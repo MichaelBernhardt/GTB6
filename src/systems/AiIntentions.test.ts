@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AudioManager } from '../core/AudioManager';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN, type City } from '../world/City';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
+import { PoliceKnowledge, ROAM_RADIUS, SIGHT_RADIUS } from './PoliceKnowledge';
 import { maxInterceptors, PoliceSystem } from './PoliceSystem';
 import { PopulationSystem } from './PopulationSystem';
 import { WantedSystem } from './WantedSystem';
@@ -41,8 +42,10 @@ describe('ai intentions simulation', () => {
     const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
     const wanted = new WantedSystem(); wanted.addCrime(100);
     const player = new THREE.Vector3(0, 0, 0);
+    // Cop-witnessed crime at the player's position: dispatch knows where to start looking.
+    const knowledge = new PoliceKnowledge(); knowledge.copWitness(player.x, player.z);
     let damage = 0;
-    for (let frame = 0; frame < 1800; frame++) police.update(1 / 30, player, true, wanted, (amount) => { damage += amount; });
+    for (let frame = 0; frame < 1800; frame++) police.update(1 / 30, player, true, wanted, knowledge, (amount) => { damage += amount; });
     const active = police.vehicles.filter((vehicle) => !vehicle.wrecked);
     expect(active).toHaveLength(maxInterceptors(wanted.level));
     expect(wanted.level).toBe(5);
@@ -55,7 +58,30 @@ describe('ai intentions simulation', () => {
     const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
     const wanted = new WantedSystem(); wanted.addCrime(15); // one star
     const player = new THREE.Vector3();
-    for (let frame = 0; frame < 600; frame++) { police.update(1 / 30, player, true, wanted, () => {}); wanted.reportSeen(); }
+    const knowledge = new PoliceKnowledge(); knowledge.copWitness(player.x, player.z);
+    for (let frame = 0; frame < 600; frame++) { police.update(1 / 30, player, true, wanted, knowledge, () => {}); wanted.reportSeen(); }
     expect(police.vehicles.filter((vehicle) => !vehicle.wrecked).length).toBeLessThanOrEqual(maxInterceptors(1));
+  });
+
+  it('never finds a hidden player: units work the last known scene until the heat decays away', () => {
+    const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
+    const wanted = new WantedSystem(); wanted.addCrime(40); // two stars
+    const knowledge = new PoliceKnowledge(); knowledge.copWitness(0, 0);
+    const player = new THREE.Vector3(400, 0, 400); // hiding far outside SIGHT_RADIUS
+    const scene = new THREE.Vector3(0, 0, 0);
+    let closestToPlayer = Infinity; let farthestWhileHot = 0;
+    for (let frame = 0; frame < 2400; frame++) {
+      police.update(1 / 30, player, true, wanted, knowledge, () => {});
+      wanted.update(1 / 30);
+      for (const vehicle of police.vehicles.filter((unit) => !unit.wrecked)) {
+        closestToPlayer = Math.min(closestToPlayer, vehicle.group.position.distanceTo(player));
+        if (wanted.isWanted) farthestWhileHot = Math.max(farthestWhileHot, vehicle.group.position.distanceTo(scene));
+      }
+    }
+    expect(closestToPlayer).toBeGreaterThan(SIGHT_RADIUS); // nobody ever sighted the player
+    expect(knowledge.lastKnown).toMatchObject({ x: 0, z: 0 }); // knowledge never advanced past the scene
+    expect(farthestWhileHot).toBeLessThan(200); // roaming stayed near the last known position, spawn distance included
+    expect(wanted.isWanted).toBe(false); // unseen decay ended the alert
+    expect(ROAM_RADIUS).toBeLessThan(200);
   });
 });
