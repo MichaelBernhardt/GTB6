@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import type { PropRegistry } from '../systems/PropSystem';
 import type { RoadPoint, RoadsidePoint } from './City';
 import { createSignMesh } from './ProceduralMaterials';
+
+const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
 export interface JunctionDefinition {
   x: number;
@@ -40,6 +43,7 @@ export class UrbanInfrastructure {
     private roadsidePoints: RoadsidePoint[],
     private isBlocked: (x: number, z: number, radius: number) => boolean,
     private isRoad: (x: number, z: number, margin: number) => boolean,
+    private props: PropRegistry,
   ) {
     this.group.name = 'Urban infrastructure'; parent.add(this.group);
     this.buildVegetation();
@@ -73,12 +77,24 @@ export class UrbanInfrastructure {
     const shrubSites = sites.filter((_, index) => index % 3 === 0);
     const shrubGeometry = new THREE.SphereGeometry(1, 16, 10);
     const shrubs = new THREE.InstancedMesh(shrubGeometry, new THREE.MeshStandardMaterial({ color: 0x365f3d, roughness: 0.94 }), shrubSites.length * 3);
+    const shrubDebrisMaterial = new THREE.MeshStandardMaterial({ color: 0x3c6a41, roughness: 0.94 });
     const matrix = new THREE.Matrix4(); const color = new THREE.Color(); let shrubIndex = 0;
     shrubSites.forEach((site, index) => {
       for (let cluster = 0; cluster < 3; cluster++) {
         const angle = cluster / 3 * Math.PI * 2 + index; const scale = 0.42 + ((index + cluster) % 4) * 0.08;
-        matrix.compose(new THREE.Vector3(site.x + Math.cos(angle) * 1.35, scale * 0.75, site.z + Math.sin(angle) * 1.35), new THREE.Quaternion(), new THREE.Vector3(scale * 1.25, scale, scale));
-        shrubs.setMatrixAt(shrubIndex, matrix); shrubs.setColorAt(shrubIndex, color.setHex(cluster === 1 ? 0x4f7d45 : 0x315c3b)); shrubIndex++;
+        const x = site.x + Math.cos(angle) * 1.35; const z = site.z + Math.sin(angle) * 1.35;
+        matrix.compose(new THREE.Vector3(x, scale * 0.75, z), new THREE.Quaternion(), new THREE.Vector3(scale * 1.25, scale, scale));
+        shrubs.setMatrixAt(shrubIndex, matrix); shrubs.setColorAt(shrubIndex, color.setHex(cluster === 1 ? 0x4f7d45 : 0x315c3b));
+        const instance = shrubIndex;
+        this.props.register('shrub', x, z, scale * 1.1, scale * 1.5, {
+          hide: () => { shrubs.setMatrixAt(instance, HIDDEN_MATRIX); shrubs.instanceMatrix.needsUpdate = true; },
+          debris: () => {
+            const group = new THREE.Group(); group.position.set(x, 0, z);
+            const tuft = new THREE.Mesh(shrubGeometry, shrubDebrisMaterial); tuft.position.y = scale * 0.75; tuft.scale.set(scale * 1.25, scale, scale); tuft.castShadow = true; group.add(tuft);
+            return group;
+          },
+        });
+        shrubIndex++;
       }
     });
     shrubs.castShadow = true; shrubs.receiveShadow = true; this.group.add(shrubs);
@@ -92,6 +108,7 @@ export class UrbanInfrastructure {
     const matrix = new THREE.Matrix4(); const color = new THREE.Color(); const quaternion = new THREE.Quaternion();
     sites.forEach((site, index) => {
       const height = 0.9 + (index % 5) * 0.035;
+      this.props.register('tree', site.x, site.z, 0.5, 5.2 * height); // trunk-sized, so the sidewalk stays walkable
       matrix.compose(new THREE.Vector3(site.x, 2.6 * height, site.z), quaternion, new THREE.Vector3(height, height, height)); trunks.setMatrixAt(index, matrix);
       const offsets: Array<[number, number, number, number]> = [[0, 6.2, 0, 2.25], [-1.45, 5.65, 0.3, 1.8], [1.35, 5.75, -0.35, 1.9], [0.25, 5.6, 1.3, 1.65], [-0.35, 6.45, -0.9, 1.55]];
       offsets.forEach(([ox, oy, oz, scale], cluster) => {
@@ -114,6 +131,7 @@ export class UrbanInfrastructure {
     const fronds = new THREE.InstancedMesh(frondGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, side: THREE.DoubleSide }), sites.length * 9);
     const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion(); const color = new THREE.Color();
     sites.forEach((site, index) => {
+      this.props.register('palm', site.x, site.z, 0.4, 7.4);
       matrix.compose(new THREE.Vector3(site.x, 3.7, site.z), quaternion, new THREE.Vector3(1, 1, 1)); trunks.setMatrixAt(index, matrix);
       for (let frond = 0; frond < 9; frond++) {
         const angle = frond / 9 * Math.PI * 2 + index * 0.31;
@@ -128,25 +146,42 @@ export class UrbanInfrastructure {
   private buildStreetlights(): void {
     const sites = this.roadsidePoints.filter((point, index) => index % 4 === 1 && !this.isBlocked(point.x, point.z, 1.2) && !this.isRoad(point.x, point.z, 0.9));
     const metal = new THREE.MeshStandardMaterial({ color: 0x253033, roughness: 0.34, metalness: 0.82 });
+    const bulbMaterial = new THREE.MeshBasicMaterial({ color: 0xffdca0, side: THREE.DoubleSide });
     const poleGeometry = new THREE.CylinderGeometry(0.08, 0.17, 6.5, 12);
     const armGeometry = new THREE.CylinderGeometry(0.055, 0.065, 1.25, 10);
+    const collarGeometry = new THREE.CylinderGeometry(0.23, 0.28, 0.42, 14);
     const fixtureGeometry = new RoundedBoxGeometry(0.9, 0.22, 0.42, 3, 0.07);
+    const bulbGeometry = new THREE.PlaneGeometry(0.62, 0.22);
     const poles = new THREE.InstancedMesh(poleGeometry, metal, sites.length);
     const arms = new THREE.InstancedMesh(armGeometry, metal, sites.length);
-    const collars = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.23, 0.28, 0.42, 14), metal, sites.length);
+    const collars = new THREE.InstancedMesh(collarGeometry, metal, sites.length);
     const fixtures = new THREE.InstancedMesh(fixtureGeometry, metal, sites.length);
-    const bulbs = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.62, 0.22), new THREE.MeshBasicMaterial({ color: 0xffdca0, side: THREE.DoubleSide }), sites.length);
-    const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion(); const up = new THREE.Vector3(0, 1, 0);
+    const bulbs = new THREE.InstancedMesh(bulbGeometry, bulbMaterial, sites.length);
+    const matrix = new THREE.Matrix4(); const up = new THREE.Vector3(0, 1, 0);
     sites.forEach((site, index) => {
       const direction = new THREE.Vector3(site.inwardX, 0, site.inwardZ).normalize();
-      const angle = Math.atan2(-direction.z, direction.x); quaternion.setFromAxisAngle(up, angle);
+      const headRotation = new THREE.Quaternion().setFromAxisAngle(up, Math.atan2(-direction.z, direction.x));
       matrix.compose(new THREE.Vector3(site.x, 3.25, site.z), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1)); poles.setMatrixAt(index, matrix);
       matrix.makeTranslation(site.x, 0.23, site.z); collars.setMatrixAt(index, matrix);
       const armRotation = new THREE.Quaternion().setFromUnitVectors(up, direction);
       matrix.compose(new THREE.Vector3(site.x, 6.08, site.z).addScaledVector(direction, 0.58), armRotation, new THREE.Vector3(1, 1, 1)); arms.setMatrixAt(index, matrix);
-      matrix.compose(new THREE.Vector3(site.x, 6.15, site.z).addScaledVector(direction, 1.18), quaternion, new THREE.Vector3(1, 1, 1)); fixtures.setMatrixAt(index, matrix);
-      const bulbRotation = quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
+      matrix.compose(new THREE.Vector3(site.x, 6.15, site.z).addScaledVector(direction, 1.18), headRotation, new THREE.Vector3(1, 1, 1)); fixtures.setMatrixAt(index, matrix);
+      const bulbRotation = headRotation.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
       matrix.compose(new THREE.Vector3(site.x, 6.02, site.z).addScaledVector(direction, 1.18), bulbRotation, new THREE.Vector3(1, 1, 1)); bulbs.setMatrixAt(index, matrix);
+      this.props.register('streetlight', site.x, site.z, 0.2, 6.5, {
+        hide: () => { for (const mesh of [poles, arms, collars, fixtures, bulbs]) { mesh.setMatrixAt(index, HIDDEN_MATRIX); mesh.instanceMatrix.needsUpdate = true; } },
+        debris: () => {
+          const group = new THREE.Group(); group.position.set(site.x, 0, site.z);
+          const pole = new THREE.Mesh(poleGeometry, metal); pole.position.y = 3.25;
+          const collar = new THREE.Mesh(collarGeometry, metal); collar.position.y = 0.23;
+          const arm = new THREE.Mesh(armGeometry, metal); arm.position.set(direction.x * 0.58, 6.08, direction.z * 0.58); arm.quaternion.copy(armRotation);
+          const fixture = new THREE.Mesh(fixtureGeometry, metal); fixture.position.set(direction.x * 1.18, 6.15, direction.z * 1.18); fixture.quaternion.copy(headRotation);
+          const bulb = new THREE.Mesh(bulbGeometry, bulbMaterial); bulb.position.set(direction.x * 1.18, 6.02, direction.z * 1.18); bulb.quaternion.copy(bulbRotation);
+          for (const part of [pole, collar, arm, fixture]) part.castShadow = true;
+          group.add(pole, collar, arm, fixture, bulb);
+          return group;
+        },
+      });
     });
     poles.castShadow = true; arms.castShadow = true; fixtures.castShadow = true; this.group.add(poles, arms, collars, fixtures, bulbs);
   }
@@ -172,6 +207,7 @@ export class UrbanInfrastructure {
   }
 
   private addSignalPole(position: THREE.Vector3, heading: number, axis: 0 | 1, phase: number, lensTransforms: THREE.Matrix4[]): void {
+    this.props.register('signal', position.x, position.z, 0.24, 5.7);
     const assembly = new THREE.Group(); assembly.position.copy(position); assembly.rotation.y = heading;
     const metal = new THREE.MeshStandardMaterial({ color: 0x273135, metalness: 0.78, roughness: 0.34 });
     const yellow = new THREE.MeshStandardMaterial({ color: 0xe0aa29, metalness: 0.32, roughness: 0.48 });
@@ -191,12 +227,16 @@ export class UrbanInfrastructure {
 
   private addStreetSigns(junction: JunctionDefinition, forward: THREE.Vector3, right: THREE.Vector3): void {
     const postPosition = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, SIGNAL_CORNER_OFFSET).addScaledVector(right, SIGNAL_CORNER_OFFSET);
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.copy(postPosition).setY(1.8); this.group.add(post);
+    const assembly = new THREE.Group(); assembly.position.copy(postPosition);
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.y = 1.8; assembly.add(post);
     const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle, 3.25], [junction.roadB, junction.angle + Math.PI / 2, 2.78]];
     for (const [label, angle, y] of labels) {
       const sign = createSignMesh(new THREE.PlaneGeometry(4.2, 0.92), label, '#f2f4e9', { background: '#176a5a', doubleSide: true });
-      sign.position.copy(postPosition).setY(y); sign.rotation.y = angle; this.group.add(sign);
+      sign.position.y = y; sign.rotation.y = angle; assembly.add(sign);
     }
+    assembly.traverse((object) => { object.userData.dynamic = true; }); // knock-over props stay unmerged so they can tip
+    this.group.add(assembly);
+    this.props.register('sign', postPosition.x, postPosition.z, 0.14, 3.6, { debris: () => assembly });
   }
 
   private buildRoadsideSigns(): void {
@@ -207,12 +247,16 @@ export class UrbanInfrastructure {
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x7b8380, metalness: 0.68, roughness: 0.38 });
     for (const [x, z, angle, label] of signs) {
       if (this.isRoad(x, z, 0.45)) continue;
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 2.6, 9), poleMaterial); pole.position.set(x, 1.3, z); this.group.add(pole);
+      const assembly = new THREE.Group(); assembly.position.set(x, 0, z);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 2.6, 9), poleMaterial); pole.position.y = 1.3; assembly.add(pole);
       const background = label === 'STOP' ? '#b62f2d' : label === 'P' ? '#28619a' : '#f0eee2';
       const foreground = label === 'STOP' || label === 'P' ? '#ffffff' : '#182326';
       const geometry = label === 'STOP' ? new THREE.CircleGeometry(0.7, 8) : new THREE.PlaneGeometry(label === 'ONE WAY' ? 1.65 : 1.1, 1.25);
       const sign = createSignMesh(geometry, label, foreground, { background, doubleSide: true });
-      sign.position.set(x, 2.45, z); sign.rotation.y = angle; this.group.add(sign);
+      sign.position.y = 2.45; sign.rotation.y = angle; assembly.add(sign);
+      assembly.traverse((object) => { object.userData.dynamic = true; }); // knock-over props stay unmerged so they can tip
+      this.group.add(assembly);
+      this.props.register('sign', x, z, 0.14, 2.6, { debris: () => assembly });
     }
   }
 
@@ -221,15 +265,55 @@ export class UrbanInfrastructure {
     const wood = new THREE.MeshStandardMaterial({ color: 0x744d32, roughness: 0.77 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x2c3739, metalness: 0.72, roughness: 0.35 });
     const red = new THREE.MeshStandardMaterial({ color: 0xa8322d, metalness: 0.3, roughness: 0.5 });
-    sites.forEach((site) => {
-      const bench = new THREE.Group(); bench.position.set(site.x, 0, site.z); bench.rotation.y = Math.atan2(site.inwardX, site.inwardZ);
-      for (const z of [-0.22, 0, 0.22]) { const slat = new THREE.Mesh(new RoundedBoxGeometry(2.25, 0.11, 0.16, 2, 0.035), wood); slat.position.set(0, 0.62, z); bench.add(slat); }
-      for (const x of [-0.78, 0.78]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.55, 0.5), metal); leg.position.set(x, 0.3, 0); bench.add(leg); }
-      const back = new THREE.Mesh(new RoundedBoxGeometry(2.25, 0.62, 0.1, 2, 0.03), wood); back.position.set(0, 0.98, -0.29); back.rotation.x = -0.12; bench.add(back); this.group.add(bench);
-      const hydrant = new THREE.Group(); hydrant.position.set(site.x + site.inwardX * 0.45, 0, site.z + site.inwardZ * 0.45);
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.23, 0.7, 16), red); body.position.y = 0.36;
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.23, 14, 9), red); cap.position.y = 0.76; hydrant.add(body, cap); this.group.add(hydrant);
+    const slatGeometry = new RoundedBoxGeometry(2.25, 0.11, 0.16, 2, 0.035);
+    const legGeometry = new THREE.BoxGeometry(0.08, 0.55, 0.5);
+    const backGeometry = new RoundedBoxGeometry(2.25, 0.62, 0.1, 2, 0.03);
+    const bodyGeometry = new THREE.CylinderGeometry(0.17, 0.23, 0.7, 16);
+    const capGeometry = new THREE.SphereGeometry(0.23, 14, 9);
+    const slats = new THREE.InstancedMesh(slatGeometry, wood, sites.length * 3);
+    const legs = new THREE.InstancedMesh(legGeometry, metal, sites.length * 2);
+    const backs = new THREE.InstancedMesh(backGeometry, wood, sites.length);
+    const bodies = new THREE.InstancedMesh(bodyGeometry, red, sites.length);
+    const caps = new THREE.InstancedMesh(capGeometry, red, sites.length);
+    const matrix = new THREE.Matrix4(); const identity = new THREE.Quaternion(); const one = new THREE.Vector3(1, 1, 1);
+    const up = new THREE.Vector3(0, 1, 0); const backTilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.12);
+    sites.forEach((site, index) => {
+      const yaw = Math.atan2(site.inwardX, site.inwardZ);
+      const rotation = new THREE.Quaternion().setFromAxisAngle(up, yaw);
+      const world = (lx: number, ly: number, lz: number) => new THREE.Vector3(lx, ly, lz).applyQuaternion(rotation).add(new THREE.Vector3(site.x, 0, site.z));
+      [-0.22, 0, 0.22].forEach((lz, slot) => { matrix.compose(world(0, 0.62, lz), rotation, one); slats.setMatrixAt(index * 3 + slot, matrix); });
+      [-0.78, 0.78].forEach((lx, slot) => { matrix.compose(world(lx, 0.3, 0), rotation, one); legs.setMatrixAt(index * 2 + slot, matrix); });
+      matrix.compose(world(0, 0.98, -0.29), rotation.clone().multiply(backTilt), one); backs.setMatrixAt(index, matrix);
+      this.props.register('bench', site.x, site.z, 0.85, 1.1, {
+        hide: () => {
+          for (const slot of [0, 1, 2]) slats.setMatrixAt(index * 3 + slot, HIDDEN_MATRIX);
+          for (const slot of [0, 1]) legs.setMatrixAt(index * 2 + slot, HIDDEN_MATRIX);
+          backs.setMatrixAt(index, HIDDEN_MATRIX);
+          for (const mesh of [slats, legs, backs]) mesh.instanceMatrix.needsUpdate = true;
+        },
+        debris: () => {
+          const group = new THREE.Group(); group.position.set(site.x, 0, site.z); group.rotation.y = yaw;
+          for (const lz of [-0.22, 0, 0.22]) { const slat = new THREE.Mesh(slatGeometry, wood); slat.position.set(0, 0.62, lz); group.add(slat); }
+          for (const lx of [-0.78, 0.78]) { const leg = new THREE.Mesh(legGeometry, metal); leg.position.set(lx, 0.3, 0); group.add(leg); }
+          const back = new THREE.Mesh(backGeometry, wood); back.position.set(0, 0.98, -0.29); back.rotation.x = -0.12; group.add(back);
+          group.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
+          return group;
+        },
+      });
+      const hx = site.x + site.inwardX * 0.45; const hz = site.z + site.inwardZ * 0.45;
+      matrix.compose(new THREE.Vector3(hx, 0.36, hz), identity, one); bodies.setMatrixAt(index, matrix);
+      matrix.compose(new THREE.Vector3(hx, 0.76, hz), identity, one); caps.setMatrixAt(index, matrix);
+      this.props.register('hydrant', hx, hz, 0.24, 0.9, {
+        hide: () => { bodies.setMatrixAt(index, HIDDEN_MATRIX); caps.setMatrixAt(index, HIDDEN_MATRIX); bodies.instanceMatrix.needsUpdate = true; caps.instanceMatrix.needsUpdate = true; },
+        debris: () => {
+          const group = new THREE.Group(); group.position.set(hx, 0, hz);
+          const body = new THREE.Mesh(bodyGeometry, red); body.position.y = 0.36; body.castShadow = true;
+          const cap = new THREE.Mesh(capGeometry, red); cap.position.y = 0.76; group.add(body, cap);
+          return group;
+        },
+      });
     });
+    for (const mesh of [slats, legs, backs, bodies, caps]) { mesh.castShadow = true; mesh.receiveShadow = true; this.group.add(mesh); }
   }
 
   private buildTransitStops(): void {
@@ -238,6 +322,7 @@ export class UrbanInfrastructure {
     const metal = new THREE.MeshStandardMaterial({ color: 0x293638, metalness: 0.72, roughness: 0.35 });
     for (const [x, z, angle, label] of stops) {
       if (this.isRoad(x, z, 2.8)) continue;
+      this.props.register('shelter', x, z, 2.7, 2.9);
       const shelter = new THREE.Group(); shelter.position.set(x, 0, z); shelter.rotation.y = angle;
       const back = new THREE.Mesh(new THREE.BoxGeometry(5.5, 2.7, 0.08), glass); back.position.y = 1.45;
       const roof = new THREE.Mesh(new RoundedBoxGeometry(5.8, 0.16, 1.65, 3, 0.06), metal); roof.position.set(0, 2.9, 0.7);

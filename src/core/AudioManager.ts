@@ -127,6 +127,37 @@ export class AudioManager {
     if (Math.abs(intensity) > 15) this.crash(Math.min(1, (Math.abs(intensity) - 15) / 25));
   }
 
+  propKnock(intensity: number, x?: number, z?: number): void {
+    const power = Math.min(1, Math.abs(intensity) / 30);
+    let level = 1; let pan = 0;
+    if (x !== undefined && z !== undefined) {
+      level = distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 12, 110);
+      if (level < 0.02) return;
+      pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.6;
+    }
+    this.burst({ duration: 0.2, type: 'bandpass', frequency: 640 + power * 320, q: 1.3, peak: (0.12 + power * 0.2) * level, decay: 0.09 + power * 0.07, echo: 0.24, pan });
+    const ring = 0.9 + Math.random() * 0.22;
+    for (const [frequency, peak] of [[416, 0.055], [902, 0.036], [1394, 0.024]] as const)
+      this.blip(frequency * ring, 0.26 + power * 0.2, peak * (0.5 + power) * level, { type: 'triangle', attack: 0.002, pan });
+    this.blip(112, 0.12, 0.13 * (0.4 + power) * level, { slide: 55, pan });
+  }
+
+  hydrantHiss(x: number, z: number, duration = 10): void {
+    const context = this.context; const master = this.master;
+    if (!context || !master || !this.noise) return;
+    const level = 0.055 * distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 10, 130);
+    if (level < 0.002) return;
+    const t = this.now();
+    const source = context.createBufferSource(); source.buffer = this.noise; source.loop = true; source.playbackRate.value = 1.15;
+    const filter = context.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.value = 2600; filter.Q.value = 0.6;
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, t); gain.gain.exponentialRampToValueAtTime(level, t + 0.18);
+    gain.gain.setValueAtTime(level, t + duration - 1.6); gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    const panner = context.createStereoPanner(); panner.pan.value = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.6;
+    source.connect(filter).connect(gain).connect(panner).connect(master);
+    source.start(t); source.stop(t + duration + 0.1);
+  }
+
   splat(intensity = 1, x?: number, z?: number): void {
     const power = Math.min(1, Math.abs(intensity) / 1.6);
     let level = 1; let pan = 0;

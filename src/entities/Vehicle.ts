@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { VEHICLE_SPECS, type VehicleKind, type VehicleSpec } from '../config';
 import type { InputManager } from '../core/InputManager';
+import { KNOCKOVER_SPEED_KEEP, knockoverDamage, solidImpactDamage, type PropRegistry } from '../systems/PropSystem';
 import { rollBurnDuration } from '../systems/VehicleFireSystem';
 import type { City } from '../world/City';
 
@@ -125,8 +126,15 @@ export class Vehicle {
     const old = this.group.position.clone();
     const next = old.clone(); next.x += Math.sin(this.heading) * this.speed * dt; next.z += Math.cos(this.heading) * this.speed * dt;
     const radius = Math.max(this.spec.size[0], this.spec.size[2]) * 0.34;
+    const props = city.props as PropRegistry | undefined; // sim tests mock City without a prop registry
+    const direction = Math.sign(this.speed || 1);
+    const felled = props?.tryKnockdown(next.x, next.z, radius, this.speed, Math.sin(this.heading) * direction, Math.cos(this.heading) * direction) ?? 0;
+    if (felled > 0) { this.takeDamage(knockoverDamage(this.speed) * felled); this.speed *= KNOCKOVER_SPEED_KEEP ** felled; } // fast enough: props tip, car ploughs on
     const resolved = city.clampMove(old, next, radius);
-    if (resolved.distanceToSquared(next) > 0.01) { const impact = Math.abs(this.speed); this.speed *= -0.16; this.takeDamage(Math.max(0, impact - 8) * 0.35); }
+    if (resolved.distanceToSquared(next) > 0.01) {
+      const impact = Math.abs(this.speed); this.speed *= -0.16;
+      this.takeDamage(props?.solidBlocked(next.x, next.z, radius) ? solidImpactDamage(impact) : Math.max(0, impact - 8) * 0.35); // trees hit back harder than walls
+    }
     this.group.position.copy(resolved); this.group.rotation.y = this.heading;
     if (this.group.position.y < 0) this.group.position.y = 0;
   }

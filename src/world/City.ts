@@ -5,6 +5,7 @@ import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture
 import { createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
+import { PropRegistry } from '../systems/PropSystem';
 import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
 
 export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; }
@@ -89,6 +90,7 @@ const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
 export class City {
   group = new THREE.Group();
   colliders: Collider[] = [];
+  props = new PropRegistry();
   roadPoints: RoadPoint[] = [];
   sidewalkPoints: RoadPoint[] = [];
   roadsidePoints: RoadsidePoint[] = [];
@@ -120,6 +122,7 @@ export class City {
       this.roadsidePoints,
       (x, z, radius) => this.collides(x, z, radius),
       (x, z, margin) => this.isOnRoad(x, z, margin),
+      this.props,
     );
     mergeStaticGeometry(this.group);
   }
@@ -143,6 +146,7 @@ export class City {
 
   collides(x: number, z: number, radius: number): boolean {
     if (Math.abs(x) > WORLD_SIZE / 2 - radius || Math.abs(z) > WORLD_SIZE / 2 - radius) return true;
+    if (this.props.blocked(x, z, radius)) return true;
     return this.colliders.some((box) => x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ);
   }
 
@@ -496,6 +500,7 @@ export class City {
   private addCivicParkFeature(x: number, z: number, width: number, depth: number): void {
     const stone = new THREE.MeshStandardMaterial({ color: 0xb9bbb3, roughness: 0.62 });
     const fountain = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.8, 0.72, 40), stone); fountain.position.set(x + width * 0.25, 0.62, z - depth * 0.23); fountain.castShadow = true; this.group.add(fountain);
+    this.props.register('fountain', fountain.position.x, fountain.position.z, 5.8, 1.8);
     const pool = new THREE.Mesh(new THREE.CylinderGeometry(4.7, 4.7, 0.1, 40), new THREE.MeshPhysicalMaterial({ color: 0x4c9fac, roughness: 0.1, clearcoat: 1 })); pool.position.set(fountain.position.x, 1.01, fountain.position.z); this.group.add(pool);
     const column = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.9, 3.2, 24), stone); column.position.set(fountain.position.x, 2.1, fountain.position.z); column.castShadow = true; this.group.add(column);
     const sculpture = new THREE.Mesh(new THREE.TorusKnotGeometry(0.75, 0.18, 80, 12), new THREE.MeshStandardMaterial({ color: 0x4a7777, metalness: 0.72, roughness: 0.28 })); sculpture.position.set(fountain.position.x, 4.05, fountain.position.z); sculpture.castShadow = true; this.group.add(sculpture);
@@ -507,7 +512,7 @@ export class City {
     for (let index = 0; index < 11; index++) { const angle = index / 11 * Math.PI * 2; const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.65 + (index % 3) * 0.17, 1), rockMaterial); rock.scale.y = 0.65; rock.position.set(pond.position.x + Math.cos(angle) * width * 0.2, 0.46, pond.position.z + Math.sin(angle) * depth * 0.2); this.group.add(rock); }
     const pergola = new THREE.Group(); pergola.position.set(x - width * 0.24, 0, z + depth * 0.2);
     const timber = new THREE.MeshStandardMaterial({ color: 0x765339, roughness: 0.76 });
-    for (const px of [-3, 3]) for (const pz of [-2, 2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 3.1, 0.22), timber); post.position.set(px, 1.55, pz); pergola.add(post); }
+    for (const px of [-3, 3]) for (const pz of [-2, 2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 3.1, 0.22), timber); post.position.set(px, 1.55, pz); pergola.add(post); this.props.register('post', pergola.position.x + px, pergola.position.z + pz, 0.2, 3.1); }
     for (let pz = -2; pz <= 2; pz += 0.7) { const slat = new THREE.Mesh(new THREE.BoxGeometry(7, 0.16, 0.18), timber); slat.position.set(0, 3.1, pz); pergola.add(slat); } this.group.add(pergola);
     const flowerColors = [0xd95462, 0xf0c74a, 0xe9e5db, 0xb85f9e];
     for (let index = 0; index < 32; index++) { const flower = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 7), new THREE.MeshStandardMaterial({ color: flowerColors[index % flowerColors.length] })); flower.position.set(x - width * 0.37 + (index % 8) * 0.65, 0.58, z - depth * 0.34 + Math.floor(index / 8) * 0.65); this.group.add(flower); }
@@ -523,10 +528,12 @@ export class City {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.16, 3.5, 12), new THREE.MeshStandardMaterial({ color: 0x303b3e, metalness: 0.7 })); pole.position.y = 1.75;
       const board = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.05, 0.09), new THREE.MeshStandardMaterial({ color: 0xe7e4d8, roughness: 0.6 })); board.position.set(0, 3.2, 0.8);
       const rim = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.045, 10, 24), new THREE.MeshStandardMaterial({ color: 0xd65b32, metalness: 0.45 })); rim.rotation.x = Math.PI / 2; rim.position.set(0, 2.85, 1.18); hoop.add(pole, board, rim); this.group.add(hoop);
+      this.props.register('post', hoop.position.x, hoop.position.z, 0.2, 3.5);
     }
   }
 
   private addParkTree(x: number, z: number, variant: number): void {
+    this.props.register('tree', x, z, 0.5, 5.1);
     const tree = new THREE.Group(); tree.position.set(x, 0, z);
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.55, 5.1, 16), new THREE.MeshStandardMaterial({ color: 0x60442f, roughness: 0.95 })); trunk.position.y = 2.55; trunk.castShadow = true; tree.add(trunk);
     const colors = [0x326d43, 0x3d7c49, 0x4b8650];
@@ -537,7 +544,7 @@ export class City {
   private buildCivicLandmarks(): void {
     const metal = new THREE.MeshStandardMaterial({ color: 0x3d4b4e, metalness: 0.72, roughness: 0.38 });
     const tower = new THREE.Group(); tower.position.set(-338, 0, -165);
-    for (const x of [-2.4, 2.4]) for (const z of [-2.4, 2.4]) { const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.25, 14, 10), metal); leg.position.set(x, 7, z); leg.rotation.z = x * 0.014; tower.add(leg); }
+    for (const x of [-2.4, 2.4]) for (const z of [-2.4, 2.4]) { const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.25, 14, 10), metal); leg.position.set(x, 7, z); leg.rotation.z = x * 0.014; tower.add(leg); this.props.register('post', tower.position.x + x, tower.position.z + z, 0.3, 14); }
     const tank = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 3.8, 5.2, 32), new THREE.MeshStandardMaterial({ color: 0x738b8d, metalness: 0.42, roughness: 0.52 })); tank.position.y = 15.3; tank.castShadow = true; tower.add(tank);
     const cap = new THREE.Mesh(new THREE.SphereGeometry(4.6, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x80999a, metalness: 0.38, roughness: 0.5 })); cap.position.y = 17.9; cap.castShadow = true; tower.add(cap);
     const label = createSignMesh(new THREE.PlaneGeometry(6.8, 1.7), 'MERCADO', '#e5c15b'); label.position.set(0, 15.8, 4.01); tower.add(label); this.group.add(tower);
@@ -545,6 +552,7 @@ export class City {
     const sculpture = new THREE.Group(); sculpture.position.set(318, 0, -273);
     const base = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.2, 1.1, 32), new THREE.MeshStandardMaterial({ color: 0xb5afa0, roughness: 0.72 })); base.position.y = 0.65;
     const sail = new THREE.Mesh(new THREE.ConeGeometry(3.2, 13, 3), new THREE.MeshStandardMaterial({ color: 0xd8d7c9, metalness: 0.18, roughness: 0.42, side: THREE.DoubleSide })); sail.position.set(0, 7.4, 0); sail.rotation.z = 0.18; sail.castShadow = true; sculpture.add(base, sail); this.group.add(sculpture);
+    this.props.register('monument', sculpture.position.x, sculpture.position.z, 4, 1.5);
   }
 
   private buildWaterfront(): void {
@@ -578,12 +586,14 @@ export class City {
       const body = new THREE.Mesh(new THREE.BoxGeometry(7.5, 3.2, 4.8), new THREE.MeshStandardMaterial({ color: kioskColors[index], roughness: 0.7 })); body.position.y = 1.6; body.castShadow = true;
       const roof = new THREE.Mesh(new THREE.CylinderGeometry(4.8, 4.8, 0.25, 3), new THREE.MeshStandardMaterial({ color: 0xe3d8bd, roughness: 0.78 })); roof.rotation.y = Math.PI / 2; roof.scale.z = 0.9; roof.position.y = 3.85; roof.castShadow = true;
       const counter = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.2, 1), metal); counter.position.set(0, 1.45, 2.85); kiosk.add(body, roof, counter); this.group.add(kiosk);
+      this.props.register('shelter', kiosk.position.x, kiosk.position.z, 3.6, 3.2);
     }
 
     const lifeguard = new THREE.Group(); lifeguard.position.set(258, 0.25, -286);
     for (const x of [-1.3, 1.3]) for (const z of [-1.1, 1.1]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.4, 0.16), metal); leg.position.set(x, 1.2, z); lifeguard.add(leg); }
     const cabin = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.5, 3.3), new THREE.MeshStandardMaterial({ color: 0xe8d7b2, roughness: 0.78 })); cabin.position.y = 3.2;
     const roof = new THREE.Mesh(new THREE.ConeGeometry(3.2, 1.3, 4), new THREE.MeshStandardMaterial({ color: 0xd75844, roughness: 0.67 })); roof.position.y = 5.05; roof.rotation.y = Math.PI / 4; lifeguard.add(cabin, roof); this.group.add(lifeguard);
+    this.props.register('shelter', lifeguard.position.x, lifeguard.position.z, 2.3, 4.5);
   }
 
   private buildPortCranes(): void {
@@ -591,6 +601,7 @@ export class City {
     const dark = new THREE.MeshStandardMaterial({ color: 0x303a3d, metalness: 0.72, roughness: 0.34 });
     for (const x of [-302, -225]) {
       const crane = new THREE.Group(); crane.position.set(x, 0, -292);
+      this.props.register('crane', x, -292, 1.3, 24);
       const tower = new THREE.Mesh(new THREE.BoxGeometry(1.4, 24, 1.4), steel); tower.position.y = 12; tower.castShadow = true;
       const boom = new THREE.Mesh(new THREE.BoxGeometry(30, 0.8, 0.8), steel); boom.position.set(8, 23.6, 0); boom.rotation.z = -0.08; boom.castShadow = true;
       const counter = new THREE.Mesh(new THREE.BoxGeometry(5.5, 3.1, 2.8), dark); counter.position.set(-7.2, 22.4, 0);
