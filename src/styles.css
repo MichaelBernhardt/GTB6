@@ -27,6 +27,9 @@ button, input { font: inherit; }
 .crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font: 400 22px Inter, sans-serif; opacity: .75; text-shadow: 0 0 4px #000; }
 .fps { position: absolute; left: 27px; bottom: 252px; color: #9ee6bc; background: #101719c9; padding: 5px 8px; font: 600 11px monospace; }
 #minimap { position: absolute; left: 27px; bottom: 27px; width: 210px; height: 210px; border: 3px solid #e9e5d7; border-radius: 50%; background: #2c3435; box-shadow: 0 4px 18px #0009; }
+#vignette { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 52%, rgba(190, 24, 18, 0.6) 100%); }
+#vignette.flash { animation: damage-flash 0.45s ease-out; }
+@keyframes damage-flash { 0% { opacity: 1; } 100% { opacity: 0; } }
 #toast { position: absolute; top: 124px; left: 50%; transform: translate(-50%, -12px); min-width: 310px; max-width: 560px; padding: 13px 18px; background: #182221ec; border-top: 3px solid #78c693; text-align: center; opacity: 0; transition: .25s; }
 #toast.visible { opacity: 1; transform: translate(-50%, 0); }#toast.failure { border-color: #e35f53; }#toast strong, #toast span { display: block; }#toast strong { font-family: "Arial Narrow", Arial, sans-serif; font-size: 22px; text-transform: uppercase; }#toast span { color: #ccd2cf; font-size: 12px; margin-top: 3px; }
 #menu { pointer-events: none; position: absolute; inset: 0; display: flex; align-items: center; padding: 8vh 8vw; background: linear-gradient(90deg, #0d1518f4 0%, #152126d9 42%, #15212655 72%, transparent); opacity: 0; transition: opacity .25s; }

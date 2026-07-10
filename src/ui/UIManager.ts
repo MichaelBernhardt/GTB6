@@ -14,6 +14,7 @@ export class UIManager {
   menu = document.createElement('div');
   toast = document.createElement('div');
   minimap = document.createElement('canvas');
+  vignette = document.createElement('div');
   private context: CanvasRenderingContext2D;
   private toastTimer = 0;
   private screen: 'none' | 'main' | 'pause' | 'controls' = 'none';
@@ -28,7 +29,8 @@ export class UIManager {
   constructor() {
     this.root.id = 'ui'; this.hud.id = 'hud'; this.menu.id = 'menu'; this.toast.id = 'toast'; this.minimap.id = 'minimap'; this.minimap.width = 210; this.minimap.height = 210;
     const context = this.minimap.getContext('2d'); if (!context) throw new Error('Canvas unavailable'); this.context = context;
-    this.root.append(this.hud, this.minimap, this.toast, this.menu); document.body.append(this.root); this.showLoading();
+    this.vignette.id = 'vignette';
+    this.root.append(this.vignette, this.hud, this.minimap, this.toast, this.menu); document.body.append(this.root); this.showLoading();
   }
 
   update(state: HudState): void {
@@ -48,13 +50,16 @@ export class UIManager {
     this.toastTimer = Math.max(0, this.toastTimer - 1 / 60); if (this.toastTimer === 0) this.toast.classList.remove('visible');
   }
 
-  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: Array<{ x: number; z: number; color: string }>, police: Array<{ x: number; z: number }>): void {
+  damageFlash(): void { this.vignette.classList.remove('flash'); void this.vignette.offsetWidth; this.vignette.classList.add('flash'); }
+
+  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: Array<{ x: number; z: number; color: string }>, police: Array<{ x: number; z: number }>, hostiles: Array<{ x: number; z: number }> = []): void {
     const ctx = this.context; const size = this.minimap.width; const scale = 0.27;
     ctx.clearRect(0, 0, size, size); ctx.fillStyle = '#35443d'; ctx.fillRect(0, 0, size, size); ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading); ctx.translate(-x * scale, -z * scale);
     ctx.strokeStyle = '#a4aaa7'; ctx.lineWidth = 19 * scale; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (const point of road.slice(1)) ctx.lineTo(point.x * scale, point.z * scale); ctx.stroke(); }
     for (const marker of markers) { ctx.fillStyle = marker.color; ctx.beginPath(); ctx.arc(marker.x * scale, marker.z * scale, 5, 0, Math.PI * 2); ctx.fill(); }
     ctx.fillStyle = '#62aaff'; for (const unit of police) { ctx.fillRect(unit.x * scale - 3, unit.z * scale - 3, 6, 6); }
+    ctx.fillStyle = '#e5443a'; for (const foe of hostiles) { ctx.beginPath(); ctx.arc(foe.x * scale, foe.z * scale, 3.5, 0, Math.PI * 2); ctx.fill(); }
     ctx.restore(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(size / 2, size / 2 - 10); ctx.lineTo(size / 2 - 7, size / 2 + 8); ctx.lineTo(size / 2 + 7, size / 2 + 8); ctx.closePath(); ctx.fill();
   }
 
