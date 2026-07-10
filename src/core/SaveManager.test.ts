@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { DEFAULT_CHEATS, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
 import type { CheatSettings, GameSettings, SavedVehicle, SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
@@ -112,6 +112,25 @@ describe('SaveManager', () => {
     expect(sanitizeGarage({ kind: 'van' })).toEqual({ kind: 'van', color: 0x58a596, health: 145 });
     expect(sanitizeGarage({ kind: 'compact', color: -5, health: 9999 } as SavedVehicle)).toEqual({ kind: 'compact', color: 0, health: 100 });
     expect(sanitizeGarage({ kind: 'compact', color: Number.NaN, health: 0 } as SavedVehicle)).toEqual({ kind: 'compact', color: 0xe7b23b, health: 1 });
+  });
+
+  it('round trips the time of day and defaults it on old saves', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, timeOfDay: 19.75 });
+    expect(manager.load().timeOfDay).toBeCloseTo(19.75);
+    storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
+    expect(manager.load().timeOfDay).toBe(DEFAULT_TIME_OF_DAY);
+  });
+
+  it('sanitizes garbage time of day values', () => {
+    expect(sanitizeTimeOfDay(undefined)).toBe(DEFAULT_TIME_OF_DAY);
+    expect(sanitizeTimeOfDay('noon')).toBe(DEFAULT_TIME_OF_DAY);
+    expect(sanitizeTimeOfDay(Number.NaN)).toBe(DEFAULT_TIME_OF_DAY);
+    expect(sanitizeTimeOfDay(Number.POSITIVE_INFINITY)).toBe(DEFAULT_TIME_OF_DAY);
+    expect(sanitizeTimeOfDay(-3)).toBeCloseTo(21);
+    expect(sanitizeTimeOfDay(25.5)).toBeCloseTo(1.5);
+    expect(sanitizeTimeOfDay(24)).toBe(0);
+    expect(sanitizeTimeOfDay(13.2)).toBeCloseTo(13.2);
   });
 
   it('sanitizes invalid cheat data to strict booleans', () => {

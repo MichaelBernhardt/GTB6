@@ -27,12 +27,17 @@ export const SIGNAL_CORNER_OFFSET = 15.5;
 interface SignalLens { axis: 0 | 1; phase: number; channel: 0 | 1 | 2; }
 const SIGNAL_COLORS = [0xe83f3f, 0xf0ad2f, 0x39d36c] as const;
 
+const BULB_COLOR = 0xffdca0;
+
 export class UrbanInfrastructure {
+  /** Interleaved xz world positions of every streetlamp fixture, for the day/night light pool. */
+  lampsXZ = new Float32Array(0);
   private group = new THREE.Group();
   private lenses: SignalLens[] = [];
   private lensMesh?: THREE.InstancedMesh;
   private lensColor = new THREE.Color();
   private elapsed = 0;
+  private bulbMaterial?: THREE.MeshBasicMaterial;
 
   constructor(
     parent: THREE.Group,
@@ -61,6 +66,11 @@ export class UrbanInfrastructure {
       mesh.setColorAt(index, this.lensColor);
     });
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  /** 0 = day (dim panel), 1 = night: pushes the shared bulb material into HDR so streetlamp heads bloom. */
+  setLampGlow(factor: number): void {
+    this.bulbMaterial?.color.setHex(BULB_COLOR).multiplyScalar(0.35 + factor * 2.85);
   }
 
   private buildVegetation(): void {
@@ -135,10 +145,13 @@ export class UrbanInfrastructure {
     const arms = new THREE.InstancedMesh(armGeometry, metal, sites.length);
     const collars = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.23, 0.28, 0.42, 14), metal, sites.length);
     const fixtures = new THREE.InstancedMesh(fixtureGeometry, metal, sites.length);
-    const bulbs = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.62, 0.22), new THREE.MeshBasicMaterial({ color: 0xffdca0, side: THREE.DoubleSide }), sites.length);
+    const bulbs = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.62, 0.22), new THREE.MeshBasicMaterial({ color: BULB_COLOR, side: THREE.DoubleSide }), sites.length);
+    this.bulbMaterial = bulbs.material as THREE.MeshBasicMaterial; this.setLampGlow(0);
+    this.lampsXZ = new Float32Array(sites.length * 2);
     const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion(); const up = new THREE.Vector3(0, 1, 0);
     sites.forEach((site, index) => {
       const direction = new THREE.Vector3(site.inwardX, 0, site.inwardZ).normalize();
+      this.lampsXZ[index * 2] = site.x + direction.x * 1.18; this.lampsXZ[index * 2 + 1] = site.z + direction.z * 1.18;
       const angle = Math.atan2(-direction.z, direction.x); quaternion.setFromAxisAngle(up, angle);
       matrix.compose(new THREE.Vector3(site.x, 3.25, site.z), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1)); poles.setMatrixAt(index, matrix);
       matrix.makeTranslation(site.x, 0.23, site.z); collars.setMatrixAt(index, matrix);

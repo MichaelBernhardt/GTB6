@@ -5,7 +5,7 @@ import type { CheatSettings, GameSettings } from '../types';
 import type { RoadPoint } from '../world/City';
 
 export interface HudState {
-  health: number; money: number; weaponName: string; melee: boolean; ammo: number; reserve: number; reloading: boolean; wanted: number; district: string; prompt: string;
+  health: number; money: number; weaponName: string; melee: boolean; ammo: number; reserve: number; reloading: boolean; wanted: number; district: string; clock: string; prompt: string;
   vehicle?: Vehicle; mission: MissionSystem; fps: number; settings: GameSettings; cheatsOn: boolean;
 }
 
@@ -54,7 +54,7 @@ export class UIManager {
     const timer = state.mission.remainingTime > 0 ? ` <b>${Math.ceil(state.mission.remainingTime)}s</b>` : '';
     const progress = objective?.required ? ` <span>${state.mission.progress}/${objective.required}</span>` : '';
     this.hud.innerHTML = `
-      <div class="brand">SAN <strong>CORDOVA</strong><small>${state.district}</small></div>
+      <div class="brand">SAN <strong>CORDOVA</strong><small>${state.district} &middot; ${state.clock}</small></div>
       <div class="status"><div class="health"><i style="width:${state.health}%"></i><span>HEALTH ${Math.ceil(state.health)}</span></div><div class="cash">$${state.money.toLocaleString()}</div></div>
       <div class="weapon"><span>${state.weaponName}</span>${state.melee ? '<b>&mdash;</b>' : `<b>${state.ammo}</b><small>/ ${state.reserve}</small>${state.reloading ? '<em>RELOADING</em>' : ''}`}</div>
       <div class="wanted">${Array.from({ length: 5 }, (_, i) => `<i class="${i < state.wanted ? 'hot' : ''}">★</i>`).join('')}</div>

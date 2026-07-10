@@ -29,6 +29,7 @@ import { WantedSystem } from './systems/WantedSystem';
 import type { CheatSettings, GameMode, GameSettings, SavedGame, WorldTarget } from './types';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
+import { DayNightSystem } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
@@ -48,6 +49,7 @@ export class Game {
   private settings: GameSettings;
   private cheats: CheatSettings;
   private city: City;
+  private dayNight: DayNightSystem;
   private player: Player;
   private cameraController: CameraController;
   private population: PopulationSystem;
@@ -90,6 +92,7 @@ export class Game {
     this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money);
     this.setupRenderer(); this.setupScene();
     this.city = new City(this.scene);
+    this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.settings.quality, this.save.timeOfDay);
     this.shops = new ShopSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
@@ -164,11 +167,12 @@ export class Game {
   private applyQuality(): void {
     const shadows = this.settings.quality !== 'low';
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
+    this.dayNight.setQuality(this.settings.quality);
     this.setupComposer();
   }
 
   private startGame(fresh: boolean): void {
-    if (fresh) { this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); }
+    if (fresh) { this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to San Cordova', 'Mission contacts are marked in gold.');
   }
@@ -203,6 +207,7 @@ export class Game {
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
     this.city.update(dt);
+    this.dayNight.update(dt, focus, this.population.vehicles, this.police.vehicles, this.activeVehicle ?? this.transition?.vehicle);
     for (const impact of this.population.consumeImpacts()) {
       const intensity = Math.min(1.6, Math.abs(impact.vehicle.speed) / 16);
       this.gore.burst(impact.position, intensity, impact.killed);
@@ -610,7 +615,7 @@ export class Game {
       else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
     }
     const spec = this.combat.spec; const ammoState = this.combat.state;
-    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
+    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), clock: this.dayNight.clockText, prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
     const markers = [...this.shops.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [])];
     const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
     this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
@@ -627,6 +632,6 @@ export class Game {
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
-  private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage }; this.saveManager.save(this.save); }
+  private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, timeOfDay: this.dayNight.hour }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }

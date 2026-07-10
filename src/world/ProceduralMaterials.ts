@@ -113,6 +113,25 @@ export function createFacadeTexture(style: number): THREE.CanvasTexture {
   return texture;
 }
 
+/** Emissive companion to createFacadeTexture: black except lit windows, sampled with the same seed so every
+ *  day-lit window stays lit at night and extra windows join in (night density > day density). */
+export function createFacadeGlowTexture(style: number): THREE.CanvasTexture {
+  const { canvas, context } = canvasTexture(512);
+  const spec = FACADE_STYLES[style % FACADE_STYLES.length] ?? FACADE_STYLES[0]!;
+  const { lit: litDensity, columns, rows } = spec;
+  context.fillStyle = '#000'; context.fillRect(0, 0, 512, 512);
+  const nightDensity = Math.min(0.85, litDensity * 2 + 0.3);
+  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+    if (seeded(row * columns + column, style + 31) <= 1 - nightDensity) continue;
+    const cellW = 512 / columns; const cellH = 512 / rows; const x = column * cellW + 15; const y = row * cellH + 13;
+    const warmth = 0.72 + seeded(row * columns + column, style + 57) * 0.28;
+    const glass = context.createLinearGradient(x, y, x + cellW - 30, y + cellH - 25);
+    glass.addColorStop(0, `rgba(255, 214, 138, ${warmth.toFixed(3)})`); glass.addColorStop(1, `rgba(196, 141, 64, ${warmth.toFixed(3)})`);
+    context.fillStyle = glass; context.fillRect(x, y, cellW - 30, cellH - 26);
+  }
+  return finish(canvas);
+}
+
 const SIGN_ATLAS = { width: 1024, height: 4096, slotW: 512, slotH: 128 };
 interface SignSlot { u0: number; v0: number; u1: number; v1: number; }
 let signAtlas: { context: CanvasRenderingContext2D; texture: THREE.CanvasTexture; next: number } | undefined;

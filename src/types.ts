@@ -18,6 +18,7 @@ export interface SavedGame {
   weapons: SavedWeapons;
   cheats: CheatSettings;
   garage: SavedVehicle | null;
+  timeOfDay: number;
 }
 export interface GameSettings {
   masterVolume: number;

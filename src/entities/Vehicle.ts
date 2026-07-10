@@ -26,6 +26,7 @@ export class Vehicle {
   aiStuck = 0;
   private wheels: THREE.Object3D[] = [];
   private brakeLights: THREE.Mesh[] = [];
+  private headLights: THREE.Mesh[] = [];
   private cabinParts: THREE.Object3D[] = [];
   private lightPhase = 0;
 
@@ -116,6 +117,13 @@ export class Vehicle {
 
   setFirstPerson(firstPerson: boolean): void { for (const part of this.cabinParts) part.visible = !firstPerson; } // hide cabin glass/roof so the driver view is unobstructed
 
+  /** 0 = day (subtle lens glow), 1 = night: headlight lenses go HDR-bright so they bloom. Brake lights are untouched. */
+  setHeadlightGlow(factor: number): void {
+    if (this.wrecked) return;
+    const intensity = 1.15 + factor * 4.6;
+    for (const light of this.headLights) (light.material as THREE.MeshStandardMaterial).emissiveIntensity = intensity;
+  }
+
   reset(position?: THREE.Vector3): void {
     if (position) this.group.position.copy(position);
     this.group.position.y = 0.02; this.group.rotation.set(0, this.heading, 0); this.speed = 0;
@@ -174,7 +182,7 @@ export class Vehicle {
     const lightGeo = new RoundedBoxGeometry(0.38, 0.17, 0.07, 2, 0.03);
     for (const x of [-width * 0.29, width * 0.29]) {
       const rear = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0x5b0808, emissive: 0x390000, emissiveIntensity: 1.8, roughness: 0.22 })); rear.position.set(x, 0.65, -length / 2 - 0.1); this.group.add(rear); this.brakeLights.push(rear);
-      const front = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 })); front.position.set(x, 0.65, length / 2 + 0.1); this.group.add(front);
+      const front = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 })); front.position.set(x, 0.65, length / 2 + 0.1); this.group.add(front); this.headLights.push(front);
     }
     const plateMaterial = new THREE.MeshStandardMaterial({ color: 0xe7e4cf, roughness: 0.5 });
     const frontPlate = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.18, 0.035), plateMaterial); frontPlate.position.set(0, 0.39, length / 2 + 0.18);
