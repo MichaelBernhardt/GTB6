@@ -1,6 +1,6 @@
-import { WEAPONS, WEAPON_BY_ID, type WeaponId } from '../config';
+import { VEHICLE_SPECS, WEAPONS, WEAPON_BY_ID, type VehicleKind, type WeaponId } from '../config';
 import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
-import type { CheatSettings, GameSettings, SavedGame, SavedWeaponState, SavedWeapons } from '../types';
+import type { CheatSettings, GameSettings, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
 
 const KEY = 'san-cordova-save-v1';
 export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW };
@@ -29,7 +29,17 @@ export function sanitizeWeapons(raw?: Partial<SavedWeapons>): SavedWeapons {
   return base;
 }
 
-export const DEFAULT_SAVE: SavedGame = { version: 1, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS };
+export function sanitizeGarage(raw: unknown): SavedVehicle | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Partial<SavedVehicle>;
+  if (typeof value.kind !== 'string' || !(value.kind in VEHICLE_SPECS)) return null;
+  const spec = VEHICLE_SPECS[value.kind as VehicleKind];
+  const color = Number.isFinite(value.color) ? Math.min(0xffffff, Math.max(0, Math.round(value.color as number))) : spec.color;
+  const health = Number.isFinite(value.health) ? Math.min(spec.health, Math.max(1, Math.round(value.health as number))) : spec.health;
+  return { kind: spec.kind, color, health };
+}
+
+export const DEFAULT_SAVE: SavedGame = { version: 1, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -50,6 +60,7 @@ export class SaveManager {
         settings,
         weapons: sanitizeWeapons(parsed.weapons),
         cheats: sanitizeCheats(parsed.cheats),
+        garage: sanitizeGarage(parsed.garage),
       };
     } catch { return structuredClone(DEFAULT_SAVE); }
   }

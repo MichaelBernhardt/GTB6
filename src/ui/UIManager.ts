@@ -13,6 +13,8 @@ export interface CheatWeaponEntry { id: WeaponId; name: string; owned: boolean; 
 
 export interface WheelEntry { name: string; ammo: string; highlighted: boolean; equipped: boolean; locked: boolean; }
 
+export interface ShopCatalogEntry { id: WeaponId; name: string; owned: boolean; price: number; ammoPrice: number; reserve: number; ammoFull: boolean; canBuy: boolean; canRefill: boolean; }
+
 export class UIManager {
   root = document.createElement('div');
   hud = document.createElement('div');
@@ -21,9 +23,11 @@ export class UIManager {
   wheel = document.createElement('div');
   minimap = document.createElement('canvas');
   vignette = document.createElement('div');
+  fade = document.createElement('div');
   private context: CanvasRenderingContext2D;
   private toastTimer = 0;
-  private screen: 'none' | 'main' | 'pause' | 'controls' | 'cheats' = 'none';
+  private fadeTimer?: ReturnType<typeof setTimeout>;
+  private screen: 'none' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' = 'none';
   private controlsFromMain = false;
   private lastSettings?: GameSettings;
   onStart?: (fresh: boolean) => void;
@@ -35,12 +39,14 @@ export class UIManager {
   onGiveWeapon?: (id: WeaponId) => void;
   onMaxAmmo?: () => void;
   onCheats?: (cheats: Partial<CheatSettings>) => void;
+  onBuyWeapon?: (id: WeaponId) => void;
+  onBuyAmmo?: (id: WeaponId) => void;
 
   constructor() {
     this.root.id = 'ui'; this.hud.id = 'hud'; this.menu.id = 'menu'; this.toast.id = 'toast'; this.wheel.id = 'weapon-wheel'; this.minimap.id = 'minimap'; this.minimap.width = 210; this.minimap.height = 210;
     const context = this.minimap.getContext('2d'); if (!context) throw new Error('Canvas unavailable'); this.context = context;
-    this.vignette.id = 'vignette';
-    this.root.append(this.vignette, this.hud, this.minimap, this.toast, this.wheel, this.menu); document.body.append(this.root); this.showLoading();
+    this.vignette.id = 'vignette'; this.fade.id = 'fade';
+    this.root.append(this.vignette, this.hud, this.minimap, this.toast, this.wheel, this.menu, this.fade); document.body.append(this.root); this.showLoading();
   }
 
   update(state: HudState): void {
@@ -62,6 +68,11 @@ export class UIManager {
   }
 
   damageFlash(): void { this.vignette.classList.remove('flash'); void this.vignette.offsetWidth; this.vignette.classList.add('flash'); }
+
+  screenFade(): void {
+    this.fade.classList.add('active');
+    clearTimeout(this.fadeTimer); this.fadeTimer = setTimeout(() => this.fade.classList.remove('active'), 620);
+  }
 
   drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: Array<{ x: number; z: number; color: string }>, police: Array<{ x: number; z: number }>, hostiles: Array<{ x: number; z: number }> = []): void {
     const ctx = this.context; const size = this.minimap.width; const scale = 0.27;
@@ -88,6 +99,7 @@ export class UIManager {
   hideMenu(): void { this.menu.classList.remove('visible'); this.screen = 'none'; }
 
   back(): boolean {
+    if (this.screen === 'shop') { this.onResume?.(); return true; }
     if (this.screen === 'controls' || this.screen === 'cheats') {
       if ((this.screen === 'controls' && this.controlsFromMain) || !this.lastSettings) this.showMainMenu(); else this.showPause(this.lastSettings);
       return true;
@@ -112,6 +124,19 @@ export class UIManager {
     this.menu.innerHTML = `<div class="menu-panel compact controls"><p class="kicker">FIELD GUIDE</p><h2>Controls</h2><div><kbd>WASD</kbd><span>Move / drive</span><kbd>Mouse</kbd><span>Orbit / aim</span><kbd>Shift</kbd><span>Sprint</span><kbd>Space</kbd><span>Jump / handbrake</span><kbd>E</kbd><span>Interact / vehicle</span><kbd>LMB</kbd><span>Aim and fire / punch</span><kbd>Tab</kbd><span>Hold for weapon wheel</span><kbd>Scroll</kbd><span>Cycle weapons</span><kbd>1-5</kbd><span>Select weapon</span><kbd>R</kbd><span>Reload</span><kbd>V</kbd><span>Cycle camera view</span><kbd>F</kbd><span>Mug / melee · vehicle recovery</span><kbd>Esc</kbd><span>Pause</span><kbd>Backquote</kbd><span>Performance</span></div><button id="back">Back</button></div>`;
     this.menu.classList.add('visible'); this.screen = 'controls'; this.controlsFromMain = fromMain; this.bind('#back', () => this.back());
   }
+  showShop(entries: ShopCatalogEntry[], balance: number): void {
+    const rows = entries.map((entry) => entry.owned
+      ? `<button data-ammo="${entry.id}" ${entry.canRefill ? '' : 'disabled'}>${entry.name} &middot; ${entry.ammoFull ? 'ammo full' : `ammo refill $${entry.ammoPrice.toLocaleString()}`}<small>reserve ${entry.reserve}</small></button>`
+      : `<button data-buy="${entry.id}" ${entry.canBuy ? '' : 'disabled'}>${entry.name} &middot; $${entry.price.toLocaleString()}<small>${entry.canBuy ? 'buy' : 'not enough cash'}</small></button>`).join('');
+    this.menu.innerHTML = `<div class="menu-panel compact shop"><p class="kicker">CORDOVA ARMS</p><h2>Weapons Counter</h2><p class="balance">Cash on hand <b>$${balance.toLocaleString()}</b></p>${rows}<button id="leave">Leave the store</button></div>`;
+    this.menu.classList.add('visible'); this.screen = 'shop';
+    for (const entry of entries) {
+      this.bind(`[data-buy="${entry.id}"]`, () => this.onBuyWeapon?.(entry.id));
+      this.bind(`[data-ammo="${entry.id}"]`, () => this.onBuyAmmo?.(entry.id));
+    }
+    this.bind('#leave', () => this.back());
+  }
+
   showCheats(weapons: CheatWeaponEntry[], cheats: CheatSettings): void {
     this.menu.innerHTML = `<div class="menu-panel compact"><p class="kicker">TESTING TOOLS</p><h2>Cheats</h2>${weapons.map((weapon) => `<button data-weapon="${weapon.id}">${weapon.name} &middot; ${weapon.owned ? 'top up ammo' : 'give'}</button>`).join('')}<button id="max-ammo">Max ammo (all weapons)</button><label class="toggle"><input id="cheat-fastrun" type="checkbox" ${cheats.fastRun ? 'checked' : ''}> Fast run</label><label class="toggle"><input id="cheat-bigjump" type="checkbox" ${cheats.bigJump ? 'checked' : ''}> Big jump</label><label class="toggle"><input id="cheat-invulnerable" type="checkbox" ${cheats.invulnerable ? 'checked' : ''}> Invulnerable</label><button id="back">Back</button></div>`;
     this.menu.classList.add('visible'); this.screen = 'cheats';

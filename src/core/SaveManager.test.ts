@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeWeapons, type StorageLike } from './SaveManager';
-import type { CheatSettings, GameSettings, SavedWeapons } from '../types';
+import { DEFAULT_CHEATS, DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeWeapons, type StorageLike } from './SaveManager';
+import type { CheatSettings, GameSettings, SavedVehicle, SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
   value = new Map<string, string>();
@@ -91,6 +91,27 @@ describe('SaveManager', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     manager.save({ ...DEFAULT_SAVE, cheats: { fastRun: true, bigJump: false, invulnerable: true } });
     expect(manager.load().cheats).toEqual({ fastRun: true, bigJump: false, invulnerable: true });
+  });
+
+  it('round trips a stored garage vehicle', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, garage: { kind: 'sport', color: 0xd83a40, health: 64 } });
+    expect(manager.load().garage).toEqual({ kind: 'sport', color: 0xd83a40, health: 64 });
+  });
+
+  it('defaults old saves without a garage to an empty slot', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
+    expect(manager.load().garage).toBeNull();
+  });
+
+  it('sanitizes garbage garage data', () => {
+    expect(sanitizeGarage(undefined)).toBeNull();
+    expect(sanitizeGarage('van')).toBeNull();
+    expect(sanitizeGarage({ kind: 'tank', color: 0, health: 50 })).toBeNull();
+    expect(sanitizeGarage({ kind: 'van' })).toEqual({ kind: 'van', color: 0x58a596, health: 145 });
+    expect(sanitizeGarage({ kind: 'compact', color: -5, health: 9999 } as SavedVehicle)).toEqual({ kind: 'compact', color: 0, health: 100 });
+    expect(sanitizeGarage({ kind: 'compact', color: Number.NaN, health: 0 } as SavedVehicle)).toEqual({ kind: 'compact', color: 0xe7b23b, health: 1 });
   });
 
   it('sanitizes invalid cheat data to strict booleans', () => {
