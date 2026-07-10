@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import type { RoadPoint } from './City';
+import type { RoadPoint, RoadsidePoint } from './City';
 
 export interface JunctionDefinition {
   x: number;
@@ -20,6 +20,8 @@ export const CITY_JUNCTIONS: JunctionDefinition[] = [
   { x: 115, z: 205, angle: 0.32, roadA: 'LIBERTAD BLVD', roadB: 'LAS PALMAS', phase: 20 },
   { x: 78, z: -246, angle: 0.65, roadA: 'HARBOR DRIVE', roadB: 'COSTA CRES', phase: 24 },
 ];
+
+export const SIGNAL_CORNER_OFFSET = 15.5;
 
 interface SignalHead {
   red: THREE.MeshStandardMaterial;
@@ -54,7 +56,9 @@ export class UrbanInfrastructure {
   constructor(
     parent: THREE.Group,
     private sidewalkPoints: RoadPoint[],
+    private roadsidePoints: RoadsidePoint[],
     private isBlocked: (x: number, z: number, radius: number) => boolean,
+    private isRoad: (x: number, z: number, margin: number) => boolean,
   ) {
     this.group.name = 'Urban infrastructure'; parent.add(this.group);
     this.buildVegetation();
@@ -76,7 +80,7 @@ export class UrbanInfrastructure {
   }
 
   private buildVegetation(): void {
-    const sites = this.sidewalkPoints.filter((point, index) => index % 6 === 0 && !this.isBlocked(point.x, point.z, 2.8));
+    const sites = this.sidewalkPoints.filter((point, index) => index % 6 === 0 && !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 0.65));
     const palms = sites.filter((point) => point.z < -220 && point.x > -170);
     const broadleaf = sites.filter((point) => !palms.includes(point));
     this.buildBroadleafTrees(broadleaf);
@@ -138,34 +142,41 @@ export class UrbanInfrastructure {
   }
 
   private buildStreetlights(): void {
-    const sites = this.sidewalkPoints.filter((point, index) => index % 14 === 4 && !this.isBlocked(point.x, point.z, 1.2));
+    const sites = this.roadsidePoints.filter((point, index) => index % 4 === 1 && !this.isBlocked(point.x, point.z, 1.2) && !this.isRoad(point.x, point.z, 0.9));
     const metal = new THREE.MeshStandardMaterial({ color: 0x253033, roughness: 0.34, metalness: 0.82 });
     const poleGeometry = new THREE.CylinderGeometry(0.08, 0.17, 6.5, 12);
+    const armGeometry = new THREE.CylinderGeometry(0.055, 0.065, 1.25, 10);
     const fixtureGeometry = new RoundedBoxGeometry(0.9, 0.22, 0.42, 3, 0.07);
     const poles = new THREE.InstancedMesh(poleGeometry, metal, sites.length);
+    const arms = new THREE.InstancedMesh(armGeometry, metal, sites.length);
+    const collars = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.23, 0.28, 0.42, 14), metal, sites.length);
     const fixtures = new THREE.InstancedMesh(fixtureGeometry, metal, sites.length);
     const bulbs = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.62, 0.22), new THREE.MeshBasicMaterial({ color: 0xffdca0, side: THREE.DoubleSide }), sites.length);
-    const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion();
+    const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion(); const up = new THREE.Vector3(0, 1, 0);
     sites.forEach((site, index) => {
-      const angle = (index * 2.399) % (Math.PI * 2); quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+      const direction = new THREE.Vector3(site.inwardX, 0, site.inwardZ).normalize();
+      const angle = Math.atan2(-direction.z, direction.x); quaternion.setFromAxisAngle(up, angle);
       matrix.compose(new THREE.Vector3(site.x, 3.25, site.z), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1)); poles.setMatrixAt(index, matrix);
-      const direction = new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle));
-      matrix.compose(new THREE.Vector3(site.x, 6.15, site.z).addScaledVector(direction, 0.55), quaternion, new THREE.Vector3(1, 1, 1)); fixtures.setMatrixAt(index, matrix);
+      matrix.makeTranslation(site.x, 0.23, site.z); collars.setMatrixAt(index, matrix);
+      const armRotation = new THREE.Quaternion().setFromUnitVectors(up, direction);
+      matrix.compose(new THREE.Vector3(site.x, 6.08, site.z).addScaledVector(direction, 0.58), armRotation, new THREE.Vector3(1, 1, 1)); arms.setMatrixAt(index, matrix);
+      matrix.compose(new THREE.Vector3(site.x, 6.15, site.z).addScaledVector(direction, 1.18), quaternion, new THREE.Vector3(1, 1, 1)); fixtures.setMatrixAt(index, matrix);
       const bulbRotation = quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
-      matrix.compose(new THREE.Vector3(site.x, 6.02, site.z).addScaledVector(direction, 0.55), bulbRotation, new THREE.Vector3(1, 1, 1)); bulbs.setMatrixAt(index, matrix);
+      matrix.compose(new THREE.Vector3(site.x, 6.02, site.z).addScaledVector(direction, 1.18), bulbRotation, new THREE.Vector3(1, 1, 1)); bulbs.setMatrixAt(index, matrix);
     });
-    poles.castShadow = true; fixtures.castShadow = true; this.group.add(poles, fixtures, bulbs);
+    poles.castShadow = true; arms.castShadow = true; fixtures.castShadow = true; this.group.add(poles, arms, collars, fixtures, bulbs);
   }
 
   private buildTrafficSignals(): void {
     for (const junction of CITY_JUNCTIONS) {
       const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle));
       const right = new THREE.Vector3(forward.z, 0, -forward.x);
-      for (const axis of [0, 1] as const) for (const side of [-1, 1]) {
-        const direction = axis === 0 ? forward : right;
-        const lateral = axis === 0 ? right : forward;
-        const position = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(direction, side * 9.6).addScaledVector(lateral, 7.2);
-        this.addSignalPole(position, Math.atan2(direction.x, direction.z) + (side < 0 ? Math.PI : 0), axis, junction.phase);
+      for (const forwardSide of [-1, 1] as const) for (const rightSide of [-1, 1] as const) {
+        const axis: 0 | 1 = forwardSide === rightSide ? 0 : 1;
+        const inward = (axis === 0 ? forward.clone().multiplyScalar(-forwardSide) : right.clone().multiplyScalar(-rightSide));
+        const position = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, forwardSide * SIGNAL_CORNER_OFFSET).addScaledVector(right, rightSide * SIGNAL_CORNER_OFFSET);
+        const heading = Math.atan2(inward.z, -inward.x);
+        this.addSignalPole(position, heading, axis, junction.phase);
       }
       this.addStreetSigns(junction, forward, right);
     }
@@ -190,7 +201,7 @@ export class UrbanInfrastructure {
   }
 
   private addStreetSigns(junction: JunctionDefinition, forward: THREE.Vector3, right: THREE.Vector3): void {
-    const postPosition = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, 10).addScaledVector(right, 9);
+    const postPosition = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, SIGNAL_CORNER_OFFSET).addScaledVector(right, SIGNAL_CORNER_OFFSET);
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.copy(postPosition).setY(1.8); this.group.add(post);
     const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle, 3.25], [junction.roadB, junction.angle + Math.PI / 2, 2.78]];
     for (const [label, angle, y] of labels) {
@@ -206,6 +217,7 @@ export class UrbanInfrastructure {
     ];
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x7b8380, metalness: 0.68, roughness: 0.38 });
     for (const [x, z, angle, label] of signs) {
+      if (this.isRoad(x, z, 0.45)) continue;
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 2.6, 9), poleMaterial); pole.position.set(x, 1.3, z); this.group.add(pole);
       const background = label === 'STOP' ? '#b62f2d' : label === 'P' ? '#28619a' : '#f0eee2';
       const foreground = label === 'STOP' || label === 'P' ? '#ffffff' : '#182326';
@@ -216,26 +228,27 @@ export class UrbanInfrastructure {
   }
 
   private buildStreetFurniture(): void {
-    const sites = this.sidewalkPoints.filter((point, index) => index % 31 === 0 && !this.isBlocked(point.x, point.z, 2));
+    const sites = this.roadsidePoints.filter((point, index) => index % 13 === 3 && !this.isBlocked(point.x, point.z, 2) && !this.isRoad(point.x, point.z, 0.7));
     const wood = new THREE.MeshStandardMaterial({ color: 0x744d32, roughness: 0.77 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x2c3739, metalness: 0.72, roughness: 0.35 });
     const red = new THREE.MeshStandardMaterial({ color: 0xa8322d, metalness: 0.3, roughness: 0.5 });
-    sites.forEach((site, index) => {
-      const bench = new THREE.Group(); bench.position.set(site.x, 0, site.z); bench.rotation.y = index * 1.31;
+    sites.forEach((site) => {
+      const bench = new THREE.Group(); bench.position.set(site.x, 0, site.z); bench.rotation.y = Math.atan2(site.inwardX, site.inwardZ);
       for (const z of [-0.22, 0, 0.22]) { const slat = new THREE.Mesh(new RoundedBoxGeometry(2.25, 0.11, 0.16, 2, 0.035), wood); slat.position.set(0, 0.62, z); bench.add(slat); }
       for (const x of [-0.78, 0.78]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.55, 0.5), metal); leg.position.set(x, 0.3, 0); bench.add(leg); }
       const back = new THREE.Mesh(new RoundedBoxGeometry(2.25, 0.62, 0.1, 2, 0.03), wood); back.position.set(0, 0.98, -0.29); back.rotation.x = -0.12; bench.add(back); this.group.add(bench);
-      const hydrant = new THREE.Group(); hydrant.position.set(site.x + 2.2, 0, site.z + 0.8);
+      const hydrant = new THREE.Group(); hydrant.position.set(site.x + site.inwardX * 0.45, 0, site.z + site.inwardZ * 0.45);
       const body = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.23, 0.7, 16), red); body.position.y = 0.36;
       const cap = new THREE.Mesh(new THREE.SphereGeometry(0.23, 14, 9), red); cap.position.y = 0.76; hydrant.add(body, cap); this.group.add(hydrant);
     });
   }
 
   private buildTransitStops(): void {
-    const stops: Array<[number, number, number, string]> = [[-48, 228, 0.15, 'CENTRO'], [166, 188, -0.2, 'LAS PALMAS'], [-210, -205, 0.12, 'PUERTO'], [125, -254, -0.08, 'COSTA AZUL']];
+    const stops: Array<[number, number, number, string]> = [[-48, 222, 0.15, 'CENTRO'], [166, 173, -0.2, 'LAS PALMAS'], [-210, -224, 0.12, 'PUERTO'], [125, -265, -0.08, 'COSTA AZUL']];
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x6e9da3, roughness: 0.16, metalness: 0.08, clearcoat: 0.7, transparent: true, opacity: 0.66 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x293638, metalness: 0.72, roughness: 0.35 });
     for (const [x, z, angle, label] of stops) {
+      if (this.isRoad(x, z, 2.8)) continue;
       const shelter = new THREE.Group(); shelter.position.set(x, 0, z); shelter.rotation.y = angle;
       const back = new THREE.Mesh(new THREE.BoxGeometry(5.5, 2.7, 0.08), glass); back.position.y = 1.45;
       const roof = new THREE.Mesh(new RoundedBoxGeometry(5.8, 0.16, 1.65, 3, 0.06), metal); roof.position.set(0, 2.9, 0.7);

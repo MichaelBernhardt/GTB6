@@ -7,6 +7,7 @@ import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
 
 export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; }
 export interface RoadPoint { x: number; z: number; }
+export interface RoadsidePoint extends RoadPoint { inwardX: number; inwardZ: number; }
 export interface RoadPose { position: THREE.Vector3; heading: number; }
 export interface RoadDefinition { name: string; width: number; closed?: boolean; points: RoadPoint[]; }
 
@@ -42,8 +43,10 @@ export class City {
   colliders: Collider[] = [];
   roadPoints: RoadPoint[] = [];
   sidewalkPoints: RoadPoint[] = [];
+  roadsidePoints: RoadsidePoint[] = [];
   roadPaths: RoadPoint[][] = [];
   trafficRoutes: RoadPoint[][] = [];
+  private roadSurfaces: Array<{ points: RoadPoint[]; width: number; closed: boolean }> = [];
   private buildingMaterial = new Map<string, THREE.MeshStandardMaterial>();
   private asphalt = createGeneratedSurfaceTexture('/textures/asphalt-gpt.jpg', 'asphalt', 1);
   private concrete = createGeneratedSurfaceTexture('/textures/concrete-gpt.jpg', 'concrete', 10);
@@ -59,7 +62,13 @@ export class City {
     this.group.name = 'San Cordova'; scene.add(this.group);
     this.architecture = new BuildingArchitecture(this.group);
     this.buildGround(); this.buildRoads(); this.buildDistricts(); this.buildWaterfront();
-    this.infrastructure = new UrbanInfrastructure(this.group, this.sidewalkPoints, (x, z, radius) => this.collides(x, z, radius));
+    this.infrastructure = new UrbanInfrastructure(
+      this.group,
+      this.sidewalkPoints,
+      this.roadsidePoints,
+      (x, z, radius) => this.collides(x, z, radius),
+      (x, z, margin) => this.isOnRoad(x, z, margin),
+    );
   }
 
   update(dt: number): void {
@@ -97,8 +106,10 @@ export class City {
     const centerMat = new THREE.MeshStandardMaterial({ color: 0xe7c564, roughness: 0.74 });
     const edgeMat = new THREE.MeshStandardMaterial({ color: 0xdedbc9, roughness: 0.8 });
     const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xa9aaa2, map: this.concrete, roughness: 0.92 });
+    const curbMat = new THREE.MeshStandardMaterial({ color: 0xc8c7bb, map: this.concrete, roughness: 0.88 });
     for (const definition of ROAD_NETWORK) {
       const sampled = this.samplePath(definition.points, definition.closed ?? false, 12);
+      this.roadSurfaces.push({ points: sampled, width: definition.width, closed: definition.closed ?? false });
       const mapPath = sampled.map((point) => ({ ...point }));
       if (definition.closed && mapPath[0]) mapPath.push({ ...mapPath[0] });
       this.roadPaths.push(mapPath);
@@ -112,7 +123,9 @@ export class City {
       const leftWalk = this.offsetPath(sampled, -(definition.width / 2 + 2.2), definition.closed ?? false);
       const rightWalk = this.offsetPath(sampled, definition.width / 2 + 2.2, definition.closed ?? false);
       this.sidewalkPoints.push(...leftWalk.filter((_, index) => index % 2 === 0), ...rightWalk.filter((_, index) => index % 2 === 0));
+      this.addRoadsidePoints(sampled, definition.width, definition.closed ?? false);
     }
+    for (const surface of this.roadSurfaces) this.addCurbs(surface.points, surface.width, surface.closed, curbMat);
     this.buildIntersections();
   }
 
@@ -121,6 +134,11 @@ export class City {
     for (const { x, z, angle } of CITY_JUNCTIONS) for (let stripe = -7; stripe <= 7; stripe += 2.5) {
       const crossing = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.025, 6.2), paint); crossing.position.set(x + Math.cos(angle) * stripe, 0.09, z - Math.sin(angle) * stripe); crossing.rotation.y = angle; this.group.add(crossing);
     }
+    this.buildTactileCorners();
+  }
+
+  isOnRoad(x: number, z: number, margin = 0): boolean {
+    return this.roadSurfaces.some((surface) => this.distanceToPath(x, z, surface.points, surface.closed) <= surface.width / 2 + margin);
   }
 
   nearestRoadPose(position: THREE.Vector3): RoadPose {
@@ -158,6 +176,61 @@ export class City {
       const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
       return { x: point.x - dz / length * offset, z: point.z + dx / length * offset };
     });
+  }
+
+  private addRoadsidePoints(points: RoadPoint[], width: number, closed: boolean): void {
+    for (const side of [-1, 1] as const) {
+      const offset = side * (width / 2 + 3.05); const path = this.offsetPath(points, offset, closed);
+      path.forEach((point, index) => {
+        if (index % 2 !== 0) return;
+        const previous = points[index === 0 ? (closed ? points.length - 1 : 0) : index - 1] ?? points[index] ?? point;
+        const next = points[index === points.length - 1 ? (closed ? 0 : points.length - 1) : index + 1] ?? points[index] ?? point;
+        const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
+        const normalX = -dz / length; const normalZ = dx / length;
+        this.roadsidePoints.push({ x: point.x, z: point.z, inwardX: -normalX * side, inwardZ: -normalZ * side });
+      });
+    }
+  }
+
+  private addCurbs(points: RoadPoint[], width: number, closed: boolean, material: THREE.Material): void {
+    const transforms: THREE.Matrix4[] = []; const segmentCount = closed ? points.length : points.length - 1;
+    const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion();
+    for (let index = 0; index < segmentCount; index++) {
+      const start = points[index]; const end = points[(index + 1) % points.length]; if (!start || !end) continue;
+      const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz); if (length < 0.5) continue;
+      const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
+      if (CITY_JUNCTIONS.some((junction) => Math.hypot(midX - junction.x, midZ - junction.z) < 14)) continue;
+      const normalX = -dz / length; const normalZ = dx / length; quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(dx, dz));
+      for (const side of [-1, 1]) {
+        const offset = side * (width / 2 + 0.22);
+        const samples = [0, 0.5, 1].map((t) => ({ x: THREE.MathUtils.lerp(start.x, end.x, t) + normalX * offset, z: THREE.MathUtils.lerp(start.z, end.z, t) + normalZ * offset }));
+        const crossesRoad = this.roadSurfaces.some((surface) => surface.points !== points && samples.some((sample) => this.distanceToPath(sample.x, sample.z, surface.points, surface.closed) <= surface.width / 2 + 1.2));
+        if (crossesRoad) continue;
+        matrix.compose(new THREE.Vector3(midX + normalX * offset, 0.15, midZ + normalZ * offset), quaternion, new THREE.Vector3(0.38, 0.22, length + 0.35)); transforms.push(matrix.clone());
+      }
+    }
+    const curbs = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), material, transforms.length); transforms.forEach((transform, index) => curbs.setMatrixAt(index, transform)); curbs.instanceMatrix.needsUpdate = true; curbs.castShadow = true; curbs.receiveShadow = true; this.group.add(curbs);
+  }
+
+  private buildTactileCorners(): void {
+    const patchTransforms: THREE.Matrix4[] = []; const bumpTransforms: THREE.Matrix4[] = [];
+    const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion();
+    for (const junction of CITY_JUNCTIONS) {
+      const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle)); const right = new THREE.Vector3(forward.z, 0, -forward.x);
+      quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), junction.angle);
+      for (const forwardSide of [-1, 1]) for (const rightSide of [-1, 1]) {
+        const center = new THREE.Vector3(junction.x, 0.24, junction.z).addScaledVector(forward, forwardSide * 14.7).addScaledVector(right, rightSide * 14.7);
+        matrix.compose(center, quaternion, new THREE.Vector3(2.5, 0.09, 1.65)); patchTransforms.push(matrix.clone());
+        for (let row = -1; row <= 1; row++) for (let column = -2; column <= 2; column++) {
+          const local = new THREE.Vector3(column * 0.38, 0.09, row * 0.38).applyQuaternion(quaternion);
+          matrix.makeTranslation(center.x + local.x, center.y + local.y, center.z + local.z); bumpTransforms.push(matrix.clone());
+        }
+      }
+    }
+    const tactile = new THREE.MeshStandardMaterial({ color: 0xd0a744, roughness: 0.82 });
+    const patches = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), tactile, patchTransforms.length); patchTransforms.forEach((transform, index) => patches.setMatrixAt(index, transform));
+    const bumps = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.09, 0.11, 0.07, 10), tactile, bumpTransforms.length); bumpTransforms.forEach((transform, index) => bumps.setMatrixAt(index, transform));
+    patches.instanceMatrix.needsUpdate = true; bumps.instanceMatrix.needsUpdate = true; patches.receiveShadow = true; this.group.add(patches, bumps);
   }
 
   private createRoadStrip(points: RoadPoint[], width: number, material: THREE.Material, y: number, closed: boolean): THREE.Mesh {
@@ -250,8 +323,14 @@ export class City {
 
   private distanceToRoad(x: number, z: number): number {
     let nearest = Infinity;
-    for (const path of this.roadPaths) for (let index = 0; index < path.length - 1; index++) {
-      const start = path[index]; const end = path[index + 1]; if (!start || !end) continue;
+    for (const surface of this.roadSurfaces) nearest = Math.min(nearest, this.distanceToPath(x, z, surface.points, surface.closed));
+    return nearest;
+  }
+
+  private distanceToPath(x: number, z: number, path: RoadPoint[], closed: boolean): number {
+    let nearest = Infinity; const segmentCount = closed ? path.length : path.length - 1;
+    for (let index = 0; index < segmentCount; index++) {
+      const start = path[index]; const end = path[(index + 1) % path.length]; if (!start || !end) continue;
       const dx = end.x - start.x; const dz = end.z - start.z; const lengthSquared = dx * dx + dz * dz || 1;
       const t = THREE.MathUtils.clamp(((x - start.x) * dx + (z - start.z) * dz) / lengthSquared, 0, 1);
       nearest = Math.min(nearest, Math.hypot(x - (start.x + dx * t), z - (start.z + dz * t)));

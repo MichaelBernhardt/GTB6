@@ -79,7 +79,7 @@ Progress is saved periodically and after mission rewards. Money, completed missi
 - A detailed articulated player character with GPT Image fabric materials, layered clothing, facial features, jointed elbows and knees, procedural footwork, breathing, sprinting, jumping, and two-handed aiming poses.
 - Compact, sport, van, and police vehicle configurations with distinct speed, acceleration, turning, braking, durability, wheels, brake lights, engine synthesis, and recovery.
 - Twelve connected road systems with curved arterials, diagonal boulevards, district loops, industrial spurs, residential crescents, a harbor drive, parking areas, named street signs, regulatory signs, crossings, and road-derived traffic/minimap routing.
-- Seven animated traffic-light junctions, bus shelters, corrected curbside lighting, benches, hydrants, shrubs, broadleaf street trees, and coastal palms.
+- Seven animated traffic-light junctions, raised road-clipped curbs, paved sidewalks, tactile crossing corners, road-facing curbside lighting, bus shelters, benches, hydrants, shrubs, broadleaf street trees, and coastal palms.
 - Pooled lane-following traffic routes, recycling, stuck recovery, simplified distance updates, and collision response.
 - Raycast pistol combat with ammunition, reloads, distance damage, muzzle light, impact particles, and generated sound.
 - Carjacking with fleeing drivers, street mugging, aggressive civilians, melee attacks, and persistent stylized blood spray and ground decals.

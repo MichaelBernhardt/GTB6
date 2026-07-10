@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PARK_AREAS, ROAD_NETWORK } from './City';
-import { CITY_JUNCTIONS } from './UrbanInfrastructure';
+import { CITY_JUNCTIONS, SIGNAL_CORNER_OFFSET } from './UrbanInfrastructure';
 
 describe('San Cordova road topology', () => {
   it('contains distinct arterials, loops, diagonals, and district roads', () => {
@@ -26,6 +26,7 @@ describe('San Cordova road topology', () => {
     expect(CITY_JUNCTIONS.length).toBeGreaterThanOrEqual(7);
     expect(CITY_JUNCTIONS.every((junction) => junction.roadA.length > 0 && junction.roadB.length > 0)).toBe(true);
     expect(new Set(CITY_JUNCTIONS.map((junction) => junction.phase)).size).toBe(CITY_JUNCTIONS.length);
+    expect(SIGNAL_CORNER_OFFSET).toBeGreaterThan(Math.max(...ROAD_NETWORK.map((road) => road.width / 2)) + 2);
   });
 
   it('provides multiple structural building families in every district', () => {
