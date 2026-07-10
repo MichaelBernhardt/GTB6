@@ -57,7 +57,7 @@ export class UIManager {
 
   drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: Array<{ x: number; z: number; color: string }>, police: Array<{ x: number; z: number }>, hostiles: Array<{ x: number; z: number }> = []): void {
     const ctx = this.context; const size = this.minimap.width; const scale = 0.27;
-    ctx.clearRect(0, 0, size, size); ctx.fillStyle = '#35443d'; ctx.fillRect(0, 0, size, size); ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading); ctx.translate(-x * scale, -z * scale);
+    ctx.clearRect(0, 0, size, size); ctx.fillStyle = '#35443d'; ctx.fillRect(0, 0, size, size); ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading - Math.PI); ctx.translate(-x * scale, -z * scale);
     ctx.strokeStyle = '#a4aaa7'; ctx.lineWidth = 19 * scale; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (const point of road.slice(1)) ctx.lineTo(point.x * scale, point.z * scale); ctx.stroke(); }
     for (const marker of markers) { ctx.fillStyle = marker.color; ctx.beginPath(); ctx.arc(marker.x * scale, marker.z * scale, 5, 0, Math.PI * 2); ctx.fill(); }
