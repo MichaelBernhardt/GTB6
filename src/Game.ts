@@ -9,6 +9,7 @@ import type { Pedestrian } from './entities/Pedestrian';
 import { Player } from './entities/Player';
 import type { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
+import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
@@ -117,6 +118,7 @@ export class Game {
     const raw = this.clock.getDelta(); const dt = Math.min(raw, 0.05); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
     if (this.mode === 'playing') this.update(dt);
     else if (this.mode === 'dead') { this.deathTimer -= dt; if (this.deathTimer <= 0) this.respawn(); }
+    else if (this.input.consume('Escape')) this.ui.back();
     this.updateCamera(dt); this.updateMarker(dt); this.renderHUD(); this.renderer.render(this.scene, this.camera); this.input.endFrame();
   };
 
@@ -137,7 +139,7 @@ export class Game {
     this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, (amount) => this.damagePlayer(amount));
     this.wanted.update(dt);
     for (const boom of this.projectiles.update(dt, this.city, this.population, this.police.vehicles, this.player.group.position)) {
-      this.audio.explosion(); this.wanted.addCrime(30); this.population.alertDanger(); this.shake = Math.min(0.7, this.shake + 0.5);
+      this.audio.explosion(); this.wanted.addCrime(30); this.population.broadcastFear(boom.position, FEAR_EVENTS.kill); this.shake = Math.min(0.7, this.shake + 0.5);
       if (boom.policeHit) this.wanted.addCrime(24);
       for (const victim of boom.victims) {
         this.gore.burst(victim.position, victim.killed ? 1.5 : 0.9, victim.killed);
@@ -163,14 +165,14 @@ export class Game {
     if (shot.fired && shot.melee) {
       this.player.punch();
       if (shot.victim) {
-        this.wanted.addCrime(shot.killed ? 24 : 16); this.population.alertDanger();
+        this.wanted.addCrime(shot.killed ? 24 : 16); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault);
         if (shot.hitPoint) this.gore.burst(shot.hitPoint, shot.killed ? 1.2 : 0.72, Boolean(shot.killed));
         if (shot.policeHit) this.wanted.addCrime(24);
-        if (shot.killed) { this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
+        if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
       }
     } else if (shot.fired) {
-      this.wanted.addCrime(7); this.population.alertDanger();
-      if (shot.victim && shot.hitPoint) this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
+      this.wanted.addCrime(7); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.gunshot);
+      if (shot.victim && shot.hitPoint) { this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed); if (shot.killed) this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); }
       if (shot.policeHit) this.wanted.addCrime(24);
       if (shot.killed && shot.victim) { this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
     }
@@ -281,10 +283,10 @@ export class Game {
     const cash = victim.mug(this.player.group.position);
     if (cash > 0) {
       this.pickups.spawnCash(this.scatter(victim.group.position), cash);
-      this.wanted.addCrime(14); this.population.alertDanger(); this.audio.tone(120, 0.14, 0.09, 'square');
+      this.wanted.addCrime(14); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault); this.audio.tone(120, 0.14, 0.09, 'square');
       this.ui.notify('Street robbery', `They dropped $${cash}. Witnesses are calling SCPD.`, false); return;
     }
-    const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.alertDanger();
+    const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
     this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.tone(72, 0.1, 0.13, 'square');
     if (killed) this.spawnDrops(victim);
   }
@@ -399,10 +401,11 @@ export class Game {
     const spec = this.combat.spec; const ammoState = this.combat.state;
     this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings });
     const markers = this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [];
-    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })));
+    const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
+    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
   }
 
-  private damagePlayer(amount: number): void { this.player.takeDamage(amount); }
+  private damagePlayer(amount: number): void { if (amount > 0) this.ui.damageFlash(); this.player.takeDamage(amount); }
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
