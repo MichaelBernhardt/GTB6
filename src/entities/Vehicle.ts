@@ -65,7 +65,8 @@ export class Vehicle {
     const targetSpeed = this.spec.maxSpeed * aggression * turnFactor;
     this.speed = THREE.MathUtils.lerp(this.speed, targetSpeed, dt * this.spec.acceleration / 15);
     const old = this.group.position.clone(); this.move(dt, city);
-    if (old.distanceToSquared(this.group.position) < 0.005) { this.aiStuck += dt; this.speed = -4; this.heading += dt * 1.4; } else this.aiStuck = 0;
+    const intended = Math.abs(this.speed) * dt; // stuck = blocked, not merely slow: actual travel far below intended travel
+    if (intended > 0.02 && old.distanceToSquared(this.group.position) < intended * intended * 0.09) { this.aiStuck += dt; this.speed = -4; this.heading += dt * 1.4; } else this.aiStuck = 0;
     this.updateVisuals(dt, false);
   }
 
