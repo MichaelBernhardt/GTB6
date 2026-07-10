@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PARK_AREAS, ROAD_NETWORK } from './City';
 import { CITY_JUNCTIONS } from './UrbanInfrastructure';
 
@@ -25,5 +26,11 @@ describe('San Cordova road topology', () => {
     expect(CITY_JUNCTIONS.length).toBeGreaterThanOrEqual(7);
     expect(CITY_JUNCTIONS.every((junction) => junction.roadA.length > 0 && junction.roadB.length > 0)).toBe(true);
     expect(new Set(CITY_JUNCTIONS.map((junction) => junction.phase)).size).toBe(CITY_JUNCTIONS.length);
+  });
+
+  it('provides multiple structural building families in every district', () => {
+    expect(ARCHITECTURE_VARIANTS.downtown).toBeGreaterThanOrEqual(5);
+    expect(ARCHITECTURE_VARIANTS.residential).toBeGreaterThanOrEqual(4);
+    expect(ARCHITECTURE_VARIANTS.industrial).toBeGreaterThanOrEqual(4);
   });
 });

@@ -28,6 +28,7 @@ Delta time is clamped to 50 ms to prevent tab restoration from producing physics
 ### World and entities
 
 - `City` deterministically generates the named non-grid road network, sampled lane and sidewalk paths, reserved park parcels, road-aware district infill, layered buildings, landmarks, waterfront facilities, parking, and rectangle collision volumes.
+- `BuildingArchitecture` turns each parcel envelope into one of thirteen structural families. It owns district-specific massing, gabled geometry, setbacks, wings, bridges, crowns, facade structure, fire escapes, porches, dormers, sawtooth roofs, loading docks, pipes, and tanks while `City` retains a conservative rectangular gameplay collider.
 - `UrbanInfrastructure` owns the repeated streetscape layer: instanced broadleaf and palm vegetation, shrubs, lighting, furniture, transit shelters, regulatory and street-name signs, plus independently phased animated signal heads.
 - `Player` owns procedural character geometry, grounded movement, jump/gravity, health, and walk animation.
 - `Vehicle` owns a typed handling specification, arcade integration, world collision, damage, wheel animation, lights, and player/AI control modes.

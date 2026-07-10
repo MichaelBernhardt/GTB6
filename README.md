@@ -54,9 +54,9 @@ Progress is saved periodically and after mission rewards. Money, completed missi
 
 ## World and systems
 
-- **Downtown**: a dense, mixed-height skyline with setback towers, storefronts, roof plant, signs, civic avenues, alleys, and signalized junctions.
-- **Las Palmas**: landscaped residential streets, a garden park, transit stops, balconies, and local shops.
-- **Mercado Industrial**: warehouses, stacks, a water tower, containers, gantry cranes, loading yards, docks, and a stunt ramp.
+- **Downtown**: a dense skyline built from five architectural families, including stepped towers, twin slabs with glass bridges, cross-plan high-rises, rounded towers, elliptical crowns, facade fins, fire escapes, storefronts, roof plant, and signs.
+- **Las Palmas**: landscaped residential streets with four house and apartment families, pitched terracotta roofs, offset wings, dormers, porches, balconies, chimneys, a garden park, and local shops.
+- **Mercado Industrial**: four warehouse families with repeated gables and sawtooth profiles, loading docks, exterior pipework, ducts, silos, stacks, a water tower, containers, gantry cranes, and loading yards.
 - **Costa Azul**: beach frontage, animated water, boardwalk kiosks, palms, lifeguard station, marina sculpture, and promenade railings.
 - **Cordova Commons**: a formal civic park with paths, mature planting, fountain, and public sculpture. Harbor Courts and Las Palmas Garden provide two additional distinct parks.
 - A detailed articulated player character with GPT Image fabric materials, layered clothing, facial features, jointed elbows and knees, procedural footwork, breathing, sprinting, jumping, and two-handed aiming poses.

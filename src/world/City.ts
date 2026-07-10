@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { COLORS, WORLD_SIZE } from '../config';
 import type { District } from '../types';
+import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import { createFacadeTexture, createGeneratedSurfaceTexture, createSignTexture, createSurfaceTexture } from './ProceduralMaterials';
 import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
 
@@ -51,10 +52,12 @@ export class City {
   private water = createSurfaceTexture('water', 7);
   private facades = [0, 1, 2, 3].map(createFacadeTexture);
   private waterMaterial?: THREE.MeshPhysicalMaterial;
+  private architecture: BuildingArchitecture;
   private infrastructure: UrbanInfrastructure;
 
   constructor(scene: THREE.Scene) {
     this.group.name = 'San Cordova'; scene.add(this.group);
+    this.architecture = new BuildingArchitecture(this.group);
     this.buildGround(); this.buildRoads(); this.buildDistricts(); this.buildWaterfront();
     this.infrastructure = new UrbanInfrastructure(this.group, this.sidewalkPoints, (x, z, radius) => this.collides(x, z, radius));
   }
@@ -265,27 +268,20 @@ export class City {
     }
   }
 
-  private addBuilding(x: number, z: number, w: number, d: number, h: number, color: number, style: string, variant: number): void {
+  private addBuilding(x: number, z: number, w: number, d: number, h: number, color: number, style: BuildingStyle, variant: number): void {
     const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 0.2, d + 6), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(x, 0.1, z); parcel.receiveShadow = true; this.group.add(parcel);
     const facadeIndex = (variant + (style === 'industrial' ? 3 : style === 'residential' ? 2 : 0)) % this.facades.length;
     const key = `${color}-${facadeIndex}`; let facade = this.buildingMaterial.get(key);
     if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], roughness: 0.72, metalness: style === 'downtown' ? 0.12 : 0.02 }); this.buildingMaterial.set(key, facade); }
     const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, metalness: 0.08 });
-    if (style === 'downtown' && h > 34) {
-      const lowerH = h * 0.68; const lower = new THREE.Mesh(new THREE.BoxGeometry(w, lowerH, d), [facade, facade, roofMaterial, roofMaterial, facade, facade]); lower.position.set(x, lowerH / 2 + 0.18, z); lower.castShadow = true; lower.receiveShadow = true; this.group.add(lower);
-      const upper = new THREE.Mesh(new THREE.BoxGeometry(w * 0.78, h - lowerH, d * 0.78), [facade, facade, roofMaterial, roofMaterial, facade, facade]); upper.position.set(x, lowerH + (h - lowerH) / 2 + 0.18, z); upper.castShadow = true; this.group.add(upper);
-      this.addLedge(x, z, w * 1.035, d * 1.035, lowerH + 0.2);
-    } else {
-      const base = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [facade, facade, roofMaterial, roofMaterial, facade, facade]); base.position.set(x, h / 2 + 0.18, z); base.castShadow = true; base.receiveShadow = true; this.group.add(base);
-    }
+    const profile = this.architecture.build({ x, z, width: w, depth: d, height: h, style, variant, facade, roof: roofMaterial });
     this.addLedge(x, z, w * 1.025, d * 1.025, Math.min(h - 0.5, 3.6));
-    const roofH = Math.min(2.3, h * 0.08); const roof = new THREE.Mesh(new THREE.BoxGeometry(w * 0.38, roofH, d * 0.35), roofMaterial); roof.position.set(x, h + roofH / 2 + 0.18, z); roof.castShadow = true; this.group.add(roof);
     this.addEntrance(x, z, w, d, style);
     if (style === 'residential') this.addBalconies(x, z, w, d, h);
-    if (style === 'industrial') this.addIndustrialDetail(x, z, w, d, h, variant);
+    if (style === 'industrial') this.addIndustrialDetail(x, z, w, d, h, profile.roofY, variant);
     if (style !== 'industrial') this.addStreetLevelDetail(x, z, w, d, style, variant);
-    this.addRoofEquipment(x, z, w, d, h, style, variant);
-    if (style === 'downtown' && h > 48 && variant % 2 === 0) this.addRoofSign(x, z, w, d, h, variant);
+    this.addRoofEquipment(x, z, w, d, h, profile.roofY, style, variant);
+    if (style === 'downtown' && h > 48 && variant % 2 === 0) this.addRoofSign(x, z, w, d, profile.roofY, variant);
     this.colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, height: h });
   }
 
@@ -293,7 +289,7 @@ export class City {
     const ledge = new THREE.Mesh(new THREE.BoxGeometry(w, 0.24, d), new THREE.MeshStandardMaterial({ color: 0xd0cec1, roughness: 0.76 })); ledge.position.set(x, y, z); ledge.castShadow = true; this.group.add(ledge);
   }
 
-  private addEntrance(x: number, z: number, w: number, d: number, style: string): void {
+  private addEntrance(x: number, z: number, w: number, d: number, style: BuildingStyle): void {
     const glass = new THREE.MeshPhysicalMaterial({ color: style === 'industrial' ? 0x4a5353 : 0x3a6672, roughness: 0.16, metalness: 0.18, clearcoat: 0.6 });
     const doorW = Math.min(5.5, w * 0.32); const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, 3.1, 0.12), glass); door.position.set(x, 1.72, z + d / 2 + 0.08); this.group.add(door);
     const canopy = new THREE.Mesh(new THREE.BoxGeometry(doorW + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(x, 3.35, z + d / 2 + 0.72); canopy.castShadow = true; this.group.add(canopy);
@@ -308,17 +304,17 @@ export class City {
     }
   }
 
-  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, variant: number): void {
+  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, roofY: number, variant: number): void {
     const shutter = new THREE.Mesh(new THREE.BoxGeometry(w * 0.42, Math.min(5, h * 0.48), 0.14), new THREE.MeshStandardMaterial({ color: 0x5e6868, roughness: 0.52, metalness: 0.45 })); shutter.position.set(x, Math.min(5, h * 0.48) / 2 + 0.2, z + d / 2 + 0.09); this.group.add(shutter);
     for (const side of [-1, 1]) { const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.58, 1.7, 16), new THREE.MeshStandardMaterial({ color: 0x555e60, metalness: 0.6, roughness: 0.48 })); vent.position.set(x + side * w * 0.24, h + 1, z); this.group.add(vent); }
     if (variant % 3 === 0) {
       const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.05, Math.min(10, h * 0.7), 20), new THREE.MeshStandardMaterial({ color: 0x7a665d, roughness: 0.72, metalness: 0.16 })); stack.position.set(x - w * 0.28, h + Math.min(10, h * 0.7) / 2, z - d * 0.18); stack.castShadow = true; this.group.add(stack);
       for (let band = 0; band < 3; band++) { const ring = new THREE.Mesh(new THREE.TorusGeometry(0.91 - band * 0.05, 0.08, 8, 20), new THREE.MeshStandardMaterial({ color: 0x363f42, metalness: 0.7, roughness: 0.38 })); ring.rotation.x = Math.PI / 2; ring.position.set(stack.position.x, h + 2.2 + band * 2.2, stack.position.z); this.group.add(ring); }
     }
-    if (variant % 2 === 0) this.addRoofSign(x, z, w, d, h, variant);
+    if (variant % 2 === 0) this.addRoofSign(x, z, w, d, roofY, variant);
   }
 
-  private addStreetLevelDetail(x: number, z: number, w: number, d: number, style: string, variant: number): void {
+  private addStreetLevelDetail(x: number, z: number, w: number, d: number, style: BuildingStyle, variant: number): void {
     const frame = new THREE.MeshStandardMaterial({ color: 0x273235, metalness: 0.55, roughness: 0.38 });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x315f68, roughness: 0.12, metalness: 0.18, clearcoat: 0.7 });
     const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
@@ -335,16 +331,16 @@ export class City {
     }
   }
 
-  private addRoofEquipment(x: number, z: number, w: number, d: number, h: number, style: string, variant: number): void {
+  private addRoofEquipment(x: number, z: number, w: number, d: number, h: number, roofY: number, style: BuildingStyle, variant: number): void {
     const metal = new THREE.MeshStandardMaterial({ color: 0x596467, metalness: 0.62, roughness: 0.46 });
-    const units = style === 'downtown' ? 2 : 1;
+    const units = style === 'downtown' ? 2 : style === 'industrial' ? 1 : 0;
     for (let index = 0; index < units; index++) {
-      const unit = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.05, 1.35), metal); unit.position.set(x - w * 0.18 + index * 2.4, h + 0.7, z - d * 0.2); unit.castShadow = true; this.group.add(unit);
-      const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.06, 16), new THREE.MeshStandardMaterial({ color: 0x263033, metalness: 0.75, roughness: 0.35 })); fan.rotation.x = Math.PI / 2; fan.position.set(unit.position.x, h + 0.72, unit.position.z - 0.7); this.group.add(fan);
+      const unit = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.05, 1.35), metal); unit.position.set(x - w * 0.18 + index * 2.4, roofY + 0.52, z - d * 0.2); unit.castShadow = true; this.group.add(unit);
+      const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.06, 16), new THREE.MeshStandardMaterial({ color: 0x263033, metalness: 0.75, roughness: 0.35 })); fan.rotation.x = Math.PI / 2; fan.position.set(unit.position.x, roofY + 0.54, unit.position.z - 0.7); this.group.add(fan);
     }
     if (h > 42 && variant % 3 === 1) {
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.1, 8, 10), metal); mast.position.set(x + w * 0.2, h + 4, z); this.group.add(mast);
-      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), new THREE.MeshStandardMaterial({ color: 0xff4b3e, emissive: 0xff1f16, emissiveIntensity: 2 })); beacon.position.set(mast.position.x, h + 8.05, z); this.group.add(beacon);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.1, 8, 10), metal); mast.position.set(x + w * 0.2, roofY + 4, z); this.group.add(mast);
+      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), new THREE.MeshStandardMaterial({ color: 0xff4b3e, emissive: 0xff1f16, emissiveIntensity: 2 })); beacon.position.set(mast.position.x, roofY + 8.05, z); this.group.add(beacon);
     }
   }
 
