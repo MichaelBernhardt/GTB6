@@ -1,12 +1,15 @@
 import type { MissionSystem } from '../systems/MissionSystem';
 import type { Vehicle } from '../entities/Vehicle';
-import type { GameSettings } from '../types';
+import type { WeaponId } from '../config';
+import type { CheatSettings, GameSettings } from '../types';
 import type { RoadPoint } from '../world/City';
 
 export interface HudState {
   health: number; money: number; weaponName: string; melee: boolean; ammo: number; reserve: number; reloading: boolean; wanted: number; district: string; prompt: string;
-  vehicle?: Vehicle; mission: MissionSystem; fps: number; settings: GameSettings;
+  vehicle?: Vehicle; mission: MissionSystem; fps: number; settings: GameSettings; cheatsOn: boolean;
 }
+
+export interface CheatWeaponEntry { id: WeaponId; name: string; owned: boolean; }
 
 export interface WheelEntry { name: string; ammo: string; highlighted: boolean; equipped: boolean; locked: boolean; }
 
@@ -20,7 +23,7 @@ export class UIManager {
   vignette = document.createElement('div');
   private context: CanvasRenderingContext2D;
   private toastTimer = 0;
-  private screen: 'none' | 'main' | 'pause' | 'controls' = 'none';
+  private screen: 'none' | 'main' | 'pause' | 'controls' | 'cheats' = 'none';
   private controlsFromMain = false;
   private lastSettings?: GameSettings;
   onStart?: (fresh: boolean) => void;
@@ -28,6 +31,10 @@ export class UIManager {
   onRestart?: () => void;
   onResetSave?: () => void;
   onSettings?: (settings: Partial<GameSettings>) => void;
+  onShowCheats?: () => void;
+  onGiveWeapon?: (id: WeaponId) => void;
+  onMaxAmmo?: () => void;
+  onCheats?: (cheats: Partial<CheatSettings>) => void;
 
   constructor() {
     this.root.id = 'ui'; this.hud.id = 'hud'; this.menu.id = 'menu'; this.toast.id = 'toast'; this.wheel.id = 'weapon-wheel'; this.minimap.id = 'minimap'; this.minimap.width = 210; this.minimap.height = 210;
@@ -49,6 +56,7 @@ export class UIManager {
       ${objective ? `<div class="objective"><small>${state.mission.active?.name}</small><span>${objective.text}${progress}${timer}</span></div>` : ''}
       ${state.prompt ? `<div class="prompt">${state.prompt}</div>` : ''}
       ${state.settings.showFps ? `<div class="fps">${Math.round(state.fps)} FPS</div>` : ''}
+      ${state.cheatsOn ? '<div class="cheats-flag">CHEATS ON</div>' : ''}
       <div class="crosshair">+</div>`;
     this.toastTimer = Math.max(0, this.toastTimer - 1 / 60); if (this.toastTimer === 0) this.toast.classList.remove('visible');
   }
@@ -80,8 +88,8 @@ export class UIManager {
   hideMenu(): void { this.menu.classList.remove('visible'); this.screen = 'none'; }
 
   back(): boolean {
-    if (this.screen === 'controls') {
-      if (this.controlsFromMain || !this.lastSettings) this.showMainMenu(); else this.showPause(this.lastSettings);
+    if (this.screen === 'controls' || this.screen === 'cheats') {
+      if ((this.screen === 'controls' && this.controlsFromMain) || !this.lastSettings) this.showMainMenu(); else this.showPause(this.lastSettings);
       return true;
     }
     if (this.screen === 'pause') { this.onResume?.(); return true; }
@@ -93,8 +101,8 @@ export class UIManager {
     this.menu.classList.add('visible'); this.screen = 'main'; this.bind('#continue', () => this.onStart?.(false)); this.bind('#new', () => this.onStart?.(true)); this.bind('#help', () => this.showControls(true));
   }
   showPause(settings: GameSettings): void {
-    this.menu.innerHTML = `<div class="menu-panel compact"><p class="kicker">GAME PAUSED</p><h2>San Cordova</h2><button id="resume">Resume</button><button id="restart">Respawn</button><button id="controls">Controls</button><label>Master volume <input id="volume" type="range" min="0" max="1" step="0.05" value="${settings.masterVolume}"></label><label>Mouse sensitivity <input id="sensitivity" type="range" min="0.001" max="0.006" step="0.0005" value="${settings.mouseSensitivity}"></label><label>Graphics quality <select id="quality"><option value="high" ${settings.quality === 'high' ? 'selected' : ''}>High</option><option value="low" ${settings.quality === 'low' ? 'selected' : ''}>Low</option></select></label><label class="toggle"><input id="fpsToggle" type="checkbox" ${settings.showFps ? 'checked' : ''}> Performance display</label><button id="reset" class="danger">Reset saved progress</button></div>`;
-    this.menu.classList.add('visible'); this.screen = 'pause'; this.lastSettings = settings; this.bind('#resume', () => this.onResume?.()); this.bind('#restart', () => this.onRestart?.()); this.bind('#controls', () => this.showControls()); this.bind('#reset', () => this.onResetSave?.());
+    this.menu.innerHTML = `<div class="menu-panel compact"><p class="kicker">GAME PAUSED</p><h2>San Cordova</h2><button id="resume">Resume</button><button id="restart">Respawn</button><button id="controls">Controls</button><button id="cheats">Cheats</button><label>Master volume <input id="volume" type="range" min="0" max="1" step="0.05" value="${settings.masterVolume}"></label><label>Mouse sensitivity <input id="sensitivity" type="range" min="0.001" max="0.006" step="0.0005" value="${settings.mouseSensitivity}"></label><label>Graphics quality <select id="quality"><option value="high" ${settings.quality === 'high' ? 'selected' : ''}>High</option><option value="low" ${settings.quality === 'low' ? 'selected' : ''}>Low</option></select></label><label class="toggle"><input id="fpsToggle" type="checkbox" ${settings.showFps ? 'checked' : ''}> Performance display</label><button id="reset" class="danger">Reset saved progress</button></div>`;
+    this.menu.classList.add('visible'); this.screen = 'pause'; this.lastSettings = settings; this.bind('#resume', () => this.onResume?.()); this.bind('#restart', () => this.onRestart?.()); this.bind('#controls', () => this.showControls()); this.bind('#cheats', () => this.onShowCheats?.()); this.bind('#reset', () => this.onResetSave?.());
     this.menu.querySelector('#volume')?.addEventListener('input', (e) => this.onSettings?.({ masterVolume: Number((e.target as HTMLInputElement).value) }));
     this.menu.querySelector('#sensitivity')?.addEventListener('input', (e) => this.onSettings?.({ mouseSensitivity: Number((e.target as HTMLInputElement).value) }));
     this.menu.querySelector('#quality')?.addEventListener('change', (e) => this.onSettings?.({ quality: (e.target as HTMLSelectElement).value as GameSettings['quality'] }));
@@ -103,6 +111,15 @@ export class UIManager {
   showControls(fromMain = false): void {
     this.menu.innerHTML = `<div class="menu-panel compact controls"><p class="kicker">FIELD GUIDE</p><h2>Controls</h2><div><kbd>WASD</kbd><span>Move / drive</span><kbd>Mouse</kbd><span>Orbit / aim</span><kbd>Shift</kbd><span>Sprint</span><kbd>Space</kbd><span>Jump / handbrake</span><kbd>E</kbd><span>Interact / vehicle</span><kbd>LMB</kbd><span>Aim and fire / punch</span><kbd>Tab</kbd><span>Hold for weapon wheel</span><kbd>Scroll</kbd><span>Cycle weapons</span><kbd>1-5</kbd><span>Select weapon</span><kbd>R</kbd><span>Reload</span><kbd>F</kbd><span>Mug / melee · vehicle recovery</span><kbd>Esc</kbd><span>Pause</span><kbd>Backquote</kbd><span>Performance</span></div><button id="back">Back</button></div>`;
     this.menu.classList.add('visible'); this.screen = 'controls'; this.controlsFromMain = fromMain; this.bind('#back', () => this.back());
+  }
+  showCheats(weapons: CheatWeaponEntry[], cheats: CheatSettings): void {
+    this.menu.innerHTML = `<div class="menu-panel compact"><p class="kicker">TESTING TOOLS</p><h2>Cheats</h2>${weapons.map((weapon) => `<button data-weapon="${weapon.id}">${weapon.name} &middot; ${weapon.owned ? 'top up ammo' : 'give'}</button>`).join('')}<button id="max-ammo">Max ammo (all weapons)</button><label class="toggle"><input id="cheat-fastrun" type="checkbox" ${cheats.fastRun ? 'checked' : ''}> Fast run</label><label class="toggle"><input id="cheat-bigjump" type="checkbox" ${cheats.bigJump ? 'checked' : ''}> Big jump</label><label class="toggle"><input id="cheat-invulnerable" type="checkbox" ${cheats.invulnerable ? 'checked' : ''}> Invulnerable</label><button id="back">Back</button></div>`;
+    this.menu.classList.add('visible'); this.screen = 'cheats';
+    for (const weapon of weapons) this.bind(`[data-weapon="${weapon.id}"]`, () => { this.onGiveWeapon?.(weapon.id); this.onShowCheats?.(); });
+    this.bind('#max-ammo', () => this.onMaxAmmo?.()); this.bind('#back', () => this.back());
+    this.menu.querySelector('#cheat-fastrun')?.addEventListener('change', (e) => this.onCheats?.({ fastRun: (e.target as HTMLInputElement).checked }));
+    this.menu.querySelector('#cheat-bigjump')?.addEventListener('change', (e) => this.onCheats?.({ bigJump: (e.target as HTMLInputElement).checked }));
+    this.menu.querySelector('#cheat-invulnerable')?.addEventListener('change', (e) => this.onCheats?.({ invulnerable: (e.target as HTMLInputElement).checked }));
   }
   private bind(selector: string, callback: () => void): void { this.menu.querySelector(selector)?.addEventListener('click', callback); }
 }

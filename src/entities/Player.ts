@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { PLAYER, type WeaponId } from '../config';
 import type { InputManager } from '../core/InputManager';
+import { jumpVelocity, moveSpeed } from '../core/GameRules';
+import type { CheatSettings } from '../types';
 import type { City } from '../world/City';
 import { buildWeaponModel } from './WeaponModels';
 
@@ -13,6 +15,7 @@ export class Player {
   onGround = true;
   inVehicle = false;
   heading = 0;
+  cheats: Pick<CheatSettings, 'fastRun' | 'bigJump'> = { fastRun: false, bigJump: false };
   private model = new THREE.Group();
   private torso = new THREE.Group();
   private head = new THREE.Group();
@@ -44,7 +47,7 @@ export class Player {
     const sprinting = moving && input.down('ShiftLeft');
     if (moving) {
       move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
-      const speed = sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
+      const speed = moveSpeed(sprinting, this.cheats.fastRun);
       const desired = this.group.position.clone().addScaledVector(move, speed * dt);
       this.group.position.copy(city.clampMove(this.group.position, desired, PLAYER.radius));
       this.turnToward(Math.atan2(move.x, move.z), dt, sprinting ? 15 : 11);
@@ -55,7 +58,7 @@ export class Player {
       this.animateIdle(dt, aiming);
     }
     this.applyPunch(dt);
-    if (input.consume('Space') && this.onGround) { this.velocityY = PLAYER.jumpSpeed; this.onGround = false; }
+    if (input.consume('Space') && this.onGround) { this.velocityY = jumpVelocity(this.cheats.bigJump); this.onGround = false; }
     this.velocityY -= PLAYER.gravity * dt; this.group.position.y += this.velocityY * dt;
     if (!this.onGround) {
       this.leftLeg.rotation.x = THREE.MathUtils.lerp(this.leftLeg.rotation.x, -0.28, dt * 9); this.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rightLeg.rotation.x, 0.22, dt * 9);

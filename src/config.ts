@@ -11,6 +11,7 @@ export const PLAYER = {
   height: 1.8,
   maxHealth: 100,
 };
+export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2 };
 
 export type VehicleKind = 'compact' | 'sport' | 'van' | 'police';
 export interface VehicleSpec {
