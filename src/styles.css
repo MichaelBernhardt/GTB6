@@ -16,7 +16,19 @@ button, input { font: inherit; }
 .cash { color: #bfe080; font-size: 25px; font-weight: 800; text-shadow: 0 2px 5px #000; }
 .weapon { position: absolute; right: 28px; top: 62px; text-shadow: 0 2px 5px #000; }
 .weapon span { color: #f1b348; margin-right: 8px; font-size: 13px; }
-.weapon b { font-size: 24px; }.weapon small { color: #c2cbc8; font-size: 15px; }
+.weapon b { font-size: 24px; }.weapon small { color: #c2cbc8; font-size: 15px; }.weapon em { display: block; color: #f0a43a; font: 700 10px Inter, sans-serif; font-style: normal; letter-spacing: 1px; text-align: right; }
+#weapon-wheel { position: absolute; top: 50%; left: 50%; width: 0; height: 0; display: none; }
+#weapon-wheel.visible { display: block; }
+#weapon-wheel::before { content: ""; position: absolute; top: -220px; left: -220px; width: 440px; height: 440px; border-radius: 50%; background: radial-gradient(circle, #0d151877 0%, #0d1518cc 62%, transparent 74%); border: 2px solid #e8eadf33; }
+#weapon-wheel .slice { position: absolute; transform: translate(-50%, -50%); min-width: 128px; padding: 10px 14px; text-align: center; background: #182124d9; border: 2px solid #73807d; box-shadow: 0 3px 12px #0008; }
+#weapon-wheel .slice span { display: block; color: #f1b348; font: 700 13px "Arial Narrow", Arial, sans-serif; letter-spacing: 1px; }
+#weapon-wheel .slice small { color: #c2cbc8; font-size: 12px; }
+#weapon-wheel .slice.equipped { border-color: #c2cbc8; }
+#weapon-wheel .slice.hot { background: #f0a43a; border-color: #f0a43a; transform: translate(-50%, -50%) scale(1.12); }
+#weapon-wheel .slice.hot span, #weapon-wheel .slice.hot small { color: #151a1c; }
+#weapon-wheel .slice.locked { opacity: 0.45; border-style: dashed; }
+#weapon-wheel .slice.locked span { color: #8a9491; }
+#weapon-wheel .hub { position: absolute; transform: translate(-50%, -50%); color: #e8eadf; font: 700 11px Inter, sans-serif; letter-spacing: 2px; text-shadow: 0 2px 5px #000; }
 .wanted { position: absolute; right: 27px; top: 97px; display: flex; gap: 4px; }
 .wanted i { color: #5a6264; font-style: normal; font-size: 23px; text-shadow: 0 2px 5px #000; }.wanted .hot { color: #efc34e; }
 .objective { position: absolute; left: 50%; top: 28px; transform: translateX(-50%); width: min(460px, 48vw); padding: 10px 14px; border-left: 4px solid #f0a43a; background: #131b20d9; box-shadow: 0 4px 18px #0006; }
