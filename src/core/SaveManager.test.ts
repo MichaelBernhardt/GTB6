@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeWeapons, type StorageLike } from './SaveManager';
-import type { SavedWeapons } from '../types';
+import type { GameSettings, SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
   value = new Map<string, string>();
@@ -48,6 +48,26 @@ describe('SaveManager', () => {
     expect(patched.current).toBe('pistol');
     expect(patched.loadout.pistol).toEqual(defaultWeapons().loadout.pistol);
     expect(patched.loadout.shotgun).toEqual({ ammo: 3, reserve: 8, owned: true });
+  });
+
+  it('round trips the chosen camera views', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, cameraViewFoot: 0, cameraViewVehicle: 3 } });
+    const loaded = manager.load();
+    expect(loaded.settings.cameraViewFoot).toBe(0);
+    expect(loaded.settings.cameraViewVehicle).toBe(3);
+  });
+
+  it('defaults invalid or missing camera views to Medium', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, cameraViewFoot: 9, cameraViewVehicle: 'far' } as unknown as GameSettings });
+    const patched = manager.load();
+    expect(patched.settings.cameraViewFoot).toBe(2);
+    expect(patched.settings.cameraViewVehicle).toBe(2);
+    storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 100, completedMissions: [], spawn: [-20, 1, 260], settings: { masterVolume: 0.5, quality: 'high', showFps: false, mouseSensitivity: 0.0025 } }));
+    const legacy = manager.load();
+    expect(legacy.settings.cameraViewFoot).toBe(2);
+    expect(legacy.settings.cameraViewVehicle).toBe(2);
   });
 
   it('treats legacy entries without ownership as owned and fixes an unowned current', () => {
