@@ -24,6 +24,9 @@ export class Pedestrian {
   threat = new THREE.Vector3();
   speed = 2.4;
   idleTime = 0;
+  route: RoadPoint[] = [];
+  private routeIndex = 0;
+  private routed = false;
   private punchTimer = 0;
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
@@ -53,7 +56,7 @@ export class Pedestrian {
     if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(choices); return; }
     if (this.destination.distanceToSquared(this.group.position) < 5) {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }
-      this.state = 'idle'; this.idleTime = 1 + Math.random() * 4; return;
+      if (this.state !== 'walk' || !this.advanceRoute()) { this.state = 'idle'; this.idleTime = 1 + Math.random() * 4; return; }
     }
     const direction = this.destination.clone().sub(this.group.position); direction.y = 0; direction.normalize();
     const pace = this.state === 'flee' ? 5.5 + this.fear * 0.014 : this.state === 'hostile' ? 5.5 : this.speed;
@@ -89,9 +92,26 @@ export class Pedestrian {
   }
 
   pickDestination(choices: RoadPoint[]): void {
+    this.route = []; this.routeIndex = 0; this.routed = false; // fallback wander until the population planner budgets a graph route
     const point = choices[Math.floor(Math.random() * choices.length)];
     if (point) this.destination.set(point.x + (Math.random() - 0.5) * 12, 0, point.z + (Math.random() - 0.5) * 12);
     this.state = this.hostile ? 'hostile' : 'walk';
+  }
+
+  /** True while wandering without a planned sidewalk route: the population system should assign one. */
+  get wantsRoute(): boolean { return this.state === 'walk' && !this.contact && !this.hostile && !this.routed; }
+
+  setRoute(points: RoadPoint[]): void {
+    this.route = points; this.routeIndex = 0; this.routed = true; this.state = 'walk';
+    if (!this.advanceRoute()) { this.state = 'idle'; this.idleTime = 1 + Math.random() * 4; }
+  }
+
+  private advanceRoute(): boolean {
+    const point = this.route[this.routeIndex];
+    if (!point) { this.routed = false; return false; }
+    this.routeIndex += 1;
+    this.destination.set(point.x + (Math.random() - 0.5) * 2.4, 0, point.z + (Math.random() - 0.5) * 2.4);
+    return true;
   }
 
   private fleeFrom(origin: THREE.Vector3): void {

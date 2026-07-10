@@ -4,6 +4,7 @@ import type { District } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import { createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { mergeStaticGeometry } from './StaticGeometry';
+import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
 import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
 
 export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; }
@@ -39,6 +40,45 @@ const seeded = (x: number, z: number, salt = 0): number => {
   return value - Math.floor(value);
 };
 
+export const ROAD_SAMPLE_SPACING = 12;
+export const VEHICLE_NAV_JOIN = 15;
+export const PED_NAV_JOIN = 18;
+
+export function sampleRoadPath(points: RoadPoint[], closed: boolean, spacing: number): RoadPoint[] {
+  const source = closed ? [...points, points[0]].filter((point): point is RoadPoint => Boolean(point)) : points;
+  const output: RoadPoint[] = [];
+  for (let segment = 0; segment < source.length - 1; segment++) {
+    const start = source[segment]; const end = source[segment + 1]; if (!start || !end) continue;
+    const distance = Math.hypot(end.x - start.x, end.z - start.z); const steps = Math.max(1, Math.ceil(distance / spacing));
+    for (let step = 0; step < steps; step++) { const t = step / steps; output.push({ x: THREE.MathUtils.lerp(start.x, end.x, t), z: THREE.MathUtils.lerp(start.z, end.z, t) }); }
+  }
+  if (!closed && source.at(-1)) output.push({ ...source.at(-1)! });
+  return output;
+}
+
+export function offsetRoadPath(points: RoadPoint[], offset: number, closed: boolean): RoadPoint[] {
+  return points.map((point, index) => {
+    const previous = points[index === 0 ? (closed ? points.length - 1 : 0) : index - 1] ?? point;
+    const next = points[index === points.length - 1 ? (closed ? 0 : points.length - 1) : index + 1] ?? point;
+    const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
+    return { x: point.x - dz / length * offset, z: point.z + dx / length * offset };
+  });
+}
+
+/** Pure builder for the nav-graph source polylines: one lane pair and one sidewalk pair per road,
+ *  sampled exactly like the rendered geometry so waypoints sit on the drawn lanes and sidewalks. */
+export function buildCityNavPaths(network: RoadDefinition[] = ROAD_NETWORK): { lanes: NavPath[]; walks: NavPath[] } {
+  const lanes: NavPath[] = []; const walks: NavPath[] = [];
+  for (const definition of network) {
+    const closed = definition.closed ?? false;
+    const sampled = sampleRoadPath(definition.points, closed, ROAD_SAMPLE_SPACING);
+    lanes.push({ points: offsetRoadPath(sampled, -definition.width * 0.23, closed), closed });
+    lanes.push({ points: offsetRoadPath(sampled, definition.width * 0.23, closed).reverse(), closed });
+    for (const side of [-1, 1]) walks.push({ points: offsetRoadPath(sampled, side * (definition.width / 2 + 2.2), closed).filter((_, index) => index % 2 === 0), closed });
+  }
+  return { lanes, walks };
+}
+
 const FACADE_RANGES: Record<BuildingStyle, [number, number]> = { downtown: [0, 6], residential: [6, 4], industrial: [10, 2] };
 const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
   downtown: [0x9db1ba, 0xc39a92, 0xd0c4a4, 0x99a4a9, 0x93a9b0],
@@ -54,6 +94,9 @@ export class City {
   roadsidePoints: RoadsidePoint[] = [];
   roadPaths: RoadPoint[][] = [];
   trafficRoutes: RoadPoint[][] = [];
+  private navPaths = buildCityNavPaths(ROAD_NETWORK);
+  vehicleNav: NavGraph = bridgeIslands(buildNavGraph(this.navPaths.lanes, VEHICLE_NAV_JOIN));
+  pedNav: NavGraph = bridgeIslands(buildNavGraph(this.navPaths.walks, PED_NAV_JOIN));
   private roadSurfaces: Array<{ points: RoadPoint[]; width: number; closed: boolean }> = [];
   private buildingMaterial = new Map<string, THREE.MeshStandardMaterial>();
   private asphalt = createGeneratedSurfaceTexture('/textures/asphalt-gpt.jpg', 'asphalt', 1);
@@ -123,7 +166,7 @@ export class City {
     const curbMat = new THREE.MeshStandardMaterial({ color: 0xc8c7bb, map: this.concrete, roughness: 0.88 });
     const dashTransforms: THREE.Matrix4[] = []; const edgeTransforms: THREE.Matrix4[] = [];
     for (const definition of ROAD_NETWORK) {
-      const sampled = this.samplePath(definition.points, definition.closed ?? false, 12);
+      const sampled = this.samplePath(definition.points, definition.closed ?? false, ROAD_SAMPLE_SPACING);
       this.roadSurfaces.push({ points: sampled, width: definition.width, closed: definition.closed ?? false });
       const mapPath = sampled.map((point) => ({ ...point }));
       if (definition.closed && mapPath[0]) mapPath.push({ ...mapPath[0] });
@@ -185,26 +228,9 @@ export class City {
     return this.nearestRoadPose(new THREE.Vector3(point.x, 0, point.z));
   }
 
-  private samplePath(points: RoadPoint[], closed: boolean, spacing: number): RoadPoint[] {
-    const source = closed ? [...points, points[0]].filter((point): point is RoadPoint => Boolean(point)) : points;
-    const output: RoadPoint[] = [];
-    for (let segment = 0; segment < source.length - 1; segment++) {
-      const start = source[segment]; const end = source[segment + 1]; if (!start || !end) continue;
-      const distance = Math.hypot(end.x - start.x, end.z - start.z); const steps = Math.max(1, Math.ceil(distance / spacing));
-      for (let step = 0; step < steps; step++) { const t = step / steps; output.push({ x: THREE.MathUtils.lerp(start.x, end.x, t), z: THREE.MathUtils.lerp(start.z, end.z, t) }); }
-    }
-    if (!closed && source.at(-1)) output.push({ ...source.at(-1)! });
-    return output;
-  }
+  private samplePath(points: RoadPoint[], closed: boolean, spacing: number): RoadPoint[] { return sampleRoadPath(points, closed, spacing); }
 
-  private offsetPath(points: RoadPoint[], offset: number, closed: boolean): RoadPoint[] {
-    return points.map((point, index) => {
-      const previous = points[index === 0 ? (closed ? points.length - 1 : 0) : index - 1] ?? point;
-      const next = points[index === points.length - 1 ? (closed ? 0 : points.length - 1) : index + 1] ?? point;
-      const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
-      return { x: point.x - dz / length * offset, z: point.z + dx / length * offset };
-    });
-  }
+  private offsetPath(points: RoadPoint[], offset: number, closed: boolean): RoadPoint[] { return offsetRoadPath(points, offset, closed); }
 
   private addRoadsidePoints(points: RoadPoint[], width: number, closed: boolean): void {
     for (const side of [-1, 1] as const) {
