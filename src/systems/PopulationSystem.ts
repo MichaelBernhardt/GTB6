@@ -27,6 +27,7 @@ export class PopulationSystem {
   private taxiState = new WeakMap<Vehicle, TaxiState>();
   private hootCooldown = 0;
   private parkedSpots: Array<[number, number]> = [];
+  private policePatrols: Pedestrian[] = [];
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.vehiclePlanner = new RoutePlanner(city.vehicleNav, 2);
@@ -94,6 +95,24 @@ export class PopulationSystem {
   }
 
   consumeImpacts(): Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle; ped: Pedestrian }> { return this.impacts.splice(0); }
+
+  /** Keeps a small, fully interactive foot-patrol presence near the player while district pressure is high. */
+  setPolicePatrolCount(count: number, focus: THREE.Vector3): void {
+    const desired = Math.max(0, Math.min(2, Math.floor(count)));
+    while (this.policePatrols.length > desired) {
+      const officer = this.policePatrols.pop(); if (!officer) break;
+      this.scene.remove(officer.group); const index = this.pedestrians.indexOf(officer); if (index >= 0) this.pedestrians.splice(index, 1);
+    }
+    while (this.policePatrols.length < desired) {
+      const candidates = this.city.sidewalkPoints.filter((point) => {
+        const distance = Math.hypot(point.x - focus.x, point.z - focus.z);
+        return distance > 25 && distance < 75 && this.city.districtAt(point.x, point.z) === 'Joburg CBD';
+      });
+      const point = candidates[(this.policePatrols.length * 17 + 5) % candidates.length]; if (!point) break;
+      const officer = new Pedestrian(this.scene, new THREE.Vector3(point.x, 0, point.z), 90 + this.policePatrols.length, false, true);
+      officer.pickDestination(this.city.sidewalkPoints); this.policePatrols.push(officer); this.pedestrians.push(officer);
+    }
+  }
 
   nearestPedestrian(position: THREE.Vector3, maxDistance = 3.2): Pedestrian | undefined {
     const nearest = this.pedestrians.filter((ped) => !ped.contact && ped.state !== 'down').sort((a, b) => a.group.position.distanceToSquared(position) - b.group.position.distanceToSquared(position))[0];

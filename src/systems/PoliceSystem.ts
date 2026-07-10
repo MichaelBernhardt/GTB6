@@ -9,8 +9,9 @@ import type { WantedSystem } from './WantedSystem';
 
 /** Max active interceptors per wanted level: 1-2 stars field two, escalating to eight at five stars. */
 export const POLICE_UNITS_BY_WANTED = [0, 2, 2, 4, 6, 8] as const;
-export function maxInterceptors(level: number): number {
-  return POLICE_UNITS_BY_WANTED[Math.min(POLICE_UNITS_BY_WANTED.length - 1, Math.max(0, Math.floor(level)))] ?? 0;
+export function maxInterceptors(level: number, reinforcementModifier = 0): number {
+  const base = POLICE_UNITS_BY_WANTED[Math.min(POLICE_UNITS_BY_WANTED.length - 1, Math.max(0, Math.floor(level)))] ?? 0;
+  return base === 0 ? 0 : Math.min(10, base + Math.max(0, Math.floor(reinforcementModifier)));
 }
 
 /** Within this range and with clear line of sight, units leave the nav graph and ram the player directly. */
@@ -31,10 +32,10 @@ export class PoliceSystem {
     this.planner = new RoutePlanner(city.vehicleNav, 2);
   }
 
-  update(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, knowledge: PoliceKnowledge<unknown>, damagePlayer: (amount: number) => void): void {
+  update(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, knowledge: PoliceKnowledge<unknown>, damagePlayer: (amount: number) => void, reinforcementModifier = 0): void {
     this.planner.beginFrame();
     this.spawnCooldown -= dt; this.attackCooldown -= dt;
-    const desired = maxInterceptors(wanted.level);
+    const desired = maxInterceptors(wanted.level, reinforcementModifier);
     const active = this.vehicles.filter((vehicle) => !vehicle.wrecked);
     const known = knowledge.lastKnown;
     const dispatchAt = known ? new THREE.Vector3(known.x, 0, known.z) : playerPosition;

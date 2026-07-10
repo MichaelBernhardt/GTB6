@@ -55,8 +55,8 @@ export class PoliceKnowledge<R = unknown> {
   get pendingReports(): number { return this.reports.length; }
 
   /** Civilian report: matures after REPORT_DELAY, then its heat lands and lastKnown becomes the crime scene. */
-  fileReport(x: number, z: number, heat: number, reporter?: R): void {
-    this.reports.push({ x, z, heat, maturesAt: this.now + REPORT_DELAY, reporter });
+  fileReport(x: number, z: number, heat: number, reporter?: R, delay = REPORT_DELAY): void {
+    this.reports.push({ x, z, heat, maturesAt: this.now + Math.max(0, delay), reporter });
   }
 
   /** Cop-witnessed crime: no dispatch lag — the officer's own eyes count as a sighting. */

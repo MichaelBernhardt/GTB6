@@ -33,6 +33,14 @@ The industrial waterfront becomes a combat space. Three hostile guards switch to
 
 All failed timed jobs retain their definition and can be restarted with `E`. Completed mission ids are persisted and their contact markers are removed.
 
+### The Arms Deal
+
+Thandi at Jozi Arms asks the player to decide the fate of an incoming shipment. Protecting the shop pays less but establishes trusted CBD standing and discounted prices. Robbing it pays more and supplies ammunition, but makes the player notorious, raises police pressure, and triggers an immediate pursuit. The choice is exclusive and persistent.
+
+## Living Joburg
+
+Joburg CBD tracks community standing from `-100` to `100` and long-term police pressure from `0` to `100`. Standing changes through civilian crime, local purchases, and The Arms Deal; pressure rises through violence and mission outcomes and cools slowly over time. Thresholds at `-50`, `-20`, `20`, and `50` drive civilian disposition, witness delay, Jozi Arms prices, local support, foot patrols, and pursuit reinforcements. Temporary wanted heat still clears independently.
+
 ## Handling roles
 
 - **Cielo Compact**: balanced speed, fast steering, approachable durability.

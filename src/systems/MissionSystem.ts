@@ -1,7 +1,8 @@
 import { Vector3 } from 'three';
 import type { GameSnapshot, WorldTarget } from '../types';
 
-export type ObjectiveKind = 'reach' | 'enter-kind' | 'checkpoints' | 'lose-wanted' | 'defeat' | 'collect' | 'escape';
+export type ObjectiveKind = 'reach' | 'enter-kind' | 'checkpoints' | 'lose-wanted' | 'defeat' | 'collect' | 'escape' | 'choice';
+export interface MissionChoice { id: 'protect' | 'rob'; label: string; detail: string; reward: number; }
 export interface MissionObjective {
   text: string;
   kind: ObjectiveKind;
@@ -10,6 +11,7 @@ export interface MissionObjective {
   vehicleColor?: number;
   required?: number;
   timeLimit?: number;
+  choices?: MissionChoice[];
 }
 export interface MissionDefinition { id: string; name: string; contact: string; intro: string; reward: number; start: WorldTarget; objectives: MissionObjective[]; }
 export type MissionState = 'available' | 'active' | 'failed' | 'complete';
@@ -46,9 +48,20 @@ export const MISSIONS: MissionDefinition[] = [
       { kind: 'reach', text: 'Bring it to Candice at Zoo Lake', target: target(-42, 0, 18, 'Braai kiosk') },
     ],
   },
+  {
+    id: 'arms-deal', name: 'The Arms Deal', contact: 'Thandi at Jozi Arms', reward: 0,
+    intro: 'Two crews want tonight\'s shipment. Help us keep the shop standing, or take the stock and make yourself rich. Either way, the CBD will remember.',
+    start: target(7, 0, 224, 'Thandi at Jozi Arms'), objectives: [
+      { kind: 'choice', text: 'Decide the fate of Jozi Arms', choices: [
+        { id: 'protect', label: 'Protect the shop', detail: 'Earn local trust and a Jozi Arms discount. Police pressure will rise.', reward: 900 },
+        { id: 'rob', label: 'Rob the shipment', detail: 'Take a large payout and ammo. Locals will fear you and JMPD will harden the CBD.', reward: 2200 },
+      ] },
+    ],
+  },
 ];
 
-export interface MissionUpdate { advanced?: boolean; completed?: MissionDefinition; failed?: string; }
+export interface MissionChoiceResult { missionId: string; choice: MissionChoice; }
+export interface MissionUpdate { advanced?: boolean; completed?: MissionDefinition; failed?: string; choice?: MissionChoiceResult; }
 
 export class MissionSystem {
   active?: MissionDefinition;
@@ -90,6 +103,7 @@ export class MissionSystem {
       case 'defeat': this.progress = snapshot.hostileDefeated; done = this.progress >= (objective.required ?? 1); break;
       case 'collect': done = snapshot.collectedItem && reachedTarget; break;
       case 'checkpoints': done = this.progress >= (objective.required ?? 1); break;
+      case 'choice': done = false; break;
     }
     if (!done) return {};
     return this.advance();
@@ -99,6 +113,15 @@ export class MissionSystem {
     if (this.objective?.kind !== 'checkpoints' || this.state !== 'active') return {};
     this.progress += 1;
     return this.progress >= (this.objective.required ?? 1) ? this.advance() : { advanced: true };
+  }
+
+  choose(id: MissionChoice['id']): MissionUpdate {
+    const objective = this.objective;
+    if (!this.active || this.state !== 'active' || objective?.kind !== 'choice') return {};
+    const choice = objective.choices?.find((option) => option.id === id);
+    if (!choice) return {};
+    const missionId = this.active.id; const update = this.advance();
+    return { ...update, choice: { missionId, choice } };
   }
 
   private advance(): MissionUpdate {

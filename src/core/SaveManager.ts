@@ -1,6 +1,7 @@
 import { VEHICLE_SPECS, WEAPONS, WEAPON_BY_ID, type VehicleKind, type WeaponId } from '../config';
 import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
 import type { CheatSettings, GameSettings, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
+import { defaultLivingCityState, sanitizeLivingCityState } from '../systems/LivingCitySystem';
 
 const KEY = 'groot-theft-bakkie-save-v1';
 export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW };
@@ -39,28 +40,30 @@ export function sanitizeGarage(raw: unknown): SavedVehicle | null {
   return { kind: spec.kind, color, health };
 }
 
-export const DEFAULT_SAVE: SavedGame = { version: 1, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null };
+export const DEFAULT_SAVE: SavedGame = { version: 2, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState() };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
 export class SaveManager {
   constructor(private storage: StorageLike = localStorage) {}
+  hasSave(): boolean { return this.storage.getItem(KEY) !== null; }
   load(): SavedGame {
     try {
       const value = this.storage.getItem(KEY);
       if (!value) return structuredClone(DEFAULT_SAVE);
-      const parsed = JSON.parse(value) as Partial<SavedGame>;
-      if (parsed.version !== 1) return structuredClone(DEFAULT_SAVE);
+      const parsed = JSON.parse(value) as Partial<Omit<SavedGame, 'version'>> & { version?: number };
+      if (parsed.version !== 1 && parsed.version !== 2) return structuredClone(DEFAULT_SAVE);
       const settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
       if (settings.quality !== 'low' && settings.quality !== 'medium' && settings.quality !== 'high') settings.quality = 'high';
       settings.cameraViewFoot = sanitizeView(settings.cameraViewFoot); settings.cameraViewVehicle = sanitizeView(settings.cameraViewVehicle);
       return {
-        ...structuredClone(DEFAULT_SAVE), ...parsed,
+        ...structuredClone(DEFAULT_SAVE), ...parsed, version: 2,
         completedMissions: Array.isArray(parsed.completedMissions) ? parsed.completedMissions : [],
         settings,
         weapons: sanitizeWeapons(parsed.weapons),
         cheats: sanitizeCheats(parsed.cheats),
         garage: sanitizeGarage(parsed.garage),
+        livingCity: sanitizeLivingCityState(parsed.livingCity),
       };
     } catch { return structuredClone(DEFAULT_SAVE); }
   }

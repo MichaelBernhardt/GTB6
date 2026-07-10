@@ -63,6 +63,13 @@ describe('report maturation', () => {
     expect(knowledge.update(REPORT_DELAY)).toEqual([]);
     expect(knowledge.lastKnown).toBeNull();
   });
+
+  it('supports reputation-adjusted report delays', () => {
+    const knowledge = new PoliceKnowledge<string>();
+    knowledge.fileReport(4, 6, 8, 'witness', 10);
+    expect(knowledge.update(9)).toEqual([]);
+    expect(knowledge.update(1).map((report) => report.heat)).toEqual([8]);
+  });
 });
 
 describe('cop-witnessed crimes and sightings', () => {

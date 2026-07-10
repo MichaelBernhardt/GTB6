@@ -1,5 +1,6 @@
 import type { Vector3 } from 'three';
 import type { VehicleKind, WeaponId } from './config';
+import type { LivingCityState } from './systems/LivingCitySystem';
 
 export type GameMode = 'loading' | 'menu' | 'playing' | 'paused' | 'dead';
 export type District = 'Joburg CBD' | 'Sandton' | 'City Deep' | 'Braamfontein' | 'Zoo Lake';
@@ -10,7 +11,7 @@ export interface SavedWeapons { current: WeaponId; loadout: Record<WeaponId, Sav
 export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerable: boolean; }
 export interface SavedVehicle { kind: VehicleKind; color: number; health: number; }
 export interface SavedGame {
-  version: 1;
+  version: 2;
   money: number;
   completedMissions: string[];
   spawn: [number, number, number];
@@ -18,6 +19,7 @@ export interface SavedGame {
   weapons: SavedWeapons;
   cheats: CheatSettings;
   garage: SavedVehicle | null;
+  livingCity: LivingCityState;
 }
 export interface GameSettings {
   masterVolume: number;

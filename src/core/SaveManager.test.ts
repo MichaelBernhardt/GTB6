@@ -10,6 +10,11 @@ class MemoryStorage implements StorageLike {
 }
 
 describe('SaveManager', () => {
+  it('reports whether persisted progress exists', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage); expect(manager.hasSave()).toBe(false);
+    manager.save(DEFAULT_SAVE); expect(manager.hasSave()).toBe(true); manager.reset(); expect(manager.hasSave()).toBe(false);
+  });
+
   it('round trips progress', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     manager.save({ ...DEFAULT_SAVE, money: 2300, completedMissions: ['delivery-run'] });
@@ -121,5 +126,22 @@ describe('SaveManager', () => {
     expect(sanitizeCheats({ fastRun: true })).toEqual({ fastRun: true, bigJump: false, invulnerable: false });
     const defaults = sanitizeCheats(undefined); defaults.fastRun = true;
     expect(DEFAULT_CHEATS.fastRun).toBe(false);
+  });
+
+  it('migrates version 1 saves to neutral Living City state without losing progress', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ ...DEFAULT_SAVE, version: 1, money: 4321, completedMissions: ['hot-property'], livingCity: undefined }));
+    const loaded = manager.load();
+    expect(loaded.version).toBe(2); expect(loaded.money).toBe(4321); expect(loaded.completedMissions).toEqual(['hot-property']);
+    expect(loaded.livingCity.districts['Joburg CBD']).toEqual({ communityStanding: 0, policePressure: 0 });
+  });
+
+  it('round trips and sanitizes Living City state', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    const save = structuredClone(DEFAULT_SAVE); save.livingCity.districts['Joburg CBD'] = { communityStanding: 55, policePressure: 30 }; save.livingCity.joziArmsResolution = 'protected';
+    manager.save(save); expect(manager.load().livingCity).toEqual(save.livingCity);
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ ...save, livingCity: { districts: { 'Joburg CBD': { communityStanding: -999, policePressure: 'high' } }, joziArmsResolution: 'invalid' } }));
+    expect(manager.load().livingCity.districts['Joburg CBD']).toEqual({ communityStanding: -100, policePressure: 0 });
+    expect(manager.load().livingCity.joziArmsResolution).toBeNull();
   });
 });
