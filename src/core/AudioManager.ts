@@ -5,6 +5,7 @@ interface BurstOptions { duration: number; type: BiquadFilterType; frequency: nu
 interface BlipOptions { type?: OscillatorType; slide?: number; at?: number; pan?: number; attack?: number; }
 interface EngineVoice { osc: OscillatorNode; sub: OscillatorNode; wobble: OscillatorNode; intake: AudioBufferSourceNode; intakeGain: GainNode; filter: BiquadFilterNode; gain: GainNode; gear: number; }
 interface SirenVoice { oscillators: OscillatorNode[]; gain: GainNode; pan: StereoPannerNode; }
+interface FireVoice { sources: AudioBufferSourceNode[]; lfo: OscillatorNode; gain: GainNode; pan: StereoPannerNode; nextPop: number; }
 interface Ambience { traffic: GainNode; wind: GainNode; windLfo: OscillatorNode; nextEvent: number; }
 
 export class AudioManager {
@@ -15,6 +16,7 @@ export class AudioManager {
   private rumble?: AudioBuffer;
   private engineVoice?: EngineVoice;
   private sirenVoice?: SirenVoice;
+  private fireVoice?: FireVoice;
   private ambience?: Ambience;
   private listener = { x: 0, z: 0, yaw: 0 };
   private lastScream = 0;
@@ -228,6 +230,26 @@ export class AudioManager {
     voice.pan.pan.setTargetAtTime(stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.7, t, 0.12);
   }
 
+  setFire(active: boolean, x = 0, z = 0): void {
+    if (!this.context || !this.master) return;
+    const t = this.now();
+    if (active && !this.fireVoice) this.fireVoice = this.buildFire();
+    const voice = this.fireVoice; if (!voice) return;
+    if (!active) {
+      voice.gain.gain.setTargetAtTime(0.0001, t, 0.3);
+      for (const source of [...voice.sources, voice.lfo]) { try { source.stop(t + 1.4); } catch { /* already stopped */ } }
+      this.fireVoice = undefined; return;
+    }
+    const level = distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 11, 120);
+    const pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.65;
+    voice.gain.gain.setTargetAtTime(0.12 * level, t, 0.14);
+    voice.pan.pan.setTargetAtTime(pan, t, 0.14);
+    if (t >= voice.nextPop && level > 0.02) {
+      voice.nextPop = t + 0.06 + Math.random() * 0.34;
+      this.burst({ duration: 0.05, type: 'bandpass', frequency: 700 + Math.random() * 2600, q: 6, peak: (0.015 + Math.random() * 0.05) * level, decay: 0.03 + Math.random() * 0.045, pan: Math.max(-1, Math.min(1, pan + Math.random() * 0.5 - 0.25)) });
+    }
+  }
+
   private now(): number { return this.context?.currentTime ?? 0; }
 
   private buildNoise(seconds: number, sample: () => number): AudioBuffer {
@@ -295,6 +317,26 @@ export class AudioManager {
     osc.connect(filter); high.connect(filter); filter.connect(gain).connect(pan).connect(master);
     osc.start(); high.start(); lfo.start();
     return { oscillators: [osc, high, lfo], gain, pan };
+  }
+
+  private buildFire(): FireVoice {
+    const context = this.context as AudioContext; const master = this.master as GainNode;
+    const crackle = context.createBufferSource(); crackle.buffer = this.noise as AudioBuffer; crackle.loop = true; crackle.playbackRate.value = 0.72;
+    const crackleFilter = context.createBiquadFilter(); crackleFilter.type = 'bandpass'; crackleFilter.frequency.value = 640; crackleFilter.Q.value = 0.5;
+    const crackleGain = context.createGain(); crackleGain.gain.value = 0.6;
+    const bed = context.createBufferSource(); bed.buffer = this.rumble as AudioBuffer; bed.loop = true;
+    const bedFilter = context.createBiquadFilter(); bedFilter.type = 'lowpass'; bedFilter.frequency.value = 210;
+    const bedGain = context.createGain(); bedGain.gain.value = 0.85;
+    const gain = context.createGain(); gain.gain.value = 0.0001;
+    const lfo = context.createOscillator(); lfo.frequency.value = 8.3;
+    const lfoDepth = context.createGain(); lfoDepth.gain.value = 0.03;
+    lfo.connect(lfoDepth).connect(gain.gain);
+    const pan = context.createStereoPanner();
+    crackle.connect(crackleFilter).connect(crackleGain).connect(gain);
+    bed.connect(bedFilter).connect(bedGain).connect(gain);
+    gain.connect(pan).connect(master);
+    crackle.start(); bed.start(); lfo.start();
+    return { sources: [crackle, bed], lfo, gain, pan, nextPop: this.now() };
   }
 
   private horn(pan: number): void {

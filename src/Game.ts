@@ -22,6 +22,7 @@ import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { PoliceSystem } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
+import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
 import type { GameMode, GameSettings, SavedGame, WorldTarget } from './types';
 import { UIManager } from './ui/UIManager';
@@ -51,6 +52,7 @@ export class Game {
   private gore: GoreSystem;
   private pickups: PickupSystem;
   private projectiles: ProjectileSystem;
+  private vehicleFire: VehicleFireSystem;
   private shake = 0;
   private wanted = new WantedSystem();
   private police: PoliceSystem;
@@ -90,6 +92,7 @@ export class Game {
     this.gore = new GoreSystem(this.scene);
     this.pickups = new PickupSystem(this.scene);
     this.projectiles = new ProjectileSystem(this.scene);
+    this.vehicleFire = new VehicleFireSystem(this.scene);
     this.combat.onRocket = (origin, direction, spec) => { if (spec.projectile) this.projectiles.spawn(origin, direction, spec.projectile, spec.range); };
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
     this.input = new InputManager(this.renderer.domElement);
@@ -200,10 +203,42 @@ export class Game {
       }
       if (boom.playerDamage > 0) this.damagePlayer(boom.playerDamage);
     }
+    this.updateVehicleFires(dt, focus);
     for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition)) this.applyPickup(item);
     this.combat.update(dt); this.gore.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
     this.saveTimer += dt; if (this.saveTimer > 8) { this.persist(); this.saveTimer = 0; }
     if (this.player.health <= 0) this.die();
+  }
+
+  private updateVehicleFires(dt: number, focus: THREE.Vector3): void {
+    const allVehicles = [...this.population.vehicles, ...this.police.vehicles];
+    const fire = this.vehicleFire.update(dt, allVehicles, this.population.pedestrians, this.player.group.position);
+    for (const vehicle of fire.ignitions) {
+      if (vehicle === this.activeVehicle || vehicle === this.transition?.vehicle) this.ui.notify('Vehicle on fire', 'Bail out before it blows.', false);
+      else if (vehicle.occupied) { this.population.ejectDriver(vehicle, vehicle.group.position.clone(), vehicle.police); vehicle.occupied = false; }
+    }
+    for (const boom of fire.burnouts) {
+      this.audio.explosion(boom.position.x, boom.position.z);
+      this.population.broadcastFear(boom.position, FEAR_EVENTS.kill);
+      this.shake = Math.min(0.7, this.shake + 0.4);
+      if (boom.vehicle.police) this.wanted.addCrime(POLICE_WRECK_HEAT);
+      for (const victim of boom.victims) {
+        this.gore.burst(victim.position, victim.killed ? 1.4 : 0.85, victim.killed);
+        if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
+      }
+      if (boom.vehicle === this.activeVehicle || boom.vehicle === this.transition?.vehicle) { this.ejectFromWreck(boom.vehicle); this.damagePlayer(OCCUPANT_BURNOUT_DAMAGE); }
+      else if (boom.playerDamage > 0) this.damagePlayer(boom.playerDamage);
+    }
+    const nearestFire = allVehicles.reduce<Vehicle | undefined>((best, vehicle) => vehicle.onFire && (!best || vehicle.group.position.distanceToSquared(focus) < best.group.position.distanceToSquared(focus)) ? vehicle : best, undefined);
+    this.audio.setFire(Boolean(nearestFire), nearestFire?.group.position.x, nearestFire?.group.position.z);
+  }
+
+  private ejectFromWreck(vehicle: Vehicle): void {
+    vehicle.playerControlled = false; this.activeVehicle = undefined; this.transition = undefined;
+    this.player.inVehicle = false; this.player.setVisible(true);
+    const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(2.2);
+    this.player.group.position.copy(vehicle.group.position).add(side).setY(0);
+    this.audio.setEngine(false);
   }
 
   private updateOnFoot(dt: number): void {
@@ -281,7 +316,7 @@ export class Game {
     this.prevDrivenSpeed = speed;
     if (this.input.consume('KeyE')) this.beginExit(vehicle);
     if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Vehicle recovered', vehicle.spec.name); }
-    if (vehicle.disabled) { this.ui.notify('Vehicle disabled', 'Exit before it catches fire.', false); this.beginExit(vehicle); }
+    if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
 
   private beginEnter(vehicle: Vehicle): void {
@@ -392,7 +427,7 @@ export class Game {
     const missionId = this.missions.active?.id;
     const vehicle = this.population.vehicles.find((item) => missionId === 'delivery-run' ? item.spec.color === 0xf1c232 : missionId === 'hot-property' ? item.spec.color === 0xd83a40 : false);
     if (vehicle) {
-      vehicle.health = vehicle.maxHealth; vehicle.disabled = false;
+      vehicle.restore();
       vehicle.heading = missionId === 'delivery-run' ? 0 : Math.PI / 2;
       vehicle.reset(missionId === 'delivery-run' ? new THREE.Vector3(-105.5, 0, 240) : new THREE.Vector3(30, 0, 205.5));
     }
@@ -466,20 +501,20 @@ export class Game {
     this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings });
     const markers = this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [];
     const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
-    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
+    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
   }
 
   private damagePlayer(amount: number): void { if (amount > 0) this.ui.damageFlash(); this.player.takeDamage(amount); }
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.closeWeaponWheel(); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.closeWeaponWheel(); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
   }
-  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize() }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }

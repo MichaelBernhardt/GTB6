@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { VEHICLE_SPECS, type VehicleKind, type VehicleSpec } from '../config';
 import type { InputManager } from '../core/InputManager';
+import { rollBurnDuration } from '../systems/VehicleFireSystem';
 import type { City } from '../world/City';
+
+type VehicleMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial | THREE.MeshBasicMaterial;
 
 export class Vehicle {
   group = new THREE.Group();
@@ -16,6 +19,9 @@ export class Vehicle {
   occupied = false;
   police = false;
   disabled = false;
+  onFire = false;
+  wrecked = false;
+  burnTimer = 0;
   aiTarget = new THREE.Vector3();
   aiStuck = 0;
   private wheels: THREE.Object3D[] = [];
@@ -63,8 +69,47 @@ export class Vehicle {
   }
 
   takeDamage(amount: number): void {
+    if (this.wrecked) return;
     this.health = Math.max(0, this.health - amount);
-    if (this.health === 0) { this.disabled = true; this.speed *= 0.3; }
+    if (this.health === 0) { this.disabled = true; this.speed *= 0.3; this.ignite(); }
+  }
+
+  ignite(random: () => number = Math.random): void {
+    if (this.onFire || this.wrecked) return;
+    this.onFire = true; this.disabled = true; this.health = 0; this.burnTimer = rollBurnDuration(random);
+  }
+
+  wreck(): void {
+    if (this.wrecked) return;
+    this.wrecked = true; this.onFire = false; this.disabled = true; this.health = 0; this.speed = 0; this.occupied = false; this.burnTimer = 0;
+    const lightbar = this.group.getObjectByName('lightbar'); if (lightbar) lightbar.visible = false;
+    this.forEachMaterial((material) => {
+      if (material.userData.originalColor === undefined) {
+        material.userData.originalColor = material.color.getHex();
+        if ('emissiveIntensity' in material) material.userData.originalEmissive = material.emissiveIntensity;
+      }
+      material.color.lerp(new THREE.Color(0x0d0c0b), 0.88);
+      if ('emissiveIntensity' in material) material.emissiveIntensity = 0;
+    });
+  }
+
+  restore(): void {
+    this.wrecked = false; this.onFire = false; this.disabled = false; this.burnTimer = 0; this.health = this.maxHealth;
+    const lightbar = this.group.getObjectByName('lightbar'); if (lightbar) lightbar.visible = true;
+    this.forEachMaterial((material) => {
+      if (material.userData.originalColor !== undefined) material.color.setHex(material.userData.originalColor as number);
+      if ('emissiveIntensity' in material && material.userData.originalEmissive !== undefined) material.emissiveIntensity = material.userData.originalEmissive as number;
+    });
+  }
+
+  private forEachMaterial(apply: (material: VehicleMaterial) => void): void {
+    const seen = new Set<VehicleMaterial>();
+    this.group.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || object.parent?.name === 'firefx') return;
+      const material = object.material as VehicleMaterial;
+      if (seen.has(material)) return;
+      seen.add(material); apply(material);
+    });
   }
 
   reset(position?: THREE.Vector3): void {
