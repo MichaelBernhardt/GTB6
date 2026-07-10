@@ -7,8 +7,11 @@ import { FEAR_EVENTS, fearContribution, FEAR_MAX, type FearEvent } from './FearS
 import { MISSIONS } from './MissionSystem';
 import { RoutePlanner, type NavPoint } from './NavGraph';
 import type { City } from '../world/City';
+import { CITY_JUNCTIONS } from '../world/UrbanInfrastructure';
+import { powerOn } from '../world/powerGrid';
 
 interface DrivePlan { points: NavPoint[]; index: number; }
+interface TaxiState { stopTimer: number; dwell: number; hootTimer: number; }
 
 export class PopulationSystem {
   pedestrians: Pedestrian[] = [];
@@ -21,6 +24,9 @@ export class PopulationSystem {
   private trafficPlans = new WeakMap<Vehicle, DrivePlan>();
   private vehiclePlanner: RoutePlanner;
   private pedPlanner: RoutePlanner;
+  private taxiState = new WeakMap<Vehicle, TaxiState>();
+  private hootCooldown = 0;
+  private parkedSpots: Array<[number, number]> = [];
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.vehiclePlanner = new RoutePlanner(city.vehicleNav, 2);
@@ -37,12 +43,19 @@ export class PopulationSystem {
       this.pedestrianImpactCooldown.set(ped, Math.max(0, (this.pedestrianImpactCooldown.get(ped) ?? 0) - dt));
     }
     this.witnessBodies(dt);
+    const robotsOut = !powerOn();
+    this.hootCooldown = Math.max(0, this.hootCooldown - dt);
     for (const vehicle of this.traffic) {
       if (vehicle.playerControlled || vehicle.disabled) continue;
       this.followDrivePlan(vehicle);
       const forward = new THREE.Vector3(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
       const blocked = this.vehicles.some((other) => other !== vehicle && other.group.position.distanceToSquared(vehicle.group.position) < 70 && other.group.position.clone().sub(vehicle.group.position).dot(forward) > 0);
-      if (vehicle.group.position.distanceToSquared(player) < 320 * 320) vehicle.updateAI(dt, this.city, undefined, blocked ? 0.05 : TRAFFIC_SPEED_FACTOR);
+      const taxi = vehicle.spec.kind === 'taxi';
+      const junctionPanic = robotsOut && !taxi && CITY_JUNCTIONS.some((junction) => (junction.x - vehicle.group.position.x) ** 2 + (junction.z - vehicle.group.position.z) ** 2 < 576);
+      if (vehicle.group.position.distanceToSquared(player) < 320 * 320) {
+        const throttle = taxi ? this.taxiThrottle(vehicle, dt, player, blocked) : blocked ? 0.05 : junctionPanic ? 0.03 : TRAFFIC_SPEED_FACTOR;
+        vehicle.updateAI(dt, this.city, undefined, throttle);
+      }
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
       if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);
     }
@@ -62,6 +75,22 @@ export class PopulationSystem {
     const before = ped.state;
     ped.applyFear(amount, origin);
     if (before !== ped.state && (ped.state === 'flee' || ped.state === 'cower') && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+  }
+
+  private taxiThrottle(vehicle: Vehicle, dt: number, player: THREE.Vector3, blocked: boolean): number {
+    const state = this.taxiState.get(vehicle) ?? { stopTimer: 6 + Math.random() * 9, dwell: 0, hootTimer: 2 + Math.random() * 3 };
+    state.stopTimer -= dt; state.hootTimer -= dt; state.dwell = Math.max(0, state.dwell - dt);
+    if (state.stopTimer <= 0) {
+      const passengerNearby = this.pedestrians.some((ped) => ped.state === 'walk' && ped.group.position.distanceToSquared(vehicle.group.position) < 784);
+      state.dwell = passengerNearby ? 2.6 : 1.2;
+      state.stopTimer = 7 + Math.random() * 10;
+    }
+    if (state.hootTimer <= 0 && this.hootCooldown === 0 && vehicle.group.position.distanceToSquared(player) < 9025) {
+      this.audio.taxiHoot(); state.hootTimer = 3 + Math.random() * 5; this.hootCooldown = 0.6;
+    }
+    this.taxiState.set(vehicle, state);
+    if (state.dwell > 0) return 0;
+    return blocked ? 0.05 : TRAFFIC_SPEED_FACTOR * 2;
   }
 
   consumeImpacts(): Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle; ped: Pedestrian }> { return this.impacts.splice(0); }
@@ -100,11 +129,13 @@ export class PopulationSystem {
     for (const [kind, x, z, heading, color] of parked) {
       const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z)); const vehicle = new Vehicle(this.scene, kind, pose.position, color);
       vehicle.heading = Number.isFinite(pose.heading) ? pose.heading : heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
+      this.parkedSpots.push([pose.position.x, pose.position.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'sport', 'van'];
-    for (let i = 0; i < 13; i++) {
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'taxi', 'van', 'taxi'];
+    for (let i = 0; i < 15; i++) {
       const routeIndex = (i * 5 + 3) % this.city.trafficRoutes.length; const route = this.city.trafficRoutes[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
-      const vehicle = new Vehicle(this.scene, kinds[i % kinds.length], new THREE.Vector3(point.x, 0, point.z), [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
+      const kind = kinds[i % kinds.length] ?? 'compact';
+      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, 0, point.z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
       vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     }
   }
@@ -117,6 +148,13 @@ export class PopulationSystem {
     MISSIONS.forEach((mission, index) => {
       const contact = new Pedestrian(this.scene, mission.start.position.clone(), index + 70);
       contact.state = 'idle'; contact.idleTime = 999999; contact.contact = true; contact.group.name = mission.contact; this.pedestrians.push(contact);
+    });
+    this.parkedSpots.slice(0, 4).forEach(([x, z], index) => {
+      let best: { x: number; z: number } | undefined; let bestDistance = Infinity;
+      for (const point of this.city.sidewalkPoints) { const distance = (point.x - x) ** 2 + (point.z - z) ** 2; if (distance < bestDistance) { bestDistance = distance; best = point; } }
+      if (!best) return;
+      const guard = new Pedestrian(this.scene, new THREE.Vector3(best.x, 0, best.z), index + 50);
+      guard.state = 'idle'; guard.idleTime = 999999; guard.makeCarGuard(); this.pedestrians.push(guard);
     });
   }
 

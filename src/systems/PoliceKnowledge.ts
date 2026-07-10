@@ -1,6 +1,6 @@
 import type { NavPoint } from './NavGraph';
 
-/** Seconds between a civilian witnessing a crime and SCPD dispatch hearing about it. Tune freely. */
+/** Seconds between a civilian witnessing a crime and JMPD dispatch hearing about it. Tune freely. */
 export const REPORT_DELAY = 30;
 /** A sighting means the player is this close to an active unit (with line of sight). */
 export const SIGHT_RADIUS = 55;
@@ -45,7 +45,7 @@ export function pickRoamGoal(nodes: readonly NavPoint[], center: { x: number; z:
   return candidates.length ? candidates[Math.floor(random() * candidates.length)] ?? nearest : nearest;
 }
 
-/** What SCPD actually knows: the last place any officer saw the player, plus 911 reports still in the
+/** What JMPD actually knows: the last place any officer saw the player, plus 911 reports still in the
  *  dispatch pipeline. Police plan on this state only — never on live game state. */
 export class PoliceKnowledge<R = unknown> {
   lastKnown: KnownPosition | null = null;

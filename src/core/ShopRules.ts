@@ -1,6 +1,6 @@
 import { WEAPON_BY_ID, type WeaponId } from '../config';
 
-/** Sticker prices at Cordova Arms. Ammo refills cost ~15% of the weapon price. */
+/** Sticker prices at Jozi Arms. Ammo refills cost ~15% of the weapon price. */
 export const WEAPON_PRICES: Partial<Record<WeaponId, number>> = { pistol: 400, smg: 1200, shotgun: 900, rpg: 5000 };
 export const AMMO_PRICE_FACTOR = 0.15;
 

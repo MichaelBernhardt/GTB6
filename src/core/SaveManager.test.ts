@@ -19,14 +19,14 @@ describe('SaveManager', () => {
 
   it('recovers from malformed storage and resets', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
-    storage.setItem('san-cordova-save-v1', 'bad json');
+    storage.setItem('groot-theft-bakkie-save-v1', 'bad json');
     expect(manager.load()).toEqual(DEFAULT_SAVE);
     expect(manager.reset()).toEqual(DEFAULT_SAVE);
   });
 
   it('migrates old saves without weapons to the default loadout', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
-    storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 900, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings }));
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 1, money: 900, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings }));
     const loaded = manager.load();
     expect(loaded.money).toBe(900);
     expect(loaded.weapons).toEqual(defaultWeapons());

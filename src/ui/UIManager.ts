@@ -54,9 +54,10 @@ export class UIManager {
     const timer = state.mission.remainingTime > 0 ? ` <b>${Math.ceil(state.mission.remainingTime)}s</b>` : '';
     const progress = objective?.required ? ` <span>${state.mission.progress}/${objective.required}</span>` : '';
     this.hud.innerHTML = `
-      <div class="brand">SAN <strong>CORDOVA</strong><small>${state.district}</small></div>
-      <div class="status"><div class="health"><i style="width:${state.health}%"></i><span>HEALTH ${Math.ceil(state.health)}</span></div><div class="cash">$${state.money.toLocaleString()}</div></div>
+      <div class="brand">GROOT THEFT <strong>BAKKIE</strong><small>${state.district}</small></div>
+      <div class="status"><div class="health"><i style="width:${state.health}%"></i><span>HEALTH ${Math.ceil(state.health)}</span></div><div class="cash">R${state.money.toLocaleString()}</div></div>
       <div class="weapon"><span>${state.weaponName}</span>${state.melee ? '<b>&mdash;</b>' : `<b>${state.ammo}</b><small>/ ${state.reserve}</small>${state.reloading ? '<em>RELOADING</em>' : ''}`}</div>
+
       <div class="wanted">${Array.from({ length: 5 }, (_, i) => `<i class="${i < state.wanted ? 'hot' : ''}">★</i>`).join('')}</div>
       ${state.vehicle ? `<div class="vehicle"><span>${state.vehicle.spec.name}</span><b>${Math.round(Math.abs(state.vehicle.speed) * 3.6)}</b><small>KM/H</small><em>${Math.ceil(state.vehicle.health)}%</em></div>` : ''}
       ${objective ? `<div class="objective"><small>${state.mission.active?.name}</small><span>${objective.text}${progress}${timer}</span></div>` : ''}
@@ -107,14 +108,14 @@ export class UIManager {
     if (this.screen === 'pause') { this.onResume?.(); return true; }
     return false;
   }
-  showLoading(): void { this.menu.innerHTML = `<div class="menu-panel"><p class="kicker">SAN CORDOVA</p><h2>Building the city...</h2></div>`; this.menu.classList.add('visible'); }
+  showLoading(): void { this.menu.innerHTML = `<div class="menu-panel"><p class="kicker">GROOT THEFT BAKKIE</p><h2>Building Jozi... now now.</h2></div>`; this.menu.classList.add('visible'); }
   showMainMenu(): void {
-    this.menu.innerHTML = `<div class="menu-panel"><p class="kicker">A SAN CORDOVA STORY</p><h1>NEON<br><strong>RECKONING</strong></h1><p>Make a name across five districts where every shortcut has a consequence.</p><div class="menu-actions"><button id="continue">Enter San Cordova</button><button id="new">New game</button><button id="help">Controls</button></div><small>Original procedural open-world game</small></div>`;
+    this.menu.innerHTML = `<div class="menu-panel"><p class="kicker">A JOZI STORY</p><h1>GROOT THEFT<br><strong>BAKKIE</strong></h1><p>Make a name across five districts where every robot is a suggestion and every pothole is personal.</p><div class="menu-actions"><button id="continue">Enter Joburg</button><button id="new">New game</button><button id="help">Controls</button></div><small>Original procedural open-world game. Load shedding included at no extra cost.</small></div>`;
     this.menu.classList.add('visible'); this.screen = 'main'; this.bind('#continue', () => this.onStart?.(false)); this.bind('#new', () => this.onStart?.(true)); this.bind('#help', () => this.showControls(true));
   }
   showPause(settings: GameSettings): void {
-    this.menu.innerHTML = `<div class="menu-panel compact"><p class="kicker">GAME PAUSED</p><h2>San Cordova</h2><button id="resume">Resume</button><button id="restart">Respawn</button><button id="controls">Controls</button><button id="cheats">Cheats</button><label>Master volume <input id="volume" type="range" min="0" max="1" step="0.05" value="${settings.masterVolume}"></label><label>Mouse sensitivity <input id="sensitivity" type="range" min="0.001" max="0.006" step="0.0005" value="${settings.mouseSensitivity}"></label><label>Graphics quality <select id="quality"><option value="high" ${settings.quality === 'high' ? 'selected' : ''}>High</option><option value="medium" ${settings.quality === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${settings.quality === 'low' ? 'selected' : ''}>Low</option></select></label><label class="toggle"><input id="fpsToggle" type="checkbox" ${settings.showFps ? 'checked' : ''}> Performance display</label><button id="reset" class="danger">Reset saved progress</button></div>`;
-    this.menu.classList.add('visible'); this.screen = 'pause'; this.lastSettings = settings; this.bind('#resume', () => this.onResume?.()); this.bind('#restart', () => this.onRestart?.()); this.bind('#controls', () => this.showControls()); this.bind('#cheats', () => this.onShowCheats?.()); this.bind('#reset', () => this.onResetSave?.());
+    this.menu.innerHTML = `<div class="menu-panel compact"><p class="kicker">GAME PAUSED</p><h2>Joburg</h2><button id="resume">Resume</button><button id="restart">Respawn</button><button id="controls">Controls</button><button id="cheats">Cheats</button><label>Master volume <input id="volume" type="range" min="0" max="1" step="0.05" value="${settings.masterVolume}"></label><label>Mouse sensitivity <input id="sensitivity" type="range" min="0.001" max="0.006" step="0.0005" value="${settings.mouseSensitivity}"></label><label>Graphics quality <select id="quality"><option value="high" ${settings.quality === 'high' ? 'selected' : ''}>High</option><option value="medium" ${settings.quality === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${settings.quality === 'low' ? 'selected' : ''}>Low</option></select></label><label class="toggle"><input id="fpsToggle" type="checkbox" ${settings.showFps ? 'checked' : ''}> Performance display</label><button id="reset" class="danger">Reset saved progress</button></div>`;
+    this.menu.classList.add('visible'); this.screen = 'pause'; this.lastSettings = settings; this.bind('#resume', () => this.onResume?.()); this.bind('#restart', () => this.onRestart?.()); this.bind('#controls', () => this.showControls()); this.bind('#cheats', () => this.onShowCheats?.()); this.bind('#reset', () => this.onResetSave?.())
     this.menu.querySelector('#volume')?.addEventListener('input', (e) => this.onSettings?.({ masterVolume: Number((e.target as HTMLInputElement).value) }));
     this.menu.querySelector('#sensitivity')?.addEventListener('input', (e) => this.onSettings?.({ mouseSensitivity: Number((e.target as HTMLInputElement).value) }));
     this.menu.querySelector('#quality')?.addEventListener('change', (e) => this.onSettings?.({ quality: (e.target as HTMLSelectElement).value as GameSettings['quality'] }));
@@ -126,9 +127,9 @@ export class UIManager {
   }
   showShop(entries: ShopCatalogEntry[], balance: number): void {
     const rows = entries.map((entry) => entry.owned
-      ? `<button data-ammo="${entry.id}" ${entry.canRefill ? '' : 'disabled'}>${entry.name} &middot; ${entry.ammoFull ? 'ammo full' : `ammo refill $${entry.ammoPrice.toLocaleString()}`}<small>reserve ${entry.reserve}</small></button>`
-      : `<button data-buy="${entry.id}" ${entry.canBuy ? '' : 'disabled'}>${entry.name} &middot; $${entry.price.toLocaleString()}<small>${entry.canBuy ? 'buy' : 'not enough cash'}</small></button>`).join('');
-    this.menu.innerHTML = `<div class="menu-panel compact shop"><p class="kicker">CORDOVA ARMS</p><h2>Weapons Counter</h2><p class="balance">Cash on hand <b>$${balance.toLocaleString()}</b></p>${rows}<button id="leave">Leave the store</button></div>`;
+      ? `<button data-ammo="${entry.id}" ${entry.canRefill ? '' : 'disabled'}>${entry.name} &middot; ${entry.ammoFull ? 'ammo full' : `ammo refill R${entry.ammoPrice.toLocaleString()}`}<small>reserve ${entry.reserve}</small></button>`
+      : `<button data-buy="${entry.id}" ${entry.canBuy ? '' : 'disabled'}>${entry.name} &middot; R${entry.price.toLocaleString()}<small>${entry.canBuy ? 'buy' : 'not enough cash'}</small></button>`).join('');
+    this.menu.innerHTML = `<div class="menu-panel compact shop"><p class="kicker">JOZI ARMS</p><h2>Weapons Counter</h2><p class="balance">Cash on hand <b>R${balance.toLocaleString()}</b></p>${rows}<button id="leave">Leave the store</button></div>`;
     this.menu.classList.add('visible'); this.screen = 'shop';
     for (const entry of entries) {
       this.bind(`[data-buy="${entry.id}"]`, () => this.onBuyWeapon?.(entry.id));

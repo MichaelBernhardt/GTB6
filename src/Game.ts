@@ -18,6 +18,7 @@ import { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
 import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
+import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, SIGHT_RADIUS, type WitnessCandidate } from './systems/PoliceKnowledge';
@@ -31,6 +32,8 @@ import type { CheatSettings, GameMode, GameSettings, SavedGame, WorldTarget } fr
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
+import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
+import { setPower } from './world/powerGrid';
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
@@ -62,6 +65,7 @@ export class Game {
   private knowledge = new PoliceKnowledge<Pedestrian>();
   private police: PoliceSystem;
   private missions = new MissionSystem();
+  private loadShedding = new LoadSheddingSystem();
   private economy: Economy;
   private shops: ShopSystem;
   private garageVehicle?: Vehicle;
@@ -77,6 +81,9 @@ export class Game {
   private deliveryIndex = 0;
   private deathTimer = 0;
   private saveTimer = 0;
+  private potholeCooldown = 0;
+  private etollCooldowns: number[] = ETOLL_GANTRIES.map(() => 0);
+  private radioIntroShown = false;
   private footstepTimer = 0;
   private prevDrivenSpeed = 0;
   private wallCrashCooldown = 0;
@@ -147,7 +154,7 @@ export class Game {
 
   private bindUI(): void {
     this.ui.onStart = (fresh) => this.startGame(fresh);
-    this.ui.onResume = () => { this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
+    this.ui.onResume = () => { this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); if (this.activeVehicle) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
     this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
     this.ui.onSettings = (settings) => {
@@ -172,7 +179,7 @@ export class Game {
   private startGame(fresh: boolean): void {
     if (fresh) { this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); }
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
-    this.ui.notify('Welcome to San Cordova', 'Mission contacts are marked in gold.');
+    this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
 
   private animate = (): void => {
@@ -205,6 +212,9 @@ export class Game {
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
     this.city.update(dt);
+    const eskom = this.loadShedding.update(dt);
+    if (eskom === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
+    else if (eskom === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
     for (const impact of this.population.consumeImpacts()) {
       const intensity = Math.min(1.6, Math.abs(impact.vehicle.speed) / 16);
       this.gore.burst(impact.position, intensity, impact.killed);
@@ -339,13 +349,31 @@ export class Game {
     this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
     if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; }
     this.prevDrivenSpeed = speed;
+    this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
+    if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
+      const position = vehicle.group.position;
+      const hit = this.city.potholes.find((hole) => (hole.x - position.x) ** 2 + (hole.z - position.z) ** 2 < hole.r * hole.r);
+      if (hit) {
+        vehicle.speed *= 0.8; vehicle.bounce = Math.min(0.28, Math.abs(vehicle.speed) * 0.012); vehicle.takeDamage(2);
+        this.audio.collision(14); this.potholeCooldown = 0.9;
+        if (Math.random() < 0.3) this.ui.notify('Pothole', 'Wheel alignment: R850. Cash only.', false);
+      }
+    }
+    ETOLL_GANTRIES.forEach((gantry, index) => {
+      this.etollCooldowns[index] = Math.max(0, (this.etollCooldowns[index] ?? 0) - dt);
+      if ((this.etollCooldowns[index] ?? 0) === 0 && (gantry.x - vehicle.group.position.x) ** 2 + (gantry.z - vehicle.group.position.z) ** 2 < 169) {
+        this.audio.beep();
+        this.ui.notify('e-toll charged: R12.50', 'Outstanding balance since 2013. Nobody pays.', false);
+        this.etollCooldowns[index] = 20;
+      }
+    });
     if (this.input.consume('KeyE')) {
       const shop = this.shops.shopNear(vehicle.group.position);
       if (shop?.kind === 'spray') { this.useSpray(vehicle); return; }
       if (shop?.kind === 'garage') { this.storeVehicle(vehicle); return; }
       this.beginExit(vehicle);
     }
-    if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Vehicle recovered', vehicle.spec.name); }
+    if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Bakkie recovered', vehicle.spec.name); }
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
 
@@ -354,9 +382,13 @@ export class Game {
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.6); this.player.group.position.copy(vehicle.group.position).add(side);
     if (vehicle.occupied) {
       const driver = this.population.ejectDriver(vehicle, this.player.group.position); this.reportCrime(this.player.group.position, 18, { victims: [driver], radius: FEAR_EVENTS.assault.radius });
-      this.ui.notify('Carjacking witnessed', 'The driver is fleeing. Expect a call to SCPD.', false); vehicle.occupied = false;
+      this.ui.notify('Hijacking witnessed', 'The driver is fleeing. Expect a call to the JMPD.', false); vehicle.occupied = false;
     }
     if (this.missions.active?.id === 'hot-property' && vehicle.spec.kind === 'sport' && vehicle.spec.color === 0xd83a40) this.forceWanted(2);
+    if (!vehicle.occupied) {
+      const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(vehicle.group.position) < 14);
+      if (guard) this.ui.notify('Car guard', '"Sharp sharp boss, I watched it like my own!"');
+    }
   }
 
   private beginExit(vehicle: Vehicle): void {
@@ -364,15 +396,26 @@ export class Game {
     const left = vehicle.group.position.clone().addScaledVector(side, 2.4); const right = vehicle.group.position.clone().addScaledVector(side, -2.4);
     const exit = !this.city.collides(left.x, left.z, 0.7) ? left : !this.city.collides(right.x, right.z, 0.7) ? right : undefined;
     if (!exit) { this.ui.notify('Exit blocked', 'Move the vehicle into open space.', false); return; }
-    this.transition = { vehicle, timer: 0.42, entering: false, exitPosition: exit }; this.audio.setEngine(false);
+    this.transition = { vehicle, timer: 0.42, entering: false, exitPosition: exit }; this.audio.setEngine(false); this.audio.stopRadio();
   }
 
   private updateTransition(dt: number): void {
     const transition = this.transition; if (!transition) return; transition.timer -= dt;
     if (transition.entering) this.player.group.position.lerp(transition.vehicle.group.position, Math.min(1, dt * 8));
     if (transition.timer > 0) return;
-    if (transition.entering) { this.activeVehicle = transition.vehicle; this.player.inVehicle = true; this.player.setVisible(false); }
-    else { transition.vehicle.playerControlled = false; transition.vehicle.setFirstPerson(false); this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position); }
+    if (transition.entering) {
+      this.activeVehicle = transition.vehicle; this.player.inVehicle = true; this.player.setVisible(false);
+      this.audio.startRadio();
+      if (!this.radioIntroShown) { this.radioIntroShown = true; this.ui.notify('Jozi FM 94.7', 'Amapiano o\'clock. It is always amapiano o\'clock.'); }
+    }
+    else {
+      transition.vehicle.playerControlled = false; transition.vehicle.setFirstPerson(false); this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position);
+      const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(transition.vehicle.group.position) < 14);
+      if (guard) {
+        const tipped = this.economy.spend(2);
+        this.ui.notify('Car guard', tipped ? '"No stress my boss, I watch it like my own." You tipped R2. The ancestors smile upon you.' : '"Eish, no tip? I watch it anyway, boss. Probably."');
+      }
+    }
     this.transition = undefined;
   }
 
@@ -412,7 +455,7 @@ export class Game {
     if (cash > 0) {
       this.pickups.spawnCash(this.scatter(victim.group.position), cash);
       this.reportCrime(this.player.group.position, 14, { victims: [victim], radius: FEAR_EVENTS.assault.radius }); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault); this.audio.melee();
-      this.ui.notify('Street robbery', `They dropped $${cash}. Witnesses are calling SCPD.`, false); return;
+      this.ui.notify('Street robbery', `They dropped R${cash}. Witnesses are calling the JMPD.`, false); return;
     }
     const killed = victim.takeDamage(34); this.reportCrime(this.player.group.position, killed ? 24 : 16, { victims: [victim], radius: (killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius }); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
     this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.melee();
@@ -420,7 +463,7 @@ export class Game {
     if (killed) this.spawnDrops(victim);
   }
 
-  /** Files a crime with SCPD using only what the world could actually see: a cop nearby means immediate heat
+  /** Files a crime with JMPD using only what the world could actually see: a cop nearby means immediate heat
    *  and a sighting; otherwise a surviving victim or a living bystander within radius phones it in after
    *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
   private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean } = {}): void {
@@ -458,7 +501,7 @@ export class Game {
 
   private applyPickup(item: Pickup): void {
     this.audio.pickup();
-    if (item.kind === 'cash') { this.economy.earn(item.amount); this.ui.notify('Cash grabbed', `+$${item.amount}`); return; }
+    if (item.kind === 'cash') { this.economy.earn(item.amount); this.ui.notify('Cash grabbed', `+R${item.amount}`); return; }
     if (item.kind === 'weapon' && item.weapon) {
       const spec = WEAPON_BY_ID[item.weapon];
       if (this.combat.grantWeapon(item.weapon) === 'new') { this.combat.select(item.weapon); this.player.setWeapon(this.combat.current); this.ui.notify('Weapon acquired', spec.name); }
@@ -490,26 +533,26 @@ export class Game {
     const result = resolvePurchase(kind, id, state.owned, this.economy.balance, reserveFull(id, state.reserve));
     if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); this.renderShop(); return; }
     this.combat.grantWeapon(id); this.audio.ui(true);
-    this.ui.notify(kind === 'weapon' ? 'Weapon purchased' : 'Ammo refilled', `${WEAPON_BY_ID[id].name} · -$${result.price.toLocaleString()}`);
+    this.ui.notify(kind === 'weapon' ? 'Weapon purchased' : 'Ammo refilled', `${WEAPON_BY_ID[id].name} · -R${result.price.toLocaleString()}`);
     this.persist(); this.renderShop();
   }
 
   private buyHotdog(): void {
     if (this.player.health >= this.player.maxHealth) { this.ui.notify('Sizzlin’ Dogs', 'You are stuffed already. Come back hungry.', false); return; }
-    if (!this.economy.spend(HOTDOG_PRICE)) { this.ui.notify('Sizzlin’ Dogs', `No cash, no dog. It costs $${HOTDOG_PRICE}.`, false); return; }
+    if (!this.economy.spend(HOTDOG_PRICE)) { this.ui.notify('Boerie Stand', `No cash, no boerie. It costs R${HOTDOG_PRICE}.`, false); return; }
     this.player.health = hotdogHeal(this.player.health, this.player.maxHealth);
-    this.audio.pickup(); this.ui.notify('Hot dog', `Tastes like victory. -$${HOTDOG_PRICE}`); this.persist();
+    this.audio.pickup(); this.ui.notify('Boerewors roll', `Lekker. Tastes like victory. -R${HOTDOG_PRICE}`); this.persist();
   }
 
   private useSpray(vehicle: Vehicle): void {
-    if (vehicle.onFire) { this.ui.notify('Palm Spray', 'They wave you off — put the fire out first.', false); return; }
+    if (vehicle.onFire) { this.ui.notify('Pik-’n’-Spray', 'They wave you off — put the fire out first.', false); return; }
     const watching = this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(vehicle.group.position) < 25);
-    if (watching) { this.ui.notify('Palm Spray', 'They’re watching — lose them first.', false); return; }
+    if (watching) { this.ui.notify('Pik-’n’-Spray', 'The JMPD is watching — lose them first.', false); return; }
     const price = detailerPrice(this.wanted.level);
-    if (!this.economy.spend(price)) { this.ui.notify('Palm Spray', `Detailing costs $${price}. Come back with cash.`, false); return; }
+    if (!this.economy.spend(price)) { this.ui.notify('Pik-’n’-Spray', `Detailing costs R${price}. Come back with cash, boss.`, false); return; }
     vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.knowledge.reset(); this.police.reset();
     this.ui.screenFade(); this.audio.ui(true);
-    this.ui.notify('Palm Spray', `Fresh coat, clean record. -$${price}`); this.persist();
+    this.ui.notify('Pik-’n’-Spray', `Fresh coat, clean record. Sharp sharp. -R${price}`); this.persist();
   }
 
   private storeVehicle(vehicle: Vehicle): void {
@@ -543,7 +586,7 @@ export class Game {
 
   private processMissionUpdate(update: MissionUpdate): void {
     if (update.failed) { this.audio.ui(false); this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false); }
-    if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+$${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
+    if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
   }
 
   private resetMissionRuntime(): void {
@@ -620,15 +663,15 @@ export class Game {
       const nearbyTarget = this.currentTarget();
       const shop = this.shops.shopNear(focus);
       if (this.activeVehicle) {
-        if (shop?.kind === 'spray') prompt = `E  Palm Spray · $${detailerPrice(this.wanted.level)}`;
+        if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
         else prompt = 'E  Exit vehicle  ·  F  Recover';
       }
-      else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Recover radio key';
+      else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && mission.start.position.distanceTo(focus) < 7)) prompt = 'E  Speak to contact';
-      else if (shop?.kind === 'weapons') prompt = 'E  Browse Cordova Arms';
-      else if (shop?.kind === 'hotdog') prompt = `E  Hot dog · $${HOTDOG_PRICE}`;
+      else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
+      else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
@@ -644,13 +687,13 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.closeWeaponWheel(); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.knowledge.reset(); this.police.reset(); this.mode = 'playing';
   }
-  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }

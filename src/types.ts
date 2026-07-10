@@ -2,7 +2,7 @@ import type { Vector3 } from 'three';
 import type { VehicleKind, WeaponId } from './config';
 
 export type GameMode = 'loading' | 'menu' | 'playing' | 'paused' | 'dead';
-export type District = 'Downtown' | 'Las Palmas' | 'Mercado Industrial' | 'Costa Azul' | 'Cordova Commons';
+export type District = 'Joburg CBD' | 'Sandton' | 'City Deep' | 'Braamfontein' | 'Zoo Lake';
 export interface Damageable { health: number; maxHealth: number; takeDamage(amount: number): void; }
 export interface WorldTarget { position: Vector3; label: string; color?: string; }
 export interface SavedWeaponState { ammo: number; reserve: number; owned: boolean; }

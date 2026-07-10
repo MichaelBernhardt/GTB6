@@ -2,7 +2,7 @@ import { VEHICLE_SPECS, WEAPONS, WEAPON_BY_ID, type VehicleKind, type WeaponId }
 import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
 import type { CheatSettings, GameSettings, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
 
-const KEY = 'san-cordova-save-v1';
+const KEY = 'groot-theft-bakkie-save-v1';
 export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW };
 export const DEFAULT_CHEATS: CheatSettings = { fastRun: false, bigJump: false, invulnerable: false };
 

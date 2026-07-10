@@ -7,12 +7,12 @@ const SUN_OFFSET = new THREE.Vector3(165, 185, 110).normalize().multiplyScalar(2
 
 export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'medium' | 'high'): EnvironmentHandle {
   const shadows = quality !== 'low';
-  scene.background = new THREE.Color(0x79aebd);
-  scene.fog = new THREE.FogExp2(0x9dbfc0, quality === 'low' ? 0.00175 : 0.00145);
+  scene.background = new THREE.Color(0x6fa8dd);
+  scene.fog = new THREE.FogExp2(0xc4b48c, quality === 'low' ? 0.0015 : 0.0012);
 
-  const hemisphere = new THREE.HemisphereLight(0xd9edf0, 0x59634d, 1.6); scene.add(hemisphere);
+  const hemisphere = new THREE.HemisphereLight(0xcfe4f5, 0x8a7c4d, 1.6); scene.add(hemisphere);
   const ambient = new THREE.AmbientLight(0xffead0, 0.28); scene.add(ambient);
-  const sun = new THREE.DirectionalLight(0xffe4b4, 4.1); sun.position.copy(SUN_OFFSET); sun.castShadow = shadows;
+  const sun = new THREE.DirectionalLight(0xffd9a0, 4.4); sun.position.copy(SUN_OFFSET); sun.castShadow = shadows;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.left = -SHADOW_SPAN; sun.shadow.camera.right = SHADOW_SPAN; sun.shadow.camera.top = SHADOW_SPAN; sun.shadow.camera.bottom = -SHADOW_SPAN;
   sun.shadow.camera.near = 60; sun.shadow.camera.far = 460; sun.shadow.bias = -0.00018; sun.shadow.normalBias = 0.02;
