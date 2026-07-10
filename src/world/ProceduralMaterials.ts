@@ -66,11 +66,11 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
 }
 
 export function createGeneratedSurfaceTexture(url: string, fallback: SurfaceKind, repeat: number): THREE.Texture {
-  const texture = createSurfaceTexture(fallback, repeat);
-  new THREE.TextureLoader().load(url, (loaded) => {
-    texture.image = loaded.image; texture.needsUpdate = true;
-    texture.colorSpace = THREE.SRGBColorSpace; texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.repeat.set(repeat, repeat); texture.anisotropy = 8;
+  const fallbackTexture = createSurfaceTexture(fallback, repeat);
+  const texture = new THREE.TextureLoader().load(url, undefined, undefined, () => {
+    texture.image = fallbackTexture.image; texture.needsUpdate = true;
   });
+  texture.colorSpace = THREE.SRGBColorSpace; texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.repeat.set(repeat, repeat); texture.anisotropy = 8;
   return texture;
 }
 

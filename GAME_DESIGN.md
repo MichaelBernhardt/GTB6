@@ -9,7 +9,7 @@
 
 ## San Cordova
 
-San Cordova is a warm coastal trade city rebuilding around old port infrastructure. Downtown sits between the residential east and industrial west. Cordova Commons provides a central landmark, while Costa Azul opens the southern edge into beach and water.
+San Cordova is a warm coastal trade city rebuilding around old port infrastructure. Downtown sits between the residential east and industrial west. Cordova Commons provides a central fountain landmark, Harbor Courts anchors the southern neighbourhoods, and Las Palmas Garden gives the eastern district its own public space. Costa Azul opens the southern edge into a working boardwalk, beach, and water.
 
 The player begins on the north side with enough cash to establish state feedback but no authored identity or borrowed franchise character. Contacts are original:
 
@@ -52,4 +52,4 @@ Health reaching zero produces a three-second death state, clears pursuit, restor
 
 ## Presentation
 
-The visual direction uses solid coastal colors, sharp low-poly silhouettes, warm daylight, fog, minimal glass strips, reusable street props, and high-contrast mission color. The interface avoids debug framing: information sits at screen edges, with a circular road radar, centered objective strip, contextual prompts, and strong mission feedback.
+The visual direction uses layered coastal materials, varied building massing, detailed ground floors and rooftops, warm daylight, atmospheric fog, district-specific landscaping, civic landmarks, and high-contrast mission color. Broadleaf trees use overlapping high-resolution crowns while Costa Azul uses dedicated palms. Repeated infrastructure remains instanced so density does not compromise the gameplay loop. The interface avoids debug framing: information sits at screen edges, with a circular road radar, centered objective strip, contextual prompts, and strong mission feedback.

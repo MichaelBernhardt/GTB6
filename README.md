@@ -54,14 +54,15 @@ Progress is saved periodically and after mission rewards. Money, completed missi
 
 ## World and systems
 
-- **Downtown**: tall mixed-shape towers around a civic avenue, commercial loop, diagonal arterial, alleys, and irregular junctions.
-- **Las Palmas**: low residential buildings and trees.
-- **Mercado Industrial**: warehouses, containers, docks, and a ramp.
-- **Costa Azul**: beach frontage, water, garages, and open roads.
-- **Cordova Commons**: intersecting paths and public green space.
+- **Downtown**: a dense, mixed-height skyline with setback towers, storefronts, roof plant, signs, civic avenues, alleys, and signalized junctions.
+- **Las Palmas**: landscaped residential streets, a garden park, transit stops, balconies, and local shops.
+- **Mercado Industrial**: warehouses, stacks, a water tower, containers, gantry cranes, loading yards, docks, and a stunt ramp.
+- **Costa Azul**: beach frontage, animated water, boardwalk kiosks, palms, lifeguard station, marina sculpture, and promenade railings.
+- **Cordova Commons**: a formal civic park with paths, mature planting, fountain, and public sculpture. Harbor Courts and Las Palmas Garden provide two additional distinct parks.
 - A detailed articulated player character with GPT Image fabric materials, layered clothing, facial features, jointed elbows and knees, procedural footwork, breathing, sprinting, jumping, and two-handed aiming poses.
 - Compact, sport, van, and police vehicle configurations with distinct speed, acceleration, turning, braking, durability, wheels, brake lights, engine synthesis, and recovery.
-- Twelve connected road systems with curved arterials, diagonal boulevards, district loops, industrial spurs, residential crescents, a harbor drive, parking areas, and road-derived traffic/minimap routing.
+- Twelve connected road systems with curved arterials, diagonal boulevards, district loops, industrial spurs, residential crescents, a harbor drive, parking areas, named street signs, regulatory signs, crossings, and road-derived traffic/minimap routing.
+- Seven animated traffic-light junctions, bus shelters, corrected curbside lighting, benches, hydrants, shrubs, broadleaf street trees, and coastal palms.
 - Pooled lane-following traffic routes, recycling, stuck recovery, simplified distance updates, and collision response.
 - Raycast pistol combat with ammunition, reloads, distance damage, muzzle light, impact particles, and generated sound.
 - Carjacking with fleeing drivers, street mugging, aggressive civilians, melee attacks, and persistent stylized blood spray and ground decals.
@@ -83,12 +84,12 @@ src/
 
 ## Performance
 
-Repeated trees and streetlights use instanced meshes. Geometry and materials are shared within entities and districts, shadows are limited, distant traffic skips simulation, effects are short lived, and the renderer caps pixel ratio. The pause menu exposes an FPS display, and backquote toggles it directly.
+Repeated tree crowns, trunks, palms, shrubs, streetlights, and promenade railings use instanced meshes. Geometry and materials are shared within entities and districts, shadows are limited, distant traffic skips simulation, effects are short lived, and the renderer caps pixel ratio. The pause menu exposes an FPS display, and backquote toggles it directly.
 
 ## Known limitations
 
 - Collision uses a stable 2D arcade model, not rigid-body suspension or destructible architecture.
-- Traffic follows approximate lane corridors and does not implement traffic signals.
+- Traffic follows approximate lane corridors; animated signals are currently presentational and vehicles do not reserve intersections by phase.
 - Pedestrian avoidance is collider based rather than navmesh or reciprocal crowd steering.
 - Police search is proximity/timeout based; there is no street-by-street vision cone simulation.
 - The compact campaign has one checkpoint spawn and no multiple save slots.
