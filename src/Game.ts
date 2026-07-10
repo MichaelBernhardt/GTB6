@@ -104,6 +104,7 @@ export class Game {
     const raw = this.clock.getDelta(); const dt = Math.min(raw, 0.05); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
     if (this.mode === 'playing') this.update(dt);
     else if (this.mode === 'dead') { this.deathTimer -= dt; if (this.deathTimer <= 0) this.respawn(); }
+    else if (this.input.consume('Escape')) this.ui.back();
     this.updateCamera(dt); this.updateMarker(dt); this.renderHUD(); this.renderer.render(this.scene, this.camera); this.input.endFrame();
   };
 

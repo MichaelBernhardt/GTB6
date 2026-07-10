@@ -17,6 +17,9 @@ export class UIManager {
   vignette = document.createElement('div');
   private context: CanvasRenderingContext2D;
   private toastTimer = 0;
+  private screen: 'none' | 'main' | 'pause' | 'controls' = 'none';
+  private controlsFromMain = false;
+  private lastSettings?: GameSettings;
   onStart?: (fresh: boolean) => void;
   onResume?: () => void;
   onRestart?: () => void;
@@ -61,15 +64,24 @@ export class UIManager {
   }
 
   notify(title: string, detail = '', success = true): void { this.toast.innerHTML = `<strong>${title}</strong><span>${detail}</span>`; this.toast.className = `visible ${success ? 'success' : 'failure'}`; this.toastTimer = 4; }
-  hideMenu(): void { this.menu.classList.remove('visible'); }
+  hideMenu(): void { this.menu.classList.remove('visible'); this.screen = 'none'; }
+
+  back(): boolean {
+    if (this.screen === 'controls') {
+      if (this.controlsFromMain || !this.lastSettings) this.showMainMenu(); else this.showPause(this.lastSettings);
+      return true;
+    }
+    if (this.screen === 'pause') { this.onResume?.(); return true; }
+    return false;
+  }
   showLoading(): void { this.menu.innerHTML = `<div class="menu-panel"><p class="kicker">SAN CORDOVA</p><h2>Building the city...</h2></div>`; this.menu.classList.add('visible'); }
   showMainMenu(): void {
     this.menu.innerHTML = `<div class="menu-panel"><p class="kicker">A SAN CORDOVA STORY</p><h1>NEON<br><strong>RECKONING</strong></h1><p>Make a name across five districts where every shortcut has a consequence.</p><div class="menu-actions"><button id="continue">Enter San Cordova</button><button id="new">New game</button><button id="help">Controls</button></div><small>Original procedural open-world game</small></div>`;
-    this.menu.classList.add('visible'); this.bind('#continue', () => this.onStart?.(false)); this.bind('#new', () => this.onStart?.(true)); this.bind('#help', () => this.showControls(true));
+    this.menu.classList.add('visible'); this.screen = 'main'; this.bind('#continue', () => this.onStart?.(false)); this.bind('#new', () => this.onStart?.(true)); this.bind('#help', () => this.showControls(true));
   }
   showPause(settings: GameSettings): void {
     this.menu.innerHTML = `<div class="menu-panel compact"><p class="kicker">GAME PAUSED</p><h2>San Cordova</h2><button id="resume">Resume</button><button id="restart">Respawn</button><button id="controls">Controls</button><label>Master volume <input id="volume" type="range" min="0" max="1" step="0.05" value="${settings.masterVolume}"></label><label>Mouse sensitivity <input id="sensitivity" type="range" min="0.001" max="0.006" step="0.0005" value="${settings.mouseSensitivity}"></label><label>Graphics quality <select id="quality"><option value="high" ${settings.quality === 'high' ? 'selected' : ''}>High</option><option value="low" ${settings.quality === 'low' ? 'selected' : ''}>Low</option></select></label><label class="toggle"><input id="fpsToggle" type="checkbox" ${settings.showFps ? 'checked' : ''}> Performance display</label><button id="reset" class="danger">Reset saved progress</button></div>`;
-    this.menu.classList.add('visible'); this.bind('#resume', () => this.onResume?.()); this.bind('#restart', () => this.onRestart?.()); this.bind('#controls', () => this.showControls()); this.bind('#reset', () => this.onResetSave?.());
+    this.menu.classList.add('visible'); this.screen = 'pause'; this.lastSettings = settings; this.bind('#resume', () => this.onResume?.()); this.bind('#restart', () => this.onRestart?.()); this.bind('#controls', () => this.showControls()); this.bind('#reset', () => this.onResetSave?.());
     this.menu.querySelector('#volume')?.addEventListener('input', (e) => this.onSettings?.({ masterVolume: Number((e.target as HTMLInputElement).value) }));
     this.menu.querySelector('#sensitivity')?.addEventListener('input', (e) => this.onSettings?.({ mouseSensitivity: Number((e.target as HTMLInputElement).value) }));
     this.menu.querySelector('#quality')?.addEventListener('change', (e) => this.onSettings?.({ quality: (e.target as HTMLSelectElement).value as GameSettings['quality'] }));
@@ -77,7 +89,7 @@ export class UIManager {
   }
   showControls(fromMain = false): void {
     this.menu.innerHTML = `<div class="menu-panel compact controls"><p class="kicker">FIELD GUIDE</p><h2>Controls</h2><div><kbd>WASD</kbd><span>Move / drive</span><kbd>Mouse</kbd><span>Orbit / aim</span><kbd>Shift</kbd><span>Sprint</span><kbd>Space</kbd><span>Jump / handbrake</span><kbd>E</kbd><span>Interact / vehicle</span><kbd>LMB</kbd><span>Aim and fire</span><kbd>R</kbd><span>Reload</span><kbd>F</kbd><span>Mug / melee · vehicle recovery</span><kbd>Esc</kbd><span>Pause</span><kbd>Backquote</kbd><span>Performance</span></div><button id="back">Back</button></div>`;
-    this.menu.classList.add('visible'); this.bind('#back', () => { if (fromMain) this.showMainMenu(); else this.onResume?.(); });
+    this.menu.classList.add('visible'); this.screen = 'controls'; this.controlsFromMain = fromMain; this.bind('#back', () => this.back());
   }
   private bind(selector: string, callback: () => void): void { this.menu.querySelector(selector)?.addEventListener('click', callback); }
 }
