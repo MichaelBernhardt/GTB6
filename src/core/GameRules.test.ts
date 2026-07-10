@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { WEAPON_BY_ID, WEAPONS, type WeaponId } from '../config';
-import { Economy, calculateDamage, cycleWeapon, outOfAmmo, rollDrops, splashDamage, spreadOffset, triggerPulled } from './GameRules';
+import { CHEATS, PLAYER, WEAPON_BY_ID, WEAPONS, type WeaponId } from '../config';
+import { Economy, calculateDamage, cycleWeapon, jumpVelocity, moveSpeed, outOfAmmo, rollDrops, splashDamage, spreadOffset, triggerPulled } from './GameRules';
 
 const rng = (...values: number[]): (() => number) => { let i = 0; return () => values[i++] ?? 0; };
 
@@ -77,6 +77,22 @@ describe('weapon rules', () => {
     expect(splashDamage(120, 7, 7)).toBe(0);
     expect(splashDamage(120, 30, 7)).toBe(0);
     expect(splashDamage(120, 1, 7)).toBeGreaterThan(splashDamage(120, 5, 7));
+  });
+});
+
+describe('cheat multipliers', () => {
+  it('scales walk and sprint speed with the fast run cheat', () => {
+    expect(moveSpeed(false, false)).toBe(PLAYER.walkSpeed);
+    expect(moveSpeed(true, false)).toBe(PLAYER.sprintSpeed);
+    expect(moveSpeed(false, true)).toBeCloseTo(PLAYER.walkSpeed * CHEATS.runMultiplier);
+    expect(moveSpeed(true, true)).toBeCloseTo(PLAYER.sprintSpeed * CHEATS.runMultiplier);
+    expect(CHEATS.runMultiplier).toBeCloseTo(1.8);
+  });
+
+  it('scales jump velocity with the big jump cheat', () => {
+    expect(jumpVelocity(false)).toBe(PLAYER.jumpSpeed);
+    expect(jumpVelocity(true)).toBeCloseTo(PLAYER.jumpSpeed * CHEATS.jumpMultiplier);
+    expect(CHEATS.jumpMultiplier).toBeCloseTo(2);
   });
 });
 

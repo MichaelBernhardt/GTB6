@@ -120,6 +120,20 @@ describe('CombatSystem', () => {
     expect(combat.state).toEqual({ ammo: 1, reserve: 3, owned: true });
   });
 
+  it('maxes mag and reserve for every owned gun, skipping fists and unowned weapons', () => {
+    const combat = makeCombat();
+    combat.grantWeapon('shotgun'); combat.loadout.pistol = { ammo: 0, reserve: 2, owned: true }; combat.loadout.shotgun = { ammo: 1, reserve: 0, owned: true };
+    expect(combat.maxAmmo()).toBe(2);
+    expect(combat.loadout.pistol).toEqual({ ammo: 12, reserve: 84 * 3, owned: true });
+    expect(combat.loadout.shotgun).toEqual({ ammo: 6, reserve: 24 * 3, owned: true });
+    expect(combat.loadout.smg).toEqual({ ammo: 0, reserve: 0, owned: false });
+    expect(combat.loadout.rpg).toEqual({ ammo: 0, reserve: 0, owned: false });
+    expect(combat.loadout.fists).toEqual({ ammo: 0, reserve: 0, owned: true });
+    combat.grantWeapon('rpg');
+    expect(combat.maxAmmo()).toBe(3);
+    expect(combat.loadout.rpg).toEqual({ ammo: 1, reserve: 12, owned: true });
+  });
+
   it('serializes and restores the loadout', () => {
     const combat = makeCombat();
     combat.grantWeapon('shotgun'); combat.select('shotgun'); combat.loadout.shotgun = { ammo: 2, reserve: 10, owned: true };
