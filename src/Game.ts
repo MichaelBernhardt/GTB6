@@ -11,9 +11,10 @@ import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraCon
 import { cycleWeapon, Economy, rollDrops, type PedKind } from './core/GameRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
+import { ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolvePurchase, weaponPrice } from './core/ShopRules';
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player } from './entities/Player';
-import type { Vehicle } from './entities/Vehicle';
+import { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
 import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
@@ -22,6 +23,7 @@ import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { PoliceSystem } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
+import { GARAGE_PARK, ShopSystem } from './systems/ShopSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
 import type { CheatSettings, GameMode, GameSettings, SavedGame, WorldTarget } from './types';
@@ -59,6 +61,8 @@ export class Game {
   private police: PoliceSystem;
   private missions = new MissionSystem();
   private economy: Economy;
+  private shops: ShopSystem;
+  private garageVehicle?: Vehicle;
   private ui = new UIManager();
   private mode: GameMode = 'menu';
   private activeVehicle?: Vehicle;
@@ -86,6 +90,7 @@ export class Game {
     this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money);
     this.setupRenderer(); this.setupScene();
     this.city = new City(this.scene);
+    this.shops = new ShopSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
@@ -99,6 +104,7 @@ export class Game {
     this.input = new InputManager(this.renderer.domElement);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
+    this.restoreGarageVehicle();
     this.buildMarker(); this.bindUI(); this.animate();
     if (import.meta.env.DEV) Object.assign(window, { __game: this });
     setTimeout(() => this.ui.showMainMenu(), 50);
@@ -151,6 +157,8 @@ export class Game {
     this.ui.onGiveWeapon = (id) => { const result = this.combat.grantWeapon(id); this.ui.notify(result === 'new' ? 'Weapon granted' : 'Ammo topped up', WEAPON_BY_ID[id].name); this.persist(); };
     this.ui.onMaxAmmo = () => { const filled = this.combat.maxAmmo(); this.ui.notify('Max ammo', `${filled} weapon${filled === 1 ? '' : 's'} fully stocked.`); this.persist(); };
     this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.persist(); };
+    this.ui.onBuyWeapon = (id) => this.purchase('weapon', id);
+    this.ui.onBuyAmmo = (id) => this.purchase('ammo', id);
   }
 
   private applyQuality(): void {
@@ -160,7 +168,7 @@ export class Game {
   }
 
   private startGame(fresh: boolean): void {
-    if (fresh) { this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); }
+    if (fresh) { this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); }
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to San Cordova', 'Mission contacts are marked in gold.');
   }
@@ -203,7 +211,7 @@ export class Game {
       if (impact.killed) this.spawnDropsAt(impact.position, 'civilian');
     }
     this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, (amount) => this.damagePlayer(amount));
-    this.wanted.update(dt);
+    this.wanted.update(dt); this.shops.update(dt);
     for (const boom of this.projectiles.update(dt, this.city, this.population, this.police.vehicles, this.player.group.position)) {
       this.audio.explosion(boom.position.x, boom.position.z); this.wanted.addCrime(30); this.population.broadcastFear(boom.position, FEAR_EVENTS.kill); this.shake = Math.min(0.7, this.shake + 0.5);
       if (boom.policeHit) this.wanted.addCrime(24);
@@ -286,6 +294,10 @@ export class Game {
       if (collectTarget && collectTarget.position.distanceTo(this.player.group.position) < 8) { this.collectedItem = true; return; }
       if (this.tryMissionInteraction()) return;
       const vehicle = this.population.nearestEnterable(this.player.group.position);
+      const shop = this.shops.shopNear(this.player.group.position);
+      if (shop?.kind === 'weapons') { this.openWeaponShop(); return; }
+      if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
+      if (shop?.driveIn && !vehicle) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
       if (vehicle) this.beginEnter(vehicle);
     }
   }
@@ -324,7 +336,12 @@ export class Game {
     this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
     if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; }
     this.prevDrivenSpeed = speed;
-    if (this.input.consume('KeyE')) this.beginExit(vehicle);
+    if (this.input.consume('KeyE')) {
+      const shop = this.shops.shopNear(vehicle.group.position);
+      if (shop?.kind === 'spray') { this.useSpray(vehicle); return; }
+      if (shop?.kind === 'garage') { this.storeVehicle(vehicle); return; }
+      this.beginExit(vehicle);
+    }
     if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Vehicle recovered', vehicle.spec.name); }
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
@@ -427,6 +444,79 @@ export class Game {
     this.ui.notify('Ammo box', WEAPON_BY_ID[this.combat.addAmmo()].name);
   }
 
+  private openWeaponShop(): void {
+    this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
+    this.renderShop();
+  }
+
+  private renderShop(): void {
+    const entries = WEAPONS.filter((spec) => !spec.melee).map((spec) => {
+      const state = this.combat.loadout[spec.id]; const full = reserveFull(spec.id, state.reserve);
+      return {
+        id: spec.id, name: spec.name, owned: state.owned, price: weaponPrice(spec.id), ammoPrice: ammoPrice(spec.id), reserve: state.reserve, ammoFull: full,
+        canBuy: resolvePurchase('weapon', spec.id, state.owned, this.economy.balance).ok,
+        canRefill: resolvePurchase('ammo', spec.id, state.owned, this.economy.balance, full).ok,
+      };
+    });
+    this.ui.showShop(entries, this.economy.balance);
+  }
+
+  private purchase(kind: 'weapon' | 'ammo', id: WeaponId): void {
+    const state = this.combat.loadout[id];
+    const result = resolvePurchase(kind, id, state.owned, this.economy.balance, reserveFull(id, state.reserve));
+    if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); this.renderShop(); return; }
+    this.combat.grantWeapon(id); this.audio.ui(true);
+    this.ui.notify(kind === 'weapon' ? 'Weapon purchased' : 'Ammo refilled', `${WEAPON_BY_ID[id].name} · -$${result.price.toLocaleString()}`);
+    this.persist(); this.renderShop();
+  }
+
+  private buyHotdog(): void {
+    if (this.player.health >= this.player.maxHealth) { this.ui.notify('Sizzlin’ Dogs', 'You are stuffed already. Come back hungry.', false); return; }
+    if (!this.economy.spend(HOTDOG_PRICE)) { this.ui.notify('Sizzlin’ Dogs', `No cash, no dog. It costs $${HOTDOG_PRICE}.`, false); return; }
+    this.player.health = hotdogHeal(this.player.health, this.player.maxHealth);
+    this.audio.pickup(); this.ui.notify('Hot dog', `Tastes like victory. -$${HOTDOG_PRICE}`); this.persist();
+  }
+
+  private useSpray(vehicle: Vehicle): void {
+    if (vehicle.onFire) { this.ui.notify('Palm Spray', 'They wave you off — put the fire out first.', false); return; }
+    const watching = this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(vehicle.group.position) < 25);
+    if (watching) { this.ui.notify('Palm Spray', 'They’re watching — lose them first.', false); return; }
+    const price = detailerPrice(this.wanted.level);
+    if (!this.economy.spend(price)) { this.ui.notify('Palm Spray', `Detailing costs $${price}. Come back with cash.`, false); return; }
+    vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.police.reset();
+    this.ui.screenFade(); this.audio.ui(true);
+    this.ui.notify('Palm Spray', `Fresh coat, clean record. -$${price}`); this.persist();
+  }
+
+  private storeVehicle(vehicle: Vehicle): void {
+    if (vehicle.onFire || vehicle.wrecked || vehicle.disabled) { this.ui.notify('Avenida Garage', 'They refuse the wreck. Bring something roadworthy.', false); return; }
+    if (this.garageVehicle && this.garageVehicle !== vehicle) this.removeGarageVehicle();
+    vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.occupied = false;
+    vehicle.heading = GARAGE_PARK.heading; vehicle.reset(new THREE.Vector3(GARAGE_PARK.x, 0, GARAGE_PARK.z));
+    const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
+    this.garageVehicle = vehicle;
+    this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
+    this.player.group.position.set(GARAGE_PARK.x + 8.5, 0, GARAGE_PARK.z + 4); this.audio.setEngine(false); this.audio.ui(true);
+    this.save.garage = { kind: vehicle.spec.kind, color: vehicle.spec.color, health: Math.round(vehicle.health) };
+    this.persist();
+    this.ui.notify('Vehicle stored', `${vehicle.spec.name} is tucked away in the garage.`);
+  }
+
+  private restoreGarageVehicle(): void {
+    const saved = this.save.garage; if (!saved) return;
+    const vehicle = new Vehicle(this.scene, saved.kind, new THREE.Vector3(GARAGE_PARK.x, 0, GARAGE_PARK.z), saved.color);
+    vehicle.heading = GARAGE_PARK.heading; vehicle.group.rotation.y = vehicle.heading; vehicle.health = saved.health;
+    this.population.vehicles.push(vehicle); this.garageVehicle = vehicle;
+  }
+
+  private removeGarageVehicle(): void {
+    const vehicle = this.garageVehicle; if (!vehicle) return;
+    this.scene.remove(vehicle.group);
+    const index = this.population.vehicles.indexOf(vehicle); if (index >= 0) this.population.vehicles.splice(index, 1);
+    const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
+    this.garageVehicle = undefined;
+  }
+
   private processMissionUpdate(update: MissionUpdate): void {
     if (update.failed) { this.audio.ui(false); this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false); }
     if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+$${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
@@ -504,16 +594,24 @@ export class Game {
     let prompt = '';
     if (this.mode === 'playing' && !this.transition) {
       const nearbyTarget = this.currentTarget();
-      if (this.activeVehicle) prompt = 'E  Exit vehicle  ·  F  Recover';
+      const shop = this.shops.shopNear(focus);
+      if (this.activeVehicle) {
+        if (shop?.kind === 'spray') prompt = `E  Palm Spray · $${detailerPrice(this.wanted.level)}`;
+        else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
+        else prompt = 'E  Exit vehicle  ·  F  Recover';
+      }
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Recover radio key';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && mission.start.position.distanceTo(focus) < 7)) prompt = 'E  Speak to contact';
+      else if (shop?.kind === 'weapons') prompt = 'E  Browse Cordova Arms';
+      else if (shop?.kind === 'hotdog') prompt = `E  Hot dog · $${HOTDOG_PRICE}`;
+      else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
     }
     const spec = this.combat.spec; const ammoState = this.combat.state;
     this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
-    const markers = this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [];
+    const markers = [...this.shops.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [])];
     const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
     this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
   }
@@ -529,6 +627,6 @@ export class Game {
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
-  private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats } }; this.saveManager.save(this.save); }
+  private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }
