@@ -3,9 +3,15 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "22.x",
+    "npm": "10.x"
+  },
   "scripts": {
+    "start": "node server.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "heroku-postbuild": "npm run build",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"

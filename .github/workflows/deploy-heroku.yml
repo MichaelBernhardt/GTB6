@@ -1,0 +1,46 @@
+name: Verify and deploy to Heroku
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: heroku-production
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify production release
+        run: |
+          npm run lint
+          npm test
+          npm run build
+
+      - name: Deploy verified commit
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          test -n "$HEROKU_API_KEY" || (echo "HEROKU_API_KEY repository secret is not configured" && exit 1)
+          authorization=$(printf ':%s' "$HEROKU_API_KEY" | base64 | tr -d '\n')
+          git remote add heroku https://git.heroku.com/groot-theft-bakkie-6.git
+          git -c http.extraheader="Authorization: Basic $authorization" push --force heroku HEAD:main

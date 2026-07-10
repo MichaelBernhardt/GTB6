@@ -8,7 +8,7 @@ The world is built at runtime from procedural geometry, instancing, canvas mater
 
 ## Run locally
 
-Requirements: Node.js 20.19+ or 22.12+ and npm.
+Requirements: Node.js 22.x and npm 10.x.
 
 ```bash
 npm install
@@ -22,6 +22,23 @@ npm run build   # strict TypeScript check and production bundle
 npm run lint    # ESLint
 npm test        # rendering-independent gameplay tests
 ```
+
+## Heroku deployment
+
+The production process builds the Vite bundle and serves `dist` from a small Node HTTP server. It listens on Heroku's assigned `PORT`, provides `/healthz`, compresses text assets, applies immutable caching to hashed assets, and falls back to `index.html` for client-side routes.
+
+```bash
+npm run build
+PORT=4174 npm start
+```
+
+Pushes to `main` are verified and deployed to the `groot-theft-bakkie-6` Heroku app by `.github/workflows/deploy-heroku.yml`. Configure it once:
+
+1. Push this repository to GitHub and keep `main` as the default branch.
+2. In GitHub, open **Settings > Secrets and variables > Actions** and create the repository secret `HEROKU_API_KEY` using a Heroku authorization token or account API key.
+3. Push to `main`, or run **Verify and deploy to Heroku** manually from the GitHub Actions tab.
+
+The workflow runs install, lint, tests, and the production build before deployment. Do not also enable Heroku's dashboard auto-deploy for the same branch, because that would create duplicate releases.
 
 ## Controls
 
