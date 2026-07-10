@@ -8,7 +8,7 @@ export interface HudState {
   vehicle?: Vehicle; mission: MissionSystem; fps: number; settings: GameSettings;
 }
 
-export interface WheelEntry { name: string; ammo: string; highlighted: boolean; equipped: boolean; }
+export interface WheelEntry { name: string; ammo: string; highlighted: boolean; equipped: boolean; locked: boolean; }
 
 export class UIManager {
   root = document.createElement('div');
@@ -62,7 +62,7 @@ export class UIManager {
     const radius = 140; const step = (Math.PI * 2) / Math.max(1, entries.length);
     this.wheel.innerHTML = entries.map((entry, index) => {
       const x = Math.sin(index * step) * radius; const y = -Math.cos(index * step) * radius;
-      return `<div class="slice ${entry.highlighted ? 'hot' : ''} ${entry.equipped ? 'equipped' : ''}" style="left:${x.toFixed(0)}px;top:${y.toFixed(0)}px"><span>${entry.name}</span><small>${entry.ammo}</small></div>`;
+      return `<div class="slice ${entry.highlighted ? 'hot' : ''} ${entry.equipped ? 'equipped' : ''} ${entry.locked ? 'locked' : ''}" style="left:${x.toFixed(0)}px;top:${y.toFixed(0)}px"><span>${entry.name}</span><small>${entry.locked ? 'LOCKED' : entry.ammo}</small></div>`;
     }).join('') + '<div class="hub">WEAPONS</div>';
     this.wheel.classList.add('visible');
   }
@@ -84,7 +84,7 @@ export class UIManager {
     this.menu.querySelector('#fpsToggle')?.addEventListener('change', (e) => this.onSettings?.({ showFps: (e.target as HTMLInputElement).checked }));
   }
   showControls(fromMain = false): void {
-    this.menu.innerHTML = `<div class="menu-panel compact controls"><p class="kicker">FIELD GUIDE</p><h2>Controls</h2><div><kbd>WASD</kbd><span>Move / drive</span><kbd>Mouse</kbd><span>Orbit / aim</span><kbd>Shift</kbd><span>Sprint</span><kbd>Space</kbd><span>Jump / handbrake</span><kbd>E</kbd><span>Interact / vehicle</span><kbd>LMB</kbd><span>Aim and fire / punch</span><kbd>Tab</kbd><span>Hold for weapon wheel</span><kbd>Scroll</kbd><span>Cycle weapons</span><kbd>1-4</kbd><span>Select weapon</span><kbd>R</kbd><span>Reload</span><kbd>F</kbd><span>Mug / melee · vehicle recovery</span><kbd>Esc</kbd><span>Pause</span><kbd>Backquote</kbd><span>Performance</span></div><button id="back">Back</button></div>`;
+    this.menu.innerHTML = `<div class="menu-panel compact controls"><p class="kicker">FIELD GUIDE</p><h2>Controls</h2><div><kbd>WASD</kbd><span>Move / drive</span><kbd>Mouse</kbd><span>Orbit / aim</span><kbd>Shift</kbd><span>Sprint</span><kbd>Space</kbd><span>Jump / handbrake</span><kbd>E</kbd><span>Interact / vehicle</span><kbd>LMB</kbd><span>Aim and fire / punch</span><kbd>Tab</kbd><span>Hold for weapon wheel</span><kbd>Scroll</kbd><span>Cycle weapons</span><kbd>1-5</kbd><span>Select weapon</span><kbd>R</kbd><span>Reload</span><kbd>F</kbd><span>Mug / melee · vehicle recovery</span><kbd>Esc</kbd><span>Pause</span><kbd>Backquote</kbd><span>Performance</span></div><button id="back">Back</button></div>`;
     this.menu.classList.add('visible'); this.bind('#back', () => { if (fromMain) this.showMainMenu(); else this.onResume?.(); });
   }
   private bind(selector: string, callback: () => void): void { this.menu.querySelector(selector)?.addEventListener('click', callback); }

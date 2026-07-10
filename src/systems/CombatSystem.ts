@@ -17,6 +17,7 @@ export class CombatSystem {
   reloading = 0;
   cooldown = 0;
   shotsFired = 0;
+  onRocket?: (origin: THREE.Vector3, direction: THREE.Vector3, spec: WeaponSpec) => void;
   private raycaster = new THREE.Raycaster();
   private effects: Array<{ mesh: THREE.Mesh; life: number }> = [];
   private muzzle?: THREE.PointLight;
@@ -24,7 +25,23 @@ export class CombatSystem {
   constructor(private scene: THREE.Scene, private audio: AudioManager) {}
 
   get spec(): WeaponSpec { return WEAPON_BY_ID[this.current]; }
-  get state(): { ammo: number; reserve: number } { return this.loadout[this.current]; }
+  get state(): { ammo: number; reserve: number; owned: boolean } { return this.loadout[this.current]; }
+
+  owned(id: WeaponId): boolean { return this.loadout[id].owned; }
+
+  grantWeapon(id: WeaponId): 'new' | 'ammo' {
+    const spec = WEAPON_BY_ID[id]; const state = this.loadout[id];
+    if (!state.owned) { state.owned = true; state.ammo = Math.max(state.ammo, spec.magazine); state.reserve = Math.max(state.reserve, spec.reserve); return 'new'; }
+    state.reserve = Math.min(state.reserve + spec.magazine * 2, spec.reserve * 3);
+    return 'ammo';
+  }
+
+  addAmmo(): WeaponId {
+    const target = !this.spec.melee && this.state.owned ? this.current : 'pistol';
+    const spec = WEAPON_BY_ID[target]; const state = this.loadout[target];
+    state.reserve = Math.min(state.reserve + spec.magazine * 2, spec.reserve * 3);
+    return target;
+  }
 
   restore(saved: SavedWeapons): void {
     this.current = saved.current; this.reloading = 0; this.cooldown = 0;
@@ -34,13 +51,13 @@ export class CombatSystem {
   serialize(): SavedWeapons { return { current: this.current, loadout: structuredClone(this.loadout) }; }
 
   select(id: WeaponId): boolean {
-    if (id === this.current || !WEAPON_BY_ID[id]) return false;
+    if (id === this.current || !WEAPON_BY_ID[id] || !this.loadout[id].owned) return false;
     this.current = id; this.reloading = 0; this.cooldown = Math.max(this.cooldown, 0.16);
     this.audio.tone(520, 0.045, 0.06, 'square');
     return true;
   }
 
-  cycle(direction: 1 | -1): void { this.select(cycleWeapon(this.current, direction)); }
+  cycle(direction: 1 | -1): void { this.select(cycleWeapon(this.current, direction, (id) => this.loadout[id].owned)); }
 
   update(dt: number): void {
     this.cooldown = Math.max(0, this.cooldown - dt);
@@ -73,6 +90,14 @@ export class CombatSystem {
     for (const tone of spec.sound) this.audio.tone(tone.freq, tone.duration, tone.volume, tone.type);
     if (this.muzzle) this.scene.remove(this.muzzle);
     this.muzzle = new THREE.PointLight(0xffb43b, 3, 7); this.muzzle.position.copy(origin).add(new THREE.Vector3(0, 1.3, 0)); this.scene.add(this.muzzle);
+    if (spec.projectile) {
+      this.raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const direction = this.raycaster.ray.direction.clone();
+      const start = this.raycaster.ray.origin.clone().addScaledVector(direction, 4.6);
+      if (start.y < 0.4) start.y = 0.4;
+      this.onRocket?.(start, direction, spec);
+      return { fired: true };
+    }
     const meshes: THREE.Object3D[] = [];
     for (const ped of population.pedestrians) if (ped.state !== 'down') meshes.push(ped.group);
     for (const vehicle of population.vehicles) meshes.push(vehicle.group);

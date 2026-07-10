@@ -3,6 +3,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { PLAYER, type WeaponId } from '../config';
 import type { InputManager } from '../core/InputManager';
 import type { City } from '../world/City';
+import { buildWeaponModel } from './WeaponModels';
 
 export class Player {
   group = new THREE.Group();
@@ -129,6 +130,13 @@ export class Player {
   }
 
   private animateAim(dt: number): void {
+    if (this.weapon === 'rpg') {
+      this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.9, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, -0.32, dt * 12);
+      this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -0.55, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0.4, dt * 12);
+      this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.55, dt * 14); this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.8, dt * 14);
+      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, -0.08, dt * 10);
+      return;
+    }
     this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.46, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, -0.09, dt * 12);
     this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -1.28, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0.28, dt * 12);
     this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.06, dt * 14); this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.16, dt * 14);
@@ -150,7 +158,7 @@ export class Player {
     this.buildHead(skin, hair);
     this.buildArm(this.leftArm, this.leftForearm, -0.355, jacket, skin);
     this.buildArm(this.rightArm, this.rightForearm, 0.355, jacket, skin);
-    this.buildWeapons(metal);
+    this.buildWeapons();
     this.buildLeg(this.leftLeg, this.leftShin, -0.14, denim, leather);
     this.buildLeg(this.rightLeg, this.rightShin, 0.14, denim, leather);
     this.model.add(this.torso, this.head, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg); this.group.add(this.model);
@@ -193,24 +201,11 @@ export class Player {
     const hand = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), skin); hand.position.y = -0.37; hand.scale.set(0.86, 1.18, 0.74); forearm.add(lower, cuff, hand); arm.add(forearm);
   }
 
-  private buildWeapons(metal: THREE.Material): void {
-    const polymer = new THREE.MeshStandardMaterial({ color: 0x131719, roughness: 0.52 });
-    const wood = new THREE.MeshStandardMaterial({ color: 0x5d4028, roughness: 0.68 });
-    const pistol = new THREE.Group();
-    const slide = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.3, 0.095, 4, 0.025), metal); slide.position.set(0, -0.49, 0.015);
-    const grip = new THREE.Mesh(new RoundedBoxGeometry(0.068, 0.16, 0.1, 3, 0.02), polymer); grip.position.set(0, -0.4, -0.015); grip.rotation.x = -0.18; pistol.add(slide, grip);
-    const smg = new THREE.Group();
-    const body = new THREE.Mesh(new RoundedBoxGeometry(0.08, 0.4, 0.11, 4, 0.02), metal); body.position.set(0, -0.54, 0.02);
-    const smgGrip = new THREE.Mesh(new RoundedBoxGeometry(0.065, 0.15, 0.09, 3, 0.02), polymer); smgGrip.position.set(0, -0.4, -0.02); smgGrip.rotation.x = -0.2;
-    const magazine = new THREE.Mesh(new RoundedBoxGeometry(0.055, 0.22, 0.06, 3, 0.015), polymer); magazine.position.set(0, -0.52, -0.075); magazine.rotation.x = 0.25;
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.14, 10), metal); barrel.position.set(0, -0.78, 0.035); smg.add(body, smgGrip, magazine, barrel);
-    const shotgun = new THREE.Group();
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.62, 12), metal); tube.position.set(0, -0.66, 0.03);
-    const under = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.44, 10), metal); under.position.set(0, -0.71, -0.015);
-    const pump = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.17, 0.08, 3, 0.02), wood); pump.position.set(0, -0.68, -0.01);
-    const stock = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.22, 0.12, 3, 0.025), wood); stock.position.set(0, -0.32, -0.03); stock.rotation.x = -0.22; shotgun.add(tube, under, pump, stock);
-    this.weaponMeshes.set('pistol', pistol).set('smg', smg).set('shotgun', shotgun);
-    for (const [id, mesh] of this.weaponMeshes) { mesh.visible = id === this.weapon; this.rightForearm.add(mesh); }
+  private buildWeapons(): void {
+    for (const id of ['pistol', 'smg', 'shotgun'] as const) { const mesh = buildWeaponModel(id); if (mesh) this.weaponMeshes.set(id, mesh); }
+    const rpg = buildWeaponModel('rpg');
+    if (rpg) { rpg.rotation.x = -Math.PI / 2; rpg.position.set(0.3, 1.56, -0.28); this.weaponMeshes.set('rpg', rpg); }
+    for (const [id, mesh] of this.weaponMeshes) { mesh.visible = id === this.weapon; (id === 'rpg' ? this.torso : this.rightForearm).add(mesh); }
   }
 
   private buildLeg(leg: THREE.Group, shin: THREE.Group, x: number, denim: THREE.Material, leather: THREE.Material): void {

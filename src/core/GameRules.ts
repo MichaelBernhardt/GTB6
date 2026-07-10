@@ -19,9 +19,33 @@ export function calculateDamage(base: number, distance: number, armour = 0): num
   return Math.max(0, Math.round(base * falloff - armour * 0.45));
 }
 
-export function cycleWeapon(current: WeaponId, direction: 1 | -1): WeaponId {
+export function cycleWeapon(current: WeaponId, direction: 1 | -1, isOwned: (id: WeaponId) => boolean = () => true): WeaponId {
   const index = WEAPONS.findIndex((spec) => spec.id === current);
-  return WEAPONS[(index + direction + WEAPONS.length) % WEAPONS.length]?.id ?? current;
+  for (let step = 1; step <= WEAPONS.length; step++) {
+    const next = WEAPONS[(index + direction * step + WEAPONS.length * step) % WEAPONS.length];
+    if (next && next.id !== current && isOwned(next.id)) return next.id;
+  }
+  return current;
+}
+
+export function splashDamage(base: number, distance: number, radius: number): number {
+  if (distance >= radius) return 0;
+  return Math.round(base * (1 - distance / radius));
+}
+
+export type PedKind = 'civilian' | 'guard' | 'police';
+export interface DropRoll { cash: number; weapon?: WeaponId; ammo?: boolean; }
+
+export function rollDrops(kind: PedKind, random: () => number = Math.random): DropRoll {
+  if (kind === 'guard') {
+    const cash = 40 + Math.floor(random() * 80); const roll = random();
+    return { cash, weapon: roll < 0.12 ? 'rpg' : roll < 0.56 ? 'smg' : 'shotgun' };
+  }
+  if (kind === 'police') return { cash: 5 + Math.floor(random() * 25), weapon: 'pistol' };
+  const cash = 10 + Math.floor(random() * 50); const roll = random();
+  if (roll < 0.1) return { cash, weapon: 'pistol' };
+  if (roll < 0.25) return { cash, ammo: true };
+  return { cash };
 }
 
 export function triggerPulled(spec: WeaponSpec, held: boolean, pressed: boolean): boolean {

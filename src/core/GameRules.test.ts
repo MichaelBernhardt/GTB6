@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { WEAPON_BY_ID, WEAPONS } from '../config';
-import { Economy, calculateDamage, cycleWeapon, outOfAmmo, spreadOffset, triggerPulled } from './GameRules';
+import { WEAPON_BY_ID, WEAPONS, type WeaponId } from '../config';
+import { Economy, calculateDamage, cycleWeapon, outOfAmmo, rollDrops, splashDamage, spreadOffset, triggerPulled } from './GameRules';
+
+const rng = (...values: number[]): (() => number) => { let i = 0; return () => values[i++] ?? 0; };
 
 describe('economy', () => {
   it('applies rounded rewards and rejects overspending', () => {
@@ -26,11 +28,21 @@ describe('weapon rules', () => {
     expect(cycleWeapon('fists', 1)).toBe('pistol');
     expect(cycleWeapon('pistol', 1)).toBe('smg');
     expect(cycleWeapon('smg', 1)).toBe('shotgun');
-    expect(cycleWeapon('shotgun', 1)).toBe('fists');
-    expect(cycleWeapon('fists', -1)).toBe('shotgun');
+    expect(cycleWeapon('shotgun', 1)).toBe('rpg');
+    expect(cycleWeapon('rpg', 1)).toBe('fists');
+    expect(cycleWeapon('fists', -1)).toBe('rpg');
     let current = WEAPONS[0]!.id;
     for (let i = 0; i < WEAPONS.length; i++) current = cycleWeapon(current, 1);
     expect(current).toBe(WEAPONS[0]!.id);
+  });
+
+  it('skips weapons the player does not own while cycling', () => {
+    const owned = new Set<WeaponId>(['fists', 'pistol', 'rpg']);
+    const isOwned = (id: WeaponId) => owned.has(id);
+    expect(cycleWeapon('pistol', 1, isOwned)).toBe('rpg');
+    expect(cycleWeapon('rpg', 1, isOwned)).toBe('fists');
+    expect(cycleWeapon('fists', -1, isOwned)).toBe('rpg');
+    expect(cycleWeapon('pistol', 1, (id) => id === 'pistol')).toBe('pistol');
   });
 
   it('gates semi-auto weapons on a fresh press and full-auto on hold', () => {
@@ -57,5 +69,40 @@ describe('weapon rules', () => {
     }
     const [zx, zy] = spreadOffset(0);
     expect(Math.hypot(zx, zy)).toBe(0);
+  });
+
+  it('applies linear splash falloff inside the blast radius', () => {
+    expect(splashDamage(120, 0, 7)).toBe(120);
+    expect(splashDamage(120, 3.5, 7)).toBe(60);
+    expect(splashDamage(120, 7, 7)).toBe(0);
+    expect(splashDamage(120, 30, 7)).toBe(0);
+    expect(splashDamage(120, 1, 7)).toBeGreaterThan(splashDamage(120, 5, 7));
+  });
+});
+
+describe('drop tables', () => {
+  it('guards always drop a heavy weapon and richer cash', () => {
+    expect(rollDrops('guard', rng(0, 0))).toEqual({ cash: 40, weapon: 'rpg' });
+    expect(rollDrops('guard', rng(0.5, 0.3))).toEqual({ cash: 80, weapon: 'smg' });
+    expect(rollDrops('guard', rng(0.99, 0.9))).toEqual({ cash: 119, weapon: 'shotgun' });
+  });
+
+  it('police always drop their pistol and pocket change', () => {
+    const drop = rollDrops('police', rng(0.5));
+    expect(drop.weapon).toBe('pistol');
+    expect(drop.cash).toBeGreaterThanOrEqual(5);
+    expect(drop.cash).toBeLessThan(30);
+  });
+
+  it('civilians drop modest cash and occasionally a pistol or ammo', () => {
+    expect(rollDrops('civilian', rng(0.5, 0.05))).toEqual({ cash: 35, weapon: 'pistol' });
+    expect(rollDrops('civilian', rng(0.5, 0.2))).toEqual({ cash: 35, ammo: true });
+    expect(rollDrops('civilian', rng(0.5, 0.8))).toEqual({ cash: 35 });
+    for (let i = 0; i < 50; i++) {
+      const drop = rollDrops('civilian');
+      expect(drop.cash).toBeGreaterThanOrEqual(10);
+      expect(drop.cash).toBeLessThan(60);
+      if (drop.weapon) expect(drop.weapon).toBe('pistol');
+    }
   });
 });

@@ -13,15 +13,39 @@ const camera = new THREE.PerspectiveCamera();
 const origin = new THREE.Vector3();
 
 describe('CombatSystem', () => {
-  it('selects and cycles weapons in loadout order', () => {
+  it('cycles owned weapons in loadout order, skipping unowned ones', () => {
     const combat = makeCombat();
     expect(combat.current).toBe('pistol');
+    combat.cycle(1); expect(combat.current).toBe('rpg');
+    combat.cycle(1); expect(combat.current).toBe('fists');
+    combat.cycle(-1); expect(combat.current).toBe('rpg');
+    combat.grantWeapon('smg'); combat.grantWeapon('shotgun');
+    combat.select('pistol');
     combat.cycle(1); expect(combat.current).toBe('smg');
     combat.cycle(1); expect(combat.current).toBe('shotgun');
-    combat.cycle(1); expect(combat.current).toBe('fists');
-    combat.cycle(-1); expect(combat.current).toBe('shotgun');
     combat.select('pistol'); expect(combat.current).toBe('pistol');
     expect(combat.select('pistol')).toBe(false);
+  });
+
+  it('rejects selecting weapons the player does not own', () => {
+    const combat = makeCombat();
+    expect(combat.select('smg')).toBe(false);
+    expect(combat.current).toBe('pistol');
+    expect(combat.grantWeapon('smg')).toBe('new');
+    expect(combat.loadout.smg).toEqual({ ammo: 30, reserve: 120, owned: true });
+    expect(combat.select('smg')).toBe(true);
+  });
+
+  it('tops up reserve ammo for owned weapons and via ammo boxes', () => {
+    const combat = makeCombat();
+    expect(combat.grantWeapon('pistol')).toBe('ammo');
+    expect(combat.loadout.pistol.reserve).toBe(84 + 24);
+    expect(combat.addAmmo()).toBe('pistol');
+    expect(combat.loadout.pistol.reserve).toBe(84 + 48);
+    combat.select('fists');
+    expect(combat.addAmmo()).toBe('pistol');
+    combat.loadout.pistol.reserve = 999; combat.grantWeapon('pistol');
+    expect(combat.loadout.pistol.reserve).toBe(84 * 3);
   });
 
   it('requires a fresh press for semi-auto weapons', () => {
@@ -36,7 +60,7 @@ describe('CombatSystem', () => {
 
   it('lets full-auto weapons fire on hold once the cooldown clears', () => {
     const combat = makeCombat();
-    combat.select('smg'); combat.update(0.5);
+    combat.grantWeapon('smg'); combat.select('smg'); combat.update(0.5);
     expect(combat.fire(fakeInput(true, false), camera, origin, emptyPopulation).fired).toBe(true);
     expect(combat.fire(fakeInput(true, false), camera, origin, emptyPopulation).fired).toBe(false);
     combat.update(0.1);
@@ -47,16 +71,16 @@ describe('CombatSystem', () => {
 
   it('auto-reloads an empty magazine when reserve remains', () => {
     const combat = makeCombat();
-    combat.loadout.pistol = { ammo: 0, reserve: 20 };
+    combat.loadout.pistol = { ammo: 0, reserve: 20, owned: true };
     expect(combat.fire(fakeInput(true, true), camera, origin, emptyPopulation).fired).toBe(false);
     expect(combat.reloading).toBeGreaterThan(0);
     combat.update(1.1);
-    expect(combat.state).toEqual({ ammo: 12, reserve: 8 });
+    expect(combat.state).toEqual({ ammo: 12, reserve: 8, owned: true });
   });
 
   it('falls back to fists when magazine and reserve are empty', () => {
     const combat = makeCombat();
-    combat.loadout.pistol = { ammo: 0, reserve: 0 };
+    combat.loadout.pistol = { ammo: 0, reserve: 0, owned: true };
     expect(combat.fire(fakeInput(true, true), camera, origin, emptyPopulation).fired).toBe(false);
     expect(combat.current).toBe('fists');
     combat.update(0.5);
@@ -78,12 +102,28 @@ describe('CombatSystem', () => {
     expect(combat.fire(fakeInput(true, true), camera, origin, population).fired).toBe(false);
   });
 
+  it('launches a visible projectile for the rocket launcher instead of hitscan', () => {
+    const combat = makeCombat();
+    const launches: Array<{ origin: THREE.Vector3; direction: THREE.Vector3 }> = [];
+    combat.onRocket = (rocketOrigin, direction) => launches.push({ origin: rocketOrigin.clone(), direction: direction.clone() });
+    combat.select('rpg'); combat.update(0.5);
+    expect(combat.fire(fakeInput(true, false), camera, origin, emptyPopulation).fired).toBe(false);
+    expect(combat.fire(fakeInput(true, true), camera, origin, emptyPopulation).fired).toBe(true);
+    expect(launches).toHaveLength(1);
+    expect(combat.state.ammo).toBe(0);
+    combat.update(1);
+    expect(combat.fire(fakeInput(true, true), camera, origin, emptyPopulation).fired).toBe(false);
+    expect(combat.reloading).toBeGreaterThan(0);
+    combat.update(3.1);
+    expect(combat.state).toEqual({ ammo: 1, reserve: 3, owned: true });
+  });
+
   it('serializes and restores the loadout', () => {
     const combat = makeCombat();
-    combat.select('shotgun'); combat.loadout.shotgun = { ammo: 2, reserve: 10 };
+    combat.grantWeapon('shotgun'); combat.select('shotgun'); combat.loadout.shotgun = { ammo: 2, reserve: 10, owned: true };
     const saved = combat.serialize();
     const fresh = makeCombat(); fresh.restore(saved);
     expect(fresh.current).toBe('shotgun');
-    expect(fresh.state).toEqual({ ammo: 2, reserve: 10 });
+    expect(fresh.state).toEqual({ ammo: 2, reserve: 10, owned: true });
   });
 });

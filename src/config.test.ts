@@ -14,7 +14,7 @@ describe('vehicle configuration', () => {
 
 describe('weapon configuration', () => {
   it('gives each weapon a distinct combat role', () => {
-    expect(WEAPONS.map((spec) => spec.id)).toEqual(['fists', 'pistol', 'smg', 'shotgun']);
+    expect(WEAPONS.map((spec) => spec.id)).toEqual(['fists', 'pistol', 'smg', 'shotgun', 'rpg']);
     expect(WEAPON_BY_ID.fists.melee).toBe(true);
     expect(WEAPON_BY_ID.smg.auto).toBe(true);
     expect(WEAPON_BY_ID.pistol.auto).toBe(false);
@@ -23,6 +23,18 @@ describe('weapon configuration', () => {
     expect(WEAPON_BY_ID.shotgun.pellets).toBeGreaterThanOrEqual(6);
     expect(WEAPON_BY_ID.shotgun.pellets).toBeLessThanOrEqual(8);
     for (const spec of WEAPONS.filter((entry) => !entry.melee)) { expect(spec.magazine).toBeGreaterThan(0); expect(spec.reloadTime).toBeGreaterThan(0); expect(spec.sound.length).toBeGreaterThan(0); }
+  });
+
+  it('makes the rocket launcher a slow, scarce, projectile siege weapon', () => {
+    const rpg = WEAPON_BY_ID.rpg;
+    expect(rpg.projectile).toBeDefined();
+    expect(rpg.magazine).toBe(1);
+    expect(rpg.auto).toBe(false);
+    expect(rpg.reloadTime).toBeGreaterThanOrEqual(2.5);
+    expect(rpg.projectile!.speed).toBeGreaterThanOrEqual(55);
+    expect(rpg.projectile!.speed).toBeLessThanOrEqual(70);
+    expect(rpg.projectile!.radius).toBeGreaterThan(3);
+    for (const spec of WEAPONS.filter((entry) => entry.id !== 'rpg')) expect(spec.projectile).toBeUndefined();
   });
 
   it('makes the shotgun devastating up close but capped at short range', () => {

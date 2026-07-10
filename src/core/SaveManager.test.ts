@@ -35,11 +35,11 @@ describe('SaveManager', () => {
   it('round trips the weapon loadout', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     const weapons: SavedWeapons = { ...defaultWeapons(), current: 'smg' };
-    weapons.loadout.smg = { ammo: 11, reserve: 60 };
+    weapons.loadout.smg = { ammo: 11, reserve: 60, owned: true };
     manager.save({ ...DEFAULT_SAVE, weapons });
     const loaded = manager.load();
     expect(loaded.weapons.current).toBe('smg');
-    expect(loaded.weapons.loadout.smg).toEqual({ ammo: 11, reserve: 60 });
+    expect(loaded.weapons.loadout.smg).toEqual({ ammo: 11, reserve: 60, owned: true });
   });
 
   it('sanitizes invalid weapon data', () => {
@@ -47,6 +47,17 @@ describe('SaveManager', () => {
     const patched = sanitizeWeapons({ current: 'bazooka', loadout: { pistol: { ammo: -4, reserve: Number.NaN }, shotgun: { ammo: 2.6, reserve: 8 } } } as unknown as SavedWeapons);
     expect(patched.current).toBe('pistol');
     expect(patched.loadout.pistol).toEqual(defaultWeapons().loadout.pistol);
-    expect(patched.loadout.shotgun).toEqual({ ammo: 3, reserve: 8 });
+    expect(patched.loadout.shotgun).toEqual({ ammo: 3, reserve: 8, owned: true });
+  });
+
+  it('treats legacy entries without ownership as owned and fixes an unowned current', () => {
+    const legacy = sanitizeWeapons({ current: 'smg', loadout: { smg: { ammo: 30, reserve: 120 } } } as unknown as SavedWeapons);
+    expect(legacy.loadout.smg).toEqual({ ammo: 30, reserve: 120, owned: true });
+    expect(legacy.current).toBe('smg');
+    const broken = sanitizeWeapons({ current: 'shotgun', loadout: { shotgun: { ammo: 2, reserve: 4, owned: false } } } as unknown as SavedWeapons);
+    expect(broken.loadout.shotgun.owned).toBe(false);
+    expect(broken.current).toBe('pistol');
+    expect(defaultWeapons().loadout.smg.owned).toBe(false);
+    expect(defaultWeapons().loadout.rpg.owned).toBe(true);
   });
 });

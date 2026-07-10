@@ -5,7 +5,7 @@ const KEY = 'san-cordova-save-v1';
 export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025 };
 
 export function defaultWeapons(): SavedWeapons {
-  const loadout = Object.fromEntries(WEAPONS.map((spec) => [spec.id, { ammo: spec.magazine, reserve: spec.reserve }])) as Record<WeaponId, SavedWeaponState>;
+  const loadout = Object.fromEntries(WEAPONS.map((spec) => [spec.id, { ammo: spec.starter ? spec.magazine : 0, reserve: spec.starter ? spec.reserve : 0, owned: spec.starter }])) as Record<WeaponId, SavedWeaponState>;
   return { current: 'pistol', loadout };
 }
 
@@ -15,8 +15,10 @@ export function sanitizeWeapons(raw?: Partial<SavedWeapons>): SavedWeapons {
   if (typeof raw.current === 'string' && raw.current in WEAPON_BY_ID) base.current = raw.current;
   for (const spec of WEAPONS) {
     const entry = raw.loadout?.[spec.id];
-    if (entry && Number.isFinite(entry.ammo) && Number.isFinite(entry.reserve)) base.loadout[spec.id] = { ammo: Math.max(0, Math.round(entry.ammo)), reserve: Math.max(0, Math.round(entry.reserve)) };
+    if (entry && Number.isFinite(entry.ammo) && Number.isFinite(entry.reserve)) base.loadout[spec.id] = { ammo: Math.max(0, Math.round(entry.ammo)), reserve: Math.max(0, Math.round(entry.reserve)), owned: entry.owned !== false };
   }
+  base.loadout.fists.owned = true;
+  if (!base.loadout[base.current].owned) base.current = base.loadout.pistol.owned ? 'pistol' : 'fists';
   return base;
 }
 
