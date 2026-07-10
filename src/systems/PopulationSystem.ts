@@ -5,9 +5,10 @@ import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, type FearEvent } from './FearSystem';
 import { MISSIONS } from './MissionSystem';
+import { RoutePlanner, type NavPoint } from './NavGraph';
 import type { City } from '../world/City';
 
-interface TrafficState { route: number; waypoint: number; direction: 1 | -1; }
+interface DrivePlan { points: NavPoint[]; index: number; }
 
 export class PopulationSystem {
   pedestrians: Pedestrian[] = [];
@@ -17,27 +18,33 @@ export class PopulationSystem {
   private hostileAttackCooldown = 0;
   private impacts: Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle }> = [];
   private pedestrianImpactCooldown = new WeakMap<Pedestrian, number>();
-  private trafficState = new WeakMap<Vehicle, TrafficState>();
+  private trafficPlans = new WeakMap<Vehicle, DrivePlan>();
+  private vehiclePlanner: RoutePlanner;
+  private pedPlanner: RoutePlanner;
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
+    this.vehiclePlanner = new RoutePlanner(city.vehicleNav, 2);
+    this.pedPlanner = new RoutePlanner(city.pedNav, 2);
     this.spawnVehicles(); this.spawnPedestrians();
   }
 
   update(dt: number, player: THREE.Vector3, damagePlayer?: (amount: number) => void): void {
+    this.vehiclePlanner.beginFrame(); this.pedPlanner.beginFrame();
     this.hostileAttackCooldown = Math.max(0, this.hostileAttackCooldown - dt);
     for (const ped of this.pedestrians) {
       ped.update(dt, this.city, this.city.sidewalkPoints, player);
+      if (ped.wantsRoute) { const points = this.pedPlanner.tryPlan(ped.group.position.x, ped.group.position.z); if (points) ped.setRoute(points); }
       this.pedestrianImpactCooldown.set(ped, Math.max(0, (this.pedestrianImpactCooldown.get(ped) ?? 0) - dt));
     }
     this.witnessBodies(dt);
     for (const vehicle of this.traffic) {
-      if (vehicle.group.position.distanceToSquared(vehicle.aiTarget) < 85) this.advanceTrafficTarget(vehicle);
+      if (vehicle.playerControlled || vehicle.disabled) continue;
+      this.followDrivePlan(vehicle);
       const forward = new THREE.Vector3(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
       const blocked = this.vehicles.some((other) => other !== vehicle && other.group.position.distanceToSquared(vehicle.group.position) < 70 && other.group.position.clone().sub(vehicle.group.position).dot(forward) > 0);
       if (vehicle.group.position.distanceToSquared(player) < 320 * 320) vehicle.updateAI(dt, this.city, undefined, blocked ? 0.05 : TRAFFIC_SPEED_FACTOR);
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
-      if (outsideWorld) this.placeOnRoute(vehicle, Math.floor(Math.random() * this.city.trafficRoutes.length));
-      else if (vehicle.aiStuck > 9) this.placeOnNearestRoute(vehicle);
+      if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);
     }
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation();
@@ -98,7 +105,7 @@ export class PopulationSystem {
     for (let i = 0; i < 13; i++) {
       const routeIndex = (i * 5 + 3) % this.city.trafficRoutes.length; const route = this.city.trafficRoutes[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
       const vehicle = new Vehicle(this.scene, kinds[i % kinds.length], new THREE.Vector3(point.x, 0, point.z), [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
-      vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.placeOnRoute(vehicle, routeIndex, (i * 7) % route.length);
+      vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     }
   }
 
@@ -113,29 +120,33 @@ export class PopulationSystem {
     });
   }
 
-  private placeOnRoute(vehicle: Vehicle, routeIndex: number, waypoint?: number): void {
-    const route = this.city.trafficRoutes[routeIndex] ?? this.city.trafficRoutes[0]; if (!route?.length) return;
-    const index = waypoint ?? Math.floor(Math.random() * Math.max(1, route.length - 1)); const nextIndex = Math.min(route.length - 1, index + 1);
-    const point = route[index]; const next = route[nextIndex]; if (!point || !next) return;
-    vehicle.reset(new THREE.Vector3(point.x, 0, point.z)); vehicle.heading = Math.atan2(next.x - point.x, next.z - point.z); vehicle.group.rotation.y = vehicle.heading;
-    this.trafficState.set(vehicle, { route: routeIndex, waypoint: nextIndex, direction: 1 }); vehicle.aiTarget.set(next.x, 0, next.z);
+  /** Advances the vehicle along its A* route; picks a fresh destination on arrival (budget permitting). */
+  private followDrivePlan(vehicle: Vehicle): void {
+    const plan = this.trafficPlans.get(vehicle);
+    if (!plan) { this.assignVehicleRoute(vehicle, false); return; }
+    if (vehicle.group.position.distanceToSquared(vehicle.aiTarget) >= 85) return;
+    plan.index += 1;
+    const point = plan.points[plan.index];
+    if (point) vehicle.aiTarget.set(point.x, 0, point.z);
+    else { this.trafficPlans.delete(vehicle); this.assignVehicleRoute(vehicle, false); }
   }
 
-  private placeOnNearestRoute(vehicle: Vehicle): void {
-    let routeIndex = 0; let waypoint = 0; let nearest = Infinity;
-    for (let route = 0; route < this.city.trafficRoutes.length; route++) {
-      const points = this.city.trafficRoutes[route] ?? [];
-      for (let index = 0; index < points.length; index++) { const point = points[index]; if (!point) continue; const distance = (point.x - vehicle.group.position.x) ** 2 + (point.z - vehicle.group.position.z) ** 2; if (distance < nearest) { nearest = distance; routeIndex = route; waypoint = index; } }
-    }
-    this.placeOnRoute(vehicle, routeIndex, waypoint);
+  private assignVehicleRoute(vehicle: Vehicle, free: boolean): void {
+    const position = vehicle.group.position;
+    const points = free ? this.vehiclePlanner.plan(position.x, position.z) : this.vehiclePlanner.tryPlan(position.x, position.z);
+    if (!points?.length) return; // budget spent or destination unreachable: retry next frame
+    this.trafficPlans.set(vehicle, { points, index: 0 });
+    const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);
+    const next = points[1];
+    if (next && Math.abs(vehicle.speed) < 1) { vehicle.heading = Math.atan2(next.x - position.x, next.z - position.z); vehicle.group.rotation.y = vehicle.heading; }
   }
 
-  private advanceTrafficTarget(vehicle: Vehicle): void {
-    const state = this.trafficState.get(vehicle); if (!state) { this.placeOnRoute(vehicle, Math.floor(Math.random() * this.city.trafficRoutes.length)); return; }
-    const route = this.city.trafficRoutes[state.route]; if (!route?.length) return;
-    let waypoint = state.waypoint + state.direction;
-    if (waypoint >= route.length || waypoint < 0) { state.direction = state.direction === 1 ? -1 : 1; waypoint = THREE.MathUtils.clamp(state.waypoint + state.direction, 0, route.length - 1); }
-    state.waypoint = waypoint; const point = route[waypoint]; if (point) vehicle.aiTarget.set(point.x, 0, point.z);
+  /** Snaps a lost/stuck vehicle back onto the nearest lane node and forces a replan. */
+  private rehomeVehicle(vehicle: Vehicle): void {
+    const node = this.vehiclePlanner.node(this.vehiclePlanner.nearest(vehicle.group.position.x, vehicle.group.position.z));
+    if (node) { vehicle.reset(new THREE.Vector3(node.x, 0, node.z)); vehicle.aiTarget.set(node.x, 0, node.z); }
+    vehicle.aiStuck = 0;
+    this.trafficPlans.delete(vehicle);
   }
 
   private witnessBodies(dt: number): void {
