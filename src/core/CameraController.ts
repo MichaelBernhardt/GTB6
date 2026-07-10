@@ -13,7 +13,7 @@ export class CameraController {
 
   update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025): void {
     this.yaw -= input.mouseDX * sensitivity;
-    this.pitch = THREE.MathUtils.clamp(this.pitch - input.mouseDY * sensitivity, -0.1, 0.9);
+    this.pitch = THREE.MathUtils.clamp(this.pitch + input.mouseDY * sensitivity, -0.1, 0.9);
     this.aiming = input.firing && !vehicle;
     const distance = this.aiming ? 4.65 : vehicle ? 10.5 : 6.35;
     const height = vehicle ? 2.6 : 1.45;
