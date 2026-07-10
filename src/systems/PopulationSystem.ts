@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, type FearEvent } from './FearSystem';
@@ -18,7 +19,7 @@ export class PopulationSystem {
   private pedestrianImpactCooldown = new WeakMap<Pedestrian, number>();
   private trafficState = new WeakMap<Vehicle, TrafficState>();
 
-  constructor(private scene: THREE.Scene, private city: City) {
+  constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.spawnVehicles(); this.spawnPedestrians();
   }
 
@@ -47,7 +48,13 @@ export class PopulationSystem {
   }
 
   broadcastFear(origin: THREE.Vector3, event: FearEvent): void {
-    for (const ped of this.pedestrians) ped.applyFear(fearContribution(event, ped.group.position.distanceTo(origin)), origin);
+    for (const ped of this.pedestrians) this.frighten(ped, fearContribution(event, ped.group.position.distanceTo(origin)), origin);
+  }
+
+  private frighten(ped: Pedestrian, amount: number, origin: THREE.Vector3): void {
+    const before = ped.state;
+    ped.applyFear(amount, origin);
+    if (before !== ped.state && (ped.state === 'flee' || ped.state === 'cower') && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
   }
 
   consumeImpacts(): Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle }> { return this.impacts.splice(0); }
@@ -61,7 +68,7 @@ export class PopulationSystem {
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading));
     const driver = new Pedestrian(this.scene, vehicle.group.position.clone().addScaledVector(side, -2.1), 120 + this.pedestrians.length);
     driver.state = 'flee'; driver.fear = FEAR_MAX; driver.threat.copy(player); driver.destination.copy(driver.group.position).add(driver.group.position.clone().sub(player).normalize().multiplyScalar(55));
-    this.pedestrians.push(driver); this.broadcastFear(player, FEAR_EVENTS.assault); return driver;
+    this.pedestrians.push(driver); this.audio.scream('panic', driver.group.position.x, driver.group.position.z); this.broadcastFear(player, FEAR_EVENTS.assault); return driver;
   }
 
   spawnHostiles(): void {
@@ -135,16 +142,21 @@ export class PopulationSystem {
     if (!bodies.length) return;
     for (const ped of this.pedestrians) {
       if (ped.state === 'down') continue;
-      for (const body of bodies) ped.applyFear(fearContribution(FEAR_EVENTS.body, ped.group.position.distanceTo(body.group.position)) * dt, body.group.position);
+      for (const body of bodies) this.frighten(ped, fearContribution(FEAR_EVENTS.body, ped.group.position.distanceTo(body.group.position)) * dt, body.group.position);
     }
   }
 
   private handleVehiclePedestrianImpacts(): void {
     for (const vehicle of this.vehicles) {
       if (Math.abs(vehicle.speed) < 7) continue;
-      for (const ped of this.pedestrians) if (ped.state !== 'down' && (this.pedestrianImpactCooldown.get(ped) ?? 0) <= 0 && vehicle.group.position.distanceToSquared(ped.group.position) < 5) {
-        const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle });
-        this.pedestrianImpactCooldown.set(ped, 1);
+      for (const ped of this.pedestrians) {
+        if (ped.state === 'down' || (this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
+        const distanceSq = vehicle.group.position.distanceToSquared(ped.group.position);
+        if (distanceSq < 5) {
+          const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle });
+          this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
+          this.pedestrianImpactCooldown.set(ped, 1);
+        } else if (distanceSq < 22 && Math.abs(vehicle.speed) > 16 && !ped.contact && !ped.hostile && !ped.police && Math.random() < 0.01) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
       }
     }
   }

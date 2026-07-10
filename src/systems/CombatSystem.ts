@@ -63,7 +63,7 @@ export class CombatSystem {
   select(id: WeaponId): boolean {
     if (id === this.current || !WEAPON_BY_ID[id] || !this.loadout[id].owned) return false;
     this.current = id; this.reloading = 0; this.cooldown = Math.max(this.cooldown, 0.16);
-    this.audio.tone(520, 0.045, 0.06, 'square');
+    this.audio.weaponSelect();
     return true;
   }
 
@@ -94,10 +94,9 @@ export class CombatSystem {
     const state = this.state;
     if (state.ammo <= 0) {
       if (state.reserve <= 0) { this.select('fists'); return { fired: false }; }
-      this.cooldown = 0.25; this.audio.tone(160, 0.05, 0.05, 'square'); this.startReload(); return { fired: false };
+      this.cooldown = 0.25; this.audio.emptyClick(); this.startReload(); return { fired: false };
     }
-    state.ammo -= 1; this.cooldown = spec.cooldown; this.shotsFired += 1;
-    for (const tone of spec.sound) this.audio.tone(tone.freq, tone.duration, tone.volume, tone.type);
+    state.ammo -= 1; this.cooldown = spec.cooldown; this.shotsFired += 1; this.audio.gunshot(spec.sound);
     if (this.muzzle) this.scene.remove(this.muzzle);
     this.muzzle = new THREE.PointLight(0xffb43b, 3, 7); this.muzzle.position.copy(origin).add(new THREE.Vector3(0, 1.3, 0)); this.scene.add(this.muzzle);
     if (spec.projectile) {
@@ -143,9 +142,9 @@ export class CombatSystem {
   private punch(spec: WeaponSpec, origin: THREE.Vector3, population: PopulationSystem): ShotResult {
     this.cooldown = spec.cooldown;
     const victim = population.nearestPedestrian(origin, spec.range);
-    if (!victim) { this.audio.tone(260, 0.05, 0.045, 'sine'); return { fired: true, melee: true }; }
+    if (!victim) { this.audio.whiff(); return { fired: true, melee: true }; }
     const killed = victim.takeDamage(spec.damage);
-    for (const tone of spec.sound) this.audio.tone(tone.freq, tone.duration, tone.volume, tone.type);
+    this.audio.melee();
     return { fired: true, melee: true, victim, killed, policeHit: victim.police, hitPoint: victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)) };
   }
 
