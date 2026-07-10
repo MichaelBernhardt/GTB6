@@ -55,7 +55,7 @@ export class ShopSystem {
   }
 
   private buildWeaponsShop(city: City): void {
-    const x = 12; const z = 212; // storefront faces +z toward Libertad Boulevard
+    const x = 12; const z = 212; // storefront faces +z toward William Nicol Dr
     const body = new THREE.Mesh(new THREE.BoxGeometry(12, 4.6, 7), new THREE.MeshStandardMaterial({ color: 0x39424a, roughness: 0.68, metalness: 0.14 }));
     body.position.set(x, 2.3, z); body.castShadow = true; body.receiveShadow = true;
     const glass = new THREE.Mesh(new THREE.BoxGeometry(7.6, 2, 0.12), new THREE.MeshPhysicalMaterial({ color: 0x2e5560, roughness: 0.14, metalness: 0.2, clearcoat: 0.7 }));
@@ -64,13 +64,13 @@ export class ShopSystem {
     canopy.position.set(x, 2.9, z + 4.1); canopy.castShadow = true;
     const board = new THREE.Mesh(new THREE.BoxGeometry(9.6, 2.1, 0.24), new THREE.MeshStandardMaterial({ color: 0x171d20, roughness: 0.55 }));
     board.position.set(x, 5.5, z + 3.42);
-    const sign = createSignMesh(new THREE.PlaneGeometry(9.2, 1.8), 'CORDOVA ARMS', '#f0ae43'); sign.position.set(x, 5.5, z + 3.56);
+    const sign = createSignMesh(new THREE.PlaneGeometry(9.2, 1.8), 'JOZI ARMS', '#f0ae43'); sign.position.set(x, 5.5, z + 3.56);
     this.group.add(body, glass, canopy, board, sign);
     city.colliders.push({ minX: x - 6, maxX: x + 6, minZ: z - 3.5, maxZ: z + 3.5, height: 4.6 });
   }
 
   private buildSpray(city: City): void {
-    const x = 236; const z = 69; // roll door faces -z toward the Las Palmas Ring
+    const x = 236; const z = 69; // roll door faces -z toward Rivonia Rd
     const body = new THREE.Mesh(new THREE.BoxGeometry(13, 5, 10), new THREE.MeshStandardMaterial({ color: 0x8f8574, roughness: 0.82, metalness: 0.05 }));
     body.position.set(x, 2.5, z); body.castShadow = true; body.receiveShadow = true;
     const shutter = new THREE.Mesh(new THREE.BoxGeometry(6.4, 3.4, 0.14), new THREE.MeshStandardMaterial({ color: 0x5e6868, roughness: 0.5, metalness: 0.45 }));
@@ -79,7 +79,7 @@ export class ShopSystem {
     stripes.position.set(x, 4.1, z);
     const board = new THREE.Mesh(new THREE.BoxGeometry(8.4, 2.1, 0.24), new THREE.MeshStandardMaterial({ color: 0x171d20, roughness: 0.55 }));
     board.position.set(x, 6, z - 4.9);
-    const sign = createSignMesh(new THREE.PlaneGeometry(8, 1.8), 'PALM SPRAY', '#72d8d2'); sign.rotation.y = Math.PI; sign.position.set(x, 6, z - 5.04);
+    const sign = createSignMesh(new THREE.PlaneGeometry(8, 1.8), 'PIK-N-SPRAY', '#72d8d2'); sign.rotation.y = Math.PI; sign.position.set(x, 6, z - 5.04);
     this.group.add(body, shutter, stripes, board, sign);
     city.colliders.push({ minX: x - 6.5, maxX: x + 6.5, minZ: z - 5, maxZ: z + 5, height: 5 });
   }
@@ -109,7 +109,7 @@ export class ShopSystem {
     const counter = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.08, 0.5), new THREE.MeshStandardMaterial({ color: 0x8a5c33, roughness: 0.7 })); counter.position.set(0, 1.4, 0.85);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 8), new THREE.MeshStandardMaterial({ color: 0x3c4546, metalness: 0.6 })); pole.position.set(-0.6, 1.9, -0.2);
     const umbrella = new THREE.Mesh(new THREE.ConeGeometry(1.7, 0.75, 10), new THREE.MeshStandardMaterial({ color: 0xd75844, roughness: 0.7, side: THREE.DoubleSide })); umbrella.position.set(-0.6, 3.05, -0.2); umbrella.castShadow = true;
-    const sign = createSignMesh(new THREE.PlaneGeometry(2.1, 0.6), 'HOT DOGS', '#e94d46'); sign.position.set(0, 1.85, 0.68);
+    const sign = createSignMesh(new THREE.PlaneGeometry(2.1, 0.6), 'BOERIE R25', '#e94d46'); sign.position.set(0, 1.85, 0.68);
     stand.add(cart, counter, pole, umbrella, sign); this.group.add(stand);
     city.colliders.push({ minX: x - 1.2, maxX: x + 1.2, minZ: z - 0.9, maxZ: z + 0.9, height: 1.6 });
   }
