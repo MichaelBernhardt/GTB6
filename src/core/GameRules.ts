@@ -1,4 +1,4 @@
-import { WEAPONS, type WeaponId, type WeaponSpec } from '../config';
+import { CHEATS, PLAYER, WEAPONS, type WeaponId, type WeaponSpec } from '../config';
 
 export class Economy {
   constructor(public balance = 750) {}
@@ -54,6 +54,14 @@ export function triggerPulled(spec: WeaponSpec, held: boolean, pressed: boolean)
 
 export function outOfAmmo(spec: WeaponSpec, ammo: number, reserve: number): boolean {
   return !spec.melee && ammo <= 0 && reserve <= 0;
+}
+
+export function moveSpeed(sprinting: boolean, fastRun: boolean): number {
+  return (sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed) * (fastRun ? CHEATS.runMultiplier : 1);
+}
+
+export function jumpVelocity(bigJump: boolean): number {
+  return PLAYER.jumpSpeed * (bigJump ? CHEATS.jumpMultiplier : 1);
 }
 
 export function spreadOffset(spread: number, random: () => number = Math.random): [number, number] {

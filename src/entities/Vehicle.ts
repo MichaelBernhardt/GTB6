@@ -26,6 +26,7 @@ export class Vehicle {
   aiStuck = 0;
   private wheels: THREE.Object3D[] = [];
   private brakeLights: THREE.Mesh[] = [];
+  private cabinParts: THREE.Object3D[] = [];
   private lightPhase = 0;
 
   constructor(scene: THREE.Scene, kind: VehicleKind, position: THREE.Vector3, color?: number) {
@@ -112,6 +113,8 @@ export class Vehicle {
     });
   }
 
+  setFirstPerson(firstPerson: boolean): void { for (const part of this.cabinParts) part.visible = !firstPerson; } // hide cabin glass/roof so the driver view is unobstructed
+
   reset(position?: THREE.Vector3): void {
     if (position) this.group.position.copy(position);
     this.group.position.y = 0.02; this.group.rotation.set(0, this.heading, 0); this.speed = 0;
@@ -153,6 +156,7 @@ export class Vehicle {
     const grille = new THREE.Mesh(new THREE.BoxGeometry(width * 0.42, 0.25, 0.035), trimMat); grille.position.set(0, 0.64, length / 2 + 0.095);
     const lowerGrille = new THREE.Mesh(new THREE.BoxGeometry(width * 0.28, 0.07, 0.042), chrome); lowerGrille.position.set(0, 0.63, length / 2 + 0.116);
     this.group.add(body, hood, cabin, roof, frontBumper, rearBumper, grille, lowerGrille);
+    this.cabinParts.push(cabin, roof);
     for (const side of [-1, 1]) {
       const skirt = new THREE.Mesh(new RoundedBoxGeometry(0.1, 0.15, length * 0.68, 2, 0.04), trimMat); skirt.position.set(side * width * 0.49, 0.4, 0); this.group.add(skirt);
       const mirror = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.15, 0.34, 3, 0.07), bodyMat); mirror.position.set(side * width * 0.56, cabin.position.y + 0.08, cabin.position.z + cabinLength * 0.32); mirror.castShadow = true; this.group.add(mirror);
@@ -179,7 +183,7 @@ export class Vehicle {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;
       const mount = new THREE.Mesh(new RoundedBoxGeometry(0.98, 0.07, 0.17, 2, 0.02), trimMat); bar.add(mount);
       for (const [x, color] of [[-0.28, 0x226dff], [0.28, 0xff3028]] as const) { const light = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.14, 0.18, 2, 0.03), new THREE.MeshBasicMaterial({ color })); light.position.x = x; bar.add(light); }
-      this.group.add(bar);
+      this.group.add(bar); this.cabinParts.push(bar);
     }
     this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.frustumCulled = false; } });
   }

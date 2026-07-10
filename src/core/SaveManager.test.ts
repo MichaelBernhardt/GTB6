@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeWeapons, type StorageLike } from './SaveManager';
-import type { SavedWeapons } from '../types';
+import { DEFAULT_CHEATS, DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeWeapons, type StorageLike } from './SaveManager';
+import type { CheatSettings, GameSettings, SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
   value = new Map<string, string>();
@@ -50,6 +50,26 @@ describe('SaveManager', () => {
     expect(patched.loadout.shotgun).toEqual({ ammo: 3, reserve: 8, owned: true });
   });
 
+  it('round trips the chosen camera views', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, cameraViewFoot: 0, cameraViewVehicle: 3 } });
+    const loaded = manager.load();
+    expect(loaded.settings.cameraViewFoot).toBe(0);
+    expect(loaded.settings.cameraViewVehicle).toBe(3);
+  });
+
+  it('defaults invalid or missing camera views to Medium', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, cameraViewFoot: 9, cameraViewVehicle: 'far' } as unknown as GameSettings });
+    const patched = manager.load();
+    expect(patched.settings.cameraViewFoot).toBe(2);
+    expect(patched.settings.cameraViewVehicle).toBe(2);
+    storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 100, completedMissions: [], spawn: [-20, 1, 260], settings: { masterVolume: 0.5, quality: 'high', showFps: false, mouseSensitivity: 0.0025 } }));
+    const legacy = manager.load();
+    expect(legacy.settings.cameraViewFoot).toBe(2);
+    expect(legacy.settings.cameraViewVehicle).toBe(2);
+  });
+
   it('treats legacy entries without ownership as owned and fixes an unowned current', () => {
     const legacy = sanitizeWeapons({ current: 'smg', loadout: { smg: { ammo: 30, reserve: 120 } } } as unknown as SavedWeapons);
     expect(legacy.loadout.smg).toEqual({ ammo: 30, reserve: 120, owned: true });
@@ -59,5 +79,26 @@ describe('SaveManager', () => {
     expect(broken.current).toBe('pistol');
     expect(defaultWeapons().loadout.smg.owned).toBe(false);
     expect(defaultWeapons().loadout.rpg.owned).toBe(false);
+  });
+
+  it('migrates old saves without cheats to everything off', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
+    expect(manager.load().cheats).toEqual({ fastRun: false, bigJump: false, invulnerable: false });
+  });
+
+  it('round trips cheat toggles', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, cheats: { fastRun: true, bigJump: false, invulnerable: true } });
+    expect(manager.load().cheats).toEqual({ fastRun: true, bigJump: false, invulnerable: true });
+  });
+
+  it('sanitizes invalid cheat data to strict booleans', () => {
+    expect(sanitizeCheats(undefined)).toEqual(DEFAULT_CHEATS);
+    expect(sanitizeCheats('yes' as unknown as CheatSettings)).toEqual(DEFAULT_CHEATS);
+    expect(sanitizeCheats({ fastRun: 1, bigJump: 'true', invulnerable: true } as unknown as CheatSettings)).toEqual({ fastRun: false, bigJump: false, invulnerable: true });
+    expect(sanitizeCheats({ fastRun: true })).toEqual({ fastRun: true, bigJump: false, invulnerable: false });
+    const defaults = sanitizeCheats(undefined); defaults.fastRun = true;
+    expect(DEFAULT_CHEATS.fastRun).toBe(false);
   });
 });

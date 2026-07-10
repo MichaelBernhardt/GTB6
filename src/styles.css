@@ -38,6 +38,7 @@ button, input { font: inherit; }
 .prompt { position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%); padding: 9px 16px; background: #11191de8; border-bottom: 3px solid #f0a43a; font: 700 14px Inter, sans-serif; box-shadow: 0 5px 15px #0008; }
 .crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font: 400 22px Inter, sans-serif; opacity: .75; text-shadow: 0 0 4px #000; }
 .fps { position: absolute; left: 27px; bottom: 252px; color: #9ee6bc; background: #101719c9; padding: 5px 8px; font: 600 11px monospace; }
+.cheats-flag { position: absolute; right: 28px; top: 132px; padding: 4px 8px; color: #f0ae43; background: #101719c9; border: 1px solid #f0ae4366; font: 700 10px Inter, sans-serif; letter-spacing: 2px; }
 #minimap { position: absolute; left: 27px; bottom: 27px; width: 210px; height: 210px; border: 3px solid #e9e5d7; border-radius: 50%; background: #2c3435; box-shadow: 0 4px 18px #0009; }
 #vignette { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 52%, rgba(190, 24, 18, 0.6) 100%); }
 #vignette.flash { animation: damage-flash 0.45s ease-out; }
