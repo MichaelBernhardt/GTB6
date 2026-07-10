@@ -64,11 +64,12 @@ export class PopulationSystem {
     return nearest && nearest.group.position.distanceTo(position) <= maxDistance ? nearest : undefined;
   }
 
-  ejectDriver(vehicle: Vehicle, player: THREE.Vector3): Pedestrian {
+  ejectDriver(vehicle: Vehicle, threat: THREE.Vector3, police = false): Pedestrian {
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading));
-    const driver = new Pedestrian(this.scene, vehicle.group.position.clone().addScaledVector(side, -2.1), 120 + this.pedestrians.length);
-    driver.state = 'flee'; driver.fear = FEAR_MAX; driver.threat.copy(player); driver.destination.copy(driver.group.position).add(driver.group.position.clone().sub(player).normalize().multiplyScalar(55));
-    this.pedestrians.push(driver); this.audio.scream('panic', driver.group.position.x, driver.group.position.z); this.broadcastFear(player, FEAR_EVENTS.assault); return driver;
+    const driver = new Pedestrian(this.scene, vehicle.group.position.clone().addScaledVector(side, -2.1), 120 + this.pedestrians.length, false, police);
+    const away = driver.group.position.clone().sub(threat); if (away.lengthSq() < 0.01) away.set(1, 0, 0);
+    driver.state = 'flee'; driver.fear = FEAR_MAX; driver.threat.copy(threat); driver.destination.copy(driver.group.position).add(away.normalize().multiplyScalar(55));
+    this.pedestrians.push(driver); this.audio.scream('panic', driver.group.position.x, driver.group.position.z); this.broadcastFear(threat, FEAR_EVENTS.assault); return driver;
   }
 
   spawnHostiles(): void {
