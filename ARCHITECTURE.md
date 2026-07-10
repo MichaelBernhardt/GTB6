@@ -27,7 +27,7 @@ Delta time is clamped to 50 ms to prevent tab restoration from producing physics
 
 ### World and entities
 
-- `City` deterministically generates roads, district buildings, park, waterfront, containers, props, instanced vegetation, and rectangle collision volumes.
+- `City` deterministically generates a named non-grid road network, sampled lane and sidewalk paths, irregular road-aware parcels, district buildings, park, waterfront, parking, containers, props, instanced vegetation, and rectangle collision volumes.
 - `Player` owns procedural character geometry, grounded movement, jump/gravity, health, and walk animation.
 - `Vehicle` owns a typed handling specification, arcade integration, world collision, damage, wheel animation, lights, and player/AI control modes.
 - `Pedestrian` owns appearance, health, procedural gait, and walk/idle/flee/hostile/down state transitions.

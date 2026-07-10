@@ -54,14 +54,15 @@ Progress is saved periodically and after mission rewards. Money, completed missi
 
 ## World and systems
 
-- **Downtown**: tall mixed-shape towers and dense cross streets.
+- **Downtown**: tall mixed-shape towers around a civic avenue, commercial loop, diagonal arterial, alleys, and irregular junctions.
 - **Las Palmas**: low residential buildings and trees.
 - **Mercado Industrial**: warehouses, containers, docks, and a ramp.
 - **Costa Azul**: beach frontage, water, garages, and open roads.
 - **Cordova Commons**: intersecting paths and public green space.
 - Animated low-poly player and pedestrian characters with walking, idling, fleeing, hostile, damaged, and down states.
 - Compact, sport, van, and police vehicle configurations with distinct speed, acceleration, turning, braking, durability, wheels, brake lights, engine synthesis, and recovery.
-- Pooled procedural traffic routes, recycling, stuck recovery, simplified distance updates, and collision response.
+- Twelve connected road systems with curved arterials, diagonal boulevards, district loops, industrial spurs, residential crescents, a harbor drive, parking areas, and road-derived traffic/minimap routing.
+- Pooled lane-following traffic routes, recycling, stuck recovery, simplified distance updates, and collision response.
 - Raycast pistol combat with ammunition, reloads, distance damage, muzzle light, impact particles, and generated sound.
 - Carjacking with fleeing drivers, street mugging, aggressive civilians, melee attacks, and persistent stylized blood spray and ground decals.
 - Health, death, timed respawn, mission rewards, five-level wanted state, SCPD chase units, circular rotating minimap, and contextual HUD.

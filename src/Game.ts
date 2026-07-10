@@ -152,7 +152,7 @@ export class Game {
     const vehicle = this.activeVehicle; if (!vehicle) return;
     const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position); this.audio.setEngine(true, speed);
     if (this.input.consume('KeyE')) this.beginExit(vehicle);
-    if (this.input.consume('KeyF')) { const road = this.nearestRoad(vehicle.group.position); vehicle.heading = Math.round(vehicle.heading / (Math.PI / 2)) * Math.PI / 2; vehicle.reset(road); this.ui.notify('Vehicle recovered', vehicle.spec.name); }
+    if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Vehicle recovered', vehicle.spec.name); }
     if (vehicle.disabled) { this.ui.notify('Vehicle disabled', 'Exit before it catches fire.', false); this.beginExit(vehicle); }
   }
 
@@ -243,7 +243,7 @@ export class Game {
   private currentTarget(): WorldTarget | undefined {
     const objective = this.missions.objective;
     if (objective?.kind === 'checkpoints') {
-      const stops = [new THREE.Vector3(-8, 0, 252), new THREE.Vector3(194, 0, 108), new THREE.Vector3(88, 0, -92)];
+      const stops = [new THREE.Vector3(-15, 0, 252), new THREE.Vector3(205, 0, 190), new THREE.Vector3(22, 0, -160)];
       const position = stops[Math.min(this.deliveryIndex, stops.length - 1)]; return position ? { position, label: `Delivery ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
     }
     if (objective?.target) return objective.target;
@@ -301,7 +301,7 @@ export class Game {
     }
     this.ui.update({ health: this.player.health, money: this.economy.balance, ammo: this.combat.ammo, reserve: this.combat.reserve, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings });
     const markers = this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [];
-    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, markers, this.police.vehicles.map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })));
+    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })));
   }
 
   private damagePlayer(amount: number): void { this.player.takeDamage(amount); }
@@ -316,9 +316,5 @@ export class Game {
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings }; this.saveManager.save(this.save); }
-  private nearestRoad(position: THREE.Vector3): THREE.Vector3 {
-    const xRoad = Math.round(position.x / 100) * 100; const zRoad = Math.round(position.z / 100) * 100;
-    return Math.abs(position.x - xRoad) < Math.abs(position.z - zRoad) ? new THREE.Vector3(xRoad + 5.5, 0, position.z) : new THREE.Vector3(position.x, 0, zRoad + 5.5);
-  }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); }
 }

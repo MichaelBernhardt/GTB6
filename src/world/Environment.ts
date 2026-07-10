@@ -1,26 +1,13 @@
 import * as THREE from 'three';
 
 export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'high'): THREE.DirectionalLight {
-  scene.background = new THREE.Color(0x9fc7cf);
+  const skyCanvas = document.createElement('canvas'); skyCanvas.width = 2; skyCanvas.height = 512;
+  const skyContext = skyCanvas.getContext('2d');
+  if (skyContext) {
+    const gradient = skyContext.createLinearGradient(0, 0, 0, 512); gradient.addColorStop(0, '#4789a4'); gradient.addColorStop(0.62, '#9fc5c5'); gradient.addColorStop(1, '#d7caa7'); skyContext.fillStyle = gradient; skyContext.fillRect(0, 0, 2, 512);
+    const skyTexture = new THREE.CanvasTexture(skyCanvas); skyTexture.colorSpace = THREE.SRGBColorSpace; scene.background = skyTexture;
+  } else scene.background = new THREE.Color(0x9fc7cf);
   scene.fog = new THREE.FogExp2(0x9dbfc0, quality === 'high' ? 0.00145 : 0.00175);
-
-  const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(820, 32, 18),
-    new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      depthWrite: false,
-      uniforms: {
-        topColor: { value: new THREE.Color(0x4385a0) },
-        horizonColor: { value: new THREE.Color(0xbad4cd) },
-        groundColor: { value: new THREE.Color(0xd5c59f) },
-        offset: { value: 45 },
-        exponent: { value: 0.72 },
-      },
-      vertexShader: 'varying vec3 vWorldPosition; void main(){ vec4 worldPosition = modelMatrix * vec4(position, 1.0); vWorldPosition = worldPosition.xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: 'uniform vec3 topColor; uniform vec3 horizonColor; uniform vec3 groundColor; uniform float offset; uniform float exponent; varying vec3 vWorldPosition; void main(){ float h = normalize(vWorldPosition + vec3(0.0, offset, 0.0)).y; float skyMix = pow(max(h, 0.0), exponent); vec3 horizon = mix(groundColor, horizonColor, smoothstep(-0.14, 0.08, h)); gl_FragColor = vec4(mix(horizon, topColor, skyMix), 1.0); }',
-    }),
-  );
-  sky.name = 'Atmosphere'; scene.add(sky);
 
   const hemisphere = new THREE.HemisphereLight(0xd9edf0, 0x59634d, 1.75); scene.add(hemisphere);
   const ambient = new THREE.AmbientLight(0xffead0, 0.32); scene.add(ambient);
@@ -35,14 +22,16 @@ export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'high'): T
 }
 
 function addClouds(scene: THREE.Scene): void {
-  const material = new THREE.MeshStandardMaterial({ color: 0xe7efed, roughness: 1, transparent: true, opacity: 0.72, depthWrite: false });
-  const geometry = new THREE.SphereGeometry(1, 12, 8);
-  const clouds: Array<[number, number, number, number]> = [[-300, 210, -430, 30], [190, 245, -500, 42], [390, 190, -260, 26], [-420, 180, 60, 34], [40, 270, -650, 36]];
+  const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 192;
+  const context = canvas.getContext('2d'); if (!context) return;
+  const puffs: Array<[number, number, number]> = [[90, 118, 66], [165, 92, 84], [250, 105, 96], [340, 88, 78], [420, 120, 62]];
+  for (const [x, y, radius] of puffs) {
+    const gradient = context.createRadialGradient(x, y, radius * 0.12, x, y, radius); gradient.addColorStop(0, '#f4f7f2dd'); gradient.addColorStop(0.55, '#e8efecb8'); gradient.addColorStop(1, '#dce9e500');
+    context.fillStyle = gradient; context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  }
+  const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+  const clouds: Array<[number, number, number, number]> = [[-300, 300, -520, 150], [210, 335, -610, 190], [430, 280, -360, 130], [-440, 290, -80, 160], [30, 370, -720, 175]];
   for (const [x, y, z, scale] of clouds) {
-    const cloud = new THREE.Group(); cloud.position.set(x, y, z);
-    for (let part = 0; part < 5; part++) {
-      const puff = new THREE.Mesh(geometry, material); puff.position.set((part - 2) * scale * 0.55, Math.sin(part * 1.8) * scale * 0.12, (part % 2) * scale * 0.1); puff.scale.set(scale * (0.7 + part % 2 * 0.2), scale * 0.25, scale * 0.4); cloud.add(puff);
-    }
-    scene.add(cloud);
+    const cloud = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0.5, depthWrite: false, fog: false })); cloud.position.set(x, y, z); cloud.scale.set(scale, scale * 0.36, 1); scene.add(cloud);
   }
 }

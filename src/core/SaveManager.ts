@@ -2,7 +2,7 @@ import type { GameSettings, SavedGame } from '../types';
 
 const KEY = 'san-cordova-save-v1';
 export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025 };
-export const DEFAULT_SAVE: SavedGame = { version: 1, money: 750, completedMissions: [], spawn: [0, 1, 260], settings: DEFAULT_SETTINGS };
+export const DEFAULT_SAVE: SavedGame = { version: 1, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 

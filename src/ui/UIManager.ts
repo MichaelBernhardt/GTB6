@@ -1,6 +1,7 @@
 import type { MissionSystem } from '../systems/MissionSystem';
 import type { Vehicle } from '../entities/Vehicle';
 import type { GameSettings } from '../types';
+import type { RoadPoint } from '../world/City';
 
 export interface HudState {
   health: number; money: number; ammo: number; reserve: number; wanted: number; district: string; prompt: string;
@@ -44,11 +45,11 @@ export class UIManager {
     this.toastTimer = Math.max(0, this.toastTimer - 1 / 60); if (this.toastTimer === 0) this.toast.classList.remove('visible');
   }
 
-  drawMap(x: number, z: number, heading: number, markers: Array<{ x: number; z: number; color: string }>, police: Array<{ x: number; z: number }>): void {
+  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: Array<{ x: number; z: number; color: string }>, police: Array<{ x: number; z: number }>): void {
     const ctx = this.context; const size = this.minimap.width; const scale = 0.27;
-    ctx.clearRect(0, 0, size, size); ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading); ctx.translate(-x * scale, -z * scale);
-    ctx.fillStyle = '#35443d'; ctx.fillRect(-400 * scale, -400 * scale, 800 * scale, 800 * scale); ctx.strokeStyle = '#8c9592'; ctx.lineWidth = 24 * scale;
-    for (const n of [-300, -200, -100, 0, 100, 200, 300]) { ctx.beginPath(); ctx.moveTo(n * scale, -400 * scale); ctx.lineTo(n * scale, 400 * scale); ctx.stroke(); ctx.beginPath(); ctx.moveTo(-400 * scale, n * scale); ctx.lineTo(400 * scale, n * scale); ctx.stroke(); }
+    ctx.clearRect(0, 0, size, size); ctx.fillStyle = '#35443d'; ctx.fillRect(0, 0, size, size); ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading); ctx.translate(-x * scale, -z * scale);
+    ctx.strokeStyle = '#a4aaa7'; ctx.lineWidth = 19 * scale; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (const point of road.slice(1)) ctx.lineTo(point.x * scale, point.z * scale); ctx.stroke(); }
     for (const marker of markers) { ctx.fillStyle = marker.color; ctx.beginPath(); ctx.arc(marker.x * scale, marker.z * scale, 5, 0, Math.PI * 2); ctx.fill(); }
     ctx.fillStyle = '#62aaff'; for (const unit of police) { ctx.fillRect(unit.x * scale - 3, unit.z * scale - 3, 6, 6); }
     ctx.restore(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(size / 2, size / 2 - 10); ctx.lineTo(size / 2 - 7, size / 2 + 8); ctx.lineTo(size / 2 + 7, size / 2 + 8); ctx.closePath(); ctx.fill();

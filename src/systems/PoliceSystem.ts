@@ -33,11 +33,8 @@ export class PoliceSystem {
   reset(): void { for (const vehicle of this.vehicles) this.scene.remove(vehicle.group); for (const officer of this.officers) this.scene.remove(officer.group); this.vehicles = []; this.officers = []; }
 
   private spawnUnit(player: THREE.Vector3): void {
-    const angle = Math.random() * Math.PI * 2; const distance = 105 + Math.random() * 45;
-    const position = new THREE.Vector3(player.x + Math.sin(angle) * distance, 0, player.z + Math.cos(angle) * distance);
-    position.x = Math.round(position.x / 100) * 100 + (Math.random() > 0.5 ? 5.5 : -5.5); position.z = THREE.MathUtils.clamp(position.z, -330, 330);
-    if (this.city.collides(position.x, position.z, 2)) position.set(-300, 0, 300);
-    const vehicle = new Vehicle(this.scene, 'police', position); vehicle.occupied = true; vehicle.heading = Math.atan2(player.x - position.x, player.z - position.z); this.vehicles.push(vehicle);
+    const pose = this.city.roadPoseAwayFrom(player, 105, 165);
+    const vehicle = new Vehicle(this.scene, 'police', pose.position); vehicle.occupied = true; vehicle.heading = pose.heading; vehicle.group.rotation.y = pose.heading; this.vehicles.push(vehicle);
   }
 
   private despawnFar(player: THREE.Vector3): void {

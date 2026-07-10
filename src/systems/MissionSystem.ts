@@ -32,7 +32,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: target(200, 0, 180, 'Nico'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'sport', vehicleColor: 0xd83a40, text: 'Steal the red Veloce downtown' },
       { kind: 'lose-wanted', text: 'Lose the SCPD pursuit' },
-      { kind: 'reach', vehicleKind: 'sport', vehicleColor: 0xd83a40, text: 'Deliver the Veloce to Costa Azul', target: target(270, 0, -254, 'Beach garage') },
+      { kind: 'reach', vehicleKind: 'sport', vehicleColor: 0xd83a40, text: 'Deliver the Veloce to Costa Azul', target: target(265, 0, -245, 'Beach garage') },
     ],
   },
   {
@@ -42,7 +42,7 @@ export const MISSIONS: MissionDefinition[] = [
       { kind: 'reach', text: 'Travel to the Breakwater docks', target: target(-258, 0, -225, 'Breakwater docks') },
       { kind: 'defeat', text: 'Defeat the dock guards', required: 3 },
       { kind: 'collect', text: 'Recover the radio key', target: target(-270, 0, -262, 'Radio key') },
-      { kind: 'escape', text: 'Escape the dock perimeter', target: target(-105.5, 0, -130, 'Safe route') },
+      { kind: 'escape', text: 'Escape the dock perimeter', target: target(22, 0, -160, 'Safe route') },
       { kind: 'reach', text: 'Return to Inez at Cordova Commons', target: target(-42, 0, 18, 'Park kiosk') },
     ],
   },
