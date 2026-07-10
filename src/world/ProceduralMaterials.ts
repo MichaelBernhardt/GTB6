@@ -28,8 +28,8 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
   const palette: Record<SurfaceKind, [string, string, string]> = {
     asphalt: ['#242b2e', '#32393c', '#171d20'],
     concrete: ['#9c9d96', '#b9b7ad', '#777c79'],
-    grass: ['#456b45', '#688650', '#304f38'],
-    sand: ['#cbbb87', '#dfcf9c', '#a99a69'],
+    grass: ['#8a7b45', '#a3924f', '#6e6236'],
+    sand: ['#c9b569', '#dcc97c', '#a08d4f'],
     water: ['#28778b', '#4e9cac', '#15566c'],
   };
   const [base, light, dark] = palette[kind]; context.fillStyle = base; context.fillRect(0, 0, 256, 256);
@@ -76,8 +76,8 @@ export function createGeneratedSurfaceTexture(url: string, fallback: SurfaceKind
 
 export function createFacadeTexture(style: number): THREE.CanvasTexture {
   const { canvas, context } = canvasTexture(512);
-  const wall = ['#88949a', '#a77970', '#b7aa88', '#778080'][style % 4];
-  const wallDark = ['#5f696e', '#76534e', '#7e755f', '#51595c'][style % 4];
+  const wall = ['#88949a', '#9c5a43', '#b7aa88', '#8a5a4a'][style % 4];
+  const wallDark = ['#5f696e', '#6b3a2c', '#7e755f', '#57352a'][style % 4];
   const gradient = context.createLinearGradient(0, 0, 512, 0); gradient.addColorStop(0, wallDark); gradient.addColorStop(0.12, wall); gradient.addColorStop(0.88, wall); gradient.addColorStop(1, wallDark);
   context.fillStyle = gradient; context.fillRect(0, 0, 512, 512);
   for (let i = 0; i < 2200; i++) { context.globalAlpha = seeded(i, style + 20) * 0.09; context.fillStyle = seeded(i, style + 21) > 0.5 ? '#fff' : '#172024'; context.fillRect(seeded(i, 22) * 512, seeded(i, 23) * 512, 1.2, 1.2); }
@@ -102,6 +102,6 @@ export function createSignTexture(text: string, accent: string): THREE.CanvasTex
   const context = canvas.getContext('2d'); if (!context) throw new Error('Canvas 2D is unavailable');
   context.fillStyle = '#10191c'; context.fillRect(0, 0, 512, 128);
   context.strokeStyle = accent; context.lineWidth = 9; context.strokeRect(8, 8, 496, 112);
-  context.fillStyle = accent; context.font = '700 60px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(text, 256, 66);
+  context.fillStyle = accent; context.font = '700 60px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(text, 256, 66, 470);
   return finish(canvas);
 }

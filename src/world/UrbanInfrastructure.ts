@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { RoadPoint, RoadsidePoint } from './City';
+import { onPowerChange, registerPowered } from './powerGrid';
 
 export interface JunctionDefinition {
   x: number;
@@ -12,16 +13,21 @@ export interface JunctionDefinition {
 }
 
 export const CITY_JUNCTIONS: JunctionDefinition[] = [
-  { x: -8, z: 205, angle: 0.2, roadA: 'AV. CORDOVA', roadB: 'LIBERTAD BLVD', phase: 0 },
-  { x: 5, z: 12, angle: -0.2, roadA: 'AV. CORDOVA', roadB: 'MERCADO WAY', phase: 4 },
-  { x: 75, z: -5, angle: -0.35, roadA: 'MERCADO WAY', roadB: 'CENTRO LOOP', phase: 8 },
-  { x: -262, z: 88, angle: 0.18, roadA: 'FOUNDRY RD', roadB: 'MERCADO RING', phase: 12 },
-  { x: -130, z: 50, angle: -0.28, roadA: 'MERCADO WAY', roadB: 'CIVIC AVE', phase: 16 },
-  { x: 115, z: 205, angle: 0.32, roadA: 'LIBERTAD BLVD', roadB: 'LAS PALMAS', phase: 20 },
-  { x: 78, z: -246, angle: 0.65, roadA: 'HARBOR DRIVE', roadB: 'COSTA CRES', phase: 24 },
+  { x: -8, z: 205, angle: 0.2, roadA: 'JAN SMUTS AVE', roadB: 'WILLIAM NICOL DR', phase: 0 },
+  { x: 5, z: 12, angle: -0.2, roadA: 'JAN SMUTS AVE', roadB: 'MAIN REEF RD', phase: 4 },
+  { x: 75, z: -5, angle: -0.35, roadA: 'MAIN REEF RD', roadB: 'BREE ST', phase: 8 },
+  { x: -262, z: 88, angle: 0.18, roadA: 'VILAKAZI ST', roadB: 'LOUIS BOTHA AVE', phase: 12 },
+  { x: -130, z: 50, angle: -0.28, roadA: 'MAIN REEF RD', roadB: 'EMPIRE RD', phase: 16 },
+  { x: 115, z: 205, angle: 0.32, roadA: 'WILLIAM NICOL DR', roadB: 'RIVONIA RD', phase: 20 },
+  { x: 78, z: -246, angle: 0.65, roadA: 'COMMISSIONER ST', roadB: 'MARSHALL ST', phase: 24 },
 ];
 
 export const SIGNAL_CORNER_OFFSET = 15.5;
+
+export const ETOLL_GANTRIES: Array<{ x: number; z: number; angle: number }> = [
+  { x: 9.5, z: 100, angle: 3.27 },
+  { x: -8.5, z: -42.5, angle: 3.05 },
+];
 
 interface SignalHead {
   red: THREE.MeshStandardMaterial;
@@ -52,6 +58,7 @@ export class UrbanInfrastructure {
   private group = new THREE.Group();
   private signals: SignalHead[] = [];
   private elapsed = 0;
+  private powered = true;
 
   constructor(
     parent: THREE.Group,
@@ -61,17 +68,25 @@ export class UrbanInfrastructure {
     private isRoad: (x: number, z: number, margin: number) => boolean,
   ) {
     this.group.name = 'Urban infrastructure'; parent.add(this.group);
+    onPowerChange((on) => { this.powered = on; });
     this.buildVegetation();
     this.buildStreetlights();
     this.buildTrafficSignals();
     this.buildRoadsideSigns();
     this.buildStreetFurniture();
     this.buildTransitStops();
+    this.buildEtollGantries();
   }
 
   update(dt: number): void {
     this.elapsed = (this.elapsed + dt) % 30;
     for (const signal of this.signals) {
+      if (!this.powered) {
+        setSignal(signal.green, false, 0x39d36c);
+        setSignal(signal.amber, false, 0xf0ad2f);
+        setSignal(signal.red, false, 0xe83f3f);
+        continue;
+      }
       const cycle = (this.elapsed + signal.phase + signal.axis * 15) % 30;
       setSignal(signal.green, cycle < 11, 0x39d36c);
       setSignal(signal.amber, cycle >= 11 && cycle < 14, 0xf0ad2f);
@@ -81,10 +96,10 @@ export class UrbanInfrastructure {
 
   private buildVegetation(): void {
     const sites = this.sidewalkPoints.filter((point, index) => index % 6 === 0 && !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 0.65));
-    const palms = sites.filter((point) => point.z < -220 && point.x > -170);
-    const broadleaf = sites.filter((point) => !palms.includes(point));
+    const jacarandas = sites.filter((_, index) => index % 2 === 0);
+    const broadleaf = sites.filter((_, index) => index % 2 !== 0);
     this.buildBroadleafTrees(broadleaf);
-    this.buildPalmTrees(palms);
+    this.buildJacarandas(jacarandas);
 
     const shrubSites = sites.filter((_, index) => index % 3 === 0);
     const shrubGeometry = new THREE.SphereGeometry(1, 16, 10);
@@ -110,35 +125,37 @@ export class UrbanInfrastructure {
       const height = 0.9 + (index % 5) * 0.035;
       matrix.compose(new THREE.Vector3(site.x, 2.6 * height, site.z), quaternion, new THREE.Vector3(height, height, height)); trunks.setMatrixAt(index, matrix);
       const offsets: Array<[number, number, number, number]> = [[0, 6.2, 0, 2.25], [-1.45, 5.65, 0.3, 1.8], [1.35, 5.75, -0.35, 1.9], [0.25, 5.6, 1.3, 1.65], [-0.35, 6.45, -0.9, 1.55]];
+      const palette = index % 4 === 0 ? [0x8a6cc4, 0x9b7fd4, 0xb18ae0, 0x8a6cc4] : [0x4c6b38, 0x5d7a3e, 0x6f8646, 0x445e34];
       offsets.forEach(([ox, oy, oz, scale], cluster) => {
         const sway = ((index * 17 + cluster * 7) % 11 - 5) * 0.055;
         matrix.compose(new THREE.Vector3(site.x + ox + sway, oy * height, site.z + oz - sway), quaternion, new THREE.Vector3(scale * (1 + sway * 0.2), scale * 0.78, scale));
         const instance = index * offsets.length + cluster; crowns.setMatrixAt(instance, matrix);
-        crowns.setColorAt(instance, color.setHex([0x2f6842, 0x397a49, 0x4b8650, 0x2b5e3e][(index + cluster) % 4] ?? 0x397a49));
+        crowns.setColorAt(instance, color.setHex(palette[(index + cluster) % 4] ?? 0x5d7a3e));
       });
     });
     trunks.castShadow = true; trunks.receiveShadow = true; crowns.castShadow = true; crowns.receiveShadow = true;
     this.group.add(trunks, crowns);
   }
 
-  private buildPalmTrees(sites: RoadPoint[]): void {
-    const trunkGeometry = new THREE.CylinderGeometry(0.2, 0.48, 7.4, 16);
-    const frondGeometry = new THREE.BufferGeometry();
-    frondGeometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, -0.48, 0.08, 2.2, 0, -0.18, 4.5, 0.48, 0.08, 2.2], 3));
-    frondGeometry.setIndex([0, 1, 2, 0, 2, 3]); frondGeometry.computeVertexNormals();
-    const trunks = new THREE.InstancedMesh(trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x806143, roughness: 0.9 }), sites.length);
-    const fronds = new THREE.InstancedMesh(frondGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, side: THREE.DoubleSide }), sites.length * 9);
+  private buildJacarandas(sites: RoadPoint[]): void {
+    const trunkGeometry = new THREE.CylinderGeometry(0.26, 0.52, 4.6, 14);
+    const crownGeometry = new THREE.SphereGeometry(1, 20, 14);
+    const trunks = new THREE.InstancedMesh(trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x6b4d38, roughness: 0.92 }), sites.length);
+    const crowns = new THREE.InstancedMesh(crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86 }), sites.length * 5);
     const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion(); const color = new THREE.Color();
     sites.forEach((site, index) => {
-      matrix.compose(new THREE.Vector3(site.x, 3.7, site.z), quaternion, new THREE.Vector3(1, 1, 1)); trunks.setMatrixAt(index, matrix);
-      for (let frond = 0; frond < 9; frond++) {
-        const angle = frond / 9 * Math.PI * 2 + index * 0.31;
-        quaternion.setFromEuler(new THREE.Euler(-0.14 - (frond % 3) * 0.08, angle, 0));
-        matrix.compose(new THREE.Vector3(site.x, 7.35, site.z), quaternion, new THREE.Vector3(0.82 + (frond % 2) * 0.12, 1, 0.82 + (frond % 2) * 0.12));
-        const instance = index * 9 + frond; fronds.setMatrixAt(instance, matrix); fronds.setColorAt(instance, color.setHex(frond % 3 === 0 ? 0x2b6845 : 0x3f8150));
-      }
+      const height = 0.92 + (index % 4) * 0.045;
+      matrix.compose(new THREE.Vector3(site.x, 2.3 * height, site.z), quaternion, new THREE.Vector3(height, height, height)); trunks.setMatrixAt(index, matrix);
+      const offsets: Array<[number, number, number, number]> = [[0, 5.4, 0, 2.5], [-1.7, 4.9, 0.4, 1.9], [1.6, 5, -0.4, 2], [0.3, 4.8, 1.55, 1.75], [-0.45, 5.6, -1.05, 1.6]];
+      offsets.forEach(([ox, oy, oz, scale], cluster) => {
+        const sway = ((index * 13 + cluster * 5) % 9 - 4) * 0.06;
+        matrix.compose(new THREE.Vector3(site.x + ox + sway, oy * height, site.z + oz - sway), quaternion, new THREE.Vector3(scale * 1.1, scale * 0.66, scale * 1.1));
+        const instance = index * offsets.length + cluster; crowns.setMatrixAt(instance, matrix);
+        crowns.setColorAt(instance, color.setHex([0x9b7fd4, 0xb18ae0, 0x8a6cc4][(index + cluster) % 3] ?? 0x9b7fd4));
+      });
     });
-    trunks.castShadow = true; fronds.castShadow = true; this.group.add(trunks, fronds);
+    trunks.castShadow = true; trunks.receiveShadow = true; crowns.castShadow = true; crowns.receiveShadow = true;
+    this.group.add(trunks, crowns);
   }
 
   private buildStreetlights(): void {
@@ -151,7 +168,9 @@ export class UrbanInfrastructure {
     const arms = new THREE.InstancedMesh(armGeometry, metal, sites.length);
     const collars = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.23, 0.28, 0.42, 14), metal, sites.length);
     const fixtures = new THREE.InstancedMesh(fixtureGeometry, metal, sites.length);
-    const bulbs = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.62, 0.22), new THREE.MeshBasicMaterial({ color: 0xffdca0, side: THREE.DoubleSide }), sites.length);
+    const bulbMaterial = new THREE.MeshBasicMaterial({ color: 0xffdca0, side: THREE.DoubleSide });
+    registerPowered(bulbMaterial, 0xffdca0, 0x2a2d2f);
+    const bulbs = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.62, 0.22), bulbMaterial, sites.length);
     const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion(); const up = new THREE.Vector3(0, 1, 0);
     sites.forEach((site, index) => {
       const direction = new THREE.Vector3(site.inwardX, 0, site.inwardZ).normalize();
@@ -211,17 +230,18 @@ export class UrbanInfrastructure {
   }
 
   private buildRoadsideSigns(): void {
-    const signs: Array<[number, number, number, 'STOP' | '40' | 'P' | 'ONE WAY']> = [
-      [-22, 28, -0.2, 'STOP'], [91, 10, -0.35, '40'], [-275, 104, 0.18, 'STOP'], [131, 214, 0.32, '40'],
-      [176, -238, 0.05, 'P'], [268, 278, -0.25, '40'], [-205, -222, 0.1, 'ONE WAY'], [-112, 218, 0.2, 'P'],
+    const signs: Array<[number, number, number, string]> = [
+      [-22, 28, -0.2, 'STOP'], [91, 10, -0.35, '60'], [-275, 104, 0.18, 'STOP'], [131, 214, 0.32, 'HIJACKING HOTSPOT'],
+      [176, -238, 0.05, 'P'], [268, 278, -0.25, '60'], [-205, -222, 0.1, 'SMASH & GRAB HOTSPOT'], [-112, 218, 0.2, 'TAXI'],
     ];
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x7b8380, metalness: 0.68, roughness: 0.38 });
     for (const [x, z, angle, label] of signs) {
       if (this.isRoad(x, z, 0.45)) continue;
+      const hotspot = label.includes('HOTSPOT');
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 2.6, 9), poleMaterial); pole.position.set(x, 1.3, z); this.group.add(pole);
-      const background = label === 'STOP' ? '#b62f2d' : label === 'P' ? '#28619a' : '#f0eee2';
+      const background = label === 'STOP' ? '#b62f2d' : label === 'P' ? '#28619a' : label === 'TAXI' ? '#f2c521' : '#f0eee2';
       const foreground = label === 'STOP' || label === 'P' ? '#ffffff' : '#182326';
-      const geometry = label === 'STOP' ? new THREE.CircleGeometry(0.7, 8) : new THREE.PlaneGeometry(label === 'ONE WAY' ? 1.65 : 1.1, 1.25);
+      const geometry = label === 'STOP' ? new THREE.CircleGeometry(0.7, 8) : hotspot ? new THREE.PlaneGeometry(2.4, 1.1) : new THREE.PlaneGeometry(1.1, 1.25);
       const sign = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: makeSignTexture(label, background, foreground), side: THREE.DoubleSide }));
       sign.position.set(x, 2.45, z); sign.rotation.y = angle; this.group.add(sign);
     }
@@ -243,8 +263,23 @@ export class UrbanInfrastructure {
     });
   }
 
+  private buildEtollGantries(): void {
+    const steel = new THREE.MeshStandardMaterial({ color: 0x7d8489, metalness: 0.72, roughness: 0.36 });
+    const purple = new THREE.MeshStandardMaterial({ color: 0x4b2e83, metalness: 0.3, roughness: 0.5 });
+    for (const gantry of ETOLL_GANTRIES) {
+      const assembly = new THREE.Group(); assembly.position.set(gantry.x, 0, gantry.z); assembly.rotation.y = gantry.angle;
+      for (const side of [-17, 17]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 7, 12), steel); post.position.set(side, 3.5, 0); assembly.add(post); }
+      const truss = new THREE.Mesh(new THREE.BoxGeometry(36, 0.9, 1.1), steel); truss.position.y = 6.6; assembly.add(truss);
+      for (const x of [-8, 0, 8]) { const camera = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.42, 0.6), purple); camera.position.set(x, 5.9, 0.3); assembly.add(camera); }
+      const board = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.4), new THREE.MeshBasicMaterial({ map: makeSignTexture('E-TOLL · SANRAL', '#4b2e83'), side: THREE.DoubleSide }));
+      board.position.set(0, 6.65, 0.62); assembly.add(board);
+      assembly.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
+      this.group.add(assembly);
+    }
+  }
+
   private buildTransitStops(): void {
-    const stops: Array<[number, number, number, string]> = [[-48, 222, 0.15, 'CENTRO'], [166, 173, -0.2, 'LAS PALMAS'], [-210, -224, 0.12, 'PUERTO'], [125, -265, -0.08, 'COSTA AZUL']];
+    const stops: Array<[number, number, number, string]> = [[-48, 222, 0.15, 'BREE RANK'], [166, 173, -0.2, 'WANDERERS'], [-210, -224, 0.12, 'MTN RANK'], [125, -265, -0.08, 'NOORD RANK']];
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x6e9da3, roughness: 0.16, metalness: 0.08, clearcoat: 0.7, transparent: true, opacity: 0.66 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x293638, metalness: 0.72, roughness: 0.35 });
     for (const [x, z, angle, label] of stops) {
@@ -253,7 +288,9 @@ export class UrbanInfrastructure {
       const back = new THREE.Mesh(new THREE.BoxGeometry(5.5, 2.7, 0.08), glass); back.position.y = 1.45;
       const roof = new THREE.Mesh(new RoundedBoxGeometry(5.8, 0.16, 1.65, 3, 0.06), metal); roof.position.set(0, 2.9, 0.7);
       const seat = new THREE.Mesh(new RoundedBoxGeometry(3.4, 0.16, 0.55, 2, 0.04), metal); seat.position.set(0, 0.65, 0.42);
-      const name = new THREE.Mesh(new THREE.PlaneGeometry(3.8, 0.65), new THREE.MeshBasicMaterial({ map: makeSignTexture(label, '#c7982c', '#172023') })); name.position.set(0, 2.45, 0.06);
+      const nameMaterial = new THREE.MeshBasicMaterial({ map: makeSignTexture(label, '#c7982c', '#172023') });
+      registerPowered(nameMaterial, 0xffffff, 0x3a3a38);
+      const name = new THREE.Mesh(new THREE.PlaneGeometry(3.8, 0.65), nameMaterial); name.position.set(0, 2.45, 0.06);
       shelter.add(back, roof, seat, name); shelter.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; }); this.group.add(shelter);
     }
   }

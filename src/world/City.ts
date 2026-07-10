@@ -4,6 +4,7 @@ import type { District } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import { createFacadeTexture, createGeneratedSurfaceTexture, createSignTexture, createSurfaceTexture } from './ProceduralMaterials';
 import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
+import { registerPowered } from './powerGrid';
 
 export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; }
 export interface RoadPoint { x: number; z: number; }
@@ -14,24 +15,24 @@ export interface RoadDefinition { name: string; width: number; closed?: boolean;
 export interface ParkDefinition { x: number; z: number; width: number; depth: number; kind: 'civic' | 'garden' | 'recreation'; name: string; }
 
 export const PARK_AREAS: ParkDefinition[] = [
-  { x: 0, z: 0, width: 76, depth: 72, kind: 'civic', name: 'Cordova Commons' },
-  { x: 245, z: 198, width: 52, depth: 38, kind: 'garden', name: 'Las Palmas Garden' },
-  { x: -118, z: -132, width: 58, depth: 40, kind: 'recreation', name: 'Harbor Courts' },
+  { x: 0, z: 0, width: 76, depth: 72, kind: 'civic', name: 'Zoo Lake Park' },
+  { x: 245, z: 198, width: 52, depth: 38, kind: 'garden', name: 'Mushroom Farm Park' },
+  { x: -118, z: -132, width: 58, depth: 40, kind: 'recreation', name: 'Pieter Roos Courts' },
 ];
 
 export const ROAD_NETWORK: RoadDefinition[] = [
-  { name: 'Avenida Cordova', width: 26, points: [{ x: -30, z: 350 }, { x: -24, z: 275 }, { x: -8, z: 205 }, { x: 14, z: 135 }, { x: 5, z: 65 }, { x: -12, z: -5 }, { x: -5, z: -80 }, { x: 22, z: -160 }, { x: 55, z: -245 }] },
-  { name: 'Libertad Boulevard', width: 24, points: [{ x: -350, z: 245 }, { x: -275, z: 230 }, { x: -205, z: 238 }, { x: -130, z: 225 }, { x: -50, z: 242 }, { x: 35, z: 230 }, { x: 115, z: 205 }, { x: 210, z: 190 }, { x: 300, z: 150 }, { x: 350, z: 110 }] },
-  { name: 'Mercado Way', width: 22, points: [{ x: -350, z: 125 }, { x: -270, z: 115 }, { x: -205, z: 78 }, { x: -130, z: 50 }, { x: -60, z: 30 }, { x: 5, z: 12 }, { x: 75, z: -5 }, { x: 150, z: -35 }, { x: 225, z: -65 }, { x: 325, z: -110 }] },
-  { name: 'Harbor Drive', width: 26, points: [{ x: -350, z: -215 }, { x: -280, z: -198 }, { x: -210, z: -207 }, { x: -135, z: -225 }, { x: -55, z: -240 }, { x: 35, z: -252 }, { x: 130, z: -248 }, { x: 225, z: -232 }, { x: 305, z: -205 }, { x: 350, z: -175 }] },
-  { name: 'Civic Avenue', width: 18, points: [{ x: -190, z: 177 }, { x: -125, z: 135 }, { x: -60, z: 110 }, { x: 10, z: 105 }, { x: 80, z: 120 }, { x: 150, z: 158 }] },
-  { name: 'Centro Loop', width: 18, closed: true, points: [{ x: -122, z: 195 }, { x: -30, z: 200 }, { x: 75, z: 162 }, { x: 108, z: 82 }, { x: 82, z: 12 }, { x: 12, z: -22 }, { x: -76, z: 20 }, { x: -128, z: 98 }] },
-  { name: 'Las Palmas Ring', width: 18, closed: true, points: [{ x: 165, z: 265 }, { x: 250, z: 282 }, { x: 322, z: 225 }, { x: 334, z: 138 }, { x: 285, z: 65 }, { x: 220, z: 45 }, { x: 158, z: 105 }] },
-  { name: 'Palmera Crescent', width: 16, points: [{ x: 155, z: 5 }, { x: 215, z: -25 }, { x: 282, z: -8 }, { x: 338, z: 52 }] },
-  { name: 'Mercado Ring', width: 21, closed: true, points: [{ x: -332, z: 58 }, { x: -262, z: 88 }, { x: -190, z: 45 }, { x: -175, z: -48 }, { x: -220, z: -132 }, { x: -310, z: -148 }, { x: -346, z: -62 }] },
-  { name: 'Foundry Road', width: 17, points: [{ x: -262, z: 88 }, { x: -278, z: 164 }, { x: -245, z: 235 }] },
-  { name: 'Commons Ring', width: 15, closed: true, points: [{ x: -88, z: 42 }, { x: -42, z: 88 }, { x: 25, z: 90 }, { x: 82, z: 46 }, { x: 84, z: -20 }, { x: 36, z: -72 }, { x: -35, z: -76 }, { x: -88, z: -35 }] },
-  { name: 'Costa Crescent', width: 16, points: [{ x: 78, z: -246 }, { x: 138, z: -290 }, { x: 215, z: -315 }, { x: 292, z: -304 }, { x: 350, z: -268 }] },
+  { name: 'Jan Smuts Ave', width: 26, points: [{ x: -30, z: 350 }, { x: -24, z: 275 }, { x: -8, z: 205 }, { x: 14, z: 135 }, { x: 5, z: 65 }, { x: -12, z: -5 }, { x: -5, z: -80 }, { x: 22, z: -160 }, { x: 55, z: -245 }] },
+  { name: 'William Nicol Dr', width: 24, points: [{ x: -350, z: 245 }, { x: -275, z: 230 }, { x: -205, z: 238 }, { x: -130, z: 225 }, { x: -50, z: 242 }, { x: 35, z: 230 }, { x: 115, z: 205 }, { x: 210, z: 190 }, { x: 300, z: 150 }, { x: 350, z: 110 }] },
+  { name: 'Main Reef Rd', width: 22, points: [{ x: -350, z: 125 }, { x: -270, z: 115 }, { x: -205, z: 78 }, { x: -130, z: 50 }, { x: -60, z: 30 }, { x: 5, z: 12 }, { x: 75, z: -5 }, { x: 150, z: -35 }, { x: 225, z: -65 }, { x: 325, z: -110 }] },
+  { name: 'Commissioner St', width: 26, points: [{ x: -350, z: -215 }, { x: -280, z: -198 }, { x: -210, z: -207 }, { x: -135, z: -225 }, { x: -55, z: -240 }, { x: 35, z: -252 }, { x: 130, z: -248 }, { x: 225, z: -232 }, { x: 305, z: -205 }, { x: 350, z: -175 }] },
+  { name: 'Empire Rd', width: 18, points: [{ x: -190, z: 177 }, { x: -125, z: 135 }, { x: -60, z: 110 }, { x: 10, z: 105 }, { x: 80, z: 120 }, { x: 150, z: 158 }] },
+  { name: 'Bree St Loop', width: 18, closed: true, points: [{ x: -122, z: 195 }, { x: -30, z: 200 }, { x: 75, z: 162 }, { x: 108, z: 82 }, { x: 82, z: 12 }, { x: 12, z: -22 }, { x: -76, z: 20 }, { x: -128, z: 98 }] },
+  { name: 'Rivonia Rd', width: 18, closed: true, points: [{ x: 165, z: 265 }, { x: 250, z: 282 }, { x: 322, z: 225 }, { x: 334, z: 138 }, { x: 285, z: 65 }, { x: 220, z: 45 }, { x: 158, z: 105 }] },
+  { name: 'Grayston Dr', width: 16, points: [{ x: 155, z: 5 }, { x: 215, z: -25 }, { x: 282, z: -8 }, { x: 338, z: 52 }] },
+  { name: 'Louis Botha Ave', width: 21, closed: true, points: [{ x: -332, z: 58 }, { x: -262, z: 88 }, { x: -190, z: 45 }, { x: -175, z: -48 }, { x: -220, z: -132 }, { x: -310, z: -148 }, { x: -346, z: -62 }] },
+  { name: 'Vilakazi St', width: 17, points: [{ x: -262, z: 88 }, { x: -278, z: 164 }, { x: -245, z: 235 }] },
+  { name: 'Oxford Rd', width: 15, closed: true, points: [{ x: -88, z: 42 }, { x: -42, z: 88 }, { x: 25, z: 90 }, { x: 82, z: 46 }, { x: 84, z: -20 }, { x: 36, z: -72 }, { x: -35, z: -76 }, { x: -88, z: -35 }] },
+  { name: 'Marshall St', width: 16, points: [{ x: 78, z: -246 }, { x: 138, z: -290 }, { x: 215, z: -315 }, { x: 292, z: -304 }, { x: 350, z: -268 }] },
 ];
 const seeded = (x: number, z: number, salt = 0): number => {
   const value = Math.sin(x * 12.9898 + z * 78.233 + salt * 41.17) * 43758.5453;
@@ -41,6 +42,7 @@ const seeded = (x: number, z: number, salt = 0): number => {
 export class City {
   group = new THREE.Group();
   colliders: Collider[] = [];
+  potholes: Array<{ x: number; z: number; r: number }> = [];
   roadPoints: RoadPoint[] = [];
   sidewalkPoints: RoadPoint[] = [];
   roadsidePoints: RoadsidePoint[] = [];
@@ -59,7 +61,7 @@ export class City {
   private infrastructure: UrbanInfrastructure;
 
   constructor(scene: THREE.Scene) {
-    this.group.name = 'San Cordova'; scene.add(this.group);
+    this.group.name = 'Joburg'; scene.add(this.group);
     this.architecture = new BuildingArchitecture(this.group);
     this.buildGround(); this.buildRoads(); this.buildDistricts(); this.buildWaterfront();
     this.infrastructure = new UrbanInfrastructure(
@@ -77,11 +79,11 @@ export class City {
   }
 
   districtAt(x: number, z: number): District {
-    if (z < -180) return 'Costa Azul';
-    if (x < -145) return 'Mercado Industrial';
-    if (x > 145) return 'Las Palmas';
-    if (Math.abs(x) < 115 && Math.abs(z) < 115) return 'Cordova Commons';
-    return 'Downtown';
+    if (z < -180) return 'Braamfontein';
+    if (x < -145) return 'City Deep';
+    if (x > 145) return 'Sandton';
+    if (Math.abs(x) < 115 && Math.abs(z) < 115) return 'Zoo Lake';
+    return 'Joburg CBD';
   }
 
   collides(x: number, z: number, radius: number): boolean {
@@ -127,6 +129,27 @@ export class City {
     }
     for (const surface of this.roadSurfaces) this.addCurbs(surface.points, surface.width, surface.closed, curbMat);
     this.buildIntersections();
+    this.buildPotholes();
+  }
+
+  private buildPotholes(): void {
+    for (const point of this.roadPoints) {
+      if (seeded(point.x, point.z, 55) <= 0.94) continue;
+      const x = point.x + (seeded(point.x, point.z, 56) - 0.5) * 3;
+      const z = point.z + (seeded(point.x, point.z, 57) - 0.5) * 3;
+      if (!this.isOnRoad(x, z, -2)) continue;
+      if (CITY_JUNCTIONS.some((junction) => Math.hypot(x - junction.x, z - junction.z) < 16)) continue;
+      this.potholes.push({ x, z, r: 1.1 + seeded(point.x, point.z, 58) * 0.9 });
+    }
+    const holes = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 14), new THREE.MeshBasicMaterial({ color: 0x0d1113 }), this.potholes.length);
+    const rims = new THREE.InstancedMesh(new THREE.RingGeometry(1, 1.22, 14), new THREE.MeshBasicMaterial({ color: 0x3f4649 }), this.potholes.length);
+    const matrix = new THREE.Matrix4(); const flat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+    this.potholes.forEach((pothole, index) => {
+      matrix.compose(new THREE.Vector3(pothole.x, 0.07, pothole.z), flat, new THREE.Vector3(pothole.r, pothole.r, 1)); holes.setMatrixAt(index, matrix);
+      matrix.compose(new THREE.Vector3(pothole.x, 0.072, pothole.z), flat, new THREE.Vector3(pothole.r, pothole.r, 1)); rims.setMatrixAt(index, matrix);
+    });
+    holes.instanceMatrix.needsUpdate = true; rims.instanceMatrix.needsUpdate = true;
+    this.group.add(holes, rims);
   }
 
   private buildIntersections(): void {
@@ -273,6 +296,7 @@ export class City {
       { style: 'residential', centers: [[175, 325], [255, 330], [320, 290], [195, 252], [278, 238], [345, 205], [180, 180], [265, 150], [325, 105], [185, 92], [255, 42], [330, -10], [205, -72], [292, -105], [340, -155]] },
       { style: 'residential', centers: [[-145, -178], [-75, -188], [2, -192], [82, -188], [160, -175], [240, -160], [315, -145]] },
     ];
+    this.buildPonte();
     let variant = 0;
     for (const district of districts) for (const [anchorX, anchorZ] of district.centers) {
       const industrial = district.style === 'industrial'; const residential = district.style === 'residential';
@@ -281,7 +305,7 @@ export class City {
       const h = industrial ? 10 + seeded(anchorX, anchorZ, 8) * 13 : residential ? 7 + seeded(anchorX, anchorZ, 9) * 12 : 30 + seeded(anchorX, anchorZ, 10) * 67;
       const position = this.findParcelPosition(anchorX, anchorZ, Math.hypot(w, d) * 0.5 + 4, variant);
       if (!position) continue;
-      const palette = industrial ? [0x8d918d, 0x777f82, 0xa28c73] : residential ? [0xd59a79, 0xaec3b0, 0xe0c587, 0x91a8b1] : [0x8aa0aa, 0xb77d74, 0xc8b98e, 0x818b91];
+      const palette = industrial ? [0x8d918d, 0xb5924c, 0xa28c73] : residential ? [0xc98a6a, 0x8f4f3a, 0xd9bc82, 0x91a8b1] : [0x8aa0aa, 0xa3563f, 0xc8b98e, 0x818b91];
       this.addBuilding(position.x, position.z, w, d, h, palette[variant % palette.length] ?? 0x8a9498, district.style, variant++);
     }
     variant = this.buildInfillBuildings(variant);
@@ -297,14 +321,14 @@ export class City {
       const anchorZ = gridZ + (seeded(gridX, gridZ, 71) - 0.5) * 19;
       if (anchorZ < -245 || this.distanceToRoad(anchorX, anchorZ) > 58) continue;
       const district = this.districtAt(anchorX, anchorZ);
-      const style = district === 'Mercado Industrial' ? 'industrial' : district === 'Las Palmas' || district === 'Costa Azul' ? 'residential' : 'downtown';
+      const style = district === 'City Deep' ? 'industrial' : district === 'Sandton' || district === 'Braamfontein' ? 'residential' : 'downtown';
       const residential = style === 'residential'; const industrial = style === 'industrial';
       const w = residential ? 11 + seeded(anchorX, anchorZ, 72) * 10 : industrial ? 18 + seeded(anchorX, anchorZ, 73) * 13 : 14 + seeded(anchorX, anchorZ, 74) * 16;
       const d = residential ? 11 + seeded(anchorX, anchorZ, 75) * 9 : industrial ? 17 + seeded(anchorX, anchorZ, 76) * 14 : 14 + seeded(anchorX, anchorZ, 77) * 15;
       const h = residential ? 7 + seeded(anchorX, anchorZ, 78) * 10 : industrial ? 9 + seeded(anchorX, anchorZ, 79) * 13 : 18 + seeded(anchorX, anchorZ, 80) * 44;
       const position = this.findParcelPosition(anchorX, anchorZ, Math.hypot(w, d) * 0.5 + 2, variant);
       if (!position) continue;
-      const palette = industrial ? [0x6e7779, 0x978978, 0x7d8981] : residential ? [0xd5a180, 0xa9bca4, 0xd8c38a, 0x829ca5, 0xc88879] : [0x7f969e, 0xa97770, 0xb8ad91, 0x707d83, 0xa39a8b];
+      const palette = industrial ? [0x6e7779, 0xb5924c, 0x7d8981] : residential ? [0xd5a180, 0x8f4f3a, 0xd8c38a, 0x829ca5, 0xa3563f] : [0x7f969e, 0xa3563f, 0xb8ad91, 0x707d83, 0xa39a8b];
       this.addBuilding(position.x, position.z, w, d, h, palette[variant % palette.length] ?? 0x899293, style, variant++); placed++;
     }
     return variant;
@@ -419,20 +443,24 @@ export class City {
     }
     if (h > 42 && variant % 3 === 1) {
       const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.1, 8, 10), metal); mast.position.set(x + w * 0.2, roofY + 4, z); this.group.add(mast);
-      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), new THREE.MeshStandardMaterial({ color: 0xff4b3e, emissive: 0xff1f16, emissiveIntensity: 2 })); beacon.position.set(mast.position.x, roofY + 8.05, z); this.group.add(beacon);
+      const beaconMaterial = new THREE.MeshStandardMaterial({ color: 0xff4b3e, emissive: 0xff1f16, emissiveIntensity: 2 });
+      registerPowered(beaconMaterial, 0xff4b3e, 0x3a1a16);
+      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), beaconMaterial); beacon.position.set(mast.position.x, roofY + 8.05, z); this.group.add(beacon);
     }
   }
 
   private addRoofSign(x: number, z: number, w: number, d: number, h: number, variant: number): void {
-    const names = ['CORDOVA', 'MARINA', 'MERCADO', 'SOL']; const accent = variant % 2 ? '#72d8d2' : '#f0ae43';
-    const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(12, w * 0.7), 3), new THREE.MeshBasicMaterial({ map: createSignTexture(names[variant % names.length], accent), transparent: true })); sign.position.set(x, h + 3.2, z + d / 2 + 0.1); this.group.add(sign);
+    const names = ['CHICKEN LEKKER', 'MR VRRR PHAA', 'PIK-A-PAY', 'DEBONERS']; const accent = variant % 2 ? '#72d8d2' : '#f0ae43';
+    const signMaterial = new THREE.MeshBasicMaterial({ map: createSignTexture(names[variant % names.length], accent), transparent: true });
+    registerPowered(signMaterial, 0xffffff, 0x2a2d2f);
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(12, w * 0.7), 3), signMaterial); sign.position.set(x, h + 3.2, z + d / 2 + 0.1); this.group.add(sign);
     for (const px of [-3, 3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 8), new THREE.MeshStandardMaterial({ color: 0x343b3d, metalness: 0.7 })); post.position.set(x + px, h + 1.5, z + d / 2); this.group.add(post); }
   }
 
   private buildPark(definition: ParkDefinition): void {
     const { x, z, width, depth, kind, name } = definition;
     const border = new THREE.Mesh(new THREE.BoxGeometry(width + 2.4, 0.3, depth + 2.4), new THREE.MeshStandardMaterial({ color: 0xb6b3a5, map: this.concrete, roughness: 0.9 })); border.position.set(x, 0.08, z); border.receiveShadow = true; this.group.add(border);
-    const park = new THREE.Mesh(new THREE.BoxGeometry(width, 0.24, depth, 12, 1, 12), new THREE.MeshStandardMaterial({ color: kind === 'garden' ? 0x527d4d : 0x5d8351, map: this.grass, roughness: 0.96 })); park.position.set(x, 0.2, z); park.receiveShadow = true; this.group.add(park);
+    const park = new THREE.Mesh(new THREE.BoxGeometry(width, 0.24, depth, 12, 1, 12), new THREE.MeshStandardMaterial({ color: kind === 'garden' ? 0x5f7a44 : 0x8a8149, map: this.grass, roughness: 0.96 })); park.position.set(x, 0.2, z); park.receiveShadow = true; this.group.add(park);
     const pathMat = new THREE.MeshStandardMaterial({ color: 0xd1c6a1, map: this.concrete, roughness: 0.91 });
     const pathA = new THREE.Mesh(new THREE.PlaneGeometry(5.2, depth), pathMat); pathA.rotation.x = -Math.PI / 2; pathA.position.set(x, 0.34, z); this.group.add(pathA);
     const pathB = new THREE.Mesh(new THREE.PlaneGeometry(width, 5.2), pathMat); pathB.rotation.x = -Math.PI / 2; pathB.position.set(x, 0.345, z); this.group.add(pathB);
@@ -486,13 +514,29 @@ export class City {
     clusters.forEach(([ox, oy, oz, scale], index) => { const crown = new THREE.Mesh(new THREE.SphereGeometry(scale, 20, 14), new THREE.MeshStandardMaterial({ color: colors[(variant + index) % colors.length], roughness: 0.9 })); crown.scale.y = 0.82; crown.position.set(ox, oy, oz); crown.castShadow = true; crown.receiveShadow = true; tree.add(crown); }); this.group.add(tree);
   }
 
+  private buildPonte(): void {
+    const x = 112; const z = -138; const height = 105; const radius = 24;
+    const ponte = new THREE.Group(); ponte.position.set(x, 0, z);
+    const facadeTexture = this.facades[0]?.clone(); if (facadeTexture) { facadeTexture.repeat.set(8, 6); facadeTexture.needsUpdate = true; }
+    const facade = new THREE.MeshStandardMaterial({ color: 0x9aa3a8, map: facadeTexture, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
+    const shell = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 40, 1, true), facade); shell.position.y = height / 2; shell.castShadow = true; shell.receiveShadow = true;
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(15, 15, height, 32, 1, true), new THREE.MeshStandardMaterial({ color: 0x2c3336, roughness: 0.9, side: THREE.DoubleSide })); core.position.y = height / 2;
+    const roof = new THREE.Mesh(new THREE.RingGeometry(15, radius, 40), new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, side: THREE.DoubleSide })); roof.rotation.x = -Math.PI / 2; roof.position.y = height;
+    const crownMaterial = new THREE.MeshBasicMaterial({ map: createSignTexture('VODACOMB', '#e4372e'), side: THREE.DoubleSide });
+    registerPowered(crownMaterial, 0xffffff, 0x2a2d2f);
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(radius + 1, radius + 1, 8, 40, 1, true, 0, Math.PI), crownMaterial); crown.position.y = height + 4;
+    ponte.add(shell, core, roof, crown); this.group.add(ponte);
+    this.colliders.push({ minX: x - radius, maxX: x + radius, minZ: z - radius, maxZ: z + radius, height });
+  }
+
   private buildCivicLandmarks(): void {
     const metal = new THREE.MeshStandardMaterial({ color: 0x3d4b4e, metalness: 0.72, roughness: 0.38 });
     const tower = new THREE.Group(); tower.position.set(-338, 0, -165);
     for (const x of [-2.4, 2.4]) for (const z of [-2.4, 2.4]) { const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.25, 14, 10), metal); leg.position.set(x, 7, z); leg.rotation.z = x * 0.014; tower.add(leg); }
     const tank = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 3.8, 5.2, 32), new THREE.MeshStandardMaterial({ color: 0x738b8d, metalness: 0.42, roughness: 0.52 })); tank.position.y = 15.3; tank.castShadow = true; tower.add(tank);
     const cap = new THREE.Mesh(new THREE.SphereGeometry(4.6, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x80999a, metalness: 0.38, roughness: 0.5 })); cap.position.y = 17.9; cap.castShadow = true; tower.add(cap);
-    const label = new THREE.Mesh(new THREE.PlaneGeometry(6.8, 1.7), new THREE.MeshBasicMaterial({ map: createSignTexture('MERCADO', '#e5c15b') })); label.position.set(0, 15.8, 4.01); tower.add(label); this.group.add(tower);
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(6.8, 1.7), new THREE.MeshBasicMaterial({ map: createSignTexture('JOBURG WATER', '#e5c15b') })); label.position.set(0, 15.8, 4.7); tower.add(label);
+    const subLabel = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), new THREE.MeshBasicMaterial({ map: createSignTexture('(EMPTY)', '#e5c15b') })); subLabel.position.set(0, 14.3, 4.72); tower.add(subLabel); this.group.add(tower);
 
     const sculpture = new THREE.Group(); sculpture.position.set(318, 0, -273);
     const base = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.2, 1.1, 32), new THREE.MeshStandardMaterial({ color: 0xb5afa0, roughness: 0.72 })); base.position.y = 0.65;
@@ -502,7 +546,7 @@ export class City {
   private buildWaterfront(): void {
     this.waterMaterial = new THREE.MeshPhysicalMaterial({ color: COLORS.water, map: this.water, roughness: 0.16, metalness: 0.05, clearcoat: 0.85, clearcoatRoughness: 0.16, transparent: true, opacity: 0.94 });
     const water = new THREE.Mesh(new THREE.PlaneGeometry(470, 90, 24, 8), this.waterMaterial); water.rotation.x = -Math.PI / 2; water.position.set(135, 0.1, -340); this.group.add(water);
-    const sand = new THREE.Mesh(new THREE.PlaneGeometry(460, 48), new THREE.MeshStandardMaterial({ color: 0xd6c486, map: this.sand, roughness: 0.96 })); sand.rotation.x = -Math.PI / 2; sand.position.set(140, 0.06, -286); sand.receiveShadow = true; this.group.add(sand);
+    const sand = new THREE.Mesh(new THREE.PlaneGeometry(460, 48), new THREE.MeshStandardMaterial({ color: 0xcdb35e, map: this.sand, roughness: 0.96 })); sand.rotation.x = -Math.PI / 2; sand.position.set(140, 0.06, -286); sand.receiveShadow = true; this.group.add(sand);
     for (let x = -330; x < -190; x += 35) {
       const material = new THREE.MeshStandardMaterial({ color: x % 2 ? 0xb84f45 : 0x3d7381, roughness: 0.65, metalness: 0.32 });
       const container = new THREE.Mesh(new THREE.BoxGeometry(26, 5, 9, 13, 1, 1), material); container.position.set(x, 2.5, -270); container.castShadow = true; this.group.add(container);

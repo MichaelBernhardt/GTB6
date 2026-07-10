@@ -3,6 +3,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { VEHICLE_SPECS, type VehicleKind, type VehicleSpec } from '../config';
 import type { InputManager } from '../core/InputManager';
 import type { City } from '../world/City';
+import { createSignTexture } from '../world/ProceduralMaterials';
 
 export class Vehicle {
   group = new THREE.Group();
@@ -18,6 +19,8 @@ export class Vehicle {
   disabled = false;
   aiTarget = new THREE.Vector3();
   aiStuck = 0;
+  bounce = 0;
+  private bouncePhase = 0;
   private wheels: THREE.Object3D[] = [];
   private brakeLights: THREE.Mesh[] = [];
   private lightPhase = 0;
@@ -84,13 +87,19 @@ export class Vehicle {
 
   private updateVisuals(dt: number, braking: boolean): void {
     const spin = this.speed * dt / 0.36; this.wheels.forEach((wheel, index) => { wheel.rotation.x += spin; if (index < 2) wheel.rotation.y = this.steeringVisual; });
+    if (this.bounce > 0.001) {
+      this.bouncePhase += dt * 34;
+      this.group.position.y = this.bounce * Math.abs(Math.sin(this.bouncePhase));
+      this.bounce *= Math.exp(-7 * dt);
+      if (this.bounce <= 0.001) { this.bounce = 0; this.group.position.y = 0.02; }
+    }
     this.brakeLights.forEach((light) => (light.material as THREE.MeshBasicMaterial).color.setHex(braking ? 0xff2018 : 0x5b0808));
     if (this.police) { this.lightPhase += dt * 11; const lights = this.group.getObjectByName('lightbar')?.children ?? []; lights.forEach((light: THREE.Object3D, i: number) => { light.visible = Math.sin(this.lightPhase + i * Math.PI) > 0; }); }
   }
 
   private buildModel(): void {
     const [width, height, length] = this.spec.size;
-    const sport = this.spec.kind === 'sport'; const van = this.spec.kind === 'van';
+    const sport = this.spec.kind === 'sport'; const taxi = this.spec.kind === 'taxi'; const van = this.spec.kind === 'van' || taxi;
     const bodyMat = new THREE.MeshPhysicalMaterial({ color: this.spec.color, metalness: 0.32, roughness: 0.24, clearcoat: 1, clearcoatRoughness: 0.13 });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x151a1c, metalness: 0.52, roughness: 0.32 });
     const chrome = new THREE.MeshStandardMaterial({ color: 0xa9b0b0, metalness: 0.9, roughness: 0.18 });
@@ -130,6 +139,12 @@ export class Vehicle {
     const frontPlate = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.18, 0.035), plateMaterial); frontPlate.position.set(0, 0.39, length / 2 + 0.18);
     const rearPlate = frontPlate.clone(); rearPlate.position.z = -length / 2 - 0.18; this.group.add(frontPlate, rearPlate);
     if (sport) { const spoiler = new THREE.Mesh(new RoundedBoxGeometry(width * 0.62, 0.09, 0.2, 2, 0.03), bodyMat); spoiler.position.set(0, 1.02, -length * 0.43); this.group.add(spoiler); }
+    if (taxi) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(width + 0.04, 0.22, length * 0.82), new THREE.MeshStandardMaterial({ color: 0xf2c521, roughness: 0.5 }));
+      stripe.position.y = 1; this.group.add(stripe);
+      const board = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.4), new THREE.MeshBasicMaterial({ map: createSignTexture('QUANTUM EXPRESS', '#f2c521'), transparent: true, side: THREE.DoubleSide }));
+      board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board);
+    }
     if (this.police) {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;
       const mount = new THREE.Mesh(new RoundedBoxGeometry(0.98, 0.07, 0.17, 2, 0.02), trimMat); bar.add(mount);

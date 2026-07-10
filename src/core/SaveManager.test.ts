@@ -18,7 +18,7 @@ describe('SaveManager', () => {
 
   it('recovers from malformed storage and resets', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
-    storage.setItem('san-cordova-save-v1', 'bad json');
+    storage.setItem('groot-theft-bakkie-save-v1', 'bad json');
     expect(manager.load()).toEqual(DEFAULT_SAVE);
     expect(manager.reset()).toEqual(DEFAULT_SAVE);
   });

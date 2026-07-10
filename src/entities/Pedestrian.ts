@@ -13,6 +13,7 @@ export class Pedestrian {
   hostile = false;
   police = false;
   contact = false;
+  carGuard = false;
   aggressive = false;
   mugged = false;
   wallet = 0;
@@ -24,7 +25,7 @@ export class Pedestrian {
 
   constructor(scene: THREE.Scene, position: THREE.Vector3, index: number, hostile = false, police = false) {
     this.group.position.copy(position); this.hostile = hostile; this.police = police; this.state = hostile ? 'hostile' : 'walk';
-    this.group.name = police ? 'SCPD Officer' : hostile ? 'Dock Guard' : 'Citizen'; this.group.userData.pedestrian = this;
+    this.group.name = police ? 'JMPD Officer' : hostile ? 'Rank Enforcer' : 'Citizen'; this.group.userData.pedestrian = this;
     this.aggressive = !hostile && !police && index % 9 === 0; this.wallet = 25 + (index * 47) % 180;
     scene.add(this.group); this.buildModel(index);
   }
@@ -53,6 +54,12 @@ export class Pedestrian {
     this.health = Math.max(0, this.health - amount); this.state = this.health === 0 ? 'down' : this.aggressive ? 'hostile' : 'flee';
     if (this.state === 'down') { this.group.rotation.z = Math.PI / 2; this.group.position.y = 0.36; }
     return this.health === 0;
+  }
+
+  makeCarGuard(): void {
+    this.carGuard = true; this.contact = true; this.group.name = 'Car Guard';
+    const vest = new THREE.Mesh(new RoundedBoxGeometry(0.52, 0.5, 0.34, 3, 0.06), new THREE.MeshStandardMaterial({ color: 0xb6f22e, emissive: 0x86c010, emissiveIntensity: 0.55, roughness: 0.6 }));
+    vest.position.y = 1.08; vest.castShadow = true; this.group.add(vest);
   }
 
   mug(player: THREE.Vector3): number {

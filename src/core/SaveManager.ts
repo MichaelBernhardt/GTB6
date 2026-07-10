@@ -1,6 +1,6 @@
 import type { GameSettings, SavedGame } from '../types';
 
-const KEY = 'san-cordova-save-v1';
+const KEY = 'groot-theft-bakkie-save-v1';
 export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025 };
 export const DEFAULT_SAVE: SavedGame = { version: 1, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS };
 

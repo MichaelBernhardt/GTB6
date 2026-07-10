@@ -8,6 +8,7 @@ import { Player } from './entities/Player';
 import type { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
 import { GoreSystem } from './systems/GoreSystem';
+import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
 import { PoliceSystem } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
@@ -16,6 +17,8 @@ import type { GameMode, GameSettings, SavedGame, WorldTarget } from './types';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
 import { buildEnvironment } from './world/Environment';
+import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
+import { setPower } from './world/powerGrid';
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
@@ -38,6 +41,7 @@ export class Game {
   private wanted = new WantedSystem();
   private police: PoliceSystem;
   private missions = new MissionSystem();
+  private loadShedding = new LoadSheddingSystem();
   private economy: Economy;
   private ui = new UIManager();
   private mode: GameMode = 'menu';
@@ -51,6 +55,9 @@ export class Game {
   private deliveryIndex = 0;
   private deathTimer = 0;
   private saveTimer = 0;
+  private potholeCooldown = 0;
+  private etollCooldowns: number[] = ETOLL_GANTRIES.map(() => 0);
+  private radioIntroShown = false;
   private footstepTimer = 0;
   private fps = 60;
   private previousObjective = '';
@@ -62,7 +69,7 @@ export class Game {
     this.city = new City(this.scene);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
-    this.population = new PopulationSystem(this.scene, this.city);
+    this.population = new PopulationSystem(this.scene, this.city, this.audio);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene);
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
@@ -86,7 +93,7 @@ export class Game {
 
   private bindUI(): void {
     this.ui.onStart = (fresh) => this.startGame(fresh);
-    this.ui.onResume = () => { this.mode = 'playing'; this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
+    this.ui.onResume = () => { this.mode = 'playing'; this.ui.hideMenu(); if (this.activeVehicle) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
     this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
     this.ui.onSettings = (settings) => { Object.assign(this.settings, settings); this.audio.setVolume(this.settings.masterVolume); this.renderer.shadowMap.enabled = this.settings.quality === 'high'; this.persist(); };
@@ -95,7 +102,7 @@ export class Game {
   private startGame(fresh: boolean): void {
     if (fresh) { this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); }
     this.mode = 'playing'; this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
-    this.ui.notify('Welcome to San Cordova', 'Mission contacts are marked in gold.');
+    this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
 
   private animate = (): void => {
@@ -115,6 +122,9 @@ export class Game {
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
     this.city.update(dt);
+    const eskom = this.loadShedding.update(dt);
+    if (eskom === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
+    else if (eskom === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
     for (const impact of this.population.consumeImpacts()) {
       this.gore.burst(impact.position, Math.min(1.6, Math.abs(impact.vehicle.speed) / 16), impact.killed);
       if (impact.vehicle === this.activeVehicle) this.wanted.addCrime(impact.killed ? 24 : 12);
@@ -151,9 +161,27 @@ export class Game {
   private updateDriving(dt: number): void {
     const vehicle = this.activeVehicle; if (!vehicle) return;
     const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position); this.audio.setEngine(true, speed);
+    this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
+    if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
+      const position = vehicle.group.position;
+      const hit = this.city.potholes.find((hole) => (hole.x - position.x) ** 2 + (hole.z - position.z) ** 2 < hole.r * hole.r);
+      if (hit) {
+        vehicle.speed *= 0.8; vehicle.bounce = Math.min(0.28, Math.abs(vehicle.speed) * 0.012); vehicle.takeDamage(2);
+        this.audio.collision(14); this.potholeCooldown = 0.9;
+        if (Math.random() < 0.3) this.ui.notify('Pothole', 'Wheel alignment: R850. Cash only.', false);
+      }
+    }
+    ETOLL_GANTRIES.forEach((gantry, index) => {
+      this.etollCooldowns[index] = Math.max(0, (this.etollCooldowns[index] ?? 0) - dt);
+      if ((this.etollCooldowns[index] ?? 0) === 0 && (gantry.x - vehicle.group.position.x) ** 2 + (gantry.z - vehicle.group.position.z) ** 2 < 169) {
+        this.audio.tone(1245, 0.09, 0.09, 'sine');
+        this.ui.notify('e-toll charged: R12.50', 'Outstanding balance since 2013. Nobody pays.', false);
+        this.etollCooldowns[index] = 20;
+      }
+    });
     if (this.input.consume('KeyE')) this.beginExit(vehicle);
-    if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Vehicle recovered', vehicle.spec.name); }
-    if (vehicle.disabled) { this.ui.notify('Vehicle disabled', 'Exit before it catches fire.', false); this.beginExit(vehicle); }
+    if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Bakkie recovered', vehicle.spec.name); }
+    if (vehicle.disabled) { this.ui.notify('Vehicle disabled', 'It is finished, boet. Exit before it catches fire.', false); this.beginExit(vehicle); }
   }
 
   private beginEnter(vehicle: Vehicle): void {
@@ -161,9 +189,13 @@ export class Game {
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.6); this.player.group.position.copy(vehicle.group.position).add(side);
     if (vehicle.occupied) {
       this.population.ejectDriver(vehicle, this.player.group.position); this.wanted.addCrime(18);
-      this.ui.notify('Carjacking reported', 'The driver is fleeing. SCPD dispatch alerted.', false); vehicle.occupied = false;
+      this.ui.notify('Hijacking reported', 'The driver is fleeing. JMPD dispatch alerted.', false); vehicle.occupied = false;
     }
     if (this.missions.active?.id === 'hot-property' && vehicle.spec.kind === 'sport' && vehicle.spec.color === 0xd83a40) this.wanted.setMinimumLevel(2);
+    if (!vehicle.occupied) {
+      const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(vehicle.group.position) < 14);
+      if (guard) this.ui.notify('Car guard', '"Sharp sharp boss, I watched it like my own!"');
+    }
   }
 
   private beginExit(vehicle: Vehicle): void {
@@ -171,15 +203,26 @@ export class Game {
     const left = vehicle.group.position.clone().addScaledVector(side, 2.4); const right = vehicle.group.position.clone().addScaledVector(side, -2.4);
     const exit = !this.city.collides(left.x, left.z, 0.7) ? left : !this.city.collides(right.x, right.z, 0.7) ? right : undefined;
     if (!exit) { this.ui.notify('Exit blocked', 'Move the vehicle into open space.', false); return; }
-    this.transition = { vehicle, timer: 0.42, entering: false, exitPosition: exit }; this.audio.setEngine(false);
+    this.transition = { vehicle, timer: 0.42, entering: false, exitPosition: exit }; this.audio.setEngine(false); this.audio.stopRadio();
   }
 
   private updateTransition(dt: number): void {
     const transition = this.transition; if (!transition) return; transition.timer -= dt;
     if (transition.entering) this.player.group.position.lerp(transition.vehicle.group.position, Math.min(1, dt * 8));
     if (transition.timer > 0) return;
-    if (transition.entering) { this.activeVehicle = transition.vehicle; this.player.inVehicle = true; this.player.setVisible(false); }
-    else { transition.vehicle.playerControlled = false; this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position); }
+    if (transition.entering) {
+      this.activeVehicle = transition.vehicle; this.player.inVehicle = true; this.player.setVisible(false);
+      this.audio.startRadio();
+      if (!this.radioIntroShown) { this.radioIntroShown = true; this.ui.notify('Jozi FM 94.7', 'Amapiano o\'clock. It is always amapiano o\'clock.'); }
+    }
+    else {
+      transition.vehicle.playerControlled = false; this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position);
+      const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(transition.vehicle.group.position) < 14);
+      if (guard) {
+        const tipped = this.economy.spend(2);
+        this.ui.notify('Car guard', tipped ? '"No stress my boss, I watch it like my own." You tipped R2. The ancestors smile upon you.' : '"Eish, no tip? I watch it anyway, boss. Probably."');
+      }
+    }
     this.transition = undefined;
   }
 
@@ -218,7 +261,7 @@ export class Game {
     const cash = victim.mug(this.player.group.position);
     if (cash > 0) {
       this.economy.earn(cash); this.wanted.addCrime(14); this.population.alertDanger(); this.audio.tone(120, 0.14, 0.09, 'square');
-      this.ui.notify('Street robbery', `+$${cash} taken. Witnesses are calling SCPD.`, false); return;
+      this.ui.notify('Street robbery', `+R${cash} taken. Witnesses are calling JMPD.`, false); return;
     }
     const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.alertDanger();
     this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.tone(72, 0.1, 0.13, 'square');
@@ -226,7 +269,7 @@ export class Game {
 
   private processMissionUpdate(update: MissionUpdate): void {
     if (update.failed) this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false);
-    if (update.completed) { this.economy.earn(update.completed.reward); this.ui.notify('Mission complete', `+$${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
+    if (update.completed) { this.economy.earn(update.completed.reward); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
   }
 
   private resetMissionRuntime(): void {
@@ -293,7 +336,7 @@ export class Game {
     if (this.mode === 'playing' && !this.transition) {
       const nearbyTarget = this.currentTarget();
       if (this.activeVehicle) prompt = 'E  Exit vehicle  ·  F  Recover';
-      else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Recover radio key';
+      else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && mission.start.position.distanceTo(focus) < 7)) prompt = 'E  Speak to contact';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
@@ -308,13 +351,13 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.stopRadio(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
   }
-  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.stopRadio(); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); }
 }
