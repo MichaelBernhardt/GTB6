@@ -13,7 +13,7 @@ export interface SavedGame {
 }
 export interface GameSettings {
   masterVolume: number;
-  quality: 'low' | 'high';
+  quality: 'low' | 'medium' | 'high';
   showFps: boolean;
   mouseSensitivity: number;
 }

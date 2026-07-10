@@ -29,8 +29,8 @@ export class Game {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 950);
   private renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  private composer!: EffectComposer;
-  private gtao!: GTAOPass;
+  private composer?: EffectComposer;
+  private gtao?: GTAOPass;
   private environment!: EnvironmentHandle;
   private clock = new THREE.Clock();
   private input: InputManager;
@@ -85,7 +85,7 @@ export class Game {
 
   private setupRenderer(): void {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); this.renderer.setSize(innerWidth, innerHeight);
-    this.renderer.shadowMap.enabled = this.settings.quality === 'high'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = this.settings.quality !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
     this.renderer.shadowMap.autoUpdate = true;
     this.container.append(this.renderer.domElement); window.addEventListener('resize', () => this.resize());
@@ -100,16 +100,20 @@ export class Game {
   }
 
   private setupComposer(): void {
+    this.composer?.dispose(); this.composer = undefined; this.gtao = undefined;
+    if (this.settings.quality === 'low') return; // low quality: plain renderer.render, no post stack
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(size.width, size.height, { type: THREE.HalfFloatType, samples: 4 }));
-    this.composer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); this.composer.setSize(innerWidth, innerHeight);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
-    this.gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 2, thickness: 1 });
-    this.gtao.blendIntensity = 0.9; this.gtao.enabled = this.settings.quality === 'high';
-    this.composer.addPass(this.gtao);
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.45, 0.85));
-    this.composer.addPass(new OutputPass());
+    const composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(size.width, size.height, { type: THREE.HalfFloatType, samples: 4 }));
+    composer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); composer.setSize(innerWidth, innerHeight);
+    composer.addPass(new RenderPass(this.scene, this.camera));
+    if (this.settings.quality === 'high') { // GTAO is the expensive pass — high only
+      this.gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
+      this.gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 2, thickness: 1 }); this.gtao.blendIntensity = 0.9;
+      composer.addPass(this.gtao);
+    }
+    composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.45, 0.85));
+    composer.addPass(new OutputPass());
+    this.composer = composer;
   }
 
   private bindUI(): void {
@@ -118,10 +122,16 @@ export class Game {
     this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
     this.ui.onSettings = (settings) => {
+      const qualityChanged = settings.quality !== undefined && settings.quality !== this.settings.quality;
       Object.assign(this.settings, settings); this.audio.setVolume(this.settings.masterVolume);
-      const high = this.settings.quality === 'high';
-      this.renderer.shadowMap.enabled = high; this.environment.sun.castShadow = high; this.gtao.enabled = high; this.persist();
+      if (qualityChanged) this.applyQuality(); this.persist();
     };
+  }
+
+  private applyQuality(): void {
+    const shadows = this.settings.quality !== 'low';
+    this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
+    this.setupComposer();
   }
 
   private startGame(fresh: boolean): void {
@@ -139,7 +149,7 @@ export class Game {
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
     const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 1;
     if (measure) { this.renderer.info.autoReset = false; this.renderer.info.reset(); }
-    this.composer.render();
+    if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
     if (measure) { this.loggedDrawCalls = true; console.info(`[render] calls=${this.renderer.info.render.calls} tris=${this.renderer.info.render.triangles}`); this.renderer.info.autoReset = true; }
     this.input.endFrame();
   };
@@ -354,5 +364,5 @@ export class Game {
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings }; this.saveManager.save(this.save); }
-  private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer.setSize(innerWidth, innerHeight); }
+  private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }
