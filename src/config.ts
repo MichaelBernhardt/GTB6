@@ -13,7 +13,7 @@ export const PLAYER = {
 };
 export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2 };
 
-export type VehicleKind = 'compact' | 'sport' | 'van' | 'police';
+export type VehicleKind = 'compact' | 'sport' | 'van' | 'police' | 'taxi';
 export interface VehicleSpec {
   kind: VehicleKind;
   name: string;
@@ -28,10 +28,11 @@ export interface VehicleSpec {
 }
 
 export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
-  compact: { kind: 'compact', name: 'Cielo Compact', color: 0xe7b23b, maxSpeed: 34, acceleration: 22, brake: 34, steering: 2.2, drag: 0.7, health: 100, size: [1.8, 1.35, 3.7] },
-  sport: { kind: 'sport', name: 'Veloce R', color: 0xd83a40, maxSpeed: 48, acceleration: 31, brake: 42, steering: 2.45, drag: 0.55, health: 80, size: [1.9, 1.15, 4.15] },
-  van: { kind: 'van', name: 'Porto Utility', color: 0x58a596, maxSpeed: 27, acceleration: 16, brake: 28, steering: 1.75, drag: 0.85, health: 145, size: [2.15, 2.15, 4.9] },
-  police: { kind: 'police', name: 'SCPD Interceptor', color: 0x202b38, maxSpeed: 42, acceleration: 28, brake: 40, steering: 2.35, drag: 0.6, health: 130, size: [1.95, 1.4, 4.35] },
+  compact: { kind: 'compact', name: 'Citi Golf', color: 0xe7b23b, maxSpeed: 34, acceleration: 22, brake: 34, steering: 2.2, drag: 0.7, health: 100, size: [1.8, 1.35, 3.7] },
+  sport: { kind: 'sport', name: 'Golf GTI (Vrrr Phaa)', color: 0xd83a40, maxSpeed: 48, acceleration: 31, brake: 42, steering: 2.45, drag: 0.55, health: 80, size: [1.9, 1.15, 4.15] },
+  van: { kind: 'van', name: 'Hilux Bakkie', color: 0x58a596, maxSpeed: 27, acceleration: 16, brake: 28, steering: 1.75, drag: 0.85, health: 145, size: [2.15, 2.15, 4.9] },
+  police: { kind: 'police', name: 'JMPD Interceptor', color: 0x202b38, maxSpeed: 42, acceleration: 28, brake: 40, steering: 2.35, drag: 0.6, health: 130, size: [1.95, 1.4, 4.35] },
+  taxi: { kind: 'taxi', name: 'Quantum Express', color: 0xf0f1ea, maxSpeed: 44, acceleration: 27, brake: 30, steering: 2.1, drag: 0.6, health: 120, size: [2.05, 2, 5.05] },
 };
 
 export type WeaponId = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rpg';
@@ -65,10 +66,10 @@ export const WEAPONS: WeaponSpec[] = [
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map((spec) => [spec.id, spec])) as Record<WeaponId, WeaponSpec>;
 
 export const COLORS = {
-  sky: 0x9fcbd5,
-  fog: 0x9fcbd5,
+  sky: 0x7fb2e0,
+  fog: 0xc9b98f,
   road: 0x30363b,
   sidewalk: 0xa9aaa0,
-  grass: 0x698b5b,
-  water: 0x2e8193,
+  grass: 0x9a8a4e,
+  water: 0x6b7d5a,
 };

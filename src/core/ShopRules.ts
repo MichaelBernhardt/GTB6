@@ -1,18 +1,19 @@
 import { WEAPON_BY_ID, type WeaponId } from '../config';
 
-/** Sticker prices at Cordova Arms. Ammo refills cost ~15% of the weapon price. */
+/** Sticker prices at Jozi Arms. Ammo refills cost ~15% of the weapon price. */
 export const WEAPON_PRICES: Partial<Record<WeaponId, number>> = { pistol: 400, smg: 1200, shotgun: 900, rpg: 5000 };
 export const AMMO_PRICE_FACTOR = 0.15;
 
 export function weaponPrice(id: WeaponId): number { return WEAPON_PRICES[id] ?? 0; }
 export function ammoPrice(id: WeaponId): number { return Math.round(weaponPrice(id) * AMMO_PRICE_FACTOR / 5) * 5; }
+export function adjustedShopPrice(price: number, multiplier: number): number { return Math.max(0, Math.round(price * multiplier / 5) * 5); }
 
 export type PurchaseDenial = 'no-price' | 'owned' | 'not-owned' | 'ammo-full' | 'funds';
 export interface PurchaseResult { ok: boolean; price: number; reason?: PurchaseDenial; }
 
 /** Resolves a shop transaction without applying it: weapons need to be unowned, ammo needs the weapon and reserve headroom, and both need cash. */
-export function resolvePurchase(kind: 'weapon' | 'ammo', id: WeaponId, owned: boolean, balance: number, ammoFull = false): PurchaseResult {
-  const price = kind === 'weapon' ? weaponPrice(id) : ammoPrice(id);
+export function resolvePurchase(kind: 'weapon' | 'ammo', id: WeaponId, owned: boolean, balance: number, ammoFull = false, multiplier = 1): PurchaseResult {
+  const price = adjustedShopPrice(kind === 'weapon' ? weaponPrice(id) : ammoPrice(id), multiplier);
   if (price <= 0) return { ok: false, price, reason: 'no-price' };
   if (kind === 'weapon' && owned) return { ok: false, price, reason: 'owned' };
   if (kind === 'ammo' && !owned) return { ok: false, price, reason: 'not-owned' };

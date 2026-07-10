@@ -21,6 +21,12 @@ describe('police unit scaling', () => {
   it('never shrinks the response as heat rises', () => {
     for (let level = 1; level <= 5; level++) expect(maxInterceptors(level)).toBeGreaterThanOrEqual(maxInterceptors(level - 1));
   });
+
+  it('adds persistent-pressure reinforcements only to an active response', () => {
+    expect(maxInterceptors(0, 2)).toBe(0);
+    expect(maxInterceptors(2, 1)).toBe(3);
+    expect(maxInterceptors(5, 9)).toBe(10);
+  });
 });
 
 describe('police replan cadence', () => {

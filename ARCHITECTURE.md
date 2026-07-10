@@ -41,11 +41,12 @@ Delta time is clamped to 50 ms to prevent tab restoration from producing physics
 - `WantedSystem` is pure heat/escalation/cooldown logic.
 - `PoliceSystem` maintains pursuit unit count by wanted level and spawns only at distant road positions.
 - `MissionSystem` is a data-driven objective sequencer. It consumes a plain `GameSnapshot` and produces advancement, failure, or completion events.
+- `LivingCitySystem` owns renderer-independent district standing, police pressure, threshold transitions, and gameplay modifier queries. The first content slice affects Joburg CBD while save state is district-keyed for expansion.
 - `ShopSystem` builds the physical shop frontages (weapons counter, detailer, garage, hot dog stand), their glowing entry pads, and minimap icons. Pricing and purchase gating are pure functions in `core/ShopRules`; `Game` applies the results to `Economy`, `CombatSystem`, `WantedSystem`, and the save file.
 
 ### UI
 
-`UIManager` exclusively owns the DOM overlay. It renders the HUD from an immutable state-shaped argument and draws a rotated canvas radar from positions supplied by `Game`. It communicates menu actions through callbacks.
+`UIManager` is the public facade for the DOM overlay and communicates menu actions through callbacks. `Game` supplies immutable primitive view models rather than entity or system instances. `HudView` constructs persistent HUD nodes once and incrementally updates their values, `MenuView` owns the explicit screen state and transient menu markup, and `MinimapView` owns the rotated canvas radar. This keeps per-frame DOM churn low and presentation concerns out of gameplay systems.
 
 ## Collision model
 
@@ -62,6 +63,7 @@ Pure state with automated tests:
 - save defaults, malformed input, round-trip, and reset (including the garage slot)
 - shop purchase resolution, detailer pricing, and vendor healing
 - mission objective progression, timing, restart, and reward metadata
+- district reputation events, pressure decay, thresholds, and consequence modifiers
 - vehicle configuration roles
 
 Runtime state is intentionally local to its owner. Cross-system events are small return objects (`ShotResult`, `MissionUpdate`) instead of a global event bus.
