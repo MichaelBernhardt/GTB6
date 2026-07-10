@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { PLAYER } from '../config';
+import { PLAYER, type WeaponId } from '../config';
 import type { InputManager } from '../core/InputManager';
 import type { City } from '../world/City';
+import { buildWeaponModel } from './WeaponModels';
 
 export class Player {
   group = new THREE.Group();
@@ -24,6 +25,10 @@ export class Player {
   private leftShin = new THREE.Group();
   private rightShin = new THREE.Group();
   private walkPhase = 0;
+  private weapon: WeaponId = 'pistol';
+  private weaponMeshes = new Map<WeaponId, THREE.Group>();
+  private punchTimer = 0;
+  private punchLeft = false;
 
   constructor(scene: THREE.Scene, position = new THREE.Vector3(0, 0, 260)) {
     this.group.position.copy(position); this.heading = Math.PI; this.group.rotation.y = this.heading; this.group.name = 'Player'; scene.add(this.group); this.buildModel();
@@ -31,6 +36,7 @@ export class Player {
 
   update(dt: number, input: InputManager, cameraYaw: number, city: City): void {
     if (this.inVehicle || this.health <= 0) return;
+    const aiming = input.firing && this.weapon !== 'fists';
     const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
     const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
     const move = new THREE.Vector3(side, 0, -forward);
@@ -43,11 +49,12 @@ export class Player {
       this.group.position.copy(city.clampMove(this.group.position, desired, PLAYER.radius));
       this.turnToward(Math.atan2(move.x, move.z), dt, sprinting ? 15 : 11);
       this.walkPhase += dt * speed * 1.05;
-      this.animateLocomotion(dt, sprinting, input.firing);
+      this.animateLocomotion(dt, sprinting, aiming);
     } else {
       if (input.firing) this.turnToward(cameraYaw + Math.PI, dt, 13);
-      this.animateIdle(dt, input.firing);
+      this.animateIdle(dt, aiming);
     }
+    this.applyPunch(dt);
     if (input.consume('Space') && this.onGround) { this.velocityY = PLAYER.jumpSpeed; this.onGround = false; }
     this.velocityY -= PLAYER.gravity * dt; this.group.position.y += this.velocityY * dt;
     if (!this.onGround) {
@@ -60,6 +67,25 @@ export class Player {
   takeDamage(amount: number): void { this.health = Math.max(0, this.health - Math.max(0, amount)); }
   heal(): void { this.health = this.maxHealth; }
   setVisible(visible: boolean): void { this.group.visible = visible; }
+
+  setWeapon(id: WeaponId): void {
+    if (id === this.weapon) return;
+    this.weapon = id;
+    for (const [meshId, mesh] of this.weaponMeshes) mesh.visible = meshId === id;
+  }
+
+  punch(): void { this.punchTimer = 0.3; this.punchLeft = !this.punchLeft; }
+
+  private applyPunch(dt: number): void {
+    if (this.punchTimer <= 0) { this.model.rotation.y *= Math.exp(-dt * 10); return; }
+    this.punchTimer = Math.max(0, this.punchTimer - dt);
+    const phase = 1 - this.punchTimer / 0.3; const thrust = Math.sin(Math.min(1, phase) * Math.PI);
+    const arm = this.punchLeft ? this.leftArm : this.rightArm;
+    const forearm = this.punchLeft ? this.leftForearm : this.rightForearm;
+    arm.rotation.x = -1.44 * thrust; arm.rotation.z = (this.punchLeft ? 0.14 : -0.14) * thrust;
+    forearm.rotation.x = -1.1 * (1 - thrust) - 0.08;
+    this.model.rotation.y = (this.punchLeft ? -0.2 : 0.2) * thrust;
+  }
 
   private turnToward(target: number, dt: number, rate: number): void {
     const delta = Math.atan2(Math.sin(target - this.heading), Math.cos(target - this.heading));
@@ -104,6 +130,13 @@ export class Player {
   }
 
   private animateAim(dt: number): void {
+    if (this.weapon === 'rpg') {
+      this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.9, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, -0.32, dt * 12);
+      this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -0.55, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0.4, dt * 12);
+      this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.55, dt * 14); this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.8, dt * 14);
+      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, -0.08, dt * 10);
+      return;
+    }
     this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.46, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, -0.09, dt * 12);
     this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -1.28, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0.28, dt * 12);
     this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.06, dt * 14); this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.16, dt * 14);
@@ -123,8 +156,9 @@ export class Player {
 
     this.buildTorso(jacket, shirt, leather, metal);
     this.buildHead(skin, hair);
-    this.buildArm(this.leftArm, this.leftForearm, -0.355, jacket, skin, false, metal);
-    this.buildArm(this.rightArm, this.rightForearm, 0.355, jacket, skin, true, metal);
+    this.buildArm(this.leftArm, this.leftForearm, -0.355, jacket, skin);
+    this.buildArm(this.rightArm, this.rightForearm, 0.355, jacket, skin);
+    this.buildWeapons();
     this.buildLeg(this.leftLeg, this.leftShin, -0.14, denim, leather);
     this.buildLeg(this.rightLeg, this.rightShin, 0.14, denim, leather);
     this.model.add(this.torso, this.head, this.leftArm, this.rightArm, this.leftLeg, this.rightLeg); this.group.add(this.model);
@@ -160,15 +194,18 @@ export class Player {
     const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.029, 0.0045, 6, 16, Math.PI), new THREE.MeshStandardMaterial({ color: 0x66372e, roughness: 0.75 })); mouth.position.set(0, -0.063, 0.154); mouth.rotation.z = Math.PI; this.head.add(mouth);
   }
 
-  private buildArm(arm: THREE.Group, forearm: THREE.Group, x: number, jacket: THREE.Material, skin: THREE.Material, armed: boolean, metal: THREE.Material): void {
+  private buildArm(arm: THREE.Group, forearm: THREE.Group, x: number, jacket: THREE.Material, skin: THREE.Material): void {
     arm.position.set(x, 1.43, 0); const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.062, 0.22, 7, 16), jacket); upper.position.y = -0.17; arm.add(upper);
     forearm.position.y = -0.34; const lower = new THREE.Mesh(new THREE.CapsuleGeometry(0.056, 0.2, 7, 16), jacket); lower.position.y = -0.16;
     const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.057, 0.066, 16), jacket); cuff.position.y = -0.31;
     const hand = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), skin); hand.position.y = -0.37; hand.scale.set(0.86, 1.18, 0.74); forearm.add(lower, cuff, hand); arm.add(forearm);
-    if (armed) {
-      const slide = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.3, 0.095, 4, 0.025), metal); slide.position.set(0, -0.49, 0.015);
-      const grip = new THREE.Mesh(new RoundedBoxGeometry(0.068, 0.16, 0.1, 3, 0.02), new THREE.MeshStandardMaterial({ color: 0x131719, roughness: 0.52 })); grip.position.set(0, -0.4, -0.015); grip.rotation.x = -0.18; forearm.add(slide, grip);
-    }
+  }
+
+  private buildWeapons(): void {
+    for (const id of ['pistol', 'smg', 'shotgun'] as const) { const mesh = buildWeaponModel(id); if (mesh) this.weaponMeshes.set(id, mesh); }
+    const rpg = buildWeaponModel('rpg');
+    if (rpg) { rpg.rotation.x = -Math.PI / 2; rpg.position.set(0.3, 1.56, -0.28); this.weaponMeshes.set('rpg', rpg); }
+    for (const [id, mesh] of this.weaponMeshes) { mesh.visible = id === this.weapon; (id === 'rpg' ? this.torso : this.rightForearm).add(mesh); }
   }
 
   private buildLeg(leg: THREE.Group, shin: THREE.Group, x: number, denim: THREE.Material, leather: THREE.Material): void {

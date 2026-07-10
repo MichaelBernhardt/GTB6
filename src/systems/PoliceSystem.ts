@@ -10,12 +10,11 @@ export class PoliceSystem {
   officers: Pedestrian[] = [];
   private spawnCooldown = 0;
   private attackCooldown = 0;
-  private sirenCooldown = 0;
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {}
 
   update(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, damagePlayer: (amount: number) => void): void {
-    this.spawnCooldown -= dt; this.attackCooldown -= dt; this.sirenCooldown -= dt;
+    this.spawnCooldown -= dt; this.attackCooldown -= dt;
     const desired = wanted.level === 0 ? 0 : Math.min(4, Math.ceil(wanted.level / 1.4));
     while (this.vehicles.length < desired && this.spawnCooldown <= 0) { this.spawnUnit(playerPosition); this.spawnCooldown = 4; }
     for (const vehicle of this.vehicles) {
@@ -26,7 +25,8 @@ export class PoliceSystem {
       if (distance < 5 && Math.abs(vehicle.speed) > 8 && this.attackCooldown <= 0) { damagePlayer(Math.min(24, Math.abs(vehicle.speed) * 0.8)); this.attackCooldown = 1.2; }
       if (!playerInVehicle && distance < 20 && this.attackCooldown <= 0) { damagePlayer(4 + wanted.level * 1.5); this.attackCooldown = 1.1; }
     }
-    if (wanted.isWanted && this.vehicles.some((vehicle) => vehicle.group.position.distanceTo(playerPosition) < 85) && this.sirenCooldown <= 0) { this.audio.siren(); this.sirenCooldown = 0.38; }
+    const nearest = this.vehicles.reduce<Vehicle | undefined>((best, vehicle) => !best || vehicle.group.position.distanceToSquared(playerPosition) < best.group.position.distanceToSquared(playerPosition) ? vehicle : best, undefined);
+    this.audio.setSiren(Boolean(wanted.isWanted && nearest), nearest?.group.position.x, nearest?.group.position.z);
     if (!wanted.isWanted && this.vehicles.length > 0) this.despawnFar(playerPosition);
   }
 

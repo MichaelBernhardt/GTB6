@@ -94,6 +94,10 @@ export class City {
     return 'Downtown';
   }
 
+  isPark(x: number, z: number): boolean {
+    return PARK_AREAS.some((park) => Math.abs(x - park.x) < park.width / 2 && Math.abs(z - park.z) < park.depth / 2);
+  }
+
   collides(x: number, z: number, radius: number): boolean {
     if (Math.abs(x) > WORLD_SIZE / 2 - radius || Math.abs(z) > WORLD_SIZE / 2 - radius) return true;
     return this.colliders.some((box) => x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ);
