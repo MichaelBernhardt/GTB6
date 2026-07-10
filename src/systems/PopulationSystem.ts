@@ -40,8 +40,9 @@ export class PopulationSystem {
     }
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation();
-    if (damagePlayer && this.hostileAttackCooldown <= 0 && this.pedestrians.some((ped) => ped.state === 'hostile' && ped.group.position.distanceTo(player) < 2.3)) {
-      damagePlayer(7); this.hostileAttackCooldown = 0.9;
+    if (damagePlayer && this.hostileAttackCooldown <= 0) {
+      const attacker = this.pedestrians.find((ped) => ped.state === 'hostile' && ped.group.position.distanceTo(player) < 2.3);
+      if (attacker) { attacker.punch(); damagePlayer(7); this.hostileAttackCooldown = 0.9; }
     }
   }
 

@@ -24,6 +24,7 @@ export class Pedestrian {
   threat = new THREE.Vector3();
   speed = 2.4;
   idleTime = 0;
+  private punchTimer = 0;
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
@@ -47,7 +48,8 @@ export class Pedestrian {
     if (this.enraged) { if (this.fear < CALM_THRESHOLD) { this.enraged = false; this.setPanicPose(false, false); this.pickDestination(choices); } else { this.state = 'hostile'; this.destination.copy(player); } }
     if (this.aggressive && !this.contact && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); }
     if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); }
-    this.setPanicPose(this.state === 'flee', false);
+    this.punchTimer = Math.max(0, this.punchTimer - dt);
+    if (this.state === 'hostile') this.setGuardPose(distance); else { this.group.rotation.x = 0; this.setPanicPose(this.state === 'flee', false); }
     if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(choices); return; }
     if (this.destination.distanceToSquared(this.group.position) < 5) {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }
@@ -75,7 +77,7 @@ export class Pedestrian {
     if (this.state === 'down' || this.contact) return false;
     this.health = Math.max(0, this.health - amount); this.fear = FEAR_MAX; this.enraged = this.aggressive && this.health > 0;
     this.state = this.health === 0 ? 'down' : this.aggressive ? 'hostile' : 'flee';
-    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.z = Math.PI / 2; this.group.position.y = 0.36; }
+    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = 0.36; }
     return this.health === 0;
   }
 
@@ -98,9 +100,20 @@ export class Pedestrian {
     this.destination.copy(this.group.position).addScaledVector(away.normalize(), 55);
   }
 
+  punch(): void { this.punchTimer = 0.28; }
+
   private setPanicPose(armsUp: boolean, crouch: boolean): void {
     for (const arm of this.arms) arm.rotation.x = armsUp ? Math.PI * 0.92 : 0;
     this.group.scale.y = crouch ? 0.58 : 1;
+  }
+
+  private setGuardPose(distance: number): void {
+    this.group.scale.y = 1; this.group.rotation.x = distance > 3 ? 0.14 : 0.05;
+    const jab = this.punchTimer > 0 ? Math.sin((0.28 - this.punchTimer) / 0.28 * Math.PI) : 0;
+    const bounce = distance < 4 ? Math.sin(this.phase * 3) * 0.12 : 0;
+    const lead = this.arms[0]; const rear = this.arms[1];
+    if (lead) lead.rotation.x = 1.32 + jab * 0.55 + bounce;
+    if (rear) rear.rotation.x = 1.18 - jab * 0.25 - bounce;
   }
 
   private buildModel(index: number): void {
