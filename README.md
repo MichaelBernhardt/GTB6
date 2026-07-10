@@ -1,6 +1,6 @@
 # San Cordova: Neon Reckoning
 
-San Cordova is a compact, original open-world crime game built with Three.js and TypeScript. Explore five stylised districts on foot, take vehicles, weave through traffic, fight hostile crews, draw an escalating SCPD response, and complete three linked missions for local contacts.
+San Cordova is a compact, original open-world crime game built with Three.js and TypeScript. Explore five stylised districts on foot, take vehicles, weave through traffic, fight hostile crews, draw an escalating SCPD response, and complete four missions for local contacts.
 
 The world is built at runtime from procedural geometry, instancing, canvas materials, CSS, and Web Audio, with two original GPT Image surface textures for asphalt and concrete. There are no borrowed maps, dialogue, music, or franchise assets.
 
@@ -64,10 +64,13 @@ Gold columns mark the nearest available contact or current objective. Approach a
 1. **Delivery Run**: borrow Mara Velez's yellow Cielo, complete three timed deliveries, and return the car.
 2. **Hot Property**: steal a red Veloce downtown, survive the resulting pursuit, lose the SCPD, and reach the Costa Azul garage.
 3. **Dockside Signal**: travel to Breakwater, defeat three guards, retrieve a radio key, escape the docks, and return it to the park.
+4. **The Arms Deal**: decide whether to protect Jozi Arms or rob its shipment, permanently changing how the CBD treats you.
 
 Crimes add heat across five wanted levels. Police units spawn on distant roads, pursue the current player vehicle or the player on foot, and maintain heat while they have a nearby sighting. Break line of contact and stay away long enough for heat to decay.
 
 Progress is saved periodically and after mission rewards. Money, completed missions, spawn location, audio level, mouse sensitivity, and the FPS preference use `localStorage`. The pause menu can reset the save.
+
+Joburg CBD remembers what you do. Civilian crime lowers community standing and raises long-term police pressure; trusted players earn slower witness calls, shop discounts, and occasional local support, while notorious players face fearful civilians, hostile guards, higher prices, faster reports, foot patrols, and reinforced pursuits. Reputation and mission choices persist independently of temporary wanted heat.
 
 ## World and systems
 
@@ -84,6 +87,8 @@ Progress is saved periodically and after mission rewards. Money, completed missi
 - Raycast pistol combat with ammunition, reloads, distance damage, muzzle light, impact particles, and generated sound.
 - Carjacking with fleeing drivers, street mugging, aggressive civilians, melee attacks, and persistent stylized blood spray and ground decals.
 - Health, death, timed respawn, mission rewards, five-level wanted state, SCPD chase units, circular rotating minimap, and contextual HUD.
+- Persistent Joburg CBD reputation and police pressure with mission-driven outcomes, witness timing, responsive pricing, civilian reactions, foot patrols, and reinforcements.
+- A responsive Jozi street-editorial interface with persistent HUD components, accessible menu navigation, reduced-motion support, objective progress, reputation feedback, and a restyled rotating street map.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for code ownership and data flow and [GAME_DESIGN.md](GAME_DESIGN.md) for game rules and tuning intent.
 

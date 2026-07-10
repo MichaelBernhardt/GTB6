@@ -1,8 +1,9 @@
 import type { Vector3 } from 'three';
 import type { VehicleKind, WeaponId } from './config';
+import type { LivingCityState } from './systems/LivingCitySystem';
 
 export type GameMode = 'loading' | 'menu' | 'playing' | 'paused' | 'dead';
-export type District = 'Downtown' | 'Las Palmas' | 'Mercado Industrial' | 'Costa Azul' | 'Cordova Commons';
+export type District = 'Joburg CBD' | 'Sandton' | 'City Deep' | 'Braamfontein' | 'Zoo Lake';
 export interface Damageable { health: number; maxHealth: number; takeDamage(amount: number): void; }
 export interface WorldTarget { position: Vector3; label: string; color?: string; }
 export interface SavedWeaponState { ammo: number; reserve: number; owned: boolean; }
@@ -10,7 +11,7 @@ export interface SavedWeapons { current: WeaponId; loadout: Record<WeaponId, Sav
 export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerable: boolean; }
 export interface SavedVehicle { kind: VehicleKind; color: number; health: number; }
 export interface SavedGame {
-  version: 1;
+  version: 2;
   money: number;
   completedMissions: string[];
   spawn: [number, number, number];
@@ -18,6 +19,8 @@ export interface SavedGame {
   weapons: SavedWeapons;
   cheats: CheatSettings;
   garage: SavedVehicle | null;
+  livingCity: LivingCityState;
+  timeOfDay: number;
 }
 export interface GameSettings {
   masterVolume: number;

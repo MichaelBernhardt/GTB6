@@ -3,7 +3,7 @@ import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PARK_AREAS, ROAD_NETWORK } from './City';
 import { CITY_JUNCTIONS, SIGNAL_CORNER_OFFSET } from './UrbanInfrastructure';
 
-describe('San Cordova road topology', () => {
+describe('Joburg road topology', () => {
   it('contains distinct arterials, loops, diagonals, and district roads', () => {
     expect(ROAD_NETWORK.length).toBeGreaterThanOrEqual(10);
     expect(new Set(ROAD_NETWORK.map((road) => road.name)).size).toBe(ROAD_NETWORK.length);
@@ -12,8 +12,8 @@ describe('San Cordova road topology', () => {
       const next = road.points[index + 1];
       return next && Math.abs(next.x - point.x) > 20 && Math.abs(next.z - point.z) > 20;
     }))).toBe(true);
-    expect(ROAD_NETWORK.some((road) => road.name.includes('Harbor'))).toBe(true);
-    expect(ROAD_NETWORK.some((road) => road.name.includes('Industrial') || road.name.includes('Foundry') || road.name.includes('Mercado'))).toBe(true);
+    expect(ROAD_NETWORK.some((road) => road.name.includes('Commissioner'))).toBe(true);
+    expect(ROAD_NETWORK.some((road) => road.name.includes('Main Reef') || road.name.includes('Louis Botha') || road.name.includes('Vilakazi'))).toBe(true);
   });
 
   it('reserves varied public spaces across multiple districts', () => {

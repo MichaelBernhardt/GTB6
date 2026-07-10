@@ -20,6 +20,9 @@ export class AudioManager {
   private ambience?: Ambience;
   private listener = { x: 0, z: 0, yaw: 0 };
   private lastScream = 0;
+  private radioTimer?: ReturnType<typeof setInterval>;
+  private radioGain?: GainNode;
+  private radioNextBeat = 0;
   volume = 0.65;
 
   async resume(): Promise<void> {
@@ -54,6 +57,48 @@ export class AudioManager {
       const pan = Math.random() * 1.6 - 0.8;
       if (inPark || Math.random() < 0.3) this.bird(pan); else this.horn(pan);
     }
+  }
+
+  taxiHoot(pan = 0): void { this.horn(pan); setTimeout(() => this.horn(pan), 210); }
+  beep(): void { this.blip(1245, 0.09, 0.09); }
+
+  startRadio(): void {
+    if (!this.context || !this.master || this.radioTimer) return;
+    const context = this.context;
+    this.radioGain = context.createGain(); this.radioGain.gain.value = 1; this.radioGain.connect(this.master);
+    const eighth = 60 / 112 / 2;
+    this.radioNextBeat = context.currentTime + 0.1;
+    let step = 0;
+    this.radioTimer = setInterval(() => {
+      while (this.radioNextBeat < context.currentTime + 0.5) {
+        const inBar = step % 8;
+        if (inBar === 0 || inBar === 3 || inBar === 6 || inBar === 7) this.logDrum(this.radioNextBeat, inBar === 0 ? 168 : 148);
+        this.shaker(this.radioNextBeat);
+        step++; this.radioNextBeat += eighth;
+      }
+    }, 200);
+  }
+
+  stopRadio(): void {
+    if (this.radioTimer) { clearInterval(this.radioTimer); this.radioTimer = undefined; }
+    this.radioGain?.disconnect(); this.radioGain = undefined;
+  }
+
+  private logDrum(time: number, startFrequency: number): void {
+    if (!this.context || !this.radioGain) return;
+    const oscillator = this.context.createOscillator(); const gain = this.context.createGain();
+    oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(startFrequency, time);
+    oscillator.frequency.exponentialRampToValueAtTime(62, time + 0.16);
+    gain.gain.setValueAtTime(0.055, time); gain.gain.exponentialRampToValueAtTime(0.001, time + 0.22);
+    oscillator.connect(gain).connect(this.radioGain); oscillator.start(time); oscillator.stop(time + 0.24);
+  }
+
+  private shaker(time: number): void {
+    if (!this.context || !this.radioGain) return;
+    const oscillator = this.context.createOscillator(); const gain = this.context.createGain();
+    oscillator.type = 'triangle'; oscillator.frequency.value = 6200;
+    gain.gain.setValueAtTime(0.008, time); gain.gain.exponentialRampToValueAtTime(0.0008, time + 0.03);
+    oscillator.connect(gain).connect(this.radioGain); oscillator.start(time); oscillator.stop(time + 0.04);
   }
 
   gunshot(kind: WeaponSound = 'pistol'): void {

@@ -45,7 +45,7 @@ export class BuildingArchitecture {
   private steel = new THREE.MeshStandardMaterial({ color: 0x596568, metalness: 0.6, roughness: 0.44 });
   private glass = new THREE.MeshPhysicalMaterial({ color: 0x335f69, roughness: 0.12, metalness: 0.2, clearcoat: 0.82 });
   private timber = new THREE.MeshStandardMaterial({ color: 0x704b32, roughness: 0.82 });
-  private terracotta = new THREE.MeshStandardMaterial({ color: 0x9a4f3d, roughness: 0.84 });
+  private terracotta = new THREE.MeshStandardMaterial({ color: 0xa14b36, roughness: 0.84 });
 
   constructor(private parent: THREE.Group) {}
 

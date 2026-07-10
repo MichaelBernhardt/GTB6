@@ -150,6 +150,7 @@ export class RoutePlanner {
   constructor(private graph: NavGraph, private perFrame = 2, private random: () => number = Math.random) {}
 
   beginFrame(): void { this.budget = this.perFrame; }
+  get nodes(): readonly NavPoint[] { return this.graph.nodes; }
   nearest(x: number, z: number): number { return nearestNode(this.graph, x, z); }
   node(index: number): NavPoint | undefined { return this.graph.nodes[index]; }
   randomGoal(): number { return this.graph.nodes.length ? Math.floor(this.random() * this.graph.nodes.length) : -1; }

@@ -23,4 +23,14 @@ describe('MissionSystem', () => {
     expect(system.restart()).toBe(true);
     expect(system.objectiveIndex).toBe(0);
   });
+
+  it('completes the CBD dilemma with one authored choice', () => {
+    const system = new MissionSystem(); expect(system.start('arms-deal')).toBe(true);
+    expect(system.objective?.kind).toBe('choice');
+    expect(system.choose('wrong' as 'protect')).toEqual({});
+    const result = system.choose('protect');
+    expect(result.choice?.choice).toMatchObject({ id: 'protect', reward: 900 });
+    expect(result.completed?.id).toBe('arms-deal');
+    expect(system.choose('rob')).toEqual({});
+  });
 });

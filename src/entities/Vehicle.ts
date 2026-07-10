@@ -5,6 +5,7 @@ import type { InputManager } from '../core/InputManager';
 import { KNOCKOVER_SPEED_KEEP, knockoverDamage, solidImpactDamage, type PropRegistry } from '../systems/PropSystem';
 import { rollBurnDuration } from '../systems/VehicleFireSystem';
 import type { City } from '../world/City';
+import { createSignMesh } from '../world/ProceduralMaterials';
 
 type VehicleMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial | THREE.MeshBasicMaterial;
 
@@ -25,8 +26,11 @@ export class Vehicle {
   burnTimer = 0;
   aiTarget = new THREE.Vector3();
   aiStuck = 0;
+  bounce = 0;
+  private bouncePhase = 0;
   private wheels: THREE.Object3D[] = [];
   private brakeLights: THREE.Mesh[] = [];
+  private headLights: THREE.Mesh[] = [];
   private cabinParts: THREE.Object3D[] = [];
   private lightPhase = 0;
 
@@ -117,6 +121,13 @@ export class Vehicle {
 
   setFirstPerson(firstPerson: boolean): void { for (const part of this.cabinParts) part.visible = !firstPerson; } // hide cabin glass/roof so the driver view is unobstructed
 
+  /** 0 = day (subtle lens glow), 1 = night: headlight lenses go HDR-bright so they bloom. Brake lights are untouched. */
+  setHeadlightGlow(factor: number): void {
+    if (this.wrecked) return;
+    const intensity = 1.15 + factor * 4.6;
+    for (const light of this.headLights) (light.material as THREE.MeshStandardMaterial).emissiveIntensity = intensity;
+  }
+
   reset(position?: THREE.Vector3): void {
     if (position) this.group.position.copy(position);
     this.group.position.y = 0.02; this.group.rotation.set(0, this.heading, 0); this.speed = 0;
@@ -141,13 +152,19 @@ export class Vehicle {
 
   private updateVisuals(dt: number, braking: boolean): void {
     const spin = this.speed * dt / 0.36; this.wheels.forEach((wheel, index) => { wheel.rotation.x += spin; if (index < 2) wheel.rotation.y = this.steeringVisual; });
+    if (this.bounce > 0.001) {
+      this.bouncePhase += dt * 34;
+      this.group.position.y = this.bounce * Math.abs(Math.sin(this.bouncePhase));
+      this.bounce *= Math.exp(-7 * dt);
+      if (this.bounce <= 0.001) { this.bounce = 0; this.group.position.y = 0.02; }
+    }
     this.brakeLights.forEach((light) => (light.material as THREE.MeshBasicMaterial).color.setHex(braking ? 0xff2018 : 0x5b0808));
     if (this.police) { this.lightPhase += dt * 11; const lights = this.group.getObjectByName('lightbar')?.children ?? []; lights.forEach((light: THREE.Object3D, i: number) => { light.visible = Math.sin(this.lightPhase + i * Math.PI) > 0; }); }
   }
 
   private buildModel(): void {
     const [width, height, length] = this.spec.size;
-    const sport = this.spec.kind === 'sport'; const van = this.spec.kind === 'van';
+    const sport = this.spec.kind === 'sport'; const taxi = this.spec.kind === 'taxi'; const van = this.spec.kind === 'van' || taxi;
     const bodyMat = new THREE.MeshPhysicalMaterial({ color: this.spec.color, metalness: 0.32, roughness: 0.24, clearcoat: 1, clearcoatRoughness: 0.13 });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x151a1c, metalness: 0.52, roughness: 0.32 });
     const chrome = new THREE.MeshStandardMaterial({ color: 0xa9b0b0, metalness: 0.9, roughness: 0.18 });
@@ -182,12 +199,18 @@ export class Vehicle {
     const lightGeo = new RoundedBoxGeometry(0.38, 0.17, 0.07, 2, 0.03);
     for (const x of [-width * 0.29, width * 0.29]) {
       const rear = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0x5b0808, emissive: 0x390000, emissiveIntensity: 1.8, roughness: 0.22 })); rear.position.set(x, 0.65, -length / 2 - 0.1); this.group.add(rear); this.brakeLights.push(rear);
-      const front = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 })); front.position.set(x, 0.65, length / 2 + 0.1); this.group.add(front);
+      const front = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 })); front.position.set(x, 0.65, length / 2 + 0.1); this.group.add(front); this.headLights.push(front);
     }
     const plateMaterial = new THREE.MeshStandardMaterial({ color: 0xe7e4cf, roughness: 0.5 });
     const frontPlate = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.18, 0.035), plateMaterial); frontPlate.position.set(0, 0.39, length / 2 + 0.18);
     const rearPlate = frontPlate.clone(); rearPlate.position.z = -length / 2 - 0.18; this.group.add(frontPlate, rearPlate);
     if (sport) { const spoiler = new THREE.Mesh(new RoundedBoxGeometry(width * 0.62, 0.09, 0.2, 2, 0.03), bodyMat); spoiler.position.set(0, 1.02, -length * 0.43); this.group.add(spoiler); }
+    if (taxi) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(width + 0.04, 0.22, length * 0.82), new THREE.MeshStandardMaterial({ color: 0xf2c521, roughness: 0.5 }));
+      stripe.position.y = 1; this.group.add(stripe);
+      const board = createSignMesh(new THREE.PlaneGeometry(1.7, 0.4), 'QUANTUM EXPRESS', '#f2c521', { doubleSide: true });
+      board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board);
+    }
     if (this.police) {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;
       const mount = new THREE.Mesh(new RoundedBoxGeometry(0.98, 0.07, 0.17, 2, 0.02), trimMat); bar.add(mount);

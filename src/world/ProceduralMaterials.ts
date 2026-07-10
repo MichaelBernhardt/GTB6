@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { registerPowered } from './powerGrid';
 
 type SurfaceKind = 'asphalt' | 'concrete' | 'grass' | 'sand' | 'water';
 
@@ -28,8 +29,8 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
   const palette: Record<SurfaceKind, [string, string, string]> = {
     asphalt: ['#242b2e', '#32393c', '#171d20'],
     concrete: ['#9c9d96', '#b9b7ad', '#777c79'],
-    grass: ['#456b45', '#688650', '#304f38'],
-    sand: ['#cbbb87', '#dfcf9c', '#a99a69'],
+    grass: ['#8a7b45', '#a3924f', '#6e6236'],
+    sand: ['#c9b569', '#dcc97c', '#a08d4f'],
     water: ['#28778b', '#4e9cac', '#15566c'],
   };
   const [base, light, dark] = palette[kind]; context.fillStyle = base; context.fillRect(0, 0, 256, 256);
@@ -79,14 +80,14 @@ interface FacadeStyle { wall: string; dark: string; frame: string; lit: number; 
 const FACADE_STYLES: FacadeStyle[] = [
   { wall: '#88949a', dark: '#5f696e', frame: '#3e4c52', lit: 0.32, columns: 6, rows: 9, band: true },
   { wall: '#7c8b96', dark: '#525e68', frame: '#2b3a44', lit: 0.48, columns: 8, rows: 11, band: false },
-  { wall: '#a77970', dark: '#76534e', frame: '#463631', lit: 0.24, columns: 5, rows: 8, band: true },
+  { wall: '#9c5a43', dark: '#6b3a2c', frame: '#463631', lit: 0.24, columns: 5, rows: 8, band: true },
   { wall: '#9aa39a', dark: '#6d766e', frame: '#37454b', lit: 0.4, columns: 7, rows: 10, band: false },
   { wall: '#b7aa88', dark: '#7e755f', frame: '#4a4436', lit: 0.2, columns: 5, rows: 9, band: true },
   { wall: '#778080', dark: '#51595c', frame: '#232d31', lit: 0.55, columns: 6, rows: 10, band: false },
   { wall: '#d3a482', dark: '#9c7458', frame: '#54402f', lit: 0.16, columns: 4, rows: 6, band: true },
   { wall: '#c9b891', dark: '#94835f', frame: '#4c4231', lit: 0.22, columns: 5, rows: 6, band: false },
   { wall: '#aebfae', dark: '#7b8d7c', frame: '#3c4a40', lit: 0.13, columns: 4, rows: 5, band: true },
-  { wall: '#c08a7a', dark: '#8b5f53', frame: '#4a332c', lit: 0.19, columns: 5, rows: 7, band: false },
+  { wall: '#8a5a4a', dark: '#57352a', frame: '#4a332c', lit: 0.19, columns: 5, rows: 7, band: false },
   { wall: '#8d918d', dark: '#636763', frame: '#31383a', lit: 0.1, columns: 4, rows: 5, band: false },
   { wall: '#98917f', dark: '#6b6558', frame: '#3a382e', lit: 0.14, columns: 5, rows: 6, band: true },
 ];
@@ -111,6 +112,25 @@ export function createFacadeTexture(style: number): THREE.CanvasTexture {
   }
   const texture = finish(canvas);
   return texture;
+}
+
+/** Emissive companion to createFacadeTexture: black except lit windows, sampled with the same seed so every
+ *  day-lit window stays lit at night and extra windows join in (night density > day density). */
+export function createFacadeGlowTexture(style: number): THREE.CanvasTexture {
+  const { canvas, context } = canvasTexture(512);
+  const spec = FACADE_STYLES[style % FACADE_STYLES.length] ?? FACADE_STYLES[0]!;
+  const { lit: litDensity, columns, rows } = spec;
+  context.fillStyle = '#000'; context.fillRect(0, 0, 512, 512);
+  const nightDensity = Math.min(0.85, litDensity * 2 + 0.3);
+  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+    if (seeded(row * columns + column, style + 31) <= 1 - nightDensity) continue;
+    const cellW = 512 / columns; const cellH = 512 / rows; const x = column * cellW + 15; const y = row * cellH + 13;
+    const warmth = 0.72 + seeded(row * columns + column, style + 57) * 0.28;
+    const glass = context.createLinearGradient(x, y, x + cellW - 30, y + cellH - 25);
+    glass.addColorStop(0, `rgba(255, 214, 138, ${warmth.toFixed(3)})`); glass.addColorStop(1, `rgba(196, 141, 64, ${warmth.toFixed(3)})`);
+    context.fillStyle = glass; context.fillRect(x, y, cellW - 30, cellH - 26);
+  }
+  return finish(canvas);
 }
 
 const SIGN_ATLAS = { width: 1024, height: 4096, slotW: 512, slotH: 128 };
@@ -140,12 +160,17 @@ function signSlot(text: string, accent: string, background: string): SignSlot {
   signSlots.set(key, slot); return slot;
 }
 
-export function createSignMesh(geometry: THREE.BufferGeometry, text: string, accent: string, options: { background?: string; doubleSide?: boolean } = {}): THREE.Mesh {
+export function createSignMesh(geometry: THREE.BufferGeometry, text: string, accent: string, options: { background?: string; doubleSide?: boolean; powered?: boolean } = {}): THREE.Mesh {
+  if (typeof document === 'undefined') return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x222831, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide }));
   const slot = signSlot(text, accent, options.background ?? '#10191c');
   const uv = geometry.getAttribute('uv');
   for (let index = 0; index < uv.count; index++) uv.setXY(index, THREE.MathUtils.lerp(slot.u0, slot.u1, uv.getX(index)), THREE.MathUtils.lerp(slot.v0, slot.v1, uv.getY(index)));
-  const materialKey = options.doubleSide ? 'double' : 'front';
+  const materialKey = `${options.doubleSide ? 'double' : 'front'}-${options.powered ? 'powered' : 'plain'}`;
   let material = signMaterials.get(materialKey);
-  if (!material) { material = new THREE.MeshBasicMaterial({ map: signAtlas!.texture, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide }); signMaterials.set(materialKey, material); }
+  if (!material) {
+    material = new THREE.MeshBasicMaterial({ map: signAtlas!.texture, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide });
+    if (options.powered) registerPowered(material, 0xffffff, 0x2a2d2f);
+    signMaterials.set(materialKey, material);
+  }
   return new THREE.Mesh(geometry, material);
 }

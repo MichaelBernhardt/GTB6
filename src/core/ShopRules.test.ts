@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WEAPONS, WEAPON_BY_ID } from '../config';
-import { ammoPrice, detailerPrice, HOTDOG_HEAL, hotdogHeal, reserveFull, resolvePurchase, weaponPrice, WEAPON_PRICES } from './ShopRules';
+import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_HEAL, hotdogHeal, reserveFull, resolvePurchase, weaponPrice, WEAPON_PRICES } from './ShopRules';
 
 describe('Cordova Arms purchase resolution', () => {
   it('prices every non-melee weapon and never the fists', () => {
@@ -32,6 +32,12 @@ describe('Cordova Arms purchase resolution', () => {
     expect(resolvePurchase('ammo', 'smg', false, 500)).toEqual({ ok: false, price: 180, reason: 'not-owned' });
     expect(resolvePurchase('ammo', 'smg', true, 500, true)).toEqual({ ok: false, price: 180, reason: 'ammo-full' });
     expect(resolvePurchase('ammo', 'smg', true, 179)).toEqual({ ok: false, price: 180, reason: 'funds' });
+  });
+
+  it('applies reputation pricing in five-rand increments', () => {
+    expect(adjustedShopPrice(900, 0.8)).toBe(720);
+    expect(resolvePurchase('weapon', 'shotgun', false, 720, false, 0.8)).toEqual({ ok: true, price: 720 });
+    expect(resolvePurchase('weapon', 'shotgun', false, 719, false, 0.8)).toMatchObject({ ok: false, reason: 'funds', price: 720 });
   });
 
   it('reports a full reserve at triple the spec reserve, matching top-up caps', () => {

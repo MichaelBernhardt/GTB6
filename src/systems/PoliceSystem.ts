@@ -4,18 +4,20 @@ import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import type { City } from '../world/City';
 import { replanInterval, RoutePlanner, type NavPoint } from './NavGraph';
+import { ARRIVE_DWELL, ARRIVE_RADIUS, pickRoamGoal, ROAM_RADIUS, SIGHT_RADIUS, type KnownPosition, type PoliceKnowledge } from './PoliceKnowledge';
 import type { WantedSystem } from './WantedSystem';
 
 /** Max active interceptors per wanted level: 1-2 stars field two, escalating to eight at five stars. */
 export const POLICE_UNITS_BY_WANTED = [0, 2, 2, 4, 6, 8] as const;
-export function maxInterceptors(level: number): number {
-  return POLICE_UNITS_BY_WANTED[Math.min(POLICE_UNITS_BY_WANTED.length - 1, Math.max(0, Math.floor(level)))] ?? 0;
+export function maxInterceptors(level: number, reinforcementModifier = 0): number {
+  const base = POLICE_UNITS_BY_WANTED[Math.min(POLICE_UNITS_BY_WANTED.length - 1, Math.max(0, Math.floor(level)))] ?? 0;
+  return base === 0 ? 0 : Math.min(10, base + Math.max(0, Math.floor(reinforcementModifier)));
 }
 
 /** Within this range and with clear line of sight, units leave the nav graph and ram the player directly. */
 export const PURSUIT_RANGE = 25;
 
-interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; }
+interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; }
 
 export class PoliceSystem {
   vehicles: Vehicle[] = [];
@@ -30,15 +32,20 @@ export class PoliceSystem {
     this.planner = new RoutePlanner(city.vehicleNav, 2);
   }
 
-  update(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, damagePlayer: (amount: number) => void): void {
+  update(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, knowledge: PoliceKnowledge<unknown>, damagePlayer: (amount: number) => void, reinforcementModifier = 0): void {
     this.planner.beginFrame();
     this.spawnCooldown -= dt; this.attackCooldown -= dt;
-    const desired = maxInterceptors(wanted.level);
+    const desired = maxInterceptors(wanted.level, reinforcementModifier);
     const active = this.vehicles.filter((vehicle) => !vehicle.wrecked);
-    while (active.length < desired && this.spawnCooldown <= 0) { this.spawnUnit(playerPosition); this.spawnCooldown = 4; const spawned = this.vehicles[this.vehicles.length - 1]; if (spawned) active.push(spawned); }
+    const known = knowledge.lastKnown;
+    const dispatchAt = known ? new THREE.Vector3(known.x, 0, known.z) : playerPosition;
+    while (active.length < desired && this.spawnCooldown <= 0) { this.spawnUnit(dispatchAt); this.spawnCooldown = 4; const spawned = this.vehicles[this.vehicles.length - 1]; if (spawned) active.push(spawned); }
+    const sighted = wanted.isWanted && active.some((vehicle) => vehicle.group.position.distanceTo(playerPosition) < SIGHT_RADIUS && this.hasLineOfSight(vehicle.group.position, playerPosition));
+    if (sighted) { knowledge.sight(playerPosition.x, playerPosition.z); wanted.reportSeen(); }
+    const target = wanted.isWanted ? knowledge.lastKnown : null;
     for (const vehicle of active) {
       const brain = this.brainOf(vehicle);
-      if (wanted.isWanted) this.pursue(vehicle, brain, dt, playerPosition, playerInVehicle, wanted, damagePlayer);
+      if (target) this.pursue(vehicle, brain, dt, target, sighted, playerPosition, playerInVehicle, wanted, damagePlayer);
       else this.patrol(vehicle, brain, dt);
     }
     const nearest = active.reduce<Vehicle | undefined>((best, vehicle) => !best || vehicle.group.position.distanceToSquared(playerPosition) < best.group.position.distanceToSquared(playerPosition) ? vehicle : best, undefined);
@@ -48,29 +55,46 @@ export class PoliceSystem {
 
   reset(): void { for (const vehicle of this.vehicles) this.scene.remove(vehicle.group); for (const officer of this.officers) this.scene.remove(officer.group); this.vehicles = []; this.officers = []; }
 
-  /** Chase: replan an A* route to the player every 1.5-2s (staggered per unit), ram directly once close with line of sight. */
-  private pursue(vehicle: Vehicle, brain: PoliceBrain, dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, damagePlayer: (amount: number) => void): void {
+  /** Chase: replan an A* route to the LAST KNOWN position every 1.5-2s (staggered per unit) — never to the
+   *  live player. Ram directly only while an active sighting exists; arriving at a cold scene turns to roam. */
+  private pursue(vehicle: Vehicle, brain: PoliceBrain, dt: number, known: KnownPosition, sighted: boolean, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, damagePlayer: (amount: number) => void): void {
+    if (brain.knownTime !== known.time) { brain.knownTime = known.time; brain.roaming = false; brain.dwell = 0; }
     const distance = vehicle.group.position.distanceTo(playerPosition);
-    if (distance < 70) wanted.reportSeen();
     const aggression = 0.82 + wanted.level * 0.035;
-    if (distance < PURSUIT_RANGE && this.hasLineOfSight(vehicle.group.position, playerPosition)) {
+    if (sighted && distance < PURSUIT_RANGE && this.hasLineOfSight(vehicle.group.position, playerPosition)) {
       brain.chasing = true; brain.path = []; brain.index = 0; brain.replanIn = 0;
       vehicle.updateAI(dt, this.city, playerPosition, aggression);
+    } else if (brain.roaming) {
+      this.roam(vehicle, brain, dt, known);
     } else {
+      if (Math.hypot(vehicle.group.position.x - known.x, vehicle.group.position.z - known.z) < ARRIVE_RADIUS) {
+        brain.dwell += dt;
+        if (brain.dwell >= ARRIVE_DWELL) { brain.roaming = true; brain.chasing = false; brain.path = []; brain.index = 0; return; }
+      }
       brain.replanIn -= dt;
       if (brain.replanIn <= 0 || !brain.chasing || brain.index >= brain.path.length || vehicle.aiStuck > 5) {
-        const path = this.planner.tryPlan(vehicle.group.position.x, vehicle.group.position.z, this.planner.nearest(playerPosition.x, playerPosition.z));
+        const path = this.planner.tryPlan(vehicle.group.position.x, vehicle.group.position.z, this.planner.nearest(known.x, known.z));
         if (path) { brain.path = path; brain.index = 0; brain.chasing = true; brain.replanIn = replanInterval(brain.serial); vehicle.aiStuck = 0; }
       }
       this.followPath(vehicle, brain, dt, aggression);
     }
     if (distance < 5 && Math.abs(vehicle.speed) > 8 && this.attackCooldown <= 0) { damagePlayer(Math.min(24, Math.abs(vehicle.speed) * 0.8)); this.attackCooldown = 1.2; }
-    if (!playerInVehicle && distance < 20 && this.attackCooldown <= 0) { damagePlayer(4 + wanted.level * 1.5); this.attackCooldown = 1.1; }
+    if (sighted && !playerInVehicle && distance < 20 && this.attackCooldown <= 0) { damagePlayer(4 + wanted.level * 1.5); this.attackCooldown = 1.1; }
+  }
+
+  /** Trail ran cold: cruise random nav nodes near the last known position until decay or fresh intel. */
+  private roam(vehicle: Vehicle, brain: PoliceBrain, dt: number, known: KnownPosition): void {
+    if (brain.index >= brain.path.length) {
+      const goal = pickRoamGoal(this.planner.nodes, known, ROAM_RADIUS);
+      const path = goal >= 0 ? this.planner.tryPlan(vehicle.group.position.x, vehicle.group.position.z, goal) : undefined;
+      if (path) { brain.path = path; brain.index = 0; }
+    }
+    this.followPath(vehicle, brain, dt, 0.55);
   }
 
   /** No heat: cruise the lane graph toward random destinations, replanning on arrival. */
   private patrol(vehicle: Vehicle, brain: PoliceBrain, dt: number): void {
-    if (brain.chasing) { brain.chasing = false; brain.path = []; brain.index = 0; }
+    if (brain.chasing || brain.roaming) { brain.chasing = false; brain.roaming = false; brain.dwell = 0; brain.knownTime = -1; brain.path = []; brain.index = 0; }
     if (brain.index >= brain.path.length) {
       const path = this.planner.tryPlan(vehicle.group.position.x, vehicle.group.position.z);
       if (path) { brain.path = path; brain.index = 0; }
@@ -99,12 +123,13 @@ export class PoliceSystem {
 
   private brainOf(vehicle: Vehicle): PoliceBrain {
     let brain = this.brains.get(vehicle);
-    if (!brain) { brain = { serial: this.serials++, path: [], index: 0, replanIn: 0, chasing: false }; this.brains.set(vehicle, brain); }
+    if (!brain) { brain = { serial: this.serials++, path: [], index: 0, replanIn: 0, chasing: false, roaming: false, dwell: 0, knownTime: -1 }; this.brains.set(vehicle, brain); }
     return brain;
   }
 
-  private spawnUnit(player: THREE.Vector3): void {
-    const pose = this.city.roadPoseAwayFrom(player, 105, 165);
+  /** Units are dispatched around the last known position (the report's crime scene), not the player. */
+  private spawnUnit(dispatchAt: THREE.Vector3): void {
+    const pose = this.city.roadPoseAwayFrom(dispatchAt, 105, 165);
     const vehicle = new Vehicle(this.scene, 'police', pose.position); vehicle.occupied = true; vehicle.heading = pose.heading; vehicle.group.rotation.y = pose.heading; this.vehicles.push(vehicle);
   }
 
