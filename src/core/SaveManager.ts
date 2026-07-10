@@ -1,8 +1,9 @@
 import { WEAPONS, WEAPON_BY_ID, type WeaponId } from '../config';
+import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
 import type { CheatSettings, GameSettings, SavedGame, SavedWeaponState, SavedWeapons } from '../types';
 
 const KEY = 'san-cordova-save-v1';
-export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025 };
+export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW };
 export const DEFAULT_CHEATS: CheatSettings = { fastRun: false, bigJump: false, invulnerable: false };
 
 export function sanitizeCheats(raw?: Partial<CheatSettings>): CheatSettings {
@@ -42,6 +43,7 @@ export class SaveManager {
       if (parsed.version !== 1) return structuredClone(DEFAULT_SAVE);
       const settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
       if (settings.quality !== 'low' && settings.quality !== 'medium' && settings.quality !== 'high') settings.quality = 'high';
+      settings.cameraViewFoot = sanitizeView(settings.cameraViewFoot); settings.cameraViewVehicle = sanitizeView(settings.cameraViewVehicle);
       return {
         ...structuredClone(DEFAULT_SAVE), ...parsed,
         completedMissions: Array.isArray(parsed.completedMissions) ? parsed.completedMissions : [],

@@ -7,7 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { WEAPON_BY_ID, WEAPONS, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
-import { CameraController } from './core/CameraController';
+import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { cycleWeapon, Economy, rollDrops, type PedKind } from './core/GameRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
@@ -180,6 +180,11 @@ export class Game {
   private update(dt: number): void {
     if (this.input.consume('Escape')) { this.pause(); return; }
     if (this.input.consume('Backquote')) { this.settings.showFps = !this.settings.showFps; this.persist(); }
+    if (this.input.consume('KeyV')) {
+      const key = this.activeVehicle ? 'cameraViewVehicle' : 'cameraViewFoot';
+      this.settings[key] = cycleView(this.settings[key]);
+      this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.settings[key]]}`); this.persist();
+    }
     if (this.transition) this.updateTransition(dt);
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
@@ -312,7 +317,7 @@ export class Game {
     if (transition.entering) this.player.group.position.lerp(transition.vehicle.group.position, Math.min(1, dt * 8));
     if (transition.timer > 0) return;
     if (transition.entering) { this.activeVehicle = transition.vehicle; this.player.inVehicle = true; this.player.setVisible(false); }
-    else { transition.vehicle.playerControlled = false; this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position); }
+    else { transition.vehicle.playerControlled = false; transition.vehicle.setFirstPerson(false); this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position); }
     this.transition = undefined;
   }
 
@@ -423,7 +428,11 @@ export class Game {
 
   private updateCamera(dt: number): void {
     const target = this.activeVehicle?.group.position ?? this.player.group.position;
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity);
+    const view = this.activeVehicle ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
+    const firstPerson = view === 0;
+    this.player.setVisible(!this.player.inVehicle && !(firstPerson && !this.activeVehicle && !this.transition));
+    this.activeVehicle?.setFirstPerson(firstPerson);
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -481,7 +490,7 @@ export class Game {
     this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.closeWeaponWheel(); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
-    if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle = undefined; }
+    if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }

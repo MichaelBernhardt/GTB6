@@ -22,6 +22,8 @@ export interface GameSettings {
   quality: 'low' | 'medium' | 'high';
   showFps: boolean;
   mouseSensitivity: number;
+  cameraViewFoot: number;
+  cameraViewVehicle: number;
 }
 export interface GameSnapshot {
   playerPosition: Vector3;
