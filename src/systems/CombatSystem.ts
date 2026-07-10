@@ -40,7 +40,7 @@ export class CombatSystem {
 
   fire(input: InputManager, camera: THREE.Camera, origin: THREE.Vector3, population: PopulationSystem, policeVehicles: Vehicle[] = []): ShotResult {
     if (!input.firing || this.cooldown > 0 || this.reloading > 0) return { fired: false };
-    if (this.ammo <= 0) { this.cooldown = 0.25; this.audio.tone(160, 0.05, 0.05, 'square'); return { fired: false }; }
+    if (this.ammo <= 0) { this.cooldown = 0.25; this.audio.emptyClick(); return { fired: false }; }
     this.ammo -= 1; this.cooldown = 0.19; this.shotsFired += 1; this.audio.gunshot();
     this.muzzle = new THREE.PointLight(0xffb43b, 3, 7); this.muzzle.position.copy(origin).add(new THREE.Vector3(0, 1.3, 0)); this.scene.add(this.muzzle);
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);

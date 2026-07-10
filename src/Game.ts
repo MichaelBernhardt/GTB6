@@ -113,6 +113,7 @@ export class Game {
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
     this.city.update(dt);
     for (const impact of this.population.consumeImpacts()) {
@@ -130,7 +131,7 @@ export class Game {
     this.player.update(dt, this.input, this.cameraController.yaw, this.city);
     this.combat.tryReload(this.input);
     this.footstepTimer -= dt;
-    if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { this.audio.tone(105, 0.045, 0.022, 'square'); this.footstepTimer = this.input.down('ShiftLeft') ? 0.24 : 0.38; }
+    if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { const running = this.input.down('ShiftLeft'); this.audio.footstep(running, this.city.isPark(this.player.group.position.x, this.player.group.position.z)); this.footstepTimer = running ? 0.24 : 0.38; }
     const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles);
     if (shot.fired) {
       this.wanted.addCrime(7); this.population.alertDanger();
@@ -150,7 +151,9 @@ export class Game {
 
   private updateDriving(dt: number): void {
     const vehicle = this.activeVehicle; if (!vehicle) return;
-    const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position); this.audio.setEngine(true, speed);
+    const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position);
+    const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
+    this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed);
     if (this.input.consume('KeyE')) this.beginExit(vehicle);
     if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Vehicle recovered', vehicle.spec.name); }
     if (vehicle.disabled) { this.ui.notify('Vehicle disabled', 'Exit before it catches fire.', false); this.beginExit(vehicle); }
@@ -217,16 +220,16 @@ export class Game {
     if (!victim) return;
     const cash = victim.mug(this.player.group.position);
     if (cash > 0) {
-      this.economy.earn(cash); this.wanted.addCrime(14); this.population.alertDanger(); this.audio.tone(120, 0.14, 0.09, 'square');
+      this.economy.earn(cash); this.wanted.addCrime(14); this.population.alertDanger(); this.audio.pickup();
       this.ui.notify('Street robbery', `+$${cash} taken. Witnesses are calling SCPD.`, false); return;
     }
     const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.alertDanger();
-    this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.tone(72, 0.1, 0.13, 'square');
+    this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.melee();
   }
 
   private processMissionUpdate(update: MissionUpdate): void {
-    if (update.failed) this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false);
-    if (update.completed) { this.economy.earn(update.completed.reward); this.ui.notify('Mission complete', `+$${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
+    if (update.failed) { this.audio.ui(false); this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false); }
+    if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+$${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
   }
 
   private resetMissionRuntime(): void {
@@ -308,13 +311,13 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
   }
-  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); }
 }
