@@ -16,6 +16,8 @@ describe('CombatSystem', () => {
   it('cycles owned weapons in loadout order, skipping unowned ones', () => {
     const combat = makeCombat();
     expect(combat.current).toBe('pistol');
+    combat.cycle(1); expect(combat.current).toBe('fists');
+    combat.grantWeapon('rpg'); combat.select('pistol');
     combat.cycle(1); expect(combat.current).toBe('rpg');
     combat.cycle(1); expect(combat.current).toBe('fists');
     combat.cycle(-1); expect(combat.current).toBe('rpg');
@@ -106,7 +108,7 @@ describe('CombatSystem', () => {
     const combat = makeCombat();
     const launches: Array<{ origin: THREE.Vector3; direction: THREE.Vector3 }> = [];
     combat.onRocket = (rocketOrigin, direction) => launches.push({ origin: rocketOrigin.clone(), direction: direction.clone() });
-    combat.select('rpg'); combat.update(0.5);
+    combat.grantWeapon('rpg'); combat.select('rpg'); combat.update(0.5);
     expect(combat.fire(fakeInput(true, false), camera, origin, emptyPopulation).fired).toBe(false);
     expect(combat.fire(fakeInput(true, true), camera, origin, emptyPopulation).fired).toBe(true);
     expect(launches).toHaveLength(1);

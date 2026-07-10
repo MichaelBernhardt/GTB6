@@ -58,6 +58,6 @@ describe('SaveManager', () => {
     expect(broken.loadout.shotgun.owned).toBe(false);
     expect(broken.current).toBe('pistol');
     expect(defaultWeapons().loadout.smg.owned).toBe(false);
-    expect(defaultWeapons().loadout.rpg.owned).toBe(true);
+    expect(defaultWeapons().loadout.rpg.owned).toBe(false);
   });
 });
