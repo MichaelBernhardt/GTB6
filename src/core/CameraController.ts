@@ -6,6 +6,7 @@ export class CameraController {
   yaw = 0;
   pitch = 0.35;
   aiming = false;
+  private aimBlend = 0;
   private focus = new THREE.Vector3();
   private desired = new THREE.Vector3();
 
@@ -15,10 +16,15 @@ export class CameraController {
     this.yaw -= input.mouseDX * sensitivity;
     this.pitch = THREE.MathUtils.clamp(this.pitch + input.mouseDY * sensitivity, -0.1, 0.9);
     this.aiming = input.firing && !vehicle;
-    const distance = this.aiming ? 4.65 : vehicle ? 10.5 : 6.35;
-    const height = vehicle ? 2.6 : 1.45;
+    this.aimBlend += ((this.aiming ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 10));
+    const distance = vehicle ? 10.5 : THREE.MathUtils.lerp(6.35, 4.4, this.aimBlend);
+    const height = vehicle ? 2.6 : THREE.MathUtils.lerp(1.45, 1.78, this.aimBlend);
     this.focus.set(target.x, target.y + height, target.z);
-    if (this.aiming) { this.focus.x += Math.cos(this.yaw) * 0.62; this.focus.z -= Math.sin(this.yaw) * 0.62; }
+    if (!vehicle) {
+      const shoulder = THREE.MathUtils.lerp(0.62, 0.98, this.aimBlend);
+      this.focus.x += Math.cos(this.yaw) * shoulder;
+      this.focus.z -= Math.sin(this.yaw) * shoulder;
+    }
     const horizontal = Math.cos(this.pitch) * distance;
     this.desired.set(
       this.focus.x + Math.sin(this.yaw) * horizontal,
