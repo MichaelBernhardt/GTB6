@@ -1,0 +1,38 @@
+:root { font-family: Inter, Arial, sans-serif; color: #f6f5ed; background: #111820; font-synthesis: none; letter-spacing: 0; }
+* { box-sizing: border-box; }
+html, body, #game { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+canvas { display: block; }
+button, input { font: inherit; }
+#ui { position: fixed; inset: 0; pointer-events: none; user-select: none; }
+#ui::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 130px #0b131948; mix-blend-mode: multiply; }
+#hud { position: absolute; inset: 0; font-family: "Arial Narrow", Arial, sans-serif; }
+.brand { position: absolute; top: 24px; left: 28px; color: #f4e6bd; font-size: 20px; font-weight: 600; line-height: .9; text-shadow: 0 2px 8px #000; }
+.brand strong { color: #f0a43a; }
+.brand small { display: block; margin-top: 7px; color: #fff; font: 600 11px Inter, sans-serif; text-transform: uppercase; }
+.status { position: absolute; right: 28px; top: 25px; display: flex; align-items: center; gap: 18px; }
+.health { position: relative; width: 190px; height: 22px; overflow: hidden; border: 2px solid #e8eadf; background: #182124cc; box-shadow: 0 2px 9px #0008; }
+.health i { display: block; height: 100%; background: #d64945; transition: width .2s; }
+.health span { position: absolute; inset: 0; padding-left: 8px; font-size: 14px; font-weight: 800; line-height: 18px; }
+.cash { color: #bfe080; font-size: 25px; font-weight: 800; text-shadow: 0 2px 5px #000; }
+.weapon { position: absolute; right: 28px; top: 62px; text-shadow: 0 2px 5px #000; }
+.weapon span { color: #f1b348; margin-right: 8px; font-size: 13px; }
+.weapon b { font-size: 24px; }.weapon small { color: #c2cbc8; font-size: 15px; }
+.wanted { position: absolute; right: 27px; top: 97px; display: flex; gap: 4px; }
+.wanted i { color: #5a6264; font-style: normal; font-size: 23px; text-shadow: 0 2px 5px #000; }.wanted .hot { color: #efc34e; }
+.objective { position: absolute; left: 50%; top: 28px; transform: translateX(-50%); width: min(460px, 48vw); padding: 10px 14px; border-left: 4px solid #f0a43a; background: #131b20d9; box-shadow: 0 4px 18px #0006; }
+.objective small { display: block; color: #f0a43a; font: 700 10px Inter, sans-serif; text-transform: uppercase; margin-bottom: 3px; }.objective > span { font-size: 18px; }.objective span span { color: #f1c451; margin-left: 6px; }
+.vehicle { position: absolute; right: 28px; bottom: 32px; width: 165px; text-align: right; text-shadow: 0 2px 8px #000; }
+.vehicle span { display: block; color: #f0a43a; font: 700 11px Inter, sans-serif; text-transform: uppercase; }.vehicle b { font-size: 58px; line-height: .9; }.vehicle small { margin-left: 4px; }.vehicle em { display: block; color: #aebdb9; font-style: normal; font-size: 14px; }
+.prompt { position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%); padding: 9px 16px; background: #11191de8; border-bottom: 3px solid #f0a43a; font: 700 14px Inter, sans-serif; box-shadow: 0 5px 15px #0008; }
+.crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font: 400 22px Inter, sans-serif; opacity: .75; text-shadow: 0 0 4px #000; }
+.fps { position: absolute; left: 27px; bottom: 252px; color: #9ee6bc; background: #101719c9; padding: 5px 8px; font: 600 11px monospace; }
+#minimap { position: absolute; left: 27px; bottom: 27px; width: 210px; height: 210px; border: 3px solid #e9e5d7; border-radius: 50%; background: #2c3435; box-shadow: 0 4px 18px #0009; }
+#toast { position: absolute; top: 124px; left: 50%; transform: translate(-50%, -12px); min-width: 310px; max-width: 560px; padding: 13px 18px; background: #182221ec; border-top: 3px solid #78c693; text-align: center; opacity: 0; transition: .25s; }
+#toast.visible { opacity: 1; transform: translate(-50%, 0); }#toast.failure { border-color: #e35f53; }#toast strong, #toast span { display: block; }#toast strong { font-family: "Arial Narrow", Arial, sans-serif; font-size: 22px; text-transform: uppercase; }#toast span { color: #ccd2cf; font-size: 12px; margin-top: 3px; }
+#menu { pointer-events: none; position: absolute; inset: 0; display: flex; align-items: center; padding: 8vh 8vw; background: linear-gradient(90deg, #0d1518f4 0%, #152126d9 42%, #15212655 72%, transparent); opacity: 0; transition: opacity .25s; }
+#menu.visible { opacity: 1; pointer-events: auto; }
+.menu-panel { width: min(470px, 90vw); }.menu-panel .kicker { color: #f1af46; font-size: 12px; font-weight: 700; text-transform: uppercase; }.menu-panel h1 { margin: 12px 0 20px; font: 800 clamp(64px, 8vw, 118px)/.73 "Arial Narrow", Arial, sans-serif; color: #f3e7c7; }.menu-panel h1 strong { color: #e94d46; }.menu-panel > p:not(.kicker) { max-width: 390px; color: #c8d0cd; font-size: 15px; line-height: 1.55; }.menu-actions { display: grid; gap: 8px; width: 280px; margin: 28px 0; }
+.menu-panel button { display: block; width: 100%; padding: 11px 16px; border: 1px solid #73807d; border-radius: 3px; color: #edf0e9; background: #222d30e8; text-align: left; cursor: pointer; transition: .16s; }.menu-panel button:hover { color: #151a1c; background: #f0ae43; border-color: #f0ae43; }.menu-panel small { color: #788481; }.menu-panel.compact { padding: 25px; background: #111a1de8; border-left: 4px solid #f0ae43; box-shadow: 0 12px 44px #0009; }.menu-panel.compact h2 { margin: 6px 0 18px; font: 800 38px "Arial Narrow", Arial, sans-serif; }.menu-panel.compact button { margin-top: 8px; }.menu-panel label { display: block; margin-top: 15px; color: #cbd1ce; font-size: 12px; }.menu-panel input[type="range"] { width: 100%; accent-color: #f0ae43; }.menu-panel .toggle { display: flex; gap: 9px; align-items: center; }.menu-panel button.danger { margin-top: 22px; color: #ee8f86; border-color: #773f3d; }
+.menu-panel select { width: 100%; margin-top: 5px; padding: 7px; color: #edf0e9; border: 1px solid #64706e; border-radius: 3px; background: #222d30; }
+.controls > div { display: grid; grid-template-columns: 88px 1fr; gap: 8px 16px; margin-bottom: 20px; }.controls kbd { padding: 4px 6px; color: #f1b148; border: 1px solid #64706e; border-radius: 3px; text-align: center; font-size: 11px; }.controls span { color: #d3d8d5; font-size: 13px; align-self: center; }
+@media (max-width: 720px) { .objective { top: 130px; width: calc(100vw - 40px); }.status { right: 16px; }.brand { left: 16px; }.health { width: 130px; }#minimap { width: 150px; height: 150px; left: 15px; bottom: 15px; }.weapon, .wanted { right: 16px; }.menu-panel h1 { font-size: 64px; }.vehicle { right: 16px; }.prompt { bottom: 15px; white-space: nowrap; font-size: 12px; } }

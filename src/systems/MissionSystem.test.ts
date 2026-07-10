@@ -1,0 +1,26 @@
+import { describe, expect, it } from 'vitest';
+import { Vector3 } from 'three';
+import { MissionSystem } from './MissionSystem';
+
+const snapshot = { playerPosition: new Vector3(), inVehicle: false, wantedLevel: 0, shotsFired: 0, hostileDefeated: 0, collectedItem: false };
+
+describe('MissionSystem', () => {
+  it('progresses delivery objectives and awards completion metadata', () => {
+    const system = new MissionSystem(); expect(system.start('delivery-run')).toBe(true);
+    system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'compact', vehicleColor: 0xf1c232 }, false);
+    expect(system.objective?.kind).toBe('checkpoints');
+    system.registerCheckpoint(); system.registerCheckpoint(); system.registerCheckpoint();
+    expect(system.objective?.kind).toBe('reach');
+    const result = system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'compact', vehicleColor: 0xf1c232 }, true);
+    expect(result.completed?.reward).toBe(900);
+    expect(system.completed.has('delivery-run')).toBe(true);
+  });
+
+  it('fails a timed objective and can restart', () => {
+    const system = new MissionSystem(); system.start('delivery-run');
+    system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'compact', vehicleColor: 0xf1c232 }, false);
+    expect(system.update(146, snapshot, false).failed).toBe('Time expired');
+    expect(system.restart()).toBe(true);
+    expect(system.objectiveIndex).toBe(0);
+  });
+});
