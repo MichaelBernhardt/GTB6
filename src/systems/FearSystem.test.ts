@@ -47,4 +47,10 @@ describe('FearSystem', () => {
     expect(fearResponse(COWER_THRESHOLD, false, 0.5)).toBe('flee');
     expect(fearResponse(FEAR_MAX, true, 0.1)).toBe('fight');
   });
+
+  it('never cowers a ped that is already fleeing', () => {
+    expect(fearResponse(FEAR_MAX, false, 0.1, true)).toBe('flee');
+    expect(fearResponse(COWER_THRESHOLD, false, 0.1, true)).toBe('flee');
+    expect(fearResponse(FEAR_MAX, true, 0.1, true)).toBe('fight');
+  });
 });

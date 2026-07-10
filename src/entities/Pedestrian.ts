@@ -67,7 +67,7 @@ export class Pedestrian {
   applyFear(amount: number, origin: THREE.Vector3): void {
     if (amount <= 0 || this.state === 'down' || this.contact || this.hostile || this.police) return;
     this.fear = accumulateFear(this.fear, amount); this.threat.copy(origin);
-    const response = fearResponse(this.fear, this.aggressive, this.bravery);
+    const response = fearResponse(this.fear, this.aggressive, this.bravery, this.state === 'flee');
     if (response === 'fight') { this.enraged = true; this.state = 'hostile'; this.destination.copy(origin); }
     else if (response === 'cower') this.state = 'cower';
     else if (response === 'flee') { this.state = 'flee'; this.fleeFrom(origin); }
@@ -104,7 +104,8 @@ export class Pedestrian {
 
   private setPanicPose(armsUp: boolean, crouch: boolean): void {
     for (const arm of this.arms) arm.rotation.x = armsUp ? Math.PI * 0.92 : 0;
-    this.group.scale.y = crouch ? 0.58 : 1;
+    this.group.scale.y = crouch ? 0.66 : 1;
+    this.group.rotation.x = crouch ? 0.42 : 0;
   }
 
   private setGuardPose(distance: number): void {

@@ -29,9 +29,9 @@ export function decayFear(current: number, dt: number): number {
   return Math.max(0, current - FEAR_DECAY_RATE * dt);
 }
 
-export function fearResponse(fear: number, aggressive: boolean, bravery: number): FearResponse {
+export function fearResponse(fear: number, aggressive: boolean, bravery: number, fleeing = false): FearResponse {
   if (fear < FLEE_THRESHOLD) return 'calm';
   if (aggressive || bravery >= BRAVE_FIGHT) return 'fight';
-  if (fear >= COWER_THRESHOLD && bravery <= TIMID_COWER) return 'cower';
+  if (!fleeing && fear >= COWER_THRESHOLD && bravery <= TIMID_COWER) return 'cower';
   return 'flee';
 }
