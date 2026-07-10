@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { COLORS, WORLD_SIZE } from '../config';
 import type { District } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
-import { createFacadeTexture, createGeneratedSurfaceTexture, createSignTexture, createSurfaceTexture } from './ProceduralMaterials';
+import { createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
+import { mergeStaticGeometry } from './StaticGeometry';
 import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
 
 export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; }
@@ -38,6 +39,13 @@ const seeded = (x: number, z: number, salt = 0): number => {
   return value - Math.floor(value);
 };
 
+const FACADE_RANGES: Record<BuildingStyle, [number, number]> = { downtown: [0, 6], residential: [6, 4], industrial: [10, 2] };
+const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
+  downtown: [0x9db1ba, 0xc39a92, 0xd0c4a4, 0x99a4a9, 0x93a9b0],
+  residential: [0xdfb094, 0xc2d4c3, 0xe6d1a2, 0xa8bcc4, 0xd4a191],
+  industrial: [0xa2a6a2, 0x929a9c, 0xb5a28c],
+};
+
 export class City {
   group = new THREE.Group();
   colliders: Collider[] = [];
@@ -53,7 +61,8 @@ export class City {
   private grass = createSurfaceTexture('grass', 22);
   private sand = createSurfaceTexture('sand', 14);
   private water = createSurfaceTexture('water', 7);
-  private facades = [0, 1, 2, 3].map(createFacadeTexture);
+  private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
+  private roofMaterial = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, metalness: 0.08 });
   private waterMaterial?: THREE.MeshPhysicalMaterial;
   private architecture: BuildingArchitecture;
   private infrastructure: UrbanInfrastructure;
@@ -69,6 +78,7 @@ export class City {
       (x, z, radius) => this.collides(x, z, radius),
       (x, z, margin) => this.isOnRoad(x, z, margin),
     );
+    mergeStaticGeometry(this.group);
   }
 
   update(dt: number): void {
@@ -111,6 +121,7 @@ export class City {
     const edgeMat = new THREE.MeshStandardMaterial({ color: 0xdedbc9, roughness: 0.8 });
     const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xa9aaa2, map: this.concrete, roughness: 0.92 });
     const curbMat = new THREE.MeshStandardMaterial({ color: 0xc8c7bb, map: this.concrete, roughness: 0.88 });
+    const dashTransforms: THREE.Matrix4[] = []; const edgeTransforms: THREE.Matrix4[] = [];
     for (const definition of ROAD_NETWORK) {
       const sampled = this.samplePath(definition.points, definition.closed ?? false, 12);
       this.roadSurfaces.push({ points: sampled, width: definition.width, closed: definition.closed ?? false });
@@ -119,7 +130,7 @@ export class City {
       this.roadPaths.push(mapPath);
       const sidewalk = this.createRoadStrip(sampled, definition.width + 7, sidewalkMat, 0.025, definition.closed ?? false); sidewalk.receiveShadow = true; this.group.add(sidewalk);
       const road = this.createRoadStrip(sampled, definition.width, roadMat, 0.055, definition.closed ?? false); road.receiveShadow = true; road.name = definition.name; this.group.add(road);
-      this.addRoadMarkings(sampled, definition.width, centerMat, edgeMat, definition.closed ?? false);
+      this.addRoadMarkings(sampled, definition.width, definition.closed ?? false, dashTransforms, edgeTransforms);
       const leftLane = this.offsetPath(sampled, -definition.width * 0.23, definition.closed ?? false);
       const rightLane = this.offsetPath(sampled, definition.width * 0.23, definition.closed ?? false).reverse();
       this.trafficRoutes.push(leftLane, rightLane);
@@ -129,8 +140,21 @@ export class City {
       this.sidewalkPoints.push(...leftWalk.filter((_, index) => index % 2 === 0), ...rightWalk.filter((_, index) => index % 2 === 0));
       this.addRoadsidePoints(sampled, definition.width, definition.closed ?? false);
     }
-    for (const surface of this.roadSurfaces) this.addCurbs(surface.points, surface.width, surface.closed, curbMat);
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    this.addInstanced(box, centerMat, dashTransforms, false);
+    this.addInstanced(box, edgeMat, edgeTransforms, false);
+    const curbTransforms: THREE.Matrix4[] = [];
+    for (const surface of this.roadSurfaces) this.addCurbs(surface.points, surface.width, surface.closed, curbTransforms);
+    this.addInstanced(box, curbMat, curbTransforms, true);
     this.buildIntersections();
+  }
+
+  private addInstanced(geometry: THREE.BufferGeometry, material: THREE.Material, transforms: THREE.Matrix4[], shadows: boolean): void {
+    const mesh = new THREE.InstancedMesh(geometry, material, transforms.length);
+    transforms.forEach((transform, index) => mesh.setMatrixAt(index, transform));
+    mesh.instanceMatrix.needsUpdate = true;
+    if (shadows) { mesh.castShadow = true; mesh.receiveShadow = true; }
+    this.group.add(mesh);
   }
 
   private buildIntersections(): void {
@@ -196,8 +220,8 @@ export class City {
     }
   }
 
-  private addCurbs(points: RoadPoint[], width: number, closed: boolean, material: THREE.Material): void {
-    const transforms: THREE.Matrix4[] = []; const segmentCount = closed ? points.length : points.length - 1;
+  private addCurbs(points: RoadPoint[], width: number, closed: boolean, transforms: THREE.Matrix4[]): void {
+    const segmentCount = closed ? points.length : points.length - 1;
     const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion();
     for (let index = 0; index < segmentCount; index++) {
       const start = points[index]; const end = points[(index + 1) % points.length]; if (!start || !end) continue;
@@ -213,7 +237,6 @@ export class City {
         matrix.compose(new THREE.Vector3(midX + normalX * offset, 0.15, midZ + normalZ * offset), quaternion, new THREE.Vector3(0.38, 0.22, length + 0.35)); transforms.push(matrix.clone());
       }
     }
-    const curbs = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), material, transforms.length); transforms.forEach((transform, index) => curbs.setMatrixAt(index, transform)); curbs.instanceMatrix.needsUpdate = true; curbs.castShadow = true; curbs.receiveShadow = true; this.group.add(curbs);
   }
 
   private buildTactileCorners(): void {
@@ -251,9 +274,8 @@ export class City {
     return new THREE.Mesh(geometry, material);
   }
 
-  private addRoadMarkings(points: RoadPoint[], width: number, center: THREE.Material, edge: THREE.Material, closed: boolean): void {
+  private addRoadMarkings(points: RoadPoint[], width: number, closed: boolean, dashTransforms: THREE.Matrix4[], edgeTransforms: THREE.Matrix4[]): void {
     const segmentCount = closed ? points.length : points.length - 1;
-    const dashTransforms: THREE.Matrix4[] = []; const edgeTransforms: THREE.Matrix4[] = [];
     const quaternion = new THREE.Quaternion(); const matrix = new THREE.Matrix4();
     for (let index = 0; index < segmentCount; index++) {
       const start = points[index]; const end = points[(index + 1) % points.length]; if (!start || !end) continue;
@@ -264,10 +286,6 @@ export class City {
       const normalX = -dz / length; const normalZ = dx / length;
       for (const side of [-1, 1]) { matrix.compose(new THREE.Vector3(midX + normalX * side * (width / 2 - 0.72), 0.084, midZ + normalZ * side * (width / 2 - 0.72)), quaternion, new THREE.Vector3(0.13, 0.018, length + 0.35)); edgeTransforms.push(matrix.clone()); }
     }
-    const box = new THREE.BoxGeometry(1, 1, 1);
-    const dashes = new THREE.InstancedMesh(box, center, dashTransforms.length); dashTransforms.forEach((transform, index) => dashes.setMatrixAt(index, transform)); dashes.instanceMatrix.needsUpdate = true;
-    const edges = new THREE.InstancedMesh(box, edge, edgeTransforms.length); edgeTransforms.forEach((transform, index) => edges.setMatrixAt(index, transform)); edges.instanceMatrix.needsUpdate = true;
-    this.group.add(dashes, edges);
   }
 
   private buildDistricts(): void {
@@ -285,8 +303,7 @@ export class City {
       const h = industrial ? 10 + seeded(anchorX, anchorZ, 8) * 13 : residential ? 7 + seeded(anchorX, anchorZ, 9) * 12 : 30 + seeded(anchorX, anchorZ, 10) * 67;
       const position = this.findParcelPosition(anchorX, anchorZ, Math.hypot(w, d) * 0.5 + 4, variant);
       if (!position) continue;
-      const palette = industrial ? [0x8d918d, 0x777f82, 0xa28c73] : residential ? [0xd59a79, 0xaec3b0, 0xe0c587, 0x91a8b1] : [0x8aa0aa, 0xb77d74, 0xc8b98e, 0x818b91];
-      this.addBuilding(position.x, position.z, w, d, h, palette[variant % palette.length] ?? 0x8a9498, district.style, variant++);
+      this.addBuilding(position.x, position.z, w, d, h, district.style, variant++);
     }
     variant = this.buildInfillBuildings(variant);
     PARK_AREAS.forEach((park) => this.buildPark(park));
@@ -308,8 +325,7 @@ export class City {
       const h = residential ? 7 + seeded(anchorX, anchorZ, 78) * 10 : industrial ? 9 + seeded(anchorX, anchorZ, 79) * 13 : 18 + seeded(anchorX, anchorZ, 80) * 44;
       const position = this.findParcelPosition(anchorX, anchorZ, Math.hypot(w, d) * 0.5 + 2, variant);
       if (!position) continue;
-      const palette = industrial ? [0x6e7779, 0x978978, 0x7d8981] : residential ? [0xd5a180, 0xa9bca4, 0xd8c38a, 0x829ca5, 0xc88879] : [0x7f969e, 0xa97770, 0xb8ad91, 0x707d83, 0xa39a8b];
-      this.addBuilding(position.x, position.z, w, d, h, palette[variant % palette.length] ?? 0x899293, style, variant++); placed++;
+      this.addBuilding(position.x, position.z, w, d, h, style, variant++); placed++;
     }
     return variant;
   }
@@ -351,13 +367,15 @@ export class City {
     }
   }
 
-  private addBuilding(x: number, z: number, w: number, d: number, h: number, color: number, style: BuildingStyle, variant: number): void {
+  private addBuilding(x: number, z: number, w: number, d: number, h: number, style: BuildingStyle, variant: number): void {
     const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 0.2, d + 6), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(x, 0.1, z); parcel.receiveShadow = true; this.group.add(parcel);
-    const facadeIndex = (variant + (style === 'industrial' ? 3 : style === 'residential' ? 2 : 0)) % this.facades.length;
-    const key = `${color}-${facadeIndex}`; let facade = this.buildingMaterial.get(key);
+    const [rangeBase, rangeCount] = FACADE_RANGES[style];
+    const facadeIndex = rangeBase + variant % rangeCount;
+    const palette = BUILDING_PALETTES[style];
+    const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
+    const key = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(key);
     if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], roughness: 0.72, metalness: style === 'downtown' ? 0.12 : 0.02 }); this.buildingMaterial.set(key, facade); }
-    const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, metalness: 0.08 });
-    const profile = this.architecture.build({ x, z, width: w, depth: d, height: h, style, variant, facade, roof: roofMaterial });
+    const profile = this.architecture.build({ x, z, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
     this.addLedge(x, z, w * 1.025, d * 1.025, Math.min(h - 0.5, 3.6));
     this.addEntrance(x, z, w, d, style);
     if (style === 'residential') this.addBalconies(x, z, w, d, h);
@@ -429,7 +447,7 @@ export class City {
 
   private addRoofSign(x: number, z: number, w: number, d: number, h: number, variant: number): void {
     const names = ['CORDOVA', 'MARINA', 'MERCADO', 'SOL']; const accent = variant % 2 ? '#72d8d2' : '#f0ae43';
-    const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(12, w * 0.7), 3), new THREE.MeshBasicMaterial({ map: createSignTexture(names[variant % names.length], accent), transparent: true })); sign.position.set(x, h + 3.2, z + d / 2 + 0.1); this.group.add(sign);
+    const sign = createSignMesh(new THREE.PlaneGeometry(Math.min(12, w * 0.7), 3), names[variant % names.length] ?? 'CORDOVA', accent); sign.position.set(x, h + 3.2, z + d / 2 + 0.1); this.group.add(sign);
     for (const px of [-3, 3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 8), new THREE.MeshStandardMaterial({ color: 0x343b3d, metalness: 0.7 })); post.position.set(x + px, h + 1.5, z + d / 2); this.group.add(post); }
   }
 
@@ -440,7 +458,7 @@ export class City {
     const pathMat = new THREE.MeshStandardMaterial({ color: 0xd1c6a1, map: this.concrete, roughness: 0.91 });
     const pathA = new THREE.Mesh(new THREE.PlaneGeometry(5.2, depth), pathMat); pathA.rotation.x = -Math.PI / 2; pathA.position.set(x, 0.34, z); this.group.add(pathA);
     const pathB = new THREE.Mesh(new THREE.PlaneGeometry(width, 5.2), pathMat); pathB.rotation.x = -Math.PI / 2; pathB.position.set(x, 0.345, z); this.group.add(pathB);
-    const nameBoard = new THREE.Mesh(new THREE.PlaneGeometry(5.8, 1.25), new THREE.MeshBasicMaterial({ map: createSignTexture(name.toUpperCase(), '#d9b64b'), side: THREE.DoubleSide })); nameBoard.position.set(x - width / 2 + 5.5, 1.7, z + depth / 2 - 1); this.group.add(nameBoard);
+    const nameBoard = createSignMesh(new THREE.PlaneGeometry(5.8, 1.25), name.toUpperCase(), '#d9b64b', { doubleSide: true }); nameBoard.position.set(x - width / 2 + 5.5, 1.7, z + depth / 2 - 1); this.group.add(nameBoard);
     for (const px of [-2.3, 2.3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 2.4, 10), new THREE.MeshStandardMaterial({ color: 0x354143, metalness: 0.62 })); post.position.set(nameBoard.position.x + px, 1.2, nameBoard.position.z); this.group.add(post); }
     if (kind === 'civic') this.addCivicParkFeature(x, z, width, depth);
     if (kind === 'garden') this.addGardenFeature(x, z, width, depth);
@@ -496,7 +514,7 @@ export class City {
     for (const x of [-2.4, 2.4]) for (const z of [-2.4, 2.4]) { const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.25, 14, 10), metal); leg.position.set(x, 7, z); leg.rotation.z = x * 0.014; tower.add(leg); }
     const tank = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 3.8, 5.2, 32), new THREE.MeshStandardMaterial({ color: 0x738b8d, metalness: 0.42, roughness: 0.52 })); tank.position.y = 15.3; tank.castShadow = true; tower.add(tank);
     const cap = new THREE.Mesh(new THREE.SphereGeometry(4.6, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x80999a, metalness: 0.38, roughness: 0.5 })); cap.position.y = 17.9; cap.castShadow = true; tower.add(cap);
-    const label = new THREE.Mesh(new THREE.PlaneGeometry(6.8, 1.7), new THREE.MeshBasicMaterial({ map: createSignTexture('MERCADO', '#e5c15b') })); label.position.set(0, 15.8, 4.01); tower.add(label); this.group.add(tower);
+    const label = createSignMesh(new THREE.PlaneGeometry(6.8, 1.7), 'MERCADO', '#e5c15b'); label.position.set(0, 15.8, 4.01); tower.add(label); this.group.add(tower);
 
     const sculpture = new THREE.Group(); sculpture.position.set(318, 0, -273);
     const base = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.2, 1.1, 32), new THREE.MeshStandardMaterial({ color: 0xb5afa0, roughness: 0.72 })); base.position.y = 0.65;
@@ -505,7 +523,7 @@ export class City {
 
   private buildWaterfront(): void {
     this.waterMaterial = new THREE.MeshPhysicalMaterial({ color: COLORS.water, map: this.water, roughness: 0.16, metalness: 0.05, clearcoat: 0.85, clearcoatRoughness: 0.16, transparent: true, opacity: 0.94 });
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(470, 90, 24, 8), this.waterMaterial); water.rotation.x = -Math.PI / 2; water.position.set(135, 0.1, -340); this.group.add(water);
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(470, 90, 24, 8), this.waterMaterial); water.rotation.x = -Math.PI / 2; water.position.set(135, 0.1, -340); water.userData.dynamic = true; this.group.add(water);
     const sand = new THREE.Mesh(new THREE.PlaneGeometry(460, 48), new THREE.MeshStandardMaterial({ color: 0xd6c486, map: this.sand, roughness: 0.96 })); sand.rotation.x = -Math.PI / 2; sand.position.set(140, 0.06, -286); sand.receiveShadow = true; this.group.add(sand);
     for (let x = -330; x < -190; x += 35) {
       const material = new THREE.MeshStandardMaterial({ color: x % 2 ? 0xb84f45 : 0x3d7381, roughness: 0.65, metalness: 0.32 });

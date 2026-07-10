@@ -34,10 +34,12 @@ export class SaveManager {
       if (!value) return structuredClone(DEFAULT_SAVE);
       const parsed = JSON.parse(value) as Partial<SavedGame>;
       if (parsed.version !== 1) return structuredClone(DEFAULT_SAVE);
+      const settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
+      if (settings.quality !== 'low' && settings.quality !== 'medium' && settings.quality !== 'high') settings.quality = 'high';
       return {
         ...structuredClone(DEFAULT_SAVE), ...parsed,
         completedMissions: Array.isArray(parsed.completedMissions) ? parsed.completedMissions : [],
-        settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
+        settings,
         weapons: sanitizeWeapons(parsed.weapons),
       };
     } catch { return structuredClone(DEFAULT_SAVE); }
