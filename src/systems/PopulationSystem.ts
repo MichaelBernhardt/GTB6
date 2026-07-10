@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { MISSIONS } from './MissionSystem';
@@ -18,7 +19,7 @@ export class PopulationSystem {
   private pedestrianImpactCooldown = new WeakMap<Pedestrian, number>();
   private trafficState = new WeakMap<Vehicle, TrafficState>();
 
-  constructor(private scene: THREE.Scene, private city: City) {
+  constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.spawnVehicles(); this.spawnPedestrians();
   }
 
@@ -26,7 +27,9 @@ export class PopulationSystem {
     this.dangerTime = Math.max(0, this.dangerTime - dt);
     this.hostileAttackCooldown = Math.max(0, this.hostileAttackCooldown - dt);
     for (const ped of this.pedestrians) {
+      const wasFleeing = ped.state === 'flee' || ped.state === 'down';
       ped.update(dt, this.city, this.city.sidewalkPoints, player, this.dangerTime > 0);
+      if (!wasFleeing && ped.state === 'flee' && Math.random() < 0.3) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
       this.pedestrianImpactCooldown.set(ped, Math.max(0, (this.pedestrianImpactCooldown.get(ped) ?? 0) - dt));
     }
     for (const vehicle of this.traffic) {
@@ -129,9 +132,14 @@ export class PopulationSystem {
   private handleVehiclePedestrianImpacts(): void {
     for (const vehicle of this.vehicles) {
       if (Math.abs(vehicle.speed) < 7) continue;
-      for (const ped of this.pedestrians) if (ped.state !== 'down' && (this.pedestrianImpactCooldown.get(ped) ?? 0) <= 0 && vehicle.group.position.distanceToSquared(ped.group.position) < 5) {
-        const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8); this.dangerTime = 5; this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle });
-        this.pedestrianImpactCooldown.set(ped, 1);
+      for (const ped of this.pedestrians) {
+        if (ped.state === 'down' || (this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
+        const distanceSq = vehicle.group.position.distanceToSquared(ped.group.position);
+        if (distanceSq < 5) {
+          const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8); this.dangerTime = 5; this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle });
+          this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
+          this.pedestrianImpactCooldown.set(ped, 1);
+        } else if (distanceSq < 22 && Math.abs(vehicle.speed) > 16 && !ped.contact && Math.random() < 0.01) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
       }
     }
   }

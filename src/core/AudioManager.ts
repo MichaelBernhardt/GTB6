@@ -1,6 +1,6 @@
 import { distanceGain, engineState, stereoPan } from './AudioMath';
 
-interface BurstOptions { duration: number; type: BiquadFilterType; frequency: number; q?: number; peak: number; decay: number; at?: number; pan?: number; echo?: number; rate?: number; }
+interface BurstOptions { duration: number; type: BiquadFilterType; frequency: number; q?: number; peak: number; decay: number; at?: number; pan?: number; echo?: number; rate?: number; rateTo?: number; }
 interface BlipOptions { type?: OscillatorType; slide?: number; at?: number; pan?: number; attack?: number; }
 interface EngineVoice { osc: OscillatorNode; sub: OscillatorNode; wobble: OscillatorNode; intake: AudioBufferSourceNode; intakeGain: GainNode; filter: BiquadFilterNode; gain: GainNode; gear: number; }
 interface SirenVoice { oscillators: OscillatorNode[]; gain: GainNode; pan: StereoPannerNode; }
@@ -16,6 +16,7 @@ export class AudioManager {
   private sirenVoice?: SirenVoice;
   private ambience?: Ambience;
   private listener = { x: 0, z: 0, yaw: 0 };
+  private lastScream = 0;
   volume = 0.65;
 
   async resume(): Promise<void> {
@@ -89,6 +90,66 @@ export class AudioManager {
     const ring = 0.88 + Math.random() * 0.28;
     for (const [frequency, level] of [[327, 0.055], [521, 0.038], [842, 0.022]] as const)
       this.blip(frequency * ring, 0.28 + power * 0.28, level * (0.4 + power), { type: 'triangle', attack: 0.003 });
+    if (Math.abs(intensity) > 15) this.crash(Math.min(1, (Math.abs(intensity) - 15) / 25));
+  }
+
+  splat(intensity = 1, x?: number, z?: number): void {
+    const power = Math.min(1, Math.abs(intensity) / 1.6);
+    let level = 1; let pan = 0;
+    if (x !== undefined && z !== undefined) {
+      level = distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 10, 95);
+      if (level < 0.02) return;
+      pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.6;
+    }
+    this.burst({ duration: 0.13, type: 'lowpass', frequency: 640, peak: (0.12 + power * 0.2) * level, decay: 0.08 + power * 0.05, rate: 1.5, rateTo: 0.45, pan });
+    this.blip(145, 0.09, 0.13 * (0.4 + power) * level, { slide: 55, pan });
+    this.blip(95, 0.14, 0.11 * (0.4 + power) * level, { slide: 40, at: 0.035, pan });
+  }
+
+  scream(kind: 'panic' | 'pain' = 'panic', x?: number, z?: number): void {
+    const context = this.context; const master = this.master;
+    if (!context || !master) return;
+    const t = this.now();
+    if (t < this.lastScream + 0.45) return;
+    let level = 0.12; let pan = 0;
+    if (x !== undefined && z !== undefined) {
+      level *= distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 10, 125);
+      if (level < 0.005) return;
+      pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.7;
+    }
+    this.lastScream = t;
+    const register = Math.random() < 0.5 ? 1 : 1.5;
+    const f0 = (165 + Math.random() * 75) * register;
+    const duration = kind === 'pain' ? 0.16 + Math.random() * 0.14 : 0.45 + Math.random() * 0.4;
+    const osc = context.createOscillator(); osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(f0, t);
+    osc.frequency.exponentialRampToValueAtTime(f0 * (kind === 'pain' ? 1.35 : 1.25), t + duration * 0.18);
+    osc.frequency.exponentialRampToValueAtTime(f0 * 0.55, t + duration);
+    const vibrato = context.createOscillator(); vibrato.frequency.value = 5.5 + Math.random() * 2.5;
+    const vibratoDepth = context.createGain(); vibratoDepth.gain.value = f0 * 0.06;
+    vibrato.connect(vibratoDepth).connect(osc.frequency);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, t); gain.gain.exponentialRampToValueAtTime(level, t + 0.03);
+    gain.gain.setValueAtTime(level, t + duration * 0.6); gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    const panner = context.createStereoPanner(); panner.pan.value = pan;
+    for (const [frequency, q, amount] of [[820 * register, 5, 1], [1250 * register, 6, 0.7], [2800, 8, 0.35]] as const) {
+      const formant = context.createBiquadFilter(); formant.type = 'bandpass'; formant.frequency.value = frequency; formant.Q.value = q;
+      const mix = context.createGain(); mix.gain.value = amount;
+      osc.connect(formant).connect(mix).connect(gain);
+    }
+    gain.connect(panner).connect(master);
+    osc.start(t); vibrato.start(t); osc.stop(t + duration + 0.05); vibrato.stop(t + duration + 0.05);
+  }
+
+  private crash(power: number): void {
+    this.blip(88, 0.32, 0.28 + power * 0.22, { slide: 34 });
+    this.burst({ duration: 0.36, type: 'lowpass', frequency: 210, peak: 0.18 + power * 0.24, decay: 0.24, echo: 0.35 });
+    const crunches = 4 + Math.round(power * 5);
+    for (let i = 0; i < crunches; i++)
+      this.blip(170 + Math.random() * 720, 0.05 + Math.random() * 0.06, (0.045 + power * 0.06) * (0.6 + Math.random() * 0.6), { type: Math.random() < 0.5 ? 'square' : 'triangle', at: Math.random() * 0.22, attack: 0.002 });
+    const shards = 6 + Math.round(power * 8);
+    for (let i = 0; i < shards; i++)
+      this.burst({ duration: 0.06, type: 'bandpass', frequency: 2600 + Math.random() * 3400, q: 9, peak: (0.018 + Math.random() * 0.028) * (0.5 + power), decay: 0.035 + Math.random() * 0.03, at: 0.02 + Math.random() * 0.3, pan: Math.random() * 0.8 - 0.4 });
   }
 
   footstep(running = false, grass = false): void {
@@ -233,7 +294,8 @@ export class AudioManager {
     if (!context || !master || !this.noise) return;
     const t = this.now() + (options.at ?? 0);
     const source = context.createBufferSource(); source.buffer = this.noise;
-    source.playbackRate.value = options.rate ?? 0.85 + Math.random() * 0.3;
+    source.playbackRate.setValueAtTime(options.rate ?? 0.85 + Math.random() * 0.3, t);
+    if (options.rateTo) source.playbackRate.exponentialRampToValueAtTime(options.rateTo, t + options.duration);
     const filter = context.createBiquadFilter(); filter.type = options.type; filter.frequency.value = options.frequency; filter.Q.value = options.q ?? 0.9;
     const gain = context.createGain();
     gain.gain.setValueAtTime(0.0001, t); gain.gain.exponentialRampToValueAtTime(options.peak, t + 0.004); gain.gain.exponentialRampToValueAtTime(0.0001, t + options.decay);

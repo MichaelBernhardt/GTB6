@@ -52,6 +52,8 @@ export class Game {
   private deathTimer = 0;
   private saveTimer = 0;
   private footstepTimer = 0;
+  private prevDrivenSpeed = 0;
+  private wallCrashCooldown = 0;
   private fps = 60;
   private previousObjective = '';
   private vehicleCollisionCooldown = new WeakMap<Vehicle, number>();
@@ -62,7 +64,7 @@ export class Game {
     this.city = new City(this.scene);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
-    this.population = new PopulationSystem(this.scene, this.city);
+    this.population = new PopulationSystem(this.scene, this.city, this.audio);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene);
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
@@ -117,7 +119,9 @@ export class Game {
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
     this.city.update(dt);
     for (const impact of this.population.consumeImpacts()) {
-      this.gore.burst(impact.position, Math.min(1.6, Math.abs(impact.vehicle.speed) / 16), impact.killed);
+      const intensity = Math.min(1.6, Math.abs(impact.vehicle.speed) / 16);
+      this.gore.burst(impact.position, intensity, impact.killed);
+      this.audio.splat(intensity, impact.position.x, impact.position.z);
       if (impact.vehicle === this.activeVehicle) this.wanted.addCrime(impact.killed ? 24 : 12);
     }
     this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, (amount) => this.damagePlayer(amount));
@@ -135,7 +139,11 @@ export class Game {
     const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles);
     if (shot.fired) {
       this.wanted.addCrime(7); this.population.alertDanger();
-      if (shot.victim && shot.hitPoint) this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
+      if (shot.victim && shot.hitPoint) {
+        this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
+        this.audio.splat(shot.killed ? 0.9 : 0.5, shot.hitPoint.x, shot.hitPoint.z);
+        this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z);
+      }
       if (shot.policeHit) this.wanted.addCrime(24);
       if (shot.killed && shot.victim?.hostile) this.hostileDefeated += 1;
     }
@@ -154,13 +162,16 @@ export class Game {
     const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position);
     const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
     this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed);
+    this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
+    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; }
+    this.prevDrivenSpeed = speed;
     if (this.input.consume('KeyE')) this.beginExit(vehicle);
     if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Vehicle recovered', vehicle.spec.name); }
     if (vehicle.disabled) { this.ui.notify('Vehicle disabled', 'Exit before it catches fire.', false); this.beginExit(vehicle); }
   }
 
   private beginEnter(vehicle: Vehicle): void {
-    this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true;
+    this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true; this.prevDrivenSpeed = 0;
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.6); this.player.group.position.copy(vehicle.group.position).add(side);
     if (vehicle.occupied) {
       this.population.ejectDriver(vehicle, this.player.group.position); this.wanted.addCrime(18);
@@ -225,6 +236,7 @@ export class Game {
     }
     const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.alertDanger();
     this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.melee();
+    this.audio.splat(killed ? 1 : 0.6, victim.group.position.x, victim.group.position.z); this.audio.scream('pain', victim.group.position.x, victim.group.position.z);
   }
 
   private processMissionUpdate(update: MissionUpdate): void {
