@@ -1,3 +1,4 @@
+import type { WeaponSound } from '../config';
 import { distanceGain, engineState, stereoPan } from './AudioMath';
 
 interface BurstOptions { duration: number; type: BiquadFilterType; frequency: number; q?: number; peak: number; decay: number; at?: number; pan?: number; echo?: number; rate?: number; rateTo?: number; }
@@ -53,12 +54,43 @@ export class AudioManager {
     }
   }
 
-  gunshot(): void {
+  gunshot(kind: WeaponSound = 'pistol'): void {
+    if (kind === 'punch') { this.melee(); return; }
     const jitter = 0.85 + Math.random() * 0.3;
-    this.burst({ duration: 0.3, type: 'bandpass', frequency: 760 * jitter, q: 0.7, peak: 0.5, decay: 0.13 + Math.random() * 0.05, echo: 0.5 });
-    this.burst({ duration: 0.12, type: 'lowpass', frequency: 330, peak: 0.42, decay: 0.09 });
-    this.blip(155 * jitter, 0.15, 0.5, { slide: 44 });
+    if (kind === 'smg') {
+      this.burst({ duration: 0.16, type: 'bandpass', frequency: 1150 * jitter, q: 0.9, peak: 0.34, decay: 0.06 + Math.random() * 0.02, echo: 0.22 });
+      this.blip(190 * jitter, 0.09, 0.3, { slide: 70 });
+    } else if (kind === 'shotgun') {
+      this.burst({ duration: 0.4, type: 'bandpass', frequency: 430 * jitter, q: 0.6, peak: 0.55, decay: 0.2 + Math.random() * 0.05, echo: 0.6 });
+      this.burst({ duration: 0.25, type: 'lowpass', frequency: 250, peak: 0.5, decay: 0.16 });
+      this.blip(110 * jitter, 0.26, 0.55, { slide: 36 });
+    } else if (kind === 'launcher') {
+      this.burst({ duration: 0.55, type: 'bandpass', frequency: 850, q: 1, peak: 0.3, decay: 0.45, rate: 0.5, rateTo: 2.4, echo: 0.3 });
+      this.burst({ duration: 0.12, type: 'lowpass', frequency: 500, peak: 0.3, decay: 0.09 });
+      this.blip(140, 0.3, 0.22, { slide: 88 });
+    } else {
+      this.burst({ duration: 0.3, type: 'bandpass', frequency: 760 * jitter, q: 0.7, peak: 0.5, decay: 0.13 + Math.random() * 0.05, echo: 0.5 });
+      this.burst({ duration: 0.12, type: 'lowpass', frequency: 330, peak: 0.42, decay: 0.09 });
+      this.blip(155 * jitter, 0.15, 0.5, { slide: 44 });
+    }
   }
+
+  explosion(x?: number, z?: number): void {
+    let level = 1; let pan = 0;
+    if (x !== undefined && z !== undefined) {
+      level = Math.max(0.2, distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 20, 320));
+      pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.55;
+    }
+    this.blip(85, 1.1, 0.6 * level, { slide: 25, attack: 0.008, pan });
+    this.burst({ duration: 0.5, type: 'lowpass', frequency: 900, peak: 0.55 * level, decay: 0.38, rate: 1.3, rateTo: 0.4, echo: 0.7, pan });
+    this.burst({ duration: 1.5, type: 'lowpass', frequency: 170, peak: 0.32 * level, decay: 1.25, pan });
+    for (let i = 0; i < 9; i++)
+      this.burst({ duration: 0.05, type: 'bandpass', frequency: 800 + Math.random() * 2800, q: 6, peak: (0.02 + Math.random() * 0.045) * level, decay: 0.04 + Math.random() * 0.03, at: 0.12 + Math.random() * 0.85, pan: Math.max(-1, Math.min(1, pan + Math.random() * 0.7 - 0.35)) });
+  }
+
+  weaponSelect(): void { this.burst({ duration: 0.05, type: 'bandpass', frequency: 1600, q: 2.2, peak: 0.08, decay: 0.04 }); }
+
+  whiff(): void { this.burst({ duration: 0.12, type: 'bandpass', frequency: 520, q: 1, peak: 0.05, decay: 0.1, rate: 1.6, rateTo: 0.7 }); }
 
   reload(): void {
     this.burst({ duration: 0.05, type: 'highpass', frequency: 2400, peak: 0.11, decay: 0.032 });
