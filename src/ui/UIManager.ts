@@ -4,15 +4,18 @@ import type { GameSettings } from '../types';
 import type { RoadPoint } from '../world/City';
 
 export interface HudState {
-  health: number; money: number; ammo: number; reserve: number; wanted: number; district: string; prompt: string;
+  health: number; money: number; weaponName: string; melee: boolean; ammo: number; reserve: number; reloading: boolean; wanted: number; district: string; prompt: string;
   vehicle?: Vehicle; mission: MissionSystem; fps: number; settings: GameSettings;
 }
+
+export interface WheelEntry { name: string; ammo: string; highlighted: boolean; equipped: boolean; }
 
 export class UIManager {
   root = document.createElement('div');
   hud = document.createElement('div');
   menu = document.createElement('div');
   toast = document.createElement('div');
+  wheel = document.createElement('div');
   minimap = document.createElement('canvas');
   private context: CanvasRenderingContext2D;
   private toastTimer = 0;
@@ -23,9 +26,9 @@ export class UIManager {
   onSettings?: (settings: Partial<GameSettings>) => void;
 
   constructor() {
-    this.root.id = 'ui'; this.hud.id = 'hud'; this.menu.id = 'menu'; this.toast.id = 'toast'; this.minimap.id = 'minimap'; this.minimap.width = 210; this.minimap.height = 210;
+    this.root.id = 'ui'; this.hud.id = 'hud'; this.menu.id = 'menu'; this.toast.id = 'toast'; this.wheel.id = 'weapon-wheel'; this.minimap.id = 'minimap'; this.minimap.width = 210; this.minimap.height = 210;
     const context = this.minimap.getContext('2d'); if (!context) throw new Error('Canvas unavailable'); this.context = context;
-    this.root.append(this.hud, this.minimap, this.toast, this.menu); document.body.append(this.root); this.showLoading();
+    this.root.append(this.hud, this.minimap, this.toast, this.wheel, this.menu); document.body.append(this.root); this.showLoading();
   }
 
   update(state: HudState): void {
@@ -35,7 +38,7 @@ export class UIManager {
     this.hud.innerHTML = `
       <div class="brand">SAN <strong>CORDOVA</strong><small>${state.district}</small></div>
       <div class="status"><div class="health"><i style="width:${state.health}%"></i><span>HEALTH ${Math.ceil(state.health)}</span></div><div class="cash">$${state.money.toLocaleString()}</div></div>
-      <div class="weapon"><span>9MM</span><b>${state.ammo}</b><small>/ ${state.reserve}</small></div>
+      <div class="weapon"><span>${state.weaponName}</span>${state.melee ? '<b>&mdash;</b>' : `<b>${state.ammo}</b><small>/ ${state.reserve}</small>${state.reloading ? '<em>RELOADING</em>' : ''}`}</div>
       <div class="wanted">${Array.from({ length: 5 }, (_, i) => `<i class="${i < state.wanted ? 'hot' : ''}">★</i>`).join('')}</div>
       ${state.vehicle ? `<div class="vehicle"><span>${state.vehicle.spec.name}</span><b>${Math.round(Math.abs(state.vehicle.speed) * 3.6)}</b><small>KM/H</small><em>${Math.ceil(state.vehicle.health)}%</em></div>` : ''}
       ${objective ? `<div class="objective"><small>${state.mission.active?.name}</small><span>${objective.text}${progress}${timer}</span></div>` : ''}
@@ -55,6 +58,16 @@ export class UIManager {
     ctx.restore(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(size / 2, size / 2 - 10); ctx.lineTo(size / 2 - 7, size / 2 + 8); ctx.lineTo(size / 2 + 7, size / 2 + 8); ctx.closePath(); ctx.fill();
   }
 
+  showWeaponWheel(entries: WheelEntry[]): void {
+    const radius = 140; const step = (Math.PI * 2) / Math.max(1, entries.length);
+    this.wheel.innerHTML = entries.map((entry, index) => {
+      const x = Math.sin(index * step) * radius; const y = -Math.cos(index * step) * radius;
+      return `<div class="slice ${entry.highlighted ? 'hot' : ''} ${entry.equipped ? 'equipped' : ''}" style="left:${x.toFixed(0)}px;top:${y.toFixed(0)}px"><span>${entry.name}</span><small>${entry.ammo}</small></div>`;
+    }).join('') + '<div class="hub">WEAPONS</div>';
+    this.wheel.classList.add('visible');
+  }
+  hideWeaponWheel(): void { this.wheel.classList.remove('visible'); }
+
   notify(title: string, detail = '', success = true): void { this.toast.innerHTML = `<strong>${title}</strong><span>${detail}</span>`; this.toast.className = `visible ${success ? 'success' : 'failure'}`; this.toastTimer = 4; }
   hideMenu(): void { this.menu.classList.remove('visible'); }
   showLoading(): void { this.menu.innerHTML = `<div class="menu-panel"><p class="kicker">SAN CORDOVA</p><h2>Building the city...</h2></div>`; this.menu.classList.add('visible'); }
@@ -71,7 +84,7 @@ export class UIManager {
     this.menu.querySelector('#fpsToggle')?.addEventListener('change', (e) => this.onSettings?.({ showFps: (e.target as HTMLInputElement).checked }));
   }
   showControls(fromMain = false): void {
-    this.menu.innerHTML = `<div class="menu-panel compact controls"><p class="kicker">FIELD GUIDE</p><h2>Controls</h2><div><kbd>WASD</kbd><span>Move / drive</span><kbd>Mouse</kbd><span>Orbit / aim</span><kbd>Shift</kbd><span>Sprint</span><kbd>Space</kbd><span>Jump / handbrake</span><kbd>E</kbd><span>Interact / vehicle</span><kbd>LMB</kbd><span>Aim and fire</span><kbd>R</kbd><span>Reload</span><kbd>F</kbd><span>Mug / melee · vehicle recovery</span><kbd>Esc</kbd><span>Pause</span><kbd>Backquote</kbd><span>Performance</span></div><button id="back">Back</button></div>`;
+    this.menu.innerHTML = `<div class="menu-panel compact controls"><p class="kicker">FIELD GUIDE</p><h2>Controls</h2><div><kbd>WASD</kbd><span>Move / drive</span><kbd>Mouse</kbd><span>Orbit / aim</span><kbd>Shift</kbd><span>Sprint</span><kbd>Space</kbd><span>Jump / handbrake</span><kbd>E</kbd><span>Interact / vehicle</span><kbd>LMB</kbd><span>Aim and fire / punch</span><kbd>Tab</kbd><span>Hold for weapon wheel</span><kbd>Scroll</kbd><span>Cycle weapons</span><kbd>1-4</kbd><span>Select weapon</span><kbd>R</kbd><span>Reload</span><kbd>F</kbd><span>Mug / melee · vehicle recovery</span><kbd>Esc</kbd><span>Pause</span><kbd>Backquote</kbd><span>Performance</span></div><button id="back">Back</button></div>`;
     this.menu.classList.add('visible'); this.bind('#back', () => { if (fromMain) this.showMainMenu(); else this.onResume?.(); });
   }
   private bind(selector: string, callback: () => void): void { this.menu.querySelector(selector)?.addEventListener('click', callback); }

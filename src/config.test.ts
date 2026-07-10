@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS } from './config';
+import { TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
+import { calculateDamage } from './core/GameRules';
 
 describe('vehicle configuration', () => {
   it('gives each class a distinct handling role', () => {
@@ -8,5 +9,26 @@ describe('vehicle configuration', () => {
     expect(VEHICLE_SPECS.compact.steering).toBeGreaterThan(VEHICLE_SPECS.van.steering);
     for (const spec of Object.values(VEHICLE_SPECS)) expect(spec.acceleration).toBeGreaterThan(0);
     expect(VEHICLE_SPECS.sport.maxSpeed * TRAFFIC_SPEED_FACTOR * 3.6).toBeLessThan(75);
+  });
+});
+
+describe('weapon configuration', () => {
+  it('gives each weapon a distinct combat role', () => {
+    expect(WEAPONS.map((spec) => spec.id)).toEqual(['fists', 'pistol', 'smg', 'shotgun']);
+    expect(WEAPON_BY_ID.fists.melee).toBe(true);
+    expect(WEAPON_BY_ID.smg.auto).toBe(true);
+    expect(WEAPON_BY_ID.pistol.auto).toBe(false);
+    expect(WEAPON_BY_ID.smg.cooldown).toBeLessThan(WEAPON_BY_ID.pistol.cooldown);
+    expect(WEAPON_BY_ID.smg.damage).toBeLessThan(WEAPON_BY_ID.pistol.damage);
+    expect(WEAPON_BY_ID.shotgun.pellets).toBeGreaterThanOrEqual(6);
+    expect(WEAPON_BY_ID.shotgun.pellets).toBeLessThanOrEqual(8);
+    for (const spec of WEAPONS.filter((entry) => !entry.melee)) { expect(spec.magazine).toBeGreaterThan(0); expect(spec.reloadTime).toBeGreaterThan(0); expect(spec.sound.length).toBeGreaterThan(0); }
+  });
+
+  it('makes the shotgun devastating up close but capped at short range', () => {
+    const shotgun = WEAPON_BY_ID.shotgun; const pistol = WEAPON_BY_ID.pistol;
+    const closeBurst = calculateDamage(shotgun.damage, 4) * shotgun.pellets;
+    expect(closeBurst).toBeGreaterThan(calculateDamage(pistol.damage, 4) * 2);
+    expect(shotgun.range).toBeLessThan(pistol.range / 2);
   });
 });

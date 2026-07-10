@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SAVE, SaveManager, type StorageLike } from './SaveManager';
+import { DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeWeapons, type StorageLike } from './SaveManager';
+import type { SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
   value = new Map<string, string>();
@@ -21,5 +22,31 @@ describe('SaveManager', () => {
     storage.setItem('san-cordova-save-v1', 'bad json');
     expect(manager.load()).toEqual(DEFAULT_SAVE);
     expect(manager.reset()).toEqual(DEFAULT_SAVE);
+  });
+
+  it('migrates old saves without weapons to the default loadout', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 900, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings }));
+    const loaded = manager.load();
+    expect(loaded.money).toBe(900);
+    expect(loaded.weapons).toEqual(defaultWeapons());
+  });
+
+  it('round trips the weapon loadout', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    const weapons: SavedWeapons = { ...defaultWeapons(), current: 'smg' };
+    weapons.loadout.smg = { ammo: 11, reserve: 60 };
+    manager.save({ ...DEFAULT_SAVE, weapons });
+    const loaded = manager.load();
+    expect(loaded.weapons.current).toBe('smg');
+    expect(loaded.weapons.loadout.smg).toEqual({ ammo: 11, reserve: 60 });
+  });
+
+  it('sanitizes invalid weapon data', () => {
+    expect(sanitizeWeapons(undefined)).toEqual(defaultWeapons());
+    const patched = sanitizeWeapons({ current: 'bazooka', loadout: { pistol: { ammo: -4, reserve: Number.NaN }, shotgun: { ammo: 2.6, reserve: 8 } } } as unknown as SavedWeapons);
+    expect(patched.current).toBe('pistol');
+    expect(patched.loadout.pistol).toEqual(defaultWeapons().loadout.pistol);
+    expect(patched.loadout.shotgun).toEqual({ ammo: 3, reserve: 8 });
   });
 });

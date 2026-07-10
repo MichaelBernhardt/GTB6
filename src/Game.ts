@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import { WEAPONS, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
 import { CameraController } from './core/CameraController';
-import { Economy } from './core/GameRules';
+import { cycleWeapon, Economy } from './core/GameRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { Player } from './entities/Player';
@@ -53,6 +54,9 @@ export class Game {
   private saveTimer = 0;
   private footstepTimer = 0;
   private fps = 60;
+  private weaponWheelOpen = false;
+  private wheelVector = new THREE.Vector2();
+  private wheelHighlight: WeaponId = 'pistol';
   private previousObjective = '';
   private vehicleCollisionCooldown = new WeakMap<Vehicle, number>();
 
@@ -67,6 +71,7 @@ export class Game {
     this.gore = new GoreSystem(this.scene);
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
     this.input = new InputManager(this.renderer.domElement);
+    this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current);
     this.missions.completed = new Set(this.save.completedMissions);
     this.buildMarker(); this.bindUI(); this.animate();
     setTimeout(() => this.ui.showMainMenu(), 50);
@@ -86,15 +91,15 @@ export class Game {
 
   private bindUI(): void {
     this.ui.onStart = (fresh) => this.startGame(fresh);
-    this.ui.onResume = () => { this.mode = 'playing'; this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
+    this.ui.onResume = () => { this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
     this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
     this.ui.onSettings = (settings) => { Object.assign(this.settings, settings); this.audio.setVolume(this.settings.masterVolume); this.renderer.shadowMap.enabled = this.settings.quality === 'high'; this.persist(); };
   }
 
   private startGame(fresh: boolean): void {
-    if (fresh) { this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); }
-    this.mode = 'playing'; this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+    if (fresh) { this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); }
+    this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to San Cordova', 'Mission contacts are marked in gold.');
   }
 
@@ -128,16 +133,28 @@ export class Game {
 
   private updateOnFoot(dt: number): void {
     this.player.update(dt, this.input, this.cameraController.yaw, this.city);
+    if (this.updateWeaponWheel()) return;
     this.combat.tryReload(this.input);
+    WEAPONS.forEach((spec, index) => { if (this.input.consume(`Digit${index + 1}`)) this.combat.select(spec.id); });
+    const scroll = this.input.consumeWheel(); if (scroll) this.combat.cycle(scroll > 0 ? 1 : -1);
     this.footstepTimer -= dt;
     if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { this.audio.tone(105, 0.045, 0.022, 'square'); this.footstepTimer = this.input.down('ShiftLeft') ? 0.24 : 0.38; }
     const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles);
-    if (shot.fired) {
+    if (shot.fired && shot.melee) {
+      this.player.punch();
+      if (shot.victim) {
+        this.wanted.addCrime(shot.killed ? 24 : 16); this.population.alertDanger();
+        if (shot.hitPoint) this.gore.burst(shot.hitPoint, shot.killed ? 1.2 : 0.72, Boolean(shot.killed));
+        if (shot.policeHit) this.wanted.addCrime(24);
+        if (shot.killed && shot.victim.hostile) this.hostileDefeated += 1;
+      }
+    } else if (shot.fired) {
       this.wanted.addCrime(7); this.population.alertDanger();
       if (shot.victim && shot.hitPoint) this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
       if (shot.policeHit) this.wanted.addCrime(24);
       if (shot.killed && shot.victim?.hostile) this.hostileDefeated += 1;
     }
+    this.player.setWeapon(this.combat.current);
     if (this.input.consume('KeyF')) this.tryMugOrMelee();
     if (this.input.consume('KeyE')) {
       const collectTarget = this.missions.objective?.kind === 'collect' ? this.currentTarget() : undefined;
@@ -147,6 +164,31 @@ export class Game {
       if (vehicle) this.beginEnter(vehicle);
     }
   }
+
+  private updateWeaponWheel(): boolean {
+    if (this.input.down('Tab')) {
+      if (!this.weaponWheelOpen) { this.weaponWheelOpen = true; this.wheelHighlight = this.combat.current; this.wheelVector.set(0, 0); }
+      this.wheelVector.x += this.input.mouseDX; this.wheelVector.y += this.input.mouseDY;
+      this.input.mouseDX = 0; this.input.mouseDY = 0;
+      if (this.wheelVector.length() > 120) this.wheelVector.setLength(120);
+      if (this.wheelVector.length() > 26) {
+        const step = (Math.PI * 2) / WEAPONS.length;
+        const angle = Math.atan2(this.wheelVector.x, -this.wheelVector.y);
+        const index = ((Math.round(angle / step) % WEAPONS.length) + WEAPONS.length) % WEAPONS.length;
+        this.wheelHighlight = WEAPONS[index]?.id ?? this.wheelHighlight;
+      }
+      const scroll = this.input.consumeWheel(); if (scroll) this.wheelHighlight = cycleWeapon(this.wheelHighlight, scroll > 0 ? 1 : -1);
+      this.ui.showWeaponWheel(WEAPONS.map((spec) => {
+        const state = this.combat.loadout[spec.id];
+        return { name: spec.name, ammo: spec.melee ? '&mdash;' : `${state.ammo} / ${state.reserve}`, highlighted: spec.id === this.wheelHighlight, equipped: spec.id === this.combat.current };
+      }));
+      return true;
+    }
+    if (this.weaponWheelOpen) { this.weaponWheelOpen = false; this.ui.hideWeaponWheel(); this.combat.select(this.wheelHighlight); this.player.setWeapon(this.combat.current); }
+    return false;
+  }
+
+  private closeWeaponWheel(): void { this.weaponWheelOpen = false; this.ui.hideWeaponWheel(); }
 
   private updateDriving(dt: number): void {
     const vehicle = this.activeVehicle; if (!vehicle) return;
@@ -299,7 +341,8 @@ export class Game {
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
     }
-    this.ui.update({ health: this.player.health, money: this.economy.balance, ammo: this.combat.ammo, reserve: this.combat.reserve, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings });
+    const spec = this.combat.spec; const ammoState = this.combat.state;
+    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings });
     const markers = this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [];
     this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })));
   }
@@ -308,13 +351,13 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.closeWeaponWheel(); this.ui.notify('Wasted', 'Emergency services are responding. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
   }
-  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); document.exitPointerLock(); this.ui.showPause(this.settings); }
-  private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings }; this.saveManager.save(this.save); }
+  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize() }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); }
 }

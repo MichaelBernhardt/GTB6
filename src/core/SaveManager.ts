@@ -1,8 +1,26 @@
-import type { GameSettings, SavedGame } from '../types';
+import { WEAPONS, WEAPON_BY_ID, type WeaponId } from '../config';
+import type { GameSettings, SavedGame, SavedWeaponState, SavedWeapons } from '../types';
 
 const KEY = 'san-cordova-save-v1';
 export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025 };
-export const DEFAULT_SAVE: SavedGame = { version: 1, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS };
+
+export function defaultWeapons(): SavedWeapons {
+  const loadout = Object.fromEntries(WEAPONS.map((spec) => [spec.id, { ammo: spec.magazine, reserve: spec.reserve }])) as Record<WeaponId, SavedWeaponState>;
+  return { current: 'pistol', loadout };
+}
+
+export function sanitizeWeapons(raw?: Partial<SavedWeapons>): SavedWeapons {
+  const base = defaultWeapons();
+  if (!raw || typeof raw !== 'object') return base;
+  if (typeof raw.current === 'string' && raw.current in WEAPON_BY_ID) base.current = raw.current;
+  for (const spec of WEAPONS) {
+    const entry = raw.loadout?.[spec.id];
+    if (entry && Number.isFinite(entry.ammo) && Number.isFinite(entry.reserve)) base.loadout[spec.id] = { ammo: Math.max(0, Math.round(entry.ammo)), reserve: Math.max(0, Math.round(entry.reserve)) };
+  }
+  return base;
+}
+
+export const DEFAULT_SAVE: SavedGame = { version: 1, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons() };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -18,6 +36,7 @@ export class SaveManager {
         ...structuredClone(DEFAULT_SAVE), ...parsed,
         completedMissions: Array.isArray(parsed.completedMissions) ? parsed.completedMissions : [],
         settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
+        weapons: sanitizeWeapons(parsed.weapons),
       };
     } catch { return structuredClone(DEFAULT_SAVE); }
   }
