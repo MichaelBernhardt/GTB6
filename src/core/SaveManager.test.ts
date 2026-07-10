@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeWeapons, type StorageLike } from './SaveManager';
-import type { GameSettings, SavedWeapons } from '../types';
+import { DEFAULT_CHEATS, DEFAULT_SAVE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeWeapons, type StorageLike } from './SaveManager';
+import type { CheatSettings, GameSettings, SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
   value = new Map<string, string>();
@@ -79,5 +79,26 @@ describe('SaveManager', () => {
     expect(broken.current).toBe('pistol');
     expect(defaultWeapons().loadout.smg.owned).toBe(false);
     expect(defaultWeapons().loadout.rpg.owned).toBe(false);
+  });
+
+  it('migrates old saves without cheats to everything off', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
+    expect(manager.load().cheats).toEqual({ fastRun: false, bigJump: false, invulnerable: false });
+  });
+
+  it('round trips cheat toggles', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, cheats: { fastRun: true, bigJump: false, invulnerable: true } });
+    expect(manager.load().cheats).toEqual({ fastRun: true, bigJump: false, invulnerable: true });
+  });
+
+  it('sanitizes invalid cheat data to strict booleans', () => {
+    expect(sanitizeCheats(undefined)).toEqual(DEFAULT_CHEATS);
+    expect(sanitizeCheats('yes' as unknown as CheatSettings)).toEqual(DEFAULT_CHEATS);
+    expect(sanitizeCheats({ fastRun: 1, bigJump: 'true', invulnerable: true } as unknown as CheatSettings)).toEqual({ fastRun: false, bigJump: false, invulnerable: true });
+    expect(sanitizeCheats({ fastRun: true })).toEqual({ fastRun: true, bigJump: false, invulnerable: false });
+    const defaults = sanitizeCheats(undefined); defaults.fastRun = true;
+    expect(DEFAULT_CHEATS.fastRun).toBe(false);
   });
 });

@@ -36,6 +36,16 @@ export class CombatSystem {
     return 'ammo';
   }
 
+  maxAmmo(): number {
+    let filled = 0;
+    for (const spec of WEAPONS) {
+      const state = this.loadout[spec.id];
+      if (spec.melee || !state.owned) continue;
+      state.ammo = spec.magazine; state.reserve = spec.reserve * 3; filled += 1;
+    }
+    return filled;
+  }
+
   addAmmo(): WeaponId {
     const target = !this.spec.melee && this.state.owned ? this.current : 'pistol';
     const spec = WEAPON_BY_ID[target]; const state = this.loadout[target];

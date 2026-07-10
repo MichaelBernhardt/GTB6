@@ -7,6 +7,7 @@ export interface Damageable { health: number; maxHealth: number; takeDamage(amou
 export interface WorldTarget { position: Vector3; label: string; color?: string; }
 export interface SavedWeaponState { ammo: number; reserve: number; owned: boolean; }
 export interface SavedWeapons { current: WeaponId; loadout: Record<WeaponId, SavedWeaponState>; }
+export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerable: boolean; }
 export interface SavedGame {
   version: 1;
   money: number;
@@ -14,6 +15,7 @@ export interface SavedGame {
   spawn: [number, number, number];
   settings: GameSettings;
   weapons: SavedWeapons;
+  cheats: CheatSettings;
 }
 export interface GameSettings {
   masterVolume: number;
