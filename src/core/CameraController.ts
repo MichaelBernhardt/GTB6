@@ -15,9 +15,10 @@ export class CameraController {
     this.yaw -= input.mouseDX * sensitivity;
     this.pitch = THREE.MathUtils.clamp(this.pitch - input.mouseDY * sensitivity, -0.1, 0.9);
     this.aiming = input.firing && !vehicle;
-    const distance = this.aiming ? 4.8 : vehicle ? 10.5 : 7.2;
+    const distance = this.aiming ? 4.65 : vehicle ? 10.5 : 6.35;
     const height = vehicle ? 2.6 : 1.45;
     this.focus.set(target.x, target.y + height, target.z);
+    if (this.aiming) { this.focus.x += Math.cos(this.yaw) * 0.62; this.focus.z -= Math.sin(this.yaw) * 0.62; }
     const horizontal = Math.cos(this.pitch) * distance;
     this.desired.set(
       this.focus.x + Math.sin(this.yaw) * horizontal,

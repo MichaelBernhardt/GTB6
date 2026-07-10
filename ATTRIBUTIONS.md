@@ -21,5 +21,7 @@ San Cordova does not ship third-party art or audio assets.
 
 - `public/textures/asphalt-gpt.jpg` - seamless coastal-city asphalt generated for this project with OpenAI GPT Image, then resized and JPEG-optimized locally.
 - `public/textures/concrete-gpt.jpg` - seamless weathered concrete pavement generated for this project with OpenAI GPT Image, then resized and JPEG-optimized locally.
+- `public/textures/character/teal-jacket-gpt.jpg` - seamless dark-teal technical jacket fabric generated with OpenAI GPT Image for the player character.
+- `public/textures/character/charcoal-denim-gpt.jpg` - seamless charcoal denim generated with OpenAI GPT Image for the player character.
 
 No Grand Theft Auto maps, logos, characters, dialogue, music, sound effects, or other copyrighted assets are included.

@@ -59,7 +59,7 @@ Progress is saved periodically and after mission rewards. Money, completed missi
 - **Mercado Industrial**: warehouses, containers, docks, and a ramp.
 - **Costa Azul**: beach frontage, water, garages, and open roads.
 - **Cordova Commons**: intersecting paths and public green space.
-- Animated low-poly player and pedestrian characters with walking, idling, fleeing, hostile, damaged, and down states.
+- A detailed articulated player character with GPT Image fabric materials, layered clothing, facial features, jointed elbows and knees, procedural footwork, breathing, sprinting, jumping, and two-handed aiming poses.
 - Compact, sport, van, and police vehicle configurations with distinct speed, acceleration, turning, braking, durability, wheels, brake lights, engine synthesis, and recovery.
 - Twelve connected road systems with curved arterials, diagonal boulevards, district loops, industrial spurs, residential crescents, a harbor drive, parking areas, and road-derived traffic/minimap routing.
 - Pooled lane-following traffic routes, recycling, stuck recovery, simplified distance updates, and collision response.
