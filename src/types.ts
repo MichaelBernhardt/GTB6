@@ -20,6 +20,7 @@ export interface SavedGame {
   cheats: CheatSettings;
   garage: SavedVehicle | null;
   livingCity: LivingCityState;
+  timeOfDay: number;
 }
 export interface GameSettings {
   masterVolume: number;

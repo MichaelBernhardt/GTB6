@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { COLORS, WORLD_SIZE } from '../config';
 import type { District } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
-import { createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
+import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
 import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
@@ -107,6 +107,7 @@ export class City {
   private sand = createSurfaceTexture('sand', 14);
   private water = createSurfaceTexture('water', 7);
   private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
+  private facadeGlows = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeGlowTexture(style));
   private roofMaterial = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, metalness: 0.08 });
   private waterMaterial?: THREE.MeshPhysicalMaterial;
   private architecture: BuildingArchitecture;
@@ -138,6 +139,13 @@ export class City {
     if (Math.abs(x) < 115 && Math.abs(z) < 115) return 'Zoo Lake';
     return 'Joburg CBD';
   }
+
+  /** Shared facade materials (buildings are merged per material): the day/night cycle animates their emissiveIntensity for lit windows. */
+  facadeMaterials(): THREE.MeshStandardMaterial[] { return [...this.buildingMaterial.values()]; }
+
+  streetlightLampsXZ(): Float32Array { return this.infrastructure.lampsXZ; }
+
+  setStreetlightGlow(factor: number): void { this.infrastructure.setLampGlow(factor); }
 
   isPark(x: number, z: number): boolean {
     return PARK_AREAS.some((park) => Math.abs(x - park.x) < park.width / 2 && Math.abs(z - park.z) < park.depth / 2);
@@ -424,7 +432,7 @@ export class City {
     const palette = BUILDING_PALETTES[style];
     const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
     const key = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(key);
-    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], roughness: 0.72, metalness: style === 'downtown' ? 0.12 : 0.02 }); this.buildingMaterial.set(key, facade); }
+    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: 0, roughness: 0.72, metalness: style === 'downtown' ? 0.12 : 0.02 }); this.buildingMaterial.set(key, facade); }
     const profile = this.architecture.build({ x, z, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
     this.addLedge(x, z, w * 1.025, d * 1.025, Math.min(h - 0.5, 3.6));
     this.addEntrance(x, z, w, d, style);

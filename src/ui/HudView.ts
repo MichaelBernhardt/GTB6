@@ -6,6 +6,7 @@ const required = <T extends Element>(root: ParentNode, selector: string): T => {
 
 export class HudView {
   private district: HTMLElement;
+  private clock: HTMLElement;
   private reputation: HTMLElement;
   private health: HTMLElement;
   private healthFill: HTMLElement;
@@ -34,7 +35,7 @@ export class HudView {
     root.innerHTML = `
       <header class="hud-masthead" aria-label="Location and reputation">
         <div class="hud-wordmark"><span>GROOT THEFT</span><strong>BAKKIE</strong></div>
-        <div class="hud-location"><span data-hud="district"></span><em data-hud="reputation"></em></div>
+        <div class="hud-location"><span data-hud="district"></span><b data-hud="clock"></b><em data-hud="reputation"></em></div>
       </header>
       <section class="hud-status" aria-label="Player status">
         <div class="hud-wanted" data-hud="wanted" aria-label="Wanted level 0 of 5">${Array.from({ length: 5 }, () => '<i aria-hidden="true">★</i>').join('')}</div>
@@ -50,7 +51,7 @@ export class HudView {
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
       <div class="hud-fps" data-hud="fps"></div><div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
       <div class="hud-crosshair" aria-hidden="true"><i></i></div>`;
-    this.district = required(root, '[data-hud="district"]'); this.reputation = required(root, '[data-hud="reputation"]');
+    this.district = required(root, '[data-hud="district"]'); this.clock = required(root, '[data-hud="clock"]'); this.reputation = required(root, '[data-hud="reputation"]');
     this.health = required(root, '[data-hud="health"]'); this.healthFill = required(root, '[data-hud="health-fill"]'); this.cash = required(root, '[data-hud="cash"]');
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i'));
@@ -60,7 +61,7 @@ export class HudView {
   }
 
   update(state: HudState): void {
-    const health = clampPercent(state.health); this.district.textContent = state.district; this.reputation.textContent = state.reputation ? reputationLabel(state.reputation) : '';
+    const health = clampPercent(state.health); this.district.textContent = state.district; this.clock.textContent = state.clock; this.reputation.textContent = state.reputation ? reputationLabel(state.reputation) : '';
     this.reputation.hidden = !state.reputation; this.health.textContent = `${health}`; this.healthFill.style.width = `${health}%`;
     const healthBox = this.health.closest<HTMLElement>('[role="progressbar"]'); healthBox?.setAttribute('aria-valuenow', String(health));
     this.cash.textContent = formatMoney(state.money); this.weaponName.textContent = state.weaponName;

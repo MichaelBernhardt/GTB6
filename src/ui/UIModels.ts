@@ -17,6 +17,7 @@ export interface HudState {
   reloading: boolean;
   wanted: number;
   district: string;
+  clock: string;
   reputation?: string;
   prompt: string;
   vehicle?: VehicleTelemetry;

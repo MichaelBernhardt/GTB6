@@ -39,6 +39,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-location { display: grid; align-content: center; gap: 2px; min-width: 142px; padding: 7px 13px; border-left: 4px solid var(--ink); background: rgba(17, 24, 23, .88); backdrop-filter: blur(7px); }
 .hud-location span { font-size: 13px; font-weight: 900; letter-spacing: .9px; text-transform: uppercase; }
 .hud-location em { color: var(--yellow); font: 800 10px Inter, sans-serif; font-style: normal; letter-spacing: 1.2px; text-transform: uppercase; }
+.hud-location b { color: #9fd8cf; font: 800 11px Inter, sans-serif; letter-spacing: 1.4px; }
 
 .hud-status { position: absolute; top: 24px; right: 28px; display: grid; grid-template-columns: auto 176px auto; grid-template-rows: 26px 32px; gap: 5px 8px; filter: drop-shadow(0 4px 9px #0008); }
 .hud-wanted { grid-column: 1 / 4; justify-self: end; display: flex; gap: 2px; padding: 3px 8px; background: rgba(17, 24, 23, .82); border-right: 4px solid var(--red); }

@@ -30,6 +30,13 @@ export function sanitizeWeapons(raw?: Partial<SavedWeapons>): SavedWeapons {
   return base;
 }
 
+export const DEFAULT_TIME_OF_DAY = 10;
+
+/** Hour-of-day float: any finite number wraps into [0, 24); everything else falls back to mid-morning. */
+export function sanitizeTimeOfDay(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) ? ((raw % 24) + 24) % 24 : DEFAULT_TIME_OF_DAY;
+}
+
 export function sanitizeGarage(raw: unknown): SavedVehicle | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Partial<SavedVehicle>;
@@ -40,7 +47,7 @@ export function sanitizeGarage(raw: unknown): SavedVehicle | null {
   return { kind: spec.kind, color, health };
 }
 
-export const DEFAULT_SAVE: SavedGame = { version: 2, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState() };
+export const DEFAULT_SAVE: SavedGame = { version: 2, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -64,6 +71,7 @@ export class SaveManager {
         cheats: sanitizeCheats(parsed.cheats),
         garage: sanitizeGarage(parsed.garage),
         livingCity: sanitizeLivingCityState(parsed.livingCity),
+        timeOfDay: sanitizeTimeOfDay(parsed.timeOfDay),
       };
     } catch { return structuredClone(DEFAULT_SAVE); }
   }
