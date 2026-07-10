@@ -25,6 +25,7 @@ import { determineReporter, PoliceKnowledge, REPORT_DELAY, SIGHT_RADIUS, type Wi
 import { PoliceSystem } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
+import { PropSystem } from './systems/PropSystem';
 import { GARAGE_PARK, ShopSystem } from './systems/ShopSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
@@ -63,6 +64,7 @@ export class Game {
   private gore: GoreSystem;
   private pickups: PickupSystem;
   private projectiles: ProjectileSystem;
+  private propFx: PropSystem;
   private vehicleFire: VehicleFireSystem;
   private shake = 0;
   private wanted = new WantedSystem();
@@ -118,6 +120,7 @@ export class Game {
     this.pickups = new PickupSystem(this.scene);
     this.projectiles = new ProjectileSystem(this.scene);
     this.vehicleFire = new VehicleFireSystem(this.scene);
+    this.propFx = new PropSystem(this.scene, this.city.props, this.audio);
     this.combat.onRocket = (origin, direction, spec) => { if (spec.projectile) this.projectiles.spawn(origin, direction, spec.projectile, spec.range); };
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
     this.input = new InputManager(this.renderer.domElement);
@@ -258,7 +261,7 @@ export class Game {
     }
     this.updateVehicleFires(dt, focus);
     for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition)) this.applyPickup(item);
-    this.combat.update(dt); this.gore.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
+    this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
     this.saveTimer += dt; if (this.saveTimer > 8) { this.persist(); this.saveTimer = 0; }
     if (this.player.health <= 0) this.die();
   }
