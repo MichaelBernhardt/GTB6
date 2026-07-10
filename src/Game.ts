@@ -1,22 +1,36 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { WEAPON_BY_ID, WEAPONS, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
-import { CameraController } from './core/CameraController';
-import { Economy } from './core/GameRules';
+import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
+import { cycleWeapon, Economy, rollDrops, type PedKind } from './core/GameRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
+import { ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolvePurchase, weaponPrice } from './core/ShopRules';
+import type { Pedestrian } from './entities/Pedestrian';
 import { Player } from './entities/Player';
-import type { Vehicle } from './entities/Vehicle';
+import { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
+import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
+import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { PoliceSystem } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
+import { ProjectileSystem } from './systems/ProjectileSystem';
+import { GARAGE_PARK, ShopSystem } from './systems/ShopSystem';
+import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
-import type { GameMode, GameSettings, SavedGame, WorldTarget } from './types';
+import type { CheatSettings, GameMode, GameSettings, SavedGame, WorldTarget } from './types';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
-import { buildEnvironment } from './world/Environment';
+import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 
@@ -26,23 +40,33 @@ export class Game {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 950);
   private renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  private composer?: EffectComposer;
+  private gtao?: GTAOPass;
+  private environment!: EnvironmentHandle;
   private clock = new THREE.Clock();
   private input: InputManager;
   private audio = new AudioManager();
   private saveManager = new SaveManager();
   private save: SavedGame;
   private settings: GameSettings;
+  private cheats: CheatSettings;
   private city: City;
   private player: Player;
   private cameraController: CameraController;
   private population: PopulationSystem;
   private combat: CombatSystem;
   private gore: GoreSystem;
+  private pickups: PickupSystem;
+  private projectiles: ProjectileSystem;
+  private vehicleFire: VehicleFireSystem;
+  private shake = 0;
   private wanted = new WantedSystem();
   private police: PoliceSystem;
   private missions = new MissionSystem();
   private loadShedding = new LoadSheddingSystem();
   private economy: Economy;
+  private shops: ShopSystem;
+  private garageVehicle?: Vehicle;
   private ui = new UIManager();
   private mode: GameMode = 'menu';
   private activeVehicle?: Vehicle;
@@ -59,49 +83,100 @@ export class Game {
   private etollCooldowns: number[] = ETOLL_GANTRIES.map(() => 0);
   private radioIntroShown = false;
   private footstepTimer = 0;
+  private prevDrivenSpeed = 0;
+  private wallCrashCooldown = 0;
   private fps = 60;
+  private weaponWheelOpen = false;
+  private wheelVector = new THREE.Vector2();
+  private wheelHighlight: WeaponId = 'pistol';
   private previousObjective = '';
+  private loggedDrawCalls = false;
   private vehicleCollisionCooldown = new WeakMap<Vehicle, number>();
 
   constructor(private container: HTMLElement) {
-    this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.economy = new Economy(this.save.money);
+    this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money);
     this.setupRenderer(); this.setupScene();
     this.city = new City(this.scene);
+    this.shops = new ShopSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene);
+    this.pickups = new PickupSystem(this.scene);
+    this.projectiles = new ProjectileSystem(this.scene);
+    this.vehicleFire = new VehicleFireSystem(this.scene);
+    this.combat.onRocket = (origin, direction, spec) => { if (spec.projectile) this.projectiles.spawn(origin, direction, spec.projectile, spec.range); };
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
     this.input = new InputManager(this.renderer.domElement);
+    this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
+    this.restoreGarageVehicle();
     this.buildMarker(); this.bindUI(); this.animate();
+    if (import.meta.env.DEV) Object.assign(window, { __game: this });
     setTimeout(() => this.ui.showMainMenu(), 50);
   }
 
   private setupRenderer(): void {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); this.renderer.setSize(innerWidth, innerHeight);
-    this.renderer.shadowMap.enabled = this.settings.quality === 'high'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.16;
+    this.renderer.shadowMap.enabled = this.settings.quality !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
     this.renderer.shadowMap.autoUpdate = true;
     this.container.append(this.renderer.domElement); window.addEventListener('resize', () => this.resize());
   }
 
   private setupScene(): void {
-    buildEnvironment(this.scene, this.settings.quality);
+    this.environment = buildEnvironment(this.scene, this.settings.quality);
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture; pmrem.dispose();
+    this.scene.environmentIntensity = 0.32;
+    this.setupComposer();
+  }
+
+  private setupComposer(): void {
+    this.composer?.dispose(); this.composer = undefined; this.gtao = undefined;
+    if (this.settings.quality === 'low') return; // low quality: plain renderer.render, no post stack
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(size.width, size.height, { type: THREE.HalfFloatType, samples: 4 }));
+    composer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); composer.setSize(innerWidth, innerHeight);
+    composer.addPass(new RenderPass(this.scene, this.camera));
+    if (this.settings.quality === 'high') { // GTAO is the expensive pass — high only
+      this.gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
+      this.gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 2, thickness: 1 }); this.gtao.blendIntensity = 0.9;
+      composer.addPass(this.gtao);
+    }
+    composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.45, 0.85));
+    composer.addPass(new OutputPass());
+    this.composer = composer;
   }
 
   private bindUI(): void {
     this.ui.onStart = (fresh) => this.startGame(fresh);
-    this.ui.onResume = () => { this.mode = 'playing'; this.ui.hideMenu(); if (this.activeVehicle) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
+    this.ui.onResume = () => { this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); if (this.activeVehicle) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
     this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
-    this.ui.onSettings = (settings) => { Object.assign(this.settings, settings); this.audio.setVolume(this.settings.masterVolume); this.renderer.shadowMap.enabled = this.settings.quality === 'high'; this.persist(); };
+    this.ui.onSettings = (settings) => {
+      const qualityChanged = settings.quality !== undefined && settings.quality !== this.settings.quality;
+      Object.assign(this.settings, settings); this.audio.setVolume(this.settings.masterVolume);
+      if (qualityChanged) this.applyQuality(); this.persist();
+    };
+    this.ui.onShowCheats = () => this.ui.showCheats(WEAPONS.filter((spec) => !spec.melee).map((spec) => ({ id: spec.id, name: spec.name, owned: this.combat.owned(spec.id) })), this.cheats);
+    this.ui.onGiveWeapon = (id) => { const result = this.combat.grantWeapon(id); this.ui.notify(result === 'new' ? 'Weapon granted' : 'Ammo topped up', WEAPON_BY_ID[id].name); this.persist(); };
+    this.ui.onMaxAmmo = () => { const filled = this.combat.maxAmmo(); this.ui.notify('Max ammo', `${filled} weapon${filled === 1 ? '' : 's'} fully stocked.`); this.persist(); };
+    this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.persist(); };
+    this.ui.onBuyWeapon = (id) => this.purchase('weapon', id);
+    this.ui.onBuyAmmo = (id) => this.purchase('ammo', id);
+  }
+
+  private applyQuality(): void {
+    const shadows = this.settings.quality !== 'low';
+    this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
+    this.setupComposer();
   }
 
   private startGame(fresh: boolean): void {
-    if (fresh) { this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); }
-    this.mode = 'playing'; this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+    if (fresh) { this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.economy.balance = this.save.money; this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); }
+    this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
 
@@ -110,57 +185,167 @@ export class Game {
     const raw = this.clock.getDelta(); const dt = Math.min(raw, 0.05); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
     if (this.mode === 'playing') this.update(dt);
     else if (this.mode === 'dead') { this.deathTimer -= dt; if (this.deathTimer <= 0) this.respawn(); }
-    this.updateCamera(dt); this.updateMarker(dt); this.renderHUD(); this.renderer.render(this.scene, this.camera); this.input.endFrame();
+    else if (this.input.consume('Escape')) this.ui.back();
+    this.updateCamera(dt); this.updateMarker(dt); this.renderHUD();
+    this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
+    const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 1;
+    if (measure) { this.renderer.info.autoReset = false; this.renderer.info.reset(); }
+    if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
+    if (measure) { this.loggedDrawCalls = true; console.info(`[render] calls=${this.renderer.info.render.calls} tris=${this.renderer.info.render.triangles}`); this.renderer.info.autoReset = true; }
+    this.input.endFrame();
   };
 
   private update(dt: number): void {
     if (this.input.consume('Escape')) { this.pause(); return; }
     if (this.input.consume('Backquote')) { this.settings.showFps = !this.settings.showFps; this.persist(); }
+    if (this.input.consume('KeyV')) {
+      const key = this.activeVehicle ? 'cameraViewVehicle' : 'cameraViewFoot';
+      this.settings[key] = cycleView(this.settings[key]);
+      this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.settings[key]]}`); this.persist();
+    }
     if (this.transition) this.updateTransition(dt);
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
     this.city.update(dt);
     const eskom = this.loadShedding.update(dt);
     if (eskom === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
     else if (eskom === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
     for (const impact of this.population.consumeImpacts()) {
-      this.gore.burst(impact.position, Math.min(1.6, Math.abs(impact.vehicle.speed) / 16), impact.killed);
+      const intensity = Math.min(1.6, Math.abs(impact.vehicle.speed) / 16);
+      this.gore.burst(impact.position, intensity, impact.killed);
+      this.audio.splat(intensity, impact.position.x, impact.position.z);
       if (impact.vehicle === this.activeVehicle) this.wanted.addCrime(impact.killed ? 24 : 12);
+      if (impact.killed) this.spawnDropsAt(impact.position, 'civilian');
     }
     this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, (amount) => this.damagePlayer(amount));
-    this.wanted.update(dt);
+    this.wanted.update(dt); this.shops.update(dt);
+    for (const boom of this.projectiles.update(dt, this.city, this.population, this.police.vehicles, this.player.group.position)) {
+      this.audio.explosion(boom.position.x, boom.position.z); this.wanted.addCrime(30); this.population.broadcastFear(boom.position, FEAR_EVENTS.kill); this.shake = Math.min(0.7, this.shake + 0.5);
+      if (boom.policeHit) this.wanted.addCrime(24);
+      for (const victim of boom.victims) {
+        this.gore.burst(victim.position, victim.killed ? 1.5 : 0.9, victim.killed);
+        if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
+      }
+      if (boom.playerDamage > 0) this.damagePlayer(boom.playerDamage);
+    }
+    this.updateVehicleFires(dt, focus);
+    for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition)) this.applyPickup(item);
     this.combat.update(dt); this.gore.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
     this.saveTimer += dt; if (this.saveTimer > 8) { this.persist(); this.saveTimer = 0; }
     if (this.player.health <= 0) this.die();
   }
 
+  private updateVehicleFires(dt: number, focus: THREE.Vector3): void {
+    const allVehicles = [...this.population.vehicles, ...this.police.vehicles];
+    const fire = this.vehicleFire.update(dt, allVehicles, this.population.pedestrians, this.player.group.position);
+    for (const vehicle of fire.ignitions) {
+      if (vehicle === this.activeVehicle || vehicle === this.transition?.vehicle) this.ui.notify('Vehicle on fire', 'Bail out before it blows.', false);
+      else if (vehicle.occupied) { this.population.ejectDriver(vehicle, vehicle.group.position.clone(), vehicle.police); vehicle.occupied = false; }
+    }
+    for (const boom of fire.burnouts) {
+      this.audio.explosion(boom.position.x, boom.position.z);
+      this.population.broadcastFear(boom.position, FEAR_EVENTS.kill);
+      this.shake = Math.min(0.7, this.shake + 0.4);
+      if (boom.vehicle.police) this.wanted.addCrime(POLICE_WRECK_HEAT);
+      for (const victim of boom.victims) {
+        this.gore.burst(victim.position, victim.killed ? 1.4 : 0.85, victim.killed);
+        if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
+      }
+      if (boom.vehicle === this.activeVehicle || boom.vehicle === this.transition?.vehicle) { this.ejectFromWreck(boom.vehicle); this.damagePlayer(OCCUPANT_BURNOUT_DAMAGE); }
+      else if (boom.playerDamage > 0) this.damagePlayer(boom.playerDamage);
+    }
+    const nearestFire = allVehicles.reduce<Vehicle | undefined>((best, vehicle) => vehicle.onFire && (!best || vehicle.group.position.distanceToSquared(focus) < best.group.position.distanceToSquared(focus)) ? vehicle : best, undefined);
+    this.audio.setFire(Boolean(nearestFire), nearestFire?.group.position.x, nearestFire?.group.position.z);
+  }
+
+  private ejectFromWreck(vehicle: Vehicle): void {
+    vehicle.playerControlled = false; this.activeVehicle = undefined; this.transition = undefined;
+    this.player.inVehicle = false; this.player.setVisible(true);
+    const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(2.2);
+    this.player.group.position.copy(vehicle.group.position).add(side).setY(0);
+    this.audio.setEngine(false);
+  }
+
   private updateOnFoot(dt: number): void {
     this.player.update(dt, this.input, this.cameraController.yaw, this.city);
+    if (this.updateWeaponWheel()) return;
     this.combat.tryReload(this.input);
+    WEAPONS.forEach((spec, index) => { if (this.input.consume(`Digit${index + 1}`)) this.combat.select(spec.id); });
+    const scroll = this.input.consumeWheel(); if (scroll) this.combat.cycle(scroll > 0 ? 1 : -1);
     this.footstepTimer -= dt;
-    if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { this.audio.tone(105, 0.045, 0.022, 'square'); this.footstepTimer = this.input.down('ShiftLeft') ? 0.24 : 0.38; }
+    if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { const running = this.input.down('ShiftLeft'); this.audio.footstep(running, this.city.isPark(this.player.group.position.x, this.player.group.position.z)); this.footstepTimer = running ? 0.24 : 0.38; }
     const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles);
-    if (shot.fired) {
-      this.wanted.addCrime(7); this.population.alertDanger();
-      if (shot.victim && shot.hitPoint) this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
+    if (shot.fired && shot.melee) {
+      this.player.punch();
+      if (shot.victim) {
+        this.wanted.addCrime(shot.killed ? 24 : 16); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault);
+        if (shot.hitPoint) { this.gore.burst(shot.hitPoint, shot.killed ? 1.2 : 0.72, Boolean(shot.killed)); this.audio.splat(shot.killed ? 1 : 0.6, shot.hitPoint.x, shot.hitPoint.z); this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z); }
+        if (shot.policeHit) this.wanted.addCrime(24);
+        if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
+      }
+    } else if (shot.fired) {
+      this.wanted.addCrime(7); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.gunshot);
+      if (shot.victim && shot.hitPoint) {
+        this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
+        this.audio.splat(shot.killed ? 0.9 : 0.5, shot.hitPoint.x, shot.hitPoint.z);
+        this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z);
+        if (shot.killed) this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill);
+      }
       if (shot.policeHit) this.wanted.addCrime(24);
-      if (shot.killed && shot.victim?.hostile) this.hostileDefeated += 1;
+      if (shot.killed && shot.victim) { this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
     }
+    this.player.setWeapon(this.combat.current);
     if (this.input.consume('KeyF')) this.tryMugOrMelee();
     if (this.input.consume('KeyE')) {
       const collectTarget = this.missions.objective?.kind === 'collect' ? this.currentTarget() : undefined;
       if (collectTarget && collectTarget.position.distanceTo(this.player.group.position) < 8) { this.collectedItem = true; return; }
       if (this.tryMissionInteraction()) return;
       const vehicle = this.population.nearestEnterable(this.player.group.position);
+      const shop = this.shops.shopNear(this.player.group.position);
+      if (shop?.kind === 'weapons') { this.openWeaponShop(); return; }
+      if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
+      if (shop?.driveIn && !vehicle) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
       if (vehicle) this.beginEnter(vehicle);
     }
   }
 
+  private updateWeaponWheel(): boolean {
+    if (this.input.down('Tab')) {
+      if (!this.weaponWheelOpen) { this.weaponWheelOpen = true; this.wheelHighlight = this.combat.current; this.wheelVector.set(0, 0); }
+      this.wheelVector.x += this.input.mouseDX; this.wheelVector.y += this.input.mouseDY;
+      this.input.mouseDX = 0; this.input.mouseDY = 0;
+      if (this.wheelVector.length() > 120) this.wheelVector.setLength(120);
+      if (this.wheelVector.length() > 26) {
+        const step = (Math.PI * 2) / WEAPONS.length;
+        const angle = Math.atan2(this.wheelVector.x, -this.wheelVector.y);
+        const index = ((Math.round(angle / step) % WEAPONS.length) + WEAPONS.length) % WEAPONS.length;
+        const target = WEAPONS[index];
+        if (target && this.combat.owned(target.id)) this.wheelHighlight = target.id;
+      }
+      const scroll = this.input.consumeWheel(); if (scroll) this.wheelHighlight = cycleWeapon(this.wheelHighlight, scroll > 0 ? 1 : -1, (id) => this.combat.owned(id));
+      this.ui.showWeaponWheel(WEAPONS.map((spec) => {
+        const state = this.combat.loadout[spec.id];
+        return { name: spec.name, ammo: spec.melee ? '&mdash;' : `${state.ammo} / ${state.reserve}`, highlighted: spec.id === this.wheelHighlight, equipped: spec.id === this.combat.current, locked: !state.owned };
+      }));
+      return true;
+    }
+    if (this.weaponWheelOpen) { this.weaponWheelOpen = false; this.ui.hideWeaponWheel(); this.combat.select(this.wheelHighlight); this.player.setWeapon(this.combat.current); }
+    return false;
+  }
+
+  private closeWeaponWheel(): void { this.weaponWheelOpen = false; this.ui.hideWeaponWheel(); }
+
   private updateDriving(dt: number): void {
     const vehicle = this.activeVehicle; if (!vehicle) return;
-    const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position); this.audio.setEngine(true, speed);
+    const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position);
+    const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
+    this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed);
+    this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
+    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; }
+    this.prevDrivenSpeed = speed;
     this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
     if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
       const position = vehicle.group.position;
@@ -174,18 +359,23 @@ export class Game {
     ETOLL_GANTRIES.forEach((gantry, index) => {
       this.etollCooldowns[index] = Math.max(0, (this.etollCooldowns[index] ?? 0) - dt);
       if ((this.etollCooldowns[index] ?? 0) === 0 && (gantry.x - vehicle.group.position.x) ** 2 + (gantry.z - vehicle.group.position.z) ** 2 < 169) {
-        this.audio.tone(1245, 0.09, 0.09, 'sine');
+        this.audio.beep();
         this.ui.notify('e-toll charged: R12.50', 'Outstanding balance since 2013. Nobody pays.', false);
         this.etollCooldowns[index] = 20;
       }
     });
-    if (this.input.consume('KeyE')) this.beginExit(vehicle);
+    if (this.input.consume('KeyE')) {
+      const shop = this.shops.shopNear(vehicle.group.position);
+      if (shop?.kind === 'spray') { this.useSpray(vehicle); return; }
+      if (shop?.kind === 'garage') { this.storeVehicle(vehicle); return; }
+      this.beginExit(vehicle);
+    }
     if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Bakkie recovered', vehicle.spec.name); }
-    if (vehicle.disabled) { this.ui.notify('Vehicle disabled', 'It is finished, boet. Exit before it catches fire.', false); this.beginExit(vehicle); }
+    if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
 
   private beginEnter(vehicle: Vehicle): void {
-    this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true;
+    this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true; this.prevDrivenSpeed = 0;
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.6); this.player.group.position.copy(vehicle.group.position).add(side);
     if (vehicle.occupied) {
       this.population.ejectDriver(vehicle, this.player.group.position); this.wanted.addCrime(18);
@@ -216,7 +406,7 @@ export class Game {
       if (!this.radioIntroShown) { this.radioIntroShown = true; this.ui.notify('Jozi FM 94.7', 'Amapiano o\'clock. It is always amapiano o\'clock.'); }
     }
     else {
-      transition.vehicle.playerControlled = false; this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position);
+      transition.vehicle.playerControlled = false; transition.vehicle.setFirstPerson(false); this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position);
       const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(transition.vehicle.group.position) < 14);
       if (guard) {
         const tipped = this.economy.spend(2);
@@ -260,16 +450,119 @@ export class Game {
     if (!victim) return;
     const cash = victim.mug(this.player.group.position);
     if (cash > 0) {
-      this.economy.earn(cash); this.wanted.addCrime(14); this.population.alertDanger(); this.audio.tone(120, 0.14, 0.09, 'square');
-      this.ui.notify('Street robbery', `+R${cash} taken. Witnesses are calling JMPD.`, false); return;
+      this.pickups.spawnCash(this.scatter(victim.group.position), cash);
+      this.wanted.addCrime(14); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault); this.audio.melee();
+      this.ui.notify('Street robbery', `They dropped R${cash}. Witnesses are calling JMPD.`, false); return;
     }
-    const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.alertDanger();
-    this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.tone(72, 0.1, 0.13, 'square');
+    const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
+    this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.melee();
+    this.audio.splat(killed ? 1 : 0.6, victim.group.position.x, victim.group.position.z); this.audio.scream('pain', victim.group.position.x, victim.group.position.z);
+    if (killed) this.spawnDrops(victim);
+  }
+
+  private spawnDrops(victim: Pedestrian): void {
+    this.spawnDropsAt(victim.group.position, victim.police ? 'police' : victim.hostile ? 'guard' : 'civilian');
+  }
+
+  private spawnDropsAt(position: THREE.Vector3, kind: PedKind): void {
+    const roll = rollDrops(kind);
+    if (roll.cash > 0) this.pickups.spawnCash(this.scatter(position), roll.cash);
+    if (roll.weapon) this.pickups.spawnWeapon(this.scatter(position), roll.weapon);
+    if (roll.ammo) this.pickups.spawnAmmo(this.scatter(position));
+  }
+
+  private scatter(position: THREE.Vector3): THREE.Vector3 {
+    return new THREE.Vector3(position.x + (Math.random() - 0.5) * 1.6, 0, position.z + (Math.random() - 0.5) * 1.6);
+  }
+
+  private applyPickup(item: Pickup): void {
+    this.audio.pickup();
+    if (item.kind === 'cash') { this.economy.earn(item.amount); this.ui.notify('Cash grabbed', `+R${item.amount}`); return; }
+    if (item.kind === 'weapon' && item.weapon) {
+      const spec = WEAPON_BY_ID[item.weapon];
+      if (this.combat.grantWeapon(item.weapon) === 'new') { this.combat.select(item.weapon); this.player.setWeapon(this.combat.current); this.ui.notify('Weapon acquired', spec.name); }
+      else this.ui.notify('Ammo added', spec.name);
+      return;
+    }
+    this.ui.notify('Ammo box', WEAPON_BY_ID[this.combat.addAmmo()].name);
+  }
+
+  private openWeaponShop(): void {
+    this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
+    this.renderShop();
+  }
+
+  private renderShop(): void {
+    const entries = WEAPONS.filter((spec) => !spec.melee).map((spec) => {
+      const state = this.combat.loadout[spec.id]; const full = reserveFull(spec.id, state.reserve);
+      return {
+        id: spec.id, name: spec.name, owned: state.owned, price: weaponPrice(spec.id), ammoPrice: ammoPrice(spec.id), reserve: state.reserve, ammoFull: full,
+        canBuy: resolvePurchase('weapon', spec.id, state.owned, this.economy.balance).ok,
+        canRefill: resolvePurchase('ammo', spec.id, state.owned, this.economy.balance, full).ok,
+      };
+    });
+    this.ui.showShop(entries, this.economy.balance);
+  }
+
+  private purchase(kind: 'weapon' | 'ammo', id: WeaponId): void {
+    const state = this.combat.loadout[id];
+    const result = resolvePurchase(kind, id, state.owned, this.economy.balance, reserveFull(id, state.reserve));
+    if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); this.renderShop(); return; }
+    this.combat.grantWeapon(id); this.audio.ui(true);
+    this.ui.notify(kind === 'weapon' ? 'Weapon purchased' : 'Ammo refilled', `${WEAPON_BY_ID[id].name} · -R${result.price.toLocaleString()}`);
+    this.persist(); this.renderShop();
+  }
+
+  private buyHotdog(): void {
+    if (this.player.health >= this.player.maxHealth) { this.ui.notify('Sizzlin’ Dogs', 'You are stuffed already. Come back hungry.', false); return; }
+    if (!this.economy.spend(HOTDOG_PRICE)) { this.ui.notify('Boerie Stand', `No cash, no boerie. It costs R${HOTDOG_PRICE}.`, false); return; }
+    this.player.health = hotdogHeal(this.player.health, this.player.maxHealth);
+    this.audio.pickup(); this.ui.notify('Boerewors roll', `Lekker. Tastes like victory. -R${HOTDOG_PRICE}`); this.persist();
+  }
+
+  private useSpray(vehicle: Vehicle): void {
+    if (vehicle.onFire) { this.ui.notify('Pik-’n’-Spray', 'They wave you off — put the fire out first.', false); return; }
+    const watching = this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(vehicle.group.position) < 25);
+    if (watching) { this.ui.notify('Pik-’n’-Spray', 'The JMPD is watching — lose them first.', false); return; }
+    const price = detailerPrice(this.wanted.level);
+    if (!this.economy.spend(price)) { this.ui.notify('Pik-’n’-Spray', `Detailing costs R${price}. Come back with cash, boss.`, false); return; }
+    vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.police.reset();
+    this.ui.screenFade(); this.audio.ui(true);
+    this.ui.notify('Pik-’n’-Spray', `Fresh coat, clean record. Sharp sharp. -R${price}`); this.persist();
+  }
+
+  private storeVehicle(vehicle: Vehicle): void {
+    if (vehicle.onFire || vehicle.wrecked || vehicle.disabled) { this.ui.notify('Avenida Garage', 'They refuse the wreck. Bring something roadworthy.', false); return; }
+    if (this.garageVehicle && this.garageVehicle !== vehicle) this.removeGarageVehicle();
+    vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.occupied = false;
+    vehicle.heading = GARAGE_PARK.heading; vehicle.reset(new THREE.Vector3(GARAGE_PARK.x, 0, GARAGE_PARK.z));
+    const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
+    this.garageVehicle = vehicle;
+    this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
+    this.player.group.position.set(GARAGE_PARK.x + 8.5, 0, GARAGE_PARK.z + 4); this.audio.setEngine(false); this.audio.ui(true);
+    this.save.garage = { kind: vehicle.spec.kind, color: vehicle.spec.color, health: Math.round(vehicle.health) };
+    this.persist();
+    this.ui.notify('Vehicle stored', `${vehicle.spec.name} is tucked away in the garage.`);
+  }
+
+  private restoreGarageVehicle(): void {
+    const saved = this.save.garage; if (!saved) return;
+    const vehicle = new Vehicle(this.scene, saved.kind, new THREE.Vector3(GARAGE_PARK.x, 0, GARAGE_PARK.z), saved.color);
+    vehicle.heading = GARAGE_PARK.heading; vehicle.group.rotation.y = vehicle.heading; vehicle.health = saved.health;
+    this.population.vehicles.push(vehicle); this.garageVehicle = vehicle;
+  }
+
+  private removeGarageVehicle(): void {
+    const vehicle = this.garageVehicle; if (!vehicle) return;
+    this.scene.remove(vehicle.group);
+    const index = this.population.vehicles.indexOf(vehicle); if (index >= 0) this.population.vehicles.splice(index, 1);
+    const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
+    this.garageVehicle = undefined;
   }
 
   private processMissionUpdate(update: MissionUpdate): void {
-    if (update.failed) this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false);
-    if (update.completed) { this.economy.earn(update.completed.reward); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
+    if (update.failed) { this.audio.ui(false); this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false); }
+    if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); this.persist(); }
   }
 
   private resetMissionRuntime(): void {
@@ -277,7 +570,7 @@ export class Game {
     const missionId = this.missions.active?.id;
     const vehicle = this.population.vehicles.find((item) => missionId === 'delivery-run' ? item.spec.color === 0xf1c232 : missionId === 'hot-property' ? item.spec.color === 0xd83a40 : false);
     if (vehicle) {
-      vehicle.health = vehicle.maxHealth; vehicle.disabled = false;
+      vehicle.restore();
       vehicle.heading = missionId === 'delivery-run' ? 0 : Math.PI / 2;
       vehicle.reset(missionId === 'delivery-run' ? new THREE.Vector3(-105.5, 0, 240) : new THREE.Vector3(30, 0, 205.5));
     }
@@ -303,7 +596,16 @@ export class Game {
 
   private updateCamera(dt: number): void {
     const target = this.activeVehicle?.group.position ?? this.player.group.position;
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity);
+    const view = this.activeVehicle ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
+    const firstPerson = view === 0;
+    this.player.setVisible(!this.player.inVehicle && !(firstPerson && !this.activeVehicle && !this.transition));
+    this.activeVehicle?.setFirstPerson(firstPerson);
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0);
+    if (this.shake > 0) {
+      this.shake = Math.max(0, this.shake - dt);
+      this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
+      this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.35;
+    }
   }
 
   private buildMarker(): void {
@@ -335,29 +637,39 @@ export class Game {
     let prompt = '';
     if (this.mode === 'playing' && !this.transition) {
       const nearbyTarget = this.currentTarget();
-      if (this.activeVehicle) prompt = 'E  Exit vehicle  ·  F  Recover';
+      const shop = this.shops.shopNear(focus);
+      if (this.activeVehicle) {
+        if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
+        else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
+        else prompt = 'E  Exit vehicle  ·  F  Recover';
+      }
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && mission.start.position.distanceTo(focus) < 7)) prompt = 'E  Speak to contact';
+      else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
+      else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
+      else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
     }
-    this.ui.update({ health: this.player.health, money: this.economy.balance, ammo: this.combat.ammo, reserve: this.combat.reserve, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings });
-    const markers = this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [];
-    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })));
+    const spec = this.combat.spec; const ammoState = this.combat.state;
+    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district: this.city.districtAt(focus.x, focus.z), prompt, vehicle: this.activeVehicle, mission: this.missions, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
+    const markers = [...this.shops.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [])];
+    const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
+    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
   }
 
-  private damagePlayer(amount: number): void { this.player.takeDamage(amount); }
+  private damagePlayer(amount: number): void { if (this.cheats.invulnerable) return; if (amount > 0) this.ui.damageFlash(); this.player.takeDamage(amount); }
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.stopRadio(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
-    if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle = undefined; }
+    if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
   }
-  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.stopRadio(); document.exitPointerLock(); this.ui.showPause(this.settings); }
-  private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings }; this.saveManager.save(this.save); }
-  private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); }
+  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage }; this.saveManager.save(this.save); }
+  private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }

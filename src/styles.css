@@ -16,7 +16,19 @@ button, input { font: inherit; }
 .cash { color: #bfe080; font-size: 25px; font-weight: 800; text-shadow: 0 2px 5px #000; }
 .weapon { position: absolute; right: 28px; top: 62px; text-shadow: 0 2px 5px #000; }
 .weapon span { color: #f1b348; margin-right: 8px; font-size: 13px; }
-.weapon b { font-size: 24px; }.weapon small { color: #c2cbc8; font-size: 15px; }
+.weapon b { font-size: 24px; }.weapon small { color: #c2cbc8; font-size: 15px; }.weapon em { display: block; color: #f0a43a; font: 700 10px Inter, sans-serif; font-style: normal; letter-spacing: 1px; text-align: right; }
+#weapon-wheel { position: absolute; top: 50%; left: 50%; width: 0; height: 0; display: none; }
+#weapon-wheel.visible { display: block; }
+#weapon-wheel::before { content: ""; position: absolute; top: -220px; left: -220px; width: 440px; height: 440px; border-radius: 50%; background: radial-gradient(circle, #0d151877 0%, #0d1518cc 62%, transparent 74%); border: 2px solid #e8eadf33; }
+#weapon-wheel .slice { position: absolute; transform: translate(-50%, -50%); min-width: 128px; padding: 10px 14px; text-align: center; background: #182124d9; border: 2px solid #73807d; box-shadow: 0 3px 12px #0008; }
+#weapon-wheel .slice span { display: block; color: #f1b348; font: 700 13px "Arial Narrow", Arial, sans-serif; letter-spacing: 1px; }
+#weapon-wheel .slice small { color: #c2cbc8; font-size: 12px; }
+#weapon-wheel .slice.equipped { border-color: #c2cbc8; }
+#weapon-wheel .slice.hot { background: #f0a43a; border-color: #f0a43a; transform: translate(-50%, -50%) scale(1.12); }
+#weapon-wheel .slice.hot span, #weapon-wheel .slice.hot small { color: #151a1c; }
+#weapon-wheel .slice.locked { opacity: 0.45; border-style: dashed; }
+#weapon-wheel .slice.locked span { color: #8a9491; }
+#weapon-wheel .hub { position: absolute; transform: translate(-50%, -50%); color: #e8eadf; font: 700 11px Inter, sans-serif; letter-spacing: 2px; text-shadow: 0 2px 5px #000; }
 .wanted { position: absolute; right: 27px; top: 97px; display: flex; gap: 4px; }
 .wanted i { color: #5a6264; font-style: normal; font-size: 23px; text-shadow: 0 2px 5px #000; }.wanted .hot { color: #efc34e; }
 .objective { position: absolute; left: 50%; top: 28px; transform: translateX(-50%); width: min(460px, 48vw); padding: 10px 14px; border-left: 4px solid #f0a43a; background: #131b20d9; box-shadow: 0 4px 18px #0006; }
@@ -26,7 +38,11 @@ button, input { font: inherit; }
 .prompt { position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%); padding: 9px 16px; background: #11191de8; border-bottom: 3px solid #f0a43a; font: 700 14px Inter, sans-serif; box-shadow: 0 5px 15px #0008; }
 .crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font: 400 22px Inter, sans-serif; opacity: .75; text-shadow: 0 0 4px #000; }
 .fps { position: absolute; left: 27px; bottom: 252px; color: #9ee6bc; background: #101719c9; padding: 5px 8px; font: 600 11px monospace; }
+.cheats-flag { position: absolute; right: 28px; top: 132px; padding: 4px 8px; color: #f0ae43; background: #101719c9; border: 1px solid #f0ae4366; font: 700 10px Inter, sans-serif; letter-spacing: 2px; }
 #minimap { position: absolute; left: 27px; bottom: 27px; width: 210px; height: 210px; border: 3px solid #e9e5d7; border-radius: 50%; background: #2c3435; box-shadow: 0 4px 18px #0009; }
+#vignette { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, transparent 52%, rgba(190, 24, 18, 0.6) 100%); }
+#vignette.flash { animation: damage-flash 0.45s ease-out; }
+@keyframes damage-flash { 0% { opacity: 1; } 100% { opacity: 0; } }
 #toast { position: absolute; top: 124px; left: 50%; transform: translate(-50%, -12px); min-width: 310px; max-width: 560px; padding: 13px 18px; background: #182221ec; border-top: 3px solid #78c693; text-align: center; opacity: 0; transition: .25s; }
 #toast.visible { opacity: 1; transform: translate(-50%, 0); }#toast.failure { border-color: #e35f53; }#toast strong, #toast span { display: block; }#toast strong { font-family: "Arial Narrow", Arial, sans-serif; font-size: 22px; text-transform: uppercase; }#toast span { color: #ccd2cf; font-size: 12px; margin-top: 3px; }
 #menu { pointer-events: none; position: absolute; inset: 0; display: flex; align-items: center; padding: 8vh 8vw; background: linear-gradient(90deg, #0d1518f4 0%, #152126d9 42%, #15212655 72%, transparent); opacity: 0; transition: opacity .25s; }
@@ -34,5 +50,11 @@ button, input { font: inherit; }
 .menu-panel { width: min(470px, 90vw); }.menu-panel .kicker { color: #f1af46; font-size: 12px; font-weight: 700; text-transform: uppercase; }.menu-panel h1 { margin: 12px 0 20px; font: 800 clamp(64px, 8vw, 118px)/.73 "Arial Narrow", Arial, sans-serif; color: #f3e7c7; }.menu-panel h1 strong { color: #e94d46; }.menu-panel > p:not(.kicker) { max-width: 390px; color: #c8d0cd; font-size: 15px; line-height: 1.55; }.menu-actions { display: grid; gap: 8px; width: 280px; margin: 28px 0; }
 .menu-panel button { display: block; width: 100%; padding: 11px 16px; border: 1px solid #73807d; border-radius: 3px; color: #edf0e9; background: #222d30e8; text-align: left; cursor: pointer; transition: .16s; }.menu-panel button:hover { color: #151a1c; background: #f0ae43; border-color: #f0ae43; }.menu-panel small { color: #788481; }.menu-panel.compact { padding: 25px; background: #111a1de8; border-left: 4px solid #f0ae43; box-shadow: 0 12px 44px #0009; }.menu-panel.compact h2 { margin: 6px 0 18px; font: 800 38px "Arial Narrow", Arial, sans-serif; }.menu-panel.compact button { margin-top: 8px; }.menu-panel label { display: block; margin-top: 15px; color: #cbd1ce; font-size: 12px; }.menu-panel input[type="range"] { width: 100%; accent-color: #f0ae43; }.menu-panel .toggle { display: flex; gap: 9px; align-items: center; }.menu-panel button.danger { margin-top: 22px; color: #ee8f86; border-color: #773f3d; }
 .menu-panel select { width: 100%; margin-top: 5px; padding: 7px; color: #edf0e9; border: 1px solid #64706e; border-radius: 3px; background: #222d30; }
+#fade { position: absolute; inset: 0; background: #05080a; opacity: 0; pointer-events: none; transition: opacity .3s ease-in-out; }
+#fade.active { opacity: 1; }
+.menu-panel .balance { margin: 0 0 6px; color: #bfe080; font-size: 15px; }.menu-panel .balance b { font-size: 19px; }
+.menu-panel.shop button small { display: block; color: #8a9491; font-size: 11px; margin-top: 2px; }
+.menu-panel button:disabled { opacity: .45; cursor: default; }.menu-panel button:disabled:hover { color: #edf0e9; background: #222d30e8; border-color: #73807d; }
+.menu-panel.shop #leave { margin-top: 22px; }
 .controls > div { display: grid; grid-template-columns: 88px 1fr; gap: 8px 16px; margin-bottom: 20px; }.controls kbd { padding: 4px 6px; color: #f1b148; border: 1px solid #64706e; border-radius: 3px; text-align: center; font-size: 11px; }.controls span { color: #d3d8d5; font-size: 13px; align-self: center; }
 @media (max-width: 720px) { .objective { top: 130px; width: calc(100vw - 40px); }.status { right: 16px; }.brand { left: 16px; }.health { width: 130px; }#minimap { width: 150px; height: 150px; left: 15px; bottom: 15px; }.weapon, .wanted { right: 16px; }.menu-panel h1 { font-size: 64px; }.vehicle { right: 16px; }.prompt { bottom: 15px; white-space: nowrap; font-size: 12px; } }

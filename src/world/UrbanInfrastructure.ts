@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { RoadPoint, RoadsidePoint } from './City';
+import { createSignMesh } from './ProceduralMaterials';
 import { onPowerChange, registerPowered } from './powerGrid';
 
 export interface JunctionDefinition {
@@ -29,34 +30,14 @@ export const ETOLL_GANTRIES: Array<{ x: number; z: number; angle: number }> = [
   { x: -8.5, z: -42.5, angle: 3.05 },
 ];
 
-interface SignalHead {
-  red: THREE.MeshStandardMaterial;
-  amber: THREE.MeshStandardMaterial;
-  green: THREE.MeshStandardMaterial;
-  axis: 0 | 1;
-  phase: number;
-}
-
-const makeSignTexture = (label: string, background: string, foreground = '#f2f4e9'): THREE.CanvasTexture => {
-  const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 128;
-  const context = canvas.getContext('2d'); if (!context) throw new Error('Canvas 2D is unavailable');
-  context.fillStyle = background; context.fillRect(0, 0, 512, 128);
-  context.strokeStyle = foreground; context.lineWidth = 9; context.strokeRect(7, 7, 498, 114);
-  context.fillStyle = foreground; context.font = '700 48px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle';
-  context.fillText(label, 256, 67, 470);
-  const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
-  return texture;
-};
-
-const setSignal = (material: THREE.MeshStandardMaterial, active: boolean, color: number): void => {
-  material.color.setHex(active ? color : 0x191d1b);
-  material.emissive.setHex(active ? color : 0x000000);
-  material.emissiveIntensity = active ? 2.8 : 0;
-};
+interface SignalLens { axis: 0 | 1; phase: number; channel: 0 | 1 | 2; }
+const SIGNAL_COLORS = [0xe83f3f, 0xf0ad2f, 0x39d36c] as const;
 
 export class UrbanInfrastructure {
   private group = new THREE.Group();
-  private signals: SignalHead[] = [];
+  private lenses: SignalLens[] = [];
+  private lensMesh?: THREE.InstancedMesh;
+  private lensColor = new THREE.Color();
   private elapsed = 0;
   private powered = true;
 
@@ -80,18 +61,15 @@ export class UrbanInfrastructure {
 
   update(dt: number): void {
     this.elapsed = (this.elapsed + dt) % 30;
-    for (const signal of this.signals) {
-      if (!this.powered) {
-        setSignal(signal.green, false, 0x39d36c);
-        setSignal(signal.amber, false, 0xf0ad2f);
-        setSignal(signal.red, false, 0xe83f3f);
-        continue;
-      }
-      const cycle = (this.elapsed + signal.phase + signal.axis * 15) % 30;
-      setSignal(signal.green, cycle < 11, 0x39d36c);
-      setSignal(signal.amber, cycle >= 11 && cycle < 14, 0xf0ad2f);
-      setSignal(signal.red, cycle >= 14, 0xe83f3f);
-    }
+    const mesh = this.lensMesh; if (!mesh) return;
+    this.lenses.forEach((lens, index) => {
+      const cycle = (this.elapsed + lens.phase + lens.axis * 15) % 30;
+      const on = this.powered && (lens.channel === 2 ? cycle < 11 : lens.channel === 1 ? cycle >= 11 && cycle < 14 : cycle >= 14);
+      this.lensColor.setHex(on ? SIGNAL_COLORS[lens.channel] : 0x14100e);
+      if (on) this.lensColor.multiplyScalar(2.1);
+      mesh.setColorAt(index, this.lensColor);
+    });
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
 
   private buildVegetation(): void {
@@ -187,6 +165,7 @@ export class UrbanInfrastructure {
   }
 
   private buildTrafficSignals(): void {
+    const lensTransforms: THREE.Matrix4[] = [];
     for (const junction of CITY_JUNCTIONS) {
       const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle));
       const right = new THREE.Vector3(forward.z, 0, -forward.x);
@@ -195,13 +174,17 @@ export class UrbanInfrastructure {
         const inward = (axis === 0 ? forward.clone().multiplyScalar(-forwardSide) : right.clone().multiplyScalar(-rightSide));
         const position = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, forwardSide * SIGNAL_CORNER_OFFSET).addScaledVector(right, rightSide * SIGNAL_CORNER_OFFSET);
         const heading = Math.atan2(inward.z, -inward.x);
-        this.addSignalPole(position, heading, axis, junction.phase);
+        this.addSignalPole(position, heading, axis, junction.phase, lensTransforms);
       }
       this.addStreetSigns(junction, forward, right);
     }
+    const lensMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(0.19, 20), new THREE.MeshBasicMaterial(), lensTransforms.length);
+    lensTransforms.forEach((transform, index) => { lensMesh.setMatrixAt(index, transform); lensMesh.setColorAt(index, this.lensColor.setHex(0x14100e)); });
+    lensMesh.instanceMatrix.needsUpdate = true;
+    this.lensMesh = lensMesh; this.group.add(lensMesh);
   }
 
-  private addSignalPole(position: THREE.Vector3, heading: number, axis: 0 | 1, phase: number): void {
+  private addSignalPole(position: THREE.Vector3, heading: number, axis: 0 | 1, phase: number, lensTransforms: THREE.Matrix4[]): void {
     const assembly = new THREE.Group(); assembly.position.copy(position); assembly.rotation.y = heading;
     const metal = new THREE.MeshStandardMaterial({ color: 0x273135, metalness: 0.78, roughness: 0.34 });
     const yellow = new THREE.MeshStandardMaterial({ color: 0xe0aa29, metalness: 0.32, roughness: 0.48 });
@@ -209,14 +192,14 @@ export class UrbanInfrastructure {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.13, 0.13), metal); arm.position.set(-2.05, 5.4, 0);
     const head = new THREE.Mesh(new RoundedBoxGeometry(0.72, 2.2, 0.58, 3, 0.09), yellow); head.position.set(-3.95, 4.65, 0);
     const hoodGeometry = new THREE.CylinderGeometry(0.25, 0.25, 0.22, 16, 1, false, 0, Math.PI);
-    const lensMaterials = [0xe83f3f, 0xf0ad2f, 0x39d36c].map((color) => new THREE.MeshStandardMaterial({ color: 0x191d1b, emissive: color, emissiveIntensity: 0, roughness: 0.35 }));
-    lensMaterials.forEach((material, index) => {
-      const lens = new THREE.Mesh(new THREE.CircleGeometry(0.19, 20), material); lens.position.set(-3.95, 5.28 - index * 0.64, 0.301); assembly.add(lens);
-      const hood = new THREE.Mesh(hoodGeometry, yellow); hood.rotation.set(Math.PI / 2, 0, 0); hood.position.set(-3.95, 5.38 - index * 0.64, 0.34); assembly.add(hood);
-    });
+    const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), heading);
+    const matrix = new THREE.Matrix4(); const one = new THREE.Vector3(1, 1, 1);
+    for (const channel of [0, 1, 2] as const) {
+      matrix.compose(new THREE.Vector3(-3.95, 5.28 - channel * 0.64, 0.301).applyQuaternion(rotation).add(position), rotation, one);
+      lensTransforms.push(matrix.clone()); this.lenses.push({ axis, phase, channel });
+      const hood = new THREE.Mesh(hoodGeometry, yellow); hood.rotation.set(Math.PI / 2, 0, 0); hood.position.set(-3.95, 5.38 - channel * 0.64, 0.34); assembly.add(hood);
+    }
     assembly.add(pole, arm, head); assembly.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; }); this.group.add(assembly);
-    const red = lensMaterials[0]; const amber = lensMaterials[1]; const green = lensMaterials[2];
-    if (red && amber && green) this.signals.push({ red, amber, green, axis, phase });
   }
 
   private addStreetSigns(junction: JunctionDefinition, forward: THREE.Vector3, right: THREE.Vector3): void {
@@ -224,7 +207,7 @@ export class UrbanInfrastructure {
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.copy(postPosition).setY(1.8); this.group.add(post);
     const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle, 3.25], [junction.roadB, junction.angle + Math.PI / 2, 2.78]];
     for (const [label, angle, y] of labels) {
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 0.92), new THREE.MeshBasicMaterial({ map: makeSignTexture(label, '#176a5a'), side: THREE.DoubleSide }));
+      const sign = createSignMesh(new THREE.PlaneGeometry(4.2, 0.92), label, '#f2f4e9', { background: '#176a5a', doubleSide: true });
       sign.position.copy(postPosition).setY(y); sign.rotation.y = angle; this.group.add(sign);
     }
   }
@@ -241,8 +224,8 @@ export class UrbanInfrastructure {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 2.6, 9), poleMaterial); pole.position.set(x, 1.3, z); this.group.add(pole);
       const background = label === 'STOP' ? '#b62f2d' : label === 'P' ? '#28619a' : label === 'TAXI' ? '#f2c521' : '#f0eee2';
       const foreground = label === 'STOP' || label === 'P' ? '#ffffff' : '#182326';
-      const geometry = label === 'STOP' ? new THREE.CircleGeometry(0.7, 8) : hotspot ? new THREE.PlaneGeometry(2.4, 1.1) : new THREE.PlaneGeometry(1.1, 1.25);
-      const sign = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: makeSignTexture(label, background, foreground), side: THREE.DoubleSide }));
+      const geometry = label === 'STOP' ? new THREE.CircleGeometry(0.7, 8) : hotspot ? new THREE.PlaneGeometry(2.4, 1.1) : new THREE.PlaneGeometry(label === 'ONE WAY' ? 1.65 : 1.1, 1.25);
+      const sign = createSignMesh(geometry, label, foreground, { background, doubleSide: true });
       sign.position.set(x, 2.45, z); sign.rotation.y = angle; this.group.add(sign);
     }
   }
@@ -271,7 +254,7 @@ export class UrbanInfrastructure {
       for (const side of [-17, 17]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 7, 12), steel); post.position.set(side, 3.5, 0); assembly.add(post); }
       const truss = new THREE.Mesh(new THREE.BoxGeometry(36, 0.9, 1.1), steel); truss.position.y = 6.6; assembly.add(truss);
       for (const x of [-8, 0, 8]) { const camera = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.42, 0.6), purple); camera.position.set(x, 5.9, 0.3); assembly.add(camera); }
-      const board = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.4), new THREE.MeshBasicMaterial({ map: makeSignTexture('E-TOLL · SANRAL', '#4b2e83'), side: THREE.DoubleSide }));
+      const board = createSignMesh(new THREE.PlaneGeometry(6, 1.4), 'E-TOLL · SANRAL', '#f2f4e9', { background: '#4b2e83', doubleSide: true });
       board.position.set(0, 6.65, 0.62); assembly.add(board);
       assembly.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
       this.group.add(assembly);
@@ -288,9 +271,7 @@ export class UrbanInfrastructure {
       const back = new THREE.Mesh(new THREE.BoxGeometry(5.5, 2.7, 0.08), glass); back.position.y = 1.45;
       const roof = new THREE.Mesh(new RoundedBoxGeometry(5.8, 0.16, 1.65, 3, 0.06), metal); roof.position.set(0, 2.9, 0.7);
       const seat = new THREE.Mesh(new RoundedBoxGeometry(3.4, 0.16, 0.55, 2, 0.04), metal); seat.position.set(0, 0.65, 0.42);
-      const nameMaterial = new THREE.MeshBasicMaterial({ map: makeSignTexture(label, '#c7982c', '#172023') });
-      registerPowered(nameMaterial, 0xffffff, 0x3a3a38);
-      const name = new THREE.Mesh(new THREE.PlaneGeometry(3.8, 0.65), nameMaterial); name.position.set(0, 2.45, 0.06);
+      const name = createSignMesh(new THREE.PlaneGeometry(3.8, 0.65), label, '#172023', { background: '#c7982c', powered: true }); name.position.set(0, 2.45, 0.06);
       shelter.add(back, roof, seat, name); shelter.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; }); this.group.add(shelter);
     }
   }

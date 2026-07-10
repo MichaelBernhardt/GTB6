@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { registerPowered } from './powerGrid';
 
 type SurfaceKind = 'asphalt' | 'concrete' | 'grass' | 'sand' | 'water';
 
@@ -74,34 +75,83 @@ export function createGeneratedSurfaceTexture(url: string, fallback: SurfaceKind
   return texture;
 }
 
+export const FACADE_VARIANTS = 12;
+interface FacadeStyle { wall: string; dark: string; frame: string; lit: number; columns: number; rows: number; band: boolean; }
+const FACADE_STYLES: FacadeStyle[] = [
+  { wall: '#88949a', dark: '#5f696e', frame: '#3e4c52', lit: 0.32, columns: 6, rows: 9, band: true },
+  { wall: '#7c8b96', dark: '#525e68', frame: '#2b3a44', lit: 0.48, columns: 8, rows: 11, band: false },
+  { wall: '#9c5a43', dark: '#6b3a2c', frame: '#463631', lit: 0.24, columns: 5, rows: 8, band: true },
+  { wall: '#9aa39a', dark: '#6d766e', frame: '#37454b', lit: 0.4, columns: 7, rows: 10, band: false },
+  { wall: '#b7aa88', dark: '#7e755f', frame: '#4a4436', lit: 0.2, columns: 5, rows: 9, band: true },
+  { wall: '#778080', dark: '#51595c', frame: '#232d31', lit: 0.55, columns: 6, rows: 10, band: false },
+  { wall: '#d3a482', dark: '#9c7458', frame: '#54402f', lit: 0.16, columns: 4, rows: 6, band: true },
+  { wall: '#c9b891', dark: '#94835f', frame: '#4c4231', lit: 0.22, columns: 5, rows: 6, band: false },
+  { wall: '#aebfae', dark: '#7b8d7c', frame: '#3c4a40', lit: 0.13, columns: 4, rows: 5, band: true },
+  { wall: '#8a5a4a', dark: '#57352a', frame: '#4a332c', lit: 0.19, columns: 5, rows: 7, band: false },
+  { wall: '#8d918d', dark: '#636763', frame: '#31383a', lit: 0.1, columns: 4, rows: 5, band: false },
+  { wall: '#98917f', dark: '#6b6558', frame: '#3a382e', lit: 0.14, columns: 5, rows: 6, band: true },
+];
+
 export function createFacadeTexture(style: number): THREE.CanvasTexture {
   const { canvas, context } = canvasTexture(512);
-  const wall = ['#88949a', '#9c5a43', '#b7aa88', '#8a5a4a'][style % 4];
-  const wallDark = ['#5f696e', '#6b3a2c', '#7e755f', '#57352a'][style % 4];
+  const spec = FACADE_STYLES[style % FACADE_STYLES.length] ?? FACADE_STYLES[0]!;
+  const { wall, dark: wallDark, frame, lit: litDensity, columns, rows } = spec;
   const gradient = context.createLinearGradient(0, 0, 512, 0); gradient.addColorStop(0, wallDark); gradient.addColorStop(0.12, wall); gradient.addColorStop(0.88, wall); gradient.addColorStop(1, wallDark);
   context.fillStyle = gradient; context.fillRect(0, 0, 512, 512);
   for (let i = 0; i < 2200; i++) { context.globalAlpha = seeded(i, style + 20) * 0.09; context.fillStyle = seeded(i, style + 21) > 0.5 ? '#fff' : '#172024'; context.fillRect(seeded(i, 22) * 512, seeded(i, 23) * 512, 1.2, 1.2); }
   context.globalAlpha = 1;
-  const columns = style % 2 === 0 ? 6 : 5; const rows = 9;
   for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
     const cellW = 512 / columns; const cellH = 512 / rows; const x = column * cellW + 15; const y = row * cellH + 13;
-    context.fillStyle = '#3e4c52'; context.fillRect(x - 4, y - 4, cellW - 22, cellH - 18);
-    const lit = seeded(row * columns + column, style + 31) > 0.68;
+    context.fillStyle = frame; context.fillRect(x - 4, y - 4, cellW - 22, cellH - 18);
+    const lit = seeded(row * columns + column, style + 31) > 1 - litDensity;
     const glass = context.createLinearGradient(x, y, x + cellW - 30, y + cellH - 25);
-    glass.addColorStop(0, lit ? '#dfc982' : '#70929a'); glass.addColorStop(0.5, lit ? '#bea55f' : '#314a54'); glass.addColorStop(1, lit ? '#8e7847' : '#182a32');
+    glass.addColorStop(0, lit ? '#f5dd92' : '#70929a'); glass.addColorStop(0.5, lit ? '#d3b465' : '#314a54'); glass.addColorStop(1, lit ? '#9c824b' : '#182a32');
     context.fillStyle = glass; context.fillRect(x, y, cellW - 30, cellH - 26);
     context.fillStyle = '#bdc5c1'; context.globalAlpha = 0.45; context.fillRect(x + 4, y + 3, 2, cellH - 32); context.globalAlpha = 1;
-    context.fillStyle = wallDark; context.fillRect(column * cellW, y + cellH - 18, cellW, 4);
+    if (spec.band) { context.fillStyle = wallDark; context.fillRect(column * cellW, y + cellH - 18, cellW, 4); }
   }
   const texture = finish(canvas);
   return texture;
 }
 
-export function createSignTexture(text: string, accent: string): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas'); canvas.width = 512; canvas.height = 128;
-  const context = canvas.getContext('2d'); if (!context) throw new Error('Canvas 2D is unavailable');
-  context.fillStyle = '#10191c'; context.fillRect(0, 0, 512, 128);
-  context.strokeStyle = accent; context.lineWidth = 9; context.strokeRect(8, 8, 496, 112);
-  context.fillStyle = accent; context.font = '700 60px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(text, 256, 66, 470);
-  return finish(canvas);
+const SIGN_ATLAS = { width: 1024, height: 4096, slotW: 512, slotH: 128 };
+interface SignSlot { u0: number; v0: number; u1: number; v1: number; }
+let signAtlas: { context: CanvasRenderingContext2D; texture: THREE.CanvasTexture; next: number } | undefined;
+const signSlots = new Map<string, SignSlot>();
+const signMaterials = new Map<string, THREE.MeshBasicMaterial>();
+
+function signSlot(text: string, accent: string, background: string): SignSlot {
+  const key = `${text}|${accent}|${background}`;
+  const existing = signSlots.get(key); if (existing) return existing;
+  if (!signAtlas) {
+    const canvas = document.createElement('canvas'); canvas.width = SIGN_ATLAS.width; canvas.height = SIGN_ATLAS.height;
+    const context = canvas.getContext('2d'); if (!context) throw new Error('Canvas 2D is unavailable');
+    const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
+    signAtlas = { context, texture, next: 0 };
+  }
+  const columns = Math.floor(SIGN_ATLAS.width / SIGN_ATLAS.slotW); const capacity = columns * Math.floor(SIGN_ATLAS.height / SIGN_ATLAS.slotH);
+  const index = signAtlas.next++ % capacity;
+  const x = (index % columns) * SIGN_ATLAS.slotW; const y = Math.floor(index / columns) * SIGN_ATLAS.slotH;
+  const context = signAtlas.context;
+  context.fillStyle = background; context.fillRect(x, y, SIGN_ATLAS.slotW, SIGN_ATLAS.slotH);
+  context.strokeStyle = accent; context.lineWidth = 9; context.strokeRect(x + 8, y + 8, SIGN_ATLAS.slotW - 16, SIGN_ATLAS.slotH - 16);
+  context.fillStyle = accent; context.font = '700 56px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(text, x + 256, y + 66, 470);
+  signAtlas.texture.needsUpdate = true;
+  const slot: SignSlot = { u0: x / SIGN_ATLAS.width, v0: 1 - (y + SIGN_ATLAS.slotH) / SIGN_ATLAS.height, u1: (x + SIGN_ATLAS.slotW) / SIGN_ATLAS.width, v1: 1 - y / SIGN_ATLAS.height };
+  signSlots.set(key, slot); return slot;
+}
+
+export function createSignMesh(geometry: THREE.BufferGeometry, text: string, accent: string, options: { background?: string; doubleSide?: boolean; powered?: boolean } = {}): THREE.Mesh {
+  if (typeof document === 'undefined') return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x222831, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide }));
+  const slot = signSlot(text, accent, options.background ?? '#10191c');
+  const uv = geometry.getAttribute('uv');
+  for (let index = 0; index < uv.count; index++) uv.setXY(index, THREE.MathUtils.lerp(slot.u0, slot.u1, uv.getX(index)), THREE.MathUtils.lerp(slot.v0, slot.v1, uv.getY(index)));
+  const materialKey = `${options.doubleSide ? 'double' : 'front'}-${options.powered ? 'powered' : 'plain'}`;
+  let material = signMaterials.get(materialKey);
+  if (!material) {
+    material = new THREE.MeshBasicMaterial({ map: signAtlas!.texture, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide });
+    if (options.powered) registerPowered(material, 0xffffff, 0x2a2d2f);
+    signMaterials.set(materialKey, material);
+  }
+  return new THREE.Mesh(geometry, material);
 }

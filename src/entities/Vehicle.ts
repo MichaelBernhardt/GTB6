@@ -2,8 +2,11 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { VEHICLE_SPECS, type VehicleKind, type VehicleSpec } from '../config';
 import type { InputManager } from '../core/InputManager';
+import { rollBurnDuration } from '../systems/VehicleFireSystem';
 import type { City } from '../world/City';
-import { createSignTexture } from '../world/ProceduralMaterials';
+import { createSignMesh } from '../world/ProceduralMaterials';
+
+type VehicleMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial | THREE.MeshBasicMaterial;
 
 export class Vehicle {
   group = new THREE.Group();
@@ -17,12 +20,16 @@ export class Vehicle {
   occupied = false;
   police = false;
   disabled = false;
+  onFire = false;
+  wrecked = false;
+  burnTimer = 0;
   aiTarget = new THREE.Vector3();
   aiStuck = 0;
   bounce = 0;
   private bouncePhase = 0;
   private wheels: THREE.Object3D[] = [];
   private brakeLights: THREE.Mesh[] = [];
+  private cabinParts: THREE.Object3D[] = [];
   private lightPhase = 0;
 
   constructor(scene: THREE.Scene, kind: VehicleKind, position: THREE.Vector3, color?: number) {
@@ -61,14 +68,56 @@ export class Vehicle {
     const targetSpeed = this.spec.maxSpeed * aggression * turnFactor;
     this.speed = THREE.MathUtils.lerp(this.speed, targetSpeed, dt * this.spec.acceleration / 15);
     const old = this.group.position.clone(); this.move(dt, city);
-    if (old.distanceToSquared(this.group.position) < 0.005) { this.aiStuck += dt; this.speed = -4; this.heading += dt * 1.4; } else this.aiStuck = 0;
+    const intended = Math.abs(this.speed) * dt; // stuck = blocked, not merely slow: actual travel far below intended travel
+    if (intended > 0.02 && old.distanceToSquared(this.group.position) < intended * intended * 0.09) { this.aiStuck += dt; this.speed = -4; this.heading += dt * 1.4; } else this.aiStuck = 0;
     this.updateVisuals(dt, false);
   }
 
   takeDamage(amount: number): void {
+    if (this.wrecked) return;
     this.health = Math.max(0, this.health - amount);
-    if (this.health === 0) { this.disabled = true; this.speed *= 0.3; }
+    if (this.health === 0) { this.disabled = true; this.speed *= 0.3; this.ignite(); }
   }
+
+  ignite(random: () => number = Math.random): void {
+    if (this.onFire || this.wrecked) return;
+    this.onFire = true; this.disabled = true; this.health = 0; this.burnTimer = rollBurnDuration(random);
+  }
+
+  wreck(): void {
+    if (this.wrecked) return;
+    this.wrecked = true; this.onFire = false; this.disabled = true; this.health = 0; this.speed = 0; this.occupied = false; this.burnTimer = 0;
+    const lightbar = this.group.getObjectByName('lightbar'); if (lightbar) lightbar.visible = false;
+    this.forEachMaterial((material) => {
+      if (material.userData.originalColor === undefined) {
+        material.userData.originalColor = material.color.getHex();
+        if ('emissiveIntensity' in material) material.userData.originalEmissive = material.emissiveIntensity;
+      }
+      material.color.lerp(new THREE.Color(0x0d0c0b), 0.88);
+      if ('emissiveIntensity' in material) material.emissiveIntensity = 0;
+    });
+  }
+
+  restore(): void {
+    this.wrecked = false; this.onFire = false; this.disabled = false; this.burnTimer = 0; this.health = this.maxHealth;
+    const lightbar = this.group.getObjectByName('lightbar'); if (lightbar) lightbar.visible = true;
+    this.forEachMaterial((material) => {
+      if (material.userData.originalColor !== undefined) material.color.setHex(material.userData.originalColor as number);
+      if ('emissiveIntensity' in material && material.userData.originalEmissive !== undefined) material.emissiveIntensity = material.userData.originalEmissive as number;
+    });
+  }
+
+  private forEachMaterial(apply: (material: VehicleMaterial) => void): void {
+    const seen = new Set<VehicleMaterial>();
+    this.group.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || object.parent?.name === 'firefx') return;
+      const material = object.material as VehicleMaterial;
+      if (seen.has(material)) return;
+      seen.add(material); apply(material);
+    });
+  }
+
+  setFirstPerson(firstPerson: boolean): void { for (const part of this.cabinParts) part.visible = !firstPerson; } // hide cabin glass/roof so the driver view is unobstructed
 
   reset(position?: THREE.Vector3): void {
     if (position) this.group.position.copy(position);
@@ -117,6 +166,7 @@ export class Vehicle {
     const grille = new THREE.Mesh(new THREE.BoxGeometry(width * 0.42, 0.25, 0.035), trimMat); grille.position.set(0, 0.64, length / 2 + 0.095);
     const lowerGrille = new THREE.Mesh(new THREE.BoxGeometry(width * 0.28, 0.07, 0.042), chrome); lowerGrille.position.set(0, 0.63, length / 2 + 0.116);
     this.group.add(body, hood, cabin, roof, frontBumper, rearBumper, grille, lowerGrille);
+    this.cabinParts.push(cabin, roof);
     for (const side of [-1, 1]) {
       const skirt = new THREE.Mesh(new RoundedBoxGeometry(0.1, 0.15, length * 0.68, 2, 0.04), trimMat); skirt.position.set(side * width * 0.49, 0.4, 0); this.group.add(skirt);
       const mirror = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.15, 0.34, 3, 0.07), bodyMat); mirror.position.set(side * width * 0.56, cabin.position.y + 0.08, cabin.position.z + cabinLength * 0.32); mirror.castShadow = true; this.group.add(mirror);
@@ -142,14 +192,14 @@ export class Vehicle {
     if (taxi) {
       const stripe = new THREE.Mesh(new THREE.BoxGeometry(width + 0.04, 0.22, length * 0.82), new THREE.MeshStandardMaterial({ color: 0xf2c521, roughness: 0.5 }));
       stripe.position.y = 1; this.group.add(stripe);
-      const board = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.4), new THREE.MeshBasicMaterial({ map: createSignTexture('QUANTUM EXPRESS', '#f2c521'), transparent: true, side: THREE.DoubleSide }));
+      const board = createSignMesh(new THREE.PlaneGeometry(1.7, 0.4), 'QUANTUM EXPRESS', '#f2c521', { doubleSide: true });
       board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board);
     }
     if (this.police) {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;
       const mount = new THREE.Mesh(new RoundedBoxGeometry(0.98, 0.07, 0.17, 2, 0.02), trimMat); bar.add(mount);
       for (const [x, color] of [[-0.28, 0x226dff], [0.28, 0xff3028]] as const) { const light = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.14, 0.18, 2, 0.03), new THREE.MeshBasicMaterial({ color })); light.position.x = x; bar.add(light); }
-      this.group.add(bar);
+      this.group.add(bar); this.cabinParts.push(bar);
     }
     this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.frustumCulled = false; } });
   }

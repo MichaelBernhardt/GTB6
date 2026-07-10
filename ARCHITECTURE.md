@@ -41,6 +41,7 @@ Delta time is clamped to 50 ms to prevent tab restoration from producing physics
 - `WantedSystem` is pure heat/escalation/cooldown logic.
 - `PoliceSystem` maintains pursuit unit count by wanted level and spawns only at distant road positions.
 - `MissionSystem` is a data-driven objective sequencer. It consumes a plain `GameSnapshot` and produces advancement, failure, or completion events.
+- `ShopSystem` builds the physical shop frontages (weapons counter, detailer, garage, hot dog stand), their glowing entry pads, and minimap icons. Pricing and purchase gating are pure functions in `core/ShopRules`; `Game` applies the results to `Economy`, `CombatSystem`, `WantedSystem`, and the save file.
 
 ### UI
 
@@ -58,7 +59,8 @@ Pure state with automated tests:
 
 - wanted heat and cooldown
 - economy changes and damage calculation
-- save defaults, malformed input, round-trip, and reset
+- save defaults, malformed input, round-trip, and reset (including the garage slot)
+- shop purchase resolution, detailer pricing, and vendor healing
 - mission objective progression, timing, restart, and reward metadata
 - vehicle configuration roles
 
