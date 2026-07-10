@@ -19,7 +19,7 @@ export class PopulationSystem {
   traffic: Vehicle[] = [];
   hostiles: Pedestrian[] = [];
   private hostileAttackCooldown = 0;
-  private impacts: Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle }> = [];
+  private impacts: Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle; ped: Pedestrian }> = [];
   private pedestrianImpactCooldown = new WeakMap<Pedestrian, number>();
   private trafficPlans = new WeakMap<Vehicle, DrivePlan>();
   private vehiclePlanner: RoutePlanner;
@@ -93,7 +93,7 @@ export class PopulationSystem {
     return blocked ? 0.05 : TRAFFIC_SPEED_FACTOR * 2;
   }
 
-  consumeImpacts(): Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle }> { return this.impacts.splice(0); }
+  consumeImpacts(): Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle; ped: Pedestrian }> { return this.impacts.splice(0); }
 
   nearestPedestrian(position: THREE.Vector3, maxDistance = 3.2): Pedestrian | undefined {
     const nearest = this.pedestrians.filter((ped) => !ped.contact && ped.state !== 'down').sort((a, b) => a.group.position.distanceToSquared(position) - b.group.position.distanceToSquared(position))[0];
@@ -203,7 +203,7 @@ export class PopulationSystem {
         if (ped.state === 'down' || (this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
         const distanceSq = vehicle.group.position.distanceToSquared(ped.group.position);
         if (distanceSq < 5) {
-          const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle });
+          const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
           this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
           this.pedestrianImpactCooldown.set(ped, 1);
         } else if (distanceSq < 22 && Math.abs(vehicle.speed) > 16 && !ped.contact && !ped.hostile && !ped.police && Math.random() < 0.01) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);

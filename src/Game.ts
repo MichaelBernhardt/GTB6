@@ -21,6 +21,7 @@ import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
+import { determineReporter, PoliceKnowledge, SIGHT_RADIUS, type WitnessCandidate } from './systems/PoliceKnowledge';
 import { PoliceSystem } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
@@ -61,6 +62,7 @@ export class Game {
   private vehicleFire: VehicleFireSystem;
   private shake = 0;
   private wanted = new WantedSystem();
+  private knowledge = new PoliceKnowledge<Pedestrian>();
   private police: PoliceSystem;
   private missions = new MissionSystem();
   private loadShedding = new LoadSheddingSystem();
@@ -217,14 +219,15 @@ export class Game {
       const intensity = Math.min(1.6, Math.abs(impact.vehicle.speed) / 16);
       this.gore.burst(impact.position, intensity, impact.killed);
       this.audio.splat(intensity, impact.position.x, impact.position.z);
-      if (impact.vehicle === this.activeVehicle) this.wanted.addCrime(impact.killed ? 24 : 12);
+      if (impact.vehicle === this.activeVehicle) this.reportCrime(impact.position, impact.killed ? 24 : 12, { victims: [impact.ped], radius: (impact.killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius });
       if (impact.killed) this.spawnDropsAt(impact.position, 'civilian');
     }
-    this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, (amount) => this.damagePlayer(amount));
+    this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, this.knowledge, (amount) => this.damagePlayer(amount));
+    for (const report of this.knowledge.update(dt, (reporter) => reporter.state !== 'down')) this.wanted.addCrime(report.heat);
     this.wanted.update(dt); this.shops.update(dt);
     for (const boom of this.projectiles.update(dt, this.city, this.population, this.police.vehicles, this.player.group.position)) {
-      this.audio.explosion(boom.position.x, boom.position.z); this.wanted.addCrime(30); this.population.broadcastFear(boom.position, FEAR_EVENTS.kill); this.shake = Math.min(0.7, this.shake + 0.5);
-      if (boom.policeHit) this.wanted.addCrime(24);
+      this.audio.explosion(boom.position.x, boom.position.z); this.reportCrime(boom.position, 30, { victims: boom.victims.map((victim) => victim.ped), radius: FEAR_EVENTS.kill.radius }); this.population.broadcastFear(boom.position, FEAR_EVENTS.kill); this.shake = Math.min(0.7, this.shake + 0.5);
+      if (boom.policeHit) this.reportCrime(boom.position, 24, { copWitnessed: true });
       for (const victim of boom.victims) {
         this.gore.burst(victim.position, victim.killed ? 1.5 : 0.9, victim.killed);
         if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
@@ -249,7 +252,7 @@ export class Game {
       this.audio.explosion(boom.position.x, boom.position.z);
       this.population.broadcastFear(boom.position, FEAR_EVENTS.kill);
       this.shake = Math.min(0.7, this.shake + 0.4);
-      if (boom.vehicle.police) this.wanted.addCrime(POLICE_WRECK_HEAT);
+      if (boom.vehicle.police) this.reportCrime(boom.position, POLICE_WRECK_HEAT, { copWitnessed: true });
       for (const victim of boom.victims) {
         this.gore.burst(victim.position, victim.killed ? 1.4 : 0.85, victim.killed);
         if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
@@ -281,20 +284,20 @@ export class Game {
     if (shot.fired && shot.melee) {
       this.player.punch();
       if (shot.victim) {
-        this.wanted.addCrime(shot.killed ? 24 : 16); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault);
+        this.reportCrime(this.player.group.position, shot.killed ? 24 : 16, { victims: [shot.victim], radius: (shot.killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius }); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault);
         if (shot.hitPoint) { this.gore.burst(shot.hitPoint, shot.killed ? 1.2 : 0.72, Boolean(shot.killed)); this.audio.splat(shot.killed ? 1 : 0.6, shot.hitPoint.x, shot.hitPoint.z); this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z); }
-        if (shot.policeHit) this.wanted.addCrime(24);
+        if (shot.policeHit) this.reportCrime(this.player.group.position, 24, { copWitnessed: true });
         if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
       }
     } else if (shot.fired) {
-      this.wanted.addCrime(7); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.gunshot);
+      this.reportCrime(this.player.group.position, 7, { victims: shot.victim ? [shot.victim] : [], radius: FEAR_EVENTS.gunshot.radius }); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.gunshot);
       if (shot.victim && shot.hitPoint) {
         this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
         this.audio.splat(shot.killed ? 0.9 : 0.5, shot.hitPoint.x, shot.hitPoint.z);
         this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z);
         if (shot.killed) this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill);
       }
-      if (shot.policeHit) this.wanted.addCrime(24);
+      if (shot.policeHit) this.reportCrime(this.player.group.position, 24, { copWitnessed: true });
       if (shot.killed && shot.victim) { this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
     }
     this.player.setWeapon(this.combat.current);
@@ -378,10 +381,10 @@ export class Game {
     this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true; this.prevDrivenSpeed = 0;
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.6); this.player.group.position.copy(vehicle.group.position).add(side);
     if (vehicle.occupied) {
-      this.population.ejectDriver(vehicle, this.player.group.position); this.wanted.addCrime(18);
-      this.ui.notify('Hijacking reported', 'The driver is fleeing. JMPD dispatch alerted.', false); vehicle.occupied = false;
+      const driver = this.population.ejectDriver(vehicle, this.player.group.position); this.reportCrime(this.player.group.position, 18, { victims: [driver], radius: FEAR_EVENTS.assault.radius });
+      this.ui.notify('Hijacking witnessed', 'The driver is fleeing. Expect a call to the JMPD.', false); vehicle.occupied = false;
     }
-    if (this.missions.active?.id === 'hot-property' && vehicle.spec.kind === 'sport' && vehicle.spec.color === 0xd83a40) this.wanted.setMinimumLevel(2);
+    if (this.missions.active?.id === 'hot-property' && vehicle.spec.kind === 'sport' && vehicle.spec.color === 0xd83a40) this.forceWanted(2);
     if (!vehicle.occupied) {
       const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(vehicle.group.position) < 14);
       if (guard) this.ui.notify('Car guard', '"Sharp sharp boss, I watched it like my own!"');
@@ -423,7 +426,7 @@ export class Game {
       if (requiredVehicle?.disabled) { this.processMissionUpdate(this.missions.fail(`${requiredVehicle.spec.name} was destroyed`)); return; }
     }
     if (objective?.kind === 'defeat') this.population.spawnHostiles();
-    if (this.missions.active?.id === 'hot-property' && objective?.kind === 'enter-kind' && this.activeVehicle?.spec.kind === 'sport' && this.activeVehicle.spec.color === 0xd83a40) this.wanted.setMinimumLevel(2);
+    if (this.missions.active?.id === 'hot-property' && objective?.kind === 'enter-kind' && this.activeVehicle?.spec.kind === 'sport' && this.activeVehicle.spec.color === 0xd83a40) this.forceWanted(2);
     const target = this.currentTarget(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.kind === 'escape' ? 12 : 8));
     if (objective?.kind === 'checkpoints' && reached) { const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1; this.processMissionUpdate(result); }
@@ -451,13 +454,34 @@ export class Game {
     const cash = victim.mug(this.player.group.position);
     if (cash > 0) {
       this.pickups.spawnCash(this.scatter(victim.group.position), cash);
-      this.wanted.addCrime(14); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault); this.audio.melee();
-      this.ui.notify('Street robbery', `They dropped R${cash}. Witnesses are calling JMPD.`, false); return;
+      this.reportCrime(this.player.group.position, 14, { victims: [victim], radius: FEAR_EVENTS.assault.radius }); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault); this.audio.melee();
+      this.ui.notify('Street robbery', `They dropped R${cash}. Witnesses are calling the JMPD.`, false); return;
     }
-    const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
+    const killed = victim.takeDamage(34); this.reportCrime(this.player.group.position, killed ? 24 : 16, { victims: [victim], radius: (killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius }); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
     this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.melee();
     this.audio.splat(killed ? 1 : 0.6, victim.group.position.x, victim.group.position.z); this.audio.scream('pain', victim.group.position.x, victim.group.position.z);
     if (killed) this.spawnDrops(victim);
+  }
+
+  /** Files a crime with JMPD using only what the world could actually see: a cop nearby means immediate heat
+   *  and a sighting; otherwise a surviving victim or a living bystander within radius phones it in after
+   *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
+  private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean } = {}): void {
+    const copSaw = options.copWitnessed
+      || this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(position) < SIGHT_RADIUS)
+      || this.population.pedestrians.some((ped) => ped.police && ped.state !== 'down' && ped.group.position.distanceTo(position) < SIGHT_RADIUS);
+    if (copSaw) { this.wanted.addCrime(heat); this.wanted.reportSeen(); this.knowledge.copWitness(position.x, position.z); return; }
+    const victims = options.victims ?? [];
+    const candidates: WitnessCandidate<Pedestrian>[] = this.population.pedestrians.map((ped) => ({ ref: ped, x: ped.group.position.x, z: ped.group.position.z, alive: ped.state !== 'down', victim: victims.includes(ped) }));
+    const reporter = determineReporter(position.x, position.z, candidates, options.radius);
+    if (reporter) this.knowledge.fileReport(position.x, position.z, heat, reporter);
+  }
+
+  /** Mission-forced heat behaves as a cop-witnessed report at the player's position, so pursuit still works. */
+  private forceWanted(level: number): void {
+    this.wanted.setMinimumLevel(level); this.wanted.reportSeen();
+    const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    this.knowledge.copWitness(focus.x, focus.z);
   }
 
   private spawnDrops(victim: Pedestrian): void {
@@ -526,7 +550,7 @@ export class Game {
     if (watching) { this.ui.notify('Pik-’n’-Spray', 'The JMPD is watching — lose them first.', false); return; }
     const price = detailerPrice(this.wanted.level);
     if (!this.economy.spend(price)) { this.ui.notify('Pik-’n’-Spray', `Detailing costs R${price}. Come back with cash, boss.`, false); return; }
-    vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.police.reset();
+    vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.knowledge.reset(); this.police.reset();
     this.ui.screenFade(); this.audio.ui(true);
     this.ui.notify('Pik-’n’-Spray', `Fresh coat, clean record. Sharp sharp. -R${price}`); this.persist();
   }
@@ -667,7 +691,7 @@ export class Game {
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
-    this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.police.reset(); this.mode = 'playing';
+    this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.knowledge.reset(); this.police.reset(); this.mode = 'playing';
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 1, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage }; this.saveManager.save(this.save); }
