@@ -1,6 +1,7 @@
 export const WORLD_SIZE = 760;
 export const ROAD_WIDTH = 24;
 export const BLOCK_SIZE = 76;
+export const TRAFFIC_SPEED_FACTOR = 0.42;
 export const PLAYER = {
   walkSpeed: 8,
   sprintSpeed: 13,

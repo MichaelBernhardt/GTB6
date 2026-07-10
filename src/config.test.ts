@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VEHICLE_SPECS } from './config';
+import { TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS } from './config';
 
 describe('vehicle configuration', () => {
   it('gives each class a distinct handling role', () => {
@@ -7,5 +7,6 @@ describe('vehicle configuration', () => {
     expect(VEHICLE_SPECS.van.health).toBeGreaterThan(VEHICLE_SPECS.sport.health);
     expect(VEHICLE_SPECS.compact.steering).toBeGreaterThan(VEHICLE_SPECS.van.steering);
     for (const spec of Object.values(VEHICLE_SPECS)) expect(spec.acceleration).toBeGreaterThan(0);
+    expect(VEHICLE_SPECS.sport.maxSpeed * TRAFFIC_SPEED_FACTOR * 3.6).toBeLessThan(75);
   });
 });

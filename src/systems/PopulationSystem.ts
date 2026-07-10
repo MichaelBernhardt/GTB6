@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WORLD_SIZE, type VehicleKind } from '../config';
+import { TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { MISSIONS } from './MissionSystem';
@@ -33,10 +33,10 @@ export class PopulationSystem {
       if (vehicle.group.position.distanceToSquared(vehicle.aiTarget) < 85) this.advanceTrafficTarget(vehicle);
       const forward = new THREE.Vector3(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
       const blocked = this.vehicles.some((other) => other !== vehicle && other.group.position.distanceToSquared(vehicle.group.position) < 70 && other.group.position.clone().sub(vehicle.group.position).dot(forward) > 0);
-      if (vehicle.group.position.distanceToSquared(player) < 320 * 320) vehicle.updateAI(dt, this.city, undefined, blocked ? 0.08 : 0.65);
-      if (Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2 || vehicle.aiStuck > 5) {
-        this.placeOnRoute(vehicle, Math.floor(Math.random() * this.city.trafficRoutes.length));
-      }
+      if (vehicle.group.position.distanceToSquared(player) < 320 * 320) vehicle.updateAI(dt, this.city, undefined, blocked ? 0.05 : TRAFFIC_SPEED_FACTOR);
+      const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
+      if (outsideWorld) this.placeOnRoute(vehicle, Math.floor(Math.random() * this.city.trafficRoutes.length));
+      else if (vehicle.aiStuck > 9) this.placeOnNearestRoute(vehicle);
     }
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation();
@@ -107,6 +107,15 @@ export class PopulationSystem {
     const point = route[index]; const next = route[nextIndex]; if (!point || !next) return;
     vehicle.reset(new THREE.Vector3(point.x, 0, point.z)); vehicle.heading = Math.atan2(next.x - point.x, next.z - point.z); vehicle.group.rotation.y = vehicle.heading;
     this.trafficState.set(vehicle, { route: routeIndex, waypoint: nextIndex, direction: 1 }); vehicle.aiTarget.set(next.x, 0, next.z);
+  }
+
+  private placeOnNearestRoute(vehicle: Vehicle): void {
+    let routeIndex = 0; let waypoint = 0; let nearest = Infinity;
+    for (let route = 0; route < this.city.trafficRoutes.length; route++) {
+      const points = this.city.trafficRoutes[route] ?? [];
+      for (let index = 0; index < points.length; index++) { const point = points[index]; if (!point) continue; const distance = (point.x - vehicle.group.position.x) ** 2 + (point.z - vehicle.group.position.z) ** 2; if (distance < nearest) { nearest = distance; routeIndex = route; waypoint = index; } }
+    }
+    this.placeOnRoute(vehicle, routeIndex, waypoint);
   }
 
   private advanceTrafficTarget(vehicle: Vehicle): void {

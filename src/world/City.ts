@@ -204,7 +204,7 @@ export class City {
   private findParcelPosition(anchorX: number, anchorZ: number, radius: number, salt: number): RoadPoint | undefined {
     for (let attempt = 0; attempt < 9; attempt++) {
       const x = anchorX + (seeded(anchorX + attempt, anchorZ, salt + 20) - 0.5) * 32; const z = anchorZ + (seeded(anchorX, anchorZ + attempt, salt + 21) - 0.5) * 32;
-      if (this.distanceToRoad(x, z) < radius + 4) continue;
+      if (this.distanceToRoad(x, z) < radius + 15) continue;
       if (this.colliders.some((box) => x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ)) continue;
       return { x, z };
     }

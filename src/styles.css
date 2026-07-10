@@ -4,7 +4,7 @@ html, body, #game { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 canvas { display: block; }
 button, input { font: inherit; }
 #ui { position: fixed; inset: 0; pointer-events: none; user-select: none; }
-#ui::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 130px #0b131948; mix-blend-mode: multiply; }
+#ui::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 110px #0b131938; }
 #hud { position: absolute; inset: 0; font-family: "Arial Narrow", Arial, sans-serif; }
 .brand { position: absolute; top: 24px; left: 28px; color: #f4e6bd; font-size: 20px; font-weight: 600; line-height: .9; text-shadow: 0 2px 8px #000; }
 .brand strong { color: #f0a43a; }

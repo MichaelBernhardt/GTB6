@@ -54,7 +54,8 @@ export class Vehicle {
     const dx = destination.x - this.group.position.x; const dz = destination.z - this.group.position.z;
     const desired = Math.atan2(dx, dz); const delta = Math.atan2(Math.sin(desired - this.heading), Math.cos(desired - this.heading));
     this.heading += THREE.MathUtils.clamp(delta, -this.spec.steering * dt, this.spec.steering * dt);
-    const targetSpeed = this.spec.maxSpeed * aggression * (Math.abs(delta) > 0.8 ? 0.38 : 1);
+    const turnFactor = THREE.MathUtils.clamp(1 - Math.abs(delta) * 0.58, 0.34, 1);
+    const targetSpeed = this.spec.maxSpeed * aggression * turnFactor;
     this.speed = THREE.MathUtils.lerp(this.speed, targetSpeed, dt * this.spec.acceleration / 15);
     const old = this.group.position.clone(); this.move(dt, city);
     if (old.distanceToSquared(this.group.position) < 0.005) { this.aiStuck += dt; this.speed = -4; this.heading += dt * 1.4; } else this.aiStuck = 0;
@@ -93,7 +94,7 @@ export class Vehicle {
     const bodyMat = new THREE.MeshPhysicalMaterial({ color: this.spec.color, metalness: 0.32, roughness: 0.24, clearcoat: 1, clearcoatRoughness: 0.13 });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x151a1c, metalness: 0.52, roughness: 0.32 });
     const chrome = new THREE.MeshStandardMaterial({ color: 0xa9b0b0, metalness: 0.9, roughness: 0.18 });
-    const glass = new THREE.MeshPhysicalMaterial({ color: this.police ? 0x263e4a : 0x213e49, roughness: 0.08, metalness: 0.12, clearcoat: 1, clearcoatRoughness: 0.05, transparent: true, opacity: 0.82 });
+    const glass = new THREE.MeshPhysicalMaterial({ color: this.police ? 0x263e4a : 0x213e49, roughness: 0.08, metalness: 0.22, clearcoat: 1, clearcoatRoughness: 0.05 });
     const bodyHeight = height * (van ? 0.7 : sport ? 0.42 : 0.5);
     const body = new THREE.Mesh(new RoundedBoxGeometry(width, bodyHeight, length, 4, Math.min(0.18, bodyHeight * 0.28)), bodyMat); body.position.y = 0.38 + bodyHeight / 2; body.castShadow = true; body.receiveShadow = true;
     const hoodLength = van ? length * 0.18 : length * 0.34;
@@ -135,6 +136,6 @@ export class Vehicle {
       for (const [x, color] of [[-0.28, 0x226dff], [0.28, 0xff3028]] as const) { const light = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.14, 0.18, 2, 0.03), new THREE.MeshBasicMaterial({ color })); light.position.x = x; bar.add(light); }
       this.group.add(bar);
     }
-    this.group.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
+    this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.frustumCulled = false; } });
   }
 }
