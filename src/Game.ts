@@ -7,6 +7,7 @@ import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { Player } from './entities/Player';
 import type { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
+import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
 import { PoliceSystem } from './systems/PoliceSystem';
@@ -133,8 +134,8 @@ export class Game {
     if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { this.audio.tone(105, 0.045, 0.022, 'square'); this.footstepTimer = this.input.down('ShiftLeft') ? 0.24 : 0.38; }
     const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles);
     if (shot.fired) {
-      this.wanted.addCrime(7); this.population.alertDanger();
-      if (shot.victim && shot.hitPoint) this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
+      this.wanted.addCrime(7); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.gunshot);
+      if (shot.victim && shot.hitPoint) { this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed); if (shot.killed) this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); }
       if (shot.policeHit) this.wanted.addCrime(24);
       if (shot.killed && shot.victim?.hostile) this.hostileDefeated += 1;
     }
@@ -217,10 +218,10 @@ export class Game {
     if (!victim) return;
     const cash = victim.mug(this.player.group.position);
     if (cash > 0) {
-      this.economy.earn(cash); this.wanted.addCrime(14); this.population.alertDanger(); this.audio.tone(120, 0.14, 0.09, 'square');
+      this.economy.earn(cash); this.wanted.addCrime(14); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault); this.audio.tone(120, 0.14, 0.09, 'square');
       this.ui.notify('Street robbery', `+$${cash} taken. Witnesses are calling SCPD.`, false); return;
     }
-    const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.alertDanger();
+    const killed = victim.takeDamage(34); this.wanted.addCrime(killed ? 24 : 16); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
     this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.tone(72, 0.1, 0.13, 'square');
   }
 
