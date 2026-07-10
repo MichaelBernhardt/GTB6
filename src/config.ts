@@ -34,7 +34,7 @@ export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
 };
 
 export type WeaponId = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rpg';
-export interface WeaponTone { freq: number; duration: number; volume: number; type: OscillatorType; }
+export type WeaponSound = 'punch' | 'pistol' | 'smg' | 'shotgun' | 'launcher';
 export interface ProjectileSpec { speed: number; radius: number; damage: number; }
 export interface WeaponSpec {
   id: WeaponId;
@@ -51,15 +51,15 @@ export interface WeaponSpec {
   spread: number;
   pellets: number;
   projectile?: ProjectileSpec;
-  sound: WeaponTone[];
+  sound: WeaponSound;
 }
 
 export const WEAPONS: WeaponSpec[] = [
-  { id: 'fists', name: 'FISTS', melee: true, auto: false, starter: true, damage: 34, cooldown: 0.42, range: 2.4, magazine: 0, reserve: 0, reloadTime: 0, spread: 0, pellets: 0, sound: [{ freq: 72, duration: 0.1, volume: 0.13, type: 'square' }] },
-  { id: 'pistol', name: '9MM', melee: false, auto: false, starter: true, damage: 38, cooldown: 0.19, range: 130, magazine: 12, reserve: 84, reloadTime: 1.05, spread: 0, pellets: 1, sound: [{ freq: 95, duration: 0.12, volume: 0.22, type: 'sawtooth' }, { freq: 42, duration: 0.2, volume: 0.16, type: 'square' }] },
-  { id: 'smg', name: 'MICRO SMG', melee: false, auto: true, starter: false, damage: 16, cooldown: 0.09, range: 90, magazine: 30, reserve: 120, reloadTime: 1.6, spread: 0.022, pellets: 1, sound: [{ freq: 135, duration: 0.06, volume: 0.15, type: 'sawtooth' }, { freq: 58, duration: 0.09, volume: 0.09, type: 'square' }] },
-  { id: 'shotgun', name: 'PUMP SHOTGUN', melee: false, auto: false, starter: false, damage: 13, cooldown: 0.85, range: 42, magazine: 6, reserve: 24, reloadTime: 2.2, spread: 0.05, pellets: 7, sound: [{ freq: 62, duration: 0.22, volume: 0.26, type: 'sawtooth' }, { freq: 34, duration: 0.3, volume: 0.2, type: 'square' }] },
-  { id: 'rpg', name: 'RPG', melee: false, auto: false, starter: false, damage: 150, cooldown: 0.9, range: 200, magazine: 1, reserve: 4, reloadTime: 3, spread: 0, pellets: 0, projectile: { speed: 62, radius: 7, damage: 150 }, sound: [{ freq: 180, duration: 0.26, volume: 0.18, type: 'sawtooth' }, { freq: 88, duration: 0.36, volume: 0.12, type: 'square' }] },
+  { id: 'fists', name: 'FISTS', melee: true, auto: false, starter: true, damage: 34, cooldown: 0.42, range: 2.4, magazine: 0, reserve: 0, reloadTime: 0, spread: 0, pellets: 0, sound: 'punch' },
+  { id: 'pistol', name: '9MM', melee: false, auto: false, starter: true, damage: 38, cooldown: 0.19, range: 130, magazine: 12, reserve: 84, reloadTime: 1.05, spread: 0, pellets: 1, sound: 'pistol' },
+  { id: 'smg', name: 'MICRO SMG', melee: false, auto: true, starter: false, damage: 16, cooldown: 0.09, range: 90, magazine: 30, reserve: 120, reloadTime: 1.6, spread: 0.022, pellets: 1, sound: 'smg' },
+  { id: 'shotgun', name: 'PUMP SHOTGUN', melee: false, auto: false, starter: false, damage: 13, cooldown: 0.85, range: 42, magazine: 6, reserve: 24, reloadTime: 2.2, spread: 0.05, pellets: 7, sound: 'shotgun' },
+  { id: 'rpg', name: 'RPG', melee: false, auto: false, starter: false, damage: 150, cooldown: 0.9, range: 200, magazine: 1, reserve: 4, reloadTime: 3, spread: 0, pellets: 0, projectile: { speed: 62, radius: 7, damage: 150 }, sound: 'launcher' },
 ];
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map((spec) => [spec.id, spec])) as Record<WeaponId, WeaponSpec>;
 
