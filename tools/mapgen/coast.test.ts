@@ -34,9 +34,12 @@ describe('Jozi-by-the-Sea coast', () => {
   });
 
   it('coastline forms a continuous south-to-north boundary along the west edge', () => {
+    // Scale-invariant: the synthetic shoreline step is ~420 m, so cap the gap in metres
+    // (keeps passing across TARGET_SIZE tweaks instead of a hard-coded unit threshold).
     let previous = coast.coastline[0]!;
     for (const point of coast.coastline.slice(1)) {
-      expect(Math.hypot(point[0] - previous[0], point[1] - previous[1])).toBeLessThan(160);
+      const gapM = Math.hypot(point[0] - previous[0], point[1] - previous[1]) * map.stats.metresPerUnit;
+      expect(gapM).toBeLessThan(620);
       previous = point;
     }
     const zs = coast.coastline.map((point) => point[1]);

@@ -34,12 +34,14 @@ export const MIN_WATER_AREA_M2 = 4000;
 
 /**
  * Target square footprint (game units). The real bbox is fitted inside, aspect preserved.
- * 4700 (~3.9 m/unit with the coast+corridor graft) is the Phase-2 driveable scale: the real
- * CBD grid pitch is ~70 m (~18 units), so stylised road widths below are tuned to leave room
- * for parcels between adjacent downtown streets while a 2-unit-wide car still gets a
- * two-lane carriageway.
+ * 6000 (~2.94 m/unit with the coast+corridor graft) is the Phase-2 driveable scale. It was
+ * bumped from 4700 (+27%) on owner direction to give the dense CBD blocks breathing room:
+ * ROAD_WIDTHS are game-scale (fixed) while the layout is map-scale, so scaling the footprint
+ * up directly widens the gaps between roads — typical CBD block interiors go from ~50 u to
+ * ~64 u across, comfortably fitting the game's ~15-40 u building parcels. A 2-unit-wide car
+ * still gets a two-lane carriageway.
  */
-export const TARGET_SIZE = 4700;
+export const TARGET_SIZE = 6000;
 
 /** Game-unit road widths per OSM highway class. */
 export const ROAD_WIDTHS: Record<string, number> = {
@@ -101,8 +103,12 @@ export const RING_KIND = 'trunk' as const;
  * rural farmland corridor ("a little drive between them"). Deliberately fantastical.
  */
 export const CAPE_BBOX = { south: -33.93, west: 18.37, north: -33.87, east: 18.42 } as const;
-/** Rural corridor width between the Joburg west edge and the coastal strip (metres). */
-export const CORRIDOR_WIDTH_M = 3300;
+/**
+ * Rural corridor width between the Joburg west edge and the coastal strip (metres).
+ * Trimmed from 3300 m alongside the TARGET_SIZE bump so the corridor stays ~900 game units
+ * wide (a "little drive") rather than ballooning with the larger footprint.
+ */
+export const CORRIDOR_WIDTH_M = 2700;
 /** Coastal road sits this far inland of the waterline. */
 export const COAST_ROAD_SETBACK_M = 260;
 /** North-south stretch applied to the Cape strip so it covers more of the west edge. */
@@ -148,8 +154,8 @@ export const MEANDER_MIN_VERTICES = 5;
 /** Regional airport in the southern farmland corridor. Base name is parodied via overrides. */
 export const AIRPORT_NAME = 'OR Tambourine Field';
 export const AIRPORT_ACCESS_ROAD_NAME = 'Aviator Avenue';
-/** Runway length (metres) — the owner asked for ~350-450 u; at ~3.75 m/u that is ~1500 m. */
-export const AIRPORT_RUNWAY_LENGTH_M = 1550;
+/** Runway length (metres) — the owner asked for ~350-450 u; at ~2.94 m/u that is ~1250 m. */
+export const AIRPORT_RUNWAY_LENGTH_M = 1250;
 export const AIRPORT_RUNWAY_BEARING_RAD = 0.32; // gentle NE-SW tilt
 
 /** Small sea port / pier on the NW coast (distinct from Kaapstad Quay near the CBD). */
