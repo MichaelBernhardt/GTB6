@@ -199,6 +199,7 @@ const makeCity = (): City => ({
   trafficRoutes: lanes.map((lane) => lane.points),
   collides: () => false,
   isOnRoad: () => true,
+  signalStops: () => false, // no robots in this lifecycle harness
   surfaceHeightAt: () => 0,
   roadHeightAt: () => 0,
   surfaceNormalAt: () => new THREE.Vector3(0, 1, 0),

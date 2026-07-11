@@ -80,6 +80,10 @@ export class PopulationSystem {
         if (vehicle.frozen && !wasFrozen) vehicle.speed = 0; // park in place: a stale speed would fire impact checks and jerk on thaw
       }
       if (vehicle.frozen) return;
+      // Obey robots (powered only): a car approaching a signalised junction on a red/amber axis holds.
+      const taxiKind = vehicle.spec.kind === 'taxi';
+      const signalStop = !robotsOut && !taxiKind && this.city.signalStops(vehicle.group.position, vehicle.heading);
+      if (signalStop) this.trafficPlans.get(vehicle)?.watchdog.reset(); // a legal red-light wait (up to ~16s) is not a stall
       if (!this.followDrivePlan(vehicle, dt)) return; // reversing out of a watchdog stall this frame
       const forward = new THREE.Vector3(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
       const blocked = this.vehicles.some((other) => { // same-lane car just ahead; a wide dot>0 sweep used to gridlock oncoming lanes on narrow roads
@@ -92,12 +96,12 @@ export class PopulationSystem {
       let playerBlocked = false; let playerHold = false; let dodge: THREE.Vector3 | undefined;
       if (playerOnFoot && !vehicle.police && vehicle.group.position.distanceToSquared(player) < AVOID_RANGE * AVOID_RANGE) ({ blocked: playerBlocked, hold: playerHold, dodge } = this.avoidPlayer(vehicle, forward, player, dt));
       else this.holdups.delete(vehicle);
-      const taxi = vehicle.spec.kind === 'taxi';
+      const taxi = taxiKind;
       const junctionPanic = robotsOut && !taxi && CITY_JUNCTIONS.some((junction) => (junction.x - vehicle.group.position.x) ** 2 + (junction.z - vehicle.group.position.z) ** 2 < 576);
       const throttle = playerHold ? 0 // held: a full stop with hysteresis, no 0.05 creep — this is what arms the honk clock
         : dodge ? DODGE_THROTTLE
         : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked)
-        : blocked || playerBlocked ? 0.05 : junctionPanic ? 0.03 : TRAFFIC_SPEED_FACTOR;
+        : blocked || playerBlocked ? 0.05 : signalStop ? 0 : junctionPanic ? 0.03 : TRAFFIC_SPEED_FACTOR;
       vehicle.updateAI(dt, this.city, dodge, throttle);
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
       if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);

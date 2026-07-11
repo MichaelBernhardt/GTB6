@@ -42,6 +42,37 @@ const SIGNAL_COLORS = [0xe83f3f, 0xf0ad2f, 0x39d36c] as const;
 
 const BULB_COLOR = 0xffdca0;
 
+/** One robot's 30s loop: green 0–11, amber 11–14, red 14–30. The two carriageway axes run 15s apart
+ *  so their greens never overlap. Both the lens animation and the traffic AI read this, so the colour
+ *  the player sees and the light a driver obeys can never disagree. */
+export type SignalPhaseState = 'green' | 'amber' | 'red';
+export function signalPhaseState(phase: number, axis: 0 | 1, elapsed: number): SignalPhaseState {
+  const cycle = (((elapsed + phase + axis * 15) % 30) + 30) % 30;
+  if (cycle < 11) return 'green';
+  if (cycle < 14) return 'amber';
+  return 'red';
+}
+
+/** Hold line sits this far beyond the junction box edge; a driver inside this ring is "at the robot". */
+export const SIGNAL_STOP_APPROACH = 8;
+/** Once a driver is this far past the box edge (into the crossing) it commits through, never freezing mid-junction. */
+export const SIGNAL_STOP_CLEAR = 1.5;
+
+/** True when an AI driver at (x, z) heading `heading` should hold for a non-green robot on the axis it
+ *  is travelling: it must be approaching, within the hold ring, and not already committed into the box. */
+export function signalHoldsDriver(junction: JunctionDefinition, x: number, z: number, heading: number, elapsed: number): boolean {
+  const toX = junction.x - x; const toZ = junction.z - z;
+  const dirX = Math.sin(heading); const dirZ = Math.cos(heading);
+  if (toX * dirX + toZ * dirZ <= 0) return false; // moving away from / already past the crossing
+  const half = junction.widest / 2;
+  const distance = Math.hypot(toX, toZ);
+  if (distance > half + SIGNAL_STOP_APPROACH) return false; // too far out to matter yet
+  if (distance < half - SIGNAL_STOP_CLEAR) return false; // inside the box: clear it, don't stall in the middle
+  const align = Math.abs(dirX * Math.sin(junction.angle) + dirZ * Math.cos(junction.angle));
+  const axis: 0 | 1 = align >= 0.5 ? 0 : 1; // aligned with roadA (the junction angle) => axis 0, else the cross axis
+  return signalPhaseState(junction.phase, axis, elapsed) !== 'green';
+}
+
 export class UrbanInfrastructure {
   /** Interleaved xz world positions of every streetlamp fixture, for the day/night light pool. */
   lampsXZ = new Float32Array(0);
@@ -98,8 +129,8 @@ export class UrbanInfrastructure {
     this.lenses.forEach((lens, index) => {
       const slot = this.lensSlots[index];
       if (!slot) return;
-      const cycle = (this.elapsed + lens.phase + lens.axis * 15) % 30; // culled lens meshes still get colors: the GPU upload only happens when their chunk is rendered again
-      const on = this.powered && (lens.channel === 2 ? cycle < 11 : lens.channel === 1 ? cycle >= 11 && cycle < 14 : cycle >= 14);
+      const state = signalPhaseState(lens.phase, lens.axis, this.elapsed); // culled lens meshes still get colors: the GPU upload only happens when their chunk is rendered again
+      const on = this.powered && (lens.channel === 2 ? state === 'green' : lens.channel === 1 ? state === 'amber' : state === 'red');
       this.lensColor.setHex(on ? SIGNAL_COLORS[lens.channel] : 0x14100e);
       if (on) this.lensColor.multiplyScalar(2.1);
       slot.mesh.setColorAt(slot.index, this.lensColor);
@@ -107,6 +138,9 @@ export class UrbanInfrastructure {
     });
     for (const mesh of this.lensDirty) if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
+
+  /** Seconds into the shared 30s robot loop — the traffic AI reads this to obey the same lights the player sees. */
+  get signalClock(): number { return this.elapsed; }
 
   /** 0 = day (dim panel), 1 = night: pushes the shared bulb material into HDR so streetlamp heads bloom.
    *  During load shedding the panel goes fully dark whatever the hour — Eskom outranks dusk. */

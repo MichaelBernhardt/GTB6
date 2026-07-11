@@ -282,6 +282,34 @@ interface JunctionAccumulator {
   incident: Array<{ name: string; width: number; dirX: number; dirZ: number }>;
 }
 
+/**
+ * Every generated junction with its degree and incident-road tally. Degree counts road SEGMENTS at
+ * the node: a road passing through adds 2, a road ending there adds 1 — so degree is the classic
+ * "number of arms" (T = 3, crossroads = 4). Built once from the road vertices that land exactly on a
+ * junction anchor (the pipeline emits junctions on shared vertices), then cached: both the signal
+ * selection and the intersection-surface geometry read it.
+ */
+let cachedAccumulators: JunctionAccumulator[] | undefined;
+function junctionAccumulators(): JunctionAccumulator[] {
+  if (cachedAccumulators) return cachedAccumulators;
+  const map = new Map<string, JunctionAccumulator>();
+  for (const junction of MAP.junctions) {
+    map.set(`${junction.x}|${junction.z}`, { x: junction.x, z: junction.z, degree: 0, incident: [] });
+  }
+  for (const road of GENERATED_ROADS) {
+    for (let index = 0; index < road.points.length; index++) {
+      const point = road.points[index]!;
+      const accumulator = map.get(`${point.x}|${point.z}`);
+      if (!accumulator) continue;
+      accumulator.degree += (index > 0 ? 1 : 0) + (index < road.points.length - 1 ? 1 : 0);
+      const spot = spotAt(road, index);
+      accumulator.incident.push({ name: road.name, width: road.width, dirX: spot.dirX, dirZ: spot.dirZ });
+    }
+  }
+  cachedAccumulators = [...map.values()];
+  return cachedAccumulators;
+}
+
 export interface SignalSelectionOptions {
   budget?: number;
   minSpacing?: number;
@@ -296,23 +324,9 @@ export interface SignalSelectionOptions {
  */
 export function computeSignalJunctions(options: SignalSelectionOptions = {}): SignalJunctionDef[] {
   const { budget = 64, minSpacing = 130, minWidestWidth = 11, minSecondWidth = 9 } = options;
-  const accumulators = new Map<string, JunctionAccumulator>();
-  for (const junction of MAP.junctions) {
-    accumulators.set(`${junction.x}|${junction.z}`, { x: junction.x, z: junction.z, degree: 0, incident: [] });
-  }
-  for (const road of GENERATED_ROADS) {
-    for (let index = 0; index < road.points.length; index++) {
-      const point = road.points[index]!;
-      const accumulator = accumulators.get(`${point.x}|${point.z}`);
-      if (!accumulator) continue;
-      accumulator.degree += (index > 0 ? 1 : 0) + (index < road.points.length - 1 ? 1 : 0);
-      const spot = spotAt(road, index);
-      accumulator.incident.push({ name: road.name, width: road.width, dirX: spot.dirX, dirZ: spot.dirZ });
-    }
-  }
   interface Candidate { x: number; z: number; angle: number; roadA: string; roadB: string; widest: number; score: number; }
   const candidates: Candidate[] = [];
-  for (const accumulator of accumulators.values()) {
+  for (const accumulator of junctionAccumulators()) {
     if (accumulator.degree < 3) continue;
     const byWidth = [...accumulator.incident].sort((a, b) => b.width - a.width);
     const widest = byWidth[0];
@@ -345,3 +359,46 @@ export function computeSignalJunctions(options: SignalSelectionOptions = {}): Si
 
 /** The signal set the game builds — computed once at module load. */
 export const SIGNAL_JUNCTIONS: SignalJunctionDef[] = computeSignalJunctions();
+
+// ---- Intersection surfaces (paved crossing polygons) --------------------------
+
+export interface JunctionSurface {
+  x: number;
+  z: number;
+  /** Radius of the paved disc laid over the crossing — scales from the widest meeting carriageway. */
+  radius: number;
+  /** Width of the widest road that meets here (drives the radius). */
+  widest: number;
+  /** Number of road arms at the node (T = 3, crossroads = 4, +). */
+  degree: number;
+}
+
+export interface JunctionSurfaceOptions {
+  /** Minimum arm count to pave. 3 = every real crossing (T/cross/multi-way); degree ≤ 2 is a single
+   *  ribbon passing through or two roads meeting end-to-end — no overlapping ribbons to unify. */
+  minDegree?: number;
+  /** Extra reach beyond the widest carriageway's edge, so the disc buries the ribbon-overlap seams. */
+  margin?: number;
+}
+
+/**
+ * The crossings that need a filled intersection surface. Where two road ribbons cross they are drawn
+ * as independent overlapping planes (z-fighting seams, an "X of two planes"); a paved disc sized to
+ * the widest meeting road, laid just over the tar, unifies each crossing into one clean surface.
+ * Pure and deterministic — derived straight from junction degree + incident road widths.
+ */
+export function computeJunctionSurfaces(options: JunctionSurfaceOptions = {}): JunctionSurface[] {
+  const { minDegree = 3, margin = 1 } = options;
+  const surfaces: JunctionSurface[] = [];
+  for (const accumulator of junctionAccumulators()) {
+    if (accumulator.degree < minDegree) continue;
+    let widest = 0;
+    for (const incident of accumulator.incident) if (incident.width > widest) widest = incident.width;
+    if (widest <= 0) continue;
+    surfaces.push({ x: accumulator.x, z: accumulator.z, radius: widest / 2 + margin, widest, degree: accumulator.degree });
+  }
+  return surfaces;
+}
+
+/** The intersection surfaces the game bakes into the chunked road geometry — computed once at load. */
+export const JUNCTION_SURFACES: JunctionSurface[] = computeJunctionSurfaces();
