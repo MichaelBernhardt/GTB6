@@ -93,4 +93,17 @@ describe('weapon configuration', () => {
     expect(closeBurst).toBeGreaterThan(calculateDamage(pistol.damage, 4) * 2);
     expect(shotgun.range).toBeLessThan(pistol.range / 2);
   });
+
+  it('gives every bullet weapon a gameplay-tuned muzzle velocity', () => {
+    for (const spec of WEAPONS.filter((entry) => !entry.melee && !entry.projectile)) { expect(spec.bulletSpeed).toBeGreaterThan(200); expect(spec.bulletSpeed).toBeLessThan(400); } // fast enough to feel instant up close, slow enough to demand a lead at range
+    expect(WEAPON_BY_ID.fists.bulletSpeed).toBeUndefined();
+    expect(WEAPON_BY_ID.rpg.bulletSpeed).toBeUndefined(); // the rocket keeps its own ProjectileSpec speed
+    const sniper = WEAPON_BY_ID.sniper;
+    expect(170 / sniper.bulletSpeed!).toBeCloseTo(0.5, 2); // half a second to a mid-range target
+    expect(sniper.range / sniper.bulletSpeed!).toBeGreaterThan(1); // over a second at max range: real leading required
+    expect(sniper.bulletSpeed!).toBeGreaterThan(WEAPON_BY_ID.pistol.bulletSpeed!); // the rifle round is the fastest thing flying
+    expect(WEAPON_BY_ID.smg.range / WEAPON_BY_ID.smg.bulletSpeed!).toBeLessThan(0.35); // spray stays effectively instant inside its envelope
+    expect(sniper.tracer).toBe(true); // the long flight reads visually
+    for (const spec of WEAPONS.filter((entry) => entry.id !== 'sniper')) expect(spec.tracer).toBeUndefined();
+  });
 });

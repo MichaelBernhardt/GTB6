@@ -70,17 +70,20 @@ export interface WeaponSpec {
   pellets: number;
   projectile?: ProjectileSpec;
   falloffFloor?: number; // minimum damage falloff multiplier; the sniper's 1 means full damage at any range
+  bulletSpeed?: number; // muzzle velocity in u/s for simulated rounds — gameplay-tuned (real ~900 m/s would make leading imperceptible)
+  tracer?: boolean; // draw a brief tracer streak so long flights read visually
   sound: WeaponSound;
 }
 
 export const WEAPONS: WeaponSpec[] = [
   { id: 'fists', name: 'FISTS', melee: true, auto: false, starter: true, damage: 34, cooldown: 0.42, range: 2.4, magazine: 0, reserve: 0, reloadTime: 0, spread: 0, pellets: 0, sound: 'punch' },
-  { id: 'pistol', name: '9MM', melee: false, auto: false, starter: true, damage: 38, cooldown: 0.19, range: 130, magazine: 12, reserve: 84, reloadTime: 1.05, spread: 0, pellets: 1, sound: 'pistol' },
-  { id: 'smg', name: 'MICRO SMG', melee: false, auto: true, starter: false, damage: 16, cooldown: 0.09, range: 90, magazine: 30, reserve: 120, reloadTime: 1.6, spread: 0.022, pellets: 1, sound: 'smg' },
-  { id: 'shotgun', name: 'PUMP SHOTGUN', melee: false, auto: false, starter: false, damage: 13, cooldown: 0.85, range: 42, magazine: 6, reserve: 24, reloadTime: 2.2, spread: 0.05, pellets: 7, sound: 'shotgun' },
+  { id: 'pistol', name: '9MM', melee: false, auto: false, starter: true, damage: 38, cooldown: 0.19, range: 130, magazine: 12, reserve: 84, reloadTime: 1.05, spread: 0, pellets: 1, bulletSpeed: 300, sound: 'pistol' },
+  { id: 'smg', name: 'MICRO SMG', melee: false, auto: true, starter: false, damage: 16, cooldown: 0.09, range: 90, magazine: 30, reserve: 120, reloadTime: 1.6, spread: 0.022, pellets: 1, bulletSpeed: 280, sound: 'smg' },
+  { id: 'shotgun', name: 'PUMP SHOTGUN', melee: false, auto: false, starter: false, damage: 13, cooldown: 0.85, range: 42, magazine: 6, reserve: 24, reloadTime: 2.2, spread: 0.05, pellets: 7, bulletSpeed: 250, sound: 'shotgun' },
   { id: 'rpg', name: 'RPG', melee: false, auto: false, starter: false, damage: 150, cooldown: 0.9, range: 200, magazine: 1, reserve: 4, reloadTime: 3, spread: 0, pellets: 0, projectile: { speed: 62, radius: 7, damage: 150 }, sound: 'launcher' },
   // Bolt-action: the 1.6s cooldown is the bolt cycle. Range sits inside the 950 camera far plane and light fog.
-  { id: 'sniper', name: 'HUNTER .303', melee: false, auto: false, starter: false, damage: 110, cooldown: 1.6, range: 420, magazine: 5, reserve: 15, reloadTime: 2.8, spread: 0, pellets: 1, falloffFloor: 1, sound: 'sniper' },
+  // 340 u/s: 0.5s flight to a 170u target, ~1.24s at max range — long shots on movers demand a real lead.
+  { id: 'sniper', name: 'HUNTER .303', melee: false, auto: false, starter: false, damage: 110, cooldown: 1.6, range: 420, magazine: 5, reserve: 15, reloadTime: 2.8, spread: 0, pellets: 1, falloffFloor: 1, bulletSpeed: 340, tracer: true, sound: 'sniper' },
 ];
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map((spec) => [spec.id, spec])) as Record<WeaponId, WeaponSpec>;
 

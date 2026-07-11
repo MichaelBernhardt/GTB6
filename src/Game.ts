@@ -16,6 +16,7 @@ import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, 
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
+import { BulletSystem } from './systems/BulletSystem';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
@@ -77,6 +78,7 @@ export class Game {
   private gore: GoreSystem;
   private pickups: PickupSystem;
   private projectiles: ProjectileSystem;
+  private bullets: BulletSystem;
   private propFx: PropSystem;
   private vehicleFire: VehicleFireSystem;
   private shake = 0;
@@ -152,9 +154,11 @@ export class Game {
     this.gore = new GoreSystem(this.scene, (x, z) => this.city.surfaceHeightAt(x, z));
     this.pickups = new PickupSystem(this.scene);
     this.projectiles = new ProjectileSystem(this.scene);
+    this.bullets = new BulletSystem(this.scene);
     this.vehicleFire = new VehicleFireSystem(this.scene);
     this.propFx = new PropSystem(this.scene, this.city.props, this.audio, (x, z) => this.city.surfaceHeightAt(x, z));
     this.combat.onRocket = (origin, direction, spec) => { if (spec.projectile) this.projectiles.spawn(origin, direction, spec.projectile, spec.range); };
+    this.combat.onShot = (position, origin, directions, count, spec, exclude) => this.bullets.spawnShot(position, origin, directions, count, spec, exclude);
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
     this.input = new InputManager(this.renderer.domElement);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
@@ -460,6 +464,8 @@ export class Game {
     this.wanted.update(dt);
     if (this.previousWanted && !this.wanted.isWanted) this.recordCityEvent('police-evaded', focus);
     this.previousWanted = this.wanted.isWanted; this.shops.update(dt); this.safehouses.update(dt);
+    // Rounds in flight land here: the resolution carries the exact hitscan-era ShotResult, delayed by time of flight.
+    for (const landed of this.bullets.update(dt, this.city, this.population, this.police.vehicles)) this.handleGunshot(landed.result, landed.position, landed.weapon);
     for (const boom of this.projectiles.update(dt, this.city, this.population, this.police.vehicles, this.player.group.position)) {
       this.audio.explosion(boom.position.x, boom.position.z); this.reportCrime(boom.position, 30, { victims: boom.victims.map((victim) => victim.ped), radius: FEAR_EVENTS.kill.radius, label: 'explosion' }); this.population.broadcastFear(boom.position, FEAR_EVENTS.kill); this.shake = Math.min(0.7, this.shake + 0.5);
       if (boom.policeHit) this.reportCrime(boom.position, 24, { copWitnessed: true, label: 'explosion' });
@@ -556,7 +562,7 @@ export class Game {
     }
     this.footstepTimer -= dt;
     if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { const running = this.input.down('ShiftLeft'); this.audio.footstep(running, this.city.isPark(this.player.group.position.x, this.player.group.position.z)); this.footstepTimer = running ? 0.24 : 0.38; }
-    const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles, { aim: this.input.aiming, heading: this.player.heading });
+    const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
     if (shot.fired && shot.melee) {
       this.player.punch();
       if (shot.victim) {
@@ -566,7 +572,7 @@ export class Game {
         if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
       }
     } else if (shot.fired) {
-      this.handleGunshot(shot, this.player.group.position);
+      if (!shot.deferred) this.handleGunshot(shot, this.player.group.position); // rockets report at launch; bullets report when they land
       if (scopeWeapon(this.combat.current)) this.cameraController.recoil(SNIPER_RECOIL); // .303 shoulder thump
     }
     this.player.setWeapon(this.combat.current);
@@ -676,9 +682,10 @@ export class Game {
     return this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && scopeActive(this.input.aiming, this.combat.current, Boolean(this.activeVehicle));
   }
 
-  /** Shared aftermath for a ranged player shot: witnesses, fear, gore, and drops — on foot or drive-by. */
-  private handleGunshot(shot: ShotResult, position: THREE.Vector3): void {
-    const fear = scopeWeapon(this.combat.current) ? FEAR_EVENTS.sniperShot : FEAR_EVENTS.gunshot; // the rifle crack carries further than a pistol pop
+  /** Shared aftermath for a ranged player shot: witnesses, fear, gore, and drops — on foot or drive-by.
+   *  Bullet weapons land here after time of flight, so the firing weapon rides along rather than reading `combat.current`. */
+  private handleGunshot(shot: ShotResult, position: THREE.Vector3, weapon: WeaponId = this.combat.current): void {
+    const fear = scopeWeapon(weapon) ? FEAR_EVENTS.sniperShot : FEAR_EVENTS.gunshot; // the rifle crack carries further than a pistol pop
     this.reportCrime(position, 7, { victims: shot.victim ? [shot.victim] : [], radius: fear.radius, cityEvent: shot.victim && !shot.victim.hostile && !shot.victim.police ? (shot.killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: shot.killed ? 'murder' : 'gunfire' }); this.population.broadcastFear(position, fear);
     if (shot.victim && shot.hitPoint) {
       this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
@@ -754,8 +761,8 @@ export class Game {
     });
     if (driveBy) { // drive-by (car window or bike saddle): Ctrl to aim, LMB fires along the camera ray; no aim, no shooting
       this.combat.tryReload(this.input);
-      const shot = this.combat.fire(this.input, this.camera, vehicle.group.position, this.population, this.police.vehicles, { exclude: vehicle, cooldownScale: DRIVEBY_COOLDOWN_SCALE });
-      if (shot.fired) this.handleGunshot(shot, vehicle.group.position);
+      const shot = this.combat.fire(this.input, this.camera, vehicle.group.position, this.population, { exclude: vehicle, cooldownScale: DRIVEBY_COOLDOWN_SCALE });
+      if (shot.fired && !shot.deferred) this.handleGunshot(shot, vehicle.group.position);
     }
     if (this.input.consume('KeyE')) {
       const shop = this.shops.shopNear(vehicle.group.position);

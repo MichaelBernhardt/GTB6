@@ -104,6 +104,32 @@ describe('CombatSystem', () => {
     expect(combat.fire(fakeInput(true, true), camera, origin, population).fired).toBe(false);
   });
 
+  it('hands bullet weapons to the simulator as a deferred shot instead of hitscan', () => {
+    const combat = makeCombat();
+    const shots: Array<{ count: number; weapon: string; direction: THREE.Vector3; origin: THREE.Vector3 }> = [];
+    combat.onShot = (_position, shotOrigin, directions, count, spec) => shots.push({ count, weapon: spec.id, direction: directions[0]!.clone(), origin: shotOrigin.clone() });
+    const result = combat.fire(fakeInput(true, true), camera, origin, emptyPopulation);
+    expect(result).toMatchObject({ fired: true, deferred: true });
+    expect(result.victim).toBeUndefined(); // outcome arrives later via BulletSystem resolution
+    expect(shots).toHaveLength(1);
+    expect(shots[0]).toMatchObject({ count: 1, weapon: 'pistol' });
+    expect(shots[0]!.direction.length()).toBeCloseTo(1, 5);
+    combat.grantWeapon('shotgun'); combat.select('shotgun'); combat.update(0.5);
+    expect(combat.fire(fakeInput(true, true), camera, origin, emptyPopulation).deferred).toBe(true);
+    expect(shots[1]!.count).toBe(7); // the whole pellet fan travels as one trigger pull
+  });
+
+  it('fires hip shots level along the facing with the muzzle pushed clear of the body', () => {
+    const combat = makeCombat();
+    const shots: Array<{ direction: THREE.Vector3; origin: THREE.Vector3 }> = [];
+    combat.onShot = (_position, shotOrigin, directions) => shots.push({ direction: directions[0]!.clone(), origin: shotOrigin.clone() });
+    combat.fire(fakeInput(true, true), camera, new THREE.Vector3(2, 0, 3), emptyPopulation, { aim: false, heading: Math.PI / 2 });
+    expect(shots[0]!.direction.x).toBeCloseTo(1, 5);
+    expect(shots[0]!.direction.y).toBeCloseTo(0, 5);
+    expect(shots[0]!.origin.y).toBeCloseTo(1.35, 5);
+    expect(shots[0]!.origin.x).toBeCloseTo(2.5, 5);
+  });
+
   it('launches a visible projectile for the rocket launcher instead of hitscan', () => {
     const combat = makeCombat();
     const launches: Array<{ origin: THREE.Vector3; direction: THREE.Vector3 }> = [];

@@ -37,7 +37,8 @@ Delta time is clamped to 50 ms to prevent tab restoration from producing physics
 ### Gameplay systems
 
 - `PopulationSystem` creates and recycles traffic and pedestrians and exposes targets to interaction/combat.
-- `CombatSystem` owns ammunition, reload/fire cadence, camera raycasts, damage application, muzzle light, and impact effects.
+- `CombatSystem` owns ammunition, reload/fire cadence, aim rays, and the muzzle light; bullet weapons hand their pellet fan to `BulletSystem`.
+- `BulletSystem` simulates player rounds at per-weapon muzzle velocity: swept per-frame collision against peds/vehicles at their current positions and against city geometry, damage falloff by distance travelled, sniper tracers, and a pooled hard cap. Each trigger pull resolves to the hitscan-era `ShotResult` after time of flight. Police fire remains probabilistic hitscan.
 - `WantedSystem` is pure heat/escalation/cooldown logic.
 - `PoliceSystem` maintains pursuit unit count by wanted level and spawns only at distant road positions.
 - `MissionSystem` is a data-driven objective sequencer. It consumes a plain `GameSnapshot` and produces advancement, failure, or completion events.
