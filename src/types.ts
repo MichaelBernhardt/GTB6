@@ -29,6 +29,7 @@ export interface GameSettings {
   mouseSensitivity: number;
   cameraViewFoot: number;
   cameraViewVehicle: number;
+  minimapZoom: number;
 }
 export interface GameSnapshot {
   playerPosition: Vector3;
