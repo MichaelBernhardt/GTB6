@@ -17,7 +17,7 @@ const TEMPLATE = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Groot Theft Bakkie — Joburg Map Preview</title>
+<title>Groot Theft Bakkie — Jozi-by-the-Sea Map Preview</title>
 <style>
   :root { color-scheme: dark; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -54,8 +54,8 @@ const TEMPLATE = `<!DOCTYPE html>
 <body>
 <canvas id="canvas"></canvas>
 <div id="panel">
-  <h1>Groot Theft Bakkie — Joburg</h1>
-  <div class="sub">OSM-derived map, Phase 1 preview</div>
+  <h1>Groot Theft Bakkie — Jozi-by-the-Sea</h1>
+  <div class="sub">OSM Joburg crop + Cape seaboard graft — Phase 2 layout preview</div>
   <h2>Stats</h2>
   <div id="stats"></div>
   <h2>Layers</h2>
@@ -86,8 +86,14 @@ const LANDUSE_COLORS = {
   forest: '#274f33', wood: '#274f33', scrub: '#3d5a3a', mine_dump: '#7a6a3f', brownfield: '#5c5142',
 };
 const WATER_COLOR = '#2e6f9e';
+const WATER_PREMIUM_COLOR = '#3d89bd';
+const OCEAN_COLOR = '#173e63';
+const BEACH_COLOR = '#d9c184';
+const FARMLAND_COLOR = '#6d7a3a';
 const DISTRICT_COLOR = '#b9c7d6';
 const CURRENT_COLOR = '#ff4fd8';
+/** Water bodies at least this large (game units^2) get the premium wavy/reflective tier in-game. */
+const PREMIUM_WATER_AREA = 3200;
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -96,15 +102,17 @@ const dpr = window.devicePixelRatio || 1;
 
 const layers = {
   hillshade: { label: 'Terrain hillshade', on: true },
+  coast: { label: 'Coast / ocean', on: true },
+  corridor: { label: 'Corridor / farmland', on: true },
   landuse: { label: 'Parks / landuse', on: true },
-  water: { label: 'Water', on: true },
+  water: { label: 'Water (game tiers)', on: true },
   railways: { label: 'Railways', on: true },
   tracks: { label: 'Off-road tracks', on: true },
   roads: { label: 'Roads', on: true },
   junctions: { label: 'Junctions', on: false },
   districts: { label: 'District labels', on: true },
   landmarks: { label: 'Landmarks', on: true },
-  current: { label: 'Current in-game network', on: false },
+  current: { label: 'Old in-game network', on: false },
 };
 
 let zoom, viewX = 0, viewZ = 0;
@@ -146,10 +154,32 @@ const trackPathsByKind = {};
 for (const t of MAP.tracks) (trackPathsByKind[t.kind] ||= []).push(t);
 const trackPaths = Object.entries(trackPathsByKind).map(([kind, ts]) => ({ kind, width: ts[0].width, path: pathOf(ts) }));
 const landusePaths = {};
-for (const area of MAP.landuse) (landusePaths[area.kind] ||= []).push(area);
+for (const area of MAP.landuse) { if (area.kind !== 'farmland') (landusePaths[area.kind] ||= []).push(area); }
 const landusePathList = Object.entries(landusePaths).map(([kind, areas]) => ({ kind, path: polyPathOf(areas) }));
-const waterPath = MAP.water.length ? polyPathOf(MAP.water) : null;
+function polyArea(points) {
+  let area = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i], b = points[(i + 1) % points.length];
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  return Math.abs(area / 2);
+}
+const premiumWater = MAP.water.filter(w => polyArea(w.points) >= PREMIUM_WATER_AREA);
+const pondWater = MAP.water.filter(w => polyArea(w.points) < PREMIUM_WATER_AREA);
+const premiumWaterPath = premiumWater.length ? polyPathOf(premiumWater) : null;
+const pondWaterPath = pondWater.length ? polyPathOf(pondWater) : null;
 const railPath = MAP.railways.length ? pathOf(MAP.railways) : null;
+// Composite coast + corridor geometry.
+const COAST = MAP.coast || null;
+const RURAL = MAP.rural || null;
+const oceanPath = COAST ? polyPathOf([{ points: COAST.ocean }]) : null;
+const coastlinePath = COAST ? pathOf([{ points: COAST.coastline }]) : null;
+const beachPath = COAST && COAST.beaches.length ? polyPathOf(COAST.beaches) : null;
+// Farmland lives in landuse but toggles with the corridor layer.
+const farmlandPath = (() => {
+  const fields = MAP.landuse.filter(a => a.kind === 'farmland');
+  return fields.length ? polyPathOf(fields) : null;
+})();
 const currentPath = pathOf(CURRENT.roads.map(r => r.closed ? { points: [...r.points, r.points[0]].map(p => [p.x, p.z]) } : { points: r.points.map(p => [p.x, p.z]) }));
 const junctionPath = new Path2D();
 for (const j of MAP.junctions) { junctionPath.moveTo(j.x + 2.5, j.z); junctionPath.arc(j.x, j.z, 2.5, 0, Math.PI * 2); }
@@ -210,6 +240,39 @@ function draw() {
     ctx.drawImage(hs.canvas, hs.x, hs.z, hs.w, hs.h);
     ctx.restore();
   }
+  if (layers.coast.on && COAST) {
+    if (oceanPath) { ctx.fillStyle = OCEAN_COLOR; ctx.globalAlpha = 0.92; ctx.fill(oceanPath); ctx.globalAlpha = 1; }
+    if (beachPath) { ctx.fillStyle = BEACH_COLOR; ctx.globalAlpha = 0.9; ctx.fill(beachPath); ctx.globalAlpha = 1; }
+    if (coastlinePath) { ctx.strokeStyle = '#8fc7e8'; ctx.lineWidth = Math.max(3, 1.6 / zoom); ctx.stroke(coastlinePath); }
+    // Harbour anchor.
+    ctx.fillStyle = '#ffd75e';
+    ctx.beginPath(); ctx.arc(COAST.harbour.x, COAST.harbour.z, Math.max(9, 5 / zoom), 0, Math.PI * 2); ctx.fill();
+  }
+  if (layers.corridor.on && COAST) {
+    // The rural band between the Joburg block and the coast.
+    ctx.save();
+    ctx.fillStyle = '#3d4a2c'; ctx.globalAlpha = 0.28;
+    ctx.fillRect(COAST.corridor.westX, -MAP.stats.targetSize, COAST.corridor.eastX - COAST.corridor.westX, MAP.stats.targetSize * 2);
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([26, 18]);
+    ctx.strokeStyle = '#5c6b3f'; ctx.lineWidth = Math.max(2, 1.2 / zoom);
+    ctx.beginPath();
+    ctx.moveTo(COAST.corridor.eastX, -MAP.stats.targetSize); ctx.lineTo(COAST.corridor.eastX, MAP.stats.targetSize);
+    ctx.moveTo(COAST.corridor.westX, -MAP.stats.targetSize); ctx.lineTo(COAST.corridor.westX, MAP.stats.targetSize);
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.restore();
+    if (farmlandPath) {
+      ctx.fillStyle = FARMLAND_COLOR; ctx.globalAlpha = 0.55; ctx.fill(farmlandPath); ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#8a934f'; ctx.lineWidth = Math.max(1.5, 1 / zoom); ctx.stroke(farmlandPath); // fence lines
+    }
+    if (RURAL) {
+      for (const farm of RURAL.farms) {
+        ctx.fillStyle = farm.kind === 'windmill' ? '#c9d4dd' : farm.kind === 'silo' ? '#b8a884' : '#a5643c';
+        const r = Math.max(5, 3 / zoom);
+        ctx.fillRect(farm.x - r, farm.z - r, r * 2, r * 2);
+      }
+    }
+  }
   if (layers.landuse.on) {
     for (const { kind, path } of landusePathList) {
       ctx.fillStyle = LANDUSE_COLORS[kind] || '#31543a';
@@ -218,7 +281,13 @@ function draw() {
     }
     ctx.globalAlpha = 1;
   }
-  if (layers.water.on && waterPath) { ctx.fillStyle = WATER_COLOR; ctx.fill(waterPath); }
+  if (layers.water.on) {
+    if (pondWaterPath) { ctx.fillStyle = WATER_COLOR; ctx.fill(pondWaterPath); }
+    if (premiumWaterPath) {
+      ctx.fillStyle = WATER_PREMIUM_COLOR; ctx.fill(premiumWaterPath);
+      ctx.strokeStyle = '#7fc4ea'; ctx.lineWidth = Math.max(2, 1.2 / zoom); ctx.stroke(premiumWaterPath); // premium tier: waves + reflections in-game
+    }
+  }
   if (layers.railways.on && railPath) {
     ctx.strokeStyle = '#5c6b7c'; ctx.lineWidth = Math.max(2, 1.5 / zoom); ctx.setLineDash([12, 8]);
     ctx.stroke(railPath); ctx.setLineDash([]);
@@ -375,7 +444,7 @@ function buildPanel() {
     ['Junctions', s.junctionCount],
     ['Off-road tracks', s.trackCount + ' (' + s.trackKm + ' km)'],
     ['Landuse polygons', s.landuseCount],
-    ['Water bodies', s.waterCount],
+    ['Water bodies', s.waterCount + ' (' + premiumWater.length + ' premium tier)'],
     ['Districts', s.districtCount],
     ['Landmarks', s.landmarkCount],
     ['Islands bridged', s.bridgedIslands],
@@ -383,6 +452,12 @@ function buildPanel() {
     ['Elevation', s.minElevation + '–' + s.maxElevation + ' m'],
     ['Footprint', s.targetSize + ' units (1 u = ' + s.metresPerUnit + ' m)'],
   ];
+  if (s.oceanKm2 !== undefined) {
+    rows.push(['Ocean', s.oceanKm2 + ' km²'], ['Land', s.landKm2 + ' km²'],
+      ['Corridor width', s.corridorWidthUnits + ' u (' + Math.round(s.corridorWidthUnits * s.metresPerUnit / 100) / 10 + ' km)'],
+      ['Beaches', (MAP.coast ? MAP.coast.beaches.length : 0)],
+      ['Farm buildings', (MAP.rural ? MAP.rural.farms.length : 0)]);
+  }
   document.getElementById('stats').innerHTML = rows.map(([k, v]) =>
     '<div>' + k + '</div><div class="v">' + v + '</div>').join('');
   const toggles = document.getElementById('toggles');
@@ -399,10 +474,14 @@ function buildPanel() {
   const entries = [
     ...['motorway','trunk','primary','secondary','tertiary','residential'].map(k => [ROAD_COLORS[k], k]),
     [TRACK_COLORS.track, 'track / path (unpaved)'],
-    [WATER_COLOR, 'water'],
+    [OCEAN_COLOR, 'ocean'],
+    [BEACH_COLOR, 'beach'],
+    [WATER_PREMIUM_COLOR, 'dam / lake (premium water tier)'],
+    [WATER_COLOR, 'pond (cheap water tier)'],
+    [FARMLAND_COLOR, 'farmland (corridor)'],
     [LANDUSE_COLORS.park, 'park / green'],
     [LANDUSE_COLORS.mine_dump, 'mine dump / quarry'],
-    [CURRENT_COLOR, 'current in-game network'],
+    [CURRENT_COLOR, 'old in-game network'],
   ];
   legend.innerHTML = entries.map(([c, n]) =>
     '<div class="legend-row"><span class="swatch" style="background:' + c + '"></span>' + n + '</div>').join('');

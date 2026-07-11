@@ -24,5 +24,8 @@
   "Pritchard Street": "Pothole Street",
   "_district_renames": "Game-facing district identities (Marshalltown is the CBD core, Sandown is Sandton CBD):",
   "Marshalltown": "Joburg CBD",
-  "Sandown": "Sandton"
+  "Sandown": "Sandton",
+  "_coast": "Jozi-by-the-Sea seeds (owner to curate):",
+  "Padstal": "Ouma se Padstal",
+  "Sea Point": "Sea Pointe"
 }

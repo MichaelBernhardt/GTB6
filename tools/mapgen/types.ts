@@ -86,7 +86,7 @@ export interface MapTrack {
   points: [number, number][];
 }
 
-/** Green / open / mining landuse polygon. */
+/** Green / open / mining / farmland landuse polygon. */
 export interface MapArea {
   name: string;
   kind:
@@ -98,8 +98,30 @@ export interface MapArea {
     | 'wood'
     | 'scrub'
     | 'mine_dump'
-    | 'brownfield';
+    | 'brownfield'
+    | 'farmland';
   points: [number, number][];
+}
+
+/** The fantastical west coast: real Cape Town seaboard geometry grafted onto the map. */
+export interface MapCoast {
+  /** South-to-north shoreline polyline; everything west of it is ocean. */
+  coastline: [number, number][];
+  /** Closed ocean polygon (coastline closed off to the west). */
+  ocean: [number, number][];
+  beaches: Array<{ name: string; points: [number, number][] }>;
+  /** V&A-style working waterfront anchor on the coastal road. */
+  harbour: { x: number; z: number };
+  /** Rural corridor band between the Joburg block and the coast (game-unit x extents). */
+  corridor: { eastX: number; westX: number };
+}
+
+export interface MapRuralBuilding { x: number; z: number; kind: 'farmhouse' | 'barn' | 'silo' | 'windmill'; }
+
+/** Farmland corridor content: sparse farm clusters and the obligatory padstal. */
+export interface MapRural {
+  farms: MapRuralBuilding[];
+  padstal: { x: number; z: number; name: string };
 }
 
 /**
@@ -153,6 +175,10 @@ export interface MapStats {
   bbox: { south: number; west: number; north: number; east: number };
   targetSize: number;
   metresPerUnit: number;
+  /** Composite (coast) additions. */
+  oceanKm2?: number;
+  landKm2?: number;
+  corridorWidthUnits?: number;
 }
 
 export interface JoburgMap {
@@ -172,4 +198,6 @@ export interface JoburgMap {
   tracks: MapTrack[];
   landuse: MapArea[];
   elevation: HeightGrid;
+  coast?: MapCoast;
+  rural?: MapRural;
 }

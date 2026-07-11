@@ -97,10 +97,11 @@ describe('generated joburg-map.json', () => {
     expect(names).toMatch(/hillbrow/);
   });
 
-  it('carries a plausible elevation grid for the Witwatersrand', () => {
+  it('carries a plausible elevation grid for the Witwatersrand (plus the fantastical coast)', () => {
     const e = map.elevation;
     expect(e.data).toHaveLength(e.cols * e.rows);
-    expect(map.stats.minElevation).toBeGreaterThan(1200);
+    // With the coast graft the composite grid reaches sea level; inland-only builds stay on the Rand.
+    expect(map.stats.minElevation).toBeGreaterThanOrEqual(map.coast ? 0 : 1200);
     expect(map.stats.maxElevation).toBeLessThan(2200);
     expect(map.stats.maxElevation - map.stats.minElevation).toBeGreaterThan(80);
     expect(e.dx).toBeGreaterThan(0);
@@ -139,6 +140,7 @@ describe('generated joburg-map.json', () => {
     const margin = 100; // game units (> the ring offset, < the stub-collection band)
     const deadEndsAtBoundary: string[] = [];
     for (const road of map.roads) {
+      if (road.name === 'Kaapstad Quay') continue; // the harbour pier deliberately ends at the water
       for (const point of [road.points[0], road.points[road.points.length - 1]]) {
         if ((incidence.get(key(point)) ?? 0) > 1) continue;
         const edge = Math.min(point[0] - minX, maxX - point[0], point[1] - minZ, maxZ - point[1]);

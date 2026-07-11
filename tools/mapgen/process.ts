@@ -25,6 +25,7 @@ import {
   THIN_SAMPLE_STEP_M,
   TRACK_WIDTHS,
 } from './config';
+import { compositeElevation, graftCoastAndCorridor, type CoastGraftResult } from './coast';
 import { buildOrbitalRing, pruneShortStubs, thinParallelRoads } from './thin';
 import { flatGrid, type ElevationSamples } from './elevation';
 import {
@@ -107,6 +108,8 @@ export interface ProcessExtras {
   buildingCounts?: number[] | null;
   /** Real OSM road names that must survive density thinning (names-overrides keys). */
   protectedNames?: Iterable<string>;
+  /** Cape Town seaboard extract: enables the Jozi-by-the-Sea coast + rural corridor graft. */
+  cape?: OsmResponse;
 }
 
 function landuseKind(tags: Record<string, string>): MapArea['kind'] | null {
@@ -210,7 +213,15 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       `${THIN_COVERAGE_DISTANCE_M} m of retained roads; pruned ${prunedStubs} dangling spurs < ${STUB_PRUNE_LENGTH_M} m`,
   );
 
+  // ---- Jozi-by-the-Sea: coastal strip + rural corridor graft -----------------
+  let coast: CoastGraftResult | undefined;
+  if (extras.cape) {
+    coast = graftCoastAndCorridor(net, extras.cape);
+    for (const line of coast.log) log.push(line);
+  }
+
   // ---- Boundary orbital (no dead ends at the crop edge) ---------------------
+  // With a coast the west side is the coastal highway, so the orbital opens into a C.
   const ring = buildOrbitalRing(net, {
     boundaryMargin: RING_BOUNDARY_MARGIN_M,
     ringOffset: RING_OFFSET_M,
@@ -218,8 +229,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     name: RING_NAME,
     kind: RING_KIND,
     width: ROAD_WIDTHS[RING_KIND] ?? 18,
+    openAcrossWest: Boolean(coast),
   });
-  log.push(`orbital: joined ${ring.stubs} boundary stubs into '${RING_NAME}'${ring.built ? '' : ' (not built)'}`);
+  log.push(`orbital: joined ${ring.stubs} boundary stubs into '${RING_NAME}'${ring.built ? '' : ' (not built)'}${coast ? ' (open west: coastal highway)' : ''}`);
 
   const componentsBefore = connectedComponents(net).length;
   const islands = bridgeIslands(net, BRIDGE_DISTANCE_M);
@@ -302,6 +314,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     if (points.length < 2 || polylineLength(points) < MIN_ROAD_LENGTH_M) continue;
     tracks.push({ name: way.tags?.name ?? (kind === 'track' ? 'Dirt track' : 'Trail'), kind, width: TRACK_WIDTHS[kind], points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
   }
+  if (coast) for (const track of coast.tracks) tracks.push({ name: track.name, kind: track.kind, width: track.width, points: track.points });
   const trackKm = tracks.reduce((sum, t) => sum + polylineLength(t.points), 0) / 1000;
   log.push(`tracks: ${tracks.length} off-road track/path polylines, ${trackKm.toFixed(1)} km`);
 
@@ -329,12 +342,14 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       landuse.push({ name: way.tags?.name ?? kind, kind, points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
     }
   }
+  if (coast) for (const field of coast.farmland) landuse.push({ name: field.name, kind: 'farmland', points: field.points });
   const mineDumps = landuse.filter((a) => a.kind === 'mine_dump').length;
-  log.push(`landuse: ${landuse.length} polygons (${mineDumps} mine dumps/quarries)`);
+  log.push(`landuse: ${landuse.length} polygons (${mineDumps} mine dumps/quarries, ${coast?.farmland.length ?? 0} farmland fields)`);
 
   // ---- Districts ---------------------------------------------------------
   const districtNodes = extractDistrictNodes(data);
   const districts = districtNodes.map(({ name, lat, lon }) => ({ name, p: project(lat, lon) }));
+  if (coast) districts.push(...coast.districts);
   const buildingCounts = extras.buildingCounts ?? null;
   log.push(`districts: ${districts.length} place nodes${buildingCounts ? ' (with building densities)' : ' (building densities unavailable)'}`);
 
@@ -357,6 +372,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     seenLandmarks.add(key);
     landmarks.push({ name, p: project(lat, lon), kind });
   }
+  if (coast) landmarks.push({ name: coast.padstal.name, p: coast.padstal.p, kind: 'padstal' });
   // The stadium sometimes appears under both names; keep "FNB Stadium".
   if (landmarks.some((l) => /fnb stadium/i.test(l.name))) {
     const index = landmarks.findIndex((l) => /^soccer city$/i.test(l.name));
@@ -389,9 +405,48 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     BBOX.north - (1.5 * (BBOX.north - BBOX.south)) / elevation.rows,
     BBOX.west + (1.5 * (BBOX.east - BBOX.west)) / elevation.cols,
   ));
-  const minElevation = Math.min(...elevation.data);
-  const maxElevation = Math.max(...elevation.data);
-  log.push(`elevation: ${elevation.cols}x${elevation.rows} grid, ${minElevation}..${maxElevation} m (${elevation.source})`);
+  // With a coast the grid is rebuilt over the whole composite square: SRTM over the city,
+  // synthetic rolling corridor + sea level over the graft (Phase 3 terrain gets it for free).
+  const composite = coast ? compositeElevation({
+    srtm: elevation,
+    joburgNW: project(BBOX.north, BBOX.west),
+    joburgSE: project(BBOX.south, BBOX.east),
+    coast,
+    fit,
+    targetSize: TARGET_SIZE,
+  }) : undefined;
+  const heightData = composite ? composite.data : elevation.data;
+  const minElevation = Math.min(...heightData);
+  const maxElevation = Math.max(...heightData);
+  log.push(`elevation: ${composite ? composite.cols : elevation.cols}x${composite ? composite.rows : elevation.rows} grid, ${minElevation}..${maxElevation} m (${composite ? composite.source : elevation.source})`);
+
+  // ---- Land/ocean split (composite stats for the preview) --------------------
+  let oceanKm2: number | undefined; let landKm2: number | undefined;
+  if (coast) {
+    const oceanUnits = coast.ocean.map((p) => fit.apply(p));
+    let minOX = Infinity; let maxOX = -Infinity; let minOZ = Infinity; let maxOZ = -Infinity;
+    for (const p of oceanUnits) { minOX = Math.min(minOX, p.x); maxOX = Math.max(maxOX, p.x); minOZ = Math.min(minOZ, p.z); maxOZ = Math.max(maxOZ, p.z); }
+    const inOcean = (x: number, z: number): boolean => {
+      if (x < minOX || x > maxOX || z < minOZ || z > maxOZ) return false;
+      let inside = false;
+      for (let i = 0, j = oceanUnits.length - 1; i < oceanUnits.length; j = i++) {
+        const a = oceanUnits[i]!; const b = oceanUnits[j]!;
+        if (a.z > z !== b.z > z && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
+      }
+      return inside;
+    };
+    const samples = 160;
+    let oceanHits = 0;
+    for (let row = 0; row < samples; row++) for (let col = 0; col < samples; col++) {
+      const x = -TARGET_SIZE / 2 + ((col + 0.5) * TARGET_SIZE) / samples;
+      const z = -TARGET_SIZE / 2 + ((row + 0.5) * TARGET_SIZE) / samples;
+      if (inOcean(x, z)) oceanHits++;
+    }
+    const totalKm2 = (TARGET_SIZE * fit.metresPerUnit / 1000) ** 2;
+    oceanKm2 = Math.round(totalKm2 * (oceanHits / (samples * samples)) * 10) / 10;
+    landKm2 = Math.round((totalKm2 - oceanKm2) * 10) / 10;
+    log.push(`coast: ocean covers ~${oceanKm2} km2 of the ${Math.round(totalKm2)} km2 square`);
+  }
 
   const map: JoburgMap = {
     meta: {
@@ -418,6 +473,11 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       bbox: { ...BBOX },
       targetSize: TARGET_SIZE,
       metresPerUnit: Math.round(fit.metresPerUnit * 1000) / 1000,
+      ...(coast ? {
+        oceanKm2,
+        landKm2,
+        corridorWidthUnits: Math.round((coast.corridorEastX - coast.corridorWestX) * fit.scale),
+      } : {}),
     },
     roads: simplifiedRoads.map(({ road, points }) => ({
       name: road.name,
@@ -455,7 +515,16 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       points: points.map(toUnits),
     })),
     landuse: landuse.map(({ name, kind, points }) => ({ name, kind, points: points.map(toUnits) })),
-    elevation: {
+    elevation: composite ? {
+      cols: composite.cols,
+      rows: composite.rows,
+      x0: round2(composite.x0),
+      z0: round2(composite.z0),
+      dx: round2(composite.dx),
+      dz: round2(composite.dz),
+      source: composite.source,
+      data: composite.data,
+    } : {
       cols: elevation.cols,
       rows: elevation.rows,
       x0: round2(nw.x),
@@ -465,6 +534,22 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       source: elevation.source,
       data: elevation.data,
     },
+    ...(coast ? {
+      coast: {
+        coastline: coast.coastline.map(toUnits),
+        ocean: coast.ocean.map(toUnits),
+        beaches: coast.beaches.map((beach) => ({ name: beach.name, points: beach.points.map(toUnits) })),
+        harbour: (() => { const [x, z] = toUnits(coast.harbour); return { x, z }; })(),
+        corridor: {
+          eastX: round2(fit.apply({ x: coast.corridorEastX, z: 0 }).x),
+          westX: round2(fit.apply({ x: coast.corridorWestX, z: 0 }).x),
+        },
+      },
+      rural: {
+        farms: coast.farms.map((farm) => { const [x, z] = toUnits(farm.p); return { x, z, kind: farm.kind }; }),
+        padstal: (() => { const [x, z] = toUnits(coast.padstal.p); return { x, z, name: coast.padstal.name }; })(),
+      },
+    } : {}),
   };
   return { map, log };
 }

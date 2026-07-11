@@ -32,5 +32,6 @@ export function applyNameOverrides(map: JoburgMap, overrides: NameOverrides): Jo
     })),
     districts: map.districts.map((district) => ({ ...district, name: rename(district.name) })),
     landmarks: map.landmarks.map((landmark) => ({ ...landmark, name: rename(landmark.name) })),
+    ...(map.rural ? { rural: { ...map.rural, padstal: { ...map.rural.padstal, name: rename(map.rural.padstal.name) } } } : {}),
   };
 }

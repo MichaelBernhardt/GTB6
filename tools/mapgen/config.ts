@@ -34,11 +34,12 @@ export const MIN_WATER_AREA_M2 = 4000;
 
 /**
  * Target square footprint (game units). The real bbox is fitted inside, aspect preserved.
- * 3900 (~4.16 m/unit) is the Phase-2 driveable scale: the real CBD grid pitch is ~70 m
- * (~17 units), so stylised road widths below are tuned to leave room for parcels between
- * adjacent downtown streets while a 2-unit-wide car still gets a two-lane carriageway.
+ * 4700 (~3.9 m/unit with the coast+corridor graft) is the Phase-2 driveable scale: the real
+ * CBD grid pitch is ~70 m (~18 units), so stylised road widths below are tuned to leave room
+ * for parcels between adjacent downtown streets while a 2-unit-wide car still gets a
+ * two-lane carriageway.
  */
-export const TARGET_SIZE = 3900;
+export const TARGET_SIZE = 4700;
 
 /** Game-unit road widths per OSM highway class. */
 export const ROAD_WIDTHS: Record<string, number> = {
@@ -93,6 +94,31 @@ export const RING_OFFSET_M = 220;
 export const RING_CORNER_CHAMFER_M = 260;
 export const RING_NAME = 'Egoli Orbital';
 export const RING_KIND = 'trunk' as const;
+
+/**
+ * Jozi-by-the-Sea: the west edge of the map becomes an Atlantic-style coastline grafted
+ * from Cape Town's Sea Point -> Camps Bay seaboard, separated from the Joburg block by a
+ * rural farmland corridor ("a little drive between them"). Deliberately fantastical.
+ */
+export const CAPE_BBOX = { south: -33.93, west: 18.37, north: -33.87, east: 18.42 } as const;
+/** Rural corridor width between the Joburg west edge and the coastal strip (metres). */
+export const CORRIDOR_WIDTH_M = 3300;
+/** Coastal road sits this far inland of the waterline. */
+export const COAST_ROAD_SETBACK_M = 260;
+/** North-south stretch applied to the Cape strip so it covers more of the west edge. */
+export const COAST_STRETCH_Z = 1.35;
+/** The ocean fill extends this far west of the coastline. */
+export const OCEAN_EXTENT_M = 2600;
+export const COASTAL_ROAD_NAME = 'Victoria Road';
+/** Corridor connector roads (creative geography, hence the in-game names straight away). */
+export const CORRIDOR_LINKS = [
+  { name: 'Madiba Meander', kind: 'trunk' },
+  { name: 'Rooibos Route', kind: 'secondary' },
+] as const;
+export const FRONTAGE_ROAD_NAME = 'Plaaspad';
+/** Renamed to "Ouma se Padstal" via names-overrides.json. */
+export const PADSTAL_NAME = 'Padstal';
+export const HARBOUR_DISTRICT_NAME = 'Kaapstad Quay';
 
 /** Elevation grid resolution (cols x rows over the bbox). */
 export const ELEVATION_COLS = 96;

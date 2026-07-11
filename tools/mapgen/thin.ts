@@ -176,6 +176,8 @@ export interface RingOptions {
   name: string;
   kind: GraphRoad['kind'];
   width: number;
+  /** Leave the west edge open (the coastal highway takes that side): the orbital becomes a C. */
+  openAcrossWest?: boolean;
 }
 
 export interface RingReport { stubs: number; built: boolean; }
@@ -239,8 +241,12 @@ export function buildOrbitalRing(net: RoadNetwork, options: RingOptions): RingRe
       if (end === undefined || seen.has(end) || (degree.get(end) ?? 0) !== 1) continue;
       const point = net.nodes.get(end);
       if (!point) continue;
-      const edgeDistance = Math.min(point.x - bounds.minX, bounds.maxX - point.x, point.z - bounds.minZ, bounds.maxZ - point.z);
-      if (edgeDistance <= options.boundaryMargin) { stubIds.push(end); seen.add(end); }
+      const dWest = point.x - bounds.minX;
+      const dOther = Math.min(bounds.maxX - point.x, point.z - bounds.minZ, bounds.maxZ - point.z);
+      // Open-west mode: stubs that belong to the west edge (the coast) stay out of the ring —
+      // quays and slipways are allowed to end at the water.
+      if (options.openAcrossWest && dWest < dOther) continue;
+      if (Math.min(dWest, dOther) <= options.boundaryMargin) { stubIds.push(end); seen.add(end); }
     }
   }
   if (stubIds.length < 2) return { stubs: stubIds.length, built: false };
@@ -254,9 +260,26 @@ export function buildOrbitalRing(net: RoadNetwork, options: RingOptions): RingRe
   const addNode = (point: Pt): number => { const id = nextId++; net.nodes.set(id, point); return id; };
 
   const total = 2 * (rect.maxX - rect.minX + rect.maxZ - rect.minZ);
-  const stubs = stubIds
+  let stubs = stubIds
     .map((id) => ({ id, t: perimeterParam(rect, net.nodes.get(id)!) }))
     .sort((a, b) => a.t - b.t);
+
+  // Open-west mode: the coastal highway owns the west side, so the orbital is a C shape.
+  // Find the stub gap whose perimeter arc crosses the middle of the west edge and cut there.
+  let closed = true;
+  if (options.openAcrossWest && stubs.length >= 2) {
+    const w = rect.maxX - rect.minX; const h = rect.maxZ - rect.minZ;
+    const westMid = 2 * w + h + h / 2; // param of (minX, midZ) on the clockwise walk
+    for (let index = 0; index < stubs.length; index++) {
+      const current = stubs[index]!; const next = stubs[(index + 1) % stubs.length]!;
+      const end = next.t > current.t ? next.t : next.t + total;
+      if ((westMid > current.t && westMid < end) || (westMid + total > current.t && westMid + total < end)) {
+        stubs = [...stubs.slice(index + 1), ...stubs.slice(0, index + 1)];
+        closed = false;
+        break;
+      }
+    }
+  }
 
   // Ring vertices: each stub's projection onto the rectangle, with chamfered corner points between.
   const corners = cornerParams(rect);
@@ -267,6 +290,7 @@ export function buildOrbitalRing(net: RoadNetwork, options: RingOptions): RingRe
     ringNodeIds.push(projectionId);
     // Spur from the orbital into the dangling endpoint.
     net.roads.push({ name: options.name, kind: options.kind, width: options.width, nodeIds: [projectionId, current.id] });
+    if (!closed && index === stubs.length - 1) break; // open orbital: the last stub is an end, not a wrap
     // Chamfered corner vertices between this projection and the next (wrapping), in walk order.
     const end = next.t > current.t ? next.t : next.t + total;
     const between: number[] = [];
@@ -280,8 +304,8 @@ export function buildOrbitalRing(net: RoadNetwork, options: RingOptions): RingRe
     }
   }
   if (ringNodeIds.length >= 2) {
-    const first = ringNodeIds[0];
-    net.roads.push({ name: options.name, kind: options.kind, width: options.width, nodeIds: [...ringNodeIds, first] });
+    const nodeIds = closed ? [...ringNodeIds, ringNodeIds[0]] : ringNodeIds;
+    net.roads.push({ name: options.name, kind: options.kind, width: options.width, nodeIds });
   }
   return { stubs: stubs.length, built: true };
 }

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { DISTRICT_RADIUS_M } from './config';
 import { fetchElevationGrid } from './elevation';
 import { applyNameOverrides, loadNameOverrides } from './emit';
-import { fetchBuildingCounts, fetchOsm } from './overpass';
+import { fetchBuildingCounts, fetchCape, fetchOsm } from './overpass';
 import { buildPreviewHtml } from './preview';
 import { extractDistrictNodes, processOsm } from './process';
 
@@ -29,6 +29,9 @@ async function main(): Promise<void> {
   const { data, fromCache } = await fetchOsm({ refresh });
   console.log(`[mapgen] OSM extract: ${data.elements.length} elements${fromCache ? ' (from cache)' : ''}`);
 
+  const cape = await fetchCape({ refresh });
+  console.log(`[mapgen] Cape seaboard extract: ${cape.data.elements.length} elements${cape.fromCache ? ' (from cache)' : ''}`);
+
   const districtNodes = extractDistrictNodes(data);
   const [elevation, buildingCounts] = [
     await fetchElevationGrid(),
@@ -36,7 +39,7 @@ async function main(): Promise<void> {
   ];
 
   const overrides = loadNameOverrides();
-  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides) });
+  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data });
   for (const line of log) console.log(`[process] ${line}`);
 
   const finalMap = applyNameOverrides(map, overrides);
@@ -55,7 +58,8 @@ async function main(): Promise<void> {
       `${s.trackCount} off-road tracks (${s.trackKm} km), ${s.landuseCount} landuse polygons, ` +
       `${s.districtCount} districts, ${s.waterCount} water bodies, ${s.landmarkCount} landmarks, ` +
       `elevation ${s.minElevation}-${s.maxElevation} m; bridged ${s.bridgedIslands} island joins, ` +
-      `dropped ${s.droppedIslands} islands (${s.droppedIslandKm} km); 1 unit = ${s.metresPerUnit} m`,
+      `dropped ${s.droppedIslands} islands (${s.droppedIslandKm} km); 1 unit = ${s.metresPerUnit} m` +
+      (s.oceanKm2 !== undefined ? `; ocean ${s.oceanKm2} km2 / land ${s.landKm2} km2, corridor ${s.corridorWidthUnits}u wide` : ''),
   );
 }
 

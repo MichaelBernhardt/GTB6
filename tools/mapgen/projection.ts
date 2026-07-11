@@ -35,6 +35,7 @@ export function makeFitTransform(
     scale,
     metresPerUnit: 1 / scale,
     apply: (p: Pt): Pt => ({ x: (p.x - cx) * scale, z: (p.z - cz) * scale }),
+    invert: (p: Pt): Pt => ({ x: p.x / scale + cx, z: p.z / scale + cz }),
   };
 }
 

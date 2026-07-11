@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   BBOX,
+  CAPE_BBOX,
   CBD_CENTER,
   LANDMARK_NAME_REGEX,
   OVERPASS_ENDPOINTS,
@@ -108,6 +109,50 @@ export async function fetchOsm(options: { refresh?: boolean } = {}): Promise<{ d
     }
   }
   throw new Error(`All Overpass attempts failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+/** Cape Town Atlantic-seaboard extract for the Jozi-by-the-Sea coast graft. */
+export function buildCapeQuery(): string {
+  const box = `${CAPE_BBOX.south},${CAPE_BBOX.west},${CAPE_BBOX.north},${CAPE_BBOX.east}`;
+  return `
+[out:json][timeout:120];
+(
+  way["natural"="coastline"](${box});
+  way["natural"="beach"](${box});
+  relation["natural"="beach"](${box});
+)->.geo;
+.geo out body;
+.geo >;
+out skel qt;
+node["place"~"^(suburb|quarter|neighbourhood)$"](${box});
+out body;
+`.trim();
+}
+
+/** Fetch the Cape seaboard extract with the same disk cache + retry policy as the main extract. */
+export async function fetchCape(options: { refresh?: boolean } = {}): Promise<{ data: OsmResponse; fromCache: boolean }> {
+  const query = buildCapeQuery();
+  const hash = createHash('sha256').update(query).digest('hex').slice(0, 16);
+  const cacheFile = join(CACHE_DIR, `overpass-cape-${hash}.json`);
+  if (!options.refresh && existsSync(cacheFile)) {
+    return { data: JSON.parse(readFileSync(cacheFile, 'utf8')) as OsmResponse, fromCache: true };
+  }
+  mkdirSync(CACHE_DIR, { recursive: true });
+  let lastError: unknown;
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      console.log(`[overpass] querying Cape seaboard via ${endpoint} ...`);
+      const data = await requestOnce(endpoint, query);
+      writeFileSync(cacheFile, JSON.stringify(data));
+      console.log(`[overpass] got ${data.elements.length} Cape elements, cached to ${cacheFile}`);
+      return { data, fromCache: false };
+    } catch (error) {
+      lastError = error;
+      console.warn(`[overpass] Cape attempt failed: ${error instanceof Error ? error.message : String(error)}`);
+      await sleep(8_000);
+    }
+  }
+  throw new Error(`Cape seaboard fetch failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }
 
 /**
