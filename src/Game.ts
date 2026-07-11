@@ -20,6 +20,7 @@ import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
+import { LifecycleSystem } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, REPORT_DELAY, SIGHT_RADIUS, type WitnessCandidate } from './systems/PoliceKnowledge';
 import { PoliceSystem } from './systems/PoliceSystem';
@@ -60,6 +61,8 @@ export class Game {
   private player: Player;
   private cameraController: CameraController;
   private population: PopulationSystem;
+  private lifecycle: LifecycleSystem;
+  private cameraForward = new THREE.Vector3();
   private combat: CombatSystem;
   private gore: GoreSystem;
   private pickups: PickupSystem;
@@ -115,6 +118,7 @@ export class Game {
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
+    this.lifecycle = new LifecycleSystem(this.city, this.population);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene);
     this.pickups = new PickupSystem(this.scene);
@@ -230,6 +234,10 @@ export class Game {
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
+    const forward = this.camera.getWorldDirection(this.cameraForward);
+    const guarded = new Set<Vehicle>();
+    for (const vehicle of [this.activeVehicle, this.transition?.vehicle, this.garageVehicle]) if (vehicle) guarded.add(vehicle);
+    this.lifecycle.update(dt, this.dayNight.hour, { x: focus.x, z: focus.z, dirX: forward.x, dirZ: forward.z }, guarded);
     this.city.update(dt);
     const eskom = this.loadShedding.update(dt);
     if (eskom === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
