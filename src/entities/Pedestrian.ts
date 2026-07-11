@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { accumulateFear, CALM_THRESHOLD, decayFear, fearResponse, FEAR_MAX } from '../systems/FearSystem';
+import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems/BumpSystem';
+import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, FEAR_MAX } from '../systems/FearSystem';
+import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
@@ -17,6 +19,7 @@ export class Pedestrian {
   carGuard = false;
   aggressive = false;
   mugged = false;
+  frozen = false; // set by PopulationSystem distance culling: a frozen ped receives no update() at all
   wallet = 0;
   fear = 0;
   bravery = 0.5;
@@ -28,7 +31,10 @@ export class Pedestrian {
   route: RoadPoint[] = [];
   private routeIndex = 0;
   private routed = false;
+  private watchdog = new ProgressWatchdog();
   private punchTimer = 0;
+  private downTimer = 0;
+  private stumbleTimer = 0;
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
@@ -41,8 +47,20 @@ export class Pedestrian {
   }
 
   update(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
-    if (this.state === 'down') return;
+    if (this.state === 'down') {
+      if (this.downTimer <= 0) return; // health depleted: stays down
+      this.downTimer -= dt;
+      if (this.downTimer <= 0) this.rise(player);
+      return;
+    }
     this.fear = decayFear(this.fear, dt);
+    if (this.stumbleTimer > 0) {
+      this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
+      const sway = this.stumbleTimer / STUMBLE_DURATION;
+      this.group.rotation.x = -0.32 * sway;
+      for (const arm of this.arms) arm.rotation.x = 0.7 * sway;
+      if (this.stumbleTimer > 0) return;
+    }
     const distance = this.group.position.distanceTo(player);
     if (this.state === 'cower') {
       this.setPanicPose(true, true);
@@ -50,6 +68,7 @@ export class Pedestrian {
       return;
     }
     if (this.enraged) { if (this.fear < CALM_THRESHOLD) { this.enraged = false; this.setPanicPose(false, false); this.pickDestination(choices); } else { this.state = 'hostile'; this.destination.copy(player); } }
+    if (this.state === 'flee' && this.fear < CALM_THRESHOLD) this.pickDestination(choices); // calm down even when a wall kept the flee point unreachable
     if (this.aggressive && !this.contact && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); }
     if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); }
     this.punchTimer = Math.max(0, this.punchTimer - dt);
@@ -59,11 +78,21 @@ export class Pedestrian {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }
       if (this.state !== 'walk' || !this.advanceRoute()) { this.state = 'idle'; this.idleTime = 1 + Math.random() * 4; return; }
     }
+    if (this.state !== 'walk') this.watchdog.reset(); // progress is only tracked while walking a route; fear states manage themselves
+    else if (this.watchdog.update(Math.hypot(this.destination.x - this.group.position.x, this.destination.z - this.group.position.z), dt)) {
+      // 10s without closing on the current waypoint: abandon the route, pause briefly (so it doesn't look robotic), then pick fresh.
+      this.watchdog.reset(); this.route = []; this.routeIndex = 0; this.routed = false;
+      this.state = 'idle'; this.idleTime = 0.4 + Math.random() * 0.9; return;
+    }
     const direction = this.destination.clone().sub(this.group.position); direction.y = 0; direction.normalize();
     const pace = this.state === 'flee' ? 5.5 + this.fear * 0.014 : this.state === 'hostile' ? 5.5 : this.speed;
-    const desired = this.group.position.clone().addScaledVector(direction, pace * dt);
+    const step = pace * dt;
+    const desired = this.group.position.clone().addScaledVector(direction, step);
     const moved = city.clampMove(this.group.position, desired, 0.42); this.group.position.copy(moved);
-    if (moved.distanceToSquared(desired) > 0.01) this.pickDestination(choices);
+    if (moved.distanceToSquared(desired) > step * step * 0.25) { // blocked = progress well below the frame step (an absolute threshold never fires at 60fps and pinned peds on walls forever)
+      if (this.state !== 'walk') this.pickDestination(choices);
+      else if (!this.advanceRoute()) { this.state = 'idle'; this.idleTime = 0.4 + Math.random() * 0.9; } // skip the snagged waypoint; wedged with no route left → brief pause, then a fresh pick
+    }
     this.group.rotation.y = Math.atan2(direction.x, direction.z); this.phase += dt * pace * 2.4;
     this.legs[0].rotation.x = Math.sin(this.phase) * 0.55; this.legs[1].rotation.x = -Math.sin(this.phase) * 0.55;
   }
@@ -85,6 +114,32 @@ export class Pedestrian {
     return this.health === 0;
   }
 
+  /** Soft player bump: a brief off-balance reaction, no state change. */
+  stumble(origin: THREE.Vector3): void {
+    if (this.state === 'down' || this.contact) return;
+    this.stumbleTimer = STUMBLE_DURATION; this.threat.copy(origin);
+  }
+
+  /** Sprint bump: floors the ped; they get back up after ~2s unless health is depleted. Returns true on kill. */
+  knockdown(origin: THREE.Vector3, damage = KNOCKDOWN_DAMAGE): boolean {
+    if (this.state === 'down' || this.contact) return false;
+    const outcome = knockdownOutcome(this.health, damage);
+    this.health = outcome.health; this.downTimer = outcome.downTime; this.threat.copy(origin);
+    this.fear = accumulateFear(this.fear, FEAR_EVENTS.assault.base); this.stumbleTimer = 0; this.state = 'down';
+    this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = 0.36;
+    if (outcome.killed) this.enraged = false;
+    return outcome.killed;
+  }
+
+  /** Back on their feet after a knockdown: personality decides fight or flight. */
+  private rise(player: THREE.Vector3): void {
+    this.group.rotation.z = 0; this.group.position.y = 0;
+    const response = fearResponse(this.fear, this.aggressive, this.bravery);
+    if (response === 'fight') { this.enraged = true; this.state = 'hostile'; this.destination.copy(player); }
+    else if (response === 'cower') this.state = 'cower';
+    else { this.state = 'flee'; this.fleeFrom(this.threat); }
+  }
+
   makeCarGuard(): void {
     this.carGuard = true; this.contact = true; this.group.name = 'Car Guard';
     const vest = new THREE.Mesh(new RoundedBoxGeometry(0.52, 0.5, 0.34, 3, 0.06), new THREE.MeshStandardMaterial({ color: 0xb6f22e, emissive: 0x86c010, emissiveIntensity: 0.55, roughness: 0.6 }));
@@ -98,10 +153,13 @@ export class Pedestrian {
     return cash;
   }
 
+  /** Freeze/thaw boundary: stalled time must not carry across a frozen gap. */
+  resetProgress(): void { this.watchdog.reset(); }
+
   pickDestination(choices: RoadPoint[]): void {
-    this.route = []; this.routeIndex = 0; this.routed = false; // fallback wander until the population planner budgets a graph route
+    this.route = []; this.routeIndex = 0; this.routed = false; this.watchdog.reset(); // fallback wander until the population planner budgets a graph route
     const point = choices[Math.floor(Math.random() * choices.length)];
-    if (point) this.destination.set(point.x + (Math.random() - 0.5) * 12, 0, point.z + (Math.random() - 0.5) * 12);
+    if (point) this.destination.set(point.x + (Math.random() - 0.5) * 6, 0, point.z + (Math.random() - 0.5) * 6); // small jitter keeps peds off single-file rails without aiming them inside parcels
     this.state = this.hostile ? 'hostile' : 'walk';
   }
 
@@ -114,6 +172,7 @@ export class Pedestrian {
   }
 
   private advanceRoute(): boolean {
+    this.watchdog.reset(); // new waypoint, new progress baseline
     const point = this.route[this.routeIndex];
     if (!point) { this.routed = false; return false; }
     this.routeIndex += 1;

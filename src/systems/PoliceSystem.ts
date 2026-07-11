@@ -3,7 +3,7 @@ import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import type { City } from '../world/City';
-import { replanInterval, RoutePlanner, type NavPoint } from './NavGraph';
+import { ProgressWatchdog, replanInterval, RoutePlanner, type NavPoint } from './NavGraph';
 import { ARRIVE_DWELL, ARRIVE_RADIUS, pickRoamGoal, ROAM_RADIUS, SIGHT_RADIUS, type KnownPosition, type PoliceKnowledge } from './PoliceKnowledge';
 import type { WantedSystem } from './WantedSystem';
 
@@ -81,7 +81,7 @@ export type PoliceEvent =
   | { kind: 'reboard'; officers: Pedestrian[] }
   | { kind: 'abandoned'; vehicle: Vehicle };
 
-interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; mode: UnitMode; shootIn: number; contactIn: number; bumpIn: number; }
+interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; mode: UnitMode; shootIn: number; contactIn: number; bumpIn: number; watchdog: ProgressWatchdog; backoff: number; }
 interface Officer { ped: Pedestrian; car?: Vehicle; role: 'cover' | 'chase'; side: 1 | -1; shootIn: number; }
 
 export class PoliceSystem {
@@ -179,7 +179,7 @@ export class PoliceSystem {
     const distance = vehicle.group.position.distanceTo(playerPosition);
     const aggression = 0.82 + wanted.level * 0.035;
     if (seen && distance < PURSUIT_RANGE) { // only reachable with the player in a vehicle: on-foot sightings become standoffs
-      brain.chasing = true; brain.path = []; brain.index = 0; brain.replanIn = 0;
+      brain.chasing = true; brain.path = []; brain.index = 0; brain.replanIn = 0; brain.watchdog.reset(); // live target: the chase is its own progress
       this.chaseVehicle(vehicle, brain, dt, playerPosition, distance, aggression);
     } else if (brain.roaming) {
       this.roam(vehicle, brain, dt, known);
@@ -190,7 +190,8 @@ export class PoliceSystem {
       }
       brain.replanIn -= dt;
       if (brain.replanIn <= 0 || !brain.chasing || brain.index >= brain.path.length || vehicle.aiStuck > 5) {
-        const path = this.planner.tryPlan(vehicle.group.position.x, vehicle.group.position.z, this.planner.nearest(known.x, known.z));
+        // Roads as far as they go, then offroad to the scene itself — otherwise an off-road lastKnown (park, parcel) never trips ARRIVE_RADIUS and units sit at the curb.
+        const path = this.planner.tryPlanTo(vehicle.group.position.x, vehicle.group.position.z, known.x, known.z);
         if (path) { brain.path = path; brain.index = 0; brain.chasing = true; brain.replanIn = replanInterval(brain.serial); vehicle.aiStuck = 0; }
       }
       this.followPath(vehicle, brain, dt, aggression);
@@ -364,14 +365,23 @@ export class PoliceSystem {
     this.followPath(vehicle, brain, dt, 0.4);
   }
 
+  /** Drives the current path with the progress watchdog: 10s without closing on the waypoint backs the
+   *  unit out for a second and clears the path, so pursue/roam/patrol all replan instead of grinding a wall. */
   private followPath(vehicle: Vehicle, brain: PoliceBrain, dt: number, aggression: number): void {
+    if (brain.backoff > 0) {
+      brain.backoff -= dt; vehicle.reverse(dt, this.city);
+      if (brain.backoff <= 0) { brain.path = []; brain.index = 0; brain.chasing = false; brain.replanIn = 0; }
+      return;
+    }
     const point = brain.path[brain.index];
-    if (!point) { vehicle.speed *= Math.exp(-dt); return; } // waiting on the planner budget
+    if (!point) { vehicle.speed *= Math.exp(-dt); brain.watchdog.reset(); return; } // waiting on the planner budget
     vehicle.aiTarget.set(point.x, 0, point.z);
     if (vehicle.group.position.distanceToSquared(vehicle.aiTarget) < 85) {
-      brain.index += 1;
+      brain.index += 1; brain.watchdog.reset();
       const next = brain.path[brain.index];
       if (next) vehicle.aiTarget.set(next.x, 0, next.z);
+    } else if (brain.watchdog.update(Math.hypot(point.x - vehicle.group.position.x, point.z - vehicle.group.position.z), dt)) {
+      brain.watchdog.reset(); brain.backoff = 1.1; return;
     }
     vehicle.updateAI(dt, this.city, undefined, aggression);
   }
@@ -385,7 +395,7 @@ export class PoliceSystem {
 
   private brainOf(vehicle: Vehicle): PoliceBrain {
     let brain = this.brains.get(vehicle);
-    if (!brain) { brain = { serial: this.serials++, path: [], index: 0, replanIn: 0, chasing: false, roaming: false, dwell: 0, knownTime: -1, mode: 'drive', shootIn: 0, contactIn: 0, bumpIn: 0 }; this.brains.set(vehicle, brain); }
+    if (!brain) { brain = { serial: this.serials++, path: [], index: 0, replanIn: 0, chasing: false, roaming: false, dwell: 0, knownTime: -1, mode: 'drive', shootIn: 0, contactIn: 0, bumpIn: 0, watchdog: new ProgressWatchdog(), backoff: 0 }; this.brains.set(vehicle, brain); }
     return brain;
   }
 

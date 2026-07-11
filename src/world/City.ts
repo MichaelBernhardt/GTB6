@@ -17,6 +17,16 @@ export interface RoadDefinition { name: string; width: number; closed?: boolean;
 
 export interface ParkDefinition { x: number; z: number; width: number; depth: number; kind: 'civic' | 'garden' | 'recreation'; name: string; }
 
+/** Pure district lookup: Braamfontein owns the deep south, the far flanks are City Deep and Sandton,
+ *  the central park belt is Zoo Lake, and everything else answers to the CBD. */
+export function districtAt(x: number, z: number): District {
+  if (z < -180) return 'Braamfontein';
+  if (x < -145) return 'City Deep';
+  if (x > 145) return 'Sandton';
+  if (Math.abs(x) < 115 && Math.abs(z) < 115) return 'Zoo Lake';
+  return 'Joburg CBD';
+}
+
 export const PARK_AREAS: ParkDefinition[] = [
   { x: 0, z: 0, width: 76, depth: 72, kind: 'civic', name: 'Zoo Lake Park' },
   { x: 245, z: 198, width: 52, depth: 38, kind: 'garden', name: 'Mushroom Farm Park' },
@@ -121,7 +131,6 @@ export class City {
     this.buildGround(); this.buildRoads(); this.buildDistricts(); this.buildWaterfront();
     this.infrastructure = new UrbanInfrastructure(
       this.group,
-      this.sidewalkPoints,
       this.roadsidePoints,
       (x, z, radius) => this.collides(x, z, radius),
       (x, z, margin) => this.isOnRoad(x, z, margin),
@@ -135,13 +144,7 @@ export class City {
     this.infrastructure.update(dt);
   }
 
-  districtAt(x: number, z: number): District {
-    if (z < -180) return 'Braamfontein';
-    if (x < -145) return 'City Deep';
-    if (x > 145) return 'Sandton';
-    if (Math.abs(x) < 115 && Math.abs(z) < 115) return 'Zoo Lake';
-    return 'Joburg CBD';
-  }
+  districtAt(x: number, z: number): District { return districtAt(x, z); }
 
   /** Shared facade materials (buildings are merged per material): the day/night cycle animates their emissiveIntensity for lit windows. */
   facadeMaterials(): THREE.MeshStandardMaterial[] { return [...this.buildingMaterial.values()]; }
@@ -533,7 +536,9 @@ export class City {
 
   private addCivicParkFeature(x: number, z: number, width: number, depth: number): void {
     const stone = new THREE.MeshStandardMaterial({ color: 0xb9bbb3, roughness: 0.62 });
-    const fountain = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.8, 0.72, 40), stone); fountain.position.set(x + width * 0.25, 0.62, z - depth * 0.23); fountain.castShadow = true; this.group.add(fountain);
+    // SW quadrant: Zoo Lake Park is criss-crossed by Bree/Main Reef/Jan Smuts, and the old (+0.25w, -0.23d)
+    // spot pushed the 5.8u basin ~6u INTO Bree St — a solid roadblock traffic wedged against forever.
+    const fountain = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.8, 0.72, 40), stone); fountain.position.set(x - width * 0.43, 0.62, z - depth * 0.42); fountain.castShadow = true; this.group.add(fountain);
     this.props.register('fountain', fountain.position.x, fountain.position.z, 5.8, 1.8);
     const pool = new THREE.Mesh(new THREE.CylinderGeometry(4.7, 4.7, 0.1, 40), new THREE.MeshPhysicalMaterial({ color: 0x4c9fac, roughness: 0.1, clearcoat: 1 })); pool.position.set(fountain.position.x, 1.01, fountain.position.z); this.group.add(pool);
     const column = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.9, 3.2, 24), stone); column.position.set(fountain.position.x, 2.1, fountain.position.z); column.castShadow = true; this.group.add(column);
@@ -567,6 +572,7 @@ export class City {
   }
 
   private addParkTree(x: number, z: number, variant: number): void {
+    if (this.isOnRoad(x, z, 2.4)) return; // parks overlap roads (Main Reef crosses Zoo Lake): no trunks on the tar
     this.props.register('tree', x, z, 0.5, 5.1);
     const tree = new THREE.Group(); tree.position.set(x, 0, z);
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.55, 5.1, 16), new THREE.MeshStandardMaterial({ color: 0x60442f, roughness: 0.95 })); trunk.position.y = 2.55; trunk.castShadow = true; tree.add(trunk);

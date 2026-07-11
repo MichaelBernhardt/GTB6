@@ -51,7 +51,6 @@ export class UrbanInfrastructure {
 
   constructor(
     parent: THREE.Group,
-    private sidewalkPoints: RoadPoint[],
     private roadsidePoints: RoadsidePoint[],
     private isBlocked: (x: number, z: number, radius: number) => boolean,
     private isRoad: (x: number, z: number, margin: number) => boolean,
@@ -89,7 +88,13 @@ export class UrbanInfrastructure {
   }
 
   private buildVegetation(): void {
-    const sites = this.sidewalkPoints.filter((point, index) => index % 6 === 0 && !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 0.65));
+    // Verge planting: trees/shrubs stand 2.1u OUTWARD of the roadside line, clear of both the sidewalk walk
+    // line peds actually route along (they used to grow exactly on the nav points and embed spawned peds)
+    // and of junction lane chords (hence the wider road margin).
+    const sites = this.roadsidePoints
+      .filter((_, index) => index % 6 === 0)
+      .map((point) => ({ x: point.x - point.inwardX * 2.1, z: point.z - point.inwardZ * 2.1 }))
+      .filter((point) => !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 2.4));
     const jacarandas = sites.filter((_, index) => index % 2 === 0);
     const broadleaf = sites.filter((_, index) => index % 2 !== 0);
     this.buildBroadleafTrees(broadleaf);
@@ -224,6 +229,7 @@ export class UrbanInfrastructure {
         const axis: 0 | 1 = forwardSide === rightSide ? 0 : 1;
         const inward = (axis === 0 ? forward.clone().multiplyScalar(-forwardSide) : right.clone().multiplyScalar(-rightSide));
         const position = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, forwardSide * SIGNAL_CORNER_OFFSET).addScaledVector(right, rightSide * SIGNAL_CORNER_OFFSET);
+        if (!this.clearOfRoad(position, junction)) continue; // corner diagonal ran down a road: no pole beats a pole in the middle of a lane
         const heading = Math.atan2(inward.z, -inward.x);
         this.addSignalPole(position, heading, axis, junction.phase, lensTransforms);
       }
@@ -254,8 +260,22 @@ export class UrbanInfrastructure {
     assembly.add(pole, arm, head); assembly.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; }); this.group.add(assembly);
   }
 
+  /** The hand-authored junction anchors don't sit exactly on either centerline and roads cross at odd
+   *  angles, so a SIGNAL_CORNER_OFFSET diagonal can land in the middle of a lane (it did: Jan Smuts and
+   *  Bree St both had signals planted on the tar, wedging traffic forever). Slide the corner outward
+   *  along its diagonal until it clears every road by a solid-prop-safe margin; give up past 12u extra. */
+  private clearOfRoad(position: THREE.Vector3, junction: JunctionDefinition): boolean {
+    const diagonal = new THREE.Vector3(position.x - junction.x, 0, position.z - junction.z).normalize();
+    for (let slide = 0; slide <= 6; slide++) {
+      if (!this.isRoad(position.x, position.z, 2.2)) return true;
+      position.addScaledVector(diagonal, 2);
+    }
+    return false;
+  }
+
   private addStreetSigns(junction: JunctionDefinition, forward: THREE.Vector3, right: THREE.Vector3): void {
     const postPosition = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, SIGNAL_CORNER_OFFSET).addScaledVector(right, SIGNAL_CORNER_OFFSET);
+    if (!this.clearOfRoad(postPosition, junction)) return;
     const assembly = new THREE.Group(); assembly.position.copy(postPosition);
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.y = 1.8; assembly.add(post);
     const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle, 3.25], [junction.roadB, junction.angle + Math.PI / 2, 2.78]];
@@ -310,11 +330,12 @@ export class UrbanInfrastructure {
     sites.forEach((site, index) => {
       const yaw = Math.atan2(site.inwardX, site.inwardZ);
       const rotation = new THREE.Quaternion().setFromAxisAngle(up, yaw);
-      const world = (lx: number, ly: number, lz: number) => new THREE.Vector3(lx, ly, lz).applyQuaternion(rotation).add(new THREE.Vector3(site.x, 0, site.z));
+      const bx = site.x - site.inwardX * 0.8; const bz = site.z - site.inwardZ * 0.8; // benches sit back from the walk line so their 0.85u shell doesn't clip routed peds
+      const world = (lx: number, ly: number, lz: number) => new THREE.Vector3(lx, ly, lz).applyQuaternion(rotation).add(new THREE.Vector3(bx, 0, bz));
       [-0.22, 0, 0.22].forEach((lz, slot) => { matrix.compose(world(0, 0.62, lz), rotation, one); slats.setMatrixAt(index * 3 + slot, matrix); });
       [-0.78, 0.78].forEach((lx, slot) => { matrix.compose(world(lx, 0.3, 0), rotation, one); legs.setMatrixAt(index * 2 + slot, matrix); });
       matrix.compose(world(0, 0.98, -0.29), rotation.clone().multiply(backTilt), one); backs.setMatrixAt(index, matrix);
-      this.props.register('bench', site.x, site.z, 0.85, 1.1, {
+      this.props.register('bench', bx, bz, 0.85, 1.1, {
         hide: () => {
           for (const slot of [0, 1, 2]) slats.setMatrixAt(index * 3 + slot, HIDDEN_MATRIX);
           for (const slot of [0, 1]) legs.setMatrixAt(index * 2 + slot, HIDDEN_MATRIX);
@@ -322,7 +343,7 @@ export class UrbanInfrastructure {
           for (const mesh of [slats, legs, backs]) mesh.instanceMatrix.needsUpdate = true;
         },
         debris: () => {
-          const group = new THREE.Group(); group.position.set(site.x, 0, site.z); group.rotation.y = yaw;
+          const group = new THREE.Group(); group.position.set(bx, 0, bz); group.rotation.y = yaw;
           for (const lz of [-0.22, 0, 0.22]) { const slat = new THREE.Mesh(slatGeometry, wood); slat.position.set(0, 0.62, lz); group.add(slat); }
           for (const lx of [-0.78, 0.78]) { const leg = new THREE.Mesh(legGeometry, metal); leg.position.set(lx, 0.3, 0); group.add(leg); }
           const back = new THREE.Mesh(backGeometry, wood); back.position.set(0, 0.98, -0.29); back.rotation.x = -0.12; group.add(back);
@@ -330,7 +351,7 @@ export class UrbanInfrastructure {
           return group;
         },
       });
-      const hx = site.x + site.inwardX * 0.45; const hz = site.z + site.inwardZ * 0.45;
+      const hx = site.x - site.inwardX * 0.75; const hz = site.z - site.inwardZ * 0.75; // hydrants used to lean INTO the walk line (0.4u off it) and embedded spawned peds
       matrix.compose(new THREE.Vector3(hx, 0.36, hz), identity, one); bodies.setMatrixAt(index, matrix);
       matrix.compose(new THREE.Vector3(hx, 0.76, hz), identity, one); caps.setMatrixAt(index, matrix);
       this.props.register('hydrant', hx, hz, 0.24, 0.9, {
@@ -365,7 +386,7 @@ export class UrbanInfrastructure {
   }
 
   private buildTransitStops(): void {
-    const stops: Array<[number, number, number, string]> = [[-48, 222, 0.15, 'BREE RANK'], [166, 173, -0.2, 'WANDERERS'], [-210, -224, 0.12, 'MTN RANK'], [125, -265, -0.08, 'NOORD RANK']];
+    const stops: Array<[number, number, number, string]> = [[-48, 222, 0.15, 'BREE RANK'], [166, 173, -0.2, 'WANDERERS'], [-210, -229, 0.12, 'MTN RANK'], [125, -265, -0.08, 'NOORD RANK']]; // MTN RANK sits back from Commissioner so its 2.7u shell clears the walk line
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x6e9da3, roughness: 0.16, metalness: 0.08, clearcoat: 0.7, transparent: true, opacity: 0.66 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x293638, metalness: 0.72, roughness: 0.35 });
     for (const [x, z, angle, label] of stops) {

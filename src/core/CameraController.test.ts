@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { InputManager } from './InputManager';
 import type { City } from '../world/City';
-import { CameraController, cycleView, sanitizeView, viewDistance, DEFAULT_CAMERA_VIEW } from './CameraController';
+import { aimedViewDistance, CameraController, cycleView, sanitizeView, viewDistance, DEFAULT_CAMERA_VIEW } from './CameraController';
 
 const city = { collides: () => false } as unknown as City;
-const input = (mouseDX: number, mouseDY: number, firing = false): InputManager => ({ mouseDX, mouseDY, firing }) as InputManager;
+const input = (mouseDX: number, mouseDY: number, aiming = false): InputManager => ({ mouseDX, mouseDY, firing: false, aiming }) as InputManager;
 
 describe('CameraController mouse look', () => {
   it('tilts down when the mouse moves down and up when it moves up', () => {
@@ -28,12 +28,12 @@ describe('CameraController mouse look', () => {
 });
 
 describe('CameraController over-the-shoulder aim', () => {
-  const settle = (controller: CameraController, camera: THREE.PerspectiveCamera, target: THREE.Vector3, firing: boolean): THREE.Vector3 => {
-    for (let i = 0; i < 240; i++) controller.update(1 / 60, input(0, 0, firing), target, city);
+  const settle = (controller: CameraController, camera: THREE.PerspectiveCamera, target: THREE.Vector3, aiming: boolean): THREE.Vector3 => {
+    for (let i = 0; i < 240; i++) controller.update(1 / 60, input(0, 0, aiming), target, city);
     return camera.position.clone();
   };
 
-  it('pulls the camera closer while firing on foot', () => {
+  it('pulls the camera closer while aiming on foot', () => {
     const target = new THREE.Vector3();
     const walkCamera = new THREE.PerspectiveCamera();
     const walkPosition = settle(new CameraController(walkCamera), walkCamera, target, false);
@@ -42,13 +42,18 @@ describe('CameraController over-the-shoulder aim', () => {
     expect(aimPosition.distanceTo(target)).toBeLessThan(walkPosition.distanceTo(target));
   });
 
-  it('keeps the player offset from screen center even when not firing', () => {
+  it('centers the player when relaxed and shifts over the shoulder while aiming', () => {
     const target = new THREE.Vector3();
     const camera = new THREE.PerspectiveCamera();
-    settle(new CameraController(camera), camera, target, false);
+    const controller = new CameraController(camera);
+    settle(controller, camera, target, false);
     camera.updateMatrixWorld();
-    const projected = target.clone().add(new THREE.Vector3(0, 1.45, 0)).project(camera);
-    expect(Math.abs(projected.x)).toBeGreaterThan(0.05);
+    const centered = target.clone().add(new THREE.Vector3(0, 1.45, 0)).project(camera);
+    expect(Math.abs(centered.x)).toBeLessThan(0.02);
+    settle(controller, camera, target, true);
+    camera.updateMatrixWorld();
+    const offset = target.clone().add(new THREE.Vector3(0, 1.78, 0)).project(camera);
+    expect(Math.abs(offset.x)).toBeGreaterThan(0.05);
   });
 });
 
@@ -70,6 +75,21 @@ describe('camera view cycle', () => {
     expect([1, 2, 3].map((view) => viewDistance(view, true))).toEqual([7.5, 10.5, 15]);
     expect(viewDistance(99, true)).toBe(10.5);
     expect(viewDistance(0, false)).toBe(0);
+  });
+
+  it('zooms Medium/Far aim in to the Near distance and leaves Near and first person alone', () => {
+    expect(aimedViewDistance(2, false, 1)).toBe(4.2);
+    expect(aimedViewDistance(3, false, 1)).toBe(4.2);
+    expect(aimedViewDistance(1, false, 1)).toBe(4.2);
+    expect(aimedViewDistance(0, false, 1)).toBe(0);
+    expect(aimedViewDistance(2, true, 1)).toBe(7.5);
+    expect(aimedViewDistance(3, true, 1)).toBe(7.5);
+    expect(aimedViewDistance(1, true, 0.5)).toBe(7.5);
+  });
+
+  it('keeps the base distance with no aim blend and interpolates between', () => {
+    expect(aimedViewDistance(3, false, 0)).toBe(9.5);
+    expect(aimedViewDistance(3, false, 0.5)).toBeCloseTo((9.5 + 4.2) / 2);
   });
 });
 

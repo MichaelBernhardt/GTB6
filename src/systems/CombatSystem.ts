@@ -10,6 +10,8 @@ import { defaultWeapons } from '../core/SaveManager';
 import type { SavedWeapons } from '../types';
 
 export interface ShotResult { fired: boolean; melee?: boolean; victim?: Pedestrian; killed?: boolean; policeHit?: boolean; hitPoint?: THREE.Vector3; }
+/** aim=false is hip fire: the ray runs level along the character's facing instead of the camera ray. */
+export interface FireOptions { aim?: boolean; heading?: number; exclude?: Vehicle; cooldownScale?: number; }
 
 export class CombatSystem {
   current: WeaponId = 'pistol';
@@ -87,7 +89,7 @@ export class CombatSystem {
     if (input.consume('KeyR') && !this.spec.melee && this.reloading <= 0 && this.state.ammo < this.spec.magazine && this.state.reserve > 0) this.startReload();
   }
 
-  fire(input: InputManager, camera: THREE.Camera, origin: THREE.Vector3, population: PopulationSystem, policeVehicles: Vehicle[] = []): ShotResult {
+  fire(input: InputManager, camera: THREE.Camera, origin: THREE.Vector3, population: PopulationSystem, policeVehicles: Vehicle[] = [], options: FireOptions = {}): ShotResult {
     const spec = this.spec;
     if (!triggerPulled(spec, input.firing, input.firePressed) || this.cooldown > 0 || this.reloading > 0) return { fired: false };
     if (spec.melee) return this.punch(spec, origin, population);
@@ -96,23 +98,23 @@ export class CombatSystem {
       if (state.reserve <= 0) { this.select('fists'); return { fired: false }; }
       this.cooldown = 0.25; this.audio.emptyClick(); this.startReload(); return { fired: false };
     }
-    state.ammo -= 1; this.cooldown = spec.cooldown; this.shotsFired += 1; this.audio.gunshot(spec.sound);
+    state.ammo -= 1; this.cooldown = spec.cooldown * (options.cooldownScale ?? 1); this.shotsFired += 1; this.audio.gunshot(spec.sound);
     if (this.muzzle) this.scene.remove(this.muzzle);
     this.muzzle = new THREE.PointLight(0xffb43b, 3, 7); this.muzzle.position.copy(origin).add(new THREE.Vector3(0, 1.3, 0)); this.scene.add(this.muzzle);
+    const hip = options.aim === false;
+    let rayOrigin: THREE.Vector3; let baseDirection: THREE.Vector3;
+    if (hip) { baseDirection = new THREE.Vector3(Math.sin(options.heading ?? 0), 0, Math.cos(options.heading ?? 0)); rayOrigin = origin.clone().add(new THREE.Vector3(0, 1.35, 0)).addScaledVector(baseDirection, 0.5); }
+    else { this.raycaster.setFromCamera(new THREE.Vector2(0, 0), camera); rayOrigin = this.raycaster.ray.origin.clone(); baseDirection = this.raycaster.ray.direction.clone(); }
     if (spec.projectile) {
-      this.raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-      const direction = this.raycaster.ray.direction.clone();
-      const start = this.raycaster.ray.origin.clone().addScaledVector(direction, 4.6);
+      const start = rayOrigin.clone().addScaledVector(baseDirection, hip ? 1.2 : 4.6);
       if (start.y < 0.4) start.y = 0.4;
-      this.onRocket?.(start, direction, spec);
+      this.onRocket?.(start, baseDirection, spec);
       return { fired: true };
     }
     const meshes: THREE.Object3D[] = [];
     for (const ped of population.pedestrians) if (ped.state !== 'down') meshes.push(ped.group);
-    for (const vehicle of population.vehicles) meshes.push(vehicle.group);
-    for (const vehicle of policeVehicles) meshes.push(vehicle.group);
-    this.raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    const rayOrigin = this.raycaster.ray.origin.clone(); const baseDirection = this.raycaster.ray.direction.clone();
+    for (const vehicle of population.vehicles) if (vehicle !== options.exclude) meshes.push(vehicle.group);
+    for (const vehicle of policeVehicles) if (vehicle !== options.exclude) meshes.push(vehicle.group);
     const up = new THREE.Vector3(0, 1, 0).projectOnPlane(baseDirection).normalize();
     const side = new THREE.Vector3().crossVectors(baseDirection, up).normalize();
     let victim: Pedestrian | undefined; let killed = false; let policeHit = false; let hitPoint: THREE.Vector3 | undefined;

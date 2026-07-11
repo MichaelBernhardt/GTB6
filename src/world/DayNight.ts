@@ -188,11 +188,11 @@ export class DayNightSystem {
     const pool = this.headPool;
     if (night <= 0.001) { for (const light of pool) light.intensity = 0; return; }
     let slot = 0;
-    if (playerVehicle && !playerVehicle.wrecked && slot < pool.length) this.aimHeadlight(pool[slot++]!, playerVehicle, night); // the player's car always gets a real beam
+    if (playerVehicle && !playerVehicle.wrecked && playerVehicle.spec.kind !== 'bicycle' && slot < pool.length) this.aimHeadlight(pool[slot++]!, playerVehicle, night); // the player's ride always gets a real beam — bicycles carry no lamp
     const remaining = pool.length - slot;
     if (remaining > 0) {
       this.candidates.length = 0;
-      for (const vehicle of traffic) if (!vehicle.wrecked && vehicle !== playerVehicle) this.candidates.push(vehicle);
+      for (const vehicle of traffic) if (!vehicle.wrecked && vehicle !== playerVehicle && vehicle.spec.kind !== 'bicycle') this.candidates.push(vehicle);
       for (const vehicle of police) if (!vehicle.wrecked && vehicle !== playerVehicle) this.candidates.push(vehicle);
       if (this.candidateXZ.length < this.candidates.length * 2) this.candidateXZ = new Float32Array(this.candidates.length * 4);
       for (let i = 0; i < this.candidates.length; i++) {

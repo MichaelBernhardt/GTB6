@@ -1,10 +1,12 @@
 import { VEHICLE_SPECS, WEAPONS, WEAPON_BY_ID, type VehicleKind, type WeaponId } from '../config';
 import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
+import { DEFAULT_MINIMAP_ZOOM, sanitizeMinimapZoom } from '../ui/MinimapView';
 import type { CheatSettings, GameSettings, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
 import { defaultLivingCityState, sanitizeLivingCityState } from '../systems/LivingCitySystem';
+import { SAFEHOUSE_IDS, type SafehouseId } from '../systems/SafehouseSystem';
 
 const KEY = 'groot-theft-bakkie-save-v1';
-export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW };
+export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW, minimapZoom: DEFAULT_MINIMAP_ZOOM };
 export const DEFAULT_CHEATS: CheatSettings = { fastRun: false, bigJump: false, invulnerable: false };
 
 export function sanitizeCheats(raw?: Partial<CheatSettings>): CheatSettings {
@@ -47,7 +49,15 @@ export function sanitizeGarage(raw: unknown): SavedVehicle | null {
   return { kind: spec.kind, color, health };
 }
 
-export const DEFAULT_SAVE: SavedGame = { version: 2, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY };
+export const STARTER_SAFEHOUSE: SafehouseId = 'brixton';
+
+/** Owned safehouses: keeps only known ids, deduped, and the starter flat is always owned. */
+export function sanitizeSafehouses(raw: unknown): SafehouseId[] {
+  const valid = Array.isArray(raw) ? raw.filter((id): id is SafehouseId => (SAFEHOUSE_IDS as readonly string[]).includes(id as string)) : [];
+  return [...new Set<SafehouseId>([STARTER_SAFEHOUSE, ...valid])];
+}
+
+export const DEFAULT_SAVE: SavedGame = { version: 2, money: 750, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE] };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -63,6 +73,7 @@ export class SaveManager {
       const settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
       if (settings.quality !== 'low' && settings.quality !== 'medium' && settings.quality !== 'high') settings.quality = 'high';
       settings.cameraViewFoot = sanitizeView(settings.cameraViewFoot); settings.cameraViewVehicle = sanitizeView(settings.cameraViewVehicle);
+      settings.minimapZoom = sanitizeMinimapZoom(settings.minimapZoom);
       return {
         ...structuredClone(DEFAULT_SAVE), ...parsed, version: 2,
         completedMissions: Array.isArray(parsed.completedMissions) ? parsed.completedMissions : [],
@@ -72,6 +83,7 @@ export class SaveManager {
         garage: sanitizeGarage(parsed.garage),
         livingCity: sanitizeLivingCityState(parsed.livingCity),
         timeOfDay: sanitizeTimeOfDay(parsed.timeOfDay),
+        safehouses: sanitizeSafehouses(parsed.safehouses),
       };
     } catch { return structuredClone(DEFAULT_SAVE); }
   }
