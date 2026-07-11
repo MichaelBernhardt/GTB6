@@ -1,0 +1,15 @@
+{
+  "_comment": "Rename OSM streets/places for the game. Key = real OSM name, value = in-game name. Keys starting with '_' are ignored, and entries whose value equals the key (or is empty) keep the real name. Edit freely; rerun `npm run map:build` to apply.",
+  "_keepers": "These stay real on purpose - they are Joburg icons:",
+  "Jan Smuts Avenue": "Jan Smuts Avenue",
+  "Bree Street": "Bree Street",
+  "Commissioner Street": "Commissioner Street",
+  "_parody_placeholders": "Placeholder parody names below - owner to edit/curate:",
+  "Oxford Road": "Oxfraud Road",
+  "Rivonia Road": "Rivalry Road",
+  "Grayston Drive": "Greyhound Drive",
+  "Katherine Street": "Catherine Wheel Street",
+  "William Nicol Drive": "William Nickel Drive",
+  "Louis Botha Avenue": "Louis Both-of-Ya Avenue",
+  "Empire Road": "Vampire Road"
+}
