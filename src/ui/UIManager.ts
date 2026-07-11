@@ -52,7 +52,7 @@ export class UIManager {
 
   damageFlash(): void { this.vignette.classList.remove('is-flashing'); void this.vignette.offsetWidth; this.vignette.classList.add('is-flashing'); }
   screenFade(): void { this.fade.classList.add('is-active'); clearTimeout(this.fadeTimer); this.fadeTimer = setTimeout(() => this.fade.classList.remove('is-active'), 620); }
-  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = []): void { this.minimapView.draw(x, z, heading, roads, markers, police, hostiles); }
+  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom?: number): void { this.minimapView.draw(x, z, heading, roads, markers, police, hostiles, zoom); }
 
   showWeaponWheel(entries: WheelEntry[]): void {
     const radius = 150; const step = (Math.PI * 2) / Math.max(1, entries.length);

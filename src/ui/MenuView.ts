@@ -38,7 +38,7 @@ export class MenuView {
 
   controls(fromMain: boolean, back: () => void): void {
     const groups = [
-      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['SPACE', 'Jump / handbrake'], ['E', 'Interact / vehicle'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—5', 'Select weapon'], ['R', 'Reload'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['ESC', 'Pause'], ['`', 'Performance'],
+      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['SPACE', 'Jump / handbrake'], ['E', 'Interact / vehicle'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—5', 'Select weapon'], ['R', 'Reload'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['PGUP/PGDN', 'Minimap zoom'], ['ESC', 'Pause'], ['`', 'Performance'],
     ];
     this.set('controls', `<section class="menu-card menu-card--guide"><header><p class="eyebrow">FIELD GUIDE</p><h2>Know the streets.</h2><span>${fromMain ? 'The essentials before you enter.' : 'Controls for foot and vehicle.'}</span></header><div class="control-grid">${groups.map(([key, label]) => `<div><kbd>${key}</kbd><span>${label}</span></div>`).join('')}</div><button class="action-primary" data-action="back">Back</button></section>`); this.bind('[data-action="back"]', back);
   }

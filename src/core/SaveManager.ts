@@ -1,11 +1,12 @@
 import { VEHICLE_SPECS, WEAPONS, WEAPON_BY_ID, type VehicleKind, type WeaponId } from '../config';
 import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
+import { DEFAULT_MINIMAP_ZOOM, sanitizeMinimapZoom } from '../ui/MinimapView';
 import type { CheatSettings, GameSettings, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
 import { defaultLivingCityState, sanitizeLivingCityState } from '../systems/LivingCitySystem';
 import { SAFEHOUSE_IDS, type SafehouseId } from '../systems/SafehouseSystem';
 
 const KEY = 'groot-theft-bakkie-save-v1';
-export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW };
+export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, mouseSensitivity: 0.0025, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW, minimapZoom: DEFAULT_MINIMAP_ZOOM };
 export const DEFAULT_CHEATS: CheatSettings = { fastRun: false, bigJump: false, invulnerable: false };
 
 export function sanitizeCheats(raw?: Partial<CheatSettings>): CheatSettings {
@@ -72,6 +73,7 @@ export class SaveManager {
       const settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
       if (settings.quality !== 'low' && settings.quality !== 'medium' && settings.quality !== 'high') settings.quality = 'high';
       settings.cameraViewFoot = sanitizeView(settings.cameraViewFoot); settings.cameraViewVehicle = sanitizeView(settings.cameraViewVehicle);
+      settings.minimapZoom = sanitizeMinimapZoom(settings.minimapZoom);
       return {
         ...structuredClone(DEFAULT_SAVE), ...parsed, version: 2,
         completedMissions: Array.isArray(parsed.completedMissions) ? parsed.completedMissions : [],
