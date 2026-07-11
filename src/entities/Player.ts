@@ -15,6 +15,8 @@ export class Player {
   onGround = true;
   inVehicle = false;
   heading = 0;
+  moving = false;
+  sprinting = false;
   cheats: Pick<CheatSettings, 'fastRun' | 'bigJump'> = { fastRun: false, bigJump: false };
   private model = new THREE.Group();
   private torso = new THREE.Group();
@@ -42,6 +44,7 @@ export class Player {
   }
 
   update(dt: number, input: InputManager, cameraYaw: number, city: City): void {
+    this.moving = false; this.sprinting = false;
     if (this.inVehicle || this.health <= 0) return;
     if (this.tumbleTimer > 0) { this.applyTumble(dt); return; }
     const aiming = input.firing && this.weapon !== 'fists';
@@ -50,6 +53,7 @@ export class Player {
     const move = new THREE.Vector3(side, 0, -forward);
     const moving = move.lengthSq() > 0;
     const sprinting = moving && input.down('ShiftLeft');
+    this.moving = moving; this.sprinting = sprinting;
     if (moving) {
       move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
       const speed = moveSpeed(sprinting, this.cheats.fastRun);

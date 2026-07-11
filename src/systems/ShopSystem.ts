@@ -5,7 +5,7 @@ import type { City } from '../world/City';
 export type ShopKind = 'weapons' | 'spray' | 'garage' | 'hotdog';
 export interface ShopPlace { kind: ShopKind; name: string; pad: THREE.Vector3; radius: number; driveIn: boolean; }
 
-export const SHOP_ICON_COLOR = '#d9a13b';
+export const SHOP_ICON_COLOR = '#3fd1c4'; // teal diamonds — distinct from gold mission blips even for colour-blind players
 export const SHOPS: ShopPlace[] = [
   { kind: 'weapons', name: 'Jozi Arms', pad: new THREE.Vector3(12, 0, 220), radius: 3.6, driveIn: false },
   { kind: 'spray', name: 'Pik-’n’-Spray', pad: new THREE.Vector3(236, 0, 60), radius: 5, driveIn: true },
@@ -41,8 +41,8 @@ export class ShopSystem {
     return best;
   }
 
-  mapIcons(): Array<{ x: number; z: number; color: string }> {
-    return SHOPS.map((shop) => ({ x: shop.pad.x, z: shop.pad.z, color: SHOP_ICON_COLOR }));
+  mapIcons(): Array<{ x: number; z: number; color: string; shape: 'diamond' }> {
+    return SHOPS.map((shop) => ({ x: shop.pad.x, z: shop.pad.z, color: SHOP_ICON_COLOR, shape: 'diamond' as const }));
   }
 
   private addPadMarker(shop: ShopPlace): void {

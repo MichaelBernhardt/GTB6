@@ -5,8 +5,8 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
-import { AudioManager, type EngineProfile } from './core/AudioManager';
+import { WEAPON_BY_ID, WEAPONS, type WeaponId } from './config';
+import { AudioManager } from './core/AudioManager';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { cycleWeapon, Economy, riderImpactDamage, rollDrops, shouldKnockOff, type PedKind } from './core/GameRules';
 import { InputManager } from './core/InputManager';
@@ -16,6 +16,7 @@ import type { Pedestrian } from './entities/Pedestrian';
 import { Player } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
+import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
 import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
@@ -26,11 +27,13 @@ import { PoliceSystem } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
+import { canEnterSafehouse, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
 import { GARAGE_PARK, ShopSystem } from './systems/ShopSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
 import type { CheatSettings, GameMode, GameSettings, SavedGame, WorldTarget } from './types';
+import { MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
 import { DayNightSystem } from './world/DayNight';
@@ -39,8 +42,6 @@ import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
-
-const ENGINE_PROFILE: Partial<Record<VehicleKind, EngineProfile>> = { bicycle: 'bicycle', motorbike: 'motorbike', superbike: 'superbike' };
 
 export class Game {
   private scene = new THREE.Scene();
@@ -77,6 +78,8 @@ export class Game {
   private livingCity: LivingCitySystem;
   private economy: Economy;
   private shops: ShopSystem;
+  private safehouses: SafehouseSystem;
+  private activeSafehouse?: SafehousePlace;
   private garageVehicle?: Vehicle;
   private ui = new UIManager();
   private mode: GameMode = 'menu';
@@ -114,6 +117,7 @@ export class Game {
     this.city = new City(this.scene);
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.settings.quality, this.save.timeOfDay);
     this.shops = new ShopSystem(this.scene, this.city);
+    this.safehouses = new SafehouseSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
@@ -183,6 +187,21 @@ export class Game {
     this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.persist(); };
     this.ui.onBuyWeapon = (id) => this.purchase('weapon', id);
     this.ui.onBuyAmmo = (id) => this.purchase('ammo', id);
+    this.ui.onSafehouseSave = () => {
+      const place = this.activeSafehouse; if (!place) return;
+      this.save.spawn = safehouseSpawn(place); this.persist(); this.audio.ui(true);
+      this.ui.notify('Game saved', `Wake-up spot set: ${place.name}.`);
+      this.ui.onResume?.();
+    };
+    this.ui.onSafehouseSleep = () => {
+      const place = this.activeSafehouse; if (!place) return;
+      this.dayNight.hour = sleepHour(this.dayNight.hour);
+      this.player.heal(); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset();
+      this.save.spawn = safehouseSpawn(place); this.persist();
+      this.ui.screenFade(); this.audio.ui(true);
+      this.ui.notify(`Slept until ${this.dayNight.clockText}`, 'Rested, healed and saved. Any heat is yesterday’s news.');
+      this.ui.onResume?.();
+    };
     this.ui.onMissionChoice = (id) => {
       const update = this.missions.choose(id); this.mode = 'playing'; this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
       this.processMissionUpdate(update);
@@ -225,6 +244,12 @@ export class Game {
       this.settings[key] = cycleView(this.settings[key]);
       this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.settings[key]]}`); this.persist();
     }
+    const zoomDirection = (this.input.consume('PageUp') ? 1 : 0) - (this.input.consume('PageDown') ? 1 : 0);
+    if (zoomDirection) {
+      const next = stepMinimapZoom(this.settings.minimapZoom, zoomDirection as 1 | -1);
+      if (next !== this.settings.minimapZoom) { this.settings.minimapZoom = next; this.persist(); }
+      this.ui.notify(`Minimap: ${MINIMAP_ZOOM_NAMES[this.settings.minimapZoom]}`);
+    }
     if (this.transition) this.updateTransition(dt);
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
@@ -256,7 +281,7 @@ export class Game {
     for (const report of this.knowledge.update(dt, (reporter) => reporter.state !== 'down')) this.wanted.addCrime(report.heat);
     this.wanted.update(dt);
     if (this.previousWanted && !this.wanted.isWanted) this.recordCityEvent('police-evaded', focus);
-    this.previousWanted = this.wanted.isWanted; this.shops.update(dt);
+    this.previousWanted = this.wanted.isWanted; this.shops.update(dt); this.safehouses.update(dt);
     for (const boom of this.projectiles.update(dt, this.city, this.population, this.police.vehicles, this.player.group.position)) {
       this.audio.explosion(boom.position.x, boom.position.z); this.reportCrime(boom.position, 30, { victims: boom.victims.map((victim) => victim.ped), radius: FEAR_EVENTS.kill.radius }); this.population.broadcastFear(boom.position, FEAR_EVENTS.kill); this.shake = Math.min(0.7, this.shake + 0.5);
       if (boom.policeHit) this.reportCrime(boom.position, 24, { copWitnessed: true });
@@ -329,6 +354,12 @@ export class Game {
 
   private updateOnFoot(dt: number): void {
     this.player.update(dt, this.input, this.cameraController.yaw, this.city);
+    for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
+      if (!bump.assault) continue;
+      this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
+      this.reportCrime(bump.position, bump.killed ? 24 : BUMP_ASSAULT_HEAT, { victims: [bump.ped], radius: FEAR_EVENTS.assault.radius, cityEvent: bump.killed ? 'civilian-murder' : 'civilian-assault' });
+      if (bump.killed) this.spawnDrops(bump.ped);
+    }
     if (this.updateWeaponWheel()) return;
     this.combat.tryReload(this.input);
     WEAPONS.forEach((spec, index) => { if (this.input.consume(`Digit${index + 1}`)) this.combat.select(spec.id); });
@@ -365,6 +396,8 @@ export class Game {
       const shop = this.shops.shopNear(this.player.group.position);
       if (shop?.kind === 'weapons') { this.openWeaponShop(); return; }
       if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
+      const safehouse = this.safehouses.near(this.player.group.position);
+      if (safehouse) { this.enterSafehouse(safehouse); return; }
       if (shop?.driveIn && !vehicle) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
       if (vehicle) this.beginEnter(vehicle);
     }
@@ -409,7 +442,7 @@ export class Game {
       if (shouldKnockOff(hit.impact)) { this.knockOff(vehicle); return; }
     }
     const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
-    this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed, ENGINE_PROFILE[vehicle.spec.kind] ?? 'car');
+    this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed, vehicle.spec.kind); // 'bicycle' routes to the freewheel/wind voice, everything else to an engine profile
     this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
     if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; }
     this.prevDrivenSpeed = speed;
@@ -601,6 +634,14 @@ export class Game {
     this.ui.notify('Ammo box', WEAPON_BY_ID[this.combat.addAmmo()].name);
   }
 
+  /** GTA rules at the front door: pending 911 calls don't matter, but a cop with live eyes on you does. */
+  private enterSafehouse(place: SafehousePlace): void {
+    if (!canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge)) { this.ui.notify(place.name, 'The JMPD has eyes on you. Lose the heat first.', false); return; }
+    this.activeSafehouse = place;
+    this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
+    this.ui.showSafehouse(place.name, SLEEP_HOURS);
+  }
+
   private openWeaponShop(): void {
     this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
     this.renderShop();
@@ -744,7 +785,7 @@ export class Game {
     this.markerTarget = this.currentTarget(); this.marker.visible = Boolean(this.markerTarget);
     if (!this.markerTarget) return;
     this.marker.position.copy(this.markerTarget.position); this.markerPhase += dt; this.marker.rotation.y += dt * 0.7; this.marker.position.y = 0.2 + Math.sin(this.markerPhase * 2) * 0.15;
-    const color = new THREE.Color(this.markerTarget.color ?? '#f5c451'); this.marker.children.forEach((child: THREE.Object3D) => { const mesh = child as THREE.Mesh; (mesh.material as THREE.MeshBasicMaterial).color.copy(color); });
+    const color = new THREE.Color(this.markerTarget.color ?? '#f5c542'); this.marker.children.forEach((child: THREE.Object3D) => { const mesh = child as THREE.Mesh; (mesh.material as THREE.MeshBasicMaterial).color.copy(color); });
   }
 
   private handleVehicleCollisions(dt: number): void {
@@ -780,6 +821,7 @@ export class Game {
       else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && mission.start.position.distanceTo(focus) < 7)) prompt = 'E  Speak to contact';
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
+      else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
@@ -792,9 +834,9 @@ export class Game {
     } : undefined;
     const vehicle = this.activeVehicle ? { name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health } : undefined;
     this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
-    const markers = [...this.shops.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [])];
+    const markers = [...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : [])];
     const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
-    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
+    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles, this.settings.minimapZoom);
   }
 
   private damagePlayer(amount: number): void { if (this.cheats.invulnerable) return; if (amount > 0) this.ui.damageFlash(); this.player.takeDamage(amount); }
@@ -804,13 +846,13 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset(); this.mode = 'playing';
   }
-  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
-  private persist(): void { this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour }; this.saveManager.save(this.save); }
+  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private persist(): void { this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }

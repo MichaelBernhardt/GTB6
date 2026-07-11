@@ -38,7 +38,7 @@ export class MenuView {
 
   controls(fromMain: boolean, back: () => void): void {
     const groups = [
-      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['SPACE', 'Jump / handbrake'], ['E', 'Interact / vehicle'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—5', 'Select weapon'], ['R', 'Reload'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['ESC', 'Pause'], ['`', 'Performance'],
+      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['SPACE', 'Jump / handbrake'], ['E', 'Interact / vehicle'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—5', 'Select weapon'], ['R', 'Reload'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['PGUP/PGDN', 'Minimap zoom'], ['ESC', 'Pause'], ['`', 'Performance'],
     ];
     this.set('controls', `<section class="menu-card menu-card--guide"><header><p class="eyebrow">FIELD GUIDE</p><h2>Know the streets.</h2><span>${fromMain ? 'The essentials before you enter.' : 'Controls for foot and vehicle.'}</span></header><div class="control-grid">${groups.map(([key, label]) => `<div><kbd>${key}</kbd><span>${label}</span></div>`).join('')}</div><button class="action-primary" data-action="back">Back</button></section>`); this.bind('[data-action="back"]', back);
   }
@@ -49,6 +49,14 @@ export class MenuView {
       : `<button class="shop-row" data-buy="${entry.id}" ${entry.canBuy ? '' : 'disabled'}><span><b>${entry.name}</b><small>${entry.canBuy ? 'Available now' : 'Not enough cash'}</small></span><em>${formatMoney(entry.price)}</em></button>`).join('');
     this.set('shop', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">JOZI ARMS · CBD</p><h2>Choose your insurance.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header><div class="shop-list">${rows}</div><button data-action="leave">Leave the counter</button></section>`);
     for (const entry of entries) { this.bind(`[data-buy="${entry.id}"]`, () => actions.buy(entry.id)); this.bind(`[data-ammo="${entry.id}"]`, () => actions.ammo(entry.id)); } this.bind('[data-action="leave"]', actions.leave);
+  }
+
+  safehouse(name: string, sleepHours: number, actions: { save: () => void; sleep: () => void; leave: () => void }): void {
+    this.set('safehouse', `<section class="menu-card"><header><p class="eyebrow">SAFEHOUSE · ${name.toUpperCase()}</p><h2>Home, sharp sharp.</h2><span>Saving or sleeping sets your wake-up spot to this door.</span></header><nav class="pause-nav">
+      <button class="action-primary" data-action="save">Save game</button>
+      <button data-action="sleep">Sleep &middot; skip ${sleepHours} hours, heal up</button>
+      <button data-action="leave">Back to the street</button></nav></section>`);
+    this.bind('[data-action="save"]', actions.save); this.bind('[data-action="sleep"]', actions.sleep); this.bind('[data-action="leave"]', actions.leave);
   }
 
   choice(title: string, choices: MissionChoice[], choose: (id: MissionChoice['id']) => void): void {
