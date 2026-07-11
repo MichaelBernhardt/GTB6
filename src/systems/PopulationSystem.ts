@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import { PLAYER, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
+import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separationPush } from './BumpSystem';
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, type FearEvent } from './FearSystem';
 import { MISSIONS } from './MissionSystem';
 import { RoutePlanner, type NavPoint } from './NavGraph';
@@ -12,6 +13,7 @@ import { powerOn } from '../world/powerGrid';
 
 interface DrivePlan { points: NavPoint[]; index: number; }
 interface TaxiState { stopTimer: number; dwell: number; hootTimer: number; }
+export interface PlayerBump { ped: Pedestrian; position: THREE.Vector3; knockdown: boolean; killed: boolean; assault: boolean; }
 
 export class PopulationSystem {
   pedestrians: Pedestrian[] = [];
@@ -25,6 +27,9 @@ export class PopulationSystem {
   private vehiclePlanner: RoutePlanner;
   private pedPlanner: RoutePlanner;
   private taxiState = new WeakMap<Vehicle, TaxiState>();
+  private bumpTimes = new WeakMap<Pedestrian, number[]>();
+  private bumpCooldown = new WeakMap<Pedestrian, number>();
+  private bumpClock = 0;
   private hootCooldown = 0;
   private parkedSpots: Array<[number, number]> = [];
   private policePatrols: Pedestrian[] = [];
@@ -78,6 +83,36 @@ export class PopulationSystem {
     }
     if (nearest) this.audio.setTrafficEngine(true, nearest.group.position.x, nearest.group.position.z, nearest.speed, nearest.spec.maxSpeed, nearest.spec.kind);
     else this.audio.setTrafficEngine(false);
+  }
+
+  /** Soft player↔ped collision: gentle radial push both ways, stumble grunt, repeat-bump/knockdown escalation. */
+  bumpPlayer(dt: number, position: THREE.Vector3, moving: boolean, sprinting: boolean): PlayerBump[] {
+    this.bumpClock += dt;
+    const events: PlayerBump[] = [];
+    for (const ped of this.pedestrians) {
+      if (ped.contact || ped.state === 'down') continue;
+      const delta = ped.group.position.clone().sub(position); delta.y = 0;
+      const distance = delta.length();
+      if (distance >= BUMP_RADIUS) continue;
+      const direction = distance > 0.001 ? delta.multiplyScalar(1 / distance) : new THREE.Vector3(1, 0, 0);
+      const push = separationPush(distance);
+      ped.group.position.copy(this.city.clampMove(ped.group.position, ped.group.position.clone().addScaledVector(direction, push.ped), 0.42));
+      position.copy(this.city.clampMove(position, position.clone().addScaledVector(direction, -push.player), PLAYER.radius));
+      if (!moving || ped.police || ped.hostile || (this.bumpCooldown.get(ped) ?? 0) > this.bumpClock) continue;
+      this.bumpCooldown.set(ped, this.bumpClock + BUMP_COOLDOWN);
+      const times = this.bumpTimes.get(ped) ?? []; this.bumpTimes.set(ped, times);
+      const count = recordBump(times, this.bumpClock);
+      const assault = bumpEscalates(count, sprinting);
+      const killed = sprinting ? ped.knockdown(position) : false;
+      if (!sprinting) {
+        ped.stumble(position);
+        if (assault) this.frighten(ped, FEAR_EVENTS.assault.base, position); else ped.applyFear(BUMP_FEAR, position);
+      }
+      if (killed || sprinting) this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
+      else this.audio.grunt(ped.group.position.x, ped.group.position.z);
+      events.push({ ped, position: ped.group.position.clone(), knockdown: sprinting, killed, assault });
+    }
+    return events;
   }
 
   broadcastFear(origin: THREE.Vector3, event: FearEvent): void {
