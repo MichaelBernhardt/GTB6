@@ -7,6 +7,7 @@ export class InputManager {
   mouseDY = 0;
   firing = false;
   firePressed = false;
+  private rmbHeld = false;
 
   constructor(private element: HTMLElement) {
     window.addEventListener('keydown', (event) => {
@@ -23,15 +24,20 @@ export class InputManager {
         this.mouseDY += event.movementY;
       }
     });
-    window.addEventListener('mousedown', (event) => { if (!this.suspended && event.button === 0) { this.firing = true; this.firePressed = true; } });
-    window.addEventListener('mouseup', (event) => { if (event.button === 0) this.firing = false; });
+    window.addEventListener('mousedown', (event) => {
+      if (this.suspended) return;
+      if (event.button === 0) { this.firing = true; this.firePressed = true; }
+      if (event.button === 2) this.rmbHeld = true;
+    });
+    window.addEventListener('mouseup', (event) => { if (event.button === 0) this.firing = false; if (event.button === 2) this.rmbHeld = false; });
+    window.addEventListener('contextmenu', (event) => { if (document.pointerLockElement === this.element) event.preventDefault(); });
     window.addEventListener('wheel', (event) => { if (!this.suspended && document.pointerLockElement === this.element) this.wheel += Math.sign(event.deltaY); }, { passive: true });
     this.element.addEventListener('click', () => { if (!document.pointerLockElement) void this.element.requestPointerLock().catch(() => undefined); });
   }
 
-  reset(): void { this.held.clear(); this.pressed.clear(); this.firing = false; this.firePressed = false; this.wheel = 0; this.mouseDX = 0; this.mouseDY = 0; }
+  reset(): void { this.held.clear(); this.pressed.clear(); this.firing = false; this.firePressed = false; this.rmbHeld = false; this.wheel = 0; this.mouseDX = 0; this.mouseDY = 0; }
   suspend(value: boolean): void { this.suspended = value; this.reset(); }
-  get aiming(): boolean { return !this.suspended && (this.held.has('ControlLeft') || this.held.has('ControlRight')); }
+  get aiming(): boolean { return !this.suspended && (this.rmbHeld || this.held.has('ControlLeft') || this.held.has('ControlRight')); }
   down(code: string): boolean { return this.held.has(code); }
   consume(code: string): boolean { const value = this.pressed.has(code); this.pressed.delete(code); return value; }
   consumeWheel(): number { const value = this.wheel; this.wheel = 0; return value; }
