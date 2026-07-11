@@ -6,8 +6,9 @@ import {
 import type { MapMarker, MapPoint } from './MinimapView';
 
 const MAP = rawMap as unknown as RenderMapData;
-/** Zoom the map opens at — a readable neighbourhood view centred on the player. */
-const OPEN_ZOOM = 0.12;
+/** Zoom the map opens at — a readable neighbourhood view centred on the player.
+ *  0.24 at ~0.98 m/unit covers the same real ground the old 0.12 did at 0.49 m/unit. */
+const OPEN_ZOOM = 0.24;
 
 /** Keys that close the map overlay. Pure so the gating is testable. */
 export const closesMapOverlay = (code: string): boolean => code === 'Escape' || code === 'KeyM';

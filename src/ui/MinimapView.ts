@@ -1,14 +1,15 @@
+import { MAP_WORLD_SIZE } from '../world/mapData';
 import type { RoadPoint } from '../world/City';
 
 export interface MapPoint { x: number; z: number; }
 export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; }
 
 /** Units-to-pixels factors, ordered widest view to tightest, over the 240px minimap canvas.
- *  'City' (0.00667) frames the whole 36000u generated map (240/0.00667 ≈ 36000u across) — though at
- *  that scale the in-game MapView (M key) is the real whole-map view; 'Metro'/'District' cover the
- *  larger driving radii the 6x scale-up introduced, and 'Standard'..'Street' keep the original
- *  on-foot fixed scales for local navigation. */
-export const MINIMAP_ZOOM_SCALES = [0.00667, 0.02, 0.045, 0.095, 0.2, 0.29, 0.4, 0.54] as const;
+ *  'City' is derived from the map footprint so the widest level always frames the whole generated
+ *  map (240/scale = MAP_WORLD_SIZE across) whatever the mapgen TARGET_SIZE — though at that scale
+ *  the in-game MapView (M key) is the real whole-map view; 'Metro'/'District' cover longer driving
+ *  radii, and 'Standard'..'Street' keep the original on-foot fixed scales for local navigation. */
+export const MINIMAP_ZOOM_SCALES = [240 / MAP_WORLD_SIZE, 0.02, 0.045, 0.095, 0.2, 0.29, 0.4, 0.54] as const;
 export const MINIMAP_ZOOM_NAMES = ['City', 'Metro', 'District', 'Far', 'Wide', 'Standard', 'Close', 'Street'] as const;
 export const DEFAULT_MINIMAP_ZOOM = 5; // Standard (on-foot fixed scale)
 

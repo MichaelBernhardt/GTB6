@@ -53,7 +53,7 @@ interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitP
 
 export class Game {
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 8000); // far plane retuned for the 36000u map: covers the CBD skyline (~2200u radius) with margin while only the CBD is massed; fog (Environment.ts) hides the cut and the bare outskirts
+  private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 8000); // player-relative far plane: covers the massed CBD skyline with generous margin at the 18000u parity scale; fog (Environment.ts) hides the cut and the bare outskirts
   private renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   private composer?: EffectComposer;
   private gtao?: GTAOPass;

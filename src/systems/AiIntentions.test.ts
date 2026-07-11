@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
+import { WORLD_SIZE } from '../config';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN, type City } from '../world/City';
 import { SPAWN_POINT } from '../world/placements';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
@@ -66,7 +67,17 @@ describe('ai intentions simulation', () => {
 
   it('freezes agents far from the player and thaws them in place without popping', () => {
     const population = new PopulationSystem(new THREE.Scene(), makeCity(), audio);
-    const far = new THREE.Vector3(2000, 0, 0);
+    // A probe every seeded agent is comfortably outside AI_FREEZE_RADIUS of. Mission contacts sit on
+    // data-driven map anchors, so a fixed magic coordinate can land right next to one after a map
+    // rescale (at the 18000u parity scale, (2000, 0) fell 296u from Candice from Boksburg).
+    const agents = [...population.pedestrians.map((ped) => ped.group.position), ...population.traffic.map((vehicle) => vehicle.group.position)];
+    const far = [
+      new THREE.Vector3(2000, 0, 0),
+      new THREE.Vector3(WORLD_SIZE / 3, 0, -WORLD_SIZE / 3),
+      new THREE.Vector3(-WORLD_SIZE / 3, 0, WORLD_SIZE / 3),
+      new THREE.Vector3(-WORLD_SIZE / 3, 0, -WORLD_SIZE / 3),
+    ].find((probe) => agents.every((agent) => agent.distanceTo(probe) > 600))!;
+    expect(far).toBeDefined();
     for (let frame = 0; frame < 15; frame++) population.update(1 / 60, far); // staggered checks: everyone frozen within 10 frames
     expect(population.pedestrians.every((ped) => ped.frozen)).toBe(true);
     expect(population.traffic.every((vehicle) => vehicle.frozen)).toBe(true);

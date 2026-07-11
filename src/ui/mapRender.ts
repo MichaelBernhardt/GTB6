@@ -83,7 +83,7 @@ const PREMIUM_WATER_AREA = 3200;
 const KIND_ORDER = ['residential', 'tertiary_link', 'tertiary', 'secondary_link', 'secondary', 'primary_link', 'primary', 'trunk_link', 'trunk', 'motorway_link', 'motorway'];
 
 // ---- Pure geometry helpers (DOM-free, unit-tested) -------------------------------------------
-export const MAP_MIN_ZOOM = 0.02;
+export const MAP_MIN_ZOOM = 0.04; // widest view: frames the whole 18000u parity map in ~720px, same on-screen framing the 36000u map had at 0.02
 export const MAP_MAX_ZOOM = 40;
 
 /** Clamp a zoom factor to the renderer's supported range. */

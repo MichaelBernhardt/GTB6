@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /**
- * Scene-level distance culling for the 36000u world.
+ * Scene-level distance culling for the full-city generated map.
  *
  * All static world geometry (merged road/ground/building meshes and per-cell instanced props) is
  * bucketed into per-cell chunk groups on the MERGE_CHUNK_SIZE grid. Each frame a staggered slice of

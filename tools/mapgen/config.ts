@@ -34,16 +34,15 @@ export const MIN_WATER_AREA_M2 = 4000;
 
 /**
  * Target square footprint (game units). The real bbox is fitted inside, aspect preserved.
- * 36000 (~0.49 m/unit with the coast+corridor graft) is the Phase-2 driveable scale, a 6x
- * scale-up from the previous 6000 on owner direction ("way too compressed ... scale up by
- * about a factor of 6"). ROAD_WIDTHS/TRACK_WIDTHS and the runway/pier/taxiway *widths* are
- * game-scale (fixed) while the whole layout is map-scale, so the 6x goes entirely into block
- * interiors and drive distances: typical CBD block interiors open from ~64 u to ~384 u across,
- * and every metre-denominated feature below (corridor, runway/pier LENGTHS, dam, ring, meanders)
- * scales with the map automatically because it is converted through fit.scale. A 2-unit-wide car
- * still gets the same two-lane carriageway; there is just far more road between the lanes.
+ * 18000 is the true-parity scale on owner direction: it measures ~0.98 m/unit with the
+ * coast+corridor graft — effectively "1 unit = 1 metre", so drive times and block sizes match
+ * the real city (the previous 36000 was 0.49 m/u, exactly 2x oversized). ROAD_WIDTHS/
+ * TRACK_WIDTHS and the runway/pier/taxiway *widths* stay game-scale (fixed) while the whole
+ * layout is map-scale, and every metre-denominated feature below (corridor, runway/pier
+ * LENGTHS, dam, ring, meanders) scales with the map automatically because it is converted
+ * through fit.scale. A 2-unit-wide car still gets the same two-lane carriageway.
  */
-export const TARGET_SIZE = 36000;
+export const TARGET_SIZE = 18000;
 
 /** Game-unit road widths per OSM highway class. */
 export const ROAD_WIDTHS: Record<string, number> = {
