@@ -79,7 +79,9 @@ export class PoliceSystem {
       this.followPath(vehicle, brain, dt, aggression);
     }
     if (distance < 5 && Math.abs(vehicle.speed) > 8 && this.attackCooldown <= 0) { damagePlayer(Math.min(24, Math.abs(vehicle.speed) * 0.8)); this.attackCooldown = 1.2; }
-    if (sighted && !playerInVehicle && distance < 20 && this.attackCooldown <= 0) { damagePlayer(4 + wanted.level * 1.5); this.attackCooldown = 1.1; }
+    // Close-range fire needs THIS unit to have line of sight — `sighted` is fleet-wide, so without the extra
+    // check a unit on the far side of a building could shoot through the wall and taking cover would be useless.
+    if (sighted && !playerInVehicle && distance < 20 && this.attackCooldown <= 0 && this.hasLineOfSight(vehicle.group.position, playerPosition)) { damagePlayer(4 + wanted.level * 1.5); this.attackCooldown = 1.1; }
   }
 
   /** Trail ran cold: cruise random nav nodes near the last known position until decay or fresh intel. */

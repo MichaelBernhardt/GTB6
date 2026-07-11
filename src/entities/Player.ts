@@ -7,6 +7,9 @@ import type { CheatSettings } from '../types';
 import type { City } from '../world/City';
 import { buildWeaponModel } from './WeaponModels';
 
+/** Game-computed cover pose: Game owns the cover position; the player only acts it out. */
+export interface CoverPose { heading: number; peek: number; twist: number; moving: boolean; }
+
 export class Player {
   group = new THREE.Group();
   health = PLAYER.maxHealth;
@@ -37,10 +40,12 @@ export class Player {
     this.group.position.copy(position); this.heading = Math.PI; this.group.rotation.y = this.heading; this.group.name = 'Player'; scene.add(this.group); this.buildModel();
   }
 
-  update(dt: number, input: InputManager, cameraYaw: number, city: City): void {
+  update(dt: number, input: InputManager, cameraYaw: number, city: City, cover?: CoverPose): void {
     if (this.inVehicle || this.health <= 0) return;
     const aimHeld = input.aiming && this.weapon !== 'fists'; // Ctrl: aim mode — raised gun, half speed, camera-facing
     const aiming = aimHeld || (input.firing && this.weapon !== 'fists'); // hip fire still raises the gun while the trigger is down
+    if (cover) { this.updateCover(dt, cover, aiming); return; }
+    this.torso.rotation.y *= Math.exp(-dt * 8); // unwind any leftover cover twist
     const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
     const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
     const move = new THREE.Vector3(side, 0, -forward);
@@ -66,6 +71,17 @@ export class Player {
       this.leftShin.rotation.x = THREE.MathUtils.lerp(this.leftShin.rotation.x, 0.65, dt * 9); this.rightShin.rotation.x = THREE.MathUtils.lerp(this.rightShin.rotation.x, 0.48, dt * 9);
     }
     if (this.group.position.y <= 0) { this.group.position.y = 0; this.velocityY = 0; this.onGround = true; }
+  }
+
+  /** Back against the wall: Game moves the group; this leans the body, twists the torso for the peek and keeps feet grounded. */
+  private updateCover(dt: number, cover: CoverPose, aiming: boolean): void {
+    this.turnToward(cover.heading, dt, 12);
+    if (cover.moving) { this.walkPhase += dt * 5.5; this.animateLocomotion(dt, false, aiming); }
+    else this.animateIdle(dt, aiming);
+    this.torso.rotation.y = THREE.MathUtils.lerp(this.torso.rotation.y, cover.twist, dt * 10);
+    this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, -0.085 * (1 - cover.peek), dt * 8); // shoulder-blades-to-brick lean, straightening as the peek comes out
+    this.applyPunch(dt);
+    this.group.position.y = 0; this.velocityY = 0; this.onGround = true;
   }
 
   takeDamage(amount: number): void { this.health = Math.max(0, this.health - Math.max(0, amount)); }
