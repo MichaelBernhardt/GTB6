@@ -13,7 +13,7 @@ export const PLAYER = {
 };
 export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2 };
 
-export type VehicleKind = 'compact' | 'sport' | 'van' | 'police' | 'taxi';
+export type VehicleKind = 'compact' | 'sport' | 'van' | 'police' | 'taxi' | 'cab';
 export interface VehicleSpec {
   kind: VehicleKind;
   name: string;
@@ -33,6 +33,7 @@ export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
   van: { kind: 'van', name: 'Hilux Bakkie', color: 0x58a596, maxSpeed: 27, acceleration: 16, brake: 28, steering: 1.75, drag: 0.85, health: 145, size: [2.15, 2.15, 4.9] },
   police: { kind: 'police', name: 'JMPD Interceptor', color: 0x202b38, maxSpeed: 42, acceleration: 28, brake: 40, steering: 2.35, drag: 0.6, health: 130, size: [1.95, 1.4, 4.35] },
   taxi: { kind: 'taxi', name: 'Quantum Express', color: 0xf0f1ea, maxSpeed: 44, acceleration: 27, brake: 30, steering: 2.1, drag: 0.6, health: 120, size: [2.05, 2, 5.05] },
+  cab: { kind: 'cab', name: 'Jozi Meter Cab', color: 0xf2c521, maxSpeed: 38, acceleration: 24, brake: 36, steering: 2.3, drag: 0.62, health: 110, size: [1.85, 1.4, 4.2] },
 };
 
 export type WeaponId = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rpg';

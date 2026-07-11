@@ -112,7 +112,7 @@ export class Vehicle {
   private forEachMaterial(apply: (material: VehicleMaterial) => void): void {
     const seen = new Set<VehicleMaterial>();
     this.group.traverse((object) => {
-      if (!(object instanceof THREE.Mesh) || object.parent?.name === 'firefx') return;
+      if (!(object instanceof THREE.Mesh) || object.parent?.name === 'firefx' || object.name === 'sign') return; // sign meshes share the atlas material with the whole city
       const material = object.material as VehicleMaterial;
       if (seen.has(material)) return;
       seen.add(material); apply(material);
@@ -120,6 +120,13 @@ export class Vehicle {
   }
 
   setFirstPerson(firstPerson: boolean): void { for (const part of this.cabinParts) part.visible = !firstPerson; } // hide cabin glass/roof so the driver view is unobstructed
+
+  /** Cab roof sign brightness: HDR-bright when the driver is AVAILABLE so it blooms, dim when occupied. */
+  setTaxiLight(available: boolean): void {
+    if (this.wrecked) return;
+    const sign = this.group.getObjectByName('taxilight');
+    if (sign instanceof THREE.Mesh) (sign.material as THREE.MeshStandardMaterial).emissiveIntensity = available ? 3.4 : 0.2;
+  }
 
   /** 0 = day (subtle lens glow), 1 = night: headlight lenses go HDR-bright so they bloom. Brake lights are untouched. */
   setHeadlightGlow(factor: number): void {
@@ -209,7 +216,14 @@ export class Vehicle {
       const stripe = new THREE.Mesh(new THREE.BoxGeometry(width + 0.04, 0.22, length * 0.82), new THREE.MeshStandardMaterial({ color: 0xf2c521, roughness: 0.5 }));
       stripe.position.y = 1; this.group.add(stripe);
       const board = createSignMesh(new THREE.PlaneGeometry(1.7, 0.4), 'QUANTUM EXPRESS', '#f2c521', { doubleSide: true });
-      board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board);
+      board.name = 'sign'; board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board);
+    }
+    if (this.spec.kind === 'cab') { // meter cab: glowing roof box (the duty light) wearing a TAXI decal on both faces
+      const box = new THREE.Mesh(new RoundedBoxGeometry(0.68, 0.26, 0.3, 2, 0.05), new THREE.MeshStandardMaterial({ color: 0xf6df7a, emissive: 0xffd75e, emissiveIntensity: 0.2, roughness: 0.4 }));
+      box.name = 'taxilight'; box.position.set(0, roof.position.y + 0.2, roof.position.z);
+      const decal = createSignMesh(new THREE.PlaneGeometry(0.6, 0.2), 'TAXI', '#141414', { background: '#f2c521' });
+      decal.name = 'sign'; decal.position.z = 0.16; const back = decal.clone(); back.position.z = -0.16; back.rotation.y = Math.PI;
+      box.add(decal, back); this.group.add(box);
     }
     if (this.police) {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;

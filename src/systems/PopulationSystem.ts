@@ -144,17 +144,18 @@ export class PopulationSystem {
     const parked: Array<[VehicleKind, number, number, number, number?]> = [
       ['compact', -105.5, 240, 0, 0xf1c232], ['sport', 30, 205.5, Math.PI / 2, 0xd83a40], ['van', -205.5, -72, 0],
       ['compact', 205.5, 86, 0], ['sport', 252, -205.5, Math.PI / 2, 0x3f6faa], ['van', -105.5, -190, 0], ['compact', 205.5, 286, 0],
+      ['cab', 105.5, 12, 0], ['cab', -30, 105.5, Math.PI / 2], // hailable meter cabs waiting for a driver
     ];
     for (const [kind, x, z, heading, color] of parked) {
       const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z)); const vehicle = new Vehicle(this.scene, kind, pose.position, color);
       vehicle.heading = Number.isFinite(pose.heading) ? pose.heading : heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([pose.position.x, pose.position.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'taxi', 'van', 'taxi'];
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'cab', 'sport', 'taxi', 'van'];
     for (let i = 0; i < 15; i++) {
       const routeIndex = (i * 5 + 3) % this.city.trafficRoutes.length; const route = this.city.trafficRoutes[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
       const kind = kinds[i % kinds.length] ?? 'compact';
-      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, 0, point.z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
+      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, 0, point.z), kind === 'taxi' || kind === 'cab' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
       vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     }
   }

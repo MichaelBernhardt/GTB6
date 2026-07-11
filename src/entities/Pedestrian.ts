@@ -15,6 +15,7 @@ export class Pedestrian {
   police = false;
   contact = false;
   carGuard = false;
+  hailing = false;
   aggressive = false;
   mugged = false;
   wallet = 0;
@@ -54,6 +55,7 @@ export class Pedestrian {
     if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); }
     this.punchTimer = Math.max(0, this.punchTimer - dt);
     if (this.state === 'hostile') this.setGuardPose(distance); else { this.group.rotation.x = 0; this.setPanicPose(this.state === 'flee', false); }
+    if (this.hailing && this.state === 'idle') { const arm = this.arms[1]; if (arm) { arm.rotation.x = Math.PI * 0.95; arm.rotation.z = -0.22; } } // curbside hail: one arm out for the cab
     if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(choices); return; }
     if (this.destination.distanceToSquared(this.group.position) < 5) {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }
@@ -91,6 +93,14 @@ export class Pedestrian {
     vest.position.y = 1.08; vest.castShadow = true; this.group.add(vest);
   }
 
+  /** Flags the player's taxi down: freeze at the curb with an arm out until picked up or released. */
+  setHail(on: boolean): void {
+    this.hailing = on;
+    if (on) { this.state = 'idle'; this.idleTime = 999999; return; }
+    const arm = this.arms[1]; if (arm) { arm.rotation.x = 0; arm.rotation.z = 0; }
+    if (this.state === 'idle') this.idleTime = Math.min(this.idleTime, 0.5);
+  }
+
   mug(player: THREE.Vector3): number {
     if (this.contact || this.state === 'down' || this.mugged) return 0;
     const cash = this.wallet; this.wallet = 0; this.mugged = true; this.fear = FEAR_MAX; this.enraged = this.aggressive;
@@ -106,7 +116,7 @@ export class Pedestrian {
   }
 
   /** True while wandering without a planned sidewalk route: the population system should assign one. */
-  get wantsRoute(): boolean { return this.state === 'walk' && !this.contact && !this.hostile && !this.routed; }
+  get wantsRoute(): boolean { return this.state === 'walk' && !this.contact && !this.hostile && !this.routed && !this.hailing; }
 
   setRoute(points: RoadPoint[]): void {
     this.route = points; this.routeIndex = 0; this.routed = true; this.state = 'walk';

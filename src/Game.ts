@@ -16,7 +16,7 @@ import type { Pedestrian } from './entities/Pedestrian';
 import { Player } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
-import { FEAR_EVENTS } from './systems/FearSystem';
+import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
@@ -26,7 +26,9 @@ import { PoliceSystem } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
+import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
 import { GARAGE_PARK, ShopSystem } from './systems/ShopSystem';
+import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADIUS, GUNFIRE_FEAR_SCALE, HAIL_RADIUS, isTaxiKind, MIN_TRIP_DISTANCE, PICKUP_RADIUS, routeDistance, STOP_SPEED, TaxiRide, taxiHudText } from './systems/TaxiJobSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
@@ -105,6 +107,11 @@ export class Game {
   private helperCooldown = 90;
   private previousWanted = false;
   private hostileGuardActivated = false;
+  private taxiDuty = false;
+  private taxiRide = new TaxiRide();
+  private taxiHailPed?: Pedestrian;
+  private taxiPassenger?: Pedestrian;
+  private taxiDestination?: THREE.Vector3;
 
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
@@ -195,7 +202,7 @@ export class Game {
   }
 
   private startGame(fresh: boolean): void {
-    if (fresh) { this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
+    if (fresh) { this.cancelTaxi(); this.taxiDuty = false; this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
@@ -313,6 +320,7 @@ export class Game {
   }
 
   private ejectFromWreck(vehicle: Vehicle): void {
+    this.cancelTaxi(); this.taxiDuty = false;
     vehicle.playerControlled = false; this.activeVehicle = undefined; this.transition = undefined;
     this.player.inVehicle = false; this.player.setVisible(true);
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(2.2);
@@ -395,7 +403,7 @@ export class Game {
     const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
     this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed);
     this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
-    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; }
+    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; this.taxiRide.recordCrash(this.prevDrivenSpeed); }
     this.prevDrivenSpeed = speed;
     this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
     if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
@@ -422,7 +430,106 @@ export class Game {
       this.beginExit(vehicle);
     }
     if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Bakkie recovered', vehicle.spec.name); }
+    if (isTaxiKind(vehicle.spec.kind) && this.input.consume('KeyT')) this.toggleTaxiDuty(vehicle);
+    if (this.taxiDuty) this.updateTaxiJob(dt, vehicle);
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
+  }
+
+  private toggleTaxiDuty(vehicle: Vehicle): void {
+    this.taxiDuty = !this.taxiDuty;
+    vehicle.setTaxiLight(this.taxiDuty); this.audio.ui(this.taxiDuty);
+    this.ui.notify(this.taxiDuty ? 'Taxi: AVAILABLE' : 'Taxi: OCCUPIED', this.taxiDuty ? 'Roof light on — watch the curb for a raised arm.' : 'Roof light off. No new fares.', this.taxiDuty);
+    if (!this.taxiDuty) this.cancelTaxi(false);
+  }
+
+  /** Runs the hail -> board -> ride -> pay loop while the player drives an AVAILABLE taxi. */
+  private updateTaxiJob(dt: number, vehicle: Vehicle): void {
+    const ride = this.taxiRide; const position = vehicle.group.position;
+    if (ride.phase === 'idle') {
+      if (vehicle.onFire || vehicle.disabled || this.wanted.isWanted) return; // nobody hails a burning cab or a police chase
+      const candidate = this.population.pedestrians
+        .filter((ped) => canHail(ped, ped.group.position.distanceTo(position)))
+        .sort((a, b) => a.group.position.distanceToSquared(position) - b.group.position.distanceToSquared(position))[0];
+      if (candidate && ride.hail()) { this.taxiHailPed = candidate; candidate.setHail(true); this.ui.notify('Fare spotted', 'Someone is flagging you down — stop at the curb beside them.'); }
+      return;
+    }
+    const hail = this.taxiHailPed;
+    if (ride.phase === 'hailed') {
+      if (!hail || hail.state !== 'idle' || hail.group.position.distanceTo(position) > HAIL_RADIUS * 1.6) { this.cancelTaxi(true); return; }
+      if (Math.abs(vehicle.speed) < STOP_SPEED && hail.group.position.distanceTo(position) <= PICKUP_RADIUS && ride.beginBoarding()) hail.state = 'walk';
+      return;
+    }
+    if (ride.phase === 'boarding') {
+      if (!hail || (hail.state !== 'walk' && hail.state !== 'idle')) { this.cancelTaxi(true); return; } // run over or frightened mid-pickup
+      const distance = hail.group.position.distanceTo(position);
+      if (distance > ABANDON_RADIUS || Math.abs(vehicle.speed) > 6) { this.cancelTaxi(true); return; } // drove off; the fare gives up
+      hail.state = 'walk'; hail.destination.copy(position);
+      if (distance <= BOARD_RADIUS) this.boardPassenger(vehicle, hail);
+      return;
+    }
+    ride.recordSpeeding(dt, Math.abs(vehicle.speed));
+    if (vehicle.onFire) ride.frighten(FEAR_MAX * dt);
+    if (ride.bailed) { this.passengerBail(vehicle); return; }
+    const destination = this.taxiDestination; if (!destination) return;
+    if (position.distanceTo(destination) < ARRIVE_RADIUS && Math.abs(vehicle.speed) < STOP_SPEED) this.completeRide(vehicle);
+  }
+
+  private boardPassenger(vehicle: Vehicle, ped: Pedestrian): void {
+    ped.setHail(false); ped.state = 'idle'; ped.idleTime = 999999; ped.group.visible = false; // aboard: hidden but remembered
+    const index = this.population.pedestrians.indexOf(ped); if (index >= 0) this.population.pedestrians.splice(index, 1);
+    this.taxiHailPed = undefined; this.taxiPassenger = ped;
+    const trip = this.planTaxiTrip(vehicle.group.position);
+    this.taxiDestination = trip.destination;
+    const fare = this.taxiRide.board(trip.distance);
+    this.audio.ui(true);
+    this.ui.notify('Passenger aboard', `Drop-off marked on the map · R${fare} on the meter. Drive lekker — they tip.`);
+  }
+
+  /** Picks a drop-off on the vehicle nav graph and prices the meter by A* route distance, not the crow's flight. */
+  private planTaxiTrip(from: THREE.Vector3): { destination: THREE.Vector3; distance: number } {
+    const graph = this.city.vehicleNav; const start = nearestNode(graph, from.x, from.z);
+    for (let attempt = 0; attempt < 14; attempt++) {
+      const goal = Math.floor(Math.random() * graph.nodes.length); const node = graph.nodes[goal];
+      if (!node || Math.hypot(node.x - from.x, node.z - from.z) < MIN_TRIP_DISTANCE) continue;
+      const path = findPath(graph, start, goal); if (!path) continue;
+      const points = path.map((index) => graph.nodes[index]).filter((point): point is NavPoint => Boolean(point));
+      return { destination: new THREE.Vector3(node.x, 0, node.z), distance: routeDistance(points) };
+    }
+    const fallback = graph.nodes[nearestNode(graph, -from.x, -from.z)] ?? { x: 0, z: 0 }; // degenerate graph: cross town, straight-line priced
+    return { destination: new THREE.Vector3(fallback.x, 0, fallback.z), distance: Math.hypot(fallback.x - from.x, fallback.z - from.z) };
+  }
+
+  private completeRide(vehicle: Vehicle): void {
+    const pay = this.taxiRide.payout(); this.economy.earn(pay.total); this.audio.ui(true);
+    this.ui.notify('Fare paid', pay.tip > 0 ? `R${pay.fare} on the meter + R${pay.tip} tip. "Sharp sharp, driver!"` : `R${pay.fare} on the meter, no tip. "Eish, that driving..."`);
+    this.disembarkPassenger(vehicle.group.position, vehicle.heading, false);
+    this.taxiRide.reset(); this.taxiDestination = undefined; this.persist();
+  }
+
+  private passengerBail(vehicle: Vehicle): void {
+    this.disembarkPassenger(vehicle.group.position, vehicle.heading, true);
+    this.taxiRide.reset(); this.taxiDestination = undefined;
+    this.ui.notify('Passenger bailed', 'They fled without paying. Smoother driving keeps fares aboard.', false);
+  }
+
+  private disembarkPassenger(origin: THREE.Vector3, heading: number, panic: boolean): void {
+    const ped = this.taxiPassenger; if (!ped) return; this.taxiPassenger = undefined;
+    const side = new THREE.Vector3(Math.cos(heading), 0, -Math.sin(heading)).multiplyScalar(2.2);
+    ped.group.position.copy(origin).add(side).setY(0); ped.group.visible = true;
+    ped.idleTime = 0; ped.pickDestination(this.city.sidewalkPoints);
+    this.population.pedestrians.push(ped);
+    if (panic) { ped.fear = 0; ped.applyFear(FEAR_MAX, origin); this.audio.scream('panic', ped.group.position.x, ped.group.position.z); }
+  }
+
+  /** Ends any hail/ride without payment: the hailer drops the arm, a boarded passenger climbs out where the cab stands. */
+  private cancelTaxi(quiet = true): void {
+    if (this.taxiHailPed) { this.taxiHailPed.setHail(false); this.taxiHailPed = undefined; }
+    if (this.taxiPassenger) {
+      const vehicle = this.activeVehicle ?? this.transition?.vehicle;
+      this.disembarkPassenger(vehicle?.group.position ?? this.player.group.position, vehicle?.heading ?? 0, false);
+      if (!quiet) this.ui.notify('Ride cancelled', 'The passenger climbs out, unpaid and unimpressed.', false);
+    }
+    this.taxiRide.reset(); this.taxiDestination = undefined;
   }
 
   private beginEnter(vehicle: Vehicle): void {
@@ -440,6 +547,7 @@ export class Game {
   }
 
   private beginExit(vehicle: Vehicle): void {
+    if (this.taxiDuty) { this.cancelTaxi(false); this.taxiDuty = false; vehicle.setTaxiLight(false); }
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading));
     const left = vehicle.group.position.clone().addScaledVector(side, 2.4); const right = vehicle.group.position.clone().addScaledVector(side, -2.4);
     const exit = !this.city.collides(left.x, left.z, 0.7) ? left : !this.city.collides(right.x, right.z, 0.7) ? right : undefined;
@@ -519,6 +627,7 @@ export class Game {
    *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
   private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; cityEvent?: CityEvent['kind'] } = {}): void {
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
+    if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the cab spooks the passenger
     const copSaw = options.copWitnessed
       || this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(position) < SIGHT_RADIUS)
       || this.population.pedestrians.some((ped) => ped.police && ped.state !== 'down' && ped.group.position.distanceTo(position) < SIGHT_RADIUS);
@@ -619,6 +728,7 @@ export class Game {
 
   private storeVehicle(vehicle: Vehicle): void {
     if (vehicle.onFire || vehicle.wrecked || vehicle.disabled) { this.ui.notify('Avenida Garage', 'They refuse the wreck. Bring something roadworthy.', false); return; }
+    if (this.taxiDuty) { this.cancelTaxi(false); this.taxiDuty = false; vehicle.setTaxiLight(false); }
     if (this.garageVehicle && this.garageVehicle !== vehicle) this.removeGarageVehicle();
     vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.occupied = false;
     vehicle.heading = GARAGE_PARK.heading; vehicle.reset(new THREE.Vector3(GARAGE_PARK.x, 0, GARAGE_PARK.z));
@@ -672,6 +782,7 @@ export class Game {
   }
 
   private currentTarget(): WorldTarget | undefined {
+    if (this.taxiDestination) return { position: this.taxiDestination, label: 'Drop-off', color: '#7fe08d' }; // active fare outranks mission breadcrumbs
     const objective = this.missions.objective;
     if (objective?.kind === 'checkpoints') {
       const stops = [new THREE.Vector3(-15, 0, 252), new THREE.Vector3(205, 0, 190), new THREE.Vector3(22, 0, -160)];
@@ -722,7 +833,7 @@ export class Game {
     for (const other of this.population.vehicles) {
       if (other === driven || driven.group.position.distanceToSquared(other.group.position) > 10) continue;
       const direction = driven.group.position.clone().sub(other.group.position).setY(0).normalize(); driven.group.position.addScaledVector(direction, 0.4); other.group.position.addScaledVector(direction, -0.35);
-      if ((this.vehicleCollisionCooldown.get(driven) ?? 0) <= 0) { const impact = Math.abs(driven.speed - other.speed); driven.takeDamage(impact * 0.35); other.takeDamage(impact * 0.25); this.audio.collision(impact); this.vehicleCollisionCooldown.set(driven, 0.8); }
+      if ((this.vehicleCollisionCooldown.get(driven) ?? 0) <= 0) { const impact = Math.abs(driven.speed - other.speed); driven.takeDamage(impact * 0.35); other.takeDamage(impact * 0.25); this.audio.collision(impact); this.taxiRide.recordCrash(impact); this.vehicleCollisionCooldown.set(driven, 0.8); }
       driven.speed *= 0.6; other.speed *= 0.7;
     }
   }
@@ -736,7 +847,7 @@ export class Game {
       if (this.activeVehicle) {
         if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
-        else prompt = 'E  Exit vehicle  ·  F  Recover';
+        else prompt = `E  Exit vehicle  ·  F  Recover${isTaxiKind(this.activeVehicle.spec.kind) ? `  ·  T  ${this.taxiDuty ? 'Go occupied' : 'Go available'}` : ''}`;
       }
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
@@ -754,9 +865,12 @@ export class Game {
       missionName: this.missions.active?.name ?? '', text: this.missions.objective.text, progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
     } : undefined;
-    const vehicle = this.activeVehicle ? { name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health } : undefined;
+    const vehicle = this.activeVehicle ? {
+      name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health,
+      taxi: isTaxiKind(this.activeVehicle.spec.kind) ? { text: taxiHudText(this.taxiRide.phase, this.taxiDuty, this.taxiRide.fare, this.taxiRide.tip), available: this.taxiDuty } : undefined,
+    } : undefined;
     this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
-    const markers = [...this.shops.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [])];
+    const markers = [...this.shops.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : []), ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : [])];
     const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
     this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
   }
@@ -771,6 +885,7 @@ export class Game {
     this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
+    this.cancelTaxi(); this.taxiDuty = false; this.activeVehicle?.setTaxiLight(false);
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
     this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset(); this.mode = 'playing';
   }
