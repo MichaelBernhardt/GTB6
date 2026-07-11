@@ -131,7 +131,7 @@ export class Game {
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.setupRenderer(); this.setupScene();
-    this.city = new City(this.scene);
+    this.city = new City(this.scene, this.settings.quality);
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.settings.quality, this.save.timeOfDay);
     this.shops = new ShopSystem(this.scene, this.city);
     this.safehouses = new SafehouseSystem(this.scene, this.city);
@@ -292,6 +292,7 @@ export class Game {
     const shadows = this.settings.quality !== 'low';
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
     this.dayNight.setQuality(this.settings.quality);
+    this.city.setWaterQuality(this.settings.quality); // rebuilds water meshes; disposes the old tier's materials and mirror target
     this.setupComposer();
   }
 
