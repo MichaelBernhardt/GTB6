@@ -8,11 +8,11 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
-import { canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, riderImpactDamage, rollDrops, shouldKnockOff, type PedKind } from './core/GameRules';
+import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
-import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolvePurchase, weaponPrice } from './core/ShopRules';
+import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
@@ -32,13 +32,15 @@ import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
 import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
-import { canEnterSafehouse, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
-import { GARAGE_PARK, GARAGE_STEP_OUT, ShopSystem } from './systems/ShopSystem';
+import { canEnterSafehouse, SAFEHOUSES, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
+import { GARAGE_PARK, GARAGE_STEP_OUT, SHOPS, ShopSystem } from './systems/ShopSystem';
+import { airborneHint, canDeploy, chuteLandingDamage, deployParachute, SKYFALL_ALTITUDE, startAirborne, stepAirborne, type AirborneState } from './systems/SkyfallSystem';
+import { buildTeleportTargets, clampToWorld, districtAnchors, resolveTeleport, safePlacement, type TeleportTarget } from './systems/Teleport';
 import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADIUS, GUNFIRE_FEAR_SCALE, HAIL_RADIUS, isTaxiKind, MIN_TRIP_DISTANCE, PICKUP_RADIUS, REHAIL_COOLDOWN, routeDistance, STOP_SPEED, TaxiRide, taxiHudText } from './systems/TaxiJobSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
-import type { CheatSettings, GameMode, GameSettings, SavedGame, WorldTarget } from './types';
+import type { CheatSettings, GameMode, GameSettings, Inventory, SavedGame, WorldTarget } from './types';
 import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
@@ -132,11 +134,15 @@ export class Game {
   private cover?: { spot: CoverSpot; t: number; peek: number; corner: -1 | 0 | 1; exitTimer: number };
   private coverAvailable = false;
   private coverLean = 0;
+  private inventory: Inventory;
+  private airborne?: AirborneState;
+  private districtTargets: TeleportTarget[];
 
   constructor(private container: HTMLElement) {
-    this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
+    this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.setupRenderer(); this.setupScene();
     this.city = new City(this.scene, this.settings.quality);
+    this.districtTargets = districtAnchors((x, z) => this.city.districtAt(x, z));
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.settings.quality, this.save.timeOfDay);
     this.shops = new ShopSystem(this.scene, this.city);
     this.safehouses = new SafehouseSystem(this.scene, this.city);
@@ -211,6 +217,7 @@ export class Game {
     this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.persist(); };
     this.ui.onBuyWeapon = (id) => this.purchase('weapon', id);
     this.ui.onBuyAmmo = (id) => this.purchase('ammo', id);
+    this.ui.onBuyArmour = () => this.purchaseArmour();
     this.ui.onSafehouseSave = () => {
       const place = this.activeSafehouse; if (!place) return;
       this.save.spawn = safehouseSpawn(place); this.persist(); this.audio.ui(true);
@@ -295,7 +302,73 @@ export class Game {
     },
     busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
     openMap: () => { this.closeConsole(); this.openMap(); return 'Opening the city map. Press M or ESC to close.'; },
+    teleport: (x, z) => this.teleportPlayer(clampToWorld(x), clampToWorld(z), `${Math.round(x)}, ${Math.round(z)}`),
+    teleportNamed: (name) => {
+      const target = resolveTeleport(name, this.teleportTargets());
+      return target ? this.teleportPlayer(target.x, target.z, target.name) : `Eish, unknown place: ${name}. Try "tp list".`;
+    },
+    teleportList: () => {
+      const targets = this.teleportTargets();
+      const kinds = ['spawn', 'district', 'shop', 'safehouse', 'mission'] as const;
+      return kinds.map((kind) => `${kind}: ${targets.filter((target) => target.kind === kind).map((target) => target.name).join(', ')}`);
+    },
+    skyfall: (name) => this.beginSkyfall(name),
+    giveWeapon: (id) => {
+      const result = this.combat.grantWeapon(id); this.player.setWeapon(this.combat.current); this.persist();
+      return `${WEAPON_BY_ID[id].name}: ${result === 'new' ? 'granted' : 'ammo topped up'}.`;
+    },
+    giveAmmo: () => { const filled = this.combat.maxAmmo(); this.persist(); return `${filled} weapon${filled === 1 ? '' : 's'} fully stocked.`; },
+    giveArmour: () => { this.inventory.armour = ARMOUR_MAX; this.persist(); return `Body armour strapped on: ${ARMOUR_MAX}/${ARMOUR_MAX}.`; },
+    giveItem: (item, count) => {
+      if (item === 'stim') { this.inventory.stims = Math.min(STIM_MAX, this.inventory.stims + count); this.persist(); return `Stim packs: ${this.inventory.stims}/${STIM_MAX}. Press H to use one.`; }
+      this.inventory.parachutes = Math.min(PARACHUTE_MAX, this.inventory.parachutes + count); this.persist();
+      return `Parachutes: ${this.inventory.parachutes}/${PARACHUTE_MAX}. SPACE deploys one mid-air.`;
+    },
   };
+
+  /** The gazetteer is rebuilt per query so the `spawn` entry tracks the current wake-up spot; districts are sampled once. */
+  private teleportTargets(): TeleportTarget[] {
+    return buildTeleportTargets({ spawn: this.save.spawn, districts: this.districtTargets, shops: SHOPS, safehouses: SAFEHOUSES, missions: MISSIONS });
+  }
+
+  /** Drops the player safely at (x, z): vehicle, cover and airborne states end cleanly, the spot nudges off any
+   *  collider, and the camera snaps behind the new position instead of flying across town. Driving? You arrive
+   *  on foot — the vehicle stays where it was. */
+  private teleportPlayer(x: number, z: number, label: string): string {
+    const vehicle = this.activeVehicle ?? this.transition?.vehicle;
+    if (vehicle) {
+      this.endTaxiShift(vehicle);
+      vehicle.playerControlled = false; vehicle.setFirstPerson(false);
+      this.activeVehicle = undefined; this.transition = undefined;
+      this.audio.setEngine(false); this.audio.stopRadio();
+    }
+    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false);
+    this.player.inVehicle = false; this.player.setVisible(true);
+    const spot = safePlacement(x, z, (px, pz) => this.city.collides(px, pz, PLAYER.radius));
+    this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
+    this.player.velocityY = 0; this.player.onGround = true;
+    this.cameraController.snapBehind(this.player.group.position);
+    this.ui.screenFade();
+    return spot.clear ? `Teleported to ${label} (${Math.round(spot.x)}, ${Math.round(spot.z)}).` : `No clear ground near ${label} — dropped on the mark anyway.`;
+  }
+
+  /** `skyfall [name]`: safe-teleport to the target (or stay put), then hoist to skydive altitude in freefall. */
+  private beginSkyfall(name?: string): string {
+    let x = this.player.group.position.x; let z = this.player.group.position.z; let label = 'this very spot';
+    if (name) {
+      const target = resolveTeleport(name, this.teleportTargets());
+      if (!target) return `Eish, unknown place: ${name}. Try "tp list".`;
+      x = target.x; z = target.z; label = target.name;
+    }
+    this.teleportPlayer(x, z, label);
+    this.player.group.position.y += SKYFALL_ALTITUDE;
+    this.player.onGround = false; this.player.velocityY = 0;
+    this.airborne = startAirborne(this.player.heading, this.player.group.position.y);
+    this.cameraController.pitch = 0.62; // start looking down at the city
+    this.closeConsole(); // hand WASD straight back — the ground is coming
+    this.ui.notify('Geronimo!', this.inventory.parachutes > 0 ? 'SPACE deploys the parachute. W dives, S flattens, A/D steer.' : 'No parachute aboard. W dives, S flattens, A/D steer. Good luck.', this.inventory.parachutes > 0);
+    return `Skydiving from ${SKYFALL_ALTITUDE}u above ${label}.`;
+  }
 
   private describeCrowd(): string {
     const target = this.lifecycle.targets(this.dayNight.hour); const tuning = this.lifecycle.tuning;
@@ -339,7 +412,7 @@ export class Game {
   }
 
   private startGame(fresh: boolean): void {
-    if (fresh) { this.endTaxiShift(); this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
+    if (fresh) { this.endTaxiShift(); this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
@@ -375,15 +448,17 @@ export class Game {
       if (next !== this.settings.minimapZoom) { this.settings.minimapZoom = next; this.persist(); }
       this.ui.notify(`Minimap: ${MINIMAP_ZOOM_NAMES[this.settings.minimapZoom]}`);
     }
-    if (this.transition) this.updateTransition(dt);
+    if (this.input.consume('KeyH')) this.useStim();
+    if (this.airborne) this.updateAirborne(dt);
+    else if (this.transition) this.updateTransition(dt);
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     this.brandishCooldown = Math.max(0, this.brandishCooldown - dt);
-    if (this.input.aiming && !this.combat.spec.melee && !this.transition && this.brandishCooldown === 0) { this.population.broadcastBrandish(focus); this.brandishCooldown = 1.5; } // a raised gun scares witnesses; no police heat for merely aiming
+    if (this.input.aiming && !this.combat.spec.melee && !this.transition && !this.airborne && this.brandishCooldown === 0) { this.population.broadcastBrandish(focus); this.brandishCooldown = 1.5; } // a raised gun scares witnesses; no police heat for merely aiming
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
-    this.population.update(dt, focus, (amount) => this.damagePlayer(amount), !this.activeVehicle && !this.transition);
+    this.population.update(dt, focus, (amount) => this.damagePlayer(amount), !this.activeVehicle && !this.transition && !this.airborne);
     for (const hit of this.population.consumePlayerVehicleHits()) { // civilian traffic vs the on-foot player: the driver is AI, the player the victim — no heat, just physics
       if (hit.damage > 0) this.damagePlayer(hit.damage);
       if (hit.knockdown && !this.player.tumbling) { this.player.tumble(); this.shake = Math.min(0.7, this.shake + 0.3); }
@@ -435,7 +510,7 @@ export class Game {
       if (boom.playerDamage > 0) this.damagePlayer(boom.playerDamage);
     }
     this.updateVehicleFires(dt, focus);
-    for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition)) this.applyPickup(item);
+    for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition && !this.airborne)) this.applyPickup(item);
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
     this.saveTimer += dt; if (this.saveTimer > 8) { this.persist(); this.saveTimer = 0; }
     if (this.player.health <= 0) this.die();
@@ -555,6 +630,52 @@ export class Game {
     }
   }
 
+  /** Skydive tick: WASD trims pitch and heading via the pure step, walls still clamp the glide, SPACE (or F)
+   *  spends a carried parachute, and touching the support surface settles the landing bill. */
+  private updateAirborne(dt: number): void {
+    const state = this.airborne; if (!state) return;
+    const position = this.player.group.position;
+    if ((this.input.consume('Space') || this.input.consume('KeyF')) && canDeploy(state.mode, this.inventory.parachutes)) {
+      this.inventory.parachutes -= 1; deployParachute(state); this.player.setCanopy(true);
+      this.audio.ui(true); this.ui.notify('Canopy out', 'Glide with WASD. Flare with S or SPACE just before touchdown.');
+      this.persist();
+    }
+    const stick = {
+      pitch: Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')),
+      steer: Number(this.input.down('KeyD')) - Number(this.input.down('KeyA')),
+      flare: this.input.down('KeyS') || this.input.down('Space'),
+    };
+    const support = this.city.supportHeight(position.x, position.z, position.y); // rooftops count: you can land on them
+    const step = stepAirborne(state, stick, dt, position.y, support);
+    const desired = new THREE.Vector3(position.x + step.dx, position.y, position.z + step.dz);
+    const clamped = this.city.clampMoveAt(position, desired, PLAYER.radius);
+    position.x = clamped.x; position.z = clamped.z; position.y = step.y;
+    this.player.heading = state.heading; this.player.group.rotation.y = state.heading;
+    this.player.animateAirborne(dt, state.mode, state.pitch, state.bank);
+    if (step.landed) this.landSkyfall(state, step.descent, support);
+  }
+
+  /** Touchdown: a flared canopy landing is free, a hot canopy landing bruises, and raw freefall pays the full
+   *  fall-damage bill from the drop altitude — from 600u that is lethal unless the invulnerable cheat is on. */
+  private landSkyfall(state: AirborneState, descent: number, support: number): void {
+    this.airborne = undefined; this.player.setCanopy(false);
+    this.player.onGround = true; this.player.velocityY = 0;
+    const damage = state.mode === 'parachute' ? chuteLandingDamage(descent) : fallDamage(state.fallOriginY - support);
+    if (damage > 0) {
+      this.damagePlayer(damage); this.player.tumble();
+      this.shake = Math.min(0.7, this.shake + 0.3); this.audio.collision(10 + damage * 0.3);
+    } else if (state.mode === 'parachute') this.ui.notify('Textbook landing', 'Two feet down, no paperwork.');
+  }
+
+  /** H: jab a stim pack — +50 health, clamped; never wasted at full health. */
+  private useStim(): void {
+    if (this.inventory.stims <= 0) return;
+    if (this.player.health >= this.player.maxHealth) { this.ui.notify('Stim pack', 'You are already at full health.', false); return; }
+    this.inventory.stims -= 1; this.player.health = stimHeal(this.player.health, this.player.maxHealth);
+    this.audio.pickup(); this.ui.notify('Stim pack used', `+50 health · ${this.inventory.stims} left.`);
+    this.persist();
+  }
+
   /** GTA-V-style cover: Q snaps flat against the nearest building face (third person only — in first person Q is a
    *  no-op), A/D slides along the wall, Ctrl at a corner leans out to shoot, mid-wall Ctrl just shows the crosshair
    *  without stepping out. Game owns the cover position; Player only performs the pose. */
@@ -593,7 +714,7 @@ export class Game {
 
   /** Scope mode: aiming the sniper on foot (cover peeks included) — never from a vehicle seat or mid-transition. */
   private get scoped(): boolean {
-    return this.mode === 'playing' && !this.transition && !this.weaponWheelOpen && scopeActive(this.input.aiming, this.combat.current, Boolean(this.activeVehicle));
+    return this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && scopeActive(this.input.aiming, this.combat.current, Boolean(this.activeVehicle));
   }
 
   /** Shared aftermath for a ranged player shot: witnesses, fear, gore, and drops — on foot or drive-by. */
@@ -1002,7 +1123,17 @@ export class Game {
         canRefill: resolvePurchase('ammo', spec.id, state.owned, this.economy.balance, full, multiplier).ok,
       };
     });
-    this.ui.showShop(entries, this.economy.balance);
+    const armour = resolveArmourPurchase(this.inventory.armour, this.economy.balance, multiplier);
+    this.ui.showShop(entries, this.economy.balance, { price: armour.price, full: this.inventory.armour >= ARMOUR_MAX, canBuy: armour.ok });
+  }
+
+  private purchaseArmour(): void {
+    const multiplier = shopPriceMultiplier(this.livingCity.district(CBD));
+    const result = resolveArmourPurchase(this.inventory.armour, this.economy.balance, multiplier);
+    if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); this.renderShop(); return; }
+    this.inventory.armour = ARMOUR_MAX; this.livingCity.apply({ kind: 'shop-purchase', district: CBD }); this.audio.ui(true);
+    this.ui.notify('Body armour fitted', `Full plate · -R${result.price.toLocaleString()}`);
+    this.persist(); this.renderShop();
   }
 
   private purchase(kind: 'weapon' | 'ammo', id: WeaponId): void {
@@ -1123,7 +1254,8 @@ export class Game {
       : 0; // pull the camera toward the exposed corner for visibility over the shoulder
     this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
     const sensitivity = scoped ? scopeSensitivity(this.settings.mouseSensitivity, this.scopeLevel) : this.settings.mouseSensitivity;
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0);
+    const airborneBoost = this.airborne ? (this.airborne.mode === 'freefall' ? 6 : 4) : 0; // skydives read better with the boom pulled back
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -1184,7 +1316,8 @@ export class Game {
     if (this.mode === 'playing' && !this.transition) {
       const nearbyTarget = this.currentTarget();
       const shop = this.shops.shopNear(focus);
-      if (this.activeVehicle) {
+      if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
+      else if (this.activeVehicle) {
         if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
         else {
@@ -1219,8 +1352,8 @@ export class Game {
       taxi: isTaxiKind(this.activeVehicle.spec.kind) ? { text: taxiHudText(this.taxiRide.phase, this.taxiRide.duty === 'available', this.taxiRide.fare, this.taxiRide.tip), available: this.taxiRide.available } : undefined,
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
-    const crosshair = this.mode === 'playing' && !this.transition && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile);
-    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
+    const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
+    this.ui.update({ health: this.player.health, armour: this.inventory.armour, stims: this.inventory.stims, parachutes: this.inventory.parachutes, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles
@@ -1229,25 +1362,32 @@ export class Game {
     if (this.ui.mapOpen) this.ui.updateMap({ x: focus.x, z: focus.z, heading, markers, police, hostiles });
   }
 
-  private damagePlayer(amount: number): void { if (this.cheats.invulnerable) return; if (amount > 0) this.ui.damageFlash(); this.player.takeDamage(amount); }
+  /** Single damage funnel: the invulnerable cheat short-circuits, then armour soaks before health bleeds. */
+  private damagePlayer(amount: number): void {
+    if (this.cheats.invulnerable || amount <= 0) return;
+    this.ui.damageFlash();
+    const routed = absorbDamage(this.inventory.armour, amount);
+    this.inventory.armour = routed.armour;
+    if (routed.through > 0) this.player.takeDamage(routed.through);
+  }
   private mainMenuSummary() {
     return { hasSave: this.saveExists, money: this.economy.balance, completedMissions: this.missions.completed.size, totalMissions: MISSIONS.length, reputation: reputationTier(this.livingCity.district(CBD).communityStanding) };
   }
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.cover = undefined; this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     this.endTaxiShift(this.activeVehicle);
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
-    this.transition = undefined; this.cover = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.mode = 'playing';
+    this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.mode = 'playing';
   }
   /** Tears down the JMPD response and drops its foot officers from the population roster. */
   private clearPolice(): void {
     for (const officer of this.police.reset()) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
-  private persist(): void { this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses }; this.saveManager.save(this.save); }
+  private persist(): void { this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } }; this.saveManager.save(this.save); }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }

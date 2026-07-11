@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CHEATS, PLAYER, WEAPON_BY_ID, WEAPONS, type WeaponId } from '../config';
-import { AIM_SPEED_MULTIPLIER, BICYCLE_CRUISE_FACTOR, Economy, FALL_SAFE_DROP, KNOCKOFF_IMPACT_SPEED, bicycleCap, calculateDamage, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, fallDamage, jumpVelocity, moveSpeed, outOfAmmo, riderImpactDamage, rollDrops, shouldKnockOff, splashDamage, spreadOffset, stepVertical, triggerPulled, type VerticalMotion } from './GameRules';
+import { absorbDamage, AIM_SPEED_MULTIPLIER, ARMOUR_MAX, BICYCLE_CRUISE_FACTOR, Economy, FALL_SAFE_DROP, KNOCKOFF_IMPACT_SPEED, PARACHUTE_MAX, STIM_HEAL, STIM_MAX, bicycleCap, calculateDamage, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, fallDamage, jumpVelocity, moveSpeed, outOfAmmo, riderImpactDamage, rollDrops, shouldKnockOff, splashDamage, spreadOffset, stepVertical, stimHeal, triggerPulled, type VerticalMotion } from './GameRules';
 
 const rng = (...values: number[]): (() => number) => { let i = 0; return () => values[i++] ?? 0; };
 
@@ -248,5 +248,32 @@ describe('vertical physics step', () => {
     expect(landing.landed).toBe(true);
     expect(motion.y).toBe(4);
     expect(landing.drop).toBeCloseTo(6);
+  });
+});
+
+describe('body armour and stims', () => {
+  it('routes damage through armour before health', () => {
+    expect(absorbDamage(100, 30)).toEqual({ armour: 70, through: 0 });
+    expect(absorbDamage(20, 30)).toEqual({ armour: 0, through: 10 });
+    expect(absorbDamage(0, 30)).toEqual({ armour: 0, through: 30 });
+    expect(absorbDamage(50, 0)).toEqual({ armour: 50, through: 0 });
+  });
+
+  it('never produces negative pools from garbage inputs', () => {
+    expect(absorbDamage(-5, 10)).toEqual({ armour: 0, through: 10 });
+    expect(absorbDamage(10, -4)).toEqual({ armour: 10, through: 0 });
+  });
+
+  it('heals a fixed stim chunk clamped to max health', () => {
+    expect(stimHeal(30, 100)).toBe(30 + STIM_HEAL);
+    expect(stimHeal(80, 100)).toBe(100);
+    expect(stimHeal(100, 100)).toBe(100);
+    expect(stimHeal(-10, 100)).toBe(STIM_HEAL);
+  });
+
+  it('publishes the carry caps', () => {
+    expect(ARMOUR_MAX).toBe(100);
+    expect(STIM_MAX).toBeGreaterThan(0);
+    expect(PARACHUTE_MAX).toBeGreaterThan(0);
   });
 });

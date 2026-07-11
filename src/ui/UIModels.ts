@@ -10,6 +10,9 @@ export interface ObjectiveView { missionName: string; text: string; progress?: n
 
 export interface HudState {
   health: number;
+  armour: number;
+  stims: number;
+  parachutes: number;
   money: number;
   weaponName: string;
   melee: boolean;
@@ -41,6 +44,7 @@ export interface MainMenuSummary {
 export interface CheatWeaponEntry { id: WeaponId; name: string; owned: boolean; }
 export interface WheelEntry { name: string; ammo: string; highlighted: boolean; equipped: boolean; locked: boolean; }
 export interface ShopCatalogEntry { id: WeaponId; name: string; owned: boolean; price: number; ammoPrice: number; reserve: number; ammoFull: boolean; canBuy: boolean; canRefill: boolean; }
+export interface ShopArmourEntry { price: number; full: boolean; canBuy: boolean; }
 
 export interface PauseModel { settings: GameSettings; }
 export interface CheatsModel { weapons: CheatWeaponEntry[]; cheats: CheatSettings; }

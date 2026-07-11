@@ -41,7 +41,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-location em { color: var(--yellow); font: 800 10px Inter, sans-serif; font-style: normal; letter-spacing: 1.2px; text-transform: uppercase; }
 .hud-location b { color: #9fd8cf; font: 800 11px Inter, sans-serif; letter-spacing: 1.4px; }
 
-.hud-status { position: absolute; top: 24px; right: 28px; display: grid; grid-template-columns: auto 176px auto; grid-template-rows: 26px 32px; gap: 5px 8px; filter: drop-shadow(0 4px 9px #0008); }
+.hud-status { position: absolute; top: 24px; right: 28px; display: grid; grid-template-columns: auto 176px auto; grid-template-rows: 26px 32px auto; gap: 5px 8px; filter: drop-shadow(0 4px 9px #0008); }
 .hud-wanted { grid-column: 1 / 4; justify-self: end; display: flex; gap: 2px; padding: 3px 8px; background: rgba(17, 24, 23, .82); border-right: 4px solid var(--red); }
 .hud-wanted i { color: #53605d; font-style: normal; font-size: 17px; line-height: 18px; }
 .hud-wanted i.is-hot { color: var(--yellow); text-shadow: 0 0 12px rgba(247, 200, 67, .55); }
@@ -49,6 +49,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-health::before { content: "HEALTH"; position: absolute; left: 8px; top: 6px; z-index: 2; font: 900 10px Inter, sans-serif; letter-spacing: 1.2px; }
 .hud-health > span { position: absolute; inset: 0 auto 0 0; background: var(--red); transition: width .2s ease; }
 .hud-health b { position: absolute; right: 7px; top: 3px; z-index: 2; font-size: 19px; }
+.hud-armour { position: relative; grid-column: 1 / 3; grid-row: 3; height: 16px; overflow: hidden; color: var(--paper); background: rgba(17, 24, 23, .88); border: 2px solid var(--blue); }
+.hud-armour::before { content: "ARMOUR"; position: absolute; left: 8px; top: 1px; z-index: 2; font: 900 9px Inter, sans-serif; letter-spacing: 1.2px; }
+.hud-armour > span { position: absolute; inset: 0 auto 0 0; background: var(--blue); transition: width .2s ease; }
+.hud-armour b { position: absolute; right: 7px; top: 0; z-index: 2; font-size: 12px; }
+.hud-items { position: absolute; left: 28px; bottom: 258px; display: flex; gap: 6px; }
+.hud-items i { padding: 5px 8px; background: rgba(17, 24, 23, .86); color: var(--paper); font: 900 9px Inter, sans-serif; font-style: normal; letter-spacing: 1.2px; border-left: 3px solid var(--teal); }
 .hud-cash { grid-column: 3; grid-row: 2; display: flex; align-items: baseline; gap: 6px; padding: 4px 8px; color: var(--ink); background: var(--yellow); }
 .hud-cash small { font: 900 8px Inter, sans-serif; letter-spacing: 1px; }
 .hud-cash b { font-size: 21px; }
@@ -161,6 +167,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .hud-status { top: 12px; right: 12px; grid-template-columns: 120px auto; transform: scale(.84); transform-origin: top right; }.hud-wanted { grid-column: 1 / 3; }.hud-health { grid-column: 1; min-width: 120px; }.hud-cash { grid-column: 2; }.hud-weapon { top: 69px; min-width: 145px; }
   .hud-objective { top: 99px; width: calc(100vw - 24px); padding: 8px 10px 10px; }.hud-objective strong { font-size: 15px; }
   #minimap { left: 12px; bottom: 12px; width: 142px; height: 142px; border-width: 4px; }
+  .hud-items { left: 12px; bottom: 142px; }
   .hud-fps { left: 12px; bottom: 164px; }.hud-vehicle { right: 12px; bottom: 12px; width: 138px; }.hud-vehicle b { font-size: 40px; }.hud-prompt { bottom: 12px; max-width: 68vw; padding: 8px 10px; font-size: 10px; }
   #toast { top: 166px; min-width: 0; width: calc(100vw - 28px); max-width: none; }#toast strong { font-size: 18px; }
   .menu-overlay { padding: 18px 16px 56px; background: rgba(13, 19, 18, .96); }.menu-overlay::before { display: none; }.main-menu { width: 100%; }.main-menu h1 { font-size: clamp(65px, 21vw, 92px); letter-spacing: -4px; }.main-menu__lede { font-size: 14px; }.main-menu__rail { grid-template-columns: 1fr; }.main-menu footer { position: static; margin-top: 10px; }

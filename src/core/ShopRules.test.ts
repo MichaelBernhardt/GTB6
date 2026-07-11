@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WEAPONS, WEAPON_BY_ID } from '../config';
-import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_HEAL, hotdogHeal, reserveFull, resolvePurchase, weaponPrice, WEAPON_PRICES } from './ShopRules';
+import { adjustedShopPrice, ammoPrice, ARMOUR_PRICE, detailerPrice, HOTDOG_HEAL, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice, WEAPON_PRICES } from './ShopRules';
 
 describe('Cordova Arms purchase resolution', () => {
   it('prices every non-melee weapon and never the fists', () => {
@@ -80,5 +80,23 @@ describe('hot dog vendor healing', () => {
     expect(hotdogHeal(100, 100)).toBe(100);
     expect(hotdogHeal(-10, 100)).toBe(HOTDOG_HEAL);
     expect(hotdogHeal(50, 100, -30)).toBe(50);
+  });
+});
+
+describe('body armour purchases', () => {
+  it('sells a full plate when there is headroom and cash', () => {
+    expect(resolveArmourPurchase(0, 1000)).toEqual({ ok: true, price: ARMOUR_PRICE });
+    expect(resolveArmourPurchase(99, ARMOUR_PRICE)).toEqual({ ok: true, price: ARMOUR_PRICE });
+  });
+
+  it('refuses when already plated or broke', () => {
+    expect(resolveArmourPurchase(100, 99999)).toEqual({ ok: false, price: ARMOUR_PRICE, reason: 'armour-full' });
+    expect(resolveArmourPurchase(0, ARMOUR_PRICE - 1)).toEqual({ ok: false, price: ARMOUR_PRICE, reason: 'funds' });
+  });
+
+  it('applies the district price multiplier with R5 rounding', () => {
+    const discounted = resolveArmourPurchase(0, 99999, 0.8);
+    expect(discounted.ok).toBe(true);
+    expect(discounted.price).toBe(Math.round(ARMOUR_PRICE * 0.8 / 5) * 5);
   });
 });

@@ -1,6 +1,6 @@
 import type { MissionChoice } from '../systems/MissionSystem';
 import type { CheatSettings, GameSettings } from '../types';
-import { formatMoney, reputationLabel, type CheatWeaponEntry, type MainMenuSummary, type MenuScreen, type ShopCatalogEntry } from './UIModels';
+import { formatMoney, reputationLabel, type CheatWeaponEntry, type MainMenuSummary, type MenuScreen, type ShopArmourEntry, type ShopCatalogEntry } from './UIModels';
 
 export class MenuView {
   screen: MenuScreen = 'none';
@@ -38,17 +38,18 @@ export class MenuView {
 
   controls(fromMain: boolean, back: () => void): void {
     const groups = [
-      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['CTRL/RMB', 'Aim / drive-by'], ['SPACE', 'Jump / handbrake'], ['E', 'Interact / vehicle'], ['Q', 'Take cover'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—5', 'Select weapon'], ['R', 'Reload'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['G', 'Siren (police car)'], ['PGUP/PGDN', 'Minimap zoom'], ['M', 'City map'], ['ESC', 'Pause'], ['~', 'Console'],
+      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['CTRL/RMB', 'Aim / drive-by'], ['SPACE', 'Jump / handbrake / chute'], ['E', 'Interact / vehicle'], ['Q', 'Take cover'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—5', 'Select weapon'], ['R', 'Reload'], ['H', 'Use stim pack'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['G', 'Siren (police car)'], ['PGUP/PGDN', 'Minimap zoom'], ['M', 'City map'], ['ESC', 'Pause'], ['~', 'Console'],
     ];
     this.set('controls', `<section class="menu-card menu-card--guide"><header><p class="eyebrow">FIELD GUIDE</p><h2>Know the streets.</h2><span>${fromMain ? 'The essentials before you enter.' : 'Controls for foot and vehicle.'}</span></header><div class="control-grid">${groups.map(([key, label]) => `<div><kbd>${key}</kbd><span>${label}</span></div>`).join('')}</div><button class="action-primary" data-action="back">Back</button></section>`); this.bind('[data-action="back"]', back);
   }
 
-  shop(entries: ShopCatalogEntry[], balance: number, actions: { buy: (id: ShopCatalogEntry['id']) => void; ammo: (id: ShopCatalogEntry['id']) => void; leave: () => void }): void {
+  shop(entries: ShopCatalogEntry[], balance: number, actions: { buy: (id: ShopCatalogEntry['id']) => void; ammo: (id: ShopCatalogEntry['id']) => void; armour: () => void; leave: () => void }, armour?: ShopArmourEntry): void {
     const rows = entries.map((entry) => entry.owned
       ? `<button class="shop-row" data-ammo="${entry.id}" ${entry.canRefill ? '' : 'disabled'}><span><b>${entry.name}</b><small>Reserve ${entry.reserve}</small></span><em>${entry.ammoFull ? 'FULL' : formatMoney(entry.ammoPrice)}</em></button>`
       : `<button class="shop-row" data-buy="${entry.id}" ${entry.canBuy ? '' : 'disabled'}><span><b>${entry.name}</b><small>${entry.canBuy ? 'Available now' : 'Not enough cash'}</small></span><em>${formatMoney(entry.price)}</em></button>`).join('');
-    this.set('shop', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">JOZI ARMS · CBD</p><h2>Choose your insurance.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header><div class="shop-list">${rows}</div><button data-action="leave">Leave the counter</button></section>`);
-    for (const entry of entries) { this.bind(`[data-buy="${entry.id}"]`, () => actions.buy(entry.id)); this.bind(`[data-ammo="${entry.id}"]`, () => actions.ammo(entry.id)); } this.bind('[data-action="leave"]', actions.leave);
+    const armourRow = armour ? `<button class="shop-row" data-action="armour" ${armour.canBuy ? '' : 'disabled'}><span><b>BODY ARMOUR</b><small>${armour.full ? 'Fully plated already' : 'Soaks damage before health'}</small></span><em>${armour.full ? 'FULL' : formatMoney(armour.price)}</em></button>` : '';
+    this.set('shop', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">JOZI ARMS · CBD</p><h2>Choose your insurance.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header><div class="shop-list">${rows}${armourRow}</div><button data-action="leave">Leave the counter</button></section>`);
+    for (const entry of entries) { this.bind(`[data-buy="${entry.id}"]`, () => actions.buy(entry.id)); this.bind(`[data-ammo="${entry.id}"]`, () => actions.ammo(entry.id)); } this.bind('[data-action="armour"]', actions.armour); this.bind('[data-action="leave"]', actions.leave);
   }
 
   safehouse(name: string, sleepHours: number, actions: { save: () => void; sleep: () => void; leave: () => void }): void {

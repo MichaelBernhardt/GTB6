@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHEAT_CASH, HELP_LINES, heatAfterStarDrop, parseCommand, parseTimeToken, runConsoleCommand, tokenize, type ConsoleHost } from './Console';
+import { CHEAT_CASH, GIVE_WEAPON_IDS, HELP_LINES, heatAfterStarDrop, parseCommand, parseCoordinate, parseTimeToken, runConsoleCommand, tokenize, type ConsoleHost } from './Console';
 
 describe('console tokenizer', () => {
   it('lowercases and collapses whitespace', () => {
@@ -61,6 +61,32 @@ describe('console parser', () => {
     expect(parseCommand('busy 300').kind).toBe('error');
   });
 
+  it('parses teleports: coordinates, names, the list, and malformed halves', () => {
+    expect(parseCommand('tp 10 -20')).toEqual({ kind: 'tp-coords', x: 10, z: -20 });
+    expect(parseCommand('tp -3.5 200.25')).toEqual({ kind: 'tp-coords', x: -3.5, z: 200.25 });
+    expect(parseCommand('tp list')).toEqual({ kind: 'tp-list' });
+    expect(parseCommand('tp sandton')).toEqual({ kind: 'tp-name', name: 'sandton' });
+    expect(parseCommand('TP Jozi Arms')).toEqual({ kind: 'tp-name', name: 'jozi arms' });
+    expect(parseCommand('tp 12 north')).toEqual({ kind: 'tp-name', name: '12 north' }); // only a full coordinate pair is a coordinate jump
+    expect(parseCommand('tp').kind).toBe('error');
+    expect(parseCommand('tp 100').kind).toBe('error'); // one lonely coordinate
+  });
+
+  it('parses skyfall with and without a target name', () => {
+    expect(parseCommand('skyfall')).toEqual({ kind: 'skyfall', name: undefined });
+    expect(parseCommand('skyfall zoo lake')).toEqual({ kind: 'skyfall', name: 'zoo lake' });
+  });
+
+  it('parses give for weapons, ammo, armour and counted items', () => {
+    for (const id of GIVE_WEAPON_IDS) expect(parseCommand(`give ${id}`)).toEqual({ kind: 'give-weapon', weapon: id });
+    expect(parseCommand('give ammo')).toEqual({ kind: 'give-ammo' });
+    expect(parseCommand('give armour')).toEqual({ kind: 'give-armour' });
+    expect(parseCommand('give armor')).toEqual({ kind: 'give-armour' }); // both spellings land
+    expect(parseCommand('give parachute')).toEqual({ kind: 'give-item', item: 'parachute', count: 1 });
+    expect(parseCommand('give stim 3')).toEqual({ kind: 'give-item', item: 'stim', count: 3 });
+    for (const bad of ['give', 'give fists', 'give stim 0', 'give stim lots', 'give pistol 2', 'give ammo 5', 'give spaceship']) expect(parseCommand(bad).kind, bad).toBe('error');
+  });
+
   it('rejects unknown input with an eish and a help hint', () => {
     const result = parseCommand('gimme money');
     expect(result.kind).toBe('error');
@@ -69,6 +95,17 @@ describe('console parser', () => {
 
   it('does not treat cheat words with arguments as cheats', () => {
     expect(parseCommand('bakkie now').kind).toBe('error');
+  });
+});
+
+describe('parseCoordinate', () => {
+  it('accepts signed decimals and rejects everything else', () => {
+    expect(parseCoordinate('12')).toBe(12);
+    expect(parseCoordinate('-260')).toBe(-260);
+    expect(parseCoordinate('3.75')).toBe(3.75);
+    expect(parseCoordinate('north')).toBeUndefined();
+    expect(parseCoordinate('12,5')).toBeUndefined();
+    expect(parseCoordinate('--3')).toBeUndefined();
   });
 });
 
@@ -106,6 +143,14 @@ describe('runConsoleCommand', () => {
     setCarTarget: (count) => `cars:${count ?? 'auto'}`,
     busyInfo: () => 'crowd',
     openMap: () => 'map-open',
+    teleport: (x, z) => `tp:${x},${z}`,
+    teleportNamed: (name) => `tpn:${name}`,
+    teleportList: () => ['place one', 'place two'],
+    skyfall: (name) => `skyfall:${name ?? 'here'}`,
+    giveWeapon: (id) => `weapon:${id}`,
+    giveAmmo: () => 'ammo-max',
+    giveArmour: () => 'armoured',
+    giveItem: (item, count) => `item:${item}:${count}`,
   };
 
   it('routes parsed commands to host handlers and echoes their feedback', () => {
@@ -128,5 +173,18 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('set cars 40', host)).toEqual(['cars:40']);
     expect(runConsoleCommand('busy', host)).toEqual(['crowd']);
     expect(runConsoleCommand('map', host)).toEqual(['map-open']);
+  });
+
+  it('routes teleports, skyfall and the give family', () => {
+    expect(runConsoleCommand('tp 15 -30', host)).toEqual(['tp:15,-30']);
+    expect(runConsoleCommand('tp jozi arms', host)).toEqual(['tpn:jozi arms']);
+    expect(runConsoleCommand('tp list', host)).toEqual(['place one', 'place two']);
+    expect(runConsoleCommand('skyfall', host)).toEqual(['skyfall:here']);
+    expect(runConsoleCommand('skyfall sandton', host)).toEqual(['skyfall:sandton']);
+    expect(runConsoleCommand('give rpg', host)).toEqual(['weapon:rpg']);
+    expect(runConsoleCommand('give ammo', host)).toEqual(['ammo-max']);
+    expect(runConsoleCommand('give armour', host)).toEqual(['armoured']);
+    expect(runConsoleCommand('give parachute 2', host)).toEqual(['item:parachute:2']);
+    expect(runConsoleCommand('give stim', host)).toEqual(['item:stim:1']);
   });
 });

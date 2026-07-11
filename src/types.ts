@@ -11,6 +11,8 @@ export interface WorldTarget { position: Vector3; label: string; color?: string;
 export interface SavedWeaponState { ammo: number; reserve: number; owned: boolean; }
 export interface SavedWeapons { current: WeaponId; loadout: Record<WeaponId, SavedWeaponState>; }
 export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerable: boolean; }
+/** Carried kit beside the weapon loadout: an armour pool plus consumable stims and parachutes. */
+export interface Inventory { armour: number; stims: number; parachutes: number; }
 export interface SavedVehicle { kind: VehicleKind; color: number; health: number; }
 export interface SavedGame {
   version: 2;
@@ -24,6 +26,7 @@ export interface SavedGame {
   livingCity: LivingCityState;
   timeOfDay: number;
   safehouses: SafehouseId[];
+  inventory: Inventory;
 }
 export interface GameSettings {
   masterVolume: number;
