@@ -4,7 +4,7 @@ import type { InputManager } from './InputManager';
 import type { City } from '../world/City';
 import { aimedViewDistance, CameraController, cycleView, sanitizeView, viewDistance, DEFAULT_CAMERA_VIEW } from './CameraController';
 
-const city = { collides: () => false } as unknown as City;
+const city = { collidesAt: () => false } as unknown as City;
 const input = (mouseDX: number, mouseDY: number, aiming = false): InputManager => ({ mouseDX, mouseDY, firing: false, aiming }) as InputManager;
 
 describe('CameraController mouse look', () => {

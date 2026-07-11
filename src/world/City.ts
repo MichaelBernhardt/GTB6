@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COLORS, WORLD_SIZE } from '../config';
+import { COLORS, PLAYER, WORLD_SIZE } from '../config';
 import type { District, GameSettings } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
@@ -10,7 +10,27 @@ import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
 
-export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; }
+/** XZ AABB with a real vertical span: `height` above `y0`. `y0` is world-space; when omitted the collider is
+ *  grounded on the terrain under its centre (the flat-world registrations keep working untouched). */
+export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; y0?: number; }
+export const colliderBase = (box: Collider): number => box.y0 ?? terrainHeightAt((box.minX + box.maxX) / 2, (box.minZ + box.maxZ) / 2);
+export const colliderTop = (box: Collider): number => colliderBase(box) + box.height;
+
+/** Pure y-aware AABB occupancy: a collider blocks the band (y0, y1) only when its own span crosses it. */
+export function collidersBlock(colliders: readonly Collider[], x: number, z: number, radius: number, y0: number, y1: number): boolean {
+  return colliders.some((box) => x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ && colliderBase(box) < y1 && colliderTop(box) > y0);
+}
+
+/** Highest collider top at or below feetY + stepUp under the query circle; undefined when nothing is underfoot. */
+export function highestColliderTop(colliders: readonly Collider[], x: number, z: number, feetY: number, radius = 0.35): number | undefined {
+  const limit = feetY + PLAYER.stepUp; let best: number | undefined;
+  for (const box of colliders) {
+    if (x + radius <= box.minX || x - radius >= box.maxX || z + radius <= box.minZ || z - radius >= box.maxZ) continue;
+    const top = colliderTop(box);
+    if (top <= limit && (best === undefined || top > best)) best = top;
+  }
+  return best;
+}
 export interface RoadPoint { x: number; z: number; }
 export interface RoadsidePoint extends RoadPoint { inwardX: number; inwardZ: number; }
 export interface RoadPose { position: THREE.Vector3; heading: number; }
@@ -190,10 +210,19 @@ export class City {
     return PARK_AREAS.some((park) => Math.abs(x - park.x) < park.width / 2 && Math.abs(z - park.z) < park.depth / 2);
   }
 
+  /** Ground-band test kept for peds/vehicles/nav: identical to the flat-world behaviour for anything rooted at street level. */
   collides(x: number, z: number, radius: number): boolean {
     if (Math.abs(x) > WORLD_SIZE / 2 - radius || Math.abs(z) > WORLD_SIZE / 2 - radius) return true;
     if (this.props.blocked(x, z, radius)) return true;
-    return this.colliders.some((box) => x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ);
+    const ground = terrainHeightAt(x, z);
+    return collidersBlock(this.colliders, x, z, radius, ground, ground + 2);
+  }
+
+  /** True 3D occupancy: world bounds, standing props and colliders whose vertical span crosses (y0, y1). */
+  collidesAt(x: number, z: number, radius: number, y0: number, y1: number): boolean {
+    if (Math.abs(x) > WORLD_SIZE / 2 - radius || Math.abs(z) > WORLD_SIZE / 2 - radius) return true;
+    if (this.props.blockedBetween(x, z, radius, y0, y1, (px, pz) => this.surfaceHeightAt(px, pz))) return true;
+    return collidersBlock(this.colliders, x, z, radius, y0, y1);
   }
 
   clampMove(from: THREE.Vector3, desired: THREE.Vector3, radius: number): THREE.Vector3 {
@@ -201,6 +230,24 @@ export class City {
     if (this.collides(output.x, from.z, radius)) output.x = from.x;
     if (this.collides(output.x, output.z, radius)) output.z = from.z;
     return output;
+  }
+
+  /** Player-grade clamp: geometry blocks only where it crosses the capsule band above the step allowance,
+   *  so a curb is walked up while a wall at head height still stops you — and a roof edge doesn't. */
+  clampMoveAt(from: THREE.Vector3, desired: THREE.Vector3, radius: number, height = PLAYER.height): THREE.Vector3 {
+    const y0 = from.y + PLAYER.stepUp; const y1 = from.y + height;
+    const output = desired.clone();
+    if (this.collidesAt(output.x, from.z, radius, y0, y1)) output.x = from.x;
+    if (this.collidesAt(output.x, output.z, radius, y0, y1)) output.z = from.z;
+    return output;
+  }
+
+  /** Highest standable surface whose top sits at or below feetY + stepUp: stacked building tiers, containers
+   *  and flat-topped props, falling back to the walkable ground. Feeds the player's landing/edge physics. */
+  supportHeight(x: number, z: number, feetY: number, radius = 0.35): number {
+    const best = highestColliderTop(this.colliders, x, z, feetY, radius);
+    const propTop = this.props.supportTop(x, z, radius, feetY + PLAYER.stepUp, (px, pz) => this.surfaceHeightAt(px, pz));
+    return Math.max(this.surfaceHeightAt(x, z), best ?? -Infinity, propTop ?? -Infinity);
   }
 
   terrainHeightAt(x: number, z: number): number { return terrainHeightAt(x, z); }
@@ -530,8 +577,10 @@ export class City {
     if (style !== 'industrial') this.addStreetLevelDetail(x, z, w, d, style, variant);
     this.addRoofEquipment(x, z, w, d, h, profile.roofY, style, variant);
     if (style === 'downtown' && h > 48 && variant % 2 === 0) this.addRoofSign(x, z, w, d, profile.roofY, variant);
-    this.liftNewChildren(start, this.terrainHeightAt(x, z));
-    this.colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, height: h });
+    const base = this.terrainHeightAt(x, z);
+    this.liftNewChildren(start, base);
+    // one collider per massing tier: stepped setbacks become stacked boxes, so podium roofs are real floors
+    for (const tier of profile.tiers) this.colliders.push({ minX: tier.minX, maxX: tier.maxX, minZ: tier.minZ, maxZ: tier.maxZ, y0: base + tier.y0, height: tier.y1 - tier.y0 });
   }
 
   private liftNewChildren(start: number, fixedHeight?: number): void {
@@ -689,7 +738,7 @@ export class City {
     const roof = new THREE.Mesh(new THREE.RingGeometry(15, radius, 40), new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, side: THREE.DoubleSide })); roof.rotation.x = -Math.PI / 2; roof.position.y = height;
     const crown = createSignMesh(new THREE.CylinderGeometry(radius + 1, radius + 1, 8, 40, 1, true, 0, Math.PI), 'VODACOMB', '#e4372e', { doubleSide: true, powered: true }); crown.position.y = height + 4;
     ponte.add(shell, core, roof, crown); this.group.add(ponte);
-    this.colliders.push({ minX: x - radius, maxX: x + radius, minZ: z - radius, maxZ: z + radius, height });
+    this.colliders.push({ minX: x - radius, maxX: x + radius, minZ: z - radius, maxZ: z + radius, y0: this.terrainHeightAt(x, z), height });
   }
 
   private buildCivicLandmarks(): void {
@@ -716,7 +765,7 @@ export class City {
       const material = new THREE.MeshStandardMaterial({ color: x % 2 ? 0xb84f45 : 0x3d7381, roughness: 0.65, metalness: 0.32 });
       const container = new THREE.Mesh(new THREE.BoxGeometry(26, 5, 9, 13, 1, 1), material); container.position.set(x, 2.5, -270); container.castShadow = true; this.group.add(container);
       for (let ridge = -11; ridge <= 11; ridge += 2) { const rib = new THREE.Mesh(new THREE.BoxGeometry(0.12, 4.7, 0.14), new THREE.MeshStandardMaterial({ color: 0x343c3d, metalness: 0.55, roughness: 0.45 })); rib.position.set(x + ridge, 2.5, -265.45); this.group.add(rib); }
-      this.colliders.push({ minX: x - 13, maxX: x + 13, minZ: -274.5, maxZ: -265.5, height: 5 });
+      this.colliders.push({ minX: x - 13, maxX: x + 13, minZ: -274.5, maxZ: -265.5, y0: this.terrainHeightAt(x, -270), height: 5 }); // container roofs are big-jump platforms
     }
     const ramp = new THREE.Mesh(new THREE.BoxGeometry(13, 1, 22), new THREE.MeshStandardMaterial({ color: 0x8b8f8b, map: this.concrete, roughness: 0.87 })); ramp.position.set(-185, 1, -225); ramp.rotation.x = -0.08; ramp.castShadow = true; this.group.add(ramp);
     const boardwalk = new THREE.Mesh(new THREE.BoxGeometry(190, 0.35, 8), new THREE.MeshStandardMaterial({ color: 0x8d6e4f, roughness: 0.86 })); boardwalk.position.set(150, 0.25, -307); boardwalk.receiveShadow = true; this.group.add(boardwalk);

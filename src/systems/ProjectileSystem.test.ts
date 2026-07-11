@@ -6,7 +6,7 @@ import { ProjectileSystem } from './ProjectileSystem';
 import type { PopulationSystem } from './PopulationSystem';
 import type { City } from '../world/City';
 
-const openCity = { collides: () => false } as unknown as City;
+const openCity = { collidesAt: () => false, terrainHeightAt: () => 0 } as unknown as City;
 const spec = WEAPON_BY_ID.rpg.projectile!;
 const farPlayer = new THREE.Vector3(0, 0, -500);
 
@@ -60,7 +60,7 @@ describe('ProjectileSystem', () => {
   });
 
   it('detonates against buildings', () => {
-    const wallCity = { collides: (_x: number, z: number) => z >= 20 } as unknown as City;
+    const wallCity = { collidesAt: (_x: number, z: number) => z >= 20, terrainHeightAt: () => 0 } as unknown as City;
     const system = new ProjectileSystem(new THREE.Scene());
     system.spawn(new THREE.Vector3(0, 1.2, 0), new THREE.Vector3(0, 0, 1), spec, 200);
     let explosion;

@@ -70,7 +70,7 @@ export class CameraController {
     const valid = this.focus.clone();
     for (let i = 1; i <= steps; i++) {
       const probe = this.focus.clone().addScaledVector(direction, i / steps);
-      if (city.collides(probe.x, probe.z, 0.25)) break;
+      if (city.collidesAt(probe.x, probe.z, 0.25, probe.y - 0.2, probe.y + 0.2)) break; // y-aware: a roof below the boom arm is not an obstruction
       valid.copy(probe);
     }
     const responsiveness = 1 - Math.exp(-dt * (vehicle ? 5 : 9));

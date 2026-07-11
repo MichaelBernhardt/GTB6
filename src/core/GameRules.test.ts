@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CHEATS, PLAYER, WEAPON_BY_ID, WEAPONS, type WeaponId } from '../config';
-import { AIM_SPEED_MULTIPLIER, BICYCLE_CRUISE_FACTOR, Economy, KNOCKOFF_IMPACT_SPEED, bicycleCap, calculateDamage, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, jumpVelocity, moveSpeed, outOfAmmo, riderImpactDamage, rollDrops, shouldKnockOff, splashDamage, spreadOffset, triggerPulled } from './GameRules';
+import { AIM_SPEED_MULTIPLIER, BICYCLE_CRUISE_FACTOR, Economy, FALL_SAFE_DROP, KNOCKOFF_IMPACT_SPEED, bicycleCap, calculateDamage, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, fallDamage, jumpVelocity, moveSpeed, outOfAmmo, riderImpactDamage, rollDrops, shouldKnockOff, splashDamage, spreadOffset, stepVertical, triggerPulled, type VerticalMotion } from './GameRules';
 
 const rng = (...values: number[]): (() => number) => { let i = 0; return () => values[i++] ?? 0; };
 
@@ -188,5 +188,65 @@ describe('drop tables', () => {
       expect(drop.cash).toBeLessThan(60);
       if (drop.weapon) expect(drop.weapon).toBe('pistol');
     }
+  });
+});
+
+describe('fall damage', () => {
+  it('is free within the safe drop and scales linearly beyond it', () => {
+    expect(fallDamage(0)).toBe(0);
+    expect(fallDamage(FALL_SAFE_DROP)).toBe(0);
+    expect(fallDamage(-3)).toBe(0); // landed above the fall origin: jumped up onto something
+    expect(fallDamage(FALL_SAFE_DROP + 1)).toBe(5);
+    expect(fallDamage(FALL_SAFE_DROP + 8)).toBe(40);
+    expect(fallDamage(60)).toBe(100); // capped at a lethal full bar
+  });
+
+  it('exempts a big jump that lands back at its own launch height', () => {
+    const apex = jumpVelocity(true) ** 2 / (2 * PLAYER.gravity); // rises well above the ground...
+    expect(apex).toBeGreaterThan(FALL_SAFE_DROP / 2);
+    expect(fallDamage(0)).toBe(0); // ...but the drop is measured from the take-off, not the apex
+  });
+});
+
+describe('vertical physics step', () => {
+  const grounded = (y = 0): VerticalMotion => ({ y, velocityY: 0, onGround: true, fallOriginY: y });
+  const run = (motion: VerticalMotion, support: (m: VerticalMotion) => number, ticks: number, jump?: number): { landed: boolean; drop: number } => {
+    let landing = { landed: false, drop: 0 };
+    for (let i = 0; i < ticks && !landing.landed; i++) { landing = stepVertical(motion, 1 / 60, support(motion), i === 0 ? jump : undefined); }
+    return landing;
+  };
+
+  it('snaps up and down steps within the allowance while grounded', () => {
+    const motion = grounded(0);
+    stepVertical(motion, 1 / 60, PLAYER.stepUp - 0.05);
+    expect(motion.y).toBeCloseTo(PLAYER.stepUp - 0.05);
+    expect(motion.onGround).toBe(true);
+    stepVertical(motion, 1 / 60, 0); // stepping back down is equally free
+    expect(motion.y).toBe(0);
+  });
+
+  it('starts a fall when the support drops away beyond the step allowance', () => {
+    const motion = grounded(3);
+    const landing = run(motion, () => 0, 120);
+    expect(landing.landed).toBe(true);
+    expect(landing.drop).toBeCloseTo(3);
+    expect(motion.y).toBe(0);
+    expect(motion.onGround).toBe(true);
+  });
+
+  it('jumps from the ground and measures the drop from the take-off height', () => {
+    const motion = grounded(0);
+    const landing = run(motion, () => 0, 240, jumpVelocity(true));
+    expect(landing.landed).toBe(true);
+    expect(landing.drop).toBeCloseTo(0, 1); // big jump straight up: no net drop, no damage
+    expect(fallDamage(landing.drop)).toBe(0);
+  });
+
+  it('lands on an elevated support mid-fall', () => {
+    const motion = grounded(10);
+    const landing = run(motion, () => 4, 240);
+    expect(landing.landed).toBe(true);
+    expect(motion.y).toBe(4);
+    expect(landing.drop).toBeCloseTo(6);
   });
 });

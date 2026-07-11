@@ -1,4 +1,5 @@
-import type { Collider } from '../world/City';
+import { PLAYER } from '../config';
+import { colliderBase, colliderTop, type Collider } from '../world/City';
 
 /** Pure GTA-V-style cover math against the city's AABB building colliders: nearest-face snap,
  *  slide clamping along the face, corner detection and peek eligibility. No three.js, no Game. */
@@ -35,11 +36,14 @@ function faces(box: Collider): Face[] {
 /** Tangent is the normal rotated 90° so that (normal, tangent) is a consistent right-handed ground frame. */
 export function tangentOf(normal: Vec2): Vec2 { return { x: -normal.z, z: normal.x }; }
 
-/** Nearest wall face the point stands in front of (within its span) and within range of; undefined when exposed. */
-export function nearestCoverSpot(x: number, z: number, colliders: readonly Collider[], range = COVER_ENTER_RANGE): CoverSpot | undefined {
+/** Nearest wall face the point stands in front of (within its span) and within range of; undefined when exposed.
+ *  With feetY given, only faces whose vertical span actually shields a player at that elevation qualify: the wall
+ *  must rise from underfoot to at least head-hiding height, so a podium below a rooftop player is no cover. */
+export function nearestCoverSpot(x: number, z: number, colliders: readonly Collider[], range = COVER_ENTER_RANGE, feetY?: number): CoverSpot | undefined {
   let best: CoverSpot | undefined; let bestDistance = range;
   for (const box of colliders) {
-    if (box.height < MIN_COVER_HEIGHT) continue;
+    if (feetY === undefined ? box.height < MIN_COVER_HEIGHT
+      : colliderBase(box) > feetY + PLAYER.stepUp || colliderTop(box) < feetY + MIN_COVER_HEIGHT) continue;
     for (const face of faces(box)) {
       const distance = x * face.normal.x + z * face.normal.z - face.plane;
       if (distance < 0 || distance > bestDistance) continue;
@@ -53,9 +57,10 @@ export function nearestCoverSpot(x: number, z: number, colliders: readonly Colli
   return best;
 }
 
-/** Cover is available whenever the character is grounded, regardless of the world's absolute elevation. */
-export function nearestGroundedCoverSpot(x: number, z: number, grounded: boolean, colliders: readonly Collider[], range = COVER_ENTER_RANGE): CoverSpot | undefined {
-  return grounded ? nearestCoverSpot(x, z, colliders, range) : undefined;
+/** Cover is available whenever the character is grounded, regardless of the world's absolute elevation
+ *  (the PR #34 gate); feetY additionally restricts candidates to faces that shield that elevation. */
+export function nearestGroundedCoverSpot(x: number, z: number, grounded: boolean, colliders: readonly Collider[], range = COVER_ENTER_RANGE, feetY?: number): CoverSpot | undefined {
+  return grounded ? nearestCoverSpot(x, z, colliders, range, feetY) : undefined;
 }
 
 /** Tangential coordinate of a world point along the spot's face. */

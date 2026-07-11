@@ -17,6 +17,7 @@ export const PLAYER = {
   gravity: 27,
   radius: 0.65,
   height: 1.8,
+  stepUp: 0.55, // curbs, plinths and low ledges are stepped onto, not collided with
   maxHealth: 100,
 };
 export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2 };

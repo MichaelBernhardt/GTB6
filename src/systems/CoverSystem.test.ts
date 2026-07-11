@@ -121,3 +121,35 @@ describe('facing and release', () => {
     expect(movingAway({ x: 0, z: 0 }, normal)).toBe(false);   // idle
   });
 });
+
+describe('elevation-aware cover', () => {
+  const podium = { ...box(-10, 10, -10, 10, 9), y0: 0 };
+  const tier = { ...box(-6, 6, -6, 6, 26), y0: 9 }; // setback tower standing on the podium roof
+
+  it('keeps street-level cover against a ground wall', () => {
+    expect(nearestCoverSpot(11.5, 0, [podium], COVER_ENTER_RANGE, 0)?.normal).toEqual({ x: 1, z: 0 });
+  });
+
+  it('rejects walls the player already stands on top of', () => {
+    // On the podium roof (feet at 9) the podium's own faces shield nothing — only the tower does.
+    expect(nearestCoverSpot(7.5, 0, [podium], COVER_ENTER_RANGE, 9)).toBeUndefined();
+    const spot = nearestCoverSpot(7.5, 0, [podium, tier], COVER_ENTER_RANGE, 9);
+    expect(spot?.collider).toBe(tier);
+    expect(spot?.normal).toEqual({ x: 1, z: 0 });
+  });
+
+  it('rejects floating tiers with no wall at street level', () => {
+    expect(nearestCoverSpot(7.5, 0, [tier], COVER_ENTER_RANGE, 0)).toBeUndefined();
+  });
+
+  it('rejects walls too short to hide a player at his own elevation', () => {
+    const parapet = { ...box(-10, 10, -10, 10, 9 + MIN_COVER_HEIGHT - 0.1), y0: 0 };
+    expect(nearestCoverSpot(11.5, 0, [parapet], COVER_ENTER_RANGE, 9)).toBeUndefined();
+    expect(nearestCoverSpot(11.5, 0, [parapet], COVER_ENTER_RANGE, 0)?.normal).toEqual({ x: 1, z: 0 }); // plenty of wall from the street
+  });
+
+  it('still gates on grounding first, as restored by the elevated-cover fix', () => {
+    expect(nearestGroundedCoverSpot(11.5, 0, false, [podium], COVER_ENTER_RANGE, 0)).toBeUndefined();
+    expect(nearestGroundedCoverSpot(11.5, 0, true, [podium], COVER_ENTER_RANGE, 0)?.normal).toEqual({ x: 1, z: 0 });
+  });
+});
