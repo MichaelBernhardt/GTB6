@@ -99,8 +99,33 @@ export interface MapArea {
     | 'scrub'
     | 'mine_dump'
     | 'brownfield'
-    | 'farmland';
+    | 'farmland'
+    | 'aerodrome';
   points: [number, number][];
+}
+
+/**
+ * Regional airport in the southern farmland. Runway/taxiway are polylines kept OUT of the
+ * road graph (kind 'runway'/'taxiway', no traffic routing); the access road that reaches it
+ * is a normal graph road. The aerodrome boundary is emitted as a landuse 'aerodrome' polygon.
+ */
+export interface MapAirport {
+  name: string;
+  runway: { kind: 'runway'; width: number; points: [number, number][] };
+  taxiway: { kind: 'taxiway'; width: number; points: [number, number][] };
+  /** Closed apron polygon. */
+  apron: [number, number][];
+  /** Terminal / hangar parcels (closed polygons). */
+  buildings: [number, number][][];
+}
+
+/** Small working sea port on the NW coast: a pier reaching into the ocean + a dockside apron. */
+export interface MapPort {
+  name: string;
+  /** Pier polyline (kind 'pier') running from the shore into the ocean. */
+  pier: { kind: 'pier'; width: number; points: [number, number][] };
+  /** Closed dockside apron polygon (on land). */
+  apron: [number, number][];
 }
 
 /** The fantastical west coast: real Cape Town seaboard geometry grafted onto the map. */
@@ -200,4 +225,6 @@ export interface JoburgMap {
   elevation: HeightGrid;
   coast?: MapCoast;
   rural?: MapRural;
+  airport?: MapAirport;
+  port?: MapPort;
 }

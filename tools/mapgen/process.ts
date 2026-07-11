@@ -5,6 +5,8 @@ import {
   DISTRICT_RADIUS_M,
   LANDMARK_CANONICAL,
   MIN_LANDUSE_AREA_M2,
+  MEANDER_MIN_VERTICES,
+  MEANDER_SPECS,
   MIN_ROAD_LENGTH_M,
   MIN_WATER_AREA_M2,
   PROTECTED_ROAD_NAMES,
@@ -38,6 +40,7 @@ import {
   type GraphRoad,
   type RoadNetwork,
 } from './graph';
+import { meanderPolyline, nameSeed } from './meander';
 import { boundsOf, makeFitTransform, makeProjector, polylineLength } from './projection';
 import { simplifyPolyline, simplifyWithPins } from './simplify';
 import type {
@@ -89,6 +92,35 @@ const round2 = (v: number): number => Math.round(v * 100) / 100;
 export interface ProcessResult {
   map: JoburgMap;
   log: string[];
+}
+
+/**
+ * Bend the synthetic roads (owner: "far too straight ... more meandering and organic").
+ * Only the long spine/ring polylines are curved (short spurs stay straight); every vertex
+ * shared with another road — junction attachment points — is pinned, so connectivity and the
+ * boundary orbital are untouched while private interior vertices become gentle noise curves.
+ */
+function meanderSyntheticRoads(net: RoadNetwork): number {
+  const refCount = new Map<number, number>();
+  for (const road of net.roads) for (const id of new Set(road.nodeIds)) refCount.set(id, (refCount.get(id) ?? 0) + 1);
+  let nextId = 0;
+  for (const id of net.nodes.keys()) if (id >= nextId) nextId = id + 1;
+  const addNode = (p: Pt): number => { const id = nextId++; net.nodes.set(id, p); return id; };
+  let curved = 0;
+  for (const road of net.roads) {
+    const spec = MEANDER_SPECS[road.name];
+    if (!spec || road.nodeIds.length < MEANDER_MIN_VERTICES) continue;
+    const points = road.nodeIds.map((id) => net.nodes.get(id)!);
+    const pins: number[] = [];
+    road.nodeIds.forEach((id, index) => {
+      if (index === 0 || index === road.nodeIds.length - 1 || (refCount.get(id) ?? 0) > 1) pins.push(index);
+    });
+    const vertices = meanderPolyline(points, pins, { ...spec, seed: nameSeed(road.name) });
+    const newIds = vertices.map((v) => (v.pin !== null ? road.nodeIds[v.pin]! : addNode(v.p)));
+    road.nodeIds = newIds.filter((id, index) => index === 0 || id !== newIds[index - 1]);
+    curved++;
+  }
+  return curved;
 }
 
 /** District place nodes in a stable order (also used to key building counts). */
@@ -243,6 +275,10 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   const componentsAfter = connectedComponents(net).length;
   log.push(`connectivity: final graph has ${componentsAfter} component(s)`);
 
+  // ---- Organic curvature for the synthetic roads --------------------------
+  const curvedRoads = meanderSyntheticRoads(net);
+  log.push(`meander: curved ${curvedRoads} synthetic spine road(s) with perpendicular fBm noise + Chaikin smoothing`);
+
   // ---- Junctions + simplification (junction vertices pinned) --------------
   const junctionInfos = findJunctions(net);
   const junctionNodeIds = new Set(junctionInfos.map((j) => j.nodeId));
@@ -287,6 +323,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       water.push({ name: way.tags?.name ?? 'Water', points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
     }
   }
+  if (coast) water.push({ name: coast.lake.name, points: coast.lake.polygon });
   log.push(`water: ${water.length} polygons >= ${MIN_WATER_AREA_M2} m2 (${water.filter((w) => w.name !== 'Water').map((w) => w.name).slice(0, 8).join(', ')})`);
 
   // ---- Railways ----------------------------------------------------------
@@ -343,6 +380,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     }
   }
   if (coast) for (const field of coast.farmland) landuse.push({ name: field.name, kind: 'farmland', points: field.points });
+  if (coast) landuse.push({ name: coast.airport.name, kind: 'aerodrome', points: coast.airport.boundary });
   const mineDumps = landuse.filter((a) => a.kind === 'mine_dump').length;
   log.push(`landuse: ${landuse.length} polygons (${mineDumps} mine dumps/quarries, ${coast?.farmland.length ?? 0} farmland fields)`);
 
@@ -373,6 +411,11 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     landmarks.push({ name, p: project(lat, lon), kind });
   }
   if (coast) landmarks.push({ name: coast.padstal.name, p: coast.padstal.p, kind: 'padstal' });
+  if (coast) {
+    landmarks.push({ name: coast.airport.name, p: coast.airport.center, kind: 'airport' });
+    const portMid = { x: (coast.port.apron[0]!.x + coast.port.apron[2]!.x) / 2, z: (coast.port.apron[0]!.z + coast.port.apron[2]!.z) / 2 };
+    landmarks.push({ name: coast.port.name, p: portMid, kind: 'port' });
+  }
   // The stadium sometimes appears under both names; keep "FNB Stadium".
   if (landmarks.some((l) => /fnb stadium/i.test(l.name))) {
     const index = landmarks.findIndex((l) => /^soccer city$/i.test(l.name));
@@ -548,6 +591,18 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       rural: {
         farms: coast.farms.map((farm) => { const [x, z] = toUnits(farm.p); return { x, z, kind: farm.kind }; }),
         padstal: (() => { const [x, z] = toUnits(coast.padstal.p); return { x, z, name: coast.padstal.name }; })(),
+      },
+      airport: {
+        name: coast.airport.name,
+        runway: { kind: 'runway' as const, width: 14, points: coast.airport.runway.map(toUnits) },
+        taxiway: { kind: 'taxiway' as const, width: 6, points: coast.airport.taxiway.map(toUnits) },
+        apron: coast.airport.apron.map(toUnits),
+        buildings: coast.airport.buildings.map((b) => b.map(toUnits)),
+      },
+      port: {
+        name: coast.port.name,
+        pier: { kind: 'pier' as const, width: 5, points: coast.port.pier.map(toUnits) },
+        apron: coast.port.apron.map(toUnits),
       },
     } : {}),
   };

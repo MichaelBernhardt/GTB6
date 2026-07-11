@@ -120,6 +120,48 @@ export const FRONTAGE_ROAD_NAME = 'Plaaspad';
 export const PADSTAL_NAME = 'Padstal';
 export const HARBOUR_DISTRICT_NAME = 'Kaapstad Quay';
 
+/**
+ * Organic curvature applied to the synthetic roads (owner: "far too straight ... a bit more
+ * meandering and organic"). Perpendicular fBm offset (amplitude in METRES; 1 unit ~= 3.75 m,
+ * so the orbital's ~220 m ≈ 59 u sits in the requested ±40-80 u band), tapered to zero at
+ * every junction attachment point, then Chaikin-smoothed. Keyed by road name.
+ */
+export interface MeanderSpec {
+  amplitude: number;
+  wavelength: number;
+  octaves: number;
+  step: number;
+  taper: number;
+  chaikin: number;
+}
+export const MEANDER_SPECS: Record<string, MeanderSpec> = {
+  'Egoli Orbital': { amplitude: 220, wavelength: 2600, octaves: 3, step: 90, taper: 260, chaikin: 2 },
+  Plaaspad: { amplitude: 120, wavelength: 1600, octaves: 2, step: 80, taper: 170, chaikin: 2 },
+  'Madiba Meander': { amplitude: 150, wavelength: 2100, octaves: 2, step: 100, taper: 280, chaikin: 1 },
+  'Rooibos Route': { amplitude: 130, wavelength: 1900, octaves: 2, step: 100, taper: 280, chaikin: 1 },
+  Melkweg: { amplitude: 90, wavelength: 1400, octaves: 2, step: 90, taper: 160, chaikin: 1 },
+  'Kraal Close': { amplitude: 90, wavelength: 1400, octaves: 2, step: 90, taper: 160, chaikin: 1 },
+};
+/** Synthetic-road polylines shorter than this many vertices are spurs, not the spine — left straight. */
+export const MEANDER_MIN_VERTICES = 5;
+
+/** Regional airport in the southern farmland corridor. Base name is parodied via overrides. */
+export const AIRPORT_NAME = 'OR Tambourine Field';
+export const AIRPORT_ACCESS_ROAD_NAME = 'Aviator Avenue';
+/** Runway length (metres) — the owner asked for ~350-450 u; at ~3.75 m/u that is ~1500 m. */
+export const AIRPORT_RUNWAY_LENGTH_M = 1550;
+export const AIRPORT_RUNWAY_BEARING_RAD = 0.32; // gentle NE-SW tilt
+
+/** Small sea port / pier on the NW coast (distinct from Kaapstad Quay near the CBD). */
+export const PORT_NAME = 'Seepunt Pier';
+export const PORT_ACCESS_ROAD_NAME = 'Sloepbaai Road';
+export const PORT_PIER_LENGTH_M = 620;
+
+/** Reservoir / dam near the NE suburb edge (premium water tier, organic shoreline). */
+export const LAKE_NAME = 'Egoli Dam';
+export const LAKE_RADIUS_M = 720;
+export const LAKESIDE_TRACK_NAME = 'Dam wal';
+
 /** Elevation grid resolution (cols x rows over the bbox). */
 export const ELEVATION_COLS = 96;
 export const ELEVATION_ROWS = 96;

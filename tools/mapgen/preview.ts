@@ -84,7 +84,13 @@ const TRACK_COLORS = { track: '#c08a52', path: '#96744e' };
 const LANDUSE_COLORS = {
   park: '#2e5e3e', golf_course: '#33684a', nature_reserve: '#2a5039', grass: '#2f5c3b',
   forest: '#274f33', wood: '#274f33', scrub: '#3d5a3a', mine_dump: '#7a6a3f', brownfield: '#5c5142',
+  aerodrome: '#4a4740',
 };
+const RUNWAY_COLOR = '#3a3f47';
+const TAXIWAY_COLOR = '#585f52';
+const AIRPORT_MARK_COLOR = '#e0e6ec';
+const PIER_COLOR = '#7c6a55';
+const APRON_COLOR = '#6b6f78';
 const WATER_COLOR = '#2e6f9e';
 const WATER_PREMIUM_COLOR = '#3d89bd';
 const OCEAN_COLOR = '#173e63';
@@ -105,6 +111,8 @@ const layers = {
   coast: { label: 'Coast / ocean', on: true },
   corridor: { label: 'Corridor / farmland', on: true },
   landuse: { label: 'Parks / landuse', on: true },
+  airport: { label: 'Airport', on: true },
+  port: { label: 'Sea port / pier', on: true },
   water: { label: 'Water (game tiers)', on: true },
   railways: { label: 'Railways', on: true },
   tracks: { label: 'Off-road tracks', on: true },
@@ -180,6 +188,15 @@ const farmlandPath = (() => {
   const fields = MAP.landuse.filter(a => a.kind === 'farmland');
   return fields.length ? polyPathOf(fields) : null;
 })();
+// Airport + sea-port geometry (kept out of the road graph).
+const AIRPORT = MAP.airport || null;
+const PORT = MAP.port || null;
+const runwayPath = AIRPORT ? pathOf([AIRPORT.runway]) : null;
+const taxiwayPath = AIRPORT ? pathOf([AIRPORT.taxiway]) : null;
+const airportApronPath = AIRPORT ? polyPathOf([{ points: AIRPORT.apron }]) : null;
+const airportBuildingsPath = AIRPORT ? polyPathOf(AIRPORT.buildings.map(b => ({ points: b }))) : null;
+const pierPath = PORT ? pathOf([PORT.pier]) : null;
+const portApronPath = PORT ? polyPathOf([{ points: PORT.apron }]) : null;
 const currentPath = pathOf(CURRENT.roads.map(r => r.closed ? { points: [...r.points, r.points[0]].map(p => [p.x, p.z]) } : { points: r.points.map(p => [p.x, p.z]) }));
 const junctionPath = new Path2D();
 for (const j of MAP.junctions) { junctionPath.moveTo(j.x + 2.5, j.z); junctionPath.arc(j.x, j.z, 2.5, 0, Math.PI * 2); }
@@ -280,6 +297,19 @@ function draw() {
       ctx.fill(path);
     }
     ctx.globalAlpha = 1;
+  }
+  if (layers.airport.on && AIRPORT) {
+    if (airportApronPath) { ctx.fillStyle = APRON_COLOR; ctx.globalAlpha = 0.75; ctx.fill(airportApronPath); ctx.globalAlpha = 1; }
+    if (airportBuildingsPath) { ctx.fillStyle = AIRPORT_MARK_COLOR; ctx.globalAlpha = 0.9; ctx.fill(airportBuildingsPath); ctx.globalAlpha = 1; }
+    if (runwayPath) {
+      ctx.strokeStyle = RUNWAY_COLOR; ctx.lineWidth = Math.max(AIRPORT.runway.width, 2 / zoom); ctx.stroke(runwayPath);
+      ctx.strokeStyle = '#e8ecf0'; ctx.lineWidth = Math.max(1, 0.6 / zoom); ctx.setLineDash([18, 14]); ctx.stroke(runwayPath); ctx.setLineDash([]); // centreline
+    }
+    if (taxiwayPath) { ctx.strokeStyle = TAXIWAY_COLOR; ctx.lineWidth = Math.max(AIRPORT.taxiway.width, 1.6 / zoom); ctx.stroke(taxiwayPath); }
+  }
+  if (layers.port.on && PORT) {
+    if (portApronPath) { ctx.fillStyle = APRON_COLOR; ctx.globalAlpha = 0.8; ctx.fill(portApronPath); ctx.globalAlpha = 1; }
+    if (pierPath) { ctx.strokeStyle = PIER_COLOR; ctx.lineWidth = Math.max(PORT.pier.width, 1.6 / zoom); ctx.stroke(pierPath); }
   }
   if (layers.water.on) {
     if (pondWaterPath) { ctx.fillStyle = WATER_COLOR; ctx.fill(pondWaterPath); }
@@ -458,6 +488,10 @@ function buildPanel() {
       ['Beaches', (MAP.coast ? MAP.coast.beaches.length : 0)],
       ['Farm buildings', (MAP.rural ? MAP.rural.farms.length : 0)]);
   }
+  if (MAP.airport) rows.push(['Airport', MAP.airport.name]);
+  if (MAP.port) rows.push(['Sea port', MAP.port.name]);
+  const damNames = MAP.water.filter(w => polyArea(w.points) >= PREMIUM_WATER_AREA).map(w => w.name);
+  if (damNames.length) rows.push(['Dams / lakes', damNames.slice(0, 3).join(', ') + (damNames.length > 3 ? '…' : '')]);
   document.getElementById('stats').innerHTML = rows.map(([k, v]) =>
     '<div>' + k + '</div><div class="v">' + v + '</div>').join('');
   const toggles = document.getElementById('toggles');
@@ -479,6 +513,8 @@ function buildPanel() {
     [WATER_PREMIUM_COLOR, 'dam / lake (premium water tier)'],
     [WATER_COLOR, 'pond (cheap water tier)'],
     [FARMLAND_COLOR, 'farmland (corridor)'],
+    [RUNWAY_COLOR, 'runway / taxiway (airport)'],
+    [PIER_COLOR, 'pier (sea port)'],
     [LANDUSE_COLORS.park, 'park / green'],
     [LANDUSE_COLORS.mine_dump, 'mine dump / quarry'],
     [CURRENT_COLOR, 'old in-game network'],

@@ -7,6 +7,10 @@
  * shared fit transform in process.ts turns it into game units afterwards.
  */
 import {
+  AIRPORT_ACCESS_ROAD_NAME,
+  AIRPORT_NAME,
+  AIRPORT_RUNWAY_BEARING_RAD,
+  AIRPORT_RUNWAY_LENGTH_M,
   CAPE_BBOX,
   COAST_ROAD_SETBACK_M,
   COAST_STRETCH_Z,
@@ -15,16 +19,45 @@ import {
   CORRIDOR_WIDTH_M,
   FRONTAGE_ROAD_NAME,
   HARBOUR_DISTRICT_NAME,
+  LAKE_NAME,
+  LAKE_RADIUS_M,
+  LAKESIDE_TRACK_NAME,
   OCEAN_EXTENT_M,
   PADSTAL_NAME,
+  PORT_ACCESS_ROAD_NAME,
+  PORT_NAME,
+  PORT_PIER_LENGTH_M,
   ROAD_WIDTHS,
   SIMPLIFY_TOLERANCE_M,
   TRACK_WIDTHS,
 } from './config';
 import { nodeDegrees, type RoadNetwork } from './graph';
+import { fbm, nameSeed } from './meander';
 import { boundsOf, makeProjector } from './projection';
 import { simplifyPolyline } from './simplify';
 import type { MapRuralBuilding, OsmNode, OsmResponse, OsmWay, Pt, RoadKind } from './types';
+
+/** Airport geometry in projected metres (turned into game units by the shared fit transform). */
+export interface CoastAirport {
+  name: string;
+  runway: Pt[];
+  taxiway: Pt[];
+  apron: Pt[];
+  buildings: Pt[][];
+  boundary: Pt[];
+  center: Pt;
+}
+/** Sea-port geometry in projected metres. */
+export interface CoastPort {
+  name: string;
+  pier: Pt[];
+  apron: Pt[];
+}
+/** Reservoir/dam geometry in projected metres. */
+export interface CoastLake {
+  name: string;
+  polygon: Pt[];
+}
 
 export interface CoastGraftResult {
   /** South-to-north shoreline (metres). */
@@ -38,6 +71,9 @@ export interface CoastGraftResult {
   padstal: { p: Pt; name: string };
   harbour: Pt;
   districts: Array<{ name: string; p: Pt }>;
+  airport: CoastAirport;
+  port: CoastPort;
+  lake: CoastLake;
   /** Corridor band (metres, x extents). */
   corridorEastX: number;
   corridorWestX: number;
@@ -230,9 +266,12 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   }
   westStubs.sort((a, b) => a.p.z - b.p.z);
   const frontageX = jb.minX - 320;
+  const frontageSeed = nameSeed(FRONTAGE_ROAD_NAME);
   const frontageIds: number[] = [];
   for (const stub of westStubs) {
-    const projectionId = addNode({ x: frontageX + Math.sin(stub.p.z * 0.0011) * 120, z: stub.p.z });
+    // Low-frequency organic wander of the frontage line (the projection nodes are shared with the
+    // spurs, so moving them keeps the network connected while Plaaspad stops being a straight edge).
+    const projectionId = addNode({ x: frontageX + fbm(frontageSeed, stub.p.z / 1400, 3) * 200, z: stub.p.z });
     frontageIds.push(projectionId);
     net.roads.push({ name: FRONTAGE_ROAD_NAME, kind: 'tertiary', width: ROAD_WIDTHS.tertiary ?? 9, nodeIds: [projectionId, stub.id] });
   }
@@ -296,6 +335,56 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
     tracks.push({ name: 'Plaas track', kind: 'track', width: TRACK_WIDTHS.track ?? 5, points });
   }
 
+  // ---- Airport in the southern farmland ----------------------------------------------
+  // A rotated rectangle: dir (dx,dz) is the long axis; perpendicular is (-dz, dx).
+  const rectPoly = (cx: number, cz: number, dx: number, dz: number, halfLen: number, halfWid: number): Pt[] => {
+    const px = -dz; const pz = dx;
+    return [
+      { x: cx + dx * halfLen + px * halfWid, z: cz + dz * halfLen + pz * halfWid },
+      { x: cx + dx * halfLen - px * halfWid, z: cz + dz * halfLen - pz * halfWid },
+      { x: cx - dx * halfLen - px * halfWid, z: cz - dz * halfLen - pz * halfWid },
+      { x: cx - dx * halfLen + px * halfWid, z: cz - dz * halfLen + pz * halfWid },
+    ];
+  };
+  const airCenter: Pt = { x: (corridorEastX + corridorWestX) / 2 + 300, z: jb.minZ + (jb.maxZ - jb.minZ) * 0.8 };
+  const airDx = Math.cos(AIRPORT_RUNWAY_BEARING_RAD); const airDz = Math.sin(AIRPORT_RUNWAY_BEARING_RAD);
+  const airPx = -airDz; const airPz = airDx;
+  const runwayHalf = AIRPORT_RUNWAY_LENGTH_M / 2;
+  const runway: Pt[] = [
+    { x: airCenter.x - airDx * runwayHalf, z: airCenter.z - airDz * runwayHalf },
+    { x: airCenter.x + airDx * runwayHalf, z: airCenter.z + airDz * runwayHalf },
+  ];
+  const taxiCenter: Pt = { x: airCenter.x + airPx * 150, z: airCenter.z + airPz * 150 };
+  const taxiway: Pt[] = [
+    { x: taxiCenter.x - airDx * runwayHalf * 0.82, z: taxiCenter.z - airDz * runwayHalf * 0.82 },
+    { x: taxiCenter.x + airDx * runwayHalf * 0.82, z: taxiCenter.z + airDz * runwayHalf * 0.82 },
+  ];
+  const apronCenter: Pt = { x: airCenter.x + airPx * 320, z: airCenter.z + airPz * 320 };
+  const airportApron = rectPoly(apronCenter.x, apronCenter.z, airDx, airDz, 240, 150);
+  const airportBuildings: Pt[][] = [0, 1, 2].map((i) => {
+    const bc = { x: apronCenter.x + airDx * (i - 1) * 150 + airPx * 190, z: apronCenter.z + airDz * (i - 1) * 150 + airPz * 190 };
+    return rectPoly(bc.x, bc.z, airDx, airDz, i === 1 ? 70 : 45, 40);
+  });
+  const airportBoundary = rectPoly(airCenter.x + airPx * 160, airCenter.z + airPz * 160, airDx, airDz, runwayHalf + 200, 430);
+  const airport: CoastAirport = { name: AIRPORT_NAME, runway, taxiway, apron: airportApron, buildings: airportBuildings, boundary: airportBoundary, center: airCenter };
+  // Access road from the apron out to the nearest Plaaspad frontage node (stays in the road graph).
+  if (frontageIds.length > 0) {
+    let airAccessStartId = frontageIds[0]!;
+    let bestD = Infinity;
+    for (const id of frontageIds) {
+      const p = net.nodes.get(id)!; const d = Math.abs(p.z - airCenter.z);
+      if (d < bestD) { bestD = d; airAccessStartId = id; }
+    }
+    const anchor = net.nodes.get(airAccessStartId)!;
+    const apronDoor = { x: apronCenter.x + airPx * 160, z: apronCenter.z + airPz * 160 };
+    addRoad(AIRPORT_ACCESS_ROAD_NAME, 'tertiary', [
+      apronDoor,
+      { x: (apronDoor.x + anchor.x) / 2, z: (apronDoor.z + anchor.z) / 2 + 140 },
+      anchor,
+    ], { endId: airAccessStartId });
+  }
+  log.push(`airport: '${AIRPORT_NAME}' runway ${Math.round(AIRPORT_RUNWAY_LENGTH_M)} m + parallel taxiway/apron in the southern farmland`);
+
   // ---- Farmland polygons + farm clusters --------------------------------------------
   // Keep fields clear of the corridor roads so the preview (and later the game) reads cleanly.
   const corridorRoadPoints: Pt[] = [];
@@ -317,6 +406,7 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
       const cx = bandWest + (bandEast - bandWest) * (0.22 + lane * 0.52) + (seeded(z, lane) - 0.5) * 500;
       const cz = z + (seeded(lane, z) - 0.5) * 420;
       if (!clearOfCorridorRoads(cx, cz, 430)) { fieldIndex++; continue; }
+      if (Math.hypot(cx - airCenter.x, cz - airCenter.z) < 1150) { fieldIndex++; continue; } // keep the aerodrome clear
       // Never let a field spill toward the shore (the coastline drifts around the corridor's west edge).
       const shoreX = coastline.reduce((best, point) => (Math.abs(point.z - cz) < Math.abs(best.z - cz) ? point : best), coastline[0]!).x;
       if (cx - 600 < shoreX + COAST_ROAD_SETBACK_M) { fieldIndex++; continue; }
@@ -354,6 +444,41 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   const first = coastline[0]!; const last = coastline[coastline.length - 1]!;
   const ocean: Pt[] = [...coastline, { x: oceanWestX, z: last.z }, { x: oceanWestX, z: first.z }];
 
+  // ---- Sea port / pier on the NW coast (north end of the shoreline) ---------------------
+  const portShore = coastline[Math.floor(coastline.length * 0.86)] ?? coastline[coastline.length - 1]!;
+  const pier: Pt[] = [
+    { x: portShore.x + 60, z: portShore.z },
+    { x: portShore.x - PORT_PIER_LENGTH_M, z: portShore.z - 60 },
+  ];
+  const portApronCenter = { x: portShore.x + 190, z: portShore.z };
+  const portApron = rectPoly(portApronCenter.x, portApronCenter.z, 0, 1, 150, 120);
+  const port: CoastPort = { name: PORT_NAME, pier, apron: portApron };
+  // Access spur off Victoria Road down to the dockside apron (ends at the water, like the quay).
+  const portAnchor = highwayNode(nearestHighwayIndex(portShore.z));
+  addRoad(PORT_ACCESS_ROAD_NAME, 'tertiary', [portAnchor.p, { x: portApronCenter.x - 40, z: portApronCenter.z }], { startId: portAnchor.id });
+  log.push(`coast: sea port '${PORT_NAME}' pier ${Math.round(PORT_PIER_LENGTH_M)} m into the ocean off the NW coast`);
+
+  // ---- Reservoir / dam near the NE suburb edge -----------------------------------------
+  const lakeCenter = { x: jb.maxX - 1700, z: jb.minZ + 1500 };
+  const lakeSeed = nameSeed(LAKE_NAME);
+  const lakeSteps = 40;
+  const lakePolygon: Pt[] = [];
+  for (let i = 0; i < lakeSteps; i++) {
+    const angle = (i / lakeSteps) * Math.PI * 2;
+    const r = LAKE_RADIUS_M * (0.74 + 0.4 * (fbm(lakeSeed, (i / lakeSteps) * 6, 3) * 0.5 + 0.5));
+    lakePolygon.push({ x: lakeCenter.x + Math.cos(angle) * r, z: lakeCenter.z + Math.sin(angle) * r * 0.82 });
+  }
+  const lake: CoastLake = { name: LAKE_NAME, polygon: lakePolygon };
+  // Optional lakeside dirt track hugging the shore.
+  const lakeTrackPts: Pt[] = [];
+  for (let i = 6; i <= 24; i++) {
+    const angle = (i / lakeSteps) * Math.PI * 2;
+    const r = LAKE_RADIUS_M * 1.18;
+    lakeTrackPts.push({ x: lakeCenter.x + Math.cos(angle) * r, z: lakeCenter.z + Math.sin(angle) * r * 0.82 });
+  }
+  tracks.push({ name: LAKESIDE_TRACK_NAME, kind: 'track', width: TRACK_WIDTHS.track ?? 5, points: lakeTrackPts });
+  log.push(`lake: '${LAKE_NAME}' reservoir (${lakePolygon.length}-pt organic shoreline) near the NE suburb edge`);
+
   // ---- Beaches (real polygons, transformed) + districts -----------------------------------
   const beaches = beachWays
     .map((way) => ({
@@ -372,6 +497,7 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
 
   return {
     coastline, ocean, beaches, farmland, tracks, farms, padstal, harbour, districts,
+    airport, port, lake,
     corridorEastX, corridorWestX, log,
   };
 }
