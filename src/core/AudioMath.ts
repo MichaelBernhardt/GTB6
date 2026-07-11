@@ -20,6 +20,9 @@ export const ENGINE_PROFILES: Record<string, EngineProfile> = {
   van: { basePitch: 0.78, brightness: 0.82, throbRate: 0.75, growl: 0.3, level: 1.05 },
   police: { basePitch: 1.1, brightness: 1.12, throbRate: 1.1, growl: 0.55, level: 1 },
   taxi: { basePitch: 0.86, brightness: 0.9, throbRate: 0.85, growl: 0.45, level: 1.05 },
+  // two-wheelers rev high and thin; the superbike out-sports even the GTI. Bicycles have NO profile — they never reach the engine voice.
+  motorbike: { basePitch: 1.5, brightness: 1.35, throbRate: 1.75, growl: 0.75, level: 0.95 },
+  superbike: { basePitch: 1.85, brightness: 1.6, throbRate: 2.2, growl: 1, level: 1.05 },
 };
 
 export function engineProfile(kind?: string): EngineProfile { return ENGINE_PROFILES[kind ?? ''] ?? ENGINE_PROFILES.compact; }

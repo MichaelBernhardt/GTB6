@@ -5,6 +5,7 @@ interface BurstOptions { duration: number; type: BiquadFilterType; frequency: nu
 interface BlipOptions { type?: OscillatorType; slide?: number; at?: number; pan?: number; attack?: number; }
 interface EngineVoice { fund: OscillatorNode; sub: OscillatorNode; harm: OscillatorNode; throb: OscillatorNode; intake: AudioBufferSourceNode; rumble: AudioBufferSourceNode; throbDepth: GainNode; drive: GainNode; intakeGain: GainNode; rumbleGain: GainNode; filter: BiquadFilterNode; gain: GainNode; gear: number; }
 interface TrafficEngine { voice: EngineVoice; pan: StereoPannerNode; }
+interface BicycleVoice { wind: AudioBufferSourceNode; windGain: GainNode; nextTick: number; }
 interface SirenVoice { oscillators: OscillatorNode[]; gain: GainNode; pan: StereoPannerNode; }
 interface FireVoice { sources: AudioBufferSourceNode[]; lfo: OscillatorNode; gain: GainNode; pan: StereoPannerNode; nextPop: number; }
 interface Ambience { traffic: GainNode; wind: GainNode; windLfo: OscillatorNode; nextEvent: number; }
@@ -17,6 +18,7 @@ export class AudioManager {
   private rumble?: AudioBuffer;
   private engineVoice?: EngineVoice;
   private trafficEngine?: TrafficEngine;
+  private bicycleVoice?: BicycleVoice;
   private sirenVoice?: SirenVoice;
   private fireVoice?: FireVoice;
   private ambience?: Ambience;
@@ -308,10 +310,32 @@ export class AudioManager {
   setEngine(active: boolean, speed = 0, throttle = 0, maxSpeed = 40, kind?: string): void {
     if (!this.context || !this.master) return;
     const t = this.now();
-    if (active && !this.engineVoice) this.engineVoice = this.buildEngine(this.master);
-    const voice = this.engineVoice; if (!voice) return;
-    if (!active) { this.stopEngine(voice, t); this.engineVoice = undefined; return; }
-    this.updateEngine(voice, t, speed, throttle, maxSpeed, engineProfile(kind), 1);
+    const pedalPowered = active && kind === 'bicycle'; // bicycles have no engine profile: freewheel tick + wind only
+    if (this.engineVoice && (!active || pedalPowered)) { this.stopEngine(this.engineVoice, t); this.engineVoice = undefined; }
+    if (this.bicycleVoice && !pedalPowered) this.stopBicycleVoice(t);
+    if (!active) return;
+    if (pedalPowered) { this.updateBicycle(t, speed, maxSpeed); return; }
+    if (!this.engineVoice) this.engineVoice = this.buildEngine(this.master);
+    this.updateEngine(this.engineVoice, t, speed, throttle, maxSpeed, engineProfile(kind), 1);
+  }
+
+  /** Bicycle: no engine at all — just a freewheel tick and wind that rises with speed. Near-silent to the world (and the JMPD). */
+  private updateBicycle(t: number, speed: number, maxSpeed: number): void {
+    if (!this.bicycleVoice) this.bicycleVoice = this.buildBicycle();
+    const voice = this.bicycleVoice;
+    const ratio = Math.min(1, Math.abs(speed) / Math.max(1, maxSpeed));
+    voice.windGain.gain.setTargetAtTime(0.0008 + ratio * ratio * 0.028, t, 0.12);
+    if (Math.abs(speed) > 1.5 && t >= voice.nextTick) {
+      voice.nextTick = t + Math.min(0.4, 1.15 / Math.abs(speed));
+      this.burst({ duration: 0.02, type: 'highpass', frequency: 5200, peak: 0.011 + ratio * 0.008, decay: 0.014 });
+    }
+  }
+
+  private stopBicycleVoice(t: number): void {
+    const voice = this.bicycleVoice; if (!voice) return;
+    voice.windGain.gain.setTargetAtTime(0.0001, t, 0.1);
+    try { voice.wind.stop(t + 0.5); } catch { /* already stopped */ }
+    this.bicycleVoice = undefined;
   }
 
   /** One shared positional voice for the nearest NPC vehicle; falls off fast with distance. */
@@ -421,6 +445,15 @@ export class AudioManager {
     const windDepth = context.createGain(); windDepth.gain.value = 0.0035;
     windLfo.connect(windDepth).connect(wind.gain); windLfo.start();
     this.ambience = { traffic, wind, windLfo, nextEvent: this.now() + 5 };
+  }
+
+  private buildBicycle(): BicycleVoice {
+    const context = this.context as AudioContext; const master = this.master as GainNode;
+    const wind = context.createBufferSource(); wind.buffer = this.noise as AudioBuffer; wind.loop = true; wind.playbackRate.value = 0.9;
+    const filter = context.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.value = 880; filter.Q.value = 0.4;
+    const windGain = context.createGain(); windGain.gain.value = 0.0001;
+    wind.connect(filter).connect(windGain).connect(master); wind.start();
+    return { wind, windGain, nextTick: this.now() };
   }
 
   private buildEngine(destination: AudioNode): EngineVoice {

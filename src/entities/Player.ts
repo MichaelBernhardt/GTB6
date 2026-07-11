@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { PLAYER, type WeaponId } from '../config';
+import { PLAYER, type VehicleKind, type WeaponId } from '../config';
 import type { InputManager } from '../core/InputManager';
 import { jumpVelocity, moveSpeed } from '../core/GameRules';
 import type { CheatSettings } from '../types';
@@ -30,6 +30,10 @@ export class Player {
   private leftShin = new THREE.Group();
   private rightShin = new THREE.Group();
   private walkPhase = 0;
+  private pedalPhase = 0;
+  private tumbleTimer = 0;
+  private tumbleDuration = 1;
+  private tumbleDir = 1;
   private weapon: WeaponId = 'pistol';
   private weaponMeshes = new Map<WeaponId, THREE.Group>();
   private punchTimer = 0;
@@ -42,6 +46,7 @@ export class Player {
   update(dt: number, input: InputManager, cameraYaw: number, city: City): void {
     this.moving = false; this.sprinting = false;
     if (this.inVehicle || this.health <= 0) return;
+    if (this.tumbleTimer > 0) { this.applyTumble(dt); return; }
     const aiming = input.firing && this.weapon !== 'fists';
     const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
     const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
@@ -61,6 +66,8 @@ export class Player {
       if (input.firing) this.turnToward(cameraYaw + Math.PI, dt, 13);
       this.animateIdle(dt, aiming);
     }
+    this.leftLeg.rotation.z *= Math.exp(-dt * 8); this.rightLeg.rotation.z *= Math.exp(-dt * 8); // legs close after riding astride
+    this.group.rotation.z *= Math.exp(-dt * 12); // shed any leftover bike lean
     this.applyPunch(dt);
     if (input.consume('Space') && this.onGround) { this.velocityY = jumpVelocity(this.cheats.bigJump); this.onGround = false; }
     this.velocityY -= PLAYER.gravity * dt; this.group.position.y += this.velocityY * dt;
@@ -82,6 +89,39 @@ export class Player {
   }
 
   punch(): void { this.punchTimer = 0.3; this.punchLeft = !this.punchLeft; }
+
+  /** Knocked off a two-wheeler: borrow the pedestrian down-pose (rolled onto the side) for a beat, then get up. */
+  tumble(duration = 1.15): void { this.tumbleTimer = duration; this.tumbleDuration = duration; this.tumbleDir = Math.random() < 0.5 ? -1 : 1; this.velocityY = 0; this.onGround = true; }
+  get tumbling(): boolean { return this.tumbleTimer > 0; }
+
+  private applyTumble(dt: number): void {
+    this.tumbleTimer = Math.max(0, this.tumbleTimer - dt);
+    const progress = 1 - this.tumbleTimer / this.tumbleDuration;
+    const roll = Math.min(1, progress * 3.2) * (1 - THREE.MathUtils.smoothstep(progress, 0.72, 1)); // slam down fast, get up late
+    this.group.rotation.z = this.tumbleDir * (Math.PI / 2) * roll;
+    this.group.position.y = 0.36 * roll;
+    this.leftArm.rotation.x = -2.3 * roll; this.rightArm.rotation.x = -2.1 * roll;
+    this.leftLeg.rotation.x = -0.5 * roll; this.rightLeg.rotation.x = 0.4 * roll;
+    if (this.tumbleTimer === 0) { this.group.rotation.z = 0; this.group.position.y = 0; }
+  }
+
+  /** Seated riding pose, driven from Game while on a two-wheeler: legs astride, hands to the bars.
+   *  Bicycle legs turn the cranks with road speed; the superbike stance is a full tuck. */
+  animateRiding(dt: number, kind: VehicleKind, speed: number): void {
+    const bicycle = kind === 'bicycle'; const superbike = kind === 'superbike';
+    const blend = Math.min(1, dt * 10);
+    const pose = (part: THREE.Group, x: number, z?: number): void => { part.rotation.x = THREE.MathUtils.lerp(part.rotation.x, x, blend); if (z !== undefined) part.rotation.z = THREE.MathUtils.lerp(part.rotation.z, z, blend); };
+    this.pedalPhase += dt * speed * (bicycle ? 0.62 : 0);
+    const pedal = bicycle ? Math.sin(this.pedalPhase) : 0;
+    pose(this.leftArm, superbike ? -1.3 : bicycle ? -0.8 : -1, 0.14); pose(this.rightArm, superbike ? -1.3 : bicycle ? -0.8 : -1, -0.14);
+    pose(this.leftForearm, superbike ? -0.12 : -0.3); pose(this.rightForearm, superbike ? -0.12 : -0.3);
+    pose(this.leftLeg, bicycle ? -0.95 + pedal * 0.42 : superbike ? -1.15 : -1.3, -0.16); pose(this.rightLeg, bicycle ? -0.95 - pedal * 0.42 : superbike ? -1.15 : -1.3, 0.16);
+    pose(this.leftShin, bicycle ? Math.max(0.2, 0.8 - pedal * 0.38) : superbike ? 1.6 : 1.35); pose(this.rightShin, bicycle ? Math.max(0.2, 0.8 + pedal * 0.38) : superbike ? 1.6 : 1.35);
+    this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, superbike ? 0.5 : bicycle ? 0.12 : 0.2, blend);
+    this.model.rotation.y *= Math.exp(-dt * 10); this.model.position.y = 0;
+    this.torso.rotation.z *= Math.exp(-dt * 8); this.torso.scale.y = THREE.MathUtils.lerp(this.torso.scale.y, 1, blend);
+    this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0, blend);
+  }
 
   private applyPunch(dt: number): void {
     if (this.punchTimer <= 0) { this.model.rotation.y *= Math.exp(-dt * 10); return; }
