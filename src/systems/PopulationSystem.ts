@@ -7,13 +7,16 @@ import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separ
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
 import { MISSIONS } from './MissionSystem';
 import { ProgressWatchdog, RoutePlanner, type NavPoint } from './NavGraph';
+import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, vehicleHitDamage } from './TrafficAvoidance';
 import type { City } from '../world/City';
 import { CITY_JUNCTIONS } from '../world/UrbanInfrastructure';
 import { powerOn } from '../world/powerGrid';
 
 interface DrivePlan { points: NavPoint[]; index: number; watchdog: ProgressWatchdog; backoff: number; }
 interface TaxiState { stopTimer: number; dwell: number; hootTimer: number; }
+interface Holdup { held: number; honkAt: number; giveUpAt: number; dodge: number; side: number; holding: boolean; clearFor: number; } // one blocked-by-the-player driver's patience
 export interface PlayerBump { ped: Pedestrian; position: THREE.Vector3; knockdown: boolean; killed: boolean; assault: boolean; }
+export interface PlayerVehicleHit { speed: number; damage: number; knockdown: boolean; }
 
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
@@ -35,6 +38,9 @@ export class PopulationSystem {
   private bumpCooldown = new WeakMap<Pedestrian, number>();
   private bumpClock = 0;
   private hootCooldown = 0;
+  private holdups = new WeakMap<Vehicle, Holdup>();
+  private playerVehicleHits: PlayerVehicleHit[] = [];
+  private playerHitCooldown = 0;
   private parkedSpots: Array<[number, number]> = [];
   private policePatrols: Pedestrian[] = [];
   private ambientSerial = 200; // seeds variety (colours, wallets, bravery) for lifecycle-spawned agents
@@ -46,9 +52,10 @@ export class PopulationSystem {
     this.spawnVehicles(); this.spawnPedestrians();
   }
 
-  update(dt: number, player: THREE.Vector3, damagePlayer?: (amount: number) => void): void {
+  update(dt: number, player: THREE.Vector3, damagePlayer?: (amount: number) => void, playerOnFoot = false): void {
     this.vehiclePlanner.beginFrame(); this.pedPlanner.beginFrame(); this.frame += 1;
     this.hostileAttackCooldown = Math.max(0, this.hostileAttackCooldown - dt);
+    this.playerHitCooldown = Math.max(0, this.playerHitCooldown - dt);
     this.pedestrians.forEach((ped, index) => {
       if ((this.frame + index) % FREEZE_CHECK_FRAMES === 0) {
         const wasFrozen = ped.frozen;
@@ -81,10 +88,16 @@ export class PopulationSystem {
         if (ahead <= 1 || ahead >= 9 || dx * dx + dz * dz - ahead * ahead >= 6.25) return false;
         return Math.cos(other.heading - vehicle.heading) > -0.35 || Math.abs(other.speed) < 2; // brake for the queue and for parked obstructions, not for oncoming movers: the undirected graph puts them on this lane and mutual braking is a head-on crawl deadlock
       });
+      let playerBlocked = false; let playerHold = false; let dodge: THREE.Vector3 | undefined;
+      if (playerOnFoot && !vehicle.police && vehicle.group.position.distanceToSquared(player) < AVOID_RANGE * AVOID_RANGE) ({ blocked: playerBlocked, hold: playerHold, dodge } = this.avoidPlayer(vehicle, forward, player, dt));
+      else this.holdups.delete(vehicle);
       const taxi = vehicle.spec.kind === 'taxi';
       const junctionPanic = robotsOut && !taxi && CITY_JUNCTIONS.some((junction) => (junction.x - vehicle.group.position.x) ** 2 + (junction.z - vehicle.group.position.z) ** 2 < 576);
-      const throttle = taxi ? this.taxiThrottle(vehicle, dt, player, blocked) : blocked ? 0.05 : junctionPanic ? 0.03 : TRAFFIC_SPEED_FACTOR;
-      vehicle.updateAI(dt, this.city, undefined, throttle);
+      const throttle = playerHold ? 0 // held: a full stop with hysteresis, no 0.05 creep — this is what arms the honk clock
+        : dodge ? DODGE_THROTTLE
+        : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked)
+        : blocked || playerBlocked ? 0.05 : junctionPanic ? 0.03 : TRAFFIC_SPEED_FACTOR;
+      vehicle.updateAI(dt, this.city, dodge, throttle);
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
       if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);
     });
@@ -184,6 +197,73 @@ export class PopulationSystem {
   }
 
   consumeImpacts(): Array<{ position: THREE.Vector3; killed: boolean; vehicle: Vehicle; ped: Pedestrian }> { return this.impacts.splice(0); }
+
+  /** Traffic-vs-on-foot-player contacts since last frame; Game applies damage/tumble (cheats respected there). */
+  consumePlayerVehicleHits(): PlayerVehicleHit[] { return this.playerVehicleHits.splice(0); }
+
+  /** One civilian driver vs the on-foot player: resolves body contact (crawl = the car yields, speed =
+   *  shove/damage on the player), then the forward corridor measured from the FRONT BUMPER — brake while
+   *  he's inside the stopping envelope, hold at a standstill (with clear-time hysteresis so a 20cm shift
+   *  never restarts the creep), honk once held, and after pullAroundPatience swing past a clear side. */
+  private avoidPlayer(vehicle: Vehicle, forward: THREE.Vector3, player: THREE.Vector3, dt: number): { blocked: boolean; hold: boolean; dodge?: THREE.Vector3 } {
+    const position = vehicle.group.position;
+    const dx = player.x - position.x; const dz = player.z - position.z;
+    const ahead = dx * forward.x + dz * forward.z;
+    const lateral = dx * forward.z - dz * forward.x; // positive = the car's right (side vector cos/-sin, as ejectDriver)
+    const halfWidth = vehicle.spec.size[0] / 2; const halfLength = vehicle.spec.size[2] / 2;
+    const push = overlapPush(ahead, lateral, halfLength, halfWidth, PLAYER.radius);
+    const impact = Math.abs(vehicle.speed);
+    if (push) { // contact: the player never occupies the car's volume
+      if (carYields(push.lateral, vehicle.speed)) { // crawl-speed bumper kiss: back the CAR off, never bulldoze a standing player
+        const back = position.clone(); back.x -= forward.x * push.ahead; back.z -= forward.z * push.ahead;
+        position.copy(this.city.clampMove(position, back, Math.max(vehicle.spec.size[0], vehicle.spec.size[2]) * 0.34));
+        vehicle.speed = 0;
+      } else {
+        const target = player.clone(); target.x += forward.x * push.ahead + forward.z * push.lateral; target.z += forward.z * push.ahead - forward.x * push.lateral;
+        player.copy(this.city.clampMove(player, target, PLAYER.radius));
+        if (impact > 0.8 && this.playerHitCooldown <= 0) {
+          this.playerHitCooldown = HIT_COOLDOWN;
+          const damage = vehicleHitDamage(impact);
+          this.playerVehicleHits.push({ speed: impact, damage, knockdown: damage > 0 });
+          if (damage > 0) { vehicle.speed *= HIT_SPEED_KEEP; this.audio.collision(impact); } // the body costs the car some momentum
+        }
+      }
+    }
+    const state = this.holdups.get(vehicle);
+    if (state && state.dodge > 0) { // mid pull-around: hold the offset target until the swing completes
+      state.dodge -= dt;
+      if (state.dodge <= 0) { this.holdups.delete(vehicle); return { blocked: false, hold: false }; }
+      return { blocked: false, hold: false, dodge: new THREE.Vector3(position.x + forward.x * DODGE_AHEAD + forward.z * state.side * DODGE_SIDE, 0, position.z + forward.z * DODGE_AHEAD - forward.x * state.side * DODGE_SIDE) };
+    }
+    const blocked = corridorBlocked(bumperAhead(ahead, halfLength), lateral * lateral, vehicle.speed, halfWidth);
+    if (state?.holding) { // held: full stop until the corridor stays clear long enough — no creep-nudge loop
+      const clearFor = holdRelease(state.clearFor, blocked, dt);
+      if (clearFor === undefined) { this.holdups.delete(vehicle); return { blocked: false, hold: false }; }
+      state.clearFor = clearFor;
+      this.runHoldupClock(state, vehicle, forward, position, lateral, halfWidth, dt);
+      return { blocked: true, hold: true };
+    }
+    if (!blocked) { this.holdups.delete(vehicle); return { blocked: false, hold: false }; }
+    const fresh = state ?? { held: 0, honkAt: firstHonkDelay(), giveUpAt: pullAroundPatience(), dodge: 0, side: 0, holding: false, clearFor: 0 };
+    this.holdups.set(vehicle, fresh);
+    if (impact < HOLD_SPEED) { fresh.holding = true; this.runHoldupClock(fresh, vehicle, forward, position, lateral, halfWidth, dt); } // rolled to a stop with him still there: the patience clock arms
+    return { blocked: true, hold: fresh.holding };
+  }
+
+  /** Patience of a held driver: hoot on the jittered cadence, and past giveUpAt try the pull-around. */
+  private runHoldupClock(state: Holdup, vehicle: Vehicle, forward: THREE.Vector3, position: THREE.Vector3, lateral: number, halfWidth: number, dt: number): void {
+    state.held += dt;
+    if (state.held >= state.honkAt) {
+      state.honkAt = state.held + rehonkDelay();
+      this.audio.hornAt(position.x, position.z, vehicle.spec.kind === 'taxi'); this.hootCooldown = 0.6; // suppress the ambient hoot piling on
+    }
+    if (state.held >= state.giveUpAt) {
+      const clear = (side: number): boolean => !this.city.collides(position.x + forward.x * 3 + forward.z * side * DODGE_SIDE, position.z + forward.z * 3 - forward.x * side * DODGE_SIDE, halfWidth + 0.3);
+      const side = pullAroundSide(lateral, clear(1), clear(-1));
+      if (side) { state.dodge = DODGE_TIME; state.side = side; }
+      else state.giveUpAt = state.held + 2; // boxed in: stay put, hoot some more, try again shortly
+    }
+  }
 
   /** Keeps a small, fully interactive foot-patrol presence near the player while district pressure is high. */
   setPolicePatrolCount(count: number, focus: THREE.Vector3): void {

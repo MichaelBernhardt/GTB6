@@ -339,7 +339,11 @@ export class Game {
     if (this.input.aiming && !this.combat.spec.melee && !this.transition && this.brandishCooldown === 0) { this.population.broadcastBrandish(focus); this.brandishCooldown = 1.5; } // a raised gun scares witnesses; no police heat for merely aiming
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
-    this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
+    this.population.update(dt, focus, (amount) => this.damagePlayer(amount), !this.activeVehicle && !this.transition);
+    for (const hit of this.population.consumePlayerVehicleHits()) { // civilian traffic vs the on-foot player: the driver is AI, the player the victim — no heat, just physics
+      if (hit.damage > 0) this.damagePlayer(hit.damage);
+      if (hit.knockdown && !this.player.tumbling) { this.player.tumble(); this.shake = Math.min(0.7, this.shake + 0.3); }
+    }
     const forward = this.camera.getWorldDirection(this.cameraForward);
     const guarded = new Set<Vehicle>();
     for (const vehicle of [this.activeVehicle, this.transition?.vehicle, this.garageVehicle]) if (vehicle) guarded.add(vehicle);
