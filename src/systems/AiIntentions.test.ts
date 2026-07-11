@@ -22,7 +22,7 @@ const makeCity = (): City => ({
   roadPoseAwayFrom: (position: THREE.Vector3, minimum: number) => ({ position: new THREE.Vector3(position.x + minimum + 5, 0, position.z), heading: 0 }),
 }) as unknown as City;
 
-const audio = { scream: () => {}, setSiren: () => {}, taxiHoot: () => {}, setTrafficEngine: () => {} } as unknown as AudioManager;
+const audio = { scream: () => {}, setSiren: () => {}, taxiHoot: () => {}, setTrafficEngine: () => {}, copGunshot: () => {}, policeShout: () => {}, collision: () => {} } as unknown as AudioManager;
 
 describe('ai intentions simulation', () => {
   it('drives traffic along planned lane routes and keeps peds wandering with sidewalk routes', () => {
@@ -99,6 +99,23 @@ describe('ai intentions simulation', () => {
     const nearest = Math.min(...active.map((vehicle) => vehicle.group.position.distanceTo(player)));
     expect(nearest).toBeLessThan(40);
     expect(damage).toBeGreaterThan(0);
+  });
+
+  it('arrests a stationary on-foot suspect: standoff, crew deployment and fire — never a deliberate ram', () => {
+    const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
+    const wanted = new WantedSystem(); wanted.addCrime(40); // two stars: live fire authorized
+    const knowledge = new PoliceKnowledge(); knowledge.copWitness(0, 0);
+    const player = new THREE.Vector3(0, 0, 0);
+    let damage = 0; let closestAtSpeed = Infinity;
+    for (let frame = 0; frame < 1800; frame++) {
+      police.update(1 / 30, player, false, wanted, knowledge, (amount) => { damage += amount; });
+      for (const vehicle of police.vehicles) if (Math.abs(vehicle.speed) > 10) closestAtSpeed = Math.min(closestAtSpeed, vehicle.group.position.distanceTo(player));
+    }
+    const events = police.consumeEvents();
+    expect(events.some((event) => event.kind === 'freeze')).toBe(true); // the crew got out and shouted
+    expect(events.flatMap((event) => event.kind === 'officers' ? event.officers : []).length).toBeGreaterThanOrEqual(2);
+    expect(damage).toBeGreaterThan(0); // arrest pressure comes from officer fire, not bumpers
+    expect(closestAtSpeed).toBeGreaterThan(5); // nobody drove through the suspect at speed
   });
 
   it('caps interceptors lower at low heat', () => {

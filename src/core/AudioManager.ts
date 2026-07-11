@@ -266,6 +266,26 @@ export class AudioManager {
     osc.start(t); vibrato.start(t); osc.stop(t + duration + 0.05); vibrato.stop(t + duration + 0.05);
   }
 
+  /** Two-syllable megaphone bark from an arrest scene — the synthesized stand-in for "FREEZE!". */
+  policeShout(x: number, z: number): void {
+    const level = distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 12, 150);
+    if (level < 0.01) return;
+    const pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.6;
+    this.blip(330, 0.18, 0.11 * level, { type: 'square', slide: 240, pan, attack: 0.004 });
+    this.blip(262, 0.3, 0.09 * level, { type: 'square', slide: 155, at: 0.2, pan, attack: 0.004 });
+    this.burst({ duration: 0.42, type: 'bandpass', frequency: 1750, q: 2.4, peak: 0.05 * level, decay: 0.34, pan, echo: 0.35 });
+  }
+
+  /** Positional service-pistol crack for JMPD fire (the player's own weapons use gunshot()). */
+  copGunshot(x: number, z: number): void {
+    const level = distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 12, 170);
+    if (level < 0.01) return;
+    const pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.6;
+    const jitter = 0.85 + Math.random() * 0.3;
+    this.burst({ duration: 0.28, type: 'bandpass', frequency: 780 * jitter, q: 0.7, peak: 0.4 * level, decay: 0.12 + Math.random() * 0.04, echo: 0.45, pan });
+    this.blip(150 * jitter, 0.13, 0.35 * level, { slide: 42, pan });
+  }
+
   /** Short "hey!"-style vocal bark for a shoulder bump: a formant-filtered falling saw. */
   grunt(x?: number, z?: number): void {
     const context = this.context; const master = this.master;

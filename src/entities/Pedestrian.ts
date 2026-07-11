@@ -188,6 +188,9 @@ export class Pedestrian {
 
   punch(): void { this.punchTimer = 0.28; }
 
+  /** Crouch behind cover (arrest officers). Reapplied every frame by the police system, after update() resets the pose. */
+  takeCover(): void { this.setPanicPose(false, true); }
+
   private setPanicPose(armsUp: boolean, crouch: boolean): void {
     for (const arm of this.arms) arm.rotation.x = armsUp ? Math.PI * 0.92 : 0;
     this.group.scale.y = crouch ? 0.66 : 1;
