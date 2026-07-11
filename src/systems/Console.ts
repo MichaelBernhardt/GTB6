@@ -8,6 +8,7 @@ export type ConsoleCommand =
   | { kind: 'help' }
   | { kind: 'fps' }
   | { kind: 'set-time'; hour: number }
+  | { kind: 'set-timerate'; rate: number }
   | { kind: 'set-busy'; percent: number }
   | { kind: 'set-peds'; count?: number } // undefined = back to the time-of-day table
   | { kind: 'set-cars'; count?: number }
@@ -31,6 +32,7 @@ export type ConsoleCommand =
 /** Game wires these in; the console never imports Game. Each handler returns its console feedback line. */
 export interface ConsoleHost {
   setTime(hour: number): string;
+  setTimerate(rate: number): string;
   toggleFps(): string;
   spawn(kind: VehicleKind): string;
   giveCash(amount: number): string;
@@ -75,6 +77,7 @@ export const HELP_LINES = [
   'give armour — strap on full body armour',
   'give parachute [n] · give stim [n] — stock inventory items',
   'set time <HHMM> — jump the clock (e.g. set time 1200)',
+  'set timerate <n> — day/night speed (1 = normal, 0 freezes time)',
   'set busy <10-1000> — crowd level in percent (100 = normal; scales every nearby zone; clears peds/cars pins)',
   'set peds <n|auto> — pin the pedestrian target for the area around you (auto = per-zone by district)',
   'set cars <n|auto> — pin the traffic target for the area around you (auto = per-zone by district)',
@@ -127,7 +130,12 @@ export function parseCommand(input: string): ConsoleCommand {
       const count = parseCount(value);
       return count === undefined ? { kind: 'error', message: `Invalid count "${value}" — use a whole number, or auto.` } : { kind, count };
     }
-    if (key !== 'time' || !value) return { kind: 'error', message: 'Usage: set time <HHMM> · set busy <percent> · set peds <n|auto> · set cars <n|auto>' };
+    if (key === 'timerate') {
+      if (!value) return { kind: 'error', message: 'Usage: set timerate <n> (1 = normal, 0 = freeze time, up to 120)' };
+      const rate = parseCoordinate(value);
+      return rate === undefined || rate < 0 ? { kind: 'error', message: `Invalid rate "${value}" — use a number ≥ 0 (0 freezes time, 1 = normal).` } : { kind: 'set-timerate', rate };
+    }
+    if (key !== 'time' || !value) return { kind: 'error', message: 'Usage: set time <HHMM> · set timerate <n> · set busy <percent> · set peds <n|auto> · set cars <n|auto>' };
     const hour = parseTimeToken(value);
     return hour === undefined ? { kind: 'error', message: `Invalid time "${value}" — use HHMM between 0000 and 2359.` } : { kind: 'set-time', hour };
   }
@@ -172,6 +180,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'error': return [command.message];
     case 'fps': return [host.toggleFps()];
     case 'set-time': return [host.setTime(command.hour)];
+    case 'set-timerate': return [host.setTimerate(command.rate)];
     case 'set-busy': return [host.setBusy(command.percent)];
     case 'set-peds': return [host.setPedTarget(command.count)];
     case 'set-cars': return [host.setCarTarget(command.count)];

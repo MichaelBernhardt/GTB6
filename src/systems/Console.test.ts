@@ -37,6 +37,10 @@ describe('console parser', () => {
     expect(parseCommand('set time 1200')).toEqual({ kind: 'set-time', hour: 12 });
     expect(parseCommand('set time 0000')).toEqual({ kind: 'set-time', hour: 0 });
     expect(parseCommand('set time 2359')).toEqual({ kind: 'set-time', hour: 23 + 59 / 60 });
+    expect(parseCommand('set timerate 0')).toEqual({ kind: 'set-timerate', rate: 0 });
+    expect(parseCommand('set timerate 10')).toEqual({ kind: 'set-timerate', rate: 10 });
+    expect(parseCommand('set timerate 2.5')).toEqual({ kind: 'set-timerate', rate: 2.5 });
+    expect(parseCommand('set timerate -3')).toEqual({ kind: 'error', message: expect.stringContaining('Invalid rate') });
     for (const bad of ['set time 2400', 'set time 1260', 'set time 12:00', 'set time noon', 'set time 120', 'set time', 'set volume 3']) {
       expect(parseCommand(bad).kind, bad).toBe('error');
     }
@@ -134,6 +138,7 @@ describe('heatAfterStarDrop', () => {
 describe('runConsoleCommand', () => {
   const host: ConsoleHost = {
     setTime: (hour) => `time:${hour}`,
+    setTimerate: (rate) => `timerate:${rate}`,
     toggleFps: () => 'fps',
     spawn: (kind) => `spawn:${kind}`,
     giveCash: (amount) => `cash:${amount}`,

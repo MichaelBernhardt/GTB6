@@ -286,6 +286,7 @@ export class Game {
   /** Console command handlers: every mutation goes through the same paths the game itself uses. */
   private consoleHost: ConsoleHost = {
     setTime: (hour) => { this.dayNight.hour = hour; this.persist(); return `Clock set to ${this.dayNight.clockText}.`; },
+    setTimerate: (rate) => { this.dayNight.timeRate = Math.min(120, Math.max(0, rate)); return this.dayNight.timeRate === 0 ? 'Time frozen.' : `Time runs at ${this.dayNight.timeRate}× normal.`; },
     toggleFps: () => { this.settings.showFps = !this.settings.showFps; this.persist(); return `Performance display ${this.settings.showFps ? 'on' : 'off'}.`; },
     spawn: (kind) => this.spawnConsoleVehicle(kind),
     giveCash: (amount) => {

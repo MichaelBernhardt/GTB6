@@ -106,6 +106,7 @@ export function selectNearest(xz: ArrayLike<number>, fx: number, fz: number, cou
 
 export class DayNightSystem {
   hour: number;
+  timeRate = 1; // clock speed multiplier: 0 freezes time, 1 = normal (console `set timerate`)
   private sample = createSkySample();
   private sunDir = new THREE.Vector3(); private moonDir = new THREE.Vector3();
   private moon: THREE.Mesh;
@@ -144,7 +145,7 @@ export class DayNightSystem {
   }
 
   update(dt: number, focus: THREE.Vector3, traffic: readonly Vehicle[], police: readonly Vehicle[], playerVehicle?: Vehicle): void {
-    this.hour = advanceHour(this.hour, dt);
+    this.hour = advanceHour(this.hour, dt * this.timeRate);
     this.apply(focus, traffic, police, playerVehicle);
   }
 
