@@ -11,6 +11,7 @@ import {
   GREEN_POLYGONS,
   DIRT_POLYGONS,
   HARBOUR_POINT,
+  JUNCTION_SURFACES,
   METRES_PER_UNIT,
   OCEAN_POLYGON,
   pointInPolygon,
@@ -26,7 +27,8 @@ import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTex
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
-import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
+import { CITY_JUNCTIONS, signalHoldsDriver, UrbanInfrastructure } from './UrbanInfrastructure';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
 
@@ -267,6 +269,17 @@ export class City {
     this.infrastructure.update(dt);
   }
 
+  /** True when an AI driver at (position, heading) should hold for a non-green robot at the signalised
+   *  junction it is approaching. Only CITY_JUNCTIONS carry robots, and the check reads the same phase
+   *  clock the lenses animate on, so drivers stop exactly when the light the player sees turns red. */
+  signalStops(position: THREE.Vector3, heading: number): boolean {
+    const clock = this.infrastructure.signalClock;
+    for (const junction of CITY_JUNCTIONS) {
+      if (signalHoldsDriver(junction, position.x, position.z, heading, clock)) return true;
+    }
+    return false;
+  }
+
   /** Frame-budgeted distance culling: chunks near the focus join the scene, far ones detach (with
    *  hysteresis). Geometry is kept in memory, so re-entering a chunk costs nothing. Colliders, nav
    *  graphs, the minimap and the map overlay are data, not scene geometry — culling never touches
@@ -472,8 +485,28 @@ export class City {
       if (surface.width >= 9) this.addCurbs(surface.points, surface.width, surface.closed, index, curbTransforms);
     }
     this.addInstanced(box, curbMat, curbTransforms, { cast: true, receive: true });
+    this.buildJunctionSurfaces(roadMat);
     this.buildIntersections();
     this.buildPotholes();
+  }
+
+  /** Paves every real crossing (T / cross / multi-way) with a filled asphalt disc laid just over the
+   *  carriageways, unifying the overlapping ribbons into one clean surface and burying the z-fight
+   *  seams that made 4-ways read as an "X of two planes". Uses the SAME asphalt material as the roads,
+   *  so mergeStaticGeometry folds these into the existing per-cell road buckets — no extra draw calls,
+   *  just triangles that cull with their chunk. Sizing + placement are map-derived and deterministic. */
+  private buildJunctionSurfaces(roadMat: THREE.Material): void {
+    const lift = ROAD_SURFACE_OFFSET + 0.012; // above the ribbons (buries the seam) but below dashes (~0.088) and zebra (0.09)
+    const discs: THREE.BufferGeometry[] = [];
+    for (const surface of JUNCTION_SURFACES) {
+      const disc = new THREE.CircleGeometry(surface.radius, 18);
+      disc.rotateX(-Math.PI / 2); // lie flat, face up — same orientation as the pothole decals
+      disc.translate(surface.x, terrainHeightAt(surface.x, surface.z) + lift, surface.z);
+      discs.push(disc);
+    }
+    const merged = discs.length ? mergeGeometries(discs, false) : null;
+    if (!merged) return;
+    const mesh = new THREE.Mesh(merged, roadMat); mesh.receiveShadow = true; this.group.add(mesh);
   }
 
   private buildPotholes(): void {
