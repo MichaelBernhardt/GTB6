@@ -62,10 +62,22 @@ export class PopulationSystem {
     }
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation();
+    this.updateTrafficEngineAudio(player);
     if (damagePlayer && this.hostileAttackCooldown <= 0) {
       const attacker = this.pedestrians.find((ped) => ped.state === 'hostile' && ped.group.position.distanceTo(player) < 2.3);
       if (attacker) { attacker.punch(); damagePlayer(7); this.hostileAttackCooldown = 0.9; }
     }
+  }
+
+  private updateTrafficEngineAudio(player: THREE.Vector3): void {
+    let nearest: Vehicle | undefined; let best = 60 * 60;
+    for (const vehicle of this.traffic) {
+      if (vehicle.playerControlled || vehicle.disabled) continue;
+      const d2 = vehicle.group.position.distanceToSquared(player);
+      if (d2 < best) { best = d2; nearest = vehicle; }
+    }
+    if (nearest) this.audio.setTrafficEngine(true, nearest.group.position.x, nearest.group.position.z, nearest.speed, nearest.spec.maxSpeed, nearest.spec.kind);
+    else this.audio.setTrafficEngine(false);
   }
 
   broadcastFear(origin: THREE.Vector3, event: FearEvent): void {
