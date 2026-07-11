@@ -5,9 +5,10 @@
 
 export const AVOID_RANGE = 60; // only vehicles this close to the player run the corridor check
 export const CORRIDOR_MARGIN = 0.6; // lateral slack beyond the half body width
-export const STOP_BASE = 3; // stopping envelope floor (a stationary car still respects personal space)
+export const STOP_BASE = 3; // stopping envelope floor: the FRONT BUMPER holds this short of the player
 export const STOP_SCALE = 0.9; // extra envelope per unit of speed: faster cars brake sooner
 export const HOLD_SPEED = 2.2; // under this a blocked driver counts as held up: full stop, honk clock runs
+export const RELEASE_CLEAR = 0.5; // corridor must stay clear this long before a held car rolls again
 export const FIRST_HONK = 1.2; // patience before the first hoot
 export const REHONK_MIN = 2; // re-honk cadence bounds, jittered per driver so a queue never honks in sync
 export const REHONK_MAX = 3;
@@ -24,13 +25,28 @@ export const HIT_COOLDOWN = 0.9; // one damage event per contact burst, not one 
 /** How far ahead a driver scans for the player: distance needed to ease to a stop at this speed. */
 export function stoppingEnvelope(speed: number): number { return Math.abs(speed) * STOP_SCALE + STOP_BASE; }
 
-/** True when the player stands inside the vehicle's forward stopping corridor (car frame: ahead along
- *  the heading, lateralSq the squared perpendicular offset). Behind or beside the car never blocks. */
+/** Corridor distances are measured from the FRONT BUMPER, not the center: a Quantum's nose reaches
+ *  the player two-plus units before its center does, and it must stop as short as a compact. */
+export function bumperAhead(centerAhead: number, halfLength: number): number { return centerAhead - halfLength; }
+
+/** True when the player stands inside the vehicle's forward stopping corridor (car frame: ahead of the
+ *  FRONT BUMPER along the heading, lateralSq the squared perpendicular offset). Behind or beside never blocks. */
 export function corridorBlocked(ahead: number, lateralSq: number, speed: number, halfWidth: number): boolean {
   if (ahead <= 0 || ahead >= stoppingEnvelope(speed)) return false;
   const halfLane = halfWidth + CORRIDOR_MARGIN;
   return lateralSq < halfLane * halfLane;
 }
+
+/** Held-state hysteresis: feeds the clear timer and returns undefined once the corridor has stayed
+ *  clear for RELEASE_CLEAR — a held car must not inch forward because the player shifted 20cm. */
+export function holdRelease(clearFor: number, blocked: boolean, dt: number): number | undefined {
+  const next = blocked ? 0 : clearFor + dt;
+  return next < RELEASE_CLEAR ? next : undefined;
+}
+
+/** Crawl-speed nose contact moves the CAR, not the player: a standing player is never bulldozed.
+ *  Lateral overlap (the player sidling into a door) still pushes the player — he is the mover there. */
+export function carYields(pushLateral: number, speed: number): boolean { return pushLateral === 0 && Math.abs(speed) < SHOVE_SPEED; }
 
 /** Body-hit damage, riderImpactDamage's cousin: contact below SHOVE_SPEED is a zero-damage nudge,
  *  past it the bumper wins and damage scales with speed. */

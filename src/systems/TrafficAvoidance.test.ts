@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CORRIDOR_MARGIN, corridorBlocked, FIRST_HONK, firstHonkDelay, overlapPush, PULL_AROUND_MAX, PULL_AROUND_MIN, pullAroundPatience, pullAroundSide, REHONK_MAX, REHONK_MIN, rehonkDelay, SHOVE_SPEED, STOP_BASE, STOP_SCALE, stoppingEnvelope, vehicleHitDamage } from './TrafficAvoidance';
+import { bumperAhead, carYields, CORRIDOR_MARGIN, corridorBlocked, FIRST_HONK, firstHonkDelay, holdRelease, overlapPush, PULL_AROUND_MAX, PULL_AROUND_MIN, pullAroundPatience, pullAroundSide, REHONK_MAX, REHONK_MIN, rehonkDelay, RELEASE_CLEAR, SHOVE_SPEED, STOP_BASE, STOP_SCALE, stoppingEnvelope, vehicleHitDamage } from './TrafficAvoidance';
 
 describe('stopping envelope', () => {
   it('keeps a personal-space floor at a standstill', () => {
@@ -39,6 +39,45 @@ describe('forward corridor', () => {
     const edge = halfWidth + CORRIDOR_MARGIN;
     expect(corridorBlocked(4, (edge - 0.05) ** 2, 10, halfWidth)).toBe(true);
     expect(corridorBlocked(4, edge ** 2, 10, halfWidth)).toBe(false);
+  });
+
+  it('measures the envelope from the front bumper, so long noses stop as short as compacts', () => {
+    const quantumHalf = 5.05 / 2; const compactHalf = 3.7 / 2; // Quantum vs Citi Golf halves from the specs
+    const playerFromCenter = 5.4; // inside a stopped Quantum's bumper envelope, outside a compact's
+    expect(corridorBlocked(bumperAhead(playerFromCenter, quantumHalf), 0, 0, halfWidth)).toBe(true);
+    expect(corridorBlocked(bumperAhead(playerFromCenter, compactHalf), 0, 0, halfWidth)).toBe(false);
+    expect(bumperAhead(playerFromCenter, quantumHalf)).toBeCloseTo(playerFromCenter - quantumHalf); // the gap the BUMPER sees
+  });
+
+  it('never blocks on a player already alongside the nose', () => {
+    expect(corridorBlocked(bumperAhead(1.5, 5.05 / 2), 0, 10, halfWidth)).toBe(false); // beside a Quantum's bumper: contact code owns this
+  });
+});
+
+describe('held-state hysteresis', () => {
+  it('resets the clear timer whenever the corridor blocks again', () => {
+    expect(holdRelease(RELEASE_CLEAR - 0.05, true, 0.016)).toBe(0); // a 20cm shuffle out and back never restarts the creep
+  });
+
+  it('accrues clear time and releases only after the full window', () => {
+    let clear: number | undefined = 0;
+    for (let step = 0; step < 4; step++) { clear = holdRelease(clear ?? 0, false, 0.1); expect(clear).not.toBeUndefined(); }
+    expect(holdRelease(clear ?? 0, false, 0.11)).toBeUndefined(); // corridor stayed clear: roll again
+  });
+});
+
+describe('crawl contact yields the car', () => {
+  it('a crawling nose contact moves the car, never the standing player', () => {
+    expect(carYields(0, SHOVE_SPEED - 0.5)).toBe(true);
+    expect(carYields(0, -(SHOVE_SPEED - 0.5))).toBe(true); // crawling in reverse too
+  });
+
+  it('above the shove threshold the bumper wins', () => {
+    expect(carYields(0, SHOVE_SPEED)).toBe(false);
+  });
+
+  it('lateral overlap still pushes the player — he sidled into the car', () => {
+    expect(carYields(0.4, 1)).toBe(false);
   });
 });
 
