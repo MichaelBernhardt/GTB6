@@ -7,7 +7,6 @@ export const DEFAULT_CAMERA_VIEW = 2; // Medium
 export const FOOT_VIEW_DISTANCES = [0, 4.2, 6.35, 9.5] as const;
 export const VEHICLE_VIEW_DISTANCES = [0, 7.5, 10.5, 15] as const;
 export const VEHICLE_VIEW_HEIGHTS = [0, 2.1, 2.6, 3.4] as const;
-const AIM_DISTANCE_RATIO = 4.4 / 6.35; // aim tightens by the classic ratio at every base distance
 const FP_EYE_FOOT = 1.62;
 const FP_EYE_VEHICLE = 1.25;
 const FP_PITCH_LIMIT = 1.2;
@@ -18,6 +17,11 @@ export function sanitizeView(raw: unknown): number {
 }
 export function cycleView(view: number): number { return (sanitizeView(view) + 1) % CAMERA_VIEW_NAMES.length; }
 export function viewDistance(view: number, vehicle: boolean): number { return (vehicle ? VEHICLE_VIEW_DISTANCES : FOOT_VIEW_DISTANCES)[sanitizeView(view)]; }
+/** Aiming pulls Medium/Far in to the Near distance; Near and first person keep their base distance. */
+export function aimedViewDistance(view: number, vehicle: boolean, aimBlend: number): number {
+  const base = viewDistance(view, vehicle);
+  return THREE.MathUtils.lerp(base, Math.min(base, viewDistance(1, vehicle)), aimBlend);
+}
 
 export class CameraController {
   yaw = 0;
@@ -31,20 +35,21 @@ export class CameraController {
 
   constructor(private camera: THREE.PerspectiveCamera) { this.baseFov = camera.fov; }
 
-  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0): void {
+  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true): void {
     const firstPerson = sanitizeView(view) === 0;
     if (firstPerson && vehicle) { this.lookOffset = (this.lookOffset - input.mouseDX * sensitivity) * Math.exp(-dt * 1.4); this.yaw = vehicleHeading + Math.PI + this.lookOffset; }
     else { this.lookOffset = 0; this.yaw -= input.mouseDX * sensitivity; }
     this.pitch = THREE.MathUtils.clamp(this.pitch + input.mouseDY * sensitivity, firstPerson ? -FP_PITCH_LIMIT : -0.1, firstPerson ? FP_PITCH_LIMIT : 0.9);
-    this.aiming = input.firing && !vehicle;
+    this.aiming = input.aiming && aimAllowed; // aim mode needs a ranged weapon in hand
     this.aimBlend += ((this.aiming ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 10));
     if (firstPerson) { this.updateFirstPerson(target, vehicle, vehicleHeading); return; }
     this.setFov(this.baseFov);
-    const distance = vehicle ? viewDistance(view, true) : viewDistance(view, false) * THREE.MathUtils.lerp(1, AIM_DISTANCE_RATIO, this.aimBlend);
-    const height = vehicle ? VEHICLE_VIEW_HEIGHTS[sanitizeView(view)] : THREE.MathUtils.lerp(1.45, 1.78, this.aimBlend);
+    const distance = aimedViewDistance(view, vehicle, this.aimBlend);
+    const baseHeight = VEHICLE_VIEW_HEIGHTS[sanitizeView(view)];
+    const height = vehicle ? THREE.MathUtils.lerp(baseHeight, Math.min(baseHeight, VEHICLE_VIEW_HEIGHTS[1]), this.aimBlend) : THREE.MathUtils.lerp(1.45, 1.78, this.aimBlend);
     this.focus.set(target.x, target.y + height, target.z);
     if (!vehicle) {
-      const shoulder = THREE.MathUtils.lerp(0.62, 0.98, this.aimBlend);
+      const shoulder = 0.98 * this.aimBlend; // centered when relaxed, over the right shoulder while aiming
       this.focus.x += Math.cos(this.yaw) * shoulder;
       this.focus.z -= Math.sin(this.yaw) * shoulder;
     }

@@ -4,8 +4,9 @@ import type { AudioManager } from '../core/AudioManager';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN, type City } from '../world/City';
 import { CALM_THRESHOLD } from './FearSystem';
 import {
-  CLEANUP_HOURS, cleanupEligible, corpseCleanable, dayPhase, FOV_COS, isAmbientPedestrian, LifecycleSystem, outOfSight,
-  pedDespawnable, POPULATION_TARGETS, SIGHT_FAR, SIGHT_NEAR, targetPopulation, vehicleDespawnable, type ViewPoint,
+  BUSY_MAX, BUSY_MIN, CAR_TARGET_CAP, censusBudget, CHANGE_BUDGET, clampBusy, CLEANUP_HOURS, cleanupEligible,
+  corpseCleanable, dayPhase, FOV_COS, isAmbientPedestrian, LifecycleSystem, outOfSight, PED_TARGET_CAP,
+  pedDespawnable, POPULATION_TARGETS, resolveTargets, SIGHT_FAR, SIGHT_NEAR, targetPopulation, vehicleDespawnable, type ViewPoint,
 } from './LifecycleSystem';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
 import { PopulationSystem } from './PopulationSystem';
@@ -93,6 +94,38 @@ describe('targetPopulation', () => {
   it('wraps out-of-range hours', () => {
     expect(dayPhase(26)).toBe('night'); // 02:00
     expect(dayPhase(-12)).toBe('day'); // 12:00
+  });
+});
+
+describe('resolveTargets', () => {
+  it('scales the time-of-day table by the busy percent', () => {
+    expect(resolveTargets(12, { busy: 100 })).toEqual(targetPopulation(12));
+    expect(resolveTargets(12, { busy: 300 })).toEqual({ peds: 84, traffic: 45 });
+    expect(resolveTargets(2, { busy: 300 })).toEqual({ peds: 24, traffic: 18 }); // still quieter at night
+    expect(resolveTargets(12, { busy: 50 })).toEqual({ peds: 14, traffic: 8 });
+  });
+
+  it('lets absolute pins win over the table, each independently', () => {
+    expect(resolveTargets(12, { busy: 100, peds: 3 })).toEqual({ peds: 3, traffic: 15 });
+    expect(resolveTargets(12, { busy: 300, cars: 2 })).toEqual({ peds: 84, traffic: 2 });
+    expect(resolveTargets(2, { busy: 100, peds: 50, cars: 40 })).toEqual({ peds: 50, traffic: 40 });
+  });
+
+  it('clamps busy percent and caps absolute targets', () => {
+    expect(clampBusy(5)).toBe(BUSY_MIN); expect(clampBusy(99999)).toBe(BUSY_MAX); expect(clampBusy(100)).toBe(100);
+    expect(resolveTargets(12, { busy: BUSY_MAX })).toEqual({ peds: PED_TARGET_CAP, traffic: CAR_TARGET_CAP }); // 10× would exceed both caps
+    expect(resolveTargets(12, { busy: 100, peds: 9999, cars: 9999 })).toEqual({ peds: PED_TARGET_CAP, traffic: CAR_TARGET_CAP });
+    expect(resolveTargets(12, { busy: 100, peds: 0, cars: 0 })).toEqual({ peds: 0, traffic: 0 });
+  });
+});
+
+describe('censusBudget', () => {
+  it('keeps the gentle floor for small drifts and scales for console jumps', () => {
+    expect(censusBudget(0)).toBe(CHANGE_BUDGET);
+    expect(censusBudget(2)).toBe(CHANGE_BUDGET);
+    expect(censusBudget(-2)).toBe(CHANGE_BUDGET);
+    expect(censusBudget(56)).toBe(19); // the busy-300 ped jump lands a third per pass
+    expect(censusBudget(-56)).toBe(19); // shrinking back is just as brisk
   });
 });
 
@@ -229,5 +262,21 @@ describe('lifecycle simulation', () => {
     for (let i = 0; i < 240; i++) lifecycle.update(1, 12, edgeView, new Set()); // noon: fill back up
     expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(POPULATION_TARGETS.day.peds);
     expect(population.traffic.length).toBe(POPULATION_TARGETS.day.traffic);
+  });
+
+  it('floods the streets within ~15 seconds of `set busy 300`, then honours pins on the way back down', () => {
+    const city = makeCity();
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const lifecycle = new LifecycleSystem(city, population);
+    const edgeView = { x: -300, z: -300, dirX: -0.71, dirZ: -0.71 }; // map corner, facing out
+    lifecycle.tuning = { busy: 300 };
+    for (let i = 0; i < 27; i++) lifecycle.update(1, 12, edgeView, new Set()); // 9 census passes (~27s)
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(84); // 3 × 28
+    expect(population.traffic.length).toBe(45); // 3 × 15
+    lifecycle.tuning = { busy: 100, cars: 3 }; // back to normal, traffic pinned low
+    const farView = { x: 2000, z: 2000, dirX: 0, dirZ: 1 }; // player leaves: everything is fair game
+    for (let i = 0; i < 30; i++) lifecycle.update(1, 12, farView, new Set());
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(28);
+    expect(population.traffic.length).toBe(3);
   });
 });

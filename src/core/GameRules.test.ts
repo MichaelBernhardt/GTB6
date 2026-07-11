@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CHEATS, PLAYER, WEAPON_BY_ID, WEAPONS, type WeaponId } from '../config';
-import { Economy, calculateDamage, cycleWeapon, jumpVelocity, moveSpeed, outOfAmmo, rollDrops, splashDamage, spreadOffset, triggerPulled } from './GameRules';
+import { AIM_SPEED_MULTIPLIER, BICYCLE_CRUISE_FACTOR, Economy, KNOCKOFF_IMPACT_SPEED, bicycleCap, calculateDamage, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, jumpVelocity, moveSpeed, outOfAmmo, riderImpactDamage, rollDrops, shouldKnockOff, splashDamage, spreadOffset, triggerPulled } from './GameRules';
 
 const rng = (...values: number[]): (() => number) => { let i = 0; return () => values[i++] ?? 0; };
 
@@ -93,6 +93,55 @@ describe('cheat multipliers', () => {
     expect(jumpVelocity(false)).toBe(PLAYER.jumpSpeed);
     expect(jumpVelocity(true)).toBeCloseTo(PLAYER.jumpSpeed * CHEATS.jumpMultiplier);
     expect(CHEATS.jumpMultiplier).toBeCloseTo(2);
+  });
+});
+
+describe('aim mode gating', () => {
+  it('halves movement while aiming, stacking with sprint and cheats', () => {
+    expect(moveSpeed(false, false, true)).toBeCloseTo(PLAYER.walkSpeed * AIM_SPEED_MULTIPLIER);
+    expect(moveSpeed(true, false, true)).toBeCloseTo(PLAYER.sprintSpeed * AIM_SPEED_MULTIPLIER);
+    expect(moveSpeed(true, true, true)).toBeCloseTo(PLAYER.sprintSpeed * CHEATS.runMultiplier * AIM_SPEED_MULTIPLIER);
+    expect(moveSpeed(false, false, false)).toBe(PLAYER.walkSpeed);
+    expect(AIM_SPEED_MULTIPLIER).toBeCloseTo(0.5);
+  });
+
+  it('shows the crosshair only while aiming a ranged weapon', () => {
+    expect(crosshairVisible(true, false)).toBe(true);
+    expect(crosshairVisible(false, false)).toBe(false);
+    expect(crosshairVisible(true, true)).toBe(false);
+    expect(crosshairVisible(false, true)).toBe(false);
+  });
+
+  it('permits shooting from a vehicle only in aim mode with a one-handed gun', () => {
+    expect(canFireFromVehicle(true, false)).toBe(true);
+    expect(canFireFromVehicle(false, false)).toBe(false);
+    expect(canFireFromVehicle(true, true)).toBe(false);
+    expect(canFireFromVehicle(true, false, true)).toBe(false); // no RPG out the window
+    expect(DRIVEBY_COOLDOWN_SCALE).toBeGreaterThan(1);
+  });
+});
+
+describe('two-wheeler rules', () => {
+  it('caps bicycle speed at a cruise unless the rider stands on the pedals', () => {
+    expect(bicycleCap(26, true)).toBe(26);
+    expect(bicycleCap(26, false)).toBeCloseTo(26 * BICYCLE_CRUISE_FACTOR);
+    expect(BICYCLE_CRUISE_FACTOR).toBeGreaterThan(0.4);
+    expect(BICYCLE_CRUISE_FACTOR).toBeLessThan(0.8);
+  });
+
+  it('throws the rider only past the knock-off impact threshold', () => {
+    expect(shouldKnockOff(0)).toBe(false);
+    expect(shouldKnockOff(KNOCKOFF_IMPACT_SPEED - 0.01)).toBe(false);
+    expect(shouldKnockOff(KNOCKOFF_IMPACT_SPEED)).toBe(true);
+    expect(shouldKnockOff(60)).toBe(true);
+  });
+
+  it('bruises the rider progressively with impact speed, ignoring taps', () => {
+    expect(riderImpactDamage(0)).toBe(0);
+    expect(riderImpactDamage(5)).toBe(0);
+    expect(riderImpactDamage(KNOCKOFF_IMPACT_SPEED)).toBeGreaterThan(0);
+    expect(riderImpactDamage(40)).toBeGreaterThan(riderImpactDamage(20));
+    expect(riderImpactDamage(60)).toBeLessThanOrEqual(PLAYER.maxHealth); // a flat-out superbike wall hit hurts, not one-shots
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN } from '../world/City';
-import { bridgeIslands, buildNavGraph, components, findPath, nearestNode, replanInterval, RoutePlanner, type NavGraph } from './NavGraph';
+import { bridgeIslands, buildNavGraph, components, findPath, nearestNode, ProgressWatchdog, replanInterval, RoutePlanner, STUCK_EPSILON, STUCK_TIMEOUT, type NavGraph } from './NavGraph';
 
 const line = (count: number, spacing: number, x0 = 0, z0 = 0): { x: number; z: number }[] =>
   Array.from({ length: count }, (_, index) => ({ x: x0 + index * spacing, z: z0 }));
@@ -101,6 +101,28 @@ describe('replanInterval', () => {
   });
 });
 
+describe('ProgressWatchdog', () => {
+  it('fires only after STUCK_TIMEOUT seconds without STUCK_EPSILON of progress', () => {
+    expect(STUCK_TIMEOUT).toBe(10);
+    expect(STUCK_EPSILON).toBe(3);
+    const watchdog = new ProgressWatchdog();
+    expect(watchdog.update(50, 1)).toBe(false); // baseline
+    expect(watchdog.update(48, 8)).toBe(false); // 2u closer: below epsilon, stall accrues
+    expect(watchdog.update(49, 1.5)).toBe(false); // 9.5s stalled
+    expect(watchdog.update(48, 0.6)).toBe(true); // 10.1s: stuck
+  });
+
+  it('clears the stall on meaningful progress and on reset()', () => {
+    const watchdog = new ProgressWatchdog();
+    watchdog.update(50, 1); watchdog.update(50, 8);
+    expect(watchdog.update(46, 5)).toBe(false); // beat the best approach by >epsilon: stall cleared
+    expect(watchdog.update(46, 9.9)).toBe(false);
+    expect(watchdog.update(46, 0.2)).toBe(true);
+    watchdog.reset();
+    expect(watchdog.update(46, 9.9)).toBe(false); // fresh baseline after reset (waypoint advance, thaw, replan)
+  });
+});
+
 describe('RoutePlanner budget', () => {
   it('caps budgeted solves per frame and resets on beginFrame', () => {
     const graph = buildNavGraph([{ points: line(10, 10) }], 5);
@@ -121,5 +143,32 @@ describe('RoutePlanner budget', () => {
     const points = planner.plan(1, 0, 9);
     expect(points?.[0]).toEqual({ x: 0, z: 0 });
     expect(points?.at(-1)).toEqual({ x: 90, z: 0 });
+  });
+});
+
+describe('RoutePlanner.planTo (road-preferring offroad targets)', () => {
+  const graph = buildNavGraph([{ points: line(10, 10) }], 5); // straight road, nodes x = 0..90
+  const planner = new RoutePlanner(graph, 2);
+
+  it('rides the graph to the node nearest the target, then appends the exact target as the offroad leg', () => {
+    const points = planner.planTo(2, 0, 88, 30)!; // target 30u off the road, far end
+    expect(points.at(-1)).toEqual({ x: 88, z: 30 }); // exact target, not a node
+    expect(points.at(-2)).toEqual({ x: 90, z: 0 }); // nearest node to the target: road taken all the way
+    expect(points.length).toBeGreaterThan(5); // full road traverse, no diagonal beeline across the map
+    for (const point of points.slice(0, -1)) expect(graph.nodes).toContainEqual(point); // everything but the last leg stays on the graph
+  });
+
+  it('skips the offroad leg when the target already sits on a node', () => {
+    const points = planner.planTo(0, 0, 90, 0)!;
+    expect(points.at(-1)).toEqual({ x: 90, z: 0 });
+    expect(points.at(-2)).toEqual({ x: 80, z: 0 });
+  });
+
+  it('shares the per-frame budget through tryPlanTo', () => {
+    const budgeted = new RoutePlanner(graph, 1);
+    expect(budgeted.tryPlanTo(0, 0, 88, 30)).toBeUndefined(); // no frame started
+    budgeted.beginFrame();
+    expect(budgeted.tryPlanTo(0, 0, 88, 30)).toBeDefined();
+    expect(budgeted.tryPlanTo(0, 0, 88, 30)).toBeUndefined(); // budget spent
   });
 });

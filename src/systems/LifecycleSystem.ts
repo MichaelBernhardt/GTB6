@@ -50,6 +50,25 @@ export const POPULATION_TARGETS: Record<DayPhase, { peds: number; traffic: numbe
 
 export function targetPopulation(hour: number): { peds: number; traffic: number } { return POPULATION_TARGETS[dayPhase(hour)]; }
 
+export const BUSY_MIN = 10; export const BUSY_MAX = 1000; // percent bounds for the console `set busy` scale
+export const PED_TARGET_CAP = 200; export const CAR_TARGET_CAP = 120; // absolute ceilings, whatever the console asks for
+export const BUDGET_PASSES = 3; // each pass closes a third of the gap: a console jump fully lands within ~20 real seconds
+
+export function clampBusy(percent: number): number { return Math.min(BUSY_MAX, Math.max(BUSY_MIN, Math.round(percent))); }
+
+/** Console tuning: `busy` scales the time-of-day table in percent; absolute `peds`/`cars` pins win until cleared. */
+export interface PopulationTuning { busy: number; peds?: number; cars?: number; }
+
+export function resolveTargets(hour: number, tuning: PopulationTuning): { peds: number; traffic: number } {
+  const base = targetPopulation(hour); const scale = clampBusy(tuning.busy) / 100;
+  const peds = tuning.peds ?? base.peds * scale;
+  const traffic = tuning.cars ?? base.traffic * scale;
+  return { peds: Math.min(PED_TARGET_CAP, Math.max(0, Math.round(peds))), traffic: Math.min(CAR_TARGET_CAP, Math.max(0, Math.round(traffic))) };
+}
+
+/** Per-pass spawn/despawn allowance: the gentle floor normally, proportional when the console jumps the target. */
+export function censusBudget(totalDeficit: number): number { return Math.max(CHANGE_BUDGET, Math.ceil(Math.abs(totalDeficit) / BUDGET_PASSES)); }
+
 interface PedShape { contact: boolean; police: boolean; hostile: boolean; carGuard: boolean; state: string; fear: number; }
 interface VehicleShape { playerControlled: boolean; police: boolean; disabled: boolean; onFire: boolean; wrecked: boolean; health: number; maxHealth: number; }
 
@@ -77,12 +96,16 @@ const MISSION_VEHICLE_COLORS = new Set(MISSIONS.flatMap((mission) => mission.obj
 /** Ages corpses/wrecks on the in-game clock and steers the ambient population toward the time-of-day target.
  *  All additions and removals happen only where `outOfSight` says the player cannot witness them. */
 export class LifecycleSystem {
+  /** Console-adjustable population tuning; `set busy` / `set peds` / `set cars` mutate this. */
+  tuning: PopulationTuning = { busy: 100 };
   private gameHours = 0;
   private timer = LIFECYCLE_INTERVAL;
   private downSince = new Map<Pedestrian, number>();
   private wreckedSince = new Map<Vehicle, number>();
 
   constructor(private city: City, private population: PopulationSystem) {}
+
+  targets(hour: number): { peds: number; traffic: number } { return resolveTargets(hour, this.tuning); }
 
   update(dt: number, hour: number, view: ViewPoint, protectedVehicles: ReadonlySet<Vehicle>): void {
     this.gameHours += dt * 24 / DAY_CYCLE_SECONDS; // advances at exactly the DayNight clock rate
@@ -114,31 +137,31 @@ export class LifecycleSystem {
     }
   }
 
-  /** Compares live ambient counts to the time-of-day target and spawns/despawns a few agents per pass. */
+  /** Compares live ambient counts to the (console-tuned) time-of-day target and spawns/despawns per pass. */
   private converge(hour: number, view: ViewPoint, protectedVehicles: ReadonlySet<Vehicle>): void {
-    const target = targetPopulation(hour);
-    let budget = CHANGE_BUDGET;
+    const target = resolveTargets(hour, this.tuning);
     const peds = this.population.pedestrians.filter(isAmbientPedestrian);
+    const traffic = this.population.traffic.filter((vehicle) => !vehicle.wrecked && !vehicle.disabled);
     let pedDeficit = target.peds - peds.length;
+    let flowDeficit = target.traffic - traffic.length;
+    let pedBudget = censusBudget(pedDeficit); let carBudget = censusBudget(flowDeficit);
     if (pedDeficit < 0) {
       for (const ped of peds) {
-        if (pedDeficit >= 0 || budget <= 0) break;
+        if (pedDeficit >= 0 || pedBudget <= 0) break;
         if (!pedDespawnable(ped) || !outOfSight(view, ped.group.position.x, ped.group.position.z)) continue;
-        this.population.removePedestrian(ped); pedDeficit++; budget--;
+        this.population.removePedestrian(ped); pedDeficit++; pedBudget--;
       }
-    } else for (; pedDeficit > 0 && budget > 0; pedDeficit--, budget--) {
+    } else for (; pedDeficit > 0 && pedBudget > 0; pedDeficit--, pedBudget--) {
       const point = this.hiddenPoint(this.city.sidewalkPoints, view); if (!point) break;
       this.population.spawnAmbientPedestrian(point.x, point.z);
     }
-    const traffic = this.population.traffic.filter((vehicle) => !vehicle.wrecked && !vehicle.disabled);
-    let flowDeficit = target.traffic - traffic.length;
     if (flowDeficit < 0) {
       for (const vehicle of traffic) {
-        if (flowDeficit >= 0 || budget <= 0) break;
+        if (flowDeficit >= 0 || carBudget <= 0) break;
         if (protectedVehicles.has(vehicle) || !vehicleDespawnable(vehicle) || !outOfSight(view, vehicle.group.position.x, vehicle.group.position.z)) continue;
-        this.population.removeVehicle(vehicle); flowDeficit++; budget--;
+        this.population.removeVehicle(vehicle); flowDeficit++; carBudget--;
       }
-    } else for (; flowDeficit > 0 && budget > 0; flowDeficit--, budget--) {
+    } else for (; flowDeficit > 0 && carBudget > 0; flowDeficit--, carBudget--) {
       const node = this.hiddenPoint(this.city.vehicleNav.nodes, view); if (!node) break;
       this.population.spawnTrafficVehicle(node.x, node.z);
     }

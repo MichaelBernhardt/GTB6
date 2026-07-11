@@ -56,13 +56,32 @@ export function outOfAmmo(spec: WeaponSpec, ammo: number, reserve: number): bool
   return !spec.melee && ammo <= 0 && reserve <= 0;
 }
 
-export function moveSpeed(sprinting: boolean, fastRun: boolean): number {
-  return (sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed) * (fastRun ? CHEATS.runMultiplier : 1);
+export const AIM_SPEED_MULTIPLIER = 0.5;
+export const DRIVEBY_COOLDOWN_SCALE = 1.5; // one-handed out the window: slower than planted feet
+
+export function moveSpeed(sprinting: boolean, fastRun: boolean, aiming = false): number {
+  return (sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed) * (fastRun ? CHEATS.runMultiplier : 1) * (aiming ? AIM_SPEED_MULTIPLIER : 1);
 }
+
+export function crosshairVisible(aiming: boolean, melee: boolean): boolean { return aiming && !melee; }
+/** Drive-by needs aim mode and a one-handed gun: no fists, no shoulder-launched rockets inside a Golf. */
+export function canFireFromVehicle(aiming: boolean, melee: boolean, projectile = false): boolean { return aiming && !melee && !projectile; }
 
 export function jumpVelocity(bigJump: boolean): number {
   return PLAYER.jumpSpeed * (bigJump ? CHEATS.jumpMultiplier : 1);
 }
+
+/** Bicycles have no throttle: W turns the cranks at a cruise, Shift (the sprint key) stands on the pedals. */
+export const BICYCLE_CRUISE_FACTOR = 0.6;
+export function bicycleCap(maxSpeed: number, pedalHard: boolean): number {
+  return maxSpeed * (pedalHard ? 1 : BICYCLE_CRUISE_FACTOR);
+}
+
+/** Losing this much speed in a single hit throws the rider off a two-wheeler (bicycle flat-out just clears it). */
+export const KNOCKOFF_IMPACT_SPEED = 13;
+export function shouldKnockOff(impact: number): boolean { return impact >= KNOCKOFF_IMPACT_SPEED; }
+/** Riders wear no cocoon: collision energy above a bruising floor lands on the player's health bar. */
+export function riderImpactDamage(impact: number): number { return Math.max(0, Math.round((impact - 6) * 1.4)); }
 
 export function spreadOffset(spread: number, random: () => number = Math.random): [number, number] {
   const angle = random() * Math.PI * 2; const radius = Math.sqrt(random()) * spread;
