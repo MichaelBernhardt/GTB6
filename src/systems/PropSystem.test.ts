@@ -18,6 +18,8 @@ const propCity = (registry: PropRegistry): City => {
   return {
     props: registry,
     collides,
+    roadHeightAt: () => 0,
+    surfaceNormalAt: () => new THREE.Vector3(0, 1, 0),
     clampMove: (from: THREE.Vector3, desired: THREE.Vector3, radius: number) => {
       const output = desired.clone();
       if (collides(output.x, from.z, radius)) output.x = from.x;

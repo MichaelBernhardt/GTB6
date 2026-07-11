@@ -15,6 +15,19 @@ export interface RoadPoint { x: number; z: number; }
 export interface RoadsidePoint extends RoadPoint { inwardX: number; inwardZ: number; }
 export interface RoadPose { position: THREE.Vector3; heading: number; }
 export interface RoadDefinition { name: string; width: number; closed?: boolean; points: RoadPoint[]; }
+export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
+
+export const ROAD_SURFACE_OFFSET = 0.055;
+export const SIDEWALK_RISE = 0.22;
+
+/** Broad deterministic relief: visible across a district, but gentle enough for urban driving. */
+export function terrainHeightAt(x: number, z: number): number {
+  const relief = Math.sin((x + 70) / 170) * 2.8
+    + Math.cos((z - 35) / 145) * 2.1
+    + Math.sin((x + z) / 230) * 1.3;
+  const coastBlend = THREE.MathUtils.smoothstep(z, -340, -260);
+  return relief * coastBlend;
+}
 
 export interface ParkDefinition { x: number; z: number; width: number; depth: number; kind: 'civic' | 'garden' | 'recreation'; name: string; }
 
@@ -137,6 +150,7 @@ export class City {
       (x, z, radius) => this.collides(x, z, radius),
       (x, z, margin) => this.isOnRoad(x, z, margin),
       this.props,
+      (x, z) => this.sidewalkHeightAt(x, z),
     );
     mergeStaticGeometry(this.group); // water is built after the merge: its meshes stay live for per-frame animation
     this.setWaterQuality(quality);
@@ -189,9 +203,50 @@ export class City {
     return output;
   }
 
+  terrainHeightAt(x: number, z: number): number { return terrainHeightAt(x, z); }
+
+  roadHeightAt(x: number, z: number): number { return terrainHeightAt(x, z) + ROAD_SURFACE_OFFSET; }
+
+  sidewalkHeightAt(x: number, z: number): number { return terrainHeightAt(x, z) + ROAD_SURFACE_OFFSET + SIDEWALK_RISE; }
+
+  isOnSidewalk(x: number, z: number): boolean {
+    if (this.isOnRoad(x, z)) return false;
+    return this.roadSurfaces.some((surface) => {
+      const distance = this.distanceToPath(x, z, surface.points, surface.closed);
+      return distance <= surface.width / 2 + 3.5;
+    });
+  }
+
+  surfaceHeightAt(x: number, z: number, preferred: SurfaceKind = 'auto'): number {
+    if (preferred === 'terrain') return this.terrainHeightAt(x, z);
+    if (preferred === 'road') return this.roadHeightAt(x, z);
+    if (preferred === 'sidewalk') return this.sidewalkHeightAt(x, z);
+    if (this.isOnRoad(x, z)) return this.roadHeightAt(x, z);
+    if (this.isOnSidewalk(x, z)) return this.sidewalkHeightAt(x, z);
+    const park = PARK_AREAS.find((area) => Math.abs(x - area.x) < area.width / 2 && Math.abs(z - area.z) < area.depth / 2);
+    return park ? this.terrainHeightAt(park.x, park.z) + 0.32 : this.terrainHeightAt(x, z);
+  }
+
+  surfaceNormalAt(x: number, z: number, preferred: SurfaceKind = 'auto', sample = 1.5): THREE.Vector3 {
+    const left = this.surfaceHeightAt(x - sample, z, preferred); const right = this.surfaceHeightAt(x + sample, z, preferred);
+    const back = this.surfaceHeightAt(x, z - sample, preferred); const front = this.surfaceHeightAt(x, z + sample, preferred);
+    return new THREE.Vector3(left - right, sample * 2, back - front).normalize();
+  }
+
+  private surfaceSegmentQuaternion(startX: number, startZ: number, endX: number, endZ: number, surface: SurfaceKind): THREE.Quaternion {
+    const forward = new THREE.Vector3(endX - startX, this.surfaceHeightAt(endX, endZ, surface) - this.surfaceHeightAt(startX, startZ, surface), endZ - startZ).normalize();
+    const normal = this.surfaceNormalAt((startX + endX) / 2, (startZ + endZ) / 2, surface);
+    const right = new THREE.Vector3().crossVectors(normal, forward).normalize(); const up = new THREE.Vector3().crossVectors(forward, right).normalize();
+    return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward));
+  }
+
   private buildGround(): void {
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE), new THREE.MeshStandardMaterial({ color: COLORS.grass, map: this.grass, roughness: 0.96 }));
-    ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; this.group.add(ground);
+    const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, 96, 96); geometry.rotateX(-Math.PI / 2);
+    const positions = geometry.getAttribute('position');
+    for (let index = 0; index < positions.count; index++) positions.setY(index, terrainHeightAt(positions.getX(index), positions.getZ(index)));
+    positions.needsUpdate = true; geometry.computeVertexNormals();
+    const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: COLORS.grass, map: this.grass, roughness: 0.96 }));
+    ground.receiveShadow = true; this.group.add(ground);
   }
 
   private buildRoads(): void {
@@ -201,21 +256,21 @@ export class City {
     const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xa9aaa2, map: this.concrete, roughness: 0.92 });
     const curbMat = new THREE.MeshStandardMaterial({ color: 0xc8c7bb, map: this.concrete, roughness: 0.88 });
     const dashTransforms: THREE.Matrix4[] = []; const edgeTransforms: THREE.Matrix4[] = [];
-    for (const definition of ROAD_NETWORK) {
-      const sampled = this.samplePath(definition.points, definition.closed ?? false, ROAD_SAMPLE_SPACING);
-      this.roadSurfaces.push({ points: sampled, width: definition.width, closed: definition.closed ?? false });
+    const roads = ROAD_NETWORK.map((definition) => ({ definition, sampled: this.samplePath(definition.points, definition.closed ?? false, ROAD_SAMPLE_SPACING) }));
+    this.roadSurfaces.push(...roads.map(({ definition, sampled }) => ({ points: sampled, width: definition.width, closed: definition.closed ?? false })));
+    for (const { definition, sampled } of roads) {
       const mapPath = sampled.map((point) => ({ ...point }));
       if (definition.closed && mapPath[0]) mapPath.push({ ...mapPath[0] });
       this.roadPaths.push(mapPath);
-      const sidewalk = this.createRoadStrip(sampled, definition.width + 7, sidewalkMat, 0.025, definition.closed ?? false); sidewalk.receiveShadow = true; this.group.add(sidewalk);
-      const road = this.createRoadStrip(sampled, definition.width, roadMat, 0.055, definition.closed ?? false); road.receiveShadow = true; road.name = definition.name; this.group.add(road);
-      this.addRoadMarkings(sampled, definition.width, definition.closed ?? false, dashTransforms, edgeTransforms);
       const leftLane = this.offsetPath(sampled, -definition.width * 0.23, definition.closed ?? false);
       const rightLane = this.offsetPath(sampled, definition.width * 0.23, definition.closed ?? false).reverse();
       this.trafficRoutes.push(leftLane, rightLane);
       this.roadPoints.push(...leftLane, ...rightLane);
       const leftWalk = this.offsetPath(sampled, -(definition.width / 2 + 2.2), definition.closed ?? false);
       const rightWalk = this.offsetPath(sampled, definition.width / 2 + 2.2, definition.closed ?? false);
+      for (const walk of [leftWalk, rightWalk]) { const sidewalk = this.createRoadStrip(walk, 3.5, sidewalkMat, SIDEWALK_RISE + ROAD_SURFACE_OFFSET, definition.closed ?? false); sidewalk.receiveShadow = true; this.group.add(sidewalk); }
+      const road = this.createRoadStrip(sampled, definition.width, roadMat, ROAD_SURFACE_OFFSET, definition.closed ?? false); road.receiveShadow = true; road.name = definition.name; this.group.add(road);
+      this.addRoadMarkings(sampled, definition.width, definition.closed ?? false, dashTransforms, edgeTransforms);
       this.sidewalkPoints.push(...leftWalk.filter((_, index) => index % 2 === 0), ...rightWalk.filter((_, index) => index % 2 === 0));
       this.addRoadsidePoints(sampled, definition.width, definition.closed ?? false);
     }
@@ -242,8 +297,9 @@ export class City {
     const rims = new THREE.InstancedMesh(new THREE.RingGeometry(1, 1.22, 14), new THREE.MeshBasicMaterial({ color: 0x3f4649 }), this.potholes.length);
     const matrix = new THREE.Matrix4(); const flat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
     this.potholes.forEach((pothole, index) => {
-      matrix.compose(new THREE.Vector3(pothole.x, 0.07, pothole.z), flat, new THREE.Vector3(pothole.r, pothole.r, 1)); holes.setMatrixAt(index, matrix);
-      matrix.compose(new THREE.Vector3(pothole.x, 0.072, pothole.z), flat, new THREE.Vector3(pothole.r, pothole.r, 1)); rims.setMatrixAt(index, matrix);
+      const y = this.roadHeightAt(pothole.x, pothole.z) + 0.015;
+      matrix.compose(new THREE.Vector3(pothole.x, y, pothole.z), flat, new THREE.Vector3(pothole.r, pothole.r, 1)); holes.setMatrixAt(index, matrix);
+      matrix.compose(new THREE.Vector3(pothole.x, y + 0.002, pothole.z), flat, new THREE.Vector3(pothole.r, pothole.r, 1)); rims.setMatrixAt(index, matrix);
     });
     holes.instanceMatrix.needsUpdate = true; rims.instanceMatrix.needsUpdate = true;
     this.group.add(holes, rims);
@@ -260,7 +316,8 @@ export class City {
   private buildIntersections(): void {
     const paint = new THREE.MeshStandardMaterial({ color: 0xe9e6d6, roughness: 0.78 });
     for (const { x, z, angle } of CITY_JUNCTIONS) for (let stripe = -7; stripe <= 7; stripe += 2.5) {
-      const crossing = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.025, 6.2), paint); crossing.position.set(x + Math.cos(angle) * stripe, 0.09, z - Math.sin(angle) * stripe); crossing.rotation.y = angle; this.group.add(crossing);
+      const px = x + Math.cos(angle) * stripe; const pz = z - Math.sin(angle) * stripe;
+      const crossing = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.025, 6.2), paint); crossing.position.set(px, this.roadHeightAt(px, pz) + 0.035, pz); crossing.rotation.y = angle; this.group.add(crossing);
     }
     this.buildTactileCorners();
   }
@@ -276,7 +333,7 @@ export class City {
       if (distance < bestDistance) { bestDistance = distance; bestRoute = route; bestIndex = index; }
     }
     const point = bestRoute[bestIndex] ?? { x: 0, z: 0 }; const next = bestRoute[Math.min(bestIndex + 1, bestRoute.length - 1)] ?? bestRoute[Math.max(0, bestIndex - 1)] ?? point;
-    return { position: new THREE.Vector3(point.x, 0, point.z), heading: Math.atan2(next.x - point.x, next.z - point.z) };
+    return { position: new THREE.Vector3(point.x, this.roadHeightAt(point.x, point.z), point.z), heading: Math.atan2(next.x - point.x, next.z - point.z) };
   }
 
   roadPoseAwayFrom(position: THREE.Vector3, minimum: number, maximum: number): RoadPose {
@@ -311,13 +368,15 @@ export class City {
       const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz); if (length < 0.5) continue;
       const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
       if (CITY_JUNCTIONS.some((junction) => Math.hypot(midX - junction.x, midZ - junction.z) < 14)) continue;
-      const normalX = -dz / length; const normalZ = dx / length; quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(dx, dz));
+      const normalX = -dz / length; const normalZ = dx / length;
       for (const side of [-1, 1]) {
         const offset = side * (width / 2 + 0.22);
         const samples = [0, 0.5, 1].map((t) => ({ x: THREE.MathUtils.lerp(start.x, end.x, t) + normalX * offset, z: THREE.MathUtils.lerp(start.z, end.z, t) + normalZ * offset }));
         const crossesRoad = this.roadSurfaces.some((surface) => surface.points !== points && samples.some((sample) => this.distanceToPath(sample.x, sample.z, surface.points, surface.closed) <= surface.width / 2 + 1.2));
         if (crossesRoad) continue;
-        matrix.compose(new THREE.Vector3(midX + normalX * offset, 0.15, midZ + normalZ * offset), quaternion, new THREE.Vector3(0.38, 0.22, length + 0.35)); transforms.push(matrix.clone());
+        const x = midX + normalX * offset; const z = midZ + normalZ * offset;
+        quaternion.copy(this.surfaceSegmentQuaternion(start.x + normalX * offset, start.z + normalZ * offset, end.x + normalX * offset, end.z + normalZ * offset, 'road'));
+        matrix.compose(new THREE.Vector3(x, this.roadHeightAt(x, z) + SIDEWALK_RISE / 2, z), quaternion, new THREE.Vector3(0.38, SIDEWALK_RISE, length + 0.35)); transforms.push(matrix.clone());
       }
     }
   }
@@ -329,7 +388,8 @@ export class City {
       const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle)); const right = new THREE.Vector3(forward.z, 0, -forward.x);
       quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), junction.angle);
       for (const forwardSide of [-1, 1]) for (const rightSide of [-1, 1]) {
-        const center = new THREE.Vector3(junction.x, 0.24, junction.z).addScaledVector(forward, forwardSide * 14.7).addScaledVector(right, rightSide * 14.7);
+        const center = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, forwardSide * 14.7).addScaledVector(right, rightSide * 14.7);
+        center.y = this.sidewalkHeightAt(center.x, center.z) + 0.04;
         matrix.compose(center, quaternion, new THREE.Vector3(2.5, 0.09, 1.65)); patchTransforms.push(matrix.clone());
         for (let row = -1; row <= 1; row++) for (let column = -2; column <= 2; column++) {
           const local = new THREE.Vector3(column * 0.38, 0.09, row * 0.38).applyQuaternion(quaternion);
@@ -349,7 +409,9 @@ export class City {
     for (let index = 0; index < points.length; index++) {
       if (index > 0) { const previous = points[index - 1]; const point = points[index]; if (previous && point) distance += Math.hypot(point.x - previous.x, point.z - previous.z); }
       const left = sides[index]; const right = opposite[index]; if (!left || !right) continue;
-      vertices.push(left.x, y, left.z, right.x, y, right.z); uvs.push(0, distance / 18, 1, distance / 18);
+      const leftOffset = y > ROAD_SURFACE_OFFSET && this.isOnRoad(left.x, left.z) ? ROAD_SURFACE_OFFSET : y;
+      const rightOffset = y > ROAD_SURFACE_OFFSET && this.isOnRoad(right.x, right.z) ? ROAD_SURFACE_OFFSET : y;
+      vertices.push(left.x, terrainHeightAt(left.x, left.z) + leftOffset, left.z, right.x, terrainHeightAt(right.x, right.z) + rightOffset, right.z); uvs.push(0, distance / 18, 1, distance / 18);
       if (index < points.length - 1) { const base = index * 2; indices.push(base, base + 2, base + 1, base + 2, base + 3, base + 1); }
     }
     if (closed && points.length > 2) { const last = (points.length - 1) * 2; indices.push(last, 0, last + 1, 0, 1, last + 1); }
@@ -363,11 +425,11 @@ export class City {
     for (let index = 0; index < segmentCount; index++) {
       const start = points[index]; const end = points[(index + 1) % points.length]; if (!start || !end) continue;
       const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz); if (length < 0.5) continue;
-      const angle = Math.atan2(dx, dz); const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
-      quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-      if (index % 2 === 0) { matrix.compose(new THREE.Vector3(midX, 0.088, midZ), quaternion, new THREE.Vector3(0.24, 0.025, Math.min(6.4, length * 0.64))); dashTransforms.push(matrix.clone()); }
+      const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
+      quaternion.copy(this.surfaceSegmentQuaternion(start.x, start.z, end.x, end.z, 'road'));
+      if (index % 2 === 0) { matrix.compose(new THREE.Vector3(midX, this.roadHeightAt(midX, midZ) + 0.033, midZ), quaternion, new THREE.Vector3(0.24, 0.025, Math.min(6.4, length * 0.64))); dashTransforms.push(matrix.clone()); }
       const normalX = -dz / length; const normalZ = dx / length;
-      for (const side of [-1, 1]) { matrix.compose(new THREE.Vector3(midX + normalX * side * (width / 2 - 0.72), 0.084, midZ + normalZ * side * (width / 2 - 0.72)), quaternion, new THREE.Vector3(0.13, 0.018, length + 0.35)); edgeTransforms.push(matrix.clone()); }
+      for (const side of [-1, 1]) { const x = midX + normalX * side * (width / 2 - 0.72); const z = midZ + normalZ * side * (width / 2 - 0.72); matrix.compose(new THREE.Vector3(x, this.roadHeightAt(x, z) + 0.029, z), quaternion, new THREE.Vector3(0.13, 0.018, length + 0.35)); edgeTransforms.push(matrix.clone()); }
     }
   }
 
@@ -446,13 +508,14 @@ export class City {
     const material = new THREE.MeshStandardMaterial({ color: 0x6f7371, map: this.asphalt, roughness: 0.92 }); const paint = new THREE.MeshStandardMaterial({ color: 0xe5e1ca, roughness: 0.8 });
     const lots: Array<[number, number, number, number, number]> = [[-300, -170, 48, 30, -0.12], [-150, 270, 42, 28, 0.18], [300, 178, 44, 30, -0.28], [155, -140, 50, 26, 0.08]];
     for (const [x, z, w, d, rotation] of lots) {
-      const lot = new THREE.Mesh(new THREE.BoxGeometry(w, 0.13, d), material); lot.position.set(x, 0.1, z); lot.rotation.y = rotation; lot.receiveShadow = true; this.group.add(lot);
+      const lot = new THREE.Mesh(new THREE.BoxGeometry(w, 2, d), material); lot.position.set(x, this.terrainHeightAt(x, z) - 0.835, z); lot.rotation.y = rotation; lot.receiveShadow = true; this.group.add(lot);
       for (let stall = -w / 2 + 4; stall < w / 2 - 2; stall += 4.5) { const line = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.02, d * 0.42), paint); line.position.set(stall, 0.18, 0); lot.add(line); }
     }
   }
 
   private addBuilding(x: number, z: number, w: number, d: number, h: number, style: BuildingStyle, variant: number): void {
-    const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 0.2, d + 6), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(x, 0.1, z); parcel.receiveShadow = true; this.group.add(parcel);
+    const start = this.group.children.length;
+    const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 2, d + 6), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(x, -0.8, z); parcel.receiveShadow = true; this.group.add(parcel);
     const [rangeBase, rangeCount] = FACADE_RANGES[style];
     const facadeIndex = rangeBase + variant % rangeCount;
     const palette = BUILDING_PALETTES[style];
@@ -467,7 +530,20 @@ export class City {
     if (style !== 'industrial') this.addStreetLevelDetail(x, z, w, d, style, variant);
     this.addRoofEquipment(x, z, w, d, h, profile.roofY, style, variant);
     if (style === 'downtown' && h > 48 && variant % 2 === 0) this.addRoofSign(x, z, w, d, profile.roofY, variant);
+    this.liftNewChildren(start, this.terrainHeightAt(x, z));
     this.colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, height: h });
+  }
+
+  private liftNewChildren(start: number, fixedHeight?: number): void {
+    const matrix = new THREE.Matrix4(); const position = new THREE.Vector3(); const rotation = new THREE.Quaternion(); const scale = new THREE.Vector3();
+    for (const object of this.group.children.slice(start)) {
+      if (object instanceof THREE.InstancedMesh && fixedHeight === undefined) {
+        for (let index = 0; index < object.count; index++) {
+          object.getMatrixAt(index, matrix); matrix.decompose(position, rotation, scale); position.y += this.terrainHeightAt(position.x, position.z); matrix.compose(position, rotation, scale); object.setMatrixAt(index, matrix);
+        }
+        object.instanceMatrix.needsUpdate = true;
+      } else object.position.y += fixedHeight ?? this.terrainHeightAt(object.position.x, object.position.z);
+    }
   }
 
   private addLedge(x: number, z: number, w: number, d: number, y: number): void {
@@ -538,9 +614,10 @@ export class City {
   }
 
   private buildPark(definition: ParkDefinition): void {
+    const start = this.group.children.length;
     const { x, z, width, depth, kind, name } = definition;
-    const border = new THREE.Mesh(new THREE.BoxGeometry(width + 2.4, 0.3, depth + 2.4), new THREE.MeshStandardMaterial({ color: 0xb6b3a5, map: this.concrete, roughness: 0.9 })); border.position.set(x, 0.08, z); border.receiveShadow = true; this.group.add(border);
-    const park = new THREE.Mesh(new THREE.BoxGeometry(width, 0.24, depth, 12, 1, 12), new THREE.MeshStandardMaterial({ color: kind === 'garden' ? 0x5f7a44 : 0x8a8149, map: this.grass, roughness: 0.96 })); park.position.set(x, 0.2, z); park.receiveShadow = true; this.group.add(park);
+    const border = new THREE.Mesh(new THREE.BoxGeometry(width + 2.4, 4, depth + 2.4), new THREE.MeshStandardMaterial({ color: 0xb6b3a5, map: this.concrete, roughness: 0.9 })); border.position.set(x, -1.77, z); border.receiveShadow = true; this.group.add(border);
+    const park = new THREE.Mesh(new THREE.BoxGeometry(width, 4, depth, 12, 1, 12), new THREE.MeshStandardMaterial({ color: kind === 'garden' ? 0x5f7a44 : 0x8a8149, map: this.grass, roughness: 0.96 })); park.position.set(x, -1.68, z); park.receiveShadow = true; this.group.add(park);
     const pathMat = new THREE.MeshStandardMaterial({ color: 0xd1c6a1, map: this.concrete, roughness: 0.91 });
     const pathA = new THREE.Mesh(new THREE.PlaneGeometry(5.2, depth), pathMat); pathA.rotation.x = -Math.PI / 2; pathA.position.set(x, 0.34, z); this.group.add(pathA);
     const pathB = new THREE.Mesh(new THREE.PlaneGeometry(width, 5.2), pathMat); pathB.rotation.x = -Math.PI / 2; pathB.position.set(x, 0.345, z); this.group.add(pathB);
@@ -551,6 +628,7 @@ export class City {
     if (kind === 'recreation') this.addRecreationFeature(x, z, width, depth);
     const treeSites: Array<[number, number]> = [[-0.37, -0.35], [0.37, -0.34], [-0.38, 0.34], [0.38, 0.35], [-0.12, 0.38], [0.14, -0.39]];
     treeSites.forEach(([nx, nz], index) => this.addParkTree(x + nx * width, z + nz * depth, index + Math.round(x)));
+    this.liftNewChildren(start, this.terrainHeightAt(x, z));
   }
 
   private addCivicParkFeature(x: number, z: number, width: number, depth: number): void {
@@ -603,7 +681,7 @@ export class City {
 
   private buildPonte(): void {
     const x = 112; const z = -138; const height = 105; const radius = 24;
-    const ponte = new THREE.Group(); ponte.position.set(x, 0, z);
+    const ponte = new THREE.Group(); ponte.position.set(x, this.terrainHeightAt(x, z), z);
     const facadeTexture = this.facades[0]?.clone(); if (facadeTexture) { facadeTexture.repeat.set(8, 6); facadeTexture.needsUpdate = true; }
     const facade = new THREE.MeshStandardMaterial({ color: 0x9aa3a8, map: facadeTexture, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
     const shell = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 40, 1, true), facade); shell.position.y = height / 2; shell.castShadow = true; shell.receiveShadow = true;
@@ -616,14 +694,14 @@ export class City {
 
   private buildCivicLandmarks(): void {
     const metal = new THREE.MeshStandardMaterial({ color: 0x3d4b4e, metalness: 0.72, roughness: 0.38 });
-    const tower = new THREE.Group(); tower.position.set(-338, 0, -165);
+    const tower = new THREE.Group(); tower.position.set(-338, this.terrainHeightAt(-338, -165), -165);
     for (const x of [-2.4, 2.4]) for (const z of [-2.4, 2.4]) { const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.25, 14, 10), metal); leg.position.set(x, 7, z); leg.rotation.z = x * 0.014; tower.add(leg); this.props.register('post', tower.position.x + x, tower.position.z + z, 0.3, 14); }
     const tank = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 3.8, 5.2, 32), new THREE.MeshStandardMaterial({ color: 0x738b8d, metalness: 0.42, roughness: 0.52 })); tank.position.y = 15.3; tank.castShadow = true; tower.add(tank);
     const cap = new THREE.Mesh(new THREE.SphereGeometry(4.6, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x80999a, metalness: 0.38, roughness: 0.5 })); cap.position.y = 17.9; cap.castShadow = true; tower.add(cap);
     const label = createSignMesh(new THREE.PlaneGeometry(6.8, 1.7), 'JOBURG WATER', '#e5c15b'); label.position.set(0, 15.8, 4.7); tower.add(label);
     const subLabel = createSignMesh(new THREE.PlaneGeometry(4.4, 1.1), '(EMPTY)', '#e5c15b'); subLabel.position.set(0, 14.3, 4.72); tower.add(subLabel); this.group.add(tower);
 
-    const sculpture = new THREE.Group(); sculpture.position.set(318, 0, -273);
+    const sculpture = new THREE.Group(); sculpture.position.set(318, this.terrainHeightAt(318, -273), -273);
     const base = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.2, 1.1, 32), new THREE.MeshStandardMaterial({ color: 0xb5afa0, roughness: 0.72 })); base.position.y = 0.65;
     const sail = new THREE.Mesh(new THREE.ConeGeometry(3.2, 13, 3), new THREE.MeshStandardMaterial({ color: 0xd8d7c9, metalness: 0.18, roughness: 0.42, side: THREE.DoubleSide })); sail.position.set(0, 7.4, 0); sail.rotation.z = 0.18; sail.castShadow = true; sculpture.add(base, sail); this.group.add(sculpture);
     this.props.register('monument', sculpture.position.x, sculpture.position.z, 4, 1.5);
@@ -632,6 +710,7 @@ export class City {
   private buildWaterfront(): void {
     this.waterSites.push({ kind: 'ocean', x: 135, y: 0.1, z: -340, width: 470, depth: 90 }); // harbour water built per quality tier
     const seabed = new THREE.Mesh(new THREE.PlaneGeometry(470, 90), new THREE.MeshStandardMaterial({ color: 0x1c3a3e, roughness: 0.95 })); seabed.rotation.x = -Math.PI / 2; seabed.position.set(135, 0.02, -340); this.group.add(seabed); // dark bottom so the see-through water reads as depth, not lawn
+    const groundedStart = this.group.children.length;
     const sand = new THREE.Mesh(new THREE.PlaneGeometry(460, 48), new THREE.MeshStandardMaterial({ color: 0xcdb35e, map: this.sand, roughness: 0.96 })); sand.rotation.x = -Math.PI / 2; sand.position.set(140, 0.06, -286); sand.receiveShadow = true; this.group.add(sand);
     for (let x = -330; x < -190; x += 35) {
       const material = new THREE.MeshStandardMaterial({ color: x % 2 ? 0xb84f45 : 0x3d7381, roughness: 0.65, metalness: 0.32 });
@@ -643,6 +722,7 @@ export class City {
     const boardwalk = new THREE.Mesh(new THREE.BoxGeometry(190, 0.35, 8), new THREE.MeshStandardMaterial({ color: 0x8d6e4f, roughness: 0.86 })); boardwalk.position.set(150, 0.25, -307); boardwalk.receiveShadow = true; this.group.add(boardwalk);
     this.buildPromenadeDetails();
     this.buildPortCranes();
+    this.liftNewChildren(groundedStart);
   }
 
   private buildPromenadeDetails(): void {

@@ -74,6 +74,8 @@ export class Player {
     }
     this.leftLeg.rotation.z *= Math.exp(-dt * 8); this.rightLeg.rotation.z *= Math.exp(-dt * 8); // legs close after riding astride
     this.group.rotation.z *= Math.exp(-dt * 12); // shed any leftover bike lean
+    const ground = city.surfaceHeightAt(this.group.position.x, this.group.position.z);
+    if (this.onGround) this.group.position.y = ground;
     this.applyPunch(dt);
     if (input.consume('Space') && this.onGround) { this.velocityY = jumpVelocity(this.cheats.bigJump); this.onGround = false; }
     this.velocityY -= PLAYER.gravity * dt; this.group.position.y += this.velocityY * dt;
@@ -81,7 +83,7 @@ export class Player {
       this.leftLeg.rotation.x = THREE.MathUtils.lerp(this.leftLeg.rotation.x, -0.28, dt * 9); this.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rightLeg.rotation.x, 0.22, dt * 9);
       this.leftShin.rotation.x = THREE.MathUtils.lerp(this.leftShin.rotation.x, 0.65, dt * 9); this.rightShin.rotation.x = THREE.MathUtils.lerp(this.rightShin.rotation.x, 0.48, dt * 9);
     }
-    if (this.group.position.y <= 0) { this.group.position.y = 0; this.velocityY = 0; this.onGround = true; }
+    if (this.group.position.y <= ground) { this.group.position.y = ground; this.velocityY = 0; this.onGround = true; }
   }
 
   /** Back against the wall: Game moves the group; this leans the body, twists the torso for the peek and keeps feet grounded. */

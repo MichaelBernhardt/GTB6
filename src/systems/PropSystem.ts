@@ -120,7 +120,7 @@ export class PropSystem {
   private dropMaterial = new THREE.MeshBasicMaterial({ color: 0xcfeaf6, transparent: true, opacity: 0.82 });
   private quaternion = new THREE.Quaternion();
 
-  constructor(private scene: THREE.Scene, private registry: PropRegistry, private audio: AudioManager) {}
+  constructor(private scene: THREE.Scene, private registry: PropRegistry, private audio: AudioManager, private groundHeight: (x: number, z: number) => number = () => 0) {}
 
   update(dt: number): void {
     for (const event of this.registry.consumeKnockdowns()) this.knock(event);
@@ -165,7 +165,7 @@ export class PropSystem {
       for (let d = spray.drops.length - 1; d >= 0; d--) {
         const drop = spray.drops[d]; if (!drop) continue;
         drop.velocity.y -= 24 * dt; drop.mesh.position.addScaledVector(drop.velocity, dt);
-        if (drop.mesh.position.y > 0.04) continue;
+        if (drop.mesh.position.y > this.groundHeight(drop.mesh.position.x, drop.mesh.position.z) + 0.04) continue;
         if (spray.life > 1) this.launch(drop, spray); // recycle while the main is still open
         else { this.scene.remove(drop.mesh); spray.drops.splice(d, 1); }
       }
@@ -174,7 +174,8 @@ export class PropSystem {
   }
 
   private launch(drop: SprayDrop, spray: HydrantSpray): void {
-    drop.mesh.position.set(spray.x + (Math.random() - 0.5) * 0.16, 0.3, spray.z + (Math.random() - 0.5) * 0.16);
+    const x = spray.x + (Math.random() - 0.5) * 0.16; const z = spray.z + (Math.random() - 0.5) * 0.16;
+    drop.mesh.position.set(x, this.groundHeight(x, z) + 0.3, z);
     drop.velocity.set((Math.random() - 0.5) * 2.2, 8.5 + Math.random() * 4.5, (Math.random() - 0.5) * 2.2);
   }
 

@@ -55,6 +55,7 @@ export class UrbanInfrastructure {
     private isBlocked: (x: number, z: number, radius: number) => boolean,
     private isRoad: (x: number, z: number, margin: number) => boolean,
     private props: PropRegistry,
+    private surfaceHeight: (x: number, z: number) => number,
   ) {
     this.group.name = 'Urban infrastructure'; parent.add(this.group);
     onPowerChange((on) => { this.powered = on; });
@@ -65,6 +66,21 @@ export class UrbanInfrastructure {
     this.buildStreetFurniture();
     this.buildTransitStops();
     this.buildEtollGantries();
+    this.groundInfrastructure();
+  }
+
+  /** Raise every streetscape root or instance onto its local sidewalk surface. */
+  private groundInfrastructure(): void {
+    const matrix = new THREE.Matrix4(); const position = new THREE.Vector3(); const rotation = new THREE.Quaternion(); const scale = new THREE.Vector3();
+    for (const object of this.group.children) {
+      if (object instanceof THREE.InstancedMesh) {
+        for (let index = 0; index < object.count; index++) {
+          object.getMatrixAt(index, matrix); matrix.decompose(position, rotation, scale);
+          position.y += this.surfaceHeight(position.x, position.z); matrix.compose(position, rotation, scale); object.setMatrixAt(index, matrix);
+        }
+        object.instanceMatrix.needsUpdate = true;
+      } else object.position.y += this.surfaceHeight(object.position.x, object.position.z);
+    }
   }
 
   update(dt: number): void {
