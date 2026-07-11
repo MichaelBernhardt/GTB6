@@ -39,8 +39,21 @@ const LAYOUT_SCALE = 2.94 / METRES_PER_UNIT;
 const FRONTAGE_CLEARANCE = 3.05;
 /** Arc step (units) for walking a road centreline while laying out lots. */
 const WALK_STEP = 8;
-/** A parcel centre nearer than this to any road edge is rejected (would hang into the carriageway). */
-const ROAD_KEEPOUT = 1.6;
+/**
+ * Minimum clear distance a building FOOTPRINT must keep from every road edge — the reserved
+ * corridor is the carriageway plus its sidewalk apron (~2.2u) plus a small margin. Checked over
+ * the whole footprint (not just the centre), so a large mass can't reach across a thin block onto
+ * a neighbouring / cross / rear street. Kept below the front-face setback (>=4.5u for every zone)
+ * so a building fronting its own road is never rejected by its own frontage.
+ */
+const ROAD_CLEARANCE = 2.5;
+/** Footprint sampling pitch (units) for the road-corridor test — quarter-snapped AABBs sample exactly. */
+const FOOTPRINT_SAMPLE_STEP = 3;
+/** Shrink schedule for a mass that overhangs a road: multiply w&d per attempt, up to this many tries. */
+const SHRINK_FACTOR = 0.82;
+const SHRINK_ATTEMPTS = 6;
+/** Never shrink a footprint below this on either axis — reject instead (keeps the street clear). */
+const MIN_FOOTPRINT = 5;
 /** Per-cell hard cap on buildings — bounds both draw calls and per-cell generation cost. */
 export const CELL_BUILDING_CAP = 46;
 const HALF_WORLD = MAP_WORLD_SIZE / 2;
@@ -66,6 +79,33 @@ function seeded(x: number, z: number, salt = 0): number {
 
 const QUARTER = Math.PI / 2;
 function snapQuarter(yaw: number): number { return Math.round(yaw / QUARTER) * QUARTER; }
+
+/**
+ * Minimum distance from a building footprint to the nearest road edge (negative when the footprint
+ * sits on a carriageway). The footprint is the quarter-snapped W×D rectangle centred at (cx, cz) and
+ * rotated by `heading` — sampled on a grid so the interior and every edge are covered, not just the
+ * centre. Uses the shared road-edge grid, so it is pure, deterministic and cheap. Exported so tests
+ * can assert the citywide guarantee (no footprint intersects a road corridor).
+ */
+export function footprintRoadClearance(cx: number, cz: number, width: number, depth: number, heading: number): number {
+  const c = Math.cos(heading); const s = Math.sin(heading);
+  const hx = width / 2; const hz = depth / 2;
+  const nx = Math.max(1, Math.ceil(width / FOOTPRINT_SAMPLE_STEP));
+  const nz = Math.max(1, Math.ceil(depth / FOOTPRINT_SAMPLE_STEP));
+  let min = Infinity;
+  for (let i = 0; i <= nx; i++) {
+    const lx = -hx + (2 * hx) * (i / nx);
+    for (let j = 0; j <= nz; j++) {
+      const lz = -hz + (2 * hz) * (j / nz);
+      // Same quarter-turn transform City uses to place the collider, so the sampled rectangle IS the collider.
+      const wx = cx + lx * c + lz * s;
+      const wz = cz - lx * s + lz * c;
+      const d = distanceToRoadEdge(wx, wz);
+      if (d < min) min = d;
+    }
+  }
+  return min;
+}
 
 interface ZoneShape {
   style: BuildingStyle;
@@ -187,24 +227,40 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
     const district = nearestDistrict(frontX, frontZ);
 
     const lot = lerp(shape.lot[0], shape.lot[1], seeded(frontX, frontZ, 11)) * LAYOUT_SCALE;
-    const depth = lerp(shape.depth[0], shape.depth[1], seeded(frontX, frontZ, 12)) * LAYOUT_SCALE;
-    const width = lot * (0.72 + seeded(frontX, frontZ, 13) * 0.2); // building narrower than the lot (side gaps)
+    const depth0 = lerp(shape.depth[0], shape.depth[1], seeded(frontX, frontZ, 12)) * LAYOUT_SCALE;
+    const width0 = lot * (0.72 + seeded(frontX, frontZ, 13) * 0.2); // building narrower than the lot (side gaps)
     const gap = lot * (0.12 + seeded(frontX, frontZ, 14) * 0.16);
-    target = lot + gap; // spacing to the next lot on this frontage
+    target = lot + gap; // spacing to the next lot on this frontage (nominal lot, not the shrunk footprint)
 
     if (seeded(frontX, frontZ, 20) > acceptance(zone, district.density)) continue;
 
-    const cx = frontX + nX * (shape.yard * LAYOUT_SCALE + depth / 2);
-    const cz = frontZ + nZ * (shape.yard * LAYOUT_SCALE + depth / 2);
+    // Face the street: local +z (the entrance face) points back toward the road, quarter-snapped.
+    const heading = snapQuarter(Math.atan2(-nX, -nZ));
+    // Front face line: `yard` beyond the sidewalk apron. Anchored — the building grows from here into
+    // the block, so shrinking never pulls the face onto the road it fronts.
+    const faceX = frontX + nX * (shape.yard * LAYOUT_SCALE);
+    const faceZ = frontZ + nZ * (shape.yard * LAYOUT_SCALE);
+
+    // A large mass (highrise/estate especially) can reach across a thin block and overhang a
+    // neighbouring, cross or rear street. Shrink w&d until the whole footprint clears every road
+    // corridor; if even a minimal footprint still overhangs, reject the lot. Correctness (no road
+    // overlap) over density — but shrink first so we keep the building wherever it can be made to fit.
+    let width = width0; let depth = depth0; let cx = 0; let cz = 0; let fits = false;
+    for (let attempt = 0; attempt <= SHRINK_ATTEMPTS; attempt++) {
+      cx = faceX + nX * (depth / 2);
+      cz = faceZ + nZ * (depth / 2);
+      if (footprintRoadClearance(cx, cz, width, depth, heading) >= ROAD_CLEARANCE) { fits = true; break; }
+      if (Math.min(width, depth) * SHRINK_FACTOR < MIN_FOOTPRINT) break;
+      width *= SHRINK_FACTOR; depth *= SHRINK_FACTOR;
+    }
+    if (!fits) continue;
+
     if (Math.abs(cx) > HALF_WORLD - 20 || Math.abs(cz) > HALF_WORLD - 20) continue;
-    if (distanceToRoadEdge(cx, cz) < ROAD_KEEPOUT) continue; // centre sits on/against a street
     const radius = Math.hypot(width, depth) / 2;
     if (isBlocked(cx, cz, radius * 0.6)) continue;
     if (!occ.free(cx, cz, radius)) continue;
     occ.add(cx, cz, radius);
 
-    // Face the street: local +z (the entrance face) points back toward the road, quarter-snapped.
-    const heading = snapQuarter(Math.atan2(-nX, -nZ));
     const s = seeded(frontX, frontZ, 30);
     out.push({
       x: cx, z: cz, heading, width, depth,

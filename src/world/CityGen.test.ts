@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, generateCell, type GeneratedBuilding } from './CityGen';
+import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintRoadClearance, generateCell, type GeneratedBuilding } from './CityGen';
 import { MAP_WORLD_SIZE } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 
@@ -41,6 +41,34 @@ describe('citywide parcel layout', () => {
 
   it('never exceeds the per-cell building cap (bounds draw calls + generation cost)', () => {
     expect(buildingStats().maxPerCell).toBeLessThanOrEqual(CELL_BUILDING_CAP);
+  });
+
+  it('never places a building footprint over a road corridor (no mass overhangs the street)', () => {
+    // Owner's rule: buildings must not block the way. Every footprint must clear the carriageway +
+    // its sidewalk apron — checked over the whole quarter-snapped W×D rectangle, not just the centre.
+    let onCarriageway = 0; let worst = Infinity;
+    for (const b of all) {
+      const clr = footprintRoadClearance(b.x, b.z, b.width, b.depth, b.heading);
+      if (clr < worst) worst = clr;
+      if (clr < 0) onCarriageway++; // footprint sample sits on a road surface
+    }
+    expect(onCarriageway, `${onCarriageway} buildings overlap a road surface`).toBe(0);
+    // Beyond just clearing the tarmac, every footprint keeps the sidewalk margin the generator reserves.
+    expect(worst).toBeGreaterThanOrEqual(1.0);
+  });
+
+  it('keeps the road-corridor guarantee in the tight CBD grid AND a low-density suburb', () => {
+    // Representative sample from both ends of the density range: the highrise CBD (thin blocks, big
+    // footprints — the reported failure case) and estate/residential suburbs (large villas).
+    const cbd = all.filter((b) => b.zone === 'commercial-highrise');
+    const suburb = all.filter((b) => b.zone === 'estate' || b.zone === 'residential');
+    expect(cbd.length).toBeGreaterThan(0);
+    expect(suburb.length).toBeGreaterThan(0);
+    for (const group of [cbd, suburb]) {
+      for (const b of group) {
+        expect(footprintRoadClearance(b.x, b.z, b.width, b.depth, b.heading)).toBeGreaterThanOrEqual(1.0);
+      }
+    }
   });
 
   it('carves out manicured site footprints so nothing collides with a special place', () => {
