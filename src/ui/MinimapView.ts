@@ -8,6 +8,13 @@ export const MINIMAP_ZOOM_SCALES = [0.14, 0.2, 0.29, 0.4, 0.54] as const;
 export const MINIMAP_ZOOM_NAMES = ['Far', 'Wide', 'Standard', 'Close', 'Street'] as const;
 export const DEFAULT_MINIMAP_ZOOM = 2; // Standard
 
+/** Screen-space bearing to TRUE north on the player-up minimap: 0 = straight up, growing clockwise.
+ *  The map content is rotated by (heading - PI), so world north (-Z) sweeps to that same screen angle;
+ *  when the player faces north (heading = PI) it lands at the top, and it tracks real north as they turn. */
+export function minimapNorthAngle(heading: number): number {
+  return heading - Math.PI;
+}
+
 export function sanitizeMinimapZoom(raw: unknown): number {
   return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 && raw < MINIMAP_ZOOM_SCALES.length ? raw : DEFAULT_MINIMAP_ZOOM;
 }
@@ -46,6 +53,10 @@ export class MinimapView {
     ctx.fillStyle = '#e3533f'; for (const foe of hostiles) { ctx.beginPath(); ctx.arc(foe.x * scale, foe.z * scale, 4, 0, Math.PI * 2); ctx.fill(); }
     ctx.restore();
     ctx.save(); ctx.translate(size / 2, size / 2); ctx.fillStyle = '#f7c843'; ctx.strokeStyle = '#101615'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(-8, 10); ctx.lineTo(0, 6); ctx.lineTo(8, 10); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
-    ctx.fillStyle = '#f2edda'; ctx.font = '700 11px Arial'; ctx.textAlign = 'center'; ctx.fillText('N', size / 2, 16);
+    // Compass rose: an outward arrowhead + upright 'N' riding the minimap edge, tracking true north as the map rotates.
+    const phi = minimapNorthAngle(heading); const dirX = Math.sin(phi); const dirY = -Math.cos(phi); const ring = size / 2 - 22;
+    ctx.save(); ctx.translate(size / 2 + dirX * ring, size / 2 + dirY * ring); ctx.rotate(phi);
+    ctx.fillStyle = '#e0402f'; ctx.strokeStyle = '#101615'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(5, 3); ctx.lineTo(-5, 3); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+    ctx.fillStyle = '#f2edda'; ctx.font = '700 11px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('N', size / 2 + dirX * (ring - 13), size / 2 + dirY * (ring - 13));
   }
 }

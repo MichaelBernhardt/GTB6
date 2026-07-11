@@ -10,6 +10,15 @@ import { createSignMesh } from '../world/ProceduralMaterials';
 
 type VehicleMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial | THREE.MeshBasicMaterial;
 
+const FORWARD_AXIS = new THREE.Vector3(0, 0, 1); // bikes face +Z; the lean is a roll about this local axis
+export const MAX_BIKE_LEAN = 0.6; // rad (~34deg): a spirited motorbike lean, never anywhere near lying on its side
+
+/** Two-wheeler roll toward a turn: banks with steer and speed, or a gentle kickstand tilt when parked/disabled. */
+export function bikeLeanTarget(steeringVisual: number, speed: number, maxSpeed: number, resting: boolean): number {
+  if (resting) return 0.15;
+  return THREE.MathUtils.clamp(-steeringVisual * Math.min(Math.abs(speed) / maxSpeed, 1) * 0.85, -MAX_BIKE_LEAN, MAX_BIKE_LEAN);
+}
+
 export class Vehicle {
   group = new THREE.Group();
   spec: VehicleSpec;
@@ -42,6 +51,7 @@ export class Vehicle {
   private cranks: THREE.Object3D[] = [];
   private rider?: THREE.Group;
   private groundY = 0.02;
+  private bikeLean = 0; // smoothed two-wheeler roll, applied as a clean forward-axis bank in alignToRoad (never poked into Euler.z)
 
   constructor(scene: THREE.Scene, kind: VehicleKind, position: THREE.Vector3, color?: number) {
     this.spec = { ...VEHICLE_SPECS[kind], color: color ?? VEHICLE_SPECS[kind].color };
@@ -195,6 +205,9 @@ export class Vehicle {
     const forward = new THREE.Vector3(Math.sin(this.heading), 0, Math.cos(this.heading)).projectOnPlane(normal).normalize();
     const right = new THREE.Vector3().crossVectors(normal, forward).normalize();
     const target = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, normal, forward));
+    // Two-wheelers bank by rolling about their own forward axis ON TOP of the road alignment — never by poking Euler.z,
+    // which cross-couples with terrain pitch in the XYZ decomposition and can snap the whole bike onto its side mid-turn.
+    if (this.spec.twoWheeler && !this.wrecked) target.multiply(new THREE.Quaternion().setFromAxisAngle(FORWARD_AXIS, this.bikeLean));
     this.group.quaternion.slerp(target, 1 - Math.exp(-dt * 10));
   }
 
@@ -206,8 +219,8 @@ export class Vehicle {
       if (this.steerGroup) this.steerGroup.rotation.y = this.steeringVisual * 0.7;
       if (this.rider) this.rider.visible = this.occupied && !this.playerControlled && !this.wrecked;
       const parked = !this.playerControlled && !this.occupied && Math.abs(this.speed) < 0.5;
-      const lean = parked || this.disabled ? 0.15 : -this.steeringVisual * Math.min(Math.abs(this.speed) / this.spec.maxSpeed, 1) * 0.85; // kickstand tilt, or lean into the turn
-      this.group.rotation.z = THREE.MathUtils.lerp(this.group.rotation.z, lean, Math.min(1, dt * 7));
+      const target = bikeLeanTarget(this.steeringVisual, this.speed, this.spec.maxSpeed, parked || this.disabled); // kickstand tilt, or lean into the turn
+      this.bikeLean = THREE.MathUtils.lerp(this.bikeLean, target, Math.min(1, dt * 7)); // alignToRoad banks by this about the forward axis
     } else this.wheels.forEach((wheel, index) => { wheel.rotation.x += spin; if (index < 2) wheel.rotation.y = this.steeringVisual; });
     if (this.bounce > 0.001) {
       this.bouncePhase += dt * 34;
