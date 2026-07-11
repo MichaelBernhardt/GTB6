@@ -1,8 +1,8 @@
 import type { WeaponId } from '../config';
 import type { CheatSettings, GameSettings } from '../types';
 
-export type NotificationTone = 'success' | 'danger' | 'reputation' | 'info';
-export type MenuScreen = 'none' | 'loading' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' | 'choice';
+export type NotificationTone = 'success' | 'danger' | 'reputation' | 'info' | 'radio';
+export type MenuScreen = 'none' | 'loading' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' | 'choice' | 'safehouse';
 
 export interface TaxiTelemetry { text: string; available: boolean; }
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; taxi?: TaxiTelemetry; }
@@ -21,6 +21,7 @@ export interface HudState {
   clock: string;
   reputation?: string;
   prompt: string;
+  crosshair: boolean;
   vehicle?: VehicleTelemetry;
   objective?: ObjectiveView;
   fps: number;

@@ -14,8 +14,19 @@ export const ARRIVE_RADIUS = 15;
 export const ARRIVE_DWELL = 3;
 
 export interface KnownPosition { x: number; z: number; time: number; }
-export interface CrimeReport<R = unknown> { x: number; z: number; heat: number; maturesAt: number; reporter?: R; }
+/** What dispatch calls the crime on air — only distinctions the call sites can actually see. */
+export type CrimeLabel = 'mugging' | 'assault' | 'murder' | 'gunfire' | 'carjacking' | 'hit-and-run' | 'explosion' | 'vehicle arson';
+export interface CrimeReport<R = unknown> { x: number; z: number; heat: number; maturesAt: number; reporter?: R; label: CrimeLabel; }
 export interface WitnessCandidate<T = unknown> { ref: T; x: number; z: number; alive: boolean; victim?: boolean; }
+
+/** On-air phrasing for the dispatch toast: a matured 911 call reads as a fresh report, while a
+ *  cop-witnessed crime is already a pursuit — no caller, just units responding. Pure string work. */
+export function radioCallout(label: CrimeLabel, district: string, copWitnessed = false): { title: string; detail: string } {
+  const crime = label[0]!.toUpperCase() + label.slice(1);
+  return copWitnessed
+    ? { title: `${crime} in progress in ${district}`, detail: 'Officer on scene — all units responding.' }
+    : { title: `${crime} reported in ${district}`, detail: 'Caller phoned it in. Units en route.' };
+}
 
 /** Picks who phones in a crime from live state at crime time: a surviving victim reports the attack
  *  themselves, otherwise the nearest living non-victim within radius. The dead can't call anyone. */
@@ -51,19 +62,24 @@ export class PoliceKnowledge<R = unknown> {
   lastKnown: KnownPosition | null = null;
   private reports: CrimeReport<R>[] = [];
   private now = 0;
+  private lastSightingAt: number | null = null;
 
   get pendingReports(): number { return this.reports.length; }
 
+  /** Seconds since an officer last laid eyes on the player, or null if never. Matured civilian reports
+   *  move lastKnown but are hearsay, not sightings, so they never refresh this. */
+  get sightingAge(): number | null { return this.lastSightingAt === null ? null : this.now - this.lastSightingAt; }
+
   /** Civilian report: matures after REPORT_DELAY, then its heat lands and lastKnown becomes the crime scene. */
-  fileReport(x: number, z: number, heat: number, reporter?: R, delay = REPORT_DELAY): void {
-    this.reports.push({ x, z, heat, maturesAt: this.now + Math.max(0, delay), reporter });
+  fileReport(x: number, z: number, heat: number, reporter?: R, delay = REPORT_DELAY, label: CrimeLabel = 'assault'): void {
+    this.reports.push({ x, z, heat, maturesAt: this.now + Math.max(0, delay), reporter, label });
   }
 
   /** Cop-witnessed crime: no dispatch lag — the officer's own eyes count as a sighting. */
   copWitness(x: number, z: number): void { this.sight(x, z); }
 
   /** An officer can currently see the player, so knowledge tracks the live position. */
-  sight(x: number, z: number): void { this.lastKnown = { x, z, time: this.now }; }
+  sight(x: number, z: number): void { this.lastKnown = { x, z, time: this.now }; this.lastSightingAt = this.now; }
 
   /** Advances the dispatch clock and returns matured reports (heat for the caller to apply) after moving
    *  lastKnown to the crime scene. Reports whose reporter died before maturing are dropped — no witness, no call. */
@@ -80,5 +96,5 @@ export class PoliceKnowledge<R = unknown> {
     return matured;
   }
 
-  reset(): void { this.lastKnown = null; this.reports = []; }
+  reset(): void { this.lastKnown = null; this.reports = []; this.lastSightingAt = null; }
 }

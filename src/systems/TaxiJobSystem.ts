@@ -10,7 +10,8 @@ export const FARE_PER_100U = 8; // R per 100 units of A* route distance
 export const TIP_RATIO = 0.25; // starting tip as a share of the fare…
 export const TIP_MIN = 5; // …clamped to a polite floor
 export const TIP_CAP = 40; // …and a generous ceiling
-export const HAIL_RADIUS = 26; // peds this close to an available cab stick an arm out
+export const HAIL_RADIUS = 34; // peds this close to an available cab stick an arm out
+export const REHAIL_COOLDOWN = 3; // beat between fares so a fresh drop-off doesn't instantly re-hail you
 export const PICKUP_RADIUS = 6; // stop within this range of the hailer to start the pickup
 export const BOARD_RADIUS = 2.6; // hailer reaches the door and climbs in
 export const ABANDON_RADIUS = 15; // drive off further than this mid-pickup and the fare gives up
@@ -40,11 +41,13 @@ export function computeFare(distance: number): number { return Math.round(FARE_B
 export function startingTip(fare: number): number { return Math.min(TIP_CAP, Math.max(TIP_MIN, Math.round(fare * TIP_RATIO))); }
 export function crashTipPenalty(impact: number): number { return Math.max(1, Math.round(impact / CRASH_TIP_DIVISOR)); }
 
-export interface HailCandidate { state: string; contact: boolean; hostile: boolean; police: boolean; carGuard: boolean; fear: number; }
+export interface HailCandidate { state: string; contact: boolean; hostile: boolean; police: boolean; carGuard: boolean; frozen: boolean; stumbling: boolean; fear: number; }
 
-/** Only calm civilians with wanderlust hail: no contacts, car guards, cops, hostiles or frightened peds. */
+/** Calm civilians hail — walking with wanderlust or paused at the curb. No contacts, car guards, cops,
+ *  hostiles, frightened peds, frozen far-cull agents or peds mid-stumble from a bump. */
 export function canHail(ped: HailCandidate, distance: number): boolean {
-  return ped.state === 'walk' && !ped.contact && !ped.hostile && !ped.police && !ped.carGuard && ped.fear < FLEE_THRESHOLD && distance <= HAIL_RADIUS;
+  return (ped.state === 'walk' || ped.state === 'idle') && !ped.contact && !ped.hostile && !ped.police && !ped.carGuard
+    && !ped.frozen && !ped.stumbling && ped.fear < FLEE_THRESHOLD && distance <= HAIL_RADIUS;
 }
 
 export function taxiHudText(phase: TaxiPhase, available: boolean, fare: number, tip: number): string {

@@ -6,7 +6,7 @@ import {
 } from './TaxiJobSystem';
 
 const walker = (overrides: Partial<HailCandidate> = {}): HailCandidate =>
-  ({ state: 'walk', contact: false, hostile: false, police: false, carGuard: false, fear: 0, ...overrides });
+  ({ state: 'walk', contact: false, hostile: false, police: false, carGuard: false, frozen: false, stumbling: false, fear: 0, ...overrides });
 
 const boardedRide = (distance = 350): TaxiRide => {
   const ride = new TaxiRide();
@@ -43,17 +43,23 @@ describe('taxi fare math', () => {
 });
 
 describe('hail eligibility', () => {
-  it('lets a calm wandering civilian hail from inside the radius', () => {
+  it('lets calm civilians hail from inside the radius, walking or paused at the curb', () => {
     expect(canHail(walker(), 10)).toBe(true);
     expect(canHail(walker(), HAIL_RADIUS)).toBe(true);
+    expect(canHail(walker({ state: 'idle' }), 12)).toBe(true);
   });
 
   it('ignores peds beyond the hail radius', () => {
     expect(canHail(walker(), HAIL_RADIUS + 0.1)).toBe(false);
   });
 
-  it('excludes everyone without wanderlust: idle, fleeing, cowering, downed', () => {
-    for (const state of ['idle', 'flee', 'cower', 'down', 'hostile']) expect(canHail(walker({ state }), 5)).toBe(false);
+  it('excludes disturbed states: fleeing, cowering, downed, hostile', () => {
+    for (const state of ['flee', 'cower', 'down', 'hostile']) expect(canHail(walker({ state }), 5)).toBe(false);
+  });
+
+  it('excludes frozen far-cull agents and peds mid-stumble from a bump', () => {
+    expect(canHail(walker({ frozen: true }), 5)).toBe(false);
+    expect(canHail(walker({ stumbling: true }), 5)).toBe(false);
   });
 
   it('excludes contacts, car guards, cops, hostiles and the frightened', () => {
