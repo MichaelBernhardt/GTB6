@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { DEFAULT_CHEATS, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeSafehouses, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
 import type { CheatSettings, GameSettings, SavedVehicle, SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
@@ -75,6 +75,16 @@ describe('SaveManager', () => {
     expect(legacy.settings.cameraViewVehicle).toBe(2);
   });
 
+  it('round trips the minimap zoom and defaults invalid or missing values', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, minimapZoom: 4 } });
+    expect(manager.load().settings.minimapZoom).toBe(4);
+    manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, minimapZoom: 'street' } as unknown as GameSettings });
+    expect(manager.load().settings.minimapZoom).toBe(2);
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 1, money: 100, completedMissions: [], spawn: [-20, 1, 260], settings: { masterVolume: 0.5, quality: 'high', showFps: false, mouseSensitivity: 0.0025 } }));
+    expect(manager.load().settings.minimapZoom).toBe(2);
+  });
+
   it('treats legacy entries without ownership as owned and fixes an unowned current', () => {
     const legacy = sanitizeWeapons({ current: 'smg', loadout: { smg: { ammo: 30, reserve: 120 } } } as unknown as SavedWeapons);
     expect(legacy.loadout.smg).toEqual({ ammo: 30, reserve: 120, owned: true });
@@ -145,6 +155,21 @@ describe('SaveManager', () => {
     expect(sanitizeCheats({ fastRun: true })).toEqual({ fastRun: true, bigJump: false, invulnerable: false });
     const defaults = sanitizeCheats(undefined); defaults.fastRun = true;
     expect(DEFAULT_CHEATS.fastRun).toBe(false);
+  });
+
+  it('round trips owned safehouses and defaults old saves to the starter flat', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, safehouses: [STARTER_SAFEHOUSE] });
+    expect(manager.load().safehouses).toEqual([STARTER_SAFEHOUSE]);
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
+    expect(manager.load().safehouses).toEqual([STARTER_SAFEHOUSE]);
+  });
+
+  it('sanitizes safehouse lists: junk ids drop, the starter is always owned, duplicates collapse', () => {
+    expect(sanitizeSafehouses(undefined)).toEqual([STARTER_SAFEHOUSE]);
+    expect(sanitizeSafehouses('brixton')).toEqual([STARTER_SAFEHOUSE]);
+    expect(sanitizeSafehouses(['penthouse', 7, null])).toEqual([STARTER_SAFEHOUSE]);
+    expect(sanitizeSafehouses(['brixton', 'brixton'])).toEqual([STARTER_SAFEHOUSE]);
   });
 
   it('migrates version 1 saves to neutral Living City state without losing progress', () => {

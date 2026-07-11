@@ -85,18 +85,19 @@ export class VehicleFireSystem {
   private updateFlames(vehicle: Vehicle, fx: FireFx, stage: FireStage): void {
     const flaming = !vehicle.wrecked && (vehicle.onFire || stage === 'critical');
     if (!flaming) { if (fx.rig) fx.rig.visible = false; if (fx.light) fx.light.intensity = 0; return; }
+    const small = vehicle.spec.twoWheeler ? 0.55 : 1; // two-wheelers burn too, just on a braai scale
     if (!fx.rig) {
       fx.rig = new THREE.Group(); fx.rig.name = 'firefx';
       const length = vehicle.spec.size[2];
       for (const [y, z] of [[0.95, length * 0.3], [1.15, -length * 0.05], [0.9, -length * 0.3]] as const) {
         const cone = new THREE.Mesh(this.coneGeometry, new THREE.MeshBasicMaterial({ color: 0xffa030, transparent: true, opacity: 0.85, depthWrite: false }));
-        cone.position.set(0, y, z); fx.rig.add(cone); fx.cones.push(cone);
+        cone.position.set(0, y * small, z); fx.rig.add(cone); fx.cones.push(cone);
       }
       vehicle.group.add(fx.rig);
     }
     fx.rig.visible = true;
     const progress = vehicle.onFire ? 1 - THREE.MathUtils.clamp(vehicle.burnTimer / fx.burnDuration, 0, 1) : 0;
-    const base = vehicle.onFire ? 1 + progress * 0.7 : 0.5;
+    const base = (vehicle.onFire ? 1 + progress * 0.7 : 0.5) * small;
     fx.cones.forEach((cone, index) => {
       cone.visible = vehicle.onFire || index === 0;
       cone.scale.set(base * (0.8 + Math.random() * 0.3), base * (0.72 + Math.random() * 0.55), base * (0.8 + Math.random() * 0.3));
@@ -104,8 +105,8 @@ export class VehicleFireSystem {
       (cone.material as THREE.MeshBasicMaterial).color.setHex(FLAME_COLORS[Math.floor(Math.random() * FLAME_COLORS.length)] ?? 0xffa030);
     });
     if (vehicle.onFire) {
-      if (!fx.light) { fx.light = new THREE.PointLight(0xff8c2d, 0, 9); fx.light.position.set(0, 1.4, 0); vehicle.group.add(fx.light); }
-      fx.light.intensity = 2.2 + progress * 1.6 + Math.random() * 0.9;
+      if (!fx.light) { fx.light = new THREE.PointLight(0xff8c2d, 0, 9 * small); fx.light.position.set(0, 1.4 * small, 0); vehicle.group.add(fx.light); }
+      fx.light.intensity = (2.2 + progress * 1.6 + Math.random() * 0.9) * small;
     } else if (fx.light) fx.light.intensity = 0;
   }
 
@@ -116,6 +117,7 @@ export class VehicleFireSystem {
     else if (stage === 'critical') { interval = 0.16; color = 0x2f3336; scale = 0.42; life = 1.7; rise = 2.1; grow = 1.5; opacity = 0.55; }
     else if (stage === 'smoke') { interval = 0.3; color = 0x9aa0a3; scale = 0.3; life = 1.3; rise = 1.6; grow = 1.1; opacity = 0.42; }
     else { fx.smokeTimer = 0; return; }
+    if (vehicle.spec.twoWheeler) scale *= 0.6;
     fx.smokeTimer -= dt;
     if (fx.smokeTimer > 0) return;
     fx.smokeTimer = interval * (0.75 + Math.random() * 0.5);

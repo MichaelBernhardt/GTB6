@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { resolveFrozen, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import { PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
-import { FEAR_EVENTS, fearContribution, FEAR_MAX, type FearEvent } from './FearSystem';
+import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separationPush } from './BumpSystem';
+import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
 import { MISSIONS } from './MissionSystem';
 import { ProgressWatchdog, RoutePlanner, type NavPoint } from './NavGraph';
 import type { City } from '../world/City';
@@ -12,6 +13,7 @@ import { powerOn } from '../world/powerGrid';
 
 interface DrivePlan { points: NavPoint[]; index: number; watchdog: ProgressWatchdog; backoff: number; }
 interface TaxiState { stopTimer: number; dwell: number; hootTimer: number; }
+export interface PlayerBump { ped: Pedestrian; position: THREE.Vector3; knockdown: boolean; killed: boolean; assault: boolean; }
 
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
@@ -29,6 +31,9 @@ export class PopulationSystem {
   private vehiclePlanner: RoutePlanner;
   private pedPlanner: RoutePlanner;
   private taxiState = new WeakMap<Vehicle, TaxiState>();
+  private bumpTimes = new WeakMap<Pedestrian, number[]>();
+  private bumpCooldown = new WeakMap<Pedestrian, number>();
+  private bumpClock = 0;
   private hootCooldown = 0;
   private parkedSpots: Array<[number, number]> = [];
   private policePatrols: Pedestrian[] = [];
@@ -84,20 +89,81 @@ export class PopulationSystem {
     });
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation();
+    this.updateTrafficEngineAudio(player);
     if (damagePlayer && this.hostileAttackCooldown <= 0) {
       const attacker = this.pedestrians.find((ped) => ped.state === 'hostile' && ped.group.position.distanceTo(player) < 2.3);
       if (attacker) { attacker.punch(); damagePlayer(7); this.hostileAttackCooldown = 0.9; }
     }
   }
 
-  broadcastFear(origin: THREE.Vector3, event: FearEvent): void {
-    for (const ped of this.pedestrians) this.frighten(ped, fearContribution(event, ped.group.position.distanceTo(origin)), origin);
+  private updateTrafficEngineAudio(player: THREE.Vector3): void {
+    let nearest: Vehicle | undefined; let best = 60 * 60;
+    for (const vehicle of this.traffic) {
+      if (vehicle.playerControlled || vehicle.disabled || vehicle.spec.kind === 'bicycle') continue; // no engine to hum
+      const d2 = vehicle.group.position.distanceToSquared(player);
+      if (d2 < best) { best = d2; nearest = vehicle; }
+    }
+    if (nearest) this.audio.setTrafficEngine(true, nearest.group.position.x, nearest.group.position.z, nearest.speed, nearest.spec.maxSpeed, nearest.spec.kind);
+    else this.audio.setTrafficEngine(false);
   }
 
-  private frighten(ped: Pedestrian, amount: number, origin: THREE.Vector3): void {
+  /** Soft player↔ped collision: gentle radial push both ways, stumble grunt, repeat-bump/knockdown escalation. */
+  bumpPlayer(dt: number, position: THREE.Vector3, moving: boolean, sprinting: boolean): PlayerBump[] {
+    this.bumpClock += dt;
+    const events: PlayerBump[] = [];
+    for (const ped of this.pedestrians) {
+      if (ped.contact || ped.state === 'down') continue;
+      const delta = ped.group.position.clone().sub(position); delta.y = 0;
+      const distance = delta.length();
+      if (distance >= BUMP_RADIUS) continue;
+      const direction = distance > 0.001 ? delta.multiplyScalar(1 / distance) : new THREE.Vector3(1, 0, 0);
+      const push = separationPush(distance);
+      ped.group.position.copy(this.city.clampMove(ped.group.position, ped.group.position.clone().addScaledVector(direction, push.ped), 0.42));
+      position.copy(this.city.clampMove(position, position.clone().addScaledVector(direction, -push.player), PLAYER.radius));
+      if (!moving || ped.police || ped.hostile || (this.bumpCooldown.get(ped) ?? 0) > this.bumpClock) continue;
+      this.bumpCooldown.set(ped, this.bumpClock + BUMP_COOLDOWN);
+      const times = this.bumpTimes.get(ped) ?? []; this.bumpTimes.set(ped, times);
+      const count = recordBump(times, this.bumpClock);
+      const assault = bumpEscalates(count, sprinting);
+      const killed = sprinting ? ped.knockdown(position) : false;
+      if (!sprinting) {
+        ped.stumble(position);
+        if (assault) this.frighten(ped, FEAR_EVENTS.assault.base, position); else ped.applyFear(BUMP_FEAR, position);
+      }
+      if (killed || sprinting) this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
+      else this.audio.grunt(ped.group.position.x, ped.group.position.z);
+      events.push({ ped, position: ped.group.position.clone(), knockdown: sprinting, killed, assault });
+    }
+    return events;
+  }
+
+  broadcastFear(origin: THREE.Vector3, event: FearEvent): void {
+    this.spreadPanic(this.pedestrians.filter((ped) => this.frighten(ped, fearContribution(event, ped.group.position.distanceTo(origin)), origin)));
+  }
+
+  /** A raised weapon frightens only peds who can see it: within radius and facing the player (or close enough to sense). */
+  broadcastBrandish(origin: THREE.Vector3, event: FearEvent = FEAR_EVENTS.brandish): void {
+    this.spreadPanic(this.pedestrians.filter((ped) => {
+      const distance = ped.group.position.distanceTo(origin);
+      if (distance >= event.radius || !seesBrandish(Math.sin(ped.group.rotation.y), Math.cos(ped.group.rotation.y), origin.x - ped.group.position.x, origin.z - ped.group.position.z, distance)) return false;
+      return this.frighten(ped, fearContribution(event, distance), origin);
+    }));
+  }
+
+  /** Fear contagion: each freshly panicked ped's shrieking rattles bystanders with a smaller secondary burst (one hop, no recursion). */
+  private spreadPanic(sources: Pedestrian[]): void {
+    for (const source of sources) for (const ped of this.pedestrians) {
+      if (ped !== source) this.frighten(ped, fearContribution(FEAR_EVENTS.panic, ped.group.position.distanceTo(source.group.position)), source.group.position);
+    }
+  }
+
+  /** Returns true when the fear pushed the ped into a fresh flee/cower panic. */
+  private frighten(ped: Pedestrian, amount: number, origin: THREE.Vector3): boolean {
     const before = ped.state;
     ped.applyFear(amount, origin);
-    if (before !== ped.state && (ped.state === 'flee' || ped.state === 'cower') && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+    const panicked = before !== ped.state && (ped.state === 'flee' || ped.state === 'cower');
+    if (panicked && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+    return panicked;
   }
 
   private taxiThrottle(vehicle: Vehicle, dt: number, player: THREE.Vector3, blocked: boolean): number {
@@ -167,6 +233,8 @@ export class PopulationSystem {
     const parked: Array<[VehicleKind, number, number, number, number?]> = [
       ['compact', -105.5, 240, 0, 0xf1c232], ['sport', 30, 205.5, Math.PI / 2, 0xd83a40], ['van', -205.5, -72, 0],
       ['compact', 205.5, 86, 0], ['sport', 252, -205.5, Math.PI / 2, 0x3f6faa], ['van', -105.5, -190, 0], ['compact', 205.5, 286, 0],
+      ['bicycle', -30, 235, 0], ['bicycle', 105.5, -240, Math.PI / 2, 0xc44f9a], ['motorbike', -105.5, 150, 0], ['motorbike', 30, -205.5, Math.PI / 2, 0x364a5e],
+      ['superbike', 205.5, 150, 0], // flashy toy on a Sandton kerb
     ];
     for (const [kind, x, z, heading, color] of parked) {
       const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z)); // heading only: snapping the POSITION parked cars onto the live lane made traffic queue behind them forever
@@ -175,7 +243,7 @@ export class PopulationSystem {
       vehicle.heading = Number.isFinite(pose.heading) ? pose.heading : heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([curb.x, curb.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'taxi', 'van', 'taxi'];
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'taxi']; // the odd commuter bike weaves through traffic
     for (let i = 0; i < 15; i++) {
       const routeIndex = (i * 5 + 3) % this.city.trafficRoutes.length; const route = this.city.trafficRoutes[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
       const kind = kinds[i % kinds.length] ?? 'compact';

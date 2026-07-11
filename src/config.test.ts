@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_FREEZE_RADIUS, AI_THAW_RADIUS, resolveFrozen, TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
+import { AI_FREEZE_RADIUS, AI_THAW_RADIUS, PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
 import { calculateDamage } from './core/GameRules';
 
 describe('distance freeze hysteresis', () => {
@@ -26,6 +26,20 @@ describe('vehicle configuration', () => {
     expect(VEHICLE_SPECS.compact.steering).toBeGreaterThan(VEHICLE_SPECS.van.steering);
     for (const spec of Object.values(VEHICLE_SPECS)) expect(spec.acceleration).toBeGreaterThan(0);
     expect(VEHICLE_SPECS.sport.maxSpeed * TRAFFIC_SPEED_FACTOR * 3.6).toBeLessThan(75);
+  });
+
+  it('orders the two-wheelers bicycle < motorbike < superbike around the JMPD interceptor', () => {
+    const { bicycle, motorbike, superbike, police } = VEHICLE_SPECS;
+    expect(bicycle.maxSpeed).toBeLessThan(motorbike.maxSpeed);
+    expect(motorbike.maxSpeed).toBeLessThan(superbike.maxSpeed);
+    expect(motorbike.maxSpeed).toBeGreaterThan(police.maxSpeed); // just barely outruns the law
+    expect(motorbike.maxSpeed).toBeLessThanOrEqual(police.maxSpeed * 1.15);
+    expect(superbike.maxSpeed).toBeGreaterThanOrEqual(police.maxSpeed * 1.4); // leaves it for dead
+    expect(superbike.maxSpeed).toBeLessThanOrEqual(police.maxSpeed * 1.5);
+    expect(bicycle.maxSpeed / PLAYER.sprintSpeed).toBeGreaterThanOrEqual(1.8); // about twice a sprint
+    expect(bicycle.maxSpeed / PLAYER.sprintSpeed).toBeLessThanOrEqual(2.2);
+    for (const spec of [bicycle, motorbike, superbike]) { expect(spec.twoWheeler).toBe(true); expect(spec.saddle).toBeDefined(); expect(spec.size[0]).toBeLessThan(1); }
+    for (const spec of Object.values(VEHICLE_SPECS)) if (!spec.twoWheeler) expect(spec.saddle).toBeUndefined();
   });
 });
 

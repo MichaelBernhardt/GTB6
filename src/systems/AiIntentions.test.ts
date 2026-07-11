@@ -22,7 +22,7 @@ const makeCity = (): City => ({
   roadPoseAwayFrom: (position: THREE.Vector3, minimum: number) => ({ position: new THREE.Vector3(position.x + minimum + 5, 0, position.z), heading: 0 }),
 }) as unknown as City;
 
-const audio = { scream: () => {}, setSiren: () => {}, taxiHoot: () => {} } as unknown as AudioManager;
+const audio = { scream: () => {}, setSiren: () => {}, taxiHoot: () => {}, setTrafficEngine: () => {} } as unknown as AudioManager;
 
 describe('ai intentions simulation', () => {
   it('drives traffic along planned lane routes and keeps peds wandering with sidewalk routes', () => {
