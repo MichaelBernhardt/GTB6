@@ -13,7 +13,7 @@ export const PLAYER = {
 };
 export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2 };
 
-export type VehicleKind = 'compact' | 'sport' | 'van' | 'police' | 'taxi';
+export type VehicleKind = 'compact' | 'sport' | 'van' | 'police' | 'taxi' | 'bicycle' | 'motorbike' | 'superbike';
 export interface VehicleSpec {
   kind: VehicleKind;
   name: string;
@@ -25,6 +25,8 @@ export interface VehicleSpec {
   drag: number;
   health: number;
   size: [number, number, number];
+  twoWheeler?: boolean;
+  saddle?: [number, number]; // rider group offset from the vehicle origin: [y, z]
 }
 
 export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
@@ -33,6 +35,10 @@ export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
   van: { kind: 'van', name: 'Hilux Bakkie', color: 0x58a596, maxSpeed: 27, acceleration: 16, brake: 28, steering: 1.75, drag: 0.85, health: 145, size: [2.15, 2.15, 4.9] },
   police: { kind: 'police', name: 'JMPD Interceptor', color: 0x202b38, maxSpeed: 42, acceleration: 28, brake: 40, steering: 2.35, drag: 0.6, health: 130, size: [1.95, 1.4, 4.35] },
   taxi: { kind: 'taxi', name: 'Quantum Express', color: 0xf0f1ea, maxSpeed: 44, acceleration: 27, brake: 30, steering: 2.1, drag: 0.6, health: 120, size: [2.05, 2, 5.05] },
+  // maxSpeed = 2x sprint (13): W cruises at BICYCLE_CRUISE_FACTOR of this, Shift pedals hard for the full cap
+  bicycle: { kind: 'bicycle', name: 'Kasi Cruiser', color: 0x3d7dc4, maxSpeed: 26, acceleration: 11, brake: 20, steering: 2.9, drag: 0.9, health: 40, size: [0.55, 1.1, 1.85], twoWheeler: true, saddle: [0.12, -0.2] },
+  motorbike: { kind: 'motorbike', name: 'Soweto Scrambler', color: 0x9a3b2c, maxSpeed: 46, acceleration: 35, brake: 40, steering: 2.95, drag: 0.6, health: 60, size: [0.75, 1.2, 2.25], twoWheeler: true, saddle: [0.08, -0.18] },
+  superbike: { kind: 'superbike', name: 'Sandton Rocket', color: 0x84f01c, maxSpeed: 60, acceleration: 46, brake: 46, steering: 3.1, drag: 0.5, health: 55, size: [0.78, 1.05, 2.2], twoWheeler: true, saddle: [0.1, -0.3] },
 };
 
 export type WeaponId = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rpg';

@@ -67,3 +67,32 @@ describe('Pedestrian death pose', () => {
     expectDown(ped);
   });
 });
+
+describe('Pedestrian knockdown', () => {
+  it('floors the ped, then personality picks fight or flight on getting up', () => {
+    const player = new THREE.Vector3(1, 0, 0);
+    const timid = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 1);
+    timid.bravery = 0.1; timid.aggressive = false;
+    expect(timid.knockdown(player)).toBe(false);
+    expectDown(timid);
+    for (let i = 0; i < 150; i++) timid.update(1 / 60, city, choices, player);
+    expect(timid.state).toBe('flee');
+    expect(timid.group.rotation.z).toBe(0);
+    expect(timid.group.position.y).toBe(0);
+    const brave = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 2);
+    brave.bravery = 0.95;
+    brave.knockdown(player);
+    for (let i = 0; i < 150; i++) brave.update(1 / 60, city, choices, new THREE.Vector3(8, 0, 8));
+    expect(brave.state).toBe('hostile');
+    expect(brave.enraged).toBe(true);
+  });
+
+  it('stays down for good when the knockdown depletes health', () => {
+    const ped = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 1);
+    ped.health = 10;
+    expect(ped.knockdown(new THREE.Vector3(1, 0, 0))).toBe(true);
+    for (let i = 0; i < 200; i++) ped.update(1 / 60, city, choices, new THREE.Vector3(1, 0, 0));
+    expectDown(ped);
+    expect(ped.health).toBe(0);
+  });
+});

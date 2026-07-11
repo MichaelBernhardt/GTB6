@@ -36,6 +36,8 @@ export class UIManager {
   onBuyWeapon?: (id: WeaponId) => void;
   onBuyAmmo?: (id: WeaponId) => void;
   onMissionChoice?: (id: MissionChoice['id']) => void;
+  onSafehouseSave?: () => void;
+  onSafehouseSleep?: () => void;
 
   constructor() {
     this.root.id = 'ui'; this.hud.id = 'hud'; this.toast.id = 'toast'; this.toast.setAttribute('role', 'status'); this.toast.setAttribute('aria-live', 'polite'); this.toast.setAttribute('aria-atomic', 'true');
@@ -50,7 +52,7 @@ export class UIManager {
 
   damageFlash(): void { this.vignette.classList.remove('is-flashing'); void this.vignette.offsetWidth; this.vignette.classList.add('is-flashing'); }
   screenFade(): void { this.fade.classList.add('is-active'); clearTimeout(this.fadeTimer); this.fadeTimer = setTimeout(() => this.fade.classList.remove('is-active'), 620); }
-  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = []): void { this.minimapView.draw(x, z, heading, roads, markers, police, hostiles); }
+  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom?: number): void { this.minimapView.draw(x, z, heading, roads, markers, police, hostiles, zoom); }
 
   showWeaponWheel(entries: WheelEntry[]): void {
     const radius = 150; const step = (Math.PI * 2) / Math.max(1, entries.length);
@@ -63,13 +65,13 @@ export class UIManager {
   hideWeaponWheel(): void { this.wheel.classList.remove('is-visible'); }
 
   notify(title: string, detail = '', success = true, tone?: NotificationTone): void {
-    const resolved = tone ?? (success ? 'success' : 'danger'); this.toast.innerHTML = `<small>${resolved === 'danger' ? 'CITY ALERT' : resolved === 'reputation' ? 'STREET WORD' : 'UPDATE'}</small><strong>${title}</strong><span>${detail}</span>`;
+    const resolved = tone ?? (success ? 'success' : 'danger'); this.toast.innerHTML = `<small>${resolved === 'danger' ? 'CITY ALERT' : resolved === 'reputation' ? 'STREET WORD' : resolved === 'radio' ? 'JMPD DISPATCH' : 'UPDATE'}</small><strong>${title}</strong><span>${detail}</span>`;
     this.toast.className = `is-visible tone-${resolved}`; this.toastTimer = 4;
   }
   hideMenu(): void { this.menuView.hide(); }
 
   back(): boolean {
-    if (this.menuView.screen === 'shop') { this.onResume?.(); return true; }
+    if (this.menuView.screen === 'shop' || this.menuView.screen === 'safehouse') { this.onResume?.(); return true; }
     if (this.menuView.screen === 'choice') return true;
     if (this.menuView.screen === 'controls') { if (this.controlsFromMain || !this.lastSettings) this.showMainMenu(); else this.showPause(this.lastSettings); return true; }
     if (this.menuView.screen === 'cheats') { if (this.lastSettings) this.showPause(this.lastSettings); else this.showMainMenu(); return true; }
@@ -88,6 +90,7 @@ export class UIManager {
   showControls(fromMain = false): void { this.controlsFromMain = fromMain; this.menuView.controls(fromMain, () => this.back()); }
   showShop(entries: ShopCatalogEntry[], balance: number): void { this.menuView.shop(entries, balance, { buy: (id) => this.onBuyWeapon?.(id), ammo: (id) => this.onBuyAmmo?.(id), leave: () => this.back() }); }
   showMissionChoice(title: string, choices: MissionChoice[]): void { this.menuView.choice(title, choices, (id) => this.onMissionChoice?.(id)); }
+  showSafehouse(name: string, sleepHours: number): void { this.menuView.safehouse(name, sleepHours, { save: () => this.onSafehouseSave?.(), sleep: () => this.onSafehouseSleep?.(), leave: () => this.back() }); }
   showCheats(weapons: CheatWeaponEntry[], cheats: CheatSettings): void {
     this.menuView.cheats(weapons, cheats, { weapon: (id) => { this.onGiveWeapon?.(id); this.onShowCheats?.(); }, maxAmmo: () => this.onMaxAmmo?.(), toggle: (value) => this.onCheats?.(value), back: () => this.back() });
   }
