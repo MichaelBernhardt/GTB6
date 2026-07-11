@@ -241,7 +241,11 @@ export class Game {
     this.closeWeaponWheel(); this.input.suspend(true); document.exitPointerLock();
     this.ui.openMap(this.mapFrame());
   }
-  private closeMap(): void { if (!this.ui.mapOpen) return; this.ui.closeMap(); this.input.suspend(false); }
+  private closeMap(): void {
+    if (!this.ui.mapOpen) return;
+    this.ui.closeMap(); this.input.suspend(false);
+    if (this.mode === 'playing') void this.renderer.domElement.requestPointerLock().catch(() => undefined); // may hit the browser's relock cooldown: the standing click-to-relock fallback covers that
+  }
 
   /** Live snapshot fed to the map overlay: player pose plus markers in the minimap's language. */
   private mapFrame(): MapViewFrame {

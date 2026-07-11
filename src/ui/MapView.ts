@@ -9,6 +9,17 @@ const MAP = rawMap as unknown as RenderMapData;
 /** Zoom the map opens at — a readable neighbourhood view centred on the player. */
 const OPEN_ZOOM = 0.12;
 
+/** Keys that close the map overlay. Pure so the gating is testable. */
+export const closesMapOverlay = (code: string): boolean => code === 'Escape' || code === 'KeyM';
+
+/** What the overlay's capture-phase keydown handler does with a key press while the map is open.
+ *  Close keys are swallowed even on auto-repeat (but only a fresh press closes): closing unsuspends
+ *  the game's InputManager, so any leaked repeat of M/Escape would instantly reopen the map or pause. */
+export function mapOverlayKeyAction(code: string, repeat: boolean): 'close' | 'swallow' | 'ignore' {
+  if (!closesMapOverlay(code)) return 'ignore';
+  return repeat ? 'swallow' : 'close';
+}
+
 /** Live snapshot the game hands the map each frame it is open. */
 export interface MapViewFrame {
   x: number; z: number; heading: number;
@@ -60,12 +71,19 @@ export class MapView {
       this.viewX += before.x - after.x; this.viewZ += before.z - after.z; // keep cursor anchored
       this.requestDraw();
     }, { passive: false });
-    window.addEventListener('keydown', (e) => {
-      if (!this.open) return;
-      if (e.code === 'Escape' || e.code === 'KeyM') { e.preventDefault(); this.onClose?.(); }
-    });
     window.addEventListener('resize', () => { if (this.open) this.draw(); });
   }
+
+  /** Capture-phase keydown, registered only while the map is open. The game's InputManager also
+   *  listens on window (bubble phase): preventDefault + stopImmediatePropagation here guarantees the
+   *  closing M/Escape press never reaches it — otherwise closing unsuspends input inside the same
+   *  event dispatch and the very press that closed the map re-opens it (M) or pauses the game (Esc). */
+  private readonly onKeyDown = (e: KeyboardEvent): void => {
+    const action = mapOverlayKeyAction(e.code, e.repeat);
+    if (action === 'ignore') return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (action === 'close') this.onClose?.();
+  };
 
   get open(): boolean { return this.root.classList.contains('is-visible'); }
 
@@ -77,10 +95,15 @@ export class MapView {
   show(frame: MapViewFrame): void {
     this.frame = frame; this.zoom = OPEN_ZOOM; this.viewX = frame.x; this.viewZ = frame.z;
     this.root.classList.add('is-visible'); this.root.setAttribute('aria-hidden', 'false');
+    window.addEventListener('keydown', this.onKeyDown, true); // capture: runs before the game's window listeners
     this.draw();
   }
 
-  hide(): void { this.root.classList.remove('is-visible'); this.root.setAttribute('aria-hidden', 'true'); }
+  hide(): void {
+    window.removeEventListener('keydown', this.onKeyDown, true);
+    this.dragging = false; this.canvas.classList.remove('is-dragging');
+    this.root.classList.remove('is-visible'); this.root.setAttribute('aria-hidden', 'true');
+  }
 
   /** Feed a fresh live frame while open (markers/player move under the static map). */
   update(frame: MapViewFrame): void { if (!this.open) return; this.frame = frame; this.requestDraw(); }
