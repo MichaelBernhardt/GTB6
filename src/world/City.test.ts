@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
-import { districtAt, PARK_AREAS, ROAD_NETWORK } from './City';
+import { districtAt, PARK_AREAS, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_RISE, terrainHeightAt } from './City';
 import { CITY_JUNCTIONS, SIGNAL_CORNER_OFFSET } from './UrbanInfrastructure';
 
 describe('Joburg road topology', () => {
@@ -49,5 +49,25 @@ describe('district naming', () => {
   it('gives the deep south to Braamfontein regardless of flank', () => {
     expect(districtAt(300, -300)).toBe('Braamfontein');
     expect(districtAt(-300, -300)).toBe('Braamfontein');
+  });
+});
+
+describe('city elevation profile', () => {
+  it('creates deterministic broad hills and dips while flattening toward the coast', () => {
+    const samples = [[-320, 220], [-120, 40], [80, 260], [300, -80]] as const;
+    const heights = samples.map(([x, z]) => terrainHeightAt(x, z));
+    expect(heights).toEqual(samples.map(([x, z]) => terrainHeightAt(x, z)));
+    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(2);
+    expect(terrainHeightAt(120, -340)).toBeCloseTo(0);
+  });
+
+  it('keeps neighboring samples gently sloped and sidewalks above roads', () => {
+    for (let x = -350; x <= 350; x += 35) for (let z = -250; z <= 350; z += 35) {
+      const height = terrainHeightAt(x, z);
+      expect(Math.abs(terrainHeightAt(x + 1, z) - height)).toBeLessThan(0.12);
+      expect(Math.abs(terrainHeightAt(x, z + 1) - height)).toBeLessThan(0.12);
+    }
+    expect(ROAD_SURFACE_OFFSET).toBeGreaterThan(0);
+    expect(SIDEWALK_RISE).toBeCloseTo(0.22);
   });
 });

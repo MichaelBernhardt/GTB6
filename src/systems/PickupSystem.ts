@@ -4,7 +4,7 @@ import type { WeaponId } from '../config';
 import { buildPickupWeaponModel } from '../entities/WeaponModels';
 
 export type PickupKind = 'cash' | 'weapon' | 'ammo';
-export interface Pickup { kind: PickupKind; amount: number; weapon?: WeaponId; group: THREE.Group; age: number; phase: number; }
+export interface Pickup { kind: PickupKind; amount: number; weapon?: WeaponId; group: THREE.Group; age: number; phase: number; baseY: number; }
 export const PICKUP_LIFETIME = 30;
 export const PICKUP_BLINK_AT = 25;
 export const PICKUP_RADIUS = 1.2;
@@ -25,10 +25,10 @@ export class PickupSystem {
       const item = this.pickups[i]; if (!item) continue;
       item.age += dt; item.phase += dt;
       item.group.rotation.y += dt * 1.7;
-      item.group.position.y = 0.42 + Math.sin(item.phase * 2.4) * 0.07;
+      item.group.position.y = item.baseY + Math.sin(item.phase * 2.4) * 0.07;
       item.group.visible = item.age < PICKUP_BLINK_AT || Math.sin(item.age * 14) > -0.25;
       if (item.age >= PICKUP_LIFETIME) { this.remove(i); continue; }
-      if (canCollect && Math.hypot(item.group.position.x - player.x, item.group.position.z - player.z) < PICKUP_RADIUS && player.y < 1.4) { collected.push(item); this.remove(i); }
+      if (canCollect && Math.hypot(item.group.position.x - player.x, item.group.position.z - player.z) < PICKUP_RADIUS && Math.abs(player.y - (item.baseY - 0.42)) < 1.4) { collected.push(item); this.remove(i); }
     }
     return collected;
   }
@@ -48,9 +48,9 @@ export class PickupSystem {
     }
     const glow = new THREE.Mesh(new THREE.CircleGeometry(0.5, 20), new THREE.MeshBasicMaterial({ color: GLOW[kind], transparent: true, opacity: 0.26, depthWrite: false }));
     glow.rotation.x = -Math.PI / 2; glow.position.y = -0.36; group.add(glow);
-    group.position.set(position.x, 0.42, position.z);
+    const baseY = position.y + 0.42; group.position.set(position.x, baseY, position.z);
     this.scene.add(group);
-    this.pickups.push({ kind, amount, weapon, group, age: 0, phase: Math.random() * Math.PI * 2 });
+    this.pickups.push({ kind, amount, weapon, group, age: 0, phase: Math.random() * Math.PI * 2, baseY });
   }
 
   private remove(index: number): void {

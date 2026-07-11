@@ -23,7 +23,8 @@ export class ShopSystem {
   constructor(scene: THREE.Scene, city: City) {
     this.group.name = 'Shops'; scene.add(this.group);
     this.buildWeaponsShop(city); this.buildSpray(city); this.buildGarage(city); this.buildHotdogStand(city);
-    for (const shop of SHOPS) this.addPadMarker(shop);
+    for (const object of this.group.children) object.position.y += city.terrainHeightAt(object.position.x, object.position.z);
+    for (const shop of SHOPS) { shop.pad.y = city.surfaceHeightAt(shop.pad.x, shop.pad.z); this.addPadMarker(shop); }
   }
 
   update(dt: number): void {
@@ -48,9 +49,9 @@ export class ShopSystem {
   private addPadMarker(shop: ShopPlace): void {
     const radius = shop.driveIn ? 2.7 : 1.9;
     const disc = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 0.06, 26), new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.5 }));
-    disc.position.set(shop.pad.x, 0.32, shop.pad.z);
+    disc.position.set(shop.pad.x, shop.pad.y + 0.32, shop.pad.z);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(radius + 0.28, 0.09, 8, 26), new THREE.MeshBasicMaterial({ color: 0xf5c451 }));
-    ring.rotation.x = Math.PI / 2; ring.position.set(shop.pad.x, 0.34, shop.pad.z);
+    ring.rotation.x = Math.PI / 2; ring.position.set(shop.pad.x, shop.pad.y + 0.34, shop.pad.z);
     this.discs.push(disc); this.group.add(disc, ring);
   }
 

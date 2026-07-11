@@ -52,7 +52,7 @@ Delta time is clamped to 50 ms to prevent tab restoration from producing physics
 
 San Cordova uses an intentionally predictable horizontal-plane model. Buildings and containers expose XZ rectangle bounds. Player and vehicle motion first resolves X, then Z, which permits sliding along walls. Vehicles reflect and reduce speed on impact. Vehicle-to-vehicle response separates bodies, damps speed, and applies damage behind a cooldown so contact does not damage every frame.
 
-Character Y motion is separate and grounded at world height zero. The current ramp is visual; full heightfield suspension is outside the compact physics model.
+Terrain, roads, and raised sidewalks share deterministic surface-height queries. Characters ground against the surface beneath them, while vehicles sample the road normal for visual pitch and roll; the compact collision and navigation models remain two-dimensional.
 
 ## State boundaries
 

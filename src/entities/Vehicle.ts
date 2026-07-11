@@ -41,11 +41,12 @@ export class Vehicle {
   private steerGroup?: THREE.Group;
   private cranks: THREE.Object3D[] = [];
   private rider?: THREE.Group;
+  private groundY = 0.02;
 
   constructor(scene: THREE.Scene, kind: VehicleKind, position: THREE.Vector3, color?: number) {
     this.spec = { ...VEHICLE_SPECS[kind], color: color ?? VEHICLE_SPECS[kind].color };
     this.health = this.spec.health; this.maxHealth = this.spec.health; this.police = kind === 'police';
-    this.group.position.copy(position); this.group.name = this.spec.name; this.group.userData.vehicle = this;
+    this.groundY = position.y + 0.02; this.group.position.copy(position).setY(this.groundY); this.group.name = this.spec.name; this.group.userData.vehicle = this;
     scene.add(this.group); this.buildModel();
   }
 
@@ -166,9 +167,10 @@ export class Vehicle {
     for (const light of this.headLights) (light.material as THREE.MeshStandardMaterial).emissiveIntensity = intensity;
   }
 
-  reset(position?: THREE.Vector3): void {
+  reset(position?: THREE.Vector3, city?: City): void {
     if (position) this.group.position.copy(position);
-    this.group.position.y = 0.02; this.group.rotation.set(0, this.heading, 0); this.speed = 0;
+    this.groundY = (city ? city.roadHeightAt(this.group.position.x, this.group.position.z) : this.group.position.y) + 0.02;
+    this.group.position.y = this.groundY; this.group.rotation.set(0, this.heading, 0); this.speed = 0;
   }
 
   private move(dt: number, city: City): void {
@@ -184,8 +186,16 @@ export class Vehicle {
       const impact = Math.abs(this.speed); this.speed *= -0.16;
       this.impactHurt(props?.solidBlocked(next.x, next.z, radius) ? solidImpactDamage(impact) : Math.max(0, impact - 8) * 0.35, riderImpactDamage(impact), impact); // trees hit back harder than walls
     }
-    this.group.position.copy(resolved); this.group.rotation.y = this.heading;
-    if (this.group.position.y < 0) this.group.position.y = 0;
+    this.groundY = city.roadHeightAt(resolved.x, resolved.z) + 0.02;
+    this.group.position.copy(resolved).setY(this.groundY); this.alignToRoad(city, dt);
+  }
+
+  private alignToRoad(city: City, dt: number): void {
+    const normal = city.surfaceNormalAt(this.group.position.x, this.group.position.z, 'road');
+    const forward = new THREE.Vector3(Math.sin(this.heading), 0, Math.cos(this.heading)).projectOnPlane(normal).normalize();
+    const right = new THREE.Vector3().crossVectors(normal, forward).normalize();
+    const target = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, normal, forward));
+    this.group.quaternion.slerp(target, 1 - Math.exp(-dt * 10));
   }
 
   private updateVisuals(dt: number, braking: boolean): void {
@@ -201,9 +211,9 @@ export class Vehicle {
     } else this.wheels.forEach((wheel, index) => { wheel.rotation.x += spin; if (index < 2) wheel.rotation.y = this.steeringVisual; });
     if (this.bounce > 0.001) {
       this.bouncePhase += dt * 34;
-      this.group.position.y = this.bounce * Math.abs(Math.sin(this.bouncePhase));
+      this.group.position.y = this.groundY + this.bounce * Math.abs(Math.sin(this.bouncePhase));
       this.bounce *= Math.exp(-7 * dt);
-      if (this.bounce <= 0.001) { this.bounce = 0; this.group.position.y = 0.02; }
+      if (this.bounce <= 0.001) { this.bounce = 0; this.group.position.y = this.groundY; }
     }
     this.brakeLights.forEach((light) => (light.material as THREE.MeshBasicMaterial).color.setHex(braking ? 0xff2018 : 0x5b0808));
     if (this.police) {

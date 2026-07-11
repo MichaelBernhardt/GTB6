@@ -300,7 +300,7 @@ export class PopulationSystem {
   spawnHostiles(): void {
     if (this.hostiles.some((ped) => ped.state !== 'down')) return;
     const spots = [[-250, -245], [-278, -230], [-292, -245]];
-    spots.forEach(([x, z], index) => { const ped = new Pedestrian(this.scene, new THREE.Vector3(x, 0, z), index + 30, true); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
+    spots.forEach(([x, z], index) => { const y = this.city.surfaceHeightAt(x, z); const ped = new Pedestrian(this.scene, new THREE.Vector3(x, y, z), index + 30, true); ped.destination.set(x, y, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
   }
 
   nearestEnterable(position: THREE.Vector3, maxDistance = 4.2): Vehicle | undefined {
@@ -320,7 +320,7 @@ export class PopulationSystem {
   spawnTrafficVehicle(x: number, z: number): Vehicle {
     const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'taxi']; // same mix as the hand-authored traffic
     const kind = kinds[this.ambientSerial % kinds.length] ?? 'compact';
-    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, 0, z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][this.ambientSerial % 4]);
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][this.ambientSerial % 4]);
     this.ambientSerial++;
     vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     return vehicle;
@@ -352,6 +352,7 @@ export class PopulationSystem {
     for (const [kind, x, z, heading, color] of parked) {
       const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z)); // heading only: snapping the POSITION parked cars onto the live lane made traffic queue behind them forever
       const curb = this.city.collides(x, z, 1.4) ? pose.position : new THREE.Vector3(x, 0, z);
+      curb.y = this.city.roadHeightAt(curb.x, curb.z);
       const vehicle = new Vehicle(this.scene, kind, curb, color);
       vehicle.heading = Number.isFinite(pose.heading) ? pose.heading : heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([curb.x, curb.z]);
@@ -360,7 +361,7 @@ export class PopulationSystem {
     for (let i = 0; i < 15; i++) {
       const routeIndex = (i * 5 + 3) % this.city.trafficRoutes.length; const route = this.city.trafficRoutes[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
       const kind = kinds[i % kinds.length] ?? 'compact';
-      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, 0, point.z), kind === 'taxi' || kind === 'cab' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
+      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, this.city.roadHeightAt(point.x, point.z), point.z), kind === 'taxi' || kind === 'cab' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
       vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     }
   }
@@ -368,13 +369,13 @@ export class PopulationSystem {
   /** Sidewalk points can sit inside prop colliders (trees, benches, hydrants, shelters). A ped spawned
    *  embedded can never move — clampMove rejects every step — so nudge to the nearest clear pose. */
   private clearSpawn(x: number, z: number): THREE.Vector3 {
-    if (!this.city.collides(x, z, 0.5)) return new THREE.Vector3(x, 0, z);
+    if (!this.city.collides(x, z, 0.5)) return new THREE.Vector3(x, this.city.surfaceHeightAt(x, z), z);
     for (const radius of [1.4, 2.6, 3.8]) for (let step = 0; step < 8; step++) {
       const angle = step / 8 * Math.PI * 2 + radius;
       const nx = x + Math.cos(angle) * radius; const nz = z + Math.sin(angle) * radius;
-      if (!this.city.collides(nx, nz, 0.5)) return new THREE.Vector3(nx, 0, nz);
+      if (!this.city.collides(nx, nz, 0.5)) return new THREE.Vector3(nx, this.city.surfaceHeightAt(nx, nz), nz);
     }
-    return new THREE.Vector3(x, 0, z);
+    return new THREE.Vector3(x, this.city.surfaceHeightAt(x, z), z);
   }
 
   private spawnPedestrians(): void {
@@ -383,7 +384,8 @@ export class PopulationSystem {
       const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i); ped.pickDestination(this.city.sidewalkPoints); this.pedestrians.push(ped);
     }
     MISSIONS.forEach((mission, index) => {
-      const contact = new Pedestrian(this.scene, mission.start.position.clone(), index + 70);
+      const contactPosition = mission.start.position.clone(); contactPosition.y = this.city.surfaceHeightAt(contactPosition.x, contactPosition.z);
+      const contact = new Pedestrian(this.scene, contactPosition, index + 70);
       contact.state = 'idle'; contact.idleTime = 999999; contact.contact = true; contact.group.name = mission.contact; this.pedestrians.push(contact);
     });
     this.parkedSpots.slice(0, 4).forEach(([x, z], index) => {
@@ -437,7 +439,7 @@ export class PopulationSystem {
   /** Snaps a lost/stuck vehicle back onto the nearest lane node and forces a replan. */
   private rehomeVehicle(vehicle: Vehicle): void {
     const node = this.vehiclePlanner.node(this.vehiclePlanner.nearest(vehicle.group.position.x, vehicle.group.position.z));
-    if (node) { vehicle.reset(new THREE.Vector3(node.x, 0, node.z)); vehicle.aiTarget.set(node.x, 0, node.z); }
+    if (node) { vehicle.reset(new THREE.Vector3(node.x, this.city.roadHeightAt(node.x, node.z), node.z)); vehicle.aiTarget.set(node.x, 0, node.z); }
     vehicle.aiStuck = 0;
     this.trafficPlans.delete(vehicle);
   }
