@@ -43,7 +43,7 @@ export class ProjectileSystem {
       rocket.trailTimer -= dt;
       if (rocket.trailTimer <= 0) { rocket.trailTimer = 0.035; this.puff(rocket.group.position, 0x9aa0a3, 0.12, 0.55, 2.6, 0.55); }
       const position = rocket.group.position;
-      let hit = rocket.traveled >= rocket.range || position.y <= 0.05 || city.collides(position.x, position.z, 0.3);
+      let hit = rocket.traveled >= rocket.range || position.y <= city.terrainHeightAt(position.x, position.z) + 0.05 || city.collidesAt(position.x, position.z, 0.3, position.y, position.y); // 3D: rockets clear low walls and rooftop parapets they fly over
       if (!hit) for (const ped of population.pedestrians) { if (ped.state !== 'down' && position.distanceToSquared(ped.group.position.clone().setY(position.y > 2 ? position.y : 1)) < 1.8) { hit = true; break; } }
       if (!hit) for (const vehicle of [...population.vehicles, ...policeVehicles]) { if (position.distanceToSquared(vehicle.group.position.clone().setY(position.y > 2.6 ? position.y : 0.9)) < 5.3) { hit = true; break; } }
       if (hit) {

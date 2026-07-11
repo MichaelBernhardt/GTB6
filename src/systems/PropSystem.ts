@@ -10,6 +10,9 @@ export const PROP_TIERS: Record<PropKind, PropTier> = {
   streetlight: 'knockover', sign: 'knockover', hydrant: 'knockover', bench: 'knockover', shrub: 'knockover',
 };
 
+/** Flat-topped street furniture the player can genuinely stand on; poles, trunks and crowns stay walls-only. */
+export const STANDABLE_PROPS: ReadonlySet<PropKind> = new Set(['shelter', 'bench', 'fountain', 'monument']);
+
 export const KNOCKOVER_MIN_SPEED = 9; // m/s — below this a knock-over prop only nudges the car to a stop
 export const KNOCKOVER_SPEED_KEEP = 0.8; // car keeps 80% of its speed per felled prop (~20% loss)
 export const SOLID_PROP_DAMAGE_FACTOR = 0.55; // building walls use 0.35 — wrapping a car around a tree hurts more
@@ -92,6 +95,26 @@ export class PropRegistry {
 
   solidBlocked(x: number, z: number, radius: number): boolean {
     return this.grid.nearby(x, z, radius).some((prop) => prop.tier === 'solid' && overlaps(prop, x, z, radius));
+  }
+
+  /** Y-aware blocking for the airborne player: a prop only walls off the vertical band it actually occupies. */
+  blockedBetween(x: number, z: number, radius: number, y0: number, y1: number, baseOf: (px: number, pz: number) => number): boolean {
+    return this.grid.nearby(x, z, radius).some((prop) => {
+      if (prop.down || !overlaps(prop, x, z, radius)) return false;
+      const base = baseOf(prop.x, prop.z);
+      return base < y1 && base + prop.height > y0;
+    });
+  }
+
+  /** Highest standable prop top at or below the limit; undefined when nothing flat-topped is underfoot. */
+  supportTop(x: number, z: number, radius: number, limit: number, baseOf: (px: number, pz: number) => number): number | undefined {
+    let best: number | undefined;
+    for (const prop of this.grid.nearby(x, z, radius)) {
+      if (prop.down || !STANDABLE_PROPS.has(prop.kind) || !overlaps(prop, x, z, radius)) continue;
+      const top = baseOf(prop.x, prop.z) + prop.height;
+      if (top <= limit && (best === undefined || top > best)) best = top;
+    }
+    return best;
   }
 
   /** Fells every standing knock-over prop under a fast-enough car; slow hits leave them standing (solid-ish nudge). */

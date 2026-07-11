@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ARREST_DEPLOY_RANGE, ARREST_STOP_SPEED, copHitChance, maxInterceptors, nextUnitMode, POLICE_UNITS_BY_WANTED, policeCarStealable, PURSUIT_RANGE, separationPush, SHOOT_MIN_WANTED, STANDOFF_RANGE, standoffSlotOffset, standoffThrottle, toggleSiren, type UnitSituation } from './PoliceSystem';
+import { ARREST_DEPLOY_RANGE, ARREST_STOP_SPEED, copHitChance, maxInterceptors, nextUnitMode, POLICE_UNITS_BY_WANTED, policeCarStealable, PURSUIT_RANGE, separationPush, SHOOT_MIN_WANTED, sightLineClear, STANDOFF_RANGE, standoffSlotOffset, standoffThrottle, toggleSiren, type UnitSituation } from './PoliceSystem';
 import { replanInterval } from './NavGraph';
 
 const onFoot = (overrides: Partial<UnitSituation> = {}): UnitSituation => ({ sighted: true, playerInVehicle: false, distance: 20, speed: 12, crewOut: false, ...overrides });
@@ -153,5 +153,32 @@ describe('unit spacing', () => {
     expect(separationPush(0, 0, 1)).toEqual({ x: 0.5, z: 0 }); // same-point stack still resolves
     expect(separationPush(4, 0, 3)).toBeNull();
     expect(separationPush(0, 3, 3)).toBeNull(); // boundary counts as clear
+  });
+});
+
+describe('3D sight lines', () => {
+  // One 9u-tall building between the shooter and the target; occlusion mirrors the collider band test.
+  const building = { minX: -5, maxX: 5, minZ: 10, maxZ: 20, y0: 0, height: 9 };
+  const occludes = (x: number, z: number, y0: number, y1: number): boolean =>
+    x > building.minX && x < building.maxX && z > building.minZ && z < building.maxZ && building.y0 < y1 && building.y0 + building.height > y0;
+
+  it('blocks a street-level target behind the building', () => {
+    expect(sightLineClear({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 30 }, occludes)).toBe(false);
+  });
+
+  it('sees a clear street-level target', () => {
+    expect(sightLineClear({ x: 30, y: 0, z: 0 }, { x: 30, y: 0, z: 30 }, occludes)).toBe(true);
+  });
+
+  it('cannot shoot a rooftop player through the floors below him', () => {
+    // Player on the 9u roof, cop right at the base: every sample passes through the building band.
+    expect(sightLineClear({ x: 0, y: 0, z: 5 }, { x: 0, y: 9, z: 15 }, occludes)).toBe(false);
+  });
+
+  it('sees the rooftop player once the sight line rises over the parapet', () => {
+    // From 60u out, the eye-to-chest line clears the 9u roof edge on its way to the elevated target.
+    expect(sightLineClear({ x: 0, y: 0, z: 80 }, { x: 0, y: 9, z: 15 }, occludes)).toBe(true);
+    // Same geometry with the player at street level behind the building stays blocked.
+    expect(sightLineClear({ x: 0, y: 0, z: 80 }, { x: 0, y: 0, z: 5 }, occludes)).toBe(false);
   });
 });

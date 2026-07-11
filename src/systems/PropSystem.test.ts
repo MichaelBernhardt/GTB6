@@ -6,7 +6,7 @@ import { Vehicle } from '../entities/Vehicle';
 import type { City } from '../world/City';
 import {
   FALL_DURATION, FALL_REST_ANGLE, fallAngle, fallAxis, HYDRANT_SPRAY_DURATION, KNOCKOVER_MIN_SPEED, KNOCKOVER_SPEED_KEEP,
-  knockoverDamage, PROP_TIERS, PropGrid, type PropCollider, PropRegistry, PropSystem, solidImpactDamage,
+  knockoverDamage, PROP_TIERS, PropGrid, type PropCollider, PropRegistry, PropSystem, solidImpactDamage, STANDABLE_PROPS,
 } from './PropSystem';
 
 const audio = { propKnock: () => {}, hydrantHiss: () => {} } as unknown as AudioManager;
@@ -172,5 +172,37 @@ describe('prop effects system', () => {
     expect(scene.children.length).toBeGreaterThan(10); // droplets in flight
     for (let step = 0; step < (HYDRANT_SPRAY_DURATION + 3) * 20; step++) system.update(0.05);
     expect(scene.children).toHaveLength(0); // spray over, droplets removed
+  });
+});
+
+describe('prop heights in a 3D world', () => {
+  const flat = (): number => 0;
+
+  it('only walls off the vertical band a prop actually occupies', () => {
+    const registry = new PropRegistry();
+    registry.register('shrub', 0, 0, 1.1, 1.2); // hedge
+    expect(registry.blockedBetween(0, 0, 0.65, 0.55, 1.8, flat)).toBe(true); // at street level it blocks
+    expect(registry.blockedBetween(0, 0, 0.65, 1.75, 3, flat)).toBe(false); // mid-hop the capsule clears it
+    expect(registry.blocked(0, 0, 0.65)).toBe(true); // flat-world callers unchanged
+  });
+
+  it('offers flat-topped props as standing surfaces and skips poles', () => {
+    const registry = new PropRegistry();
+    registry.register('bench', 0, 0, 0.85, 1.1);
+    registry.register('streetlight', 3, 0, 0.2, 6.5);
+    expect(STANDABLE_PROPS.has('bench')).toBe(true);
+    expect(STANDABLE_PROPS.has('streetlight')).toBe(false);
+    expect(registry.supportTop(0, 0, 0.35, 1.1 + 0.55, flat)).toBeCloseTo(1.1);
+    expect(registry.supportTop(0, 0, 0.35, 0.55, flat)).toBeUndefined(); // top out of step reach from the street
+    expect(registry.supportTop(3, 0, 0.35, 99, flat)).toBeUndefined(); // no perching on a light pole
+  });
+
+  it('stops supporting a prop once it is knocked down', () => {
+    const registry = new PropRegistry();
+    const bench = registry.register('bench', 0, 0, 0.85, 1.1);
+    expect(registry.supportTop(0, 0, 0.35, 2, flat)).toBeCloseTo(1.1);
+    bench.down = true;
+    expect(registry.supportTop(0, 0, 0.35, 2, flat)).toBeUndefined();
+    expect(registry.blockedBetween(0, 0, 0.65, 0.55, 1.8, flat)).toBe(false); // debris underfoot
   });
 });

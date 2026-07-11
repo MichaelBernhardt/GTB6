@@ -19,7 +19,7 @@ import { Vehicle } from './entities/Vehicle';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
-import { clampT, cornerSide, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestGroundedCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
+import { clampT, cornerSide, COVER_ENTER_RANGE, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestGroundedCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
@@ -462,6 +462,8 @@ export class Game {
 
   private updateOnFoot(dt: number): void {
     this.player.update(dt, this.input, this.cameraController.yaw, this.city, this.updateCoverState(dt));
+    const fall = this.player.consumeFallDamage(); // hard landings billed through the usual damage path
+    if (fall > 0) { this.damagePlayer(fall); this.shake = Math.min(0.7, this.shake + 0.25); this.audio.collision(10 + fall * 0.3); }
     for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
       if (!bump.assault) continue;
       this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
@@ -518,7 +520,7 @@ export class Game {
     const position = this.player.group.position;
     if (this.settings.cameraViewFoot === 0 || this.player.tumbling) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble knocks you out of cover
     if (!this.cover) {
-      const spot = nearestGroundedCoverSpot(position.x, position.z, this.player.onGround, this.city.colliders);
+      const spot = nearestGroundedCoverSpot(position.x, position.z, this.player.onGround, this.city.colliders, COVER_ENTER_RANGE, position.y); // only faces that shield the player's elevation
       this.coverAvailable = Boolean(spot);
       if (!spot || !this.input.consume('KeyQ')) return undefined;
       const t = clampT(spot, coverT(spot, position.x, position.z), PLAYER.radius);
@@ -539,9 +541,9 @@ export class Game {
     cover.peek += ((aiming && cover.corner !== 0 ? 1 : 0) - cover.peek) * (1 - Math.exp(-dt * 10)); // peek only exists at a corner
     const base = coverPosition(cover.spot, cover.t, PLAYER.radius);
     const desired = new THREE.Vector3(
-      base.x + (tangent.x * cover.corner * PEEK_STEP + cover.spot.normal.x * PEEK_OUT) * cover.peek, 0,
+      base.x + (tangent.x * cover.corner * PEEK_STEP + cover.spot.normal.x * PEEK_OUT) * cover.peek, position.y,
       base.z + (tangent.z * cover.corner * PEEK_STEP + cover.spot.normal.z * PEEK_OUT) * cover.peek);
-    const clamped = this.city.clampMove(position, desired, PLAYER.radius);
+    const clamped = this.city.clampMoveAt(position, desired, PLAYER.radius);
     const snap = 1 - Math.exp(-dt * 14); // one fast lerp covers the entry snap and the slide/peek motion
     position.x = THREE.MathUtils.lerp(position.x, clamped.x, snap); position.z = THREE.MathUtils.lerp(position.z, clamped.z, snap);
     return { heading: aiming ? yaw + Math.PI : coverHeading(cover.spot), peek: cover.peek, twist: cover.corner * cover.peek * 0.45, moving: slide !== 0 };

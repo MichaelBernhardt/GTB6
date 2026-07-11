@@ -28,6 +28,22 @@ export const REBOARD_RANGE = 46;
 /** Below two stars JMPD only follows and shouts; live fire starts at two. */
 export const SHOOT_MIN_WANTED = 2;
 
+/** Officer eye and suspect chest heights for the 3D sight line. */
+export const EYE_HEIGHT = 1.5;
+export const TARGET_HEIGHT = 1.2;
+/** Pure 3D sight line, sampled every ~4u: from the shooter's eye to the target's chest at their actual
+ *  elevations. A rooftop player is seen only where the geometry genuinely opens up — no shots through floors. */
+export function sightLineClear(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, occludes: (x: number, z: number, y0: number, y1: number) => boolean): boolean {
+  const eyeY = from.y + EYE_HEIGHT; const targetY = to.y + TARGET_HEIGHT;
+  const distance = Math.hypot(to.x - from.x, to.z - from.z);
+  const steps = Math.max(1, Math.ceil(distance / 4));
+  for (let step = 1; step < steps; step++) {
+    const t = step / steps; const y = eyeY + (targetY - eyeY) * t;
+    if (occludes(from.x + (to.x - from.x) * t, from.z + (to.z - from.z) * t, y - 0.4, y + 0.4)) return false;
+  }
+  return true;
+}
+
 export type UnitMode = 'drive' | 'standoff' | 'arrest';
 export interface UnitSituation { sighted: boolean; playerInVehicle: boolean; distance: number; speed: number; crewOut: boolean; }
 
@@ -387,10 +403,7 @@ export class PoliceSystem {
   }
 
   private hasLineOfSight(from: THREE.Vector3, to: THREE.Vector3): boolean {
-    const distance = Math.hypot(to.x - from.x, to.z - from.z);
-    const steps = Math.max(1, Math.ceil(distance / 4));
-    for (let step = 1; step < steps; step++) { const t = step / steps; if (this.city.collides(from.x + (to.x - from.x) * t, from.z + (to.z - from.z) * t, 0.4)) return false; }
-    return true;
+    return sightLineClear(from, to, (x, z, y0, y1) => this.city.collidesAt(x, z, 0.4, y0, y1));
   }
 
   private brainOf(vehicle: Vehicle): PoliceBrain {

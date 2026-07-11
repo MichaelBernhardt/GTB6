@@ -16,6 +16,7 @@ const makeCity = (): City => ({
   sidewalkPoints: walks.flatMap((walk) => walk.points),
   trafficRoutes: lanes.map((lane) => lane.points),
   collides: () => false,
+  collidesAt: () => false,
   isOnRoad: () => true,
   surfaceHeightAt: () => 0,
   sidewalkHeightAt: () => 0,

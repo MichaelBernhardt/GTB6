@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { PLAYER, type VehicleKind, type WeaponId } from '../config';
 import type { InputManager } from '../core/InputManager';
-import { jumpVelocity, moveSpeed } from '../core/GameRules';
+import { fallDamage, jumpVelocity, moveSpeed, stepVertical } from '../core/GameRules';
 import type { CheatSettings } from '../types';
 import type { City } from '../world/City';
 import { buildWeaponModel } from './WeaponModels';
@@ -37,6 +37,9 @@ export class Player {
   private tumbleTimer = 0;
   private tumbleDuration = 1;
   private tumbleDir = 1;
+  private tumbleBaseY = 0;
+  private fallOriginY = 0;
+  private pendingFallDamage = 0;
   private weapon: WeaponId = 'pistol';
   private weaponMeshes = new Map<WeaponId, THREE.Group>();
   private punchTimer = 0;
@@ -52,7 +55,7 @@ export class Player {
     if (this.tumbleTimer > 0) { this.applyTumble(dt); return; }
     const aimHeld = input.aiming && this.weapon !== 'fists'; // Ctrl: aim mode — raised gun, half speed, camera-facing
     const aiming = aimHeld || (input.firing && this.weapon !== 'fists'); // hip fire still raises the gun while the trigger is down
-    if (cover) { this.updateCover(dt, cover, aiming); return; }
+    if (cover) { this.updateCover(dt, cover, aiming, city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y)); return; }
     this.torso.rotation.y *= Math.exp(-dt * 8); // unwind any leftover cover twist
     const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
     const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
@@ -64,7 +67,7 @@ export class Player {
       move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
       const speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld);
       const desired = this.group.position.clone().addScaledVector(move, speed * dt);
-      this.group.position.copy(city.clampMove(this.group.position, desired, PLAYER.radius));
+      this.group.position.copy(city.clampMoveAt(this.group.position, desired, PLAYER.radius)); // y-aware: walls above the head or below the feet don't block
       this.turnToward(aimHeld ? cameraYaw + Math.PI : Math.atan2(move.x, move.z), dt, aimHeld ? 13 : sprinting ? 15 : 11);
       this.walkPhase += dt * speed * 1.05;
       this.animateLocomotion(dt, sprinting, aiming);
@@ -74,20 +77,28 @@ export class Player {
     }
     this.leftLeg.rotation.z *= Math.exp(-dt * 8); this.rightLeg.rotation.z *= Math.exp(-dt * 8); // legs close after riding astride
     this.group.rotation.z *= Math.exp(-dt * 12); // shed any leftover bike lean
-    const ground = city.surfaceHeightAt(this.group.position.x, this.group.position.z);
-    if (this.onGround) this.group.position.y = ground;
     this.applyPunch(dt);
-    if (input.consume('Space') && this.onGround) { this.velocityY = jumpVelocity(this.cheats.bigJump); this.onGround = false; }
-    this.velocityY -= PLAYER.gravity * dt; this.group.position.y += this.velocityY * dt;
+    const jump = input.consume('Space') && this.onGround ? jumpVelocity(this.cheats.bigJump) : undefined;
+    const support = city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y);
+    const motion = { y: this.group.position.y, velocityY: this.velocityY, onGround: this.onGround, fallOriginY: this.fallOriginY };
+    const landing = stepVertical(motion, dt, support, jump);
+    this.group.position.y = motion.y; this.velocityY = motion.velocityY; this.onGround = motion.onGround; this.fallOriginY = motion.fallOriginY;
     if (!this.onGround) {
       this.leftLeg.rotation.x = THREE.MathUtils.lerp(this.leftLeg.rotation.x, -0.28, dt * 9); this.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rightLeg.rotation.x, 0.22, dt * 9);
       this.leftShin.rotation.x = THREE.MathUtils.lerp(this.leftShin.rotation.x, 0.65, dt * 9); this.rightShin.rotation.x = THREE.MathUtils.lerp(this.rightShin.rotation.x, 0.48, dt * 9);
     }
-    if (this.group.position.y <= ground) { this.group.position.y = ground; this.velocityY = 0; this.onGround = true; }
+    if (landing.landed) {
+      const damage = fallDamage(landing.drop);
+      if (damage > 0) { this.pendingFallDamage += damage; this.tumble(); } // hard landing: eat tar, Game settles the bill
+    }
   }
 
-  /** Back against the wall: Game moves the group; this leans the body, twists the torso for the peek and keeps feet grounded. */
-  private updateCover(dt: number, cover: CoverPose, aiming: boolean): void {
+  /** Landing bill accrued since the last query; Game routes it through the usual damage path (cheats respected). */
+  consumeFallDamage(): number { const amount = this.pendingFallDamage; this.pendingFallDamage = 0; return amount; }
+
+  /** Back against the wall: Game moves the group; this leans the body, twists the torso for the peek and keeps
+   *  feet planted on whatever surface holds the cover — street or podium roof alike. */
+  private updateCover(dt: number, cover: CoverPose, aiming: boolean, ground: number): void {
     this.turnToward(cover.heading, dt, 12);
     this.leftLeg.rotation.z *= Math.exp(-dt * 8); this.rightLeg.rotation.z *= Math.exp(-dt * 8); // legs close after riding astride
     if (cover.moving) { this.walkPhase += dt * 5.5; this.animateLocomotion(dt, false, aiming); }
@@ -95,7 +106,7 @@ export class Player {
     this.torso.rotation.y = THREE.MathUtils.lerp(this.torso.rotation.y, cover.twist, dt * 10);
     this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, -0.085 * (1 - cover.peek), dt * 8); // shoulder-blades-to-brick lean, straightening as the peek comes out
     this.applyPunch(dt);
-    this.group.position.y = 0; this.velocityY = 0; this.onGround = true;
+    this.group.position.y = ground; this.velocityY = 0; this.onGround = true;
   }
 
   takeDamage(amount: number): void { this.health = Math.max(0, this.health - Math.max(0, amount)); }
@@ -111,7 +122,7 @@ export class Player {
   punch(): void { this.punchTimer = 0.3; this.punchLeft = !this.punchLeft; }
 
   /** Knocked off a two-wheeler: borrow the pedestrian down-pose (rolled onto the side) for a beat, then get up. */
-  tumble(duration = 1.15): void { this.tumbleTimer = duration; this.tumbleDuration = duration; this.tumbleDir = Math.random() < 0.5 ? -1 : 1; this.velocityY = 0; this.onGround = true; }
+  tumble(duration = 1.15): void { this.tumbleTimer = duration; this.tumbleDuration = duration; this.tumbleDir = Math.random() < 0.5 ? -1 : 1; this.tumbleBaseY = this.group.position.y; this.velocityY = 0; this.onGround = true; }
   get tumbling(): boolean { return this.tumbleTimer > 0; }
 
   private applyTumble(dt: number): void {
@@ -119,10 +130,10 @@ export class Player {
     const progress = 1 - this.tumbleTimer / this.tumbleDuration;
     const roll = Math.min(1, progress * 3.2) * (1 - THREE.MathUtils.smoothstep(progress, 0.72, 1)); // slam down fast, get up late
     this.group.rotation.z = this.tumbleDir * (Math.PI / 2) * roll;
-    this.group.position.y = 0.36 * roll;
+    this.group.position.y = this.tumbleBaseY + 0.36 * roll; // rolled on whatever surface the tumble started on
     this.leftArm.rotation.x = -2.3 * roll; this.rightArm.rotation.x = -2.1 * roll;
     this.leftLeg.rotation.x = -0.5 * roll; this.rightLeg.rotation.x = 0.4 * roll;
-    if (this.tumbleTimer === 0) { this.group.rotation.z = 0; this.group.position.y = 0; }
+    if (this.tumbleTimer === 0) { this.group.rotation.z = 0; this.group.position.y = this.tumbleBaseY; }
   }
 
   /** Seated riding pose, driven from Game while on a two-wheeler: legs astride, hands to the bars.
