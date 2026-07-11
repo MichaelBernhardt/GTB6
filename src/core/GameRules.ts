@@ -64,6 +64,18 @@ export function jumpVelocity(bigJump: boolean): number {
   return PLAYER.jumpSpeed * (bigJump ? CHEATS.jumpMultiplier : 1);
 }
 
+/** Bicycles have no throttle: W turns the cranks at a cruise, Shift (the sprint key) stands on the pedals. */
+export const BICYCLE_CRUISE_FACTOR = 0.6;
+export function bicycleCap(maxSpeed: number, pedalHard: boolean): number {
+  return maxSpeed * (pedalHard ? 1 : BICYCLE_CRUISE_FACTOR);
+}
+
+/** Losing this much speed in a single hit throws the rider off a two-wheeler (bicycle flat-out just clears it). */
+export const KNOCKOFF_IMPACT_SPEED = 13;
+export function shouldKnockOff(impact: number): boolean { return impact >= KNOCKOFF_IMPACT_SPEED; }
+/** Riders wear no cocoon: collision energy above a bruising floor lands on the player's health bar. */
+export function riderImpactDamage(impact: number): number { return Math.max(0, Math.round((impact - 6) * 1.4)); }
+
 export function spreadOffset(spread: number, random: () => number = Math.random): [number, number] {
   const angle = random() * Math.PI * 2; const radius = Math.sqrt(random()) * spread;
   return [Math.cos(angle) * radius, Math.sin(angle) * radius];

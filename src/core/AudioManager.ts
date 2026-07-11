@@ -1,9 +1,11 @@
 import type { WeaponSound } from '../config';
-import { distanceGain, engineState, stereoPan } from './AudioMath';
+import { distanceGain, engineCutoff, engineFrequency, engineLevel, engineProfile, engineState, engineThrob, shiftGlide, stereoPan, trafficEngineGain, type EngineProfile } from './AudioMath';
 
 interface BurstOptions { duration: number; type: BiquadFilterType; frequency: number; q?: number; peak: number; decay: number; at?: number; pan?: number; echo?: number; rate?: number; rateTo?: number; }
 interface BlipOptions { type?: OscillatorType; slide?: number; at?: number; pan?: number; attack?: number; }
-interface EngineVoice { osc: OscillatorNode; sub: OscillatorNode; wobble: OscillatorNode; intake: AudioBufferSourceNode; intakeGain: GainNode; filter: BiquadFilterNode; gain: GainNode; gear: number; }
+interface EngineVoice { fund: OscillatorNode; sub: OscillatorNode; harm: OscillatorNode; throb: OscillatorNode; intake: AudioBufferSourceNode; rumble: AudioBufferSourceNode; throbDepth: GainNode; drive: GainNode; intakeGain: GainNode; rumbleGain: GainNode; filter: BiquadFilterNode; gain: GainNode; gear: number; }
+interface TrafficEngine { voice: EngineVoice; pan: StereoPannerNode; }
+interface BicycleVoice { wind: AudioBufferSourceNode; windGain: GainNode; nextTick: number; }
 interface SirenVoice { oscillators: OscillatorNode[]; gain: GainNode; pan: StereoPannerNode; }
 interface FireVoice { sources: AudioBufferSourceNode[]; lfo: OscillatorNode; gain: GainNode; pan: StereoPannerNode; nextPop: number; }
 interface Ambience { traffic: GainNode; wind: GainNode; windLfo: OscillatorNode; nextEvent: number; }
@@ -15,11 +17,14 @@ export class AudioManager {
   private noise?: AudioBuffer;
   private rumble?: AudioBuffer;
   private engineVoice?: EngineVoice;
+  private trafficEngine?: TrafficEngine;
+  private bicycleVoice?: BicycleVoice;
   private sirenVoice?: SirenVoice;
   private fireVoice?: FireVoice;
   private ambience?: Ambience;
   private listener = { x: 0, z: 0, yaw: 0 };
   private lastScream = 0;
+  private lastGrunt = 0;
   private radioTimer?: ReturnType<typeof setInterval>;
   private radioGain?: GainNode;
   private radioNextBeat = 0;
@@ -261,6 +266,37 @@ export class AudioManager {
     osc.start(t); vibrato.start(t); osc.stop(t + duration + 0.05); vibrato.stop(t + duration + 0.05);
   }
 
+  /** Short "hey!"-style vocal bark for a shoulder bump: a formant-filtered falling saw. */
+  grunt(x?: number, z?: number): void {
+    const context = this.context; const master = this.master;
+    if (!context || !master) return;
+    const t = this.now();
+    if (t < this.lastGrunt + 0.22) return;
+    let level = 0.09; let pan = 0;
+    if (x !== undefined && z !== undefined) {
+      level *= distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 6, 42);
+      if (level < 0.004) return;
+      pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.7;
+    }
+    this.lastGrunt = t;
+    const f0 = 125 + Math.random() * 95;
+    const duration = 0.13 + Math.random() * 0.09;
+    const osc = context.createOscillator(); osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(f0 * 1.35, t);
+    osc.frequency.exponentialRampToValueAtTime(f0 * 0.78, t + duration);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, t); gain.gain.exponentialRampToValueAtTime(level, t + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    const panner = context.createStereoPanner(); panner.pan.value = pan;
+    for (const [frequency, q, amount] of [[540, 4, 1], [1150, 5, 0.55]] as const) {
+      const formant = context.createBiquadFilter(); formant.type = 'bandpass'; formant.frequency.value = frequency; formant.Q.value = q;
+      const mix = context.createGain(); mix.gain.value = amount;
+      osc.connect(formant).connect(mix).connect(gain);
+    }
+    gain.connect(panner).connect(master);
+    osc.start(t); osc.stop(t + duration + 0.05);
+  }
+
   private crash(power: number): void {
     this.blip(88, 0.32, 0.28 + power * 0.22, { slide: 34 });
     this.burst({ duration: 0.36, type: 'lowpass', frequency: 210, peak: 0.18 + power * 0.24, decay: 0.24, echo: 0.35 });
@@ -281,24 +317,74 @@ export class AudioManager {
     }
   }
 
-  setEngine(active: boolean, speed = 0, throttle = 0, maxSpeed = 40): void {
+  setEngine(active: boolean, speed = 0, throttle = 0, maxSpeed = 40, kind?: string): void {
     if (!this.context || !this.master) return;
     const t = this.now();
-    if (active && !this.engineVoice) this.engineVoice = this.buildEngine();
-    const voice = this.engineVoice; if (!voice) return;
-    if (!active) {
-      voice.gain.gain.setTargetAtTime(0.0001, t, 0.08); voice.intakeGain.gain.setTargetAtTime(0.0001, t, 0.08);
-      for (const node of [voice.osc, voice.sub, voice.wobble, voice.intake]) { try { node.stop(t + 0.6); } catch { /* already stopped */ } }
-      this.engineVoice = undefined; return;
+    const pedalPowered = active && kind === 'bicycle'; // bicycles have no engine profile: freewheel tick + wind only
+    if (this.engineVoice && (!active || pedalPowered)) { this.stopEngine(this.engineVoice, t); this.engineVoice = undefined; }
+    if (this.bicycleVoice && !pedalPowered) this.stopBicycleVoice(t);
+    if (!active) return;
+    if (pedalPowered) { this.updateBicycle(t, speed, maxSpeed); return; }
+    if (!this.engineVoice) this.engineVoice = this.buildEngine(this.master);
+    this.updateEngine(this.engineVoice, t, speed, throttle, maxSpeed, engineProfile(kind), 1);
+  }
+
+  /** Bicycle: no engine at all — just a freewheel tick and wind that rises with speed. Near-silent to the world (and the JMPD). */
+  private updateBicycle(t: number, speed: number, maxSpeed: number): void {
+    if (!this.bicycleVoice) this.bicycleVoice = this.buildBicycle();
+    const voice = this.bicycleVoice;
+    const ratio = Math.min(1, Math.abs(speed) / Math.max(1, maxSpeed));
+    voice.windGain.gain.setTargetAtTime(0.0008 + ratio * ratio * 0.028, t, 0.12);
+    if (Math.abs(speed) > 1.5 && t >= voice.nextTick) {
+      voice.nextTick = t + Math.min(0.4, 1.15 / Math.abs(speed));
+      this.burst({ duration: 0.02, type: 'highpass', frequency: 5200, peak: 0.011 + ratio * 0.008, decay: 0.014 });
     }
+  }
+
+  private stopBicycleVoice(t: number): void {
+    const voice = this.bicycleVoice; if (!voice) return;
+    voice.windGain.gain.setTargetAtTime(0.0001, t, 0.1);
+    try { voice.wind.stop(t + 0.5); } catch { /* already stopped */ }
+    this.bicycleVoice = undefined;
+  }
+
+  /** One shared positional voice for the nearest NPC vehicle; falls off fast with distance. */
+  setTrafficEngine(active: boolean, x = 0, z = 0, speed = 0, maxSpeed = 40, kind?: string): void {
+    if (!this.context || !this.master) return;
+    const t = this.now();
+    if (active && !this.trafficEngine) {
+      const pan = this.context.createStereoPanner(); pan.connect(this.master);
+      this.trafficEngine = { voice: this.buildEngine(pan), pan };
+    }
+    const traffic = this.trafficEngine; if (!traffic) return;
+    if (!active) { this.stopEngine(traffic.voice, t); this.trafficEngine = undefined; return; }
+    const level = 0.6 * trafficEngineGain(Math.hypot(x - this.listener.x, z - this.listener.z));
+    traffic.pan.pan.setTargetAtTime(stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.6, t, 0.15);
+    this.updateEngine(traffic.voice, t, speed, 0.3, maxSpeed, engineProfile(kind), level);
+  }
+
+  private updateEngine(voice: EngineVoice, t: number, speed: number, throttle: number, maxSpeed: number, profile: EngineProfile, levelScale: number): void {
     const { gear, rpm } = engineState(speed, maxSpeed);
-    const glide = gear === voice.gear ? 0.09 : 0.035; voice.gear = gear;
-    const frequency = 42 + rpm * 108;
-    voice.osc.frequency.setTargetAtTime(frequency, t, glide);
+    const glide = shiftGlide(gear === voice.gear); voice.gear = gear;
+    const frequency = engineFrequency(rpm, profile.basePitch);
+    voice.fund.frequency.setTargetAtTime(frequency, t, glide);
+    voice.harm.frequency.setTargetAtTime(frequency, t, glide);
     voice.sub.frequency.setTargetAtTime(frequency * 0.5, t, glide);
-    voice.filter.frequency.setTargetAtTime(260 + throttle * 1900 + rpm * 900, t, 0.08);
-    voice.intakeGain.gain.setTargetAtTime(0.006 + throttle * 0.03 + rpm * 0.012, t, 0.1);
-    voice.gain.gain.setTargetAtTime(0.045 + rpm * 0.05 + throttle * 0.012, t, 0.09);
+    voice.filter.frequency.setTargetAtTime(engineCutoff(rpm, throttle, profile.brightness), t, 0.1);
+    const throb = engineThrob(rpm, profile.throbRate);
+    voice.throb.frequency.setTargetAtTime(throb.rate, t, glide);
+    const level = engineLevel(rpm, throttle, profile.level) * levelScale;
+    voice.gain.gain.setTargetAtTime(level, t, 0.09);
+    voice.throbDepth.gain.setTargetAtTime(level * throb.depth, t, 0.12);
+    voice.drive.gain.setTargetAtTime(0.4 + throttle * profile.growl * 1.2, t, 0.08);
+    voice.intakeGain.gain.setTargetAtTime(0.08 + throttle * 0.4 + rpm * 0.1, t, 0.1);
+    voice.rumbleGain.gain.setTargetAtTime(0.45 + rpm * 0.25, t, 0.12);
+  }
+
+  private stopEngine(voice: EngineVoice, t: number): void {
+    voice.gain.gain.setTargetAtTime(0.0001, t, 0.08);
+    voice.throbDepth.gain.setTargetAtTime(0, t, 0.08);
+    for (const node of [voice.fund, voice.sub, voice.harm, voice.throb, voice.intake, voice.rumble]) { try { node.stop(t + 0.6); } catch { /* already stopped */ } }
   }
 
   setSiren(active: boolean, x = 0, z = 0): void {
@@ -371,22 +457,52 @@ export class AudioManager {
     this.ambience = { traffic, wind, windLfo, nextEvent: this.now() + 5 };
   }
 
-  private buildEngine(): EngineVoice {
+  private buildBicycle(): BicycleVoice {
     const context = this.context as AudioContext; const master = this.master as GainNode;
-    const osc = context.createOscillator(); osc.type = 'sawtooth'; osc.frequency.value = 60;
-    const sub = context.createOscillator(); sub.type = 'square'; sub.frequency.value = 30; sub.detune.value = 7;
-    const wobble = context.createOscillator(); wobble.frequency.value = 6.5;
-    const wobbleDepth = context.createGain(); wobbleDepth.gain.value = 5;
-    wobble.connect(wobbleDepth).connect(osc.detune);
-    const filter = context.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 300;
+    const wind = context.createBufferSource(); wind.buffer = this.noise as AudioBuffer; wind.loop = true; wind.playbackRate.value = 0.9;
+    const filter = context.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.value = 880; filter.Q.value = 0.4;
+    const windGain = context.createGain(); windGain.gain.value = 0.0001;
+    wind.connect(filter).connect(windGain).connect(master); wind.start();
+    return { wind, windGain, nextTick: this.now() };
+  }
+
+  private buildEngine(destination: AudioNode): EngineVoice {
+    const context = this.context as AudioContext;
+    // Tonal core: triangle fundamental + quiet detuned saw layer through a soft waveshaper (growl),
+    // plus a sine sub-octave for weight. Everything tonal goes through a low-capped lowpass.
+    const fund = context.createOscillator(); fund.type = 'triangle'; fund.frequency.value = 54;
+    const sub = context.createOscillator(); sub.type = 'sine'; sub.frequency.value = 27;
+    const harm = context.createOscillator(); harm.type = 'sawtooth'; harm.frequency.value = 54; harm.detune.value = 6;
+    const harmGain = context.createGain(); harmGain.gain.value = 0.3;
+    const drive = context.createGain(); drive.gain.value = 0.4;
+    const shaper = context.createWaveShaper();
+    const curve = new Float32Array(257);
+    for (let i = 0; i < curve.length; i++) curve[i] = Math.tanh(1.6 * (i / 128 - 1));
+    shaper.curve = curve;
+    const filter = context.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 220; filter.Q.value = 0.5;
+    const shelf = context.createBiquadFilter(); shelf.type = 'highshelf'; shelf.frequency.value = 1600; shelf.gain.value = -9;
     const gain = context.createGain(); gain.gain.value = 0.0001;
+    // Noise body: intake hiss (bandpass white) + exhaust/road rumble (lowpassed brown noise).
     const intake = context.createBufferSource(); intake.buffer = this.noise as AudioBuffer; intake.loop = true;
-    const intakeFilter = context.createBiquadFilter(); intakeFilter.type = 'bandpass'; intakeFilter.frequency.value = 1800; intakeFilter.Q.value = 0.6;
+    const intakeFilter = context.createBiquadFilter(); intakeFilter.type = 'bandpass'; intakeFilter.frequency.value = 900; intakeFilter.Q.value = 0.5;
     const intakeGain = context.createGain(); intakeGain.gain.value = 0.0001;
-    osc.connect(filter); sub.connect(filter); filter.connect(gain).connect(master);
-    intake.connect(intakeFilter).connect(intakeGain).connect(master);
-    osc.start(); sub.start(); wobble.start(); intake.start();
-    return { osc, sub, wobble, intake, intakeGain, filter, gain, gear: 0 };
+    const rumble = context.createBufferSource(); rumble.buffer = this.rumble as AudioBuffer; rumble.loop = true;
+    const rumbleFilter = context.createBiquadFilter(); rumbleFilter.type = 'lowpass'; rumbleFilter.frequency.value = 190;
+    const rumbleGain = context.createGain(); rumbleGain.gain.value = 0.0001;
+    // Firing-order throb: one LFO amplitude-modulates the whole voice and flutters pitch a few cents.
+    const throb = context.createOscillator(); throb.frequency.value = 13;
+    const throbDepth = context.createGain(); throbDepth.gain.value = 0;
+    throb.connect(throbDepth).connect(gain.gain);
+    const flutter = context.createGain(); flutter.gain.value = 4;
+    throb.connect(flutter); flutter.connect(fund.detune); flutter.connect(harm.detune);
+    fund.connect(drive); harm.connect(harmGain).connect(drive);
+    drive.connect(shaper).connect(filter); sub.connect(filter);
+    filter.connect(shelf).connect(gain);
+    intake.connect(intakeFilter).connect(intakeGain).connect(gain);
+    rumble.connect(rumbleFilter).connect(rumbleGain).connect(gain);
+    gain.connect(destination);
+    fund.start(); sub.start(); harm.start(); throb.start(); intake.start(); rumble.start();
+    return { fund, sub, harm, throb, intake, rumble, throbDepth, drive, intakeGain, rumbleGain, filter, gain, gear: 0 };
   }
 
   private buildSiren(): SirenVoice {

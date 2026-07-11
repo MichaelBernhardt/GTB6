@@ -104,6 +104,38 @@ describe('cop-witnessed crimes and sightings', () => {
     knowledge.reset();
     expect(knowledge.lastKnown).toBeNull();
     expect(knowledge.pendingReports).toBe(0);
+    expect(knowledge.sightingAge).toBeNull();
+  });
+});
+
+describe('sighting age', () => {
+  it('is null before any officer has ever seen the player', () => {
+    expect(new PoliceKnowledge().sightingAge).toBeNull();
+  });
+
+  it('tracks seconds since the last live sighting and refreshes on re-sight', () => {
+    const knowledge = new PoliceKnowledge();
+    knowledge.sight(1, 1);
+    expect(knowledge.sightingAge).toBe(0);
+    knowledge.update(4);
+    expect(knowledge.sightingAge).toBe(4);
+    knowledge.sight(2, 2);
+    expect(knowledge.sightingAge).toBe(0);
+  });
+
+  it('treats a cop-witnessed crime as a sighting', () => {
+    const knowledge = new PoliceKnowledge();
+    knowledge.copWitness(3, 4);
+    expect(knowledge.sightingAge).toBe(0);
+  });
+
+  it('never counts civilian reports as sightings, pending or matured', () => {
+    const knowledge = new PoliceKnowledge<string>();
+    knowledge.fileReport(5, 5, 10, 'witness');
+    expect(knowledge.sightingAge).toBeNull();
+    knowledge.update(REPORT_DELAY + 1);
+    expect(knowledge.lastKnown).toMatchObject({ x: 5, z: 5 });
+    expect(knowledge.sightingAge).toBeNull();
   });
 });
 
