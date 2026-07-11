@@ -28,6 +28,7 @@ export class HudView {
   private vehicleName: HTMLElement;
   private vehicleSpeed: HTMLElement;
   private vehicleHealth: HTMLElement;
+  private taxi: HTMLElement;
   private fps: HTMLElement;
   private cheats: HTMLElement;
   private crosshair: HTMLElement;
@@ -48,7 +49,7 @@ export class HudView {
         <div><small data-hud="objective-name"></small><span data-hud="objective-meta"></span></div>
         <strong data-hud="objective-text"></strong><div class="hud-objective-track" data-hud="objective-track" role="progressbar" aria-label="Objective progress" aria-valuemin="0" aria-valuemax="100"><i data-hud="objective-fill"></i></div>
       </section>
-      <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em></section>
+      <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em><i class="hud-taxi" data-hud="taxi" role="status"></i></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
       <div class="hud-fps" data-hud="fps"></div><div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
       <div class="hud-crosshair" data-hud="crosshair" aria-hidden="true" hidden><i></i></div>`;
@@ -57,7 +58,7 @@ export class HudView {
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i'));
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
-    this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]');
+    this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.taxi = required(root, '[data-hud="taxi"]');
     this.fps = required(root, '[data-hud="fps"]'); this.cheats = required(root, '[data-hud="cheats"]'); this.crosshair = required(root, '[data-hud="crosshair"]');
   }
 
@@ -78,7 +79,11 @@ export class HudView {
     }
     this.prompt.textContent = state.prompt; this.prompt.hidden = !state.prompt;
     this.vehicle.hidden = !state.vehicle;
-    if (state.vehicle) { this.vehicleName.textContent = state.vehicle.name; this.vehicleSpeed.textContent = String(Math.round(state.vehicle.speedKph)); this.vehicleHealth.textContent = `${Math.ceil(state.vehicle.health)}% VEHICLE`; }
+    if (state.vehicle) {
+      this.vehicleName.textContent = state.vehicle.name; this.vehicleSpeed.textContent = String(Math.round(state.vehicle.speedKph)); this.vehicleHealth.textContent = `${Math.ceil(state.vehicle.health)}% VEHICLE`;
+      const taxi = state.vehicle.taxi; this.taxi.hidden = !taxi;
+      if (taxi) { this.taxi.textContent = taxi.text; this.taxi.classList.toggle('is-on', taxi.available); }
+    }
     this.fps.textContent = `${Math.round(state.fps)} FPS`; this.fps.hidden = !state.settings.showFps; this.cheats.hidden = !state.cheatsOn; this.crosshair.hidden = !state.crosshair;
   }
 }

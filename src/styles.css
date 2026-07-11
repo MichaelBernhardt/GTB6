@@ -67,6 +67,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-vehicle > small { display: block; color: var(--yellow); font: 900 10px Inter, sans-serif; letter-spacing: 1.1px; text-transform: uppercase; }
 .hud-vehicle > div { display: flex; align-items: baseline; justify-content: flex-end; gap: 5px; }.hud-vehicle b { font-size: 52px; line-height: .95; }.hud-vehicle div span { font-size: 10px; font-weight: 900; }
 .hud-vehicle em { color: var(--paper-dim); font: 800 10px Inter, sans-serif; font-style: normal; letter-spacing: .8px; }
+.hud-taxi { display: block; margin-top: 3px; color: var(--paper-dim); font: 900 10px Inter, sans-serif; font-style: normal; letter-spacing: 1px; }
+.hud-taxi.is-on { color: var(--yellow); text-shadow: 0 0 8px rgba(242, 197, 33, .55); }
 .hud-prompt { position: absolute; bottom: 28px; left: 50%; max-width: min(620px, 60vw); padding: 10px 16px; transform: translateX(-50%); color: var(--ink); background: var(--paper); border-left: 7px solid var(--yellow); box-shadow: var(--shadow); font: 900 13px Inter, sans-serif; letter-spacing: .35px; text-align: center; }
 .hud-prompt::first-letter { color: var(--red); }
 .hud-crosshair { position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); opacity: .9; filter: drop-shadow(0 1px 2px #000); }
