@@ -51,8 +51,13 @@ export class PoliceKnowledge<R = unknown> {
   lastKnown: KnownPosition | null = null;
   private reports: CrimeReport<R>[] = [];
   private now = 0;
+  private lastSightingAt: number | null = null;
 
   get pendingReports(): number { return this.reports.length; }
+
+  /** Seconds since an officer last laid eyes on the player, or null if never. Matured civilian reports
+   *  move lastKnown but are hearsay, not sightings, so they never refresh this. */
+  get sightingAge(): number | null { return this.lastSightingAt === null ? null : this.now - this.lastSightingAt; }
 
   /** Civilian report: matures after REPORT_DELAY, then its heat lands and lastKnown becomes the crime scene. */
   fileReport(x: number, z: number, heat: number, reporter?: R, delay = REPORT_DELAY): void {
@@ -63,7 +68,7 @@ export class PoliceKnowledge<R = unknown> {
   copWitness(x: number, z: number): void { this.sight(x, z); }
 
   /** An officer can currently see the player, so knowledge tracks the live position. */
-  sight(x: number, z: number): void { this.lastKnown = { x, z, time: this.now }; }
+  sight(x: number, z: number): void { this.lastKnown = { x, z, time: this.now }; this.lastSightingAt = this.now; }
 
   /** Advances the dispatch clock and returns matured reports (heat for the caller to apply) after moving
    *  lastKnown to the crime scene. Reports whose reporter died before maturing are dropped — no witness, no call. */
@@ -80,5 +85,5 @@ export class PoliceKnowledge<R = unknown> {
     return matured;
   }
 
-  reset(): void { this.lastKnown = null; this.reports = []; }
+  reset(): void { this.lastKnown = null; this.reports = []; this.lastSightingAt = null; }
 }

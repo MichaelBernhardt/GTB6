@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { accumulateFear, CALM_THRESHOLD, decayFear, fearResponse, FEAR_MAX } from '../systems/FearSystem';
+import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems/BumpSystem';
+import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, FEAR_MAX } from '../systems/FearSystem';
 import type { City, RoadPoint } from '../world/City';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
@@ -29,6 +30,8 @@ export class Pedestrian {
   private routeIndex = 0;
   private routed = false;
   private punchTimer = 0;
+  private downTimer = 0;
+  private stumbleTimer = 0;
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
@@ -41,8 +44,20 @@ export class Pedestrian {
   }
 
   update(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
-    if (this.state === 'down') return;
+    if (this.state === 'down') {
+      if (this.downTimer <= 0) return; // health depleted: stays down
+      this.downTimer -= dt;
+      if (this.downTimer <= 0) this.rise(player);
+      return;
+    }
     this.fear = decayFear(this.fear, dt);
+    if (this.stumbleTimer > 0) {
+      this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
+      const sway = this.stumbleTimer / STUMBLE_DURATION;
+      this.group.rotation.x = -0.32 * sway;
+      for (const arm of this.arms) arm.rotation.x = 0.7 * sway;
+      if (this.stumbleTimer > 0) return;
+    }
     const distance = this.group.position.distanceTo(player);
     if (this.state === 'cower') {
       this.setPanicPose(true, true);
@@ -83,6 +98,32 @@ export class Pedestrian {
     this.state = this.health === 0 ? 'down' : this.aggressive ? 'hostile' : 'flee';
     if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = 0.36; }
     return this.health === 0;
+  }
+
+  /** Soft player bump: a brief off-balance reaction, no state change. */
+  stumble(origin: THREE.Vector3): void {
+    if (this.state === 'down' || this.contact) return;
+    this.stumbleTimer = STUMBLE_DURATION; this.threat.copy(origin);
+  }
+
+  /** Sprint bump: floors the ped; they get back up after ~2s unless health is depleted. Returns true on kill. */
+  knockdown(origin: THREE.Vector3, damage = KNOCKDOWN_DAMAGE): boolean {
+    if (this.state === 'down' || this.contact) return false;
+    const outcome = knockdownOutcome(this.health, damage);
+    this.health = outcome.health; this.downTimer = outcome.downTime; this.threat.copy(origin);
+    this.fear = accumulateFear(this.fear, FEAR_EVENTS.assault.base); this.stumbleTimer = 0; this.state = 'down';
+    this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = 0.36;
+    if (outcome.killed) this.enraged = false;
+    return outcome.killed;
+  }
+
+  /** Back on their feet after a knockdown: personality decides fight or flight. */
+  private rise(player: THREE.Vector3): void {
+    this.group.rotation.z = 0; this.group.position.y = 0;
+    const response = fearResponse(this.fear, this.aggressive, this.bravery);
+    if (response === 'fight') { this.enraged = true; this.state = 'hostile'; this.destination.copy(player); }
+    else if (response === 'cower') this.state = 'cower';
+    else { this.state = 'flee'; this.fleeFrom(this.threat); }
   }
 
   makeCarGuard(): void {
