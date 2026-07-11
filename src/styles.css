@@ -82,6 +82,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 #toast { position: absolute; top: 125px; left: 50%; z-index: 70; min-width: 330px; max-width: min(620px, 70vw); padding: 10px 16px 12px; transform: translate(-50%, -16px) rotate(-.4deg); color: var(--ink); background: var(--paper); border-left: 8px solid var(--green); box-shadow: var(--shadow); opacity: 0; transition: opacity .2s, transform .2s; }
 #toast.is-visible { opacity: 1; transform: translate(-50%, 0) rotate(-.4deg); }
 #toast.tone-danger { border-color: var(--red); }#toast.tone-reputation { border-color: var(--yellow); }#toast.tone-info { border-color: var(--blue); }
+#toast.tone-radio { border-color: var(--blue); background: #e3edee; }#toast.tone-radio strong, #toast.tone-radio span { font-family: "Courier New", ui-monospace, monospace; }#toast.tone-radio small { color: #2c7d99; }
 #toast small, #toast strong, #toast span { display: block; }#toast small { font: 900 8px Inter, sans-serif; letter-spacing: 1.7px; }#toast strong { margin: 1px 0; font-size: 22px; line-height: 1; text-transform: uppercase; }#toast span { color: #43504d; font-size: 12px; }
 #vignette { position: absolute; inset: 0; z-index: 65; opacity: 0; background: radial-gradient(ellipse at center, transparent 48%, rgba(196, 28, 18, .68) 100%); }
 #vignette.is-flashing { animation: damage-flash .45s ease-out; }@keyframes damage-flash { 0% { opacity: 1; } 100% { opacity: 0; } }

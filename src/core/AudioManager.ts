@@ -62,6 +62,16 @@ export class AudioManager {
   taxiHoot(pan = 0): void { this.horn(pan); setTimeout(() => this.horn(pan), 210); }
   beep(): void { this.blip(1245, 0.09, 0.09); }
 
+  /** JMPD dispatch coming over the air: a squelch crackle opens the channel, two Motorola-ish ANI
+   *  alert tones, a static bed under the "transmission", then a squelch tail closes it. ~1s, desk-radio level. */
+  policeRadio(): void {
+    this.burst({ duration: 0.14, type: 'bandpass', frequency: 2100, q: 1.1, peak: 0.05, decay: 0.12, rate: 1.5 });
+    this.blip(950, 0.15, 0.042, { at: 0.13, attack: 0.012 });
+    this.blip(1400, 0.15, 0.036, { at: 0.31, attack: 0.012 });
+    this.burst({ duration: 0.32, type: 'bandpass', frequency: 1750, q: 0.8, peak: 0.028, decay: 0.28, at: 0.48, rate: 1.3 });
+    this.burst({ duration: 0.07, type: 'highpass', frequency: 3000, peak: 0.05, decay: 0.045, at: 0.82 });
+  }
+
   startRadio(): void {
     if (!this.context || !this.master || this.radioTimer) return;
     const context = this.context;

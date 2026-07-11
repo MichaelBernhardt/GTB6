@@ -17,6 +17,16 @@ export interface RoadDefinition { name: string; width: number; closed?: boolean;
 
 export interface ParkDefinition { x: number; z: number; width: number; depth: number; kind: 'civic' | 'garden' | 'recreation'; name: string; }
 
+/** Pure district lookup: Braamfontein owns the deep south, the far flanks are City Deep and Sandton,
+ *  the central park belt is Zoo Lake, and everything else answers to the CBD. */
+export function districtAt(x: number, z: number): District {
+  if (z < -180) return 'Braamfontein';
+  if (x < -145) return 'City Deep';
+  if (x > 145) return 'Sandton';
+  if (Math.abs(x) < 115 && Math.abs(z) < 115) return 'Zoo Lake';
+  return 'Joburg CBD';
+}
+
 export const PARK_AREAS: ParkDefinition[] = [
   { x: 0, z: 0, width: 76, depth: 72, kind: 'civic', name: 'Zoo Lake Park' },
   { x: 245, z: 198, width: 52, depth: 38, kind: 'garden', name: 'Mushroom Farm Park' },
@@ -135,13 +145,7 @@ export class City {
     this.infrastructure.update(dt);
   }
 
-  districtAt(x: number, z: number): District {
-    if (z < -180) return 'Braamfontein';
-    if (x < -145) return 'City Deep';
-    if (x > 145) return 'Sandton';
-    if (Math.abs(x) < 115 && Math.abs(z) < 115) return 'Zoo Lake';
-    return 'Joburg CBD';
-  }
+  districtAt(x: number, z: number): District { return districtAt(x, z); }
 
   /** Shared facade materials (buildings are merged per material): the day/night cycle animates their emissiveIntensity for lit windows. */
   facadeMaterials(): THREE.MeshStandardMaterial[] { return [...this.buildingMaterial.values()]; }

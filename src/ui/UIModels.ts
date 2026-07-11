@@ -1,7 +1,7 @@
 import type { WeaponId } from '../config';
 import type { CheatSettings, GameSettings } from '../types';
 
-export type NotificationTone = 'success' | 'danger' | 'reputation' | 'info';
+export type NotificationTone = 'success' | 'danger' | 'reputation' | 'info' | 'radio';
 export type MenuScreen = 'none' | 'loading' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' | 'choice';
 
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; }

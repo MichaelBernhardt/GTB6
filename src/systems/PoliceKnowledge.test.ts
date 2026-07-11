@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { determineReporter, pickRoamGoal, PoliceKnowledge, REPORT_DELAY, ROAM_RADIUS, SIGHT_RADIUS, WITNESS_RADIUS, type WitnessCandidate } from './PoliceKnowledge';
+import { determineReporter, pickRoamGoal, PoliceKnowledge, radioCallout, REPORT_DELAY, ROAM_RADIUS, SIGHT_RADIUS, WITNESS_RADIUS, type WitnessCandidate } from './PoliceKnowledge';
 
 const ped = (x: number, z: number, alive = true, victim = false): WitnessCandidate<string> => ({ ref: `${x},${z}${victim ? ':victim' : ''}`, x, z, alive, victim });
 
@@ -121,6 +121,33 @@ describe('roam destination selection', () => {
   it('falls back to the nearest node when none sit inside the radius', () => {
     expect(pickRoamGoal([{ x: 90, z: 0 }, { x: 500, z: 0 }], { x: 0, z: 0 })).toBe(0);
     expect(pickRoamGoal([], { x: 0, z: 0 })).toBe(-1);
+  });
+});
+
+describe('radio dispatch', () => {
+  it('tags a report with its crime label at filing time and carries it to maturity', () => {
+    const knowledge = new PoliceKnowledge<string>();
+    knowledge.fileReport(1, 2, 14, 'witness', REPORT_DELAY, 'mugging');
+    knowledge.fileReport(3, 4, 30, 'witness', REPORT_DELAY, 'explosion');
+    expect(knowledge.update(REPORT_DELAY + 1).map((report) => report.label)).toEqual(['mugging', 'explosion']);
+  });
+
+  it('defaults unlabeled reports to assault', () => {
+    const knowledge = new PoliceKnowledge<string>();
+    knowledge.fileReport(0, 0, 5, 'witness');
+    expect(knowledge.update(REPORT_DELAY)[0]!.label).toBe('assault');
+  });
+
+  it('phrases a matured 911 call as a fresh report of the crime in its district', () => {
+    expect(radioCallout('mugging', 'Sandton')).toEqual({ title: 'Mugging reported in Sandton', detail: 'Caller phoned it in. Units en route.' });
+    expect(radioCallout('vehicle arson', 'Joburg CBD').title).toBe('Vehicle arson reported in Joburg CBD');
+  });
+
+  it('gives cop-witnessed crimes units-responding flavor instead of a caller', () => {
+    const callout = radioCallout('gunfire', 'Braamfontein', true);
+    expect(callout.title).toBe('Gunfire in progress in Braamfontein');
+    expect(callout.detail).toContain('units responding');
+    expect(callout.detail).not.toContain('Caller');
   });
 });
 
