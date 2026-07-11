@@ -395,15 +395,41 @@ export const SIGNAL_JUNCTIONS: SignalJunctionDef[] = computeSignalJunctions();
 
 // ---- Intersection surfaces (paved crossing polygons) --------------------------
 
+/** One carriageway meeting a junction: a unit outward direction and the road's width. Distinct directions
+ *  only (a road passing through contributes a single arm, not two opposed ones). */
+export interface JunctionArm {
+  dirX: number;
+  dirZ: number;
+  width: number;
+}
+
 export interface JunctionSurface {
   x: number;
   z: number;
-  /** Radius of the paved disc laid over the crossing — scales from the widest meeting carriageway. */
+  /** Radius of the paved disc laid over the crossing centre — scales from the widest meeting carriageway. */
   radius: number;
   /** Width of the widest road that meets here (drives the radius). */
   widest: number;
   /** Number of road arms at the node (T = 3, crossroads = 4, +). */
   degree: number;
+  /** The distinct incident carriageways, so the renderer can pave each arm's strip through the node — a disc
+   *  alone leaves the square crossing's corners (and the ribbon edge-lines) poking out as an "X". */
+  arms: JunctionArm[];
+}
+
+/** Collapse a node's incident roads to distinct outward directions (a through-road's two opposed vertices
+ *  become one arm, keeping the widest width), so paving covers each carriageway once. Deterministic. */
+function distinctArms(incident: Array<{ width: number; dirX: number; dirZ: number }>): JunctionArm[] {
+  const arms: JunctionArm[] = [];
+  for (const entry of incident) {
+    const length = Math.hypot(entry.dirX, entry.dirZ);
+    if (length < 1e-6) continue; // degenerate spot (coincident vertices): no meaningful arm direction
+    const dirX = entry.dirX / length; const dirZ = entry.dirZ / length;
+    const match = arms.find((arm) => Math.abs(arm.dirX * dirX + arm.dirZ * dirZ) > 0.985); // same line (either heading)
+    if (match) { if (entry.width > match.width) match.width = entry.width; }
+    else arms.push({ dirX, dirZ, width: entry.width });
+  }
+  return arms;
 }
 
 export interface JunctionSurfaceOptions {
@@ -428,9 +454,30 @@ export function computeJunctionSurfaces(options: JunctionSurfaceOptions = {}): J
     let widest = 0;
     for (const incident of accumulator.incident) if (incident.width > widest) widest = incident.width;
     if (widest <= 0) continue;
-    surfaces.push({ x: accumulator.x, z: accumulator.z, radius: widest / 2 + margin, widest, degree: accumulator.degree });
+    surfaces.push({ x: accumulator.x, z: accumulator.z, radius: widest / 2 + margin, widest, degree: accumulator.degree, arms: distinctArms(accumulator.incident) });
   }
   return surfaces;
+}
+
+/** How far a junction's paving reaches from the node along each arm: enough to cover the square crossing
+ *  footprint of the widest carriageway (half-diagonal ~= 0.71 * width), never less than the centre disc. */
+export function junctionReach(surface: JunctionSurface): number {
+  return Math.max(surface.radius, surface.widest * 0.72);
+}
+
+/** True when (x, z) lies on a junction's paved surface: inside the centre disc, or on any arm's strip
+ *  (a carriageway-wide band running clear across the node). The renderer bakes exactly this shape, and the
+ *  lane-marking pass blanks markings wherever this holds — so a crossing reads as one clean surface. */
+export function junctionPaves(surface: JunctionSurface, x: number, z: number): boolean {
+  const dx = x - surface.x; const dz = z - surface.z;
+  if (dx * dx + dz * dz <= surface.radius * surface.radius) return true;
+  const reach = junctionReach(surface);
+  for (const arm of surface.arms) {
+    const along = dx * arm.dirX + dz * arm.dirZ;
+    const perp = -dx * arm.dirZ + dz * arm.dirX;
+    if (Math.abs(along) <= reach && Math.abs(perp) <= arm.width / 2) return true;
+  }
+  return false;
 }
 
 /** The intersection surfaces the game bakes into the chunked road geometry — computed once at load. */

@@ -12,6 +12,8 @@ import {
   DIRT_POLYGONS,
   HARBOUR_POINT,
   JUNCTION_SURFACES,
+  junctionPaves,
+  junctionReach,
   METRES_PER_UNIT,
   OCEAN_POLYGON,
   pointInPolygon,
@@ -61,6 +63,14 @@ export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
 
 export const ROAD_SURFACE_OFFSET = 0.055;
 export const SIDEWALK_RISE = 0.22;
+
+/** True when (x, z) sits on any paved junction surface — used to blank lane markings there so a 4-way reads
+ *  as one clean intersection instead of two ribbons' edge/centre lines crossing in an X. Same shape the
+ *  renderer bakes (see junctionPaves), so paving and marking blackout line up exactly. */
+function insideJunction(x: number, z: number): boolean {
+  for (const surface of JUNCTION_SURFACES) if (junctionPaves(surface, x, z)) return true;
+  return false;
+}
 
 /** Broad deterministic relief: visible across a district, but gentle enough for urban driving. */
 /**
@@ -497,14 +507,21 @@ export class City {
    *  just triangles that cull with their chunk. Sizing + placement are map-derived and deterministic. */
   private buildJunctionSurfaces(roadMat: THREE.Material): void {
     const lift = ROAD_SURFACE_OFFSET + 0.012; // above the ribbons (buries the seam) but below dashes (~0.088) and zebra (0.09)
-    const discs: THREE.BufferGeometry[] = [];
+    const parts: THREE.BufferGeometry[] = [];
     for (const surface of JUNCTION_SURFACES) {
+      const y = terrainHeightAt(surface.x, surface.z) + lift;
+      // Central disc covers the rounded middle; a strip per incident carriageway paves each arm clear across
+      // the node, so the square crossing's corners are covered too and no ribbon edge pokes out as an "X".
       const disc = new THREE.CircleGeometry(surface.radius, 18);
-      disc.rotateX(-Math.PI / 2); // lie flat, face up — same orientation as the pothole decals
-      disc.translate(surface.x, terrainHeightAt(surface.x, surface.z) + lift, surface.z);
-      discs.push(disc);
+      disc.rotateX(-Math.PI / 2); disc.translate(surface.x, y, surface.z); parts.push(disc);
+      const reach = junctionReach(surface); // half-length of each arm strip: spans past the far kerb of the widest road
+      for (const arm of surface.arms) {
+        const strip = new THREE.PlaneGeometry(arm.width, reach * 2);
+        strip.rotateX(-Math.PI / 2); strip.rotateY(Math.atan2(arm.dirX, arm.dirZ)); // align the strip's length with the carriageway
+        strip.translate(surface.x, y, surface.z); parts.push(strip);
+      }
     }
-    const merged = discs.length ? mergeGeometries(discs, false) : null;
+    const merged = parts.length ? mergeGeometries(parts, false) : null;
     if (!merged) return;
     const mesh = new THREE.Mesh(merged, roadMat); mesh.receiveShadow = true; this.group.add(mesh);
   }
@@ -663,10 +680,12 @@ export class City {
       const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz); if (length < 0.5) continue;
       const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
       quaternion.copy(this.surfaceSegmentQuaternion(start.x, start.z, end.x, end.z, 'road'));
-      if (index % 2 === 0) { matrix.compose(new THREE.Vector3(midX, this.roadHeightAt(midX, midZ) + 0.033, midZ), quaternion, new THREE.Vector3(0.24, 0.025, Math.min(6.4, length * 0.64))); dashTransforms.push(matrix.clone()); }
+      // Junctions are paved as one clean surface; a dash/edge line drawn through them makes the crossing read
+      // as two overlapping roads (the "X"), so blank any marking that falls inside a junction footprint.
+      if (index % 2 === 0 && !insideJunction(midX, midZ)) { matrix.compose(new THREE.Vector3(midX, this.roadHeightAt(midX, midZ) + 0.033, midZ), quaternion, new THREE.Vector3(0.24, 0.025, Math.min(6.4, length * 0.64))); dashTransforms.push(matrix.clone()); }
       if (!edgeTransforms) continue;
       const normalX = -dz / length; const normalZ = dx / length;
-      for (const side of [-1, 1]) { const x = midX + normalX * side * (width / 2 - 0.72); const z = midZ + normalZ * side * (width / 2 - 0.72); matrix.compose(new THREE.Vector3(x, this.roadHeightAt(x, z) + 0.029, z), quaternion, new THREE.Vector3(0.13, 0.018, length + 0.35)); edgeTransforms.push(matrix.clone()); }
+      for (const side of [-1, 1]) { const x = midX + normalX * side * (width / 2 - 0.72); const z = midZ + normalZ * side * (width / 2 - 0.72); if (insideJunction(x, z)) continue; matrix.compose(new THREE.Vector3(x, this.roadHeightAt(x, z) + 0.029, z), quaternion, new THREE.Vector3(0.13, 0.018, length + 0.35)); edgeTransforms.push(matrix.clone()); }
     }
   }
 

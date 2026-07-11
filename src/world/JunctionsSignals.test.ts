@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeJunctionSurfaces, JUNCTION_SURFACES, SIGNAL_JUNCTIONS } from './mapData';
+import { computeJunctionSurfaces, JUNCTION_SURFACES, junctionPaves, junctionReach, SIGNAL_JUNCTIONS } from './mapData';
 import { signalHoldsDriver, signalPhaseState, SIGNAL_STOP_APPROACH, type JunctionDefinition } from './UrbanInfrastructure';
 
 describe('intersection surfaces (BUG B: unify overlapping road ribbons)', () => {
@@ -21,6 +21,51 @@ describe('intersection surfaces (BUG B: unify overlapping road ribbons)', () => 
   it('places every signalised junction on a paved surface (signals are a subset of the crossings)', () => {
     const surfaceKeys = new Set(JUNCTION_SURFACES.map((surface) => `${surface.x}|${surface.z}`));
     expect(SIGNAL_JUNCTIONS.every((junction) => surfaceKeys.has(`${junction.x}|${junction.z}`))).toBe(true);
+  });
+
+  it('gives every crossing its distinct incident arms (unit dirs, no opposed duplicates)', () => {
+    for (const surface of JUNCTION_SURFACES) {
+      expect(surface.arms.length).toBeGreaterThanOrEqual(1); // usually 2+ dirs; collinear stubs collapse to one
+      for (const arm of surface.arms) {
+        expect(Math.hypot(arm.dirX, arm.dirZ)).toBeCloseTo(1); // unit direction
+        expect(arm.width).toBeGreaterThan(0);
+      }
+      // a through-road's two opposed vertices collapse to one arm: no near-antiparallel pair survives
+      for (let i = 0; i < surface.arms.length; i++) for (let j = i + 1; j < surface.arms.length; j++) {
+        const a = surface.arms[i]!; const b = surface.arms[j]!;
+        expect(Math.abs(a.dirX * b.dirX + a.dirZ * b.dirZ)).toBeLessThan(0.986);
+      }
+    }
+  });
+
+  it('paves the whole square crossing — the four corners a bare disc would leave poking out (BUG A)', () => {
+    // A 4-way of two width-W roads is a WxW square; its corners sit at ~0.71W from the node, outside the
+    // widest/2+1 disc. The arm strips must cover them, else the ribbon edges show as an "X". Test the shared
+    // corners of every near-orthogonal pair of carriageways at each crossing.
+    let orthogonalCrossings = 0;
+    for (const surface of JUNCTION_SURFACES) {
+      for (let i = 0; i < surface.arms.length; i++) for (let j = i + 1; j < surface.arms.length; j++) {
+        const a = surface.arms[i]!; const b = surface.arms[j]!;
+        if (Math.abs(a.dirX * b.dirX + a.dirZ * b.dirZ) > 0.35) continue; // only the ~perpendicular pairs form a square
+        orthogonalCrossings++;
+        const half = Math.min(a.width, b.width) / 2 - 0.4; // just inside where the two ribbons share a corner
+        for (const sa of [-1, 1]) for (const sb of [-1, 1]) {
+          const x = surface.x + (a.dirX * sa + b.dirX * sb) * half;
+          const z = surface.z + (a.dirZ * sa + b.dirZ * sb) * half;
+          expect(junctionPaves(surface, x, z)).toBe(true); // corner is paved, not bare tar with a ribbon seam
+        }
+      }
+    }
+    expect(orthogonalCrossings).toBeGreaterThan(100); // the CBD grid is full of them
+  });
+
+  it('blanks lane markings across the junction: reach spans the crossing and covers the disc', () => {
+    for (const surface of JUNCTION_SURFACES) {
+      const reach = junctionReach(surface);
+      expect(reach).toBeGreaterThanOrEqual(surface.radius); // never smaller than the centre disc
+      expect(reach).toBeGreaterThanOrEqual(surface.widest * 0.71); // spans the square crossing's half-diagonal
+      expect(junctionPaves(surface, surface.x, surface.z)).toBe(true); // the node centre is always paved
+    }
   });
 
   it('is deterministic and tightens to fewer crossings as the minimum degree rises', () => {
