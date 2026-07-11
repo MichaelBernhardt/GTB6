@@ -12,6 +12,7 @@ import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWe
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
+import { simSteps } from './core/Timestep';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
@@ -426,11 +427,12 @@ export class Game {
 
   private animate = (): void => {
     requestAnimationFrame(this.animate);
-    const raw = this.clock.getDelta(); const dt = Math.min(raw, 0.05); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
-    if (this.mode === 'playing') this.update(dt);
-    else if (this.mode === 'dead') { this.deathTimer -= dt; if (this.deathTimer <= 0) this.respawn(); }
+    const raw = this.clock.getDelta(); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
+    const steps = simSteps(raw); const frameDt = steps.reduce((total, step) => total + step, 0); // wall-clock time the world advances this frame — real time under slow frames, capped only at the catch-up ceiling
+    if (this.mode === 'playing') { for (const dt of steps) { this.update(dt); if (this.mode !== 'playing') break; } } // sub-steps: a 15fps frame runs two updates instead of stretching one past the physics-stable step
+    else if (this.mode === 'dead') { this.deathTimer -= frameDt; if (this.deathTimer <= 0) this.respawn(); }
     else if (this.input.consume('Escape')) this.ui.back();
-    this.updateCamera(dt); this.updateMarker(dt); this.renderHUD();
+    this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
     this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position); // staggered chunk culling — runs in every mode so the menu backdrop is culled too
     const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 2; // >2s: the staggered chunk culling needs its first full pass before the number means anything
