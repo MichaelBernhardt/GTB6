@@ -348,7 +348,7 @@ export class Game {
       this.activeVehicle = undefined; this.transition = undefined;
       this.audio.setEngine(false); this.audio.stopRadio();
     }
-    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false);
+    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose();
     this.player.inVehicle = false; this.player.setVisible(true);
     const spot = safePlacement(x, z, (px, pz) => this.city.collides(px, pz, PLAYER.radius));
     this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
@@ -370,6 +370,7 @@ export class Game {
     this.player.group.position.y += SKYFALL_ALTITUDE;
     this.player.onGround = false; this.player.velocityY = 0;
     this.airborne = startAirborne(this.player.heading, this.player.group.position.y);
+    this.player.startSkydive(); // snap belly-to-earth on frame one instead of tipping over from standing
     this.cameraController.pitch = 0.62; // start looking down at the city
     this.closeConsole(); // hand WASD straight back — the ground is coming
     this.ui.notify('Geronimo!', this.inventory.parachutes > 0 ? 'SPACE deploys the parachute. W dives, S flattens, A/D steer.' : 'No parachute aboard. W dives, S flattens, A/D steer. Good luck.', this.inventory.parachutes > 0);
@@ -666,7 +667,7 @@ export class Game {
   /** Touchdown: a flared canopy landing is free, a hot canopy landing bruises, and raw freefall pays the full
    *  fall-damage bill from the drop altitude — from 600u that is lethal unless the invulnerable cheat is on. */
   private landSkyfall(state: AirborneState, descent: number, support: number): void {
-    this.airborne = undefined; this.player.setCanopy(false);
+    this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose(); // upright + controllable the instant feet touch
     this.player.onGround = true; this.player.velocityY = 0;
     const damage = state.mode === 'parachute' ? chuteLandingDamage(descent) : fallDamage(state.fallOriginY - support);
     if (damage > 0) {
@@ -1390,7 +1391,7 @@ export class Game {
   private respawn(): void {
     this.endTaxiShift(this.activeVehicle);
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
-    this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.mode = 'playing';
+    this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose(); this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.mode = 'playing';
   }
   /** Tears down the JMPD response and drops its foot officers from the population roster. */
   private clearPolice(): void {

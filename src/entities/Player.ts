@@ -10,6 +10,11 @@ import { buildWeaponModel } from './WeaponModels';
 /** Game-computed cover pose: Game owns the cover position; the player only acts it out. */
 export interface CoverPose { heading: number; peek: number; twist: number; moving: boolean; }
 
+/** Freefall body tip about the model's X axis: FREEFALL_TIP is the neutral belly-to-earth arch, the dive trim
+ *  swings it +/- FREEFALL_TIP_RANGE. Both stay well under pi/2 so the diver is always face-down, never inverted. */
+export const FREEFALL_TIP = 1.22;
+export const FREEFALL_TIP_RANGE = 0.28;
+
 export class Player {
   group = new THREE.Group();
   health = PLAYER.maxHealth;
@@ -189,13 +194,43 @@ export class Player {
     return canopy;
   }
 
+  /** Snap into the skydiver pose the instant a skyfall begins, so the very first frame reads belly-to-earth
+   *  face-down rather than the standing pose tipping over across the next few frames (which flashed feet-down /
+   *  "facing up"). Also clears any leftover body roll/tip from a previous state so the dive starts clean. */
+  startSkydive(): void {
+    this.group.rotation.x = 0; this.group.rotation.z = 0;
+    this.model.rotation.set(FREEFALL_TIP, 0, 0); this.model.position.y = 0;
+    this.torso.rotation.set(0, 0, 0);
+  }
+
+  /** Touchdown / bail-out: wipe every airborne rotation so the grounded player is upright and controllable.
+   *  landSkyfall (and the teleport/death clears) call this — without it the forward dive tip and turn bank
+   *  survive the landing and, compounded with a hard-landing tumble roll, leave the player stuck inverted. */
+  resetAirbornePose(): void {
+    this.group.rotation.x = 0; this.group.rotation.z = 0;
+    this.model.rotation.set(0, 0, 0); this.model.position.y = 0;
+    this.torso.rotation.set(0, 0, 0);
+    if (this.canopy) { this.canopy.rotation.set(0, 0, 0); }
+  }
+
+  /** World-space "up" of the body, composed through both the group (heading/bank) and the model (dive tip).
+   *  A grounded, upright player reads ~ (0,1,0); a belly-to-earth diver tips it toward horizontal but never
+   *  past it (y stays >= 0 — the diver is never on their back). Exposed for headless pose tests. */
+  bodyUp(): THREE.Vector3 {
+    this.group.updateMatrixWorld(true);
+    return new THREE.Vector3(0, 1, 0).applyQuaternion(this.model.getWorldQuaternion(new THREE.Quaternion()));
+  }
+
   /** Airborne pose, driven from Game during a skyfall: freefall spread-eagle tipping with the dive trim, or
    *  hanging in the harness under a gently swaying canopy. Bank rolls the whole body into the turn. */
   animateAirborne(dt: number, mode: 'freefall' | 'parachute', pitch: number, bank: number): void {
     const blend = Math.min(1, dt * 8);
     const pose = (part: THREE.Group, x: number, z?: number): void => { part.rotation.x = THREE.MathUtils.lerp(part.rotation.x, x, blend); if (z !== undefined) part.rotation.z = THREE.MathUtils.lerp(part.rotation.z, z, blend); };
     if (mode === 'freefall') {
-      this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, 1.32 + pitch * 0.42, blend); // belly-to-earth, tipping head-down as W steepens the dive
+      // Belly-to-earth, tipping head-down as W steepens the dive — but CLAMPED below vertical (pi/2) so the
+      // diver can never tumble past horizontal onto their back. pitch is already [-1,1] from the pure step.
+      const tip = THREE.MathUtils.clamp(FREEFALL_TIP + pitch * FREEFALL_TIP_RANGE, 0.5, Math.PI / 2 - 0.06);
+      this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, tip, blend);
       pose(this.leftArm, -0.5, 1.15); pose(this.rightArm, -0.5, -1.15); // arms mirrored: left is +x, outward is +z
       pose(this.leftForearm, -0.3); pose(this.rightForearm, -0.3);
       pose(this.leftLeg, 0.25, 0.35); pose(this.rightLeg, 0.25, -0.35);
