@@ -6,4 +6,5 @@ coverage/
 .vite/
 *.log
 GTA ThreeJS/
+tools/mapgen/cache/
 .claude/worktrees/
