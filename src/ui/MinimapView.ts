@@ -1,7 +1,7 @@
 import type { RoadPoint } from '../world/City';
 
 export interface MapPoint { x: number; z: number; }
-export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond'; }
+export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; }
 
 /** Metres-to-pixels factors, ordered widest view to tightest. Index 2 matches the original fixed scale. */
 export const MINIMAP_ZOOM_SCALES = [0.14, 0.2, 0.29, 0.4, 0.54] as const;
@@ -38,6 +38,7 @@ export class MinimapView {
       ctx.save(); ctx.translate(marker.x * scale, marker.z * scale); ctx.rotate(counter);
       ctx.fillStyle = marker.color; ctx.strokeStyle = '#111817'; ctx.lineWidth = 2; ctx.beginPath();
       if (marker.shape === 'diamond') { ctx.moveTo(0, -6.5); ctx.lineTo(6.5, 0); ctx.lineTo(0, 6.5); ctx.lineTo(-6.5, 0); ctx.closePath(); }
+      else if (marker.shape === 'house') { ctx.moveTo(0, -7.5); ctx.lineTo(6, -1.5); ctx.lineTo(6, 6); ctx.lineTo(-6, 6); ctx.lineTo(-6, -1.5); ctx.closePath(); }
       else ctx.arc(0, 0, 6, 0, Math.PI * 2);
       ctx.fill(); ctx.stroke(); ctx.restore();
     }

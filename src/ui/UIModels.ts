@@ -2,7 +2,7 @@ import type { WeaponId } from '../config';
 import type { CheatSettings, GameSettings } from '../types';
 
 export type NotificationTone = 'success' | 'danger' | 'reputation' | 'info';
-export type MenuScreen = 'none' | 'loading' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' | 'choice';
+export type MenuScreen = 'none' | 'loading' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' | 'choice' | 'safehouse';
 
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; }
 export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; }
