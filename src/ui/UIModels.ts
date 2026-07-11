@@ -20,6 +20,7 @@ export interface HudState {
   clock: string;
   reputation?: string;
   prompt: string;
+  crosshair: boolean;
   vehicle?: VehicleTelemetry;
   objective?: ObjectiveView;
   fps: number;

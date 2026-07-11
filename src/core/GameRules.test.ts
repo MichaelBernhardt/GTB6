@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CHEATS, PLAYER, WEAPON_BY_ID, WEAPONS, type WeaponId } from '../config';
-import { BICYCLE_CRUISE_FACTOR, Economy, KNOCKOFF_IMPACT_SPEED, bicycleCap, calculateDamage, cycleWeapon, jumpVelocity, moveSpeed, outOfAmmo, riderImpactDamage, rollDrops, shouldKnockOff, splashDamage, spreadOffset, triggerPulled } from './GameRules';
+import { AIM_SPEED_MULTIPLIER, BICYCLE_CRUISE_FACTOR, Economy, KNOCKOFF_IMPACT_SPEED, bicycleCap, calculateDamage, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, jumpVelocity, moveSpeed, outOfAmmo, riderImpactDamage, rollDrops, shouldKnockOff, splashDamage, spreadOffset, triggerPulled } from './GameRules';
 
 const rng = (...values: number[]): (() => number) => { let i = 0; return () => values[i++] ?? 0; };
 
@@ -93,6 +93,31 @@ describe('cheat multipliers', () => {
     expect(jumpVelocity(false)).toBe(PLAYER.jumpSpeed);
     expect(jumpVelocity(true)).toBeCloseTo(PLAYER.jumpSpeed * CHEATS.jumpMultiplier);
     expect(CHEATS.jumpMultiplier).toBeCloseTo(2);
+  });
+});
+
+describe('aim mode gating', () => {
+  it('halves movement while aiming, stacking with sprint and cheats', () => {
+    expect(moveSpeed(false, false, true)).toBeCloseTo(PLAYER.walkSpeed * AIM_SPEED_MULTIPLIER);
+    expect(moveSpeed(true, false, true)).toBeCloseTo(PLAYER.sprintSpeed * AIM_SPEED_MULTIPLIER);
+    expect(moveSpeed(true, true, true)).toBeCloseTo(PLAYER.sprintSpeed * CHEATS.runMultiplier * AIM_SPEED_MULTIPLIER);
+    expect(moveSpeed(false, false, false)).toBe(PLAYER.walkSpeed);
+    expect(AIM_SPEED_MULTIPLIER).toBeCloseTo(0.5);
+  });
+
+  it('shows the crosshair only while aiming a ranged weapon', () => {
+    expect(crosshairVisible(true, false)).toBe(true);
+    expect(crosshairVisible(false, false)).toBe(false);
+    expect(crosshairVisible(true, true)).toBe(false);
+    expect(crosshairVisible(false, true)).toBe(false);
+  });
+
+  it('permits shooting from a vehicle only in aim mode with a one-handed gun', () => {
+    expect(canFireFromVehicle(true, false)).toBe(true);
+    expect(canFireFromVehicle(false, false)).toBe(false);
+    expect(canFireFromVehicle(true, true)).toBe(false);
+    expect(canFireFromVehicle(true, false, true)).toBe(false); // no RPG out the window
+    expect(DRIVEBY_COOLDOWN_SCALE).toBeGreaterThan(1);
   });
 });
 
