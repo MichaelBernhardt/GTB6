@@ -15,6 +15,8 @@ export class Player {
   onGround = true;
   inVehicle = false;
   heading = 0;
+  moving = false;
+  sprinting = false;
   cheats: Pick<CheatSettings, 'fastRun' | 'bigJump'> = { fastRun: false, bigJump: false };
   private model = new THREE.Group();
   private torso = new THREE.Group();
@@ -42,24 +44,27 @@ export class Player {
   }
 
   update(dt: number, input: InputManager, cameraYaw: number, city: City): void {
+    this.moving = false; this.sprinting = false;
     if (this.inVehicle || this.health <= 0) return;
     if (this.tumbleTimer > 0) { this.applyTumble(dt); return; }
-    const aiming = input.firing && this.weapon !== 'fists';
+    const aimHeld = input.aiming && this.weapon !== 'fists'; // Ctrl: aim mode — raised gun, half speed, camera-facing
+    const aiming = aimHeld || (input.firing && this.weapon !== 'fists'); // hip fire still raises the gun while the trigger is down
     const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
     const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
     const move = new THREE.Vector3(side, 0, -forward);
     const moving = move.lengthSq() > 0;
     const sprinting = moving && input.down('ShiftLeft');
+    this.moving = moving; this.sprinting = sprinting;
     if (moving) {
       move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
-      const speed = moveSpeed(sprinting, this.cheats.fastRun);
+      const speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld);
       const desired = this.group.position.clone().addScaledVector(move, speed * dt);
       this.group.position.copy(city.clampMove(this.group.position, desired, PLAYER.radius));
-      this.turnToward(Math.atan2(move.x, move.z), dt, sprinting ? 15 : 11);
+      this.turnToward(aimHeld ? cameraYaw + Math.PI : Math.atan2(move.x, move.z), dt, aimHeld ? 13 : sprinting ? 15 : 11);
       this.walkPhase += dt * speed * 1.05;
       this.animateLocomotion(dt, sprinting, aiming);
     } else {
-      if (input.firing) this.turnToward(cameraYaw + Math.PI, dt, 13);
+      if (input.firing || aimHeld) this.turnToward(cameraYaw + Math.PI, dt, 13);
       this.animateIdle(dt, aiming);
     }
     this.leftLeg.rotation.z *= Math.exp(-dt * 8); this.rightLeg.rotation.z *= Math.exp(-dt * 8); // legs close after riding astride
@@ -102,15 +107,18 @@ export class Player {
   }
 
   /** Seated riding pose, driven from Game while on a two-wheeler: legs astride, hands to the bars.
-   *  Bicycle legs turn the cranks with road speed; the superbike stance is a full tuck. */
-  animateRiding(dt: number, kind: VehicleKind, speed: number): void {
+   *  Bicycle legs turn the cranks with road speed; the superbike stance is a full tuck.
+   *  While aiming a drive-by the right (gun) arm leaves the bars and levels the weapon one-handed. */
+  animateRiding(dt: number, kind: VehicleKind, speed: number, aiming = false): void {
     const bicycle = kind === 'bicycle'; const superbike = kind === 'superbike';
     const blend = Math.min(1, dt * 10);
     const pose = (part: THREE.Group, x: number, z?: number): void => { part.rotation.x = THREE.MathUtils.lerp(part.rotation.x, x, blend); if (z !== undefined) part.rotation.z = THREE.MathUtils.lerp(part.rotation.z, z, blend); };
     this.pedalPhase += dt * speed * (bicycle ? 0.62 : 0);
     const pedal = bicycle ? Math.sin(this.pedalPhase) : 0;
-    pose(this.leftArm, superbike ? -1.3 : bicycle ? -0.8 : -1, 0.14); pose(this.rightArm, superbike ? -1.3 : bicycle ? -0.8 : -1, -0.14);
-    pose(this.leftForearm, superbike ? -0.12 : -0.3); pose(this.rightForearm, superbike ? -0.12 : -0.3);
+    pose(this.leftArm, superbike ? -1.3 : bicycle ? -0.8 : -1, -0.14); // arms mirrored with the right-hand weapon rig: left is +x, so inward is -z
+    if (aiming) { pose(this.rightArm, -1.46, 0.09); pose(this.rightForearm, -0.06); }
+    else { pose(this.rightArm, superbike ? -1.3 : bicycle ? -0.8 : -1, 0.14); pose(this.rightForearm, superbike ? -0.12 : -0.3); }
+    pose(this.leftForearm, superbike ? -0.12 : -0.3);
     pose(this.leftLeg, bicycle ? -0.95 + pedal * 0.42 : superbike ? -1.15 : -1.3, -0.16); pose(this.rightLeg, bicycle ? -0.95 - pedal * 0.42 : superbike ? -1.15 : -1.3, 0.16);
     pose(this.leftShin, bicycle ? Math.max(0.2, 0.8 - pedal * 0.38) : superbike ? 1.6 : 1.35); pose(this.rightShin, bicycle ? Math.max(0.2, 0.8 + pedal * 0.38) : superbike ? 1.6 : 1.35);
     this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, superbike ? 0.5 : bicycle ? 0.12 : 0.2, blend);
@@ -125,9 +133,9 @@ export class Player {
     const phase = 1 - this.punchTimer / 0.3; const thrust = Math.sin(Math.min(1, phase) * Math.PI);
     const arm = this.punchLeft ? this.leftArm : this.rightArm;
     const forearm = this.punchLeft ? this.leftForearm : this.rightForearm;
-    arm.rotation.x = -1.44 * thrust; arm.rotation.z = (this.punchLeft ? 0.14 : -0.14) * thrust;
+    arm.rotation.x = -1.44 * thrust; arm.rotation.z = (this.punchLeft ? -0.14 : 0.14) * thrust;
     forearm.rotation.x = -1.1 * (1 - thrust) - 0.08;
-    this.model.rotation.y = (this.punchLeft ? -0.2 : 0.2) * thrust;
+    this.model.rotation.y = (this.punchLeft ? 0.2 : -0.2) * thrust;
   }
 
   private turnToward(target: number, dt: number, rate: number): void {
@@ -174,16 +182,16 @@ export class Player {
 
   private animateAim(dt: number): void {
     if (this.weapon === 'rpg') {
-      this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.9, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, -0.32, dt * 12);
-      this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -0.55, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0.4, dt * 12);
+      this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.9, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, 0.32, dt * 12);
+      this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -0.55, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, -0.4, dt * 12);
       this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.55, dt * 14); this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.8, dt * 14);
-      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, -0.08, dt * 10);
+      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0.08, dt * 10);
       return;
     }
-    this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.46, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, -0.09, dt * 12);
-    this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -1.28, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0.28, dt * 12);
+    this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.46, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, 0.09, dt * 12);
+    this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -1.28, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, -0.28, dt * 12);
     this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.06, dt * 14); this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.16, dt * 14);
-    this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0.06, dt * 10);
+    this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, -0.06, dt * 10);
   }
 
   private buildModel(): void {
@@ -199,8 +207,8 @@ export class Player {
 
     this.buildTorso(jacket, shirt, leather, metal);
     this.buildHead(skin, hair);
-    this.buildArm(this.leftArm, this.leftForearm, -0.355, jacket, skin);
-    this.buildArm(this.rightArm, this.rightForearm, 0.355, jacket, skin);
+    this.buildArm(this.leftArm, this.leftForearm, 0.355, jacket, skin); // model faces +z, so anatomical left is +x
+    this.buildArm(this.rightArm, this.rightForearm, -0.355, jacket, skin); // weapon hand: true right, the camera's shoulder side
     this.buildWeapons();
     this.buildLeg(this.leftLeg, this.leftShin, -0.14, denim, leather);
     this.buildLeg(this.rightLeg, this.rightShin, 0.14, denim, leather);
@@ -247,7 +255,7 @@ export class Player {
   private buildWeapons(): void {
     for (const id of ['pistol', 'smg', 'shotgun'] as const) { const mesh = buildWeaponModel(id); if (mesh) this.weaponMeshes.set(id, mesh); }
     const rpg = buildWeaponModel('rpg');
-    if (rpg) { rpg.rotation.x = -Math.PI / 2; rpg.position.set(0.3, 1.56, -0.28); this.weaponMeshes.set('rpg', rpg); }
+    if (rpg) { rpg.rotation.x = -Math.PI / 2; rpg.position.set(-0.3, 1.56, -0.28); this.weaponMeshes.set('rpg', rpg); }
     for (const [id, mesh] of this.weaponMeshes) { mesh.visible = id === this.weapon; (id === 'rpg' ? this.torso : this.rightForearm).add(mesh); }
   }
 

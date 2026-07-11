@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
-import { PARK_AREAS, ROAD_NETWORK } from './City';
+import { districtAt, PARK_AREAS, ROAD_NETWORK } from './City';
 import { CITY_JUNCTIONS, SIGNAL_CORNER_OFFSET } from './UrbanInfrastructure';
 
 describe('Joburg road topology', () => {
@@ -33,5 +33,21 @@ describe('Joburg road topology', () => {
     expect(ARCHITECTURE_VARIANTS.downtown).toBeGreaterThanOrEqual(5);
     expect(ARCHITECTURE_VARIANTS.residential).toBeGreaterThanOrEqual(4);
     expect(ARCHITECTURE_VARIANTS.industrial).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe('district naming', () => {
+  it('names every quarter of the map for dispatch callouts', () => {
+    expect(districtAt(0, -200)).toBe('Braamfontein');
+    expect(districtAt(-200, 0)).toBe('City Deep');
+    expect(districtAt(200, 50)).toBe('Sandton');
+    expect(districtAt(0, 0)).toBe('Zoo Lake');
+    expect(districtAt(130, 0)).toBe('Joburg CBD');
+    expect(districtAt(0, 130)).toBe('Joburg CBD');
+  });
+
+  it('gives the deep south to Braamfontein regardless of flank', () => {
+    expect(districtAt(300, -300)).toBe('Braamfontein');
+    expect(districtAt(-300, -300)).toBe('Braamfontein');
   });
 });

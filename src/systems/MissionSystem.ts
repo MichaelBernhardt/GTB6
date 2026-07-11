@@ -16,7 +16,7 @@ export interface MissionObjective {
 export interface MissionDefinition { id: string; name: string; contact: string; intro: string; reward: number; start: WorldTarget; objectives: MissionObjective[]; }
 export type MissionState = 'available' | 'active' | 'failed' | 'complete';
 
-const target = (x: number, y: number, z: number, label: string, color = '#f5c451'): WorldTarget => ({ position: new Vector3(x, y, z), label, color });
+const target = (x: number, y: number, z: number, label: string, color = '#f5c542'): WorldTarget => ({ position: new Vector3(x, y, z), label, color });
 
 export const MISSIONS: MissionDefinition[] = [
   {

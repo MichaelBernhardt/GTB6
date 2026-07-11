@@ -144,6 +144,27 @@ export function replanInterval(serial: number, base = 1.5, spread = 0.5): number
   return base + ((serial * GOLDEN) % 1) * spread;
 }
 
+/** Seconds of no meaningful progress toward the current waypoint before an agent abandons its route. */
+export const STUCK_TIMEOUT = 10;
+/** Progress must beat the best distance achieved so far by this many units to count as meaningful. */
+export const STUCK_EPSILON = 3;
+
+/** Progress watchdog: feed it the distance to the current waypoint every frame; fires (returns true) once
+ *  STUCK_TIMEOUT seconds pass without closing in by STUCK_EPSILON on the best approach so far. Reset it
+ *  whenever the goal changes: waypoint advance, replan, state change, freeze/thaw. */
+export class ProgressWatchdog {
+  private best = Infinity;
+  private stalled = 0;
+
+  reset(): void { this.best = Infinity; this.stalled = 0; }
+
+  update(distance: number, dt: number): boolean {
+    if (distance < this.best - STUCK_EPSILON) { this.best = distance; this.stalled = 0; return false; }
+    this.stalled += dt;
+    return this.stalled >= STUCK_TIMEOUT;
+  }
+}
+
 /** Budgeted A* front-end shared by the agents of one system: at most perFrame solves per beginFrame(). */
 export class RoutePlanner {
   private budget = 0;
@@ -167,5 +188,22 @@ export class RoutePlanner {
     if (this.budget <= 0) return undefined;
     this.budget -= 1;
     return this.plan(fromX, fromZ, goal);
+  }
+
+  /** Road-preferring route to an arbitrary point: rides the graph to the node NEAREST the target, then
+   *  appends the exact target as a final offroad leg — never a beeline while a road path gets close. */
+  planTo(fromX: number, fromZ: number, toX: number, toZ: number): NavPoint[] | undefined {
+    const points = this.plan(fromX, fromZ, nearestNode(this.graph, toX, toZ));
+    if (!points?.length) return points;
+    const last = points[points.length - 1];
+    if (last && (last.x - toX) ** 2 + (last.z - toZ) ** 2 > 1) points.push({ x: toX, z: toZ });
+    return points;
+  }
+
+  /** Budgeted planTo for per-frame replans (chases, ped wander): shares the same frame budget. */
+  tryPlanTo(fromX: number, fromZ: number, toX: number, toZ: number): NavPoint[] | undefined {
+    if (this.budget <= 0) return undefined;
+    this.budget -= 1;
+    return this.planTo(fromX, fromZ, toX, toZ);
   }
 }

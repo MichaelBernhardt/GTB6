@@ -27,6 +27,7 @@ export class Vehicle {
   burnTimer = 0;
   aiTarget = new THREE.Vector3();
   aiStuck = 0;
+  frozen = false; // set by PopulationSystem distance culling: frozen traffic gets no plan/AI/visual updates
   bounce = 0;
   riderDamage = 0; // pending player damage while a two-wheeler is player-ridden: no vehicle health cocoon
   riderImpact = 0; // hardest single hit since the last consume; past KNOCKOFF_IMPACT_SPEED the rider is thrown
@@ -78,8 +79,17 @@ export class Vehicle {
     this.speed = THREE.MathUtils.lerp(this.speed, targetSpeed, dt * this.spec.acceleration / 15);
     const old = this.group.position.clone(); this.move(dt, city);
     const intended = Math.abs(this.speed) * dt; // stuck = blocked, not merely slow: actual travel far below intended travel
-    if (intended > 0.02 && old.distanceToSquared(this.group.position) < intended * intended * 0.09) { this.aiStuck += dt; this.speed = -4; this.heading += dt * 1.4; } else this.aiStuck = 0;
+    if (intended > 0.02 && old.distanceToSquared(this.group.position) < intended * intended * 0.09) { this.aiStuck += dt; this.speed = -4; this.heading += dt * 1.4; }
+    else this.aiStuck = Math.max(0, this.aiStuck - dt * 0.5); // decay, don't clear: bump-reverse-bump oscillation must still accumulate toward rehome
     this.updateVisuals(dt, false);
+  }
+
+  /** Watchdog escape: back straight out for a moment so the next plan doesn't immediately re-wedge. */
+  reverse(dt: number, city: City): void {
+    if (this.playerControlled || this.disabled) return;
+    this.speed = THREE.MathUtils.lerp(this.speed, -7, dt * 4);
+    this.move(dt, city);
+    this.updateVisuals(dt, true);
   }
 
   takeDamage(amount: number): void {
