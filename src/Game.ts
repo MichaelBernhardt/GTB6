@@ -253,6 +253,7 @@ export class Game {
     },
     dropStar: () => this.consoleDropStar(),
     toggleShedding: () => { const event = this.loadShedding.force(); this.applyEskom(event); return event === 'start' ? 'Load shedding forced. Stage 4 begins.' : 'Load shedding called off. Power restored.'; },
+    toggleSirens: () => { this.audio.sirensMuted = !this.audio.sirensMuted; if (this.audio.sirensMuted) this.audio.setSiren(false); return this.audio.sirensMuted ? 'Sirens silenced. Elude in peace.' : 'Sirens back on. The city screams again.'; },
     setBusy: (percent) => { this.lifecycle.tuning = { busy: clampBusy(percent) }; return `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`; }, // fresh tuning also clears peds/cars pins
     setPedTarget: (count) => {
       this.lifecycle.tuning.peds = count === undefined ? undefined : Math.min(PED_TARGET_CAP, count);

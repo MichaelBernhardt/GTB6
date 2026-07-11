@@ -16,6 +16,7 @@ export type ConsoleCommand =
   | { kind: 'cash'; amount: number }
   | { kind: 'unwanted' }
   | { kind: 'shedding' }
+  | { kind: 'nomoresirens' }
   | { kind: 'tp-coords'; x: number; z: number }
   | { kind: 'tp-name'; name: string }
   | { kind: 'tp-list' }
@@ -34,6 +35,7 @@ export interface ConsoleHost {
   giveCash(amount: number): string;
   dropStar(): string;
   toggleShedding(): string;
+  toggleSirens(): string;
   setBusy(percent: number): string;
   setPedTarget(count?: number): string;
   setCarTarget(count?: number): string;
@@ -59,6 +61,7 @@ const CHEAT_WORDS: Record<string, ConsoleCommand> = {
   ritchierich: { kind: 'cash', amount: CHEAT_CASH },
   unwanted: { kind: 'unwanted' },
   shedding: { kind: 'shedding' },
+  nomoresirens: { kind: 'nomoresirens' },
 };
 
 export const HELP_LINES = [
@@ -76,7 +79,7 @@ export const HELP_LINES = [
   'busy — show the current crowd targets and live counts',
   'fps — toggle the performance display',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
-  'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding',
+  'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens',
 ];
 
 export function tokenize(input: string): string[] { return input.trim().toLowerCase().split(/\s+/).filter(Boolean); }
@@ -173,6 +176,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'cash': return [host.giveCash(command.amount)];
     case 'unwanted': return [host.dropStar()];
     case 'shedding': return [host.toggleShedding()];
+    case 'nomoresirens': return [host.toggleSirens()];
     case 'tp-coords': return [host.teleport(command.x, command.z)];
     case 'tp-name': return [host.teleportNamed(command.name)];
     case 'tp-list': return host.teleportList();

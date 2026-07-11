@@ -22,6 +22,7 @@ describe('console parser', () => {
     expect(parseCommand('ritchierich')).toEqual({ kind: 'cash', amount: CHEAT_CASH });
     expect(parseCommand('unwanted')).toEqual({ kind: 'unwanted' });
     expect(parseCommand('shedding')).toEqual({ kind: 'shedding' });
+    expect(parseCommand('NoMoreSirens')).toEqual({ kind: 'nomoresirens' });
   });
 
   it('parses spawn with kinds and the bakkie alias', () => {
@@ -137,7 +138,7 @@ describe('runConsoleCommand', () => {
     spawn: (kind) => `spawn:${kind}`,
     giveCash: (amount) => `cash:${amount}`,
     dropStar: () => 'star',
-    toggleShedding: () => 'eskom',
+    toggleSirens: () => 'sirens toggled', toggleShedding: () => 'eskom',
     setBusy: (percent) => `busy:${percent}`,
     setPedTarget: (count) => `peds:${count ?? 'auto'}`,
     setCarTarget: (count) => `cars:${count ?? 'auto'}`,
@@ -158,6 +159,7 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('ritchierich', host)).toEqual([`cash:${CHEAT_CASH}`]);
     expect(runConsoleCommand('unwanted', host)).toEqual(['star']);
     expect(runConsoleCommand('shedding', host)).toEqual(['eskom']);
+    expect(runConsoleCommand('nomoresirens', host)).toEqual(['sirens toggled']);
     expect(runConsoleCommand('fps', host)).toEqual(['fps']);
     expect(runConsoleCommand('help', host)).toEqual(HELP_LINES);
     expect(runConsoleCommand('', host)).toEqual([]);
