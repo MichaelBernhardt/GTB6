@@ -162,6 +162,7 @@ export class DayNightSystem {
     env.sunDisc.position.copy(focus).addScaledVector(this.sunDir, DISC_DISTANCE); env.sunDisc.visible = this.sunDir.y > -0.05;
     (env.sunDisc.material as THREE.MeshBasicMaterial).color.copy(sky.sun);
     this.moon.position.copy(focus).addScaledVector(this.moonDir, DISC_DISTANCE); this.moon.visible = this.moonDir.y > -0.05;
+    this.city.setWaterMood(this.hour, this.sunDir.y >= this.moonDir.y ? this.sunDir : this.moonDir, sky.sun); // water tint and its specular body track the sky
     const gridNight = powerOn() ? night : 0; // load shedding: mains-fed lights go dark, whatever the hour
     this.city.setStreetlightGlow(night); // the bulb material checks the grid itself so panels also read dark by day
     for (const material of this.facades) material.emissiveIntensity = gridNight * FACADE_NIGHT_EMISSIVE;
