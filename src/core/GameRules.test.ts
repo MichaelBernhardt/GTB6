@@ -98,7 +98,7 @@ describe('cheat multipliers', () => {
   it('scales jump velocity with the big jump cheat', () => {
     expect(jumpVelocity(false)).toBe(PLAYER.jumpSpeed);
     expect(jumpVelocity(true)).toBeCloseTo(PLAYER.jumpSpeed * CHEATS.jumpMultiplier);
-    expect(CHEATS.jumpMultiplier).toBeCloseTo(2);
+    expect(CHEATS.jumpMultiplier).toBeCloseTo(2.85);
   });
 });
 

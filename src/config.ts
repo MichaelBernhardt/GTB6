@@ -23,7 +23,7 @@ export const PLAYER = {
   stepUp: 0.55, // curbs, plinths and low ledges are stepped onto, not collided with
   maxHealth: 100,
 };
-export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2 };
+export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2.85 };
 
 export type VehicleKind = 'compact' | 'sport' | 'van' | 'police' | 'taxi' | 'cab' | 'bicycle' | 'motorbike' | 'superbike';
 export interface VehicleSpec {
