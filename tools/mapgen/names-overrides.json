@@ -11,5 +11,18 @@
   "Katherine Street": "Catherine Wheel Street",
   "William Nicol Drive": "William Nickel Drive",
   "Louis Botha Avenue": "Louis Both-of-Ya Avenue",
-  "Empire Road": "Vampire Road"
+  "Empire Road": "Vampire Road",
+  "_cbd_parody": "CBD grid parody names - these streets surround the player spawn:",
+  "Rissik Street": "Risk-It Street",
+  "Marshall Street": "Martial Street",
+  "Fox Street": "Fax Street",
+  "Main Street": "Main Main Street",
+  "Loveday Street": "Loadshed Lane",
+  "Eloff Street": "Eish-loff Street",
+  "Harrison Street": "Hairyson Street",
+  "Joubert Street": "You-Bet Street",
+  "Pritchard Street": "Pothole Street",
+  "_district_renames": "Game-facing district identities (Marshalltown is the CBD core, Sandown is Sandton CBD):",
+  "Marshalltown": "Joburg CBD",
+  "Sandown": "Sandton"
 }

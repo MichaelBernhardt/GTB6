@@ -4,7 +4,8 @@ import type { LivingCityState } from './systems/LivingCitySystem';
 import type { SafehouseId } from './systems/SafehouseSystem';
 
 export type GameMode = 'loading' | 'menu' | 'playing' | 'paused' | 'dead';
-export type District = 'Joburg CBD' | 'Sandton' | 'City Deep' | 'Braamfontein' | 'Zoo Lake';
+/** District names come from the generated OSM map (place nodes, plus names-overrides renames). */
+export type District = string;
 export interface Damageable { health: number; maxHealth: number; takeDamage(amount: number): void; }
 export interface WorldTarget { position: Vector3; label: string; color?: string; }
 export interface SavedWeaponState { ammo: number; reserve: number; owned: boolean; }

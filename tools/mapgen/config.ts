@@ -4,8 +4,8 @@
  * widths and TARGET_SIZE are game world units.
  */
 
-/** Bounding box covering Johannesburg CBD up to Sandton. [south, west, north, east] */
-export const BBOX = { south: -26.28, west: 27.95, north: -26.05, east: 28.12 } as const;
+/** Phase-2 driveable crop: CBD up to Sandton, trimmed flanks. [south, west, north, east] */
+export const BBOX = { south: -26.23, west: 27.97, north: -26.09, east: 28.09 } as const;
 
 /** Approximate centre of the Joburg CBD (Rissik & Commissioner area). */
 export const CBD_CENTER = { lat: -26.205, lon: 28.043 } as const;
@@ -32,28 +32,33 @@ export const MIN_ROAD_LENGTH_M = 25;
 /** Water polygons smaller than this (square metres) are discarded. */
 export const MIN_WATER_AREA_M2 = 4000;
 
-/** Target square footprint (game units). The real bbox is fitted inside, aspect preserved. */
-export const TARGET_SIZE = 3000;
+/**
+ * Target square footprint (game units). The real bbox is fitted inside, aspect preserved.
+ * 3900 (~4.16 m/unit) is the Phase-2 driveable scale: the real CBD grid pitch is ~70 m
+ * (~17 units), so stylised road widths below are tuned to leave room for parcels between
+ * adjacent downtown streets while a 2-unit-wide car still gets a two-lane carriageway.
+ */
+export const TARGET_SIZE = 3900;
 
 /** Game-unit road widths per OSM highway class. */
 export const ROAD_WIDTHS: Record<string, number> = {
-  motorway: 32,
-  motorway_link: 16,
-  trunk: 28,
-  trunk_link: 14,
-  primary: 24,
-  primary_link: 12,
-  secondary: 18,
-  secondary_link: 10,
-  tertiary: 14,
-  tertiary_link: 8,
-  residential: 10,
+  motorway: 24,
+  motorway_link: 11,
+  trunk: 18,
+  trunk_link: 10,
+  primary: 14,
+  primary_link: 8,
+  secondary: 11,
+  secondary_link: 7,
+  tertiary: 9,
+  tertiary_link: 6,
+  residential: 7,
 };
 
 /** Off-road tracks/trails (not part of the connected road graph). */
 export const TRACK_WIDTHS: Record<string, number> = {
-  track: 6,
-  path: 3.5,
+  track: 5,
+  path: 3,
 };
 
 /** Landuse polygons smaller than this (square metres) are discarded. */
