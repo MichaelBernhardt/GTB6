@@ -9,6 +9,7 @@ import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type We
 import { AudioManager } from './core/AudioManager';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, riderImpactDamage, rollDrops, shouldKnockOff, type PedKind } from './core/GameRules';
+import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolvePurchase, weaponPrice } from './core/ShopRules';
@@ -124,6 +125,7 @@ export class Game {
   private taxiDestination?: THREE.Vector3;
   private taxiHailCooldown = 0;
   private brandishCooldown = 0;
+  private scopeLevel = 0;
   private cover?: { spot: CoverSpot; t: number; peek: number; corner: -1 | 0 | 1; exitTimer: number };
   private coverAvailable = false;
   private coverLean = 0;
@@ -469,7 +471,11 @@ export class Game {
     if (this.updateWeaponWheel()) return;
     this.combat.tryReload(this.input);
     WEAPONS.forEach((spec, index) => { if (this.input.consume(`Digit${index + 1}`)) this.combat.select(spec.id); });
-    const scroll = this.input.consumeWheel(); if (scroll) this.combat.cycle(scroll > 0 ? 1 : -1);
+    const scroll = this.input.consumeWheel();
+    if (scroll) { // scoped, the wheel belongs to the zoom ladder; otherwise it cycles the loadout as ever
+      if (wheelAction(this.scoped) === 'zoom') this.scopeLevel = stepScopeLevel(this.scopeLevel, scroll > 0 ? -1 : 1);
+      else this.combat.cycle(scroll > 0 ? 1 : -1);
+    }
     this.footstepTimer -= dt;
     if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { const running = this.input.down('ShiftLeft'); this.audio.footstep(running, this.city.isPark(this.player.group.position.x, this.player.group.position.z)); this.footstepTimer = running ? 0.24 : 0.38; }
     const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles, { aim: this.input.aiming, heading: this.player.heading });
@@ -481,7 +487,10 @@ export class Game {
         if (shot.policeHit) this.reportCrime(this.player.group.position, 24, { copWitnessed: true, label: 'assault' });
         if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
       }
-    } else if (shot.fired) this.handleGunshot(shot, this.player.group.position);
+    } else if (shot.fired) {
+      this.handleGunshot(shot, this.player.group.position);
+      if (scopeWeapon(this.combat.current)) this.cameraController.recoil(SNIPER_RECOIL); // .303 shoulder thump
+    }
     this.player.setWeapon(this.combat.current);
     if (this.input.consume('KeyF')) this.tryMugOrMelee();
     if (this.input.consume('KeyE')) {
@@ -538,9 +547,15 @@ export class Game {
     return { heading: aiming ? yaw + Math.PI : coverHeading(cover.spot), peek: cover.peek, twist: cover.corner * cover.peek * 0.45, moving: slide !== 0 };
   }
 
+  /** Scope mode: aiming the sniper on foot (cover peeks included) — never from a vehicle seat or mid-transition. */
+  private get scoped(): boolean {
+    return this.mode === 'playing' && !this.transition && !this.weaponWheelOpen && scopeActive(this.input.aiming, this.combat.current, Boolean(this.activeVehicle));
+  }
+
   /** Shared aftermath for a ranged player shot: witnesses, fear, gore, and drops — on foot or drive-by. */
   private handleGunshot(shot: ShotResult, position: THREE.Vector3): void {
-    this.reportCrime(position, 7, { victims: shot.victim ? [shot.victim] : [], radius: FEAR_EVENTS.gunshot.radius, cityEvent: shot.victim && !shot.victim.hostile && !shot.victim.police ? (shot.killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: shot.killed ? 'murder' : 'gunfire' }); this.population.broadcastFear(position, FEAR_EVENTS.gunshot);
+    const fear = scopeWeapon(this.combat.current) ? FEAR_EVENTS.sniperShot : FEAR_EVENTS.gunshot; // the rifle crack carries further than a pistol pop
+    this.reportCrime(position, 7, { victims: shot.victim ? [shot.victim] : [], radius: fear.radius, cityEvent: shot.victim && !shot.victim.hostile && !shot.victim.police ? (shot.killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: shot.killed ? 'murder' : 'gunfire' }); this.population.broadcastFear(position, fear);
     if (shot.victim && shot.hitPoint) {
       this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
       this.audio.splat(shot.killed ? 0.9 : 0.5, shot.hitPoint.x, shot.hitPoint.z);
@@ -580,7 +595,7 @@ export class Game {
   private updateDriving(dt: number): void {
     const vehicle = this.activeVehicle; if (!vehicle) return;
     const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position);
-    const driveBy = canFireFromVehicle(this.input.aiming, this.combat.spec.melee, Boolean(this.combat.spec.projectile));
+    const driveBy = canFireFromVehicle(this.input.aiming, this.combat.spec.melee, Boolean(this.combat.spec.projectile), scopeWeapon(this.combat.current));
     if (vehicle.spec.twoWheeler) { // rider stays visible in the saddle — and wears no cocoon: hits land on the player
       const [saddleY, saddleZ] = vehicle.spec.saddle ?? [0.1, -0.2];
       this.player.group.position.add(new THREE.Vector3(Math.sin(vehicle.heading) * saddleZ, saddleY, Math.cos(vehicle.heading) * saddleZ));
@@ -1055,14 +1070,16 @@ export class Game {
     const view = this.activeVehicle ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
     const firstPerson = view === 0;
     const riding = Boolean(this.player.inVehicle && this.activeVehicle?.spec.twoWheeler); // riders stay visible except in first person
-    this.player.setVisible(riding ? !firstPerson : !this.player.inVehicle && !(firstPerson && !this.activeVehicle && !this.transition));
+    const scoped = this.scoped; // scope: first-person eye from any view, model hidden, FOV from the zoom ladder
+    this.player.setVisible(riding ? !firstPerson : !this.player.inVehicle && !((firstPerson || scoped) && !this.activeVehicle && !this.transition));
     this.activeVehicle?.setFirstPerson(firstPerson);
     const cover = this.cover;
     const leanTarget = cover && cover.corner !== 0 && !this.activeVehicle
       ? Math.sign(Math.cos(this.cameraController.yaw) * cover.spot.tangent.x * cover.corner - Math.sin(this.cameraController.yaw) * cover.spot.tangent.z * cover.corner || 1) * (0.55 + 0.45 * cover.peek)
       : 0; // pull the camera toward the exposed corner for visibility over the shoulder
     this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee, this.coverLean);
+    const sensitivity = scoped ? scopeSensitivity(this.settings.mouseSensitivity, this.scopeLevel) : this.settings.mouseSensitivity;
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -1157,8 +1174,9 @@ export class Game {
       name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health,
       taxi: isTaxiKind(this.activeVehicle.spec.kind) ? { text: taxiHudText(this.taxiRide.phase, this.taxiRide.duty === 'available', this.taxiRide.fare, this.taxiRide.tip), available: this.taxiRide.available } : undefined,
     } : undefined;
-    const crosshair = this.mode === 'playing' && !this.transition && !this.weaponWheelOpen && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile);
-    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
+    const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
+    const crosshair = this.mode === 'playing' && !this.transition && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile);
+    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
     const markers = [...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : []), ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : [])];
     const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact && !ped.police).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z })); // arrest officers are on the map as JMPD, not as red hostiles
     this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles, this.settings.minimapZoom);

@@ -29,20 +29,26 @@ export class CameraController {
   aiming = false;
   private aimBlend = 0;
   private lookOffset = 0;
+  private recoilReturn = 0;
   private baseFov: number;
   private focus = new THREE.Vector3();
   private desired = new THREE.Vector3();
 
   constructor(private camera: THREE.PerspectiveCamera) { this.baseFov = camera.fov; }
 
-  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0): void {
-    const firstPerson = sanitizeView(view) === 0;
+  /** Firing kick: an instant upward pitch bump; a bit over half of it settles back over the next beats. */
+  recoil(amount: number): void { this.pitch -= amount; this.recoilReturn += amount * 0.55; }
+
+  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0): void {
+    const scoped = scopeFov > 0 && !vehicle; // sniper scope: first-person eye regardless of the chosen view
+    const firstPerson = sanitizeView(view) === 0 || scoped;
     if (firstPerson && vehicle) { this.lookOffset = (this.lookOffset - input.mouseDX * sensitivity) * Math.exp(-dt * 1.4); this.yaw = vehicleHeading + Math.PI + this.lookOffset; }
     else { this.lookOffset = 0; this.yaw -= input.mouseDX * sensitivity; }
+    if (this.recoilReturn > 0) { const back = this.recoilReturn * (1 - Math.exp(-dt * 5)); this.pitch += back; this.recoilReturn -= back; }
     this.pitch = THREE.MathUtils.clamp(this.pitch + input.mouseDY * sensitivity, firstPerson ? -FP_PITCH_LIMIT : -0.1, firstPerson ? FP_PITCH_LIMIT : 0.9);
     this.aiming = input.aiming && aimAllowed; // aim mode needs a ranged weapon in hand
     this.aimBlend += ((this.aiming ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 10));
-    if (firstPerson) { this.updateFirstPerson(target, vehicle, vehicleHeading); return; }
+    if (firstPerson) { this.updateFirstPerson(target, vehicle, vehicleHeading, scoped ? scopeFov : 0); return; }
     this.setFov(this.baseFov);
     const distance = aimedViewDistance(view, vehicle, this.aimBlend);
     const baseHeight = VEHICLE_VIEW_HEIGHTS[sanitizeView(view)];
@@ -72,13 +78,13 @@ export class CameraController {
     this.camera.lookAt(this.focus);
   }
 
-  private updateFirstPerson(target: THREE.Vector3, vehicle: boolean, vehicleHeading: number): void {
+  private updateFirstPerson(target: THREE.Vector3, vehicle: boolean, vehicleHeading: number, scopeFov = 0): void {
     this.focus.set(target.x, target.y + (vehicle ? FP_EYE_VEHICLE : FP_EYE_FOOT), target.z);
     if (vehicle) { this.focus.x += Math.sin(vehicleHeading) * 0.25 + Math.cos(vehicleHeading) * 0.33; this.focus.z += Math.cos(vehicleHeading) * 0.25 - Math.sin(vehicleHeading) * 0.33; } // driver seat: forward + door side
     this.camera.position.copy(this.focus);
     const cosPitch = Math.cos(this.pitch);
     this.camera.lookAt(this.focus.x - Math.sin(this.yaw) * cosPitch, this.focus.y - Math.sin(this.pitch), this.focus.z - Math.cos(this.yaw) * cosPitch);
-    this.setFov(this.baseFov - (vehicle ? 0 : FP_AIM_ZOOM * this.aimBlend));
+    this.setFov(scopeFov > 0 ? scopeFov : this.baseFov - (vehicle ? 0 : FP_AIM_ZOOM * this.aimBlend));
   }
 
   private setFov(fov: number): void {

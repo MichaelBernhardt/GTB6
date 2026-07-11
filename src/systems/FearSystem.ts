@@ -3,6 +3,8 @@ export interface FearEvent { base: number; radius: number; }
 
 export const FEAR_EVENTS = {
   gunshot: { base: 34, radius: 48 },
+  sniperShot: { base: 42, radius: 84 }, // a rifle crack carries: witnesses well beyond a pistol's earshot
+
   kill: { base: 62, radius: 58 },
   assault: { base: 42, radius: 24 },
   body: { base: 22, radius: 10 },

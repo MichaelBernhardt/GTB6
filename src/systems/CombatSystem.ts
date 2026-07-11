@@ -130,12 +130,12 @@ export class CombatSystem {
       while (root && !root.userData.pedestrian && !root.userData.vehicle) root = root.parent;
       if (root?.userData.pedestrian) {
         const ped = root.userData.pedestrian as Pedestrian;
-        const dead = ped.takeDamage(calculateDamage(spec.damage, hit.distance));
+        const dead = ped.takeDamage(calculateDamage(spec.damage, hit.distance, 0, spec.falloffFloor));
         policeHit ||= ped.police;
         if (!victim || ped === victim) { victim = ped; killed ||= dead; hitPoint ??= hit.point.clone(); }
       } else if (root?.userData.vehicle) {
         const vehicle = root.userData.vehicle as Vehicle;
-        if (!hitVehicles.has(vehicle)) { hitVehicles.add(vehicle); vehicle.takeDamage(calculateDamage(spec.damage * 0.6, hit.distance)); policeHit ||= vehicle.police; }
+        if (!hitVehicles.has(vehicle)) { hitVehicles.add(vehicle); vehicle.takeDamage(calculateDamage(spec.damage * 0.6, hit.distance, 0, spec.falloffFloor)); policeHit ||= vehicle.police; }
       }
     }
     return { fired: true, victim, killed, policeHit, hitPoint };

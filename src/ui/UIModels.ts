@@ -22,6 +22,7 @@ export interface HudState {
   reputation?: string;
   prompt: string;
   crosshair: boolean;
+  scope?: { zoom: string };
   vehicle?: VehicleTelemetry;
   objective?: ObjectiveView;
   fps: number;
