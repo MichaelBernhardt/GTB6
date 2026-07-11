@@ -144,13 +144,15 @@ export class PopulationSystem {
     const parked: Array<[VehicleKind, number, number, number, number?]> = [
       ['compact', -105.5, 240, 0, 0xf1c232], ['sport', 30, 205.5, Math.PI / 2, 0xd83a40], ['van', -205.5, -72, 0],
       ['compact', 205.5, 86, 0], ['sport', 252, -205.5, Math.PI / 2, 0x3f6faa], ['van', -105.5, -190, 0], ['compact', 205.5, 286, 0],
+      ['bicycle', -30, 235, 0], ['bicycle', 105.5, -240, Math.PI / 2, 0xc44f9a], ['motorbike', -105.5, 150, 0], ['motorbike', 30, -205.5, Math.PI / 2, 0x364a5e],
+      ['superbike', 205.5, 150, 0], // flashy toy on a Sandton kerb
     ];
     for (const [kind, x, z, heading, color] of parked) {
       const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z)); const vehicle = new Vehicle(this.scene, kind, pose.position, color);
       vehicle.heading = Number.isFinite(pose.heading) ? pose.heading : heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([pose.position.x, pose.position.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'taxi', 'van', 'taxi'];
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'taxi']; // the odd commuter bike weaves through traffic
     for (let i = 0; i < 15; i++) {
       const routeIndex = (i * 5 + 3) % this.city.trafficRoutes.length; const route = this.city.trafficRoutes[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
       const kind = kinds[i % kinds.length] ?? 'compact';

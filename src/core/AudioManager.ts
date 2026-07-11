@@ -3,7 +3,17 @@ import { distanceGain, engineState, stereoPan } from './AudioMath';
 
 interface BurstOptions { duration: number; type: BiquadFilterType; frequency: number; q?: number; peak: number; decay: number; at?: number; pan?: number; echo?: number; rate?: number; rateTo?: number; }
 interface BlipOptions { type?: OscillatorType; slide?: number; at?: number; pan?: number; attack?: number; }
-interface EngineVoice { osc: OscillatorNode; sub: OscillatorNode; wobble: OscillatorNode; intake: AudioBufferSourceNode; intakeGain: GainNode; filter: BiquadFilterNode; gain: GainNode; gear: number; }
+interface EngineVoice { osc: OscillatorNode; sub: OscillatorNode; wobble: OscillatorNode; intake: AudioBufferSourceNode; intakeGain: GainNode; filter: BiquadFilterNode; gain: GainNode; gear: number; profile: EngineProfile; }
+interface BicycleVoice { wind: AudioBufferSourceNode; windGain: GainNode; nextTick: number; }
+
+export type EngineProfile = 'car' | 'motorbike' | 'superbike' | 'bicycle';
+interface MotorProfile { base: number; span: number; osc: OscillatorType; wobbleRate: number; wobbleDepth: number; bright: number; level: number; }
+/** Synthesis recipes per drivetrain: bikes rev higher and thinner, the superbike screams brightest. */
+const MOTOR_PROFILES: Record<Exclude<EngineProfile, 'bicycle'>, MotorProfile> = {
+  car: { base: 42, span: 108, osc: 'sawtooth', wobbleRate: 6.5, wobbleDepth: 5, bright: 1, level: 1 },
+  motorbike: { base: 64, span: 175, osc: 'square', wobbleRate: 11, wobbleDepth: 10, bright: 1.3, level: 0.9 },
+  superbike: { base: 88, span: 260, osc: 'sawtooth', wobbleRate: 15, wobbleDepth: 7, bright: 1.6, level: 0.95 },
+};
 interface SirenVoice { oscillators: OscillatorNode[]; gain: GainNode; pan: StereoPannerNode; }
 interface FireVoice { sources: AudioBufferSourceNode[]; lfo: OscillatorNode; gain: GainNode; pan: StereoPannerNode; nextPop: number; }
 interface Ambience { traffic: GainNode; wind: GainNode; windLfo: OscillatorNode; nextEvent: number; }
@@ -15,6 +25,7 @@ export class AudioManager {
   private noise?: AudioBuffer;
   private rumble?: AudioBuffer;
   private engineVoice?: EngineVoice;
+  private bicycleVoice?: BicycleVoice;
   private sirenVoice?: SirenVoice;
   private fireVoice?: FireVoice;
   private ambience?: Ambience;
@@ -271,24 +282,49 @@ export class AudioManager {
     }
   }
 
-  setEngine(active: boolean, speed = 0, throttle = 0, maxSpeed = 40): void {
+  setEngine(active: boolean, speed = 0, throttle = 0, maxSpeed = 40, profile: EngineProfile = 'car'): void {
     if (!this.context || !this.master) return;
     const t = this.now();
-    if (active && !this.engineVoice) this.engineVoice = this.buildEngine();
-    const voice = this.engineVoice; if (!voice) return;
-    if (!active) {
-      voice.gain.gain.setTargetAtTime(0.0001, t, 0.08); voice.intakeGain.gain.setTargetAtTime(0.0001, t, 0.08);
-      for (const node of [voice.osc, voice.sub, voice.wobble, voice.intake]) { try { node.stop(t + 0.6); } catch { /* already stopped */ } }
-      this.engineVoice = undefined; return;
-    }
+    if (this.engineVoice && (!active || profile !== this.engineVoice.profile)) this.stopEngineVoice(t);
+    if (this.bicycleVoice && (!active || profile !== 'bicycle')) this.stopBicycleVoice(t);
+    if (!active) return;
+    if (profile === 'bicycle') { this.updateBicycle(t, speed, maxSpeed); return; }
+    if (!this.engineVoice) this.engineVoice = this.buildEngine(profile);
+    const voice = this.engineVoice; const spec = MOTOR_PROFILES[profile];
     const { gear, rpm } = engineState(speed, maxSpeed);
     const glide = gear === voice.gear ? 0.09 : 0.035; voice.gear = gear;
-    const frequency = 42 + rpm * 108;
+    const frequency = spec.base + rpm * spec.span;
     voice.osc.frequency.setTargetAtTime(frequency, t, glide);
     voice.sub.frequency.setTargetAtTime(frequency * 0.5, t, glide);
-    voice.filter.frequency.setTargetAtTime(260 + throttle * 1900 + rpm * 900, t, 0.08);
-    voice.intakeGain.gain.setTargetAtTime(0.006 + throttle * 0.03 + rpm * 0.012, t, 0.1);
-    voice.gain.gain.setTargetAtTime(0.045 + rpm * 0.05 + throttle * 0.012, t, 0.09);
+    voice.filter.frequency.setTargetAtTime((260 + throttle * 1900 + rpm * 900) * spec.bright, t, 0.08);
+    voice.intakeGain.gain.setTargetAtTime((0.006 + throttle * 0.03 + rpm * 0.012) * spec.level, t, 0.1);
+    voice.gain.gain.setTargetAtTime((0.045 + rpm * 0.05 + throttle * 0.012) * spec.level, t, 0.09);
+  }
+
+  private stopEngineVoice(t: number): void {
+    const voice = this.engineVoice; if (!voice) return;
+    voice.gain.gain.setTargetAtTime(0.0001, t, 0.08); voice.intakeGain.gain.setTargetAtTime(0.0001, t, 0.08);
+    for (const node of [voice.osc, voice.sub, voice.wobble, voice.intake]) { try { node.stop(t + 0.6); } catch { /* already stopped */ } }
+    this.engineVoice = undefined;
+  }
+
+  /** Bicycle: no engine at all — just a freewheel tick and wind that rises with speed. Near-silent to the world (and the JMPD). */
+  private updateBicycle(t: number, speed: number, maxSpeed: number): void {
+    if (!this.bicycleVoice) this.bicycleVoice = this.buildBicycle();
+    const voice = this.bicycleVoice;
+    const ratio = Math.min(1, Math.abs(speed) / Math.max(1, maxSpeed));
+    voice.windGain.gain.setTargetAtTime(0.0008 + ratio * ratio * 0.028, t, 0.12);
+    if (Math.abs(speed) > 1.5 && t >= voice.nextTick) {
+      voice.nextTick = t + Math.min(0.4, 1.15 / Math.abs(speed));
+      this.burst({ duration: 0.02, type: 'highpass', frequency: 5200, peak: 0.011 + ratio * 0.008, decay: 0.014 });
+    }
+  }
+
+  private stopBicycleVoice(t: number): void {
+    const voice = this.bicycleVoice; if (!voice) return;
+    voice.windGain.gain.setTargetAtTime(0.0001, t, 0.1);
+    try { voice.wind.stop(t + 0.5); } catch { /* already stopped */ }
+    this.bicycleVoice = undefined;
   }
 
   setSiren(active: boolean, x = 0, z = 0): void {
@@ -361,12 +397,22 @@ export class AudioManager {
     this.ambience = { traffic, wind, windLfo, nextEvent: this.now() + 5 };
   }
 
-  private buildEngine(): EngineVoice {
+  private buildBicycle(): BicycleVoice {
     const context = this.context as AudioContext; const master = this.master as GainNode;
-    const osc = context.createOscillator(); osc.type = 'sawtooth'; osc.frequency.value = 60;
-    const sub = context.createOscillator(); sub.type = 'square'; sub.frequency.value = 30; sub.detune.value = 7;
-    const wobble = context.createOscillator(); wobble.frequency.value = 6.5;
-    const wobbleDepth = context.createGain(); wobbleDepth.gain.value = 5;
+    const wind = context.createBufferSource(); wind.buffer = this.noise as AudioBuffer; wind.loop = true; wind.playbackRate.value = 0.9;
+    const filter = context.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.value = 880; filter.Q.value = 0.4;
+    const windGain = context.createGain(); windGain.gain.value = 0.0001;
+    wind.connect(filter).connect(windGain).connect(master); wind.start();
+    return { wind, windGain, nextTick: this.now() };
+  }
+
+  private buildEngine(profile: Exclude<EngineProfile, 'bicycle'>): EngineVoice {
+    const context = this.context as AudioContext; const master = this.master as GainNode;
+    const spec = MOTOR_PROFILES[profile];
+    const osc = context.createOscillator(); osc.type = spec.osc; osc.frequency.value = spec.base;
+    const sub = context.createOscillator(); sub.type = 'square'; sub.frequency.value = spec.base / 2; sub.detune.value = 7;
+    const wobble = context.createOscillator(); wobble.frequency.value = spec.wobbleRate;
+    const wobbleDepth = context.createGain(); wobbleDepth.gain.value = spec.wobbleDepth;
     wobble.connect(wobbleDepth).connect(osc.detune);
     const filter = context.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 300;
     const gain = context.createGain(); gain.gain.value = 0.0001;
@@ -376,7 +422,7 @@ export class AudioManager {
     osc.connect(filter); sub.connect(filter); filter.connect(gain).connect(master);
     intake.connect(intakeFilter).connect(intakeGain).connect(master);
     osc.start(); sub.start(); wobble.start(); intake.start();
-    return { osc, sub, wobble, intake, intakeGain, filter, gain, gear: 0 };
+    return { osc, sub, wobble, intake, intakeGain, filter, gain, gear: 0, profile };
   }
 
   private buildSiren(): SirenVoice {
