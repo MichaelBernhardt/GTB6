@@ -421,8 +421,11 @@ export class AudioManager {
     for (const node of [voice.fund, voice.sub, voice.harm, voice.throb, voice.intake, voice.rumble]) { try { node.stop(t + 0.6); } catch { /* already stopped */ } }
   }
 
+  sirensMuted = false; // 'nomoresirens' cheat: emergency sirens silenced (lightbars unaffected)
+
   setSiren(active: boolean, x = 0, z = 0): void {
     if (!this.context || !this.master) return;
+    if (this.sirensMuted) active = false;
     const t = this.now();
     if (active && !this.sirenVoice) this.sirenVoice = this.buildSiren();
     const voice = this.sirenVoice; if (!voice) return;
