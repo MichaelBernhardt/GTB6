@@ -53,6 +53,11 @@ export function nearestCoverSpot(x: number, z: number, colliders: readonly Colli
   return best;
 }
 
+/** Cover is available whenever the character is grounded, regardless of the world's absolute elevation. */
+export function nearestGroundedCoverSpot(x: number, z: number, grounded: boolean, colliders: readonly Collider[], range = COVER_ENTER_RANGE): CoverSpot | undefined {
+  return grounded ? nearestCoverSpot(x, z, colliders, range) : undefined;
+}
+
 /** Tangential coordinate of a world point along the spot's face. */
 export function coverT(spot: CoverSpot, x: number, z: number): number { return x * spot.tangent.x + z * spot.tangent.z; }
 
