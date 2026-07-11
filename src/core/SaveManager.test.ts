@@ -80,9 +80,9 @@ describe('SaveManager', () => {
     manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, minimapZoom: 4 } });
     expect(manager.load().settings.minimapZoom).toBe(4);
     manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, minimapZoom: 'street' } as unknown as GameSettings });
-    expect(manager.load().settings.minimapZoom).toBe(2);
+    expect(manager.load().settings.minimapZoom).toBe(3); // DEFAULT_MINIMAP_ZOOM (Standard) on the 6-step ladder
     storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 1, money: 100, completedMissions: [], spawn: [-20, 1, 260], settings: { masterVolume: 0.5, quality: 'high', showFps: false, mouseSensitivity: 0.0025 } }));
-    expect(manager.load().settings.minimapZoom).toBe(2);
+    expect(manager.load().settings.minimapZoom).toBe(3); // DEFAULT_MINIMAP_ZOOM (Standard) on the 6-step ladder
   });
 
   it('treats legacy entries without ownership as owned and fixes an unowned current', () => {

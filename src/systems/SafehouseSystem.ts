@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { SAFEHOUSE_SITE } from '../world/placements';
+import { placedCollider } from './ShopSystem';
 import type { City } from '../world/City';
 
 export const SAFEHOUSE_IDS = ['brixton'] as const;
@@ -6,10 +8,14 @@ export type SafehouseId = (typeof SAFEHOUSE_IDS)[number];
 export interface SafehousePlace { id: SafehouseId; name: string; pad: THREE.Vector3; radius: number; spawn: [number, number, number]; }
 
 export const SAFEHOUSE_ICON_COLOR = '#67d17f';
-/** Parcel verified free of roads, buildings, shops and mission markers: a face-brick flat one block
- *  north of William Nicol Dr, ~36m east of the street spawn. The gate pad faces the road. */
+/** Data-driven parcel from the generated map: a face-brick flat on Main Main Street, a block from
+ *  the spawn corner. The gate pad faces the road. (The id stays 'brixton' for save compatibility.) */
 export const SAFEHOUSES: SafehousePlace[] = [
-  { id: 'brixton', name: 'Brixton Flat', pad: new THREE.Vector3(16, 0, 251.8), radius: 3, spawn: [16, 1, 251.8] },
+  {
+    id: 'brixton', name: 'Main Main Mansions',
+    pad: new THREE.Vector3(SAFEHOUSE_SITE.pad.x, 0, SAFEHOUSE_SITE.pad.z), radius: 3,
+    spawn: [SAFEHOUSE_SITE.pad.x, 1, SAFEHOUSE_SITE.pad.z],
+  },
 ];
 
 export const SLEEP_HOURS = 6;
@@ -35,7 +41,7 @@ export class SafehouseSystem {
 
   constructor(scene: THREE.Scene, city: City) {
     this.group.name = 'Safehouses'; scene.add(this.group);
-    this.buildBrixtonFlat(city);
+    this.buildFlat(city);
     for (const place of SAFEHOUSES) this.addPadMarker(place);
   }
 
@@ -61,31 +67,33 @@ export class SafehouseSystem {
     this.discs.push(disc); this.group.add(disc, ring);
   }
 
-  private buildBrixtonFlat(city: City): void {
-    const x = 16; const z = 259; // stoep, gate and pad face -z toward William Nicol Dr
+  private buildFlat(city: City): void {
+    const site = SAFEHOUSE_SITE.building; // stoep, gate and pad face local +z toward the road
+    const flat = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(10, 3.6, 7), new THREE.MeshStandardMaterial({ color: 0x9a5a43, roughness: 0.85, metalness: 0.02 }));
-    body.position.set(x, 1.8, z); body.castShadow = true; body.receiveShadow = true;
+    body.position.set(0, 1.8, 0); body.castShadow = true; body.receiveShadow = true;
     const roofMat = new THREE.MeshStandardMaterial({ color: 0x77463a, roughness: 0.58, metalness: 0.34 });
-    const slopeA = new THREE.Mesh(new THREE.BoxGeometry(10.8, 0.16, 4.15), roofMat); slopeA.position.set(x, 4.3, z - 1.78); slopeA.rotation.x = 0.38; slopeA.castShadow = true;
-    const slopeB = slopeA.clone(); slopeB.position.z = z + 1.78; slopeB.rotation.x = -0.38;
-    const stoep = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.24, 1.7), new THREE.MeshStandardMaterial({ color: 0xb8b1a2, roughness: 0.9 })); stoep.position.set(x, 0.12, z - 4.3); stoep.receiveShadow = true;
-    const door = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2.35, 0.12), new THREE.MeshStandardMaterial({ color: 0x2f7774, roughness: 0.55 })); door.position.set(x, 1.28, z - 3.55);
+    const slopeA = new THREE.Mesh(new THREE.BoxGeometry(10.8, 0.16, 4.15), roofMat); slopeA.position.set(0, 4.3, 1.78); slopeA.rotation.x = -0.38; slopeA.castShadow = true;
+    const slopeB = slopeA.clone(); slopeB.position.z = -1.78; slopeB.rotation.x = 0.38;
+    const stoep = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.24, 1.7), new THREE.MeshStandardMaterial({ color: 0xb8b1a2, roughness: 0.9 })); stoep.position.set(0, 0.12, 4.3); stoep.receiveShadow = true;
+    const door = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2.35, 0.12), new THREE.MeshStandardMaterial({ color: 0x2f7774, roughness: 0.55 })); door.position.set(0, 1.28, 3.55);
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x37525c, roughness: 0.18, metalness: 0.15, clearcoat: 0.6 });
-    const windowA = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.25, 0.1), glass); windowA.position.set(x - 3.1, 1.85, z - 3.54);
-    const windowB = windowA.clone(); windowB.position.x = x + 3.1;
-    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), new THREE.MeshStandardMaterial({ color: 0xffdf9e, emissive: 0xffc966, emissiveIntensity: 1.6 })); lamp.position.set(x + 1, 2.85, z - 3.56);
+    const windowA = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.25, 0.1), glass); windowA.position.set(-3.1, 1.85, 3.54);
+    const windowB = windowA.clone(); windowB.position.x = 3.1;
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), new THREE.MeshStandardMaterial({ color: 0xffdf9e, emissive: 0xffc966, emissiveIntensity: 1.6 })); lamp.position.set(1, 2.85, 3.56);
     const wallMat = new THREE.MeshStandardMaterial({ color: 0xb3a48c, roughness: 0.92 });
-    const wallL = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.05, 0.3), wallMat); wallL.position.set(x - 3.3, 0.52, z - 6.2); wallL.castShadow = true;
-    const wallR = wallL.clone(); wallR.position.x = x + 3.3;
-    const sideL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.05, 9.5), wallMat); sideL.position.set(x - 5, 0.52, z - 1.5); sideL.castShadow = true;
-    const sideR = sideL.clone(); sideR.position.x = x + 5;
-    this.group.add(body, slopeA, slopeB, stoep, door, windowA, windowB, lamp, wallL, wallR, sideL, sideR);
+    const wallL = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.05, 0.3), wallMat); wallL.position.set(-3.3, 0.52, 6.2); wallL.castShadow = true;
+    const wallR = wallL.clone(); wallR.position.x = 3.3;
+    const sideL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.05, 9.5), wallMat); sideL.position.set(-5, 0.52, 1.5); sideL.castShadow = true;
+    const sideR = sideL.clone(); sideR.position.x = 5;
+    flat.add(body, slopeA, slopeB, stoep, door, windowA, windowB, lamp, wallL, wallR, sideL, sideR);
+    flat.position.set(site.x, 0, site.z); flat.rotation.y = site.heading; this.group.add(flat);
     city.colliders.push(
-      { minX: x - 5, maxX: x + 5, minZ: z - 3.5, maxZ: z + 3.5, height: 3.6 },
-      { minX: x - 5, maxX: x - 1.6, minZ: z - 6.35, maxZ: z - 6.05, height: 1.05 },
-      { minX: x + 1.6, maxX: x + 5, minZ: z - 6.35, maxZ: z - 6.05, height: 1.05 },
-      { minX: x - 5.15, maxX: x - 4.85, minZ: z - 6.25, maxZ: z + 3.25, height: 1.05 },
-      { minX: x + 4.85, maxX: x + 5.15, minZ: z - 6.25, maxZ: z + 3.25, height: 1.05 },
+      placedCollider(site, -5, 5, -3.5, 3.5, 3.6), // house body
+      placedCollider(site, -5, -1.6, 6.05, 6.35, 1.05), // front garden walls (gate gap in the middle)
+      placedCollider(site, 1.6, 5, 6.05, 6.35, 1.05),
+      placedCollider(site, -5.15, -4.85, -3.25, 6.25, 1.05), // side walls
+      placedCollider(site, 4.85, 5.15, -3.25, 6.25, 1.05),
     );
   }
 }

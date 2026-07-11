@@ -110,6 +110,43 @@ describe('generated joburg-map.json', () => {
   it('keeps OSM attribution in the metadata', () => {
     expect(map.meta.attribution).toContain('OpenStreetMap');
   });
+
+  it('ships the boundary orbital and it belongs to the single component', () => {
+    const orbital = map.roads.filter((road) => road.name === 'Egoli Orbital');
+    expect(orbital.length).toBeGreaterThan(2); // the ring plus its boundary-stub spurs
+    // Connectivity is proven by the ONE-component test above; here we pin that the orbital
+    // actually shares coordinates with the rest of the network (spur endpoints are road nodes).
+    const orbitalKeys = new Set(orbital.flatMap((road) => road.points.map(key)));
+    const otherKeys = new Set(map.roads.filter((road) => road.name !== 'Egoli Orbital').flatMap((road) => road.points.map(key)));
+    let shared = 0;
+    for (const k of orbitalKeys) if (otherKeys.has(k)) shared++;
+    expect(shared).toBeGreaterThan(10);
+  });
+
+  it('has no dead-end road endpoints near the crop boundary', () => {
+    // Every clipped outbound road must either join the orbital or have been pruned back.
+    const incidence = new Map<string, number>();
+    let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
+    for (const road of map.roads) {
+      for (let index = 0; index < road.points.length; index++) {
+        const point = road.points[index];
+        minX = Math.min(minX, point[0]); maxX = Math.max(maxX, point[0]);
+        minZ = Math.min(minZ, point[1]); maxZ = Math.max(maxZ, point[1]);
+        const bump = index === 0 || index === road.points.length - 1 ? 1 : 2;
+        incidence.set(key(point), (incidence.get(key(point)) ?? 0) + bump);
+      }
+    }
+    const margin = 100; // game units (> the ring offset, < the stub-collection band)
+    const deadEndsAtBoundary: string[] = [];
+    for (const road of map.roads) {
+      for (const point of [road.points[0], road.points[road.points.length - 1]]) {
+        if ((incidence.get(key(point)) ?? 0) > 1) continue;
+        const edge = Math.min(point[0] - minX, maxX - point[0], point[1] - minZ, maxZ - point[1]);
+        if (edge < margin) deadEndsAtBoundary.push(`${road.name}@${key(point)}`);
+      }
+    }
+    expect(deadEndsAtBoundary).toEqual([]);
+  });
 });
 
 describe('applyNameOverrides', () => {

@@ -19,7 +19,7 @@ describe('MissionSystem', () => {
   it('fails a timed objective and can restart', () => {
     const system = new MissionSystem(); system.start('delivery-run');
     system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'compact', vehicleColor: 0xf1c232 }, false);
-    expect(system.update(146, snapshot, false).failed).toBe('Time expired');
+    expect(system.update(211, snapshot, false).failed).toBe('Time expired');
     expect(system.restart()).toBe(true);
     expect(system.objectiveIndex).toBe(0);
   });

@@ -1,5 +1,8 @@
-export const WORLD_SIZE = 760;
-export const ROAD_WIDTH = 24;
+import { MAP_WORLD_SIZE } from './world/mapData';
+
+/** World footprint comes from the generated OSM map (stats.targetSize). */
+export const WORLD_SIZE = MAP_WORLD_SIZE;
+export const ROAD_WIDTH = 14; // widest common surface street (primary) in the generated map
 export const BLOCK_SIZE = 76;
 export const TRAFFIC_SPEED_FACTOR = 0.42;
 /** Agents beyond this range from the player freeze entirely: no motion, routing, or animation. */

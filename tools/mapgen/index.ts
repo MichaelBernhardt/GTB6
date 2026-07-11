@@ -35,10 +35,10 @@ async function main(): Promise<void> {
     await fetchBuildingCounts(districtNodes, DISTRICT_RADIUS_M),
   ];
 
-  const { map, log } = processOsm(data, { elevation, buildingCounts });
+  const overrides = loadNameOverrides();
+  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides) });
   for (const line of log) console.log(`[process] ${line}`);
 
-  const overrides = loadNameOverrides();
   const finalMap = applyNameOverrides(map, overrides);
   console.log(`[emit] applied ${Object.keys(overrides).length} name overrides`);
 

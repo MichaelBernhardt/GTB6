@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN, type City } from '../world/City';
+import { SPAWN_POINT } from '../world/placements';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
 import { PoliceKnowledge, ROAM_RADIUS, SIGHT_RADIUS } from './PoliceKnowledge';
 import { maxInterceptors, PoliceSystem } from './PoliceSystem';
@@ -27,7 +28,7 @@ const audio = { scream: () => {}, setSiren: () => {}, taxiHoot: () => {}, setTra
 describe('ai intentions simulation', () => {
   it('drives traffic along planned lane routes and keeps peds wandering with sidewalk routes', () => {
     const population = new PopulationSystem(new THREE.Scene(), makeCity(), audio);
-    const player = new THREE.Vector3();
+    const player = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z); // the CBD spawn: the opening crowd seeds around it
     const startPositions = population.traffic.map((vehicle) => vehicle.group.position.clone());
     for (let frame = 0; frame < 900; frame++) population.update(1 / 60, player);
     const moved = population.traffic.filter((vehicle, index) => vehicle.group.position.distanceTo(startPositions[index]!) > 15);
@@ -41,8 +42,10 @@ describe('ai intentions simulation', () => {
 
   it('replans a fresh sidewalk route after a ped arrives instead of idling forever', () => {
     const population = new PopulationSystem(new THREE.Scene(), makeCity(), audio);
-    const player = new THREE.Vector3();
-    const ped = population.pedestrians.find((walker) => !walker.contact && !walker.hostile)!;
+    const player = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z);
+    const ped = population.pedestrians
+      .filter((walker) => !walker.contact && !walker.hostile)
+      .sort((a, b) => a.group.position.distanceToSquared(player) - b.group.position.distanceToSquared(player))[0]!; // a walker inside the AI wake radius
     ped.setRoute([{ x: ped.group.position.x + 2, z: ped.group.position.z + 2 }]); // one-hop route: arrival is imminent
     let replanned = false;
     for (let frame = 0; frame < 900 && !replanned; frame++) {
@@ -72,7 +75,10 @@ describe('ai intentions simulation', () => {
     for (let frame = 0; frame < 300; frame++) population.update(1 / 60, far);
     population.pedestrians.forEach((ped, index) => expect(ped.group.position.distanceTo(pedSnapshot[index]!)).toBe(0));
     population.traffic.forEach((vehicle, index) => expect(vehicle.group.position.distanceTo(vehicleSnapshot[index]!)).toBe(0));
-    const walker = population.pedestrians.find((ped) => !ped.contact && !ped.hostile && !ped.aggressive)!;
+    // A walker clear of the seeded CBD traffic: this test measures thaw continuity, not car bumps.
+    const walker = population.pedestrians
+      .filter((ped) => !ped.contact && !ped.hostile && !ped.aggressive)
+      .find((ped) => population.vehicles.every((vehicle) => vehicle.group.position.distanceTo(ped.group.position) > 40))!;
     const near = walker.group.position.clone().add(new THREE.Vector3(20, 0, 0));
     let travelled = 0; let largestStep = 0; const previous = walker.group.position.clone();
     for (let frame = 0; frame < 600; frame++) {
@@ -88,7 +94,7 @@ describe('ai intentions simulation', () => {
   it('spawns interceptors up to the wanted-level cap and closes in on the player', () => {
     const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
     const wanted = new WantedSystem(); wanted.addCrime(100);
-    const player = new THREE.Vector3(0, 0, 0);
+    const player = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z); // CBD spawn: dense lanes all around
     // Cop-witnessed crime at the player's position: dispatch knows where to start looking.
     const knowledge = new PoliceKnowledge(); knowledge.copWitness(player.x, player.z);
     let damage = 0;
@@ -104,8 +110,8 @@ describe('ai intentions simulation', () => {
   it('arrests a stationary on-foot suspect: standoff, crew deployment and fire — never a deliberate ram', () => {
     const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
     const wanted = new WantedSystem(); wanted.addCrime(40); // two stars: live fire authorized
-    const knowledge = new PoliceKnowledge(); knowledge.copWitness(0, 0);
-    const player = new THREE.Vector3(0, 0, 0);
+    const knowledge = new PoliceKnowledge(); knowledge.copWitness(SPAWN_POINT.x, SPAWN_POINT.z);
+    const player = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z);
     let damage = 0; let closestAtSpeed = Infinity;
     for (let frame = 0; frame < 1800; frame++) {
       police.update(1 / 30, player, false, wanted, knowledge, (amount) => { damage += amount; });

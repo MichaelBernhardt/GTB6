@@ -156,9 +156,26 @@ export function createWaterNormalTexture(size = 256): THREE.DataTexture {
   return texture;
 }
 
-export interface OceanSite { kind: 'ocean'; x: number; y: number; z: number; width: number; depth: number; }
+export interface OceanSite {
+  kind: 'ocean';
+  x: number; y: number; z: number;
+  width: number; depth: number;
+  /** Optional absolute-coordinate shoreline polygon (generated lakes/dams); omitted = rectangular plane. */
+  shape?: ReadonlyArray<{ x: number; z: number }>;
+}
 export interface BasinSite { kind: 'fountain' | 'pond'; x: number; y: number; z: number; radius: number; }
 export type WaterSite = OceanSite | BasinSite;
+
+/** Site-local XY shape for an ocean polygon (matches the -PI/2 X-rotation applied to water planes). */
+function oceanShapeGeometry(site: OceanSite): THREE.ShapeGeometry {
+  const shape = new THREE.Shape(site.shape!.map((point) => new THREE.Vector2(point.x - site.x, -(point.z - site.z))));
+  return new THREE.ShapeGeometry(shape);
+}
+
+/** Geometry for an ocean site in the XY plane (callers rotate mesh or geometry by -PI/2 about X). */
+function oceanGeometryXY(site: OceanSite, segments?: [number, number]): THREE.BufferGeometry {
+  return site.shape ? oceanShapeGeometry(site) : new THREE.PlaneGeometry(site.width, site.depth, ...(segments ?? [1, 1]));
+}
 
 export interface WaterHandle {
   group: THREE.Group;
@@ -224,14 +241,14 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
       const texture = createSurfaceTexture('water', 7); textures.push(texture); scrollTextures.push(texture);
       const material = new THREE.MeshPhysicalMaterial({ color: 0x2f7589, map: texture, roughness: 0.16, metalness: 0.05, clearcoat: 0.85, clearcoatRoughness: 0.16, transparent: true, opacity: 0.9 });
       moodMaterials.push(material);
-      addMesh(new THREE.PlaneGeometry(site.width, site.depth).rotateX(-Math.PI / 2), material, site);
+      addMesh(oceanGeometryXY(site).rotateX(-Math.PI / 2), material, site);
       return;
     }
     if (tier === 'physical') {
       const vertexChunk = `vec3 transformed = vec3( position );\n\tvWaterPos = transformed.xz;\n\ttransformed.y += ${waveHeightGlsl('vWaterPos.x', 'vWaterPos.y', 'uTime')};`;
       const fragmentChunk = `\tvec2 waterSlope = ${waveSlopeGlsl('vWaterPos.x', 'vWaterPos.y', 'uTime', [...OCEAN_WAVES, ...DETAIL_WAVES])};\n\twaterSlope += ${detailSlopeGlsl()};\n\t${slopeFadeGlsl('length(vViewPosition)')}\n\t${slopeToViewNormalGlsl}`;
       const material = wavyMaterial('water-ocean', vertexChunk, fragmentChunk, OCEAN_ALPHA);
-      addMesh(new THREE.PlaneGeometry(site.width, site.depth, ...OCEAN_SEGMENTS).rotateX(-Math.PI / 2), material, site);
+      addMesh(oceanGeometryXY(site, OCEAN_SEGMENTS).rotateX(-Math.PI / 2), material, site);
       return;
     }
     // Planar tier: a Reflector with a custom wave shader — the mirror texture shows the real skyline, sun and moon.
@@ -290,7 +307,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
         #include <colorspace_fragment>
         #include <fog_fragment>
       }`;
-    reflector = new Reflector(new THREE.PlaneGeometry(site.width, site.depth, ...OCEAN_SEGMENTS), {
+    reflector = new Reflector(oceanGeometryXY(site, OCEAN_SEGMENTS), {
       textureWidth: REFLECTOR_TEXTURE_SIZE, textureHeight: REFLECTOR_TEXTURE_SIZE, clipBias: 0.015, multisample: 0,
       shader: {
         name: 'HarbourWater',

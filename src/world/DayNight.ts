@@ -19,7 +19,7 @@ export const HEADLIGHT_POOL: Record<GameSettings['quality'], number> = { low: 2,
 const STREETLIGHT_RADIUS = 18; const STREETLIGHT_INTENSITY = 30; const STREETLIGHT_COLOR = 0xffb45e;
 const HEADLIGHT_RANGE = 36; const HEADLIGHT_INTENSITY = 48; const HEADLIGHT_COLOR = 0xfff3cf;
 const LAMP_HEIGHT = 5.7; // just below the fixture built in UrbanInfrastructure (bulb at y=6.02)
-const DISC_DISTANCE = 640; // sun/moon disc distance from the focus (camera far is 950)
+const DISC_DISTANCE = 1750; // sun/moon disc distance from the focus (camera far is 2600)
 const FACADE_NIGHT_EMISSIVE = 1.25;
 
 export interface SkyKeyframe { hour: number; sky: number; fog: number; sun: number; sunIntensity: number; hemiSky: number; hemiGround: number; hemiIntensity: number; ambient: number; ambientIntensity: number; }

@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { PropRegistry } from '../systems/PropSystem';
 import type { RoadPoint, RoadsidePoint } from './City';
+import { SIGNAL_JUNCTIONS } from './mapData';
+import { ETOLL_SPOTS, ROADSIDE_SIGNS, SPAWN_SIGN_JUNCTIONS, TRANSIT_STOPS } from './placements';
 import { createSignMesh } from './ProceduralMaterials';
 import { onPowerChange } from './powerGrid';
 
@@ -14,24 +16,22 @@ export interface JunctionDefinition {
   roadA: string;
   roadB: string;
   phase: number;
+  /** Width of the widest incident road: junction furniture offsets scale from it. */
+  widest: number;
 }
 
-export const CITY_JUNCTIONS: JunctionDefinition[] = [
-  { x: -8, z: 205, angle: 0.2, roadA: 'JAN SMUTS AVE', roadB: 'WILLIAM NICOL DR', phase: 0 },
-  { x: 5, z: 12, angle: -0.2, roadA: 'JAN SMUTS AVE', roadB: 'MAIN REEF RD', phase: 4 },
-  { x: 75, z: -5, angle: -0.35, roadA: 'MAIN REEF RD', roadB: 'BREE ST', phase: 8 },
-  { x: -262, z: 88, angle: 0.18, roadA: 'VILAKAZI ST', roadB: 'LOUIS BOTHA AVE', phase: 12 },
-  { x: -130, z: 50, angle: -0.28, roadA: 'MAIN REEF RD', roadB: 'EMPIRE RD', phase: 16 },
-  { x: 115, z: 205, angle: 0.32, roadA: 'WILLIAM NICOL DR', roadB: 'RIVONIA RD', phase: 20 },
-  { x: 78, z: -246, angle: 0.65, roadA: 'COMMISSIONER ST', roadB: 'MARSHALL ST', phase: 24 },
-];
+/** Signalised junctions ("robots") — picked from the generated map by degree/width, budgeted. */
+export const CITY_JUNCTIONS: JunctionDefinition[] = SIGNAL_JUNCTIONS.map((junction) => ({
+  x: junction.x, z: junction.z, angle: junction.angle,
+  roadA: junction.roadA, roadB: junction.roadB,
+  phase: junction.phase, widest: junction.widest,
+}));
 
-export const SIGNAL_CORNER_OFFSET = 15.5;
+/** Corner clearance beyond the junction's widest carriageway for poles and signs. */
+export const signalCornerOffset = (widest: number): number => widest / 2 + 4;
 
-export const ETOLL_GANTRIES: Array<{ x: number; z: number; angle: number }> = [
-  { x: 9.5, z: 100, angle: 3.27 },
-  { x: -8.5, z: -42.5, angle: 3.05 },
-];
+/** e-toll gantries over the M1, from the generated map. */
+export const ETOLL_GANTRIES: Array<{ x: number; z: number; angle: number }> = ETOLL_SPOTS.map((spot) => ({ x: spot.x, z: spot.z, angle: spot.angle }));
 
 interface SignalLens { axis: 0 | 1; phase: number; channel: 0 | 1 | 2; }
 const SIGNAL_COLORS = [0xe83f3f, 0xf0ad2f, 0x39d36c] as const;
@@ -89,10 +89,10 @@ export class UrbanInfrastructure {
 
   private buildVegetation(): void {
     // Verge planting: trees/shrubs stand 2.1u OUTWARD of the roadside line, clear of both the sidewalk walk
-    // line peds actually route along (they used to grow exactly on the nav points and embed spawned peds)
-    // and of junction lane chords (hence the wider road margin).
+    // line peds actually route along and of junction lane chords. The generated map has ~15k roadside
+    // points, so strides are wider than the old hand-authored city to keep instance budgets sane.
     const sites = this.roadsidePoints
-      .filter((_, index) => index % 6 === 0)
+      .filter((point, index) => index % 9 === 0 && point.width >= 9)
       .map((point) => ({ x: point.x - point.inwardX * 2.1, z: point.z - point.inwardZ * 2.1 }))
       .filter((point) => !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 2.4));
     const jacarandas = sites.filter((_, index) => index % 2 === 0);
@@ -172,7 +172,7 @@ export class UrbanInfrastructure {
   }
 
   private buildStreetlights(): void {
-    const sites = this.roadsidePoints.filter((point, index) => index % 4 === 1 && !this.isBlocked(point.x, point.z, 1.2) && !this.isRoad(point.x, point.z, 0.9));
+    const sites = this.roadsidePoints.filter((point, index) => index % 7 === 1 && point.width >= 9 && !this.isBlocked(point.x, point.z, 1.2) && !this.isRoad(point.x, point.z, 0.9));
     const metal = new THREE.MeshStandardMaterial({ color: 0x253033, roughness: 0.34, metalness: 0.82 });
     const deadBulbMaterial = new THREE.MeshBasicMaterial({ color: 0x2a2d2f, side: THREE.DoubleSide }); // a downed lamp is dark, day or night, powered or not
     const poleGeometry = new THREE.CylinderGeometry(0.08, 0.17, 6.5, 12);
@@ -225,15 +225,22 @@ export class UrbanInfrastructure {
     for (const junction of CITY_JUNCTIONS) {
       const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle));
       const right = new THREE.Vector3(forward.z, 0, -forward.x);
+      const offset = signalCornerOffset(junction.widest);
       for (const forwardSide of [-1, 1] as const) for (const rightSide of [-1, 1] as const) {
         const axis: 0 | 1 = forwardSide === rightSide ? 0 : 1;
         const inward = (axis === 0 ? forward.clone().multiplyScalar(-forwardSide) : right.clone().multiplyScalar(-rightSide));
-        const position = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, forwardSide * SIGNAL_CORNER_OFFSET).addScaledVector(right, rightSide * SIGNAL_CORNER_OFFSET);
-        if (!this.clearOfRoad(position, junction)) continue; // corner diagonal ran down a road: no pole beats a pole in the middle of a lane
+        const position = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, forwardSide * offset).addScaledVector(right, rightSide * offset);
+        if (!this.clearOfRoad(position, junction)) continue; // corner diagonal ran down a road: no pole beats a pole in a lane
         const heading = Math.atan2(inward.z, -inward.x);
         this.addSignalPole(position, heading, axis, junction.phase, lensTransforms);
       }
       this.addStreetSigns(junction, forward, right);
+    }
+    // Sign-only corners near the spawn so the parody street names read on foot (no lenses, just boards).
+    for (const junction of SPAWN_SIGN_JUNCTIONS) {
+      const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle));
+      const right = new THREE.Vector3(forward.z, 0, -forward.x);
+      this.addStreetSigns({ ...junction, widest: junction.widest }, forward, right);
     }
     const lensMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(0.19, 20), new THREE.MeshBasicMaterial(), lensTransforms.length);
     lensTransforms.forEach((transform, index) => { lensMesh.setMatrixAt(index, transform); lensMesh.setColorAt(index, this.lensColor.setHex(0x14100e)); });
@@ -260,11 +267,10 @@ export class UrbanInfrastructure {
     assembly.add(pole, arm, head); assembly.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; }); this.group.add(assembly);
   }
 
-  /** The hand-authored junction anchors don't sit exactly on either centerline and roads cross at odd
-   *  angles, so a SIGNAL_CORNER_OFFSET diagonal can land in the middle of a lane (it did: Jan Smuts and
-   *  Bree St both had signals planted on the tar, wedging traffic forever). Slide the corner outward
-   *  along its diagonal until it clears every road by a solid-prop-safe margin; give up past 12u extra. */
-  private clearOfRoad(position: THREE.Vector3, junction: JunctionDefinition): boolean {
+  /** Junction anchors sit on real centreline crossings and roads meet at odd angles, so a corner
+   *  diagonal can land in a lane. Slide the corner outward along its diagonal until it clears every
+   *  road by a solid-prop-safe margin; give up past 12u extra. */
+  private clearOfRoad(position: THREE.Vector3, junction: { x: number; z: number }): boolean {
     const diagonal = new THREE.Vector3(position.x - junction.x, 0, position.z - junction.z).normalize();
     for (let slide = 0; slide <= 6; slide++) {
       if (!this.isRoad(position.x, position.z, 2.2)) return true;
@@ -274,8 +280,10 @@ export class UrbanInfrastructure {
   }
 
   private addStreetSigns(junction: JunctionDefinition, forward: THREE.Vector3, right: THREE.Vector3): void {
-    const postPosition = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, SIGNAL_CORNER_OFFSET).addScaledVector(right, SIGNAL_CORNER_OFFSET);
+    const offset = signalCornerOffset(junction.widest);
+    const postPosition = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, offset).addScaledVector(right, offset);
     if (!this.clearOfRoad(postPosition, junction)) return;
+    if (this.isBlocked(postPosition.x, postPosition.z, 0.5)) return;
     const assembly = new THREE.Group(); assembly.position.copy(postPosition);
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.y = 1.8; assembly.add(post);
     const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle, 3.25], [junction.roadB, junction.angle + Math.PI / 2, 2.78]];
@@ -289,19 +297,15 @@ export class UrbanInfrastructure {
   }
 
   private buildRoadsideSigns(): void {
-    const signs: Array<[number, number, number, string]> = [
-      [-22, 28, -0.2, 'STOP'], [91, 10, -0.35, '60'], [-275, 104, 0.18, 'STOP'], [131, 214, 0.32, 'HIJACKING HOTSPOT'],
-      [176, -238, 0.05, 'P'], [268, 278, -0.25, '60'], [-205, -222, 0.1, 'SMASH & GRAB HOTSPOT'], [-112, 218, 0.2, 'TAXI'],
-    ];
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x7b8380, metalness: 0.68, roughness: 0.38 });
-    for (const [x, z, angle, label] of signs) {
+    for (const { x, z, angle, label } of ROADSIDE_SIGNS) {
       if (this.isRoad(x, z, 0.45)) continue;
       const hotspot = label.includes('HOTSPOT');
       const assembly = new THREE.Group(); assembly.position.set(x, 0, z);
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 2.6, 9), poleMaterial); pole.position.y = 1.3; assembly.add(pole);
       const background = label === 'STOP' ? '#b62f2d' : label === 'P' ? '#28619a' : label === 'TAXI' ? '#f2c521' : '#f0eee2';
       const foreground = label === 'STOP' || label === 'P' ? '#ffffff' : '#182326';
-      const geometry = label === 'STOP' ? new THREE.CircleGeometry(0.7, 8) : hotspot ? new THREE.PlaneGeometry(2.4, 1.1) : new THREE.PlaneGeometry(label === 'ONE WAY' ? 1.65 : 1.1, 1.25);
+      const geometry = label === 'STOP' ? new THREE.CircleGeometry(0.7, 8) : hotspot ? new THREE.PlaneGeometry(2.4, 1.1) : new THREE.PlaneGeometry(1.1, 1.25);
       const sign = createSignMesh(geometry, label, foreground, { background, doubleSide: true });
       sign.position.y = 2.45; sign.rotation.y = angle; assembly.add(sign);
       assembly.traverse((object) => { object.userData.dynamic = true; }); // knock-over props stay unmerged so they can tip
@@ -311,7 +315,7 @@ export class UrbanInfrastructure {
   }
 
   private buildStreetFurniture(): void {
-    const sites = this.roadsidePoints.filter((point, index) => index % 13 === 3 && !this.isBlocked(point.x, point.z, 2) && !this.isRoad(point.x, point.z, 0.7));
+    const sites = this.roadsidePoints.filter((point, index) => index % 21 === 3 && point.width >= 9 && !this.isBlocked(point.x, point.z, 2) && !this.isRoad(point.x, point.z, 0.7));
     const wood = new THREE.MeshStandardMaterial({ color: 0x744d32, roughness: 0.77 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x2c3739, metalness: 0.72, roughness: 0.35 });
     const red = new THREE.MeshStandardMaterial({ color: 0xa8322d, metalness: 0.3, roughness: 0.5 });
@@ -351,7 +355,7 @@ export class UrbanInfrastructure {
           return group;
         },
       });
-      const hx = site.x - site.inwardX * 0.75; const hz = site.z - site.inwardZ * 0.75; // hydrants used to lean INTO the walk line (0.4u off it) and embedded spawned peds
+      const hx = site.x - site.inwardX * 0.75; const hz = site.z - site.inwardZ * 0.75; // hydrants sit off the walk line so they don't embed spawned peds
       matrix.compose(new THREE.Vector3(hx, 0.36, hz), identity, one); bodies.setMatrixAt(index, matrix);
       matrix.compose(new THREE.Vector3(hx, 0.76, hz), identity, one); caps.setMatrixAt(index, matrix);
       this.props.register('hydrant', hx, hz, 0.24, 0.9, {
@@ -370,14 +374,15 @@ export class UrbanInfrastructure {
   private buildEtollGantries(): void {
     const steel = new THREE.MeshStandardMaterial({ color: 0x7d8489, metalness: 0.72, roughness: 0.36 });
     const purple = new THREE.MeshStandardMaterial({ color: 0x4b2e83, metalness: 0.3, roughness: 0.5 });
-    for (const gantry of ETOLL_GANTRIES) {
+    for (const gantry of ETOLL_SPOTS) {
+      const half = gantry.width / 2 + 3;
       const assembly = new THREE.Group(); assembly.position.set(gantry.x, 0, gantry.z); assembly.rotation.y = gantry.angle;
-      for (const side of [-17, 17]) {
+      for (const side of [-half, half]) {
         const post = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 7, 12), steel); post.position.set(side, 3.5, 0); assembly.add(post);
         this.props.register('post', gantry.x + side * Math.cos(gantry.angle), gantry.z - side * Math.sin(gantry.angle), 0.3, 7); // gantry pylons: SANRAL built them to last
       }
-      const truss = new THREE.Mesh(new THREE.BoxGeometry(36, 0.9, 1.1), steel); truss.position.y = 6.6; assembly.add(truss);
-      for (const x of [-8, 0, 8]) { const camera = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.42, 0.6), purple); camera.position.set(x, 5.9, 0.3); assembly.add(camera); }
+      const truss = new THREE.Mesh(new THREE.BoxGeometry(half * 2 + 2, 0.9, 1.1), steel); truss.position.y = 6.6; assembly.add(truss);
+      for (const x of [-half * 0.5, 0, half * 0.5]) { const camera = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.42, 0.6), purple); camera.position.set(x, 5.9, 0.3); assembly.add(camera); }
       const board = createSignMesh(new THREE.PlaneGeometry(6, 1.4), 'E-TOLL · SANRAL', '#f2f4e9', { background: '#4b2e83', doubleSide: true });
       board.position.set(0, 6.65, 0.62); assembly.add(board);
       assembly.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
@@ -386,10 +391,9 @@ export class UrbanInfrastructure {
   }
 
   private buildTransitStops(): void {
-    const stops: Array<[number, number, number, string]> = [[-48, 222, 0.15, 'BREE RANK'], [166, 173, -0.2, 'WANDERERS'], [-210, -229, 0.12, 'MTN RANK'], [125, -265, -0.08, 'NOORD RANK']]; // MTN RANK sits back from Commissioner so its 2.7u shell clears the walk line
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x6e9da3, roughness: 0.16, metalness: 0.08, clearcoat: 0.7, transparent: true, opacity: 0.66 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x293638, metalness: 0.72, roughness: 0.35 });
-    for (const [x, z, angle, label] of stops) {
+    for (const { x, z, angle, label } of TRANSIT_STOPS) {
       if (this.isRoad(x, z, 2.8)) continue;
       this.props.register('shelter', x, z, 2.7, 2.9);
       const shelter = new THREE.Group(); shelter.position.set(x, 0, z); shelter.rotation.y = angle;

@@ -28,7 +28,8 @@ export interface CityTransition {
   state: DistrictState;
 }
 
-export const DISTRICTS: District[] = ['Joburg CBD', 'Sandton', 'City Deep', 'Braamfontein', 'Zoo Lake'];
+/** Districts with pre-seeded reputation slots; any other generated district gets a neutral slot on demand. */
+export const DISTRICTS: District[] = ['Joburg CBD', 'Sandton', 'Braamfontein', 'Hillbrow', 'Newtown'];
 export const CBD: District = 'Joburg CBD';
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
@@ -99,7 +100,8 @@ export class LivingCitySystem {
 
   constructor(state: LivingCityState = defaultLivingCityState()) { this.state = sanitizeLivingCityState(state); }
 
-  district(district: District): DistrictState { return this.state.districts[district]; }
+  /** State for any generated district name: unseen districts lazily get a neutral slot. */
+  district(district: District): DistrictState { return this.state.districts[district] ??= neutralDistrict(); }
 
   apply(event: CityEvent): CityTransition | undefined {
     // The vertical slice only changes the CBD. Other districts already have state slots for later expansion.

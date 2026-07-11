@@ -17,8 +17,10 @@ const extractRange = (geometry: THREE.BufferGeometry, start: number, count: numb
   return output;
 };
 
-/** Merges every static Mesh under root into one Mesh per distinct material, baking world transforms. Skips InstancedMesh and anything flagged userData.dynamic. */
-export function mergeStaticGeometry(root: THREE.Object3D): void {
+/** Merges every static Mesh under root into one Mesh per distinct material, baking world transforms.
+ *  Skips InstancedMesh and anything flagged userData.dynamic. Pass a `chunkSize` to additionally split
+ *  buckets over a world-space grid, so frustum culling still discards off-screen city blocks. */
+export function mergeStaticGeometry(root: THREE.Object3D, chunkSize?: number): void {
   root.updateWorldMatrix(true, true);
   const buckets = new Map<string, Bucket>();
   const victims: THREE.Mesh[] = [];
@@ -30,9 +32,11 @@ export function mergeStaticGeometry(root: THREE.Object3D): void {
     const parts = materials.length > 1 && source.groups.length > 0
       ? source.groups.map((group) => ({ material: materials[group.materialIndex ?? 0] ?? materials[0]!, geometry: extractRange(source, group.start, group.count) }))
       : [{ material: materials[0]!, geometry: source }];
+    const position = new THREE.Vector3().setFromMatrixPosition(object.matrixWorld);
+    const chunk = chunkSize ? `@${Math.floor(position.x / chunkSize)},${Math.floor(position.z / chunkSize)}` : '';
     for (const part of parts) {
       part.geometry.clearGroups();
-      const key = `${materialKey(part.material)}#${Object.keys(part.geometry.attributes).sort().join(',')}`;
+      const key = `${materialKey(part.material)}#${Object.keys(part.geometry.attributes).sort().join(',')}${chunk}`;
       const bucket: Bucket = buckets.get(key) ?? { material: part.material, geometries: [], castShadow: false, receiveShadow: false };
       bucket.castShadow ||= object.castShadow; bucket.receiveShadow ||= object.receiveShadow;
       bucket.geometries.push(part.geometry); buckets.set(key, bucket);

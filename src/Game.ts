@@ -32,7 +32,7 @@ import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
 import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
 import { canEnterSafehouse, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
-import { GARAGE_PARK, ShopSystem } from './systems/ShopSystem';
+import { GARAGE_PARK, GARAGE_STEP_OUT, ShopSystem } from './systems/ShopSystem';
 import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADIUS, GUNFIRE_FEAR_SCALE, HAIL_RADIUS, isTaxiKind, MIN_TRIP_DISTANCE, PICKUP_RADIUS, REHAIL_COOLDOWN, routeDistance, STOP_SPEED, TaxiRide, taxiHudText } from './systems/TaxiJobSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
@@ -41,6 +41,7 @@ import type { CheatSettings, GameMode, GameSettings, SavedGame, WorldTarget } fr
 import { MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
+import { DELIVERY_STOPS, GTI_SPOT, PORTIA_CAR_SPOT } from './world/placements';
 import { DayNightSystem } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
@@ -50,7 +51,7 @@ interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitP
 
 export class Game {
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 950);
+  private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2600);
   private renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   private composer?: EffectComposer;
   private gtao?: GTAOPass;
@@ -976,7 +977,7 @@ export class Game {
     const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
     this.garageVehicle = vehicle;
     this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
-    this.player.group.position.set(GARAGE_PARK.x + 8.5, 0, GARAGE_PARK.z + 4); this.audio.setEngine(false); this.audio.ui(true);
+    this.player.group.position.set(GARAGE_STEP_OUT.x, 0, GARAGE_STEP_OUT.z); this.audio.setEngine(false); this.audio.ui(true);
     this.save.garage = { kind: vehicle.spec.kind, color: vehicle.spec.color, health: Math.round(vehicle.health) };
     this.persist();
     this.ui.notify('Vehicle stored', `${vehicle.spec.name} is tucked away in the garage.`);
@@ -1016,9 +1017,10 @@ export class Game {
     const missionId = this.missions.active?.id;
     const vehicle = this.population.vehicles.find((item) => missionId === 'delivery-run' ? item.spec.color === 0xf1c232 : missionId === 'hot-property' ? item.spec.color === 0xd83a40 : false);
     if (vehicle) {
+      const spot = missionId === 'delivery-run' ? PORTIA_CAR_SPOT : GTI_SPOT;
       vehicle.restore();
-      vehicle.heading = missionId === 'delivery-run' ? 0 : Math.PI / 2;
-      vehicle.reset(missionId === 'delivery-run' ? new THREE.Vector3(-105.5, 0, 240) : new THREE.Vector3(30, 0, 205.5));
+      vehicle.heading = spot.heading;
+      vehicle.reset(new THREE.Vector3(spot.x, 0, spot.z));
     }
   }
 
@@ -1026,8 +1028,8 @@ export class Game {
     if (this.taxiDestination) return { position: this.taxiDestination, label: 'Drop-off', color: '#7fe08d' }; // active fare outranks mission breadcrumbs
     const objective = this.missions.objective;
     if (objective?.kind === 'checkpoints') {
-      const stops = [new THREE.Vector3(-15, 0, 252), new THREE.Vector3(205, 0, 190), new THREE.Vector3(22, 0, -160)];
-      const position = stops[Math.min(this.deliveryIndex, stops.length - 1)]; return position ? { position, label: `Delivery ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
+      const stop = DELIVERY_STOPS[Math.min(this.deliveryIndex, DELIVERY_STOPS.length - 1)];
+      return stop ? { position: new THREE.Vector3(stop.x, 0, stop.z), label: `Delivery ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
     }
     if (objective?.target) return objective.target;
     if (!this.missions.active) {

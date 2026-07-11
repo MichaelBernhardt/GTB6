@@ -15,7 +15,7 @@ const SUN_DISTANCE = 240;
 export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'medium' | 'high'): EnvironmentHandle {
   const shadows = quality !== 'low';
   scene.background = new THREE.Color(0x6fa8dd);
-  scene.fog = new THREE.FogExp2(0xc4b48c, quality === 'low' ? 0.0015 : 0.0012);
+  scene.fog = new THREE.FogExp2(0xc4b48c, quality === 'low' ? 0.001 : 0.00085); // retuned for the 3900u generated map (camera far 2600)
 
   const hemisphere = new THREE.HemisphereLight(0xcfe4f5, 0x8a7c4d, 1.6); scene.add(hemisphere);
   const ambient = new THREE.AmbientLight(0xffead0, 0.28); scene.add(ambient);

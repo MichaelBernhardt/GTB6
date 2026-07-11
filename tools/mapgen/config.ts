@@ -64,6 +64,36 @@ export const TRACK_WIDTHS: Record<string, number> = {
 /** Landuse polygons smaller than this (square metres) are discarded. */
 export const MIN_LANDUSE_AREA_M2 = 15_000;
 
+/**
+ * Density thinning ("guided by life, not true to life"): minor roads mostly running
+ * parallel within THIN_COVERAGE_DISTANCE_M of an already-retained road are dropped, so
+ * the ~70 m CBD grid decimates to a driveable pitch. Parody/anchor street names (the
+ * names-overrides keys plus the list below) are never dropped.
+ */
+export const THIN_COVERAGE_DISTANCE_M = 55;
+export const THIN_COVERAGE_FRACTION = 0.62;
+export const THIN_SAMPLE_STEP_M = 20;
+export const THIN_PARALLEL_COS = 0.8; // ~36 degrees
+export const THIN_MAX_RANK = 3; // residential..secondary may be dropped; primary+ never
+/** Post-thinning cleanup: dangling minor spurs shorter than this (m) are pruned. */
+export const STUB_PRUNE_LENGTH_M = 80;
+/** Anchor streets the game placements rely on that are not in names-overrides.json. */
+export const PROTECTED_ROAD_NAMES = [
+  'Albertina Sisulu Road',
+  'Wemmer Jubilee Road',
+  'Lilian Ngoyi Street',
+  'Wanderers Street',
+  'Anderson Street',
+  'Von Weilligh Street',
+] as const;
+
+/** Boundary orbital: dangling endpoints near the crop edge are joined into one ring road. */
+export const RING_BOUNDARY_MARGIN_M = 380;
+export const RING_OFFSET_M = 220;
+export const RING_CORNER_CHAMFER_M = 260;
+export const RING_NAME = 'Egoli Orbital';
+export const RING_KIND = 'trunk' as const;
+
 /** Elevation grid resolution (cols x rows over the bbox). */
 export const ELEVATION_COLS = 96;
 export const ELEVATION_ROWS = 96;

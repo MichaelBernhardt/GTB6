@@ -8,6 +8,7 @@ import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent }
 import { MISSIONS } from './MissionSystem';
 import { ProgressWatchdog, RoutePlanner, type NavPoint } from './NavGraph';
 import type { City } from '../world/City';
+import { HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
 import { CITY_JUNCTIONS } from '../world/UrbanInfrastructure';
 import { powerOn } from '../world/powerGrid';
 
@@ -219,8 +220,7 @@ export class PopulationSystem {
 
   spawnHostiles(): void {
     if (this.hostiles.some((ped) => ped.state !== 'down')) return;
-    const spots = [[-250, -245], [-278, -230], [-292, -245]];
-    spots.forEach(([x, z], index) => { const ped = new Pedestrian(this.scene, new THREE.Vector3(x, 0, z), index + 30, true); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
+    HOSTILE_SPOTS.forEach(({ x, z }, index) => { const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), index + 30, true); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
   }
 
   nearestEnterable(position: THREE.Vector3, maxDistance = 4.2): Vehicle | undefined {
@@ -262,23 +262,23 @@ export class PopulationSystem {
   }
 
   private spawnVehicles(): void {
-    const parked: Array<[VehicleKind, number, number, number, number?]> = [
-      ['compact', -105.5, 240, 0, 0xf1c232], ['sport', 30, 205.5, Math.PI / 2, 0xd83a40], ['van', -205.5, -72, 0],
-      ['compact', 205.5, 86, 0], ['sport', 252, -205.5, Math.PI / 2, 0x3f6faa], ['van', -105.5, -190, 0], ['compact', 205.5, 286, 0],
-      ['cab', 105.5, 12, 0], ['cab', -30, 105.5, Math.PI / 2], // hailable meter cabs waiting for a driver
-      ['bicycle', -30, 235, 0], ['bicycle', 105.5, -240, Math.PI / 2, 0xc44f9a], ['motorbike', -105.5, 150, 0], ['motorbike', 30, -205.5, Math.PI / 2, 0x364a5e],
-      ['superbike', 205.5, 150, 0], // flashy toy on a Sandton kerb
-    ];
-    for (const [kind, x, z, heading, color] of parked) {
-      const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z)); // heading only: snapping the POSITION parked cars onto the live lane made traffic queue behind them forever
-      const curb = this.city.collides(x, z, 1.4) ? pose.position : new THREE.Vector3(x, 0, z);
-      const vehicle = new Vehicle(this.scene, kind, curb, color);
-      vehicle.heading = Number.isFinite(pose.heading) ? pose.heading : heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
-      this.parkedSpots.push([curb.x, curb.z]);
+    // Parked vehicles come from the generated-map placements: kerbside spots around the CBD spawn
+    // blocks (plus a Sandton toy), already vetted against roads and each other.
+    for (const spot of PARKED_VEHICLES) {
+      const vehicle = new Vehicle(this.scene, spot.kind as VehicleKind, new THREE.Vector3(spot.x, 0, spot.z), spot.color);
+      vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
+      this.parkedSpots.push([spot.x, spot.z]);
     }
     const kinds: VehicleKind[] = ['compact', 'taxi', 'cab', 'sport', 'motorbike', 'van']; // the odd commuter bike weaves through traffic
+    // Seed the opening traffic on lanes around the player spawn (the map is far bigger than the
+    // AI wake radius; the lifecycle system keeps density right as the player moves).
+    const nearbyRoutes = this.city.trafficRoutes.filter((route) => {
+      const point = route[0];
+      return point && (point.x - SPAWN_POINT.x) ** 2 + (point.z - SPAWN_POINT.z) ** 2 < 400 * 400;
+    });
+    const routePool = nearbyRoutes.length >= 8 ? nearbyRoutes : this.city.trafficRoutes;
     for (let i = 0; i < 15; i++) {
-      const routeIndex = (i * 5 + 3) % this.city.trafficRoutes.length; const route = this.city.trafficRoutes[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
+      const routeIndex = (i * 5 + 3) % routePool.length; const route = routePool[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
       const kind = kinds[i % kinds.length] ?? 'compact';
       const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, 0, point.z), kind === 'taxi' || kind === 'cab' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
       vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
@@ -298,8 +298,11 @@ export class PopulationSystem {
   }
 
   private spawnPedestrians(): void {
+    // Opening crowd walks the spawn district; the lifecycle census takes over from there.
+    const nearby = this.city.sidewalkPoints.filter((point) => (point.x - SPAWN_POINT.x) ** 2 + (point.z - SPAWN_POINT.z) ** 2 < 320 * 320);
+    const pool = nearby.length >= 40 ? nearby : this.city.sidewalkPoints;
     for (let i = 0; i < 28; i++) {
-      const point = this.city.sidewalkPoints[(i * 17 + 4) % this.city.sidewalkPoints.length]; if (!point) continue;
+      const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
       const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i); ped.pickDestination(this.city.sidewalkPoints); this.pedestrians.push(ped);
     }
     MISSIONS.forEach((mission, index) => {

@@ -7,12 +7,25 @@ import {
   MIN_LANDUSE_AREA_M2,
   MIN_ROAD_LENGTH_M,
   MIN_WATER_AREA_M2,
+  PROTECTED_ROAD_NAMES,
+  RING_BOUNDARY_MARGIN_M,
+  RING_CORNER_CHAMFER_M,
+  RING_KIND,
+  RING_NAME,
+  RING_OFFSET_M,
   ROAD_WIDTHS,
   SIMPLIFY_TOLERANCE_M,
   SNAP_DISTANCE_M,
+  STUB_PRUNE_LENGTH_M,
   TARGET_SIZE,
+  THIN_COVERAGE_DISTANCE_M,
+  THIN_COVERAGE_FRACTION,
+  THIN_MAX_RANK,
+  THIN_PARALLEL_COS,
+  THIN_SAMPLE_STEP_M,
   TRACK_WIDTHS,
 } from './config';
+import { buildOrbitalRing, pruneShortStubs, thinParallelRoads } from './thin';
 import { flatGrid, type ElevationSamples } from './elevation';
 import {
   bridgeIslands,
@@ -92,6 +105,8 @@ export interface ProcessExtras {
   elevation?: ElevationSamples;
   /** Building counts per district, aligned with extractDistrictNodes order. */
   buildingCounts?: number[] | null;
+  /** Real OSM road names that must survive density thinning (names-overrides keys). */
+  protectedNames?: Iterable<string>;
 }
 
 function landuseKind(tags: Record<string, string>): MapArea['kind'] | null {
@@ -178,6 +193,34 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   net.roads = net.roads.filter((road) => road.nodeIds.length >= 2); // fully-collapsed stubs
   const endpointSnaps = snapEndpointsToSegments(net, SNAP_DISTANCE_M);
   log.push(`snapping: merged ${mergedNodes} junction nodes, snapped ${endpointSnaps} dangling endpoints (<= ${SNAP_DISTANCE_M} m)`);
+
+  // ---- Density thinning ("guided by life") ---------------------------------
+  const protectedNames = new Set<string>([...(extras.protectedNames ?? []), ...PROTECTED_ROAD_NAMES]);
+  const thinReport = thinParallelRoads(net, {
+    coverageDistance: THIN_COVERAGE_DISTANCE_M,
+    coverageFraction: THIN_COVERAGE_FRACTION,
+    sampleStep: THIN_SAMPLE_STEP_M,
+    parallelCos: THIN_PARALLEL_COS,
+    maxRank: THIN_MAX_RANK,
+    protectedNames,
+  });
+  const prunedStubs = pruneShortStubs(net, STUB_PRUNE_LENGTH_M, protectedNames);
+  log.push(
+    `thinning: dropped ${thinReport.dropped} parallel minor roads (${thinReport.droppedKm.toFixed(1)} km) within ` +
+      `${THIN_COVERAGE_DISTANCE_M} m of retained roads; pruned ${prunedStubs} dangling spurs < ${STUB_PRUNE_LENGTH_M} m`,
+  );
+
+  // ---- Boundary orbital (no dead ends at the crop edge) ---------------------
+  const ring = buildOrbitalRing(net, {
+    boundaryMargin: RING_BOUNDARY_MARGIN_M,
+    ringOffset: RING_OFFSET_M,
+    cornerChamfer: RING_CORNER_CHAMFER_M,
+    name: RING_NAME,
+    kind: RING_KIND,
+    width: ROAD_WIDTHS[RING_KIND] ?? 18,
+  });
+  log.push(`orbital: joined ${ring.stubs} boundary stubs into '${RING_NAME}'${ring.built ? '' : ' (not built)'}`);
+
   const componentsBefore = connectedComponents(net).length;
   const islands = bridgeIslands(net, BRIDGE_DISTANCE_M);
   log.push(

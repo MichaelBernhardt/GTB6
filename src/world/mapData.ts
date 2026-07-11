@@ -62,7 +62,7 @@ interface RawMap {
   landuse: Array<{ name: string; kind: string; points: [number, number][] }>;
 }
 
-const MAP = rawMap as RawMap;
+const MAP = rawMap as unknown as RawMap;
 
 export const MAP_STATS = MAP.stats;
 /** Square world footprint in game units — the generated map is fitted into this. */
@@ -93,14 +93,19 @@ export const CBD_CENTER: DistrictCenter =
   ?? DISTRICT_CENTERS[0]
   ?? { name: CBD_NAME, x: 0, z: 0, radius: 150, density: 200 };
 
-/** Nearest-centre district lookup over the generated place nodes. */
-export function districtAt(x: number, z: number): District {
-  let best = CBD_CENTER.name; let bestDistance = Infinity;
+/** Nearest generated place node to a point (Voronoi-style district ownership). */
+export function nearestDistrict(x: number, z: number): DistrictCenter {
+  let best = CBD_CENTER; let bestDistance = Infinity;
   for (const district of DISTRICT_CENTERS) {
     const distance = (district.x - x) ** 2 + (district.z - z) ** 2;
-    if (distance < bestDistance) { bestDistance = distance; best = district.name; }
+    if (distance < bestDistance) { bestDistance = distance; best = district; }
   }
   return best;
+}
+
+/** Nearest-centre district lookup over the generated place nodes. */
+export function districtAt(x: number, z: number): District {
+  return nearestDistrict(x, z).name;
 }
 
 export function districtCenter(name: District): DistrictCenter | undefined {
