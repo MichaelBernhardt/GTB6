@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { COLORS, WORLD_SIZE } from '../config';
-import type { District } from '../types';
+import type { District, GameSettings } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
 import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
+import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
 
 export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; }
@@ -117,15 +118,16 @@ export class City {
   private concrete = createGeneratedSurfaceTexture('/textures/concrete-gpt.jpg', 'concrete', 10);
   private grass = createSurfaceTexture('grass', 22);
   private sand = createSurfaceTexture('sand', 14);
-  private water = createSurfaceTexture('water', 7);
   private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
   private facadeGlows = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeGlowTexture(style));
   private roofMaterial = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, metalness: 0.08 });
-  private waterMaterial?: THREE.MeshPhysicalMaterial;
+  private waterSites: WaterSite[] = [];
+  private waterHandle?: WaterHandle;
+  private waterMood?: { hour: number; sun: THREE.Vector3; color: THREE.Color };
   private architecture: BuildingArchitecture;
   private infrastructure: UrbanInfrastructure;
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, quality: GameSettings['quality'] = 'medium') {
     this.group.name = 'Joburg'; scene.add(this.group);
     this.architecture = new BuildingArchitecture(this.group);
     this.buildGround(); this.buildRoads(); this.buildDistricts(); this.buildWaterfront();
@@ -136,12 +138,29 @@ export class City {
       (x, z, margin) => this.isOnRoad(x, z, margin),
       this.props,
     );
-    mergeStaticGeometry(this.group);
+    mergeStaticGeometry(this.group); // water is built after the merge: its meshes stay live for per-frame animation
+    this.setWaterQuality(quality);
   }
 
   update(dt: number): void {
-    if (this.waterMaterial?.map) this.waterMaterial.map.offset.x = (this.waterMaterial.map.offset.x + dt * 0.006) % 1;
+    this.waterHandle?.update(dt);
     this.infrastructure.update(dt);
+  }
+
+  /** (Re)builds every water surface for the given quality tier; safe to call live from the pause menu.
+   *  The old handle disposes its geometries, materials, and the planar mirror's render target. */
+  setWaterQuality(quality: GameSettings['quality']): void {
+    this.waterHandle?.dispose();
+    this.waterHandle = createWater(this.waterSites, waterTier(quality));
+    this.group.add(this.waterHandle.group);
+    if (this.waterMood) this.waterHandle.setMood(this.waterMood.hour, this.waterMood.sun, this.waterMood.color);
+  }
+
+  /** Day/night hook: tints the water and aims its specular sun/moon; called from the same path that drives the sky. */
+  setWaterMood(hour: number, sunDirection: THREE.Vector3, sunColor: THREE.Color): void {
+    this.waterMood ??= { hour: 0, sun: new THREE.Vector3(), color: new THREE.Color() };
+    this.waterMood.hour = hour; this.waterMood.sun.copy(sunDirection); this.waterMood.color.copy(sunColor);
+    this.waterHandle?.setMood(hour, sunDirection, sunColor);
   }
 
   districtAt(x: number, z: number): District { return districtAt(x, z); }
@@ -540,15 +559,16 @@ export class City {
     // spot pushed the 5.8u basin ~6u INTO Bree St — a solid roadblock traffic wedged against forever.
     const fountain = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 5.8, 0.72, 40), stone); fountain.position.set(x - width * 0.43, 0.62, z - depth * 0.42); fountain.castShadow = true; this.group.add(fountain);
     this.props.register('fountain', fountain.position.x, fountain.position.z, 5.8, 1.8);
-    const pool = new THREE.Mesh(new THREE.CylinderGeometry(4.7, 4.7, 0.1, 40), new THREE.MeshPhysicalMaterial({ color: 0x4c9fac, roughness: 0.1, clearcoat: 1 })); pool.position.set(fountain.position.x, 1.01, fountain.position.z); this.group.add(pool);
+    this.waterSites.push({ kind: 'fountain', x: fountain.position.x, y: 1.01, z: fountain.position.z, radius: 4.7 }); // rippling pool built per quality tier
     const column = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.9, 3.2, 24), stone); column.position.set(fountain.position.x, 2.1, fountain.position.z); column.castShadow = true; this.group.add(column);
     const sculpture = new THREE.Mesh(new THREE.TorusKnotGeometry(0.75, 0.18, 80, 12), new THREE.MeshStandardMaterial({ color: 0x4a7777, metalness: 0.72, roughness: 0.28 })); sculpture.position.set(fountain.position.x, 4.05, fountain.position.z); sculpture.castShadow = true; this.group.add(sculpture);
   }
 
   private addGardenFeature(x: number, z: number, width: number, depth: number): void {
-    const pond = new THREE.Mesh(new THREE.CircleGeometry(Math.min(width, depth) * 0.18, 40), new THREE.MeshPhysicalMaterial({ color: 0x397e83, roughness: 0.12, clearcoat: 0.85, side: THREE.DoubleSide })); pond.rotation.x = -Math.PI / 2; pond.position.set(x + width * 0.22, 0.39, z - depth * 0.18); this.group.add(pond);
+    const pond = { x: x + width * 0.22, z: z - depth * 0.18 };
+    this.waterSites.push({ kind: 'pond', x: pond.x, y: 0.39, z: pond.z, radius: Math.min(width, depth) * 0.18 }); // rippling pond built per quality tier
     const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x76766b, roughness: 0.92 });
-    for (let index = 0; index < 11; index++) { const angle = index / 11 * Math.PI * 2; const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.65 + (index % 3) * 0.17, 1), rockMaterial); rock.scale.y = 0.65; rock.position.set(pond.position.x + Math.cos(angle) * width * 0.2, 0.46, pond.position.z + Math.sin(angle) * depth * 0.2); this.group.add(rock); }
+    for (let index = 0; index < 11; index++) { const angle = index / 11 * Math.PI * 2; const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.65 + (index % 3) * 0.17, 1), rockMaterial); rock.scale.y = 0.65; rock.position.set(pond.x + Math.cos(angle) * width * 0.2, 0.46, pond.z + Math.sin(angle) * depth * 0.2); this.group.add(rock); }
     const pergola = new THREE.Group(); pergola.position.set(x - width * 0.24, 0, z + depth * 0.2);
     const timber = new THREE.MeshStandardMaterial({ color: 0x765339, roughness: 0.76 });
     for (const px of [-3, 3]) for (const pz of [-2, 2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 3.1, 0.22), timber); post.position.set(px, 1.55, pz); pergola.add(post); this.props.register('post', pergola.position.x + px, pergola.position.z + pz, 0.2, 3.1); }
@@ -610,8 +630,8 @@ export class City {
   }
 
   private buildWaterfront(): void {
-    this.waterMaterial = new THREE.MeshPhysicalMaterial({ color: COLORS.water, map: this.water, roughness: 0.16, metalness: 0.05, clearcoat: 0.85, clearcoatRoughness: 0.16, transparent: true, opacity: 0.94 });
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(470, 90, 24, 8), this.waterMaterial); water.rotation.x = -Math.PI / 2; water.position.set(135, 0.1, -340); water.userData.dynamic = true; this.group.add(water);
+    this.waterSites.push({ kind: 'ocean', x: 135, y: 0.1, z: -340, width: 470, depth: 90 }); // harbour water built per quality tier
+    const seabed = new THREE.Mesh(new THREE.PlaneGeometry(470, 90), new THREE.MeshStandardMaterial({ color: 0x1c3a3e, roughness: 0.95 })); seabed.rotation.x = -Math.PI / 2; seabed.position.set(135, 0.02, -340); this.group.add(seabed); // dark bottom so the see-through water reads as depth, not lawn
     const sand = new THREE.Mesh(new THREE.PlaneGeometry(460, 48), new THREE.MeshStandardMaterial({ color: 0xcdb35e, map: this.sand, roughness: 0.96 })); sand.rotation.x = -Math.PI / 2; sand.position.set(140, 0.06, -286); sand.receiveShadow = true; this.group.add(sand);
     for (let x = -330; x < -190; x += 35) {
       const material = new THREE.MeshStandardMaterial({ color: x % 2 ? 0xb84f45 : 0x3d7381, roughness: 0.65, metalness: 0.32 });
