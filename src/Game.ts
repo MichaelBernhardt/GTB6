@@ -5,7 +5,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
+import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, riderImpactDamage, rollDrops, shouldKnockOff, type PedKind } from './core/GameRules';
@@ -13,11 +13,12 @@ import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolvePurchase, weaponPrice } from './core/ShopRules';
 import type { Pedestrian } from './entities/Pedestrian';
-import { Player } from './entities/Player';
+import { Player, type CoverPose } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
+import { clampT, cornerSide, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
@@ -116,6 +117,9 @@ export class Game {
   private previousWanted = false;
   private hostileGuardActivated = false;
   private brandishCooldown = 0;
+  private cover?: { spot: CoverSpot; t: number; peek: number; corner: -1 | 0 | 1; exitTimer: number };
+  private coverAvailable = false;
+  private coverLean = 0;
 
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
@@ -432,7 +436,7 @@ export class Game {
   }
 
   private updateOnFoot(dt: number): void {
-    this.player.update(dt, this.input, this.cameraController.yaw, this.city);
+    this.player.update(dt, this.input, this.cameraController.yaw, this.city, this.updateCoverState(dt));
     for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
       if (!bump.assault) continue;
       this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
@@ -470,6 +474,42 @@ export class Game {
       if (shop?.driveIn && !vehicle) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
       if (vehicle) this.beginEnter(vehicle);
     }
+  }
+
+  /** GTA-V-style cover: Q snaps flat against the nearest building face (third person only — in first person Q is a
+   *  no-op), A/D slides along the wall, Ctrl at a corner leans out to shoot, mid-wall Ctrl just shows the crosshair
+   *  without stepping out. Game owns the cover position; Player only performs the pose. */
+  private updateCoverState(dt: number): CoverPose | undefined {
+    const position = this.player.group.position;
+    if (this.settings.cameraViewFoot === 0 || this.player.tumbling) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble knocks you out of cover
+    if (!this.cover) {
+      const spot = position.y === 0 ? nearestCoverSpot(position.x, position.z, this.city.colliders) : undefined;
+      this.coverAvailable = Boolean(spot);
+      if (!spot || !this.input.consume('KeyQ')) return undefined;
+      const t = clampT(spot, coverT(spot, position.x, position.z), PLAYER.radius);
+      this.cover = { spot, t, peek: 0, corner: cornerSide(spot, t, PLAYER.radius), exitTimer: 0 };
+    }
+    this.coverAvailable = false;
+    const cover = this.cover; const yaw = this.cameraController.yaw;
+    const side = Number(this.input.down('KeyD')) - Number(this.input.down('KeyA'));
+    const forward = Number(this.input.down('KeyW')) - Number(this.input.down('KeyS'));
+    const move = new THREE.Vector3(side, 0, -forward).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    cover.exitTimer = movingAway(move, cover.spot.normal) ? cover.exitTimer + dt : 0;
+    if (this.input.consume('KeyQ') || cover.exitTimer >= COVER_EXIT_HOLD) { this.cover = undefined; return undefined; }
+    const tangent = cover.spot.tangent;
+    const slide = side * Math.sign(Math.cos(yaw) * tangent.x - Math.sin(yaw) * tangent.z || 1); // A/D are screen-relative along the wall
+    cover.t = clampT(cover.spot, cover.t + slide * SLIDE_SPEED * dt, PLAYER.radius);
+    cover.corner = cornerSide(cover.spot, cover.t, PLAYER.radius);
+    const aiming = this.input.aiming && !this.combat.spec.melee;
+    cover.peek += ((aiming && cover.corner !== 0 ? 1 : 0) - cover.peek) * (1 - Math.exp(-dt * 10)); // peek only exists at a corner
+    const base = coverPosition(cover.spot, cover.t, PLAYER.radius);
+    const desired = new THREE.Vector3(
+      base.x + (tangent.x * cover.corner * PEEK_STEP + cover.spot.normal.x * PEEK_OUT) * cover.peek, 0,
+      base.z + (tangent.z * cover.corner * PEEK_STEP + cover.spot.normal.z * PEEK_OUT) * cover.peek);
+    const clamped = this.city.clampMove(position, desired, PLAYER.radius);
+    const snap = 1 - Math.exp(-dt * 14); // one fast lerp covers the entry snap and the slide/peek motion
+    position.x = THREE.MathUtils.lerp(position.x, clamped.x, snap); position.z = THREE.MathUtils.lerp(position.z, clamped.z, snap);
+    return { heading: aiming ? yaw + Math.PI : coverHeading(cover.spot), peek: cover.peek, twist: cover.corner * cover.peek * 0.45, moving: slide !== 0 };
   }
 
   /** Shared aftermath for a ranged player shot: witnesses, fear, gore, and drops — on foot or drive-by. */
@@ -575,6 +615,7 @@ export class Game {
   }
 
   private beginEnter(vehicle: Vehicle): void {
+    this.cover = undefined;
     this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true; this.prevDrivenSpeed = 0;
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.6); this.player.group.position.copy(vehicle.group.position).add(side);
     if (vehicle.occupied) {
@@ -863,7 +904,12 @@ export class Game {
     const riding = Boolean(this.player.inVehicle && this.activeVehicle?.spec.twoWheeler); // riders stay visible except in first person
     this.player.setVisible(riding ? !firstPerson : !this.player.inVehicle && !(firstPerson && !this.activeVehicle && !this.transition));
     this.activeVehicle?.setFirstPerson(firstPerson);
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee);
+    const cover = this.cover;
+    const leanTarget = cover && cover.corner !== 0 && !this.activeVehicle
+      ? Math.sign(Math.cos(this.cameraController.yaw) * cover.spot.tangent.x * cover.corner - Math.sin(this.cameraController.yaw) * cover.spot.tangent.z * cover.corner || 1) * (0.55 + 0.45 * cover.peek)
+      : 0; // pull the camera toward the exposed corner for visibility over the shoulder
+    this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee, this.coverLean);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -911,6 +957,7 @@ export class Game {
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
         else prompt = 'E  Exit vehicle  ·  F  Recover';
       }
+      else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (this.missions.objective?.kind === 'choice') prompt = 'E  Decide the fate of Jozi Arms';
@@ -919,6 +966,7 @@ export class Game {
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
+      else if (this.coverAvailable) prompt = 'Q  Take cover';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
     }
@@ -943,11 +991,11 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.cover = undefined; this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
-    this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset(); this.mode = 'playing';
+    this.transition = undefined; this.cover = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset(); this.mode = 'playing';
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses }; this.saveManager.save(this.save); }
