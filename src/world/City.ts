@@ -3,6 +3,7 @@ import { COLORS, WORLD_SIZE } from '../config';
 import type { District, GameSettings } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import {
+  CBD_CENTER,
   districtAt as generatedDistrictAt,
   GENERATED_ROADS,
   GENERATED_TRACKS,
@@ -14,6 +15,7 @@ import {
   type MapPolygon,
 } from './mapData';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
+import { inBuildZone, TEST_BUILDING_BUDGET } from './data/cityBuild';
 import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
@@ -48,7 +50,8 @@ export const PED_NAV_JOIN = 18;
 export const MERGE_CHUNK_SIZE = 976;
 /** Lakes/dams at least this large (units²) get the tiered wavy/reflective water treatment. */
 export const PREMIUM_WATER_AREA = 3200;
-/** Procedural building budget for the whole map. */
+/** Absolute procedural-building ceiling for a fully-populated map (future full-city build).
+ *  This round uses the smaller, CBD-scoped TEST_BUILDING_BUDGET from ./data/cityBuild. */
 export const MAX_BUILDINGS = 1000;
 /** Sidewalk apron beyond the road strip: wide roads get the full pavement, lanes a narrow one. */
 export const sidewalkExtension = (width: number): number => (width >= 12 ? 7 : 5);
@@ -552,11 +555,18 @@ export class City {
     this.buildHillbrowTower();
     this.buildWaterTower();
     let variant = 0; let placed = 0;
-    for (let index = 0; index < this.roadsidePoints.length && placed < MAX_BUILDINGS; index += 2) {
+    // This build round only masses the CBD test blocks around spawn (data-driven zones); the rest
+    // of the 6000u map stays bare roads. Widen TEST_BUILDING_ZONES + rebuild to populate more.
+    for (let index = 0; index < this.roadsidePoints.length && placed < TEST_BUILDING_BUDGET; index += 2) {
       const point = this.roadsidePoints[index]!;
       if (point.width < 7) continue;
+      if (!inBuildZone(point.x, point.z)) continue;
       const district = nearestDistrict(point.x, point.z);
-      const style: BuildingStyle = district.density >= 350 || Math.hypot(point.x - PONTE_SPOT.x, point.z - PONTE_SPOT.z) < 320 ? 'downtown'
+      // Downtown massing (tall towers) inside the CBD core and near Ponte; a residential ring
+      // beyond the core gives a natural height gradient to drive through. CBD_CENTER is data-driven,
+      // so this tracks the map: the OSM "building count" density alone under-reads the CBD skyline.
+      const inCbdCore = Math.hypot(point.x - CBD_CENTER.x, point.z - CBD_CENTER.z) < 260;
+      const style: BuildingStyle = district.density >= 350 || inCbdCore || Math.hypot(point.x - PONTE_SPOT.x, point.z - PONTE_SPOT.z) < 320 ? 'downtown'
         : district.density < 40 ? 'industrial' : 'residential';
       const acceptance = style === 'downtown' ? 0.62 : style === 'residential' ? Math.min(0.5, 0.14 + district.density / 900) : 0.26;
       if (seeded(point.x, point.z, 90) > acceptance) continue;

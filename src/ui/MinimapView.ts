@@ -3,9 +3,10 @@ import type { RoadPoint } from '../world/City';
 export interface MapPoint { x: number; z: number; }
 export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; }
 
-/** Metres-to-pixels factors, ordered widest view to tightest. 'City' exists for the 3900u generated
- *  map; index 3 (Standard) matches the original fixed scale. */
-export const MINIMAP_ZOOM_SCALES = [0.06, 0.14, 0.2, 0.29, 0.4, 0.54] as const;
+/** Units-to-pixels factors, ordered widest view to tightest, over the 240px minimap canvas.
+ *  'City' (0.04) frames the whole 6000u generated map (240/0.04 = 6000u across); 'Far' shows a
+ *  ~2.5km slice; index 3 (Standard) keeps the original on-foot fixed scale. */
+export const MINIMAP_ZOOM_SCALES = [0.04, 0.095, 0.2, 0.29, 0.4, 0.54] as const;
 export const MINIMAP_ZOOM_NAMES = ['City', 'Far', 'Wide', 'Standard', 'Close', 'Street'] as const;
 export const DEFAULT_MINIMAP_ZOOM = 3; // Standard
 

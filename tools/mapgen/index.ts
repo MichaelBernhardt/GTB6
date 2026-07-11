@@ -20,8 +20,10 @@ import { buildPreviewHtml } from './preview';
 import { extractDistrictNodes, processOsm } from './process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUTPUT_JSON = resolve(HERE, '../../src/world/generated/joburg-map.json');
-const OUTPUT_PREVIEW = join(HERE, 'preview.html');
+// Output paths default to the committed map + preview; MAPGEN_OUT / MAPGEN_PREVIEW_OUT let a
+// determinism harness (or a dry run) emit elsewhere without clobbering the approved map.
+const OUTPUT_JSON = process.env.MAPGEN_OUT ?? resolve(HERE, '../../src/world/generated/joburg-map.json');
+const OUTPUT_PREVIEW = process.env.MAPGEN_PREVIEW_OUT ?? join(HERE, 'preview.html');
 
 async function main(): Promise<void> {
   const refresh = process.argv.includes('--refresh');

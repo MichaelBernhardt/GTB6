@@ -51,7 +51,7 @@ interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitP
 
 export class Game {
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2600);
+  private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 3000); // far plane retuned for the 6000u map; fog (Environment.ts) hides the cut
   private renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   private composer?: EffectComposer;
   private gtao?: GTAOPass;
