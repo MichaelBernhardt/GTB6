@@ -20,6 +20,7 @@ export class AudioManager {
   private ambience?: Ambience;
   private listener = { x: 0, z: 0, yaw: 0 };
   private lastScream = 0;
+  private lastGrunt = 0;
   private radioTimer?: ReturnType<typeof setInterval>;
   private radioGain?: GainNode;
   private radioNextBeat = 0;
@@ -249,6 +250,37 @@ export class AudioManager {
     }
     gain.connect(panner).connect(master);
     osc.start(t); vibrato.start(t); osc.stop(t + duration + 0.05); vibrato.stop(t + duration + 0.05);
+  }
+
+  /** Short "hey!"-style vocal bark for a shoulder bump: a formant-filtered falling saw. */
+  grunt(x?: number, z?: number): void {
+    const context = this.context; const master = this.master;
+    if (!context || !master) return;
+    const t = this.now();
+    if (t < this.lastGrunt + 0.22) return;
+    let level = 0.09; let pan = 0;
+    if (x !== undefined && z !== undefined) {
+      level *= distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 6, 42);
+      if (level < 0.004) return;
+      pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.7;
+    }
+    this.lastGrunt = t;
+    const f0 = 125 + Math.random() * 95;
+    const duration = 0.13 + Math.random() * 0.09;
+    const osc = context.createOscillator(); osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(f0 * 1.35, t);
+    osc.frequency.exponentialRampToValueAtTime(f0 * 0.78, t + duration);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, t); gain.gain.exponentialRampToValueAtTime(level, t + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    const panner = context.createStereoPanner(); panner.pan.value = pan;
+    for (const [frequency, q, amount] of [[540, 4, 1], [1150, 5, 0.55]] as const) {
+      const formant = context.createBiquadFilter(); formant.type = 'bandpass'; formant.frequency.value = frequency; formant.Q.value = q;
+      const mix = context.createGain(); mix.gain.value = amount;
+      osc.connect(formant).connect(mix).connect(gain);
+    }
+    gain.connect(panner).connect(master);
+    osc.start(t); osc.stop(t + duration + 0.05);
   }
 
   private crash(power: number): void {
