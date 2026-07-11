@@ -123,3 +123,30 @@ describe('RoutePlanner budget', () => {
     expect(points?.at(-1)).toEqual({ x: 90, z: 0 });
   });
 });
+
+describe('RoutePlanner.planTo (road-preferring offroad targets)', () => {
+  const graph = buildNavGraph([{ points: line(10, 10) }], 5); // straight road, nodes x = 0..90
+  const planner = new RoutePlanner(graph, 2);
+
+  it('rides the graph to the node nearest the target, then appends the exact target as the offroad leg', () => {
+    const points = planner.planTo(2, 0, 88, 30)!; // target 30u off the road, far end
+    expect(points.at(-1)).toEqual({ x: 88, z: 30 }); // exact target, not a node
+    expect(points.at(-2)).toEqual({ x: 90, z: 0 }); // nearest node to the target: road taken all the way
+    expect(points.length).toBeGreaterThan(5); // full road traverse, no diagonal beeline across the map
+    for (const point of points.slice(0, -1)) expect(graph.nodes).toContainEqual(point); // everything but the last leg stays on the graph
+  });
+
+  it('skips the offroad leg when the target already sits on a node', () => {
+    const points = planner.planTo(0, 0, 90, 0)!;
+    expect(points.at(-1)).toEqual({ x: 90, z: 0 });
+    expect(points.at(-2)).toEqual({ x: 80, z: 0 });
+  });
+
+  it('shares the per-frame budget through tryPlanTo', () => {
+    const budgeted = new RoutePlanner(graph, 1);
+    expect(budgeted.tryPlanTo(0, 0, 88, 30)).toBeUndefined(); // no frame started
+    budgeted.beginFrame();
+    expect(budgeted.tryPlanTo(0, 0, 88, 30)).toBeDefined();
+    expect(budgeted.tryPlanTo(0, 0, 88, 30)).toBeUndefined(); // budget spent
+  });
+});

@@ -168,4 +168,21 @@ export class RoutePlanner {
     this.budget -= 1;
     return this.plan(fromX, fromZ, goal);
   }
+
+  /** Road-preferring route to an arbitrary point: rides the graph to the node NEAREST the target, then
+   *  appends the exact target as a final offroad leg — never a beeline while a road path gets close. */
+  planTo(fromX: number, fromZ: number, toX: number, toZ: number): NavPoint[] | undefined {
+    const points = this.plan(fromX, fromZ, nearestNode(this.graph, toX, toZ));
+    if (!points?.length) return points;
+    const last = points[points.length - 1];
+    if (last && (last.x - toX) ** 2 + (last.z - toZ) ** 2 > 1) points.push({ x: toX, z: toZ });
+    return points;
+  }
+
+  /** Budgeted planTo for per-frame replans (chases, ped wander): shares the same frame budget. */
+  tryPlanTo(fromX: number, fromZ: number, toX: number, toZ: number): NavPoint[] | undefined {
+    if (this.budget <= 0) return undefined;
+    this.budget -= 1;
+    return this.planTo(fromX, fromZ, toX, toZ);
+  }
 }

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import { resolveFrozen, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
@@ -12,6 +12,9 @@ import { powerOn } from '../world/powerGrid';
 
 interface DrivePlan { points: NavPoint[]; index: number; }
 interface TaxiState { stopTimer: number; dwell: number; hootTimer: number; }
+
+/** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
+const FREEZE_CHECK_FRAMES = 10;
 
 export class PopulationSystem {
   pedestrians: Pedestrian[] = [];
@@ -28,6 +31,7 @@ export class PopulationSystem {
   private hootCooldown = 0;
   private parkedSpots: Array<[number, number]> = [];
   private policePatrols: Pedestrian[] = [];
+  private frame = 0;
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.vehiclePlanner = new RoutePlanner(city.vehicleNav, 2);
@@ -36,30 +40,41 @@ export class PopulationSystem {
   }
 
   update(dt: number, player: THREE.Vector3, damagePlayer?: (amount: number) => void): void {
-    this.vehiclePlanner.beginFrame(); this.pedPlanner.beginFrame();
+    this.vehiclePlanner.beginFrame(); this.pedPlanner.beginFrame(); this.frame += 1;
     this.hostileAttackCooldown = Math.max(0, this.hostileAttackCooldown - dt);
-    for (const ped of this.pedestrians) {
+    this.pedestrians.forEach((ped, index) => {
+      if ((this.frame + index) % FREEZE_CHECK_FRAMES === 0) ped.frozen = resolveFrozen(ped.frozen, ped.group.position.distanceToSquared(player));
+      if (ped.frozen) return; // far agents: no motion, routing, or animation until the player closes in again
       ped.update(dt, this.city, this.city.sidewalkPoints, player);
-      if (ped.wantsRoute) { const points = this.pedPlanner.tryPlan(ped.group.position.x, ped.group.position.z); if (points) ped.setRoute(points); }
+      if (ped.wantsRoute) { const points = this.pedPlanner.tryPlanTo(ped.group.position.x, ped.group.position.z, ped.destination.x, ped.destination.z); if (points) ped.setRoute(points); }
       this.pedestrianImpactCooldown.set(ped, Math.max(0, (this.pedestrianImpactCooldown.get(ped) ?? 0) - dt));
-    }
+    });
     this.witnessBodies(dt);
     const robotsOut = !powerOn();
     this.hootCooldown = Math.max(0, this.hootCooldown - dt);
-    for (const vehicle of this.traffic) {
-      if (vehicle.playerControlled || vehicle.disabled) continue;
+    this.traffic.forEach((vehicle, index) => {
+      if (vehicle.playerControlled || vehicle.disabled) return;
+      if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0) {
+        const wasFrozen = vehicle.frozen;
+        vehicle.frozen = resolveFrozen(vehicle.frozen, vehicle.group.position.distanceToSquared(player));
+        if (vehicle.frozen && !wasFrozen) vehicle.speed = 0; // park in place: a stale speed would fire impact checks and jerk on thaw
+      }
+      if (vehicle.frozen) return;
       this.followDrivePlan(vehicle);
       const forward = new THREE.Vector3(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
-      const blocked = this.vehicles.some((other) => other !== vehicle && other.group.position.distanceToSquared(vehicle.group.position) < 70 && other.group.position.clone().sub(vehicle.group.position).dot(forward) > 0);
+      const blocked = this.vehicles.some((other) => { // same-lane car just ahead; a wide dot>0 sweep used to gridlock oncoming lanes on narrow roads
+        if (other === vehicle) return false;
+        const dx = other.group.position.x - vehicle.group.position.x; const dz = other.group.position.z - vehicle.group.position.z;
+        const ahead = dx * forward.x + dz * forward.z;
+        return ahead > 1 && ahead < 9 && dx * dx + dz * dz - ahead * ahead < 6.25;
+      });
       const taxi = vehicle.spec.kind === 'taxi';
       const junctionPanic = robotsOut && !taxi && CITY_JUNCTIONS.some((junction) => (junction.x - vehicle.group.position.x) ** 2 + (junction.z - vehicle.group.position.z) ** 2 < 576);
-      if (vehicle.group.position.distanceToSquared(player) < 320 * 320) {
-        const throttle = taxi ? this.taxiThrottle(vehicle, dt, player, blocked) : blocked ? 0.05 : junctionPanic ? 0.03 : TRAFFIC_SPEED_FACTOR;
-        vehicle.updateAI(dt, this.city, undefined, throttle);
-      }
+      const throttle = taxi ? this.taxiThrottle(vehicle, dt, player, blocked) : blocked ? 0.05 : junctionPanic ? 0.03 : TRAFFIC_SPEED_FACTOR;
+      vehicle.updateAI(dt, this.city, undefined, throttle);
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
       if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);
-    }
+    });
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation();
     if (damagePlayer && this.hostileAttackCooldown <= 0) {
@@ -146,9 +161,11 @@ export class PopulationSystem {
       ['compact', 205.5, 86, 0], ['sport', 252, -205.5, Math.PI / 2, 0x3f6faa], ['van', -105.5, -190, 0], ['compact', 205.5, 286, 0],
     ];
     for (const [kind, x, z, heading, color] of parked) {
-      const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z)); const vehicle = new Vehicle(this.scene, kind, pose.position, color);
+      const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z)); // heading only: snapping the POSITION parked cars onto the live lane made traffic queue behind them forever
+      const curb = this.city.collides(x, z, 1.4) ? pose.position : new THREE.Vector3(x, 0, z);
+      const vehicle = new Vehicle(this.scene, kind, curb, color);
       vehicle.heading = Number.isFinite(pose.heading) ? pose.heading : heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
-      this.parkedSpots.push([pose.position.x, pose.position.z]);
+      this.parkedSpots.push([curb.x, curb.z]);
     }
     const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'taxi', 'van', 'taxi'];
     for (let i = 0; i < 15; i++) {
@@ -210,7 +227,7 @@ export class PopulationSystem {
     const bodies = this.pedestrians.filter((ped) => ped.state === 'down');
     if (!bodies.length) return;
     for (const ped of this.pedestrians) {
-      if (ped.state === 'down') continue;
+      if (ped.state === 'down' || ped.frozen) continue;
       for (const body of bodies) this.frighten(ped, fearContribution(FEAR_EVENTS.body, ped.group.position.distanceTo(body.group.position)) * dt, body.group.position);
     }
   }

@@ -73,7 +73,8 @@ export class PoliceSystem {
       }
       brain.replanIn -= dt;
       if (brain.replanIn <= 0 || !brain.chasing || brain.index >= brain.path.length || vehicle.aiStuck > 5) {
-        const path = this.planner.tryPlan(vehicle.group.position.x, vehicle.group.position.z, this.planner.nearest(known.x, known.z));
+        // Roads as far as they go, then offroad to the scene itself — otherwise an off-road lastKnown (park, parcel) never trips ARRIVE_RADIUS and units sit at the curb.
+        const path = this.planner.tryPlanTo(vehicle.group.position.x, vehicle.group.position.z, known.x, known.z);
         if (path) { brain.path = path; brain.index = 0; brain.chasing = true; brain.replanIn = replanInterval(brain.serial); vehicle.aiStuck = 0; }
       }
       this.followPath(vehicle, brain, dt, aggression);

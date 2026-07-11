@@ -2,6 +2,14 @@ export const WORLD_SIZE = 760;
 export const ROAD_WIDTH = 24;
 export const BLOCK_SIZE = 76;
 export const TRAFFIC_SPEED_FACTOR = 0.42;
+/** Agents beyond this range from the player freeze entirely: no motion, routing, or animation. */
+export const AI_FREEZE_RADIUS = 500;
+/** Frozen agents wake only once the player is back inside this range (hysteresis avoids boundary flicker). */
+export const AI_THAW_RADIUS = 450;
+/** Pure freeze/thaw hysteresis: takes the current frozen state and squared distance to the player. */
+export function resolveFrozen(frozen: boolean, distanceSq: number): boolean {
+  return distanceSq > (frozen ? AI_THAW_RADIUS * AI_THAW_RADIUS : AI_FREEZE_RADIUS * AI_FREEZE_RADIUS);
+}
 export const PLAYER = {
   walkSpeed: 8,
   sprintSpeed: 13,

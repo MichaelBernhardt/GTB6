@@ -26,6 +26,7 @@ export class Vehicle {
   burnTimer = 0;
   aiTarget = new THREE.Vector3();
   aiStuck = 0;
+  frozen = false; // set by PopulationSystem distance culling: frozen traffic gets no plan/AI/visual updates
   bounce = 0;
   private bouncePhase = 0;
   private wheels: THREE.Object3D[] = [];

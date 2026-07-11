@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
+import { AI_FREEZE_RADIUS, AI_THAW_RADIUS, resolveFrozen, TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
 import { calculateDamage } from './core/GameRules';
+
+describe('distance freeze hysteresis', () => {
+  const sq = (value: number): number => value * value;
+
+  it('freezes beyond the freeze radius and thaws only inside the thaw radius', () => {
+    expect(AI_THAW_RADIUS).toBeLessThan(AI_FREEZE_RADIUS);
+    expect(resolveFrozen(false, sq(AI_FREEZE_RADIUS + 1))).toBe(true);
+    expect(resolveFrozen(false, sq(AI_FREEZE_RADIUS - 1))).toBe(false);
+    expect(resolveFrozen(true, sq(AI_THAW_RADIUS - 1))).toBe(false);
+  });
+
+  it('holds state inside the hysteresis band so agents never flicker at the boundary', () => {
+    const band = sq((AI_FREEZE_RADIUS + AI_THAW_RADIUS) / 2);
+    expect(resolveFrozen(true, band)).toBe(true); // frozen stays frozen
+    expect(resolveFrozen(false, band)).toBe(false); // active stays active
+  });
+});
 
 describe('vehicle configuration', () => {
   it('gives each class a distinct handling role', () => {

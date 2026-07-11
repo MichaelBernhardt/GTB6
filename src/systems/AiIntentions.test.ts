@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { AudioManager } from '../core/AudioManager';
+import { Pedestrian } from '../entities/Pedestrian';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN, type City } from '../world/City';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
 import { PoliceKnowledge, ROAM_RADIUS, SIGHT_RADIUS } from './PoliceKnowledge';
@@ -36,6 +37,52 @@ describe('ai intentions simulation', () => {
     expect(walkers.some((ped) => ped.route.length > 1)).toBe(true);
     const contacts = population.pedestrians.filter((ped) => ped.contact);
     expect(contacts.every((ped) => ped.state === 'idle' && ped.route.length === 0)).toBe(true);
+  });
+
+  it('replans a fresh sidewalk route after a ped arrives instead of idling forever', () => {
+    const population = new PopulationSystem(new THREE.Scene(), makeCity(), audio);
+    const player = new THREE.Vector3();
+    const ped = population.pedestrians.find((walker) => !walker.contact && !walker.hostile)!;
+    ped.setRoute([{ x: ped.group.position.x + 2, z: ped.group.position.z + 2 }]); // one-hop route: arrival is imminent
+    let replanned = false;
+    for (let frame = 0; frame < 900 && !replanned; frame++) {
+      population.update(1 / 60, player);
+      replanned = ped.state === 'walk' && ped.route.length > 1; // arrived → idled briefly → picked a destination → planner granted a graph route
+    }
+    expect(replanned).toBe(true);
+  });
+
+  it('recovers a walker pinned against a wall instead of pushing into it forever', () => {
+    const walled = makeCity();
+    (walled as { clampMove: City['clampMove'] }).clampMove = (from: THREE.Vector3) => from.clone(); // every step blocked
+    const ped = new Pedestrian(new THREE.Scene(), new THREE.Vector3(50, 0, 50), 1);
+    ped.destination.set(90, 0, 50);
+    for (let frame = 0; frame < 5; frame++) ped.update(1 / 60, walled, [{ x: 60, z: 60 }], new THREE.Vector3(400, 0, 400));
+    expect(ped.state).toBe('idle'); // blocked step detected at 60fps step size: brief pause, then a fresh pick — never a permanent pinned walk
+  });
+
+  it('freezes agents far from the player and thaws them in place without popping', () => {
+    const population = new PopulationSystem(new THREE.Scene(), makeCity(), audio);
+    const far = new THREE.Vector3(2000, 0, 0);
+    for (let frame = 0; frame < 15; frame++) population.update(1 / 60, far); // staggered checks: everyone frozen within 10 frames
+    expect(population.pedestrians.every((ped) => ped.frozen)).toBe(true);
+    expect(population.traffic.every((vehicle) => vehicle.frozen)).toBe(true);
+    const pedSnapshot = population.pedestrians.map((ped) => ped.group.position.clone());
+    const vehicleSnapshot = population.traffic.map((vehicle) => vehicle.group.position.clone());
+    for (let frame = 0; frame < 300; frame++) population.update(1 / 60, far);
+    population.pedestrians.forEach((ped, index) => expect(ped.group.position.distanceTo(pedSnapshot[index]!)).toBe(0));
+    population.traffic.forEach((vehicle, index) => expect(vehicle.group.position.distanceTo(vehicleSnapshot[index]!)).toBe(0));
+    const walker = population.pedestrians.find((ped) => !ped.contact && !ped.hostile && !ped.aggressive)!;
+    const near = walker.group.position.clone().add(new THREE.Vector3(20, 0, 0));
+    let travelled = 0; let largestStep = 0; const previous = walker.group.position.clone();
+    for (let frame = 0; frame < 600; frame++) {
+      population.update(1 / 60, near);
+      const step = walker.group.position.distanceTo(previous); previous.copy(walker.group.position);
+      travelled += step; largestStep = Math.max(largestStep, step);
+    }
+    expect(walker.frozen).toBe(false);
+    expect(travelled).toBeGreaterThan(0.5); // resumed its route after thawing
+    expect(largestStep).toBeLessThan(0.3); // continuous motion from the frozen pose — no teleport pop
   });
 
   it('spawns interceptors up to the wanted-level cap and closes in on the player', () => {
