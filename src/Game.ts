@@ -18,7 +18,7 @@ import { Vehicle } from './entities/Vehicle';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
-import { clampT, cornerSide, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
+import { clampT, cornerSide, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestGroundedCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
@@ -509,7 +509,7 @@ export class Game {
     const position = this.player.group.position;
     if (this.settings.cameraViewFoot === 0 || this.player.tumbling) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble knocks you out of cover
     if (!this.cover) {
-      const spot = position.y === 0 ? nearestCoverSpot(position.x, position.z, this.city.colliders) : undefined;
+      const spot = nearestGroundedCoverSpot(position.x, position.z, this.player.onGround, this.city.colliders);
       this.coverAvailable = Boolean(spot);
       if (!spot || !this.input.consume('KeyQ')) return undefined;
       const t = clampT(spot, coverT(spot, position.x, position.z), PLAYER.radius);

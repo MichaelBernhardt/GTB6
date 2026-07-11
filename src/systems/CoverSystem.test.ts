@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Collider } from '../world/City';
 import {
   clampT, cornerSide, CORNER_HOLD, COVER_ENTER_RANGE, COVER_GAP, coverHeading, coverPosition, coverT,
-  MIN_COVER_HEIGHT, movingAway, nearestCoverSpot, peekEligible, tangentOf,
+  MIN_COVER_HEIGHT, movingAway, nearestCoverSpot, nearestGroundedCoverSpot, peekEligible, tangentOf,
 } from './CoverSystem';
 
 const box = (minX: number, maxX: number, minZ: number, maxZ: number, height = 20): Collider => ({ minX, maxX, minZ, maxZ, height });
@@ -37,6 +37,12 @@ describe('nearest-face detection', () => {
     const spot = nearestCoverSpot(12.2, 0, [building, other]); // 2.2 from building's +X, 1.8 from other's -X
     expect(spot?.collider).toBe(other);
     expect(spot?.normal).toEqual({ x: -1, z: 0 });
+  });
+
+  it('allows cover while grounded above world zero and rejects airborne entry', () => {
+    // Elevation is deliberately absent from cover math: grounding state is the source of truth.
+    expect(nearestGroundedCoverSpot(11.5, 0, true, [building])?.normal).toEqual({ x: 1, z: 0 });
+    expect(nearestGroundedCoverSpot(11.5, 0, false, [building])).toBeUndefined();
   });
 });
 
