@@ -44,6 +44,8 @@ export class Player {
   private weaponMeshes = new Map<WeaponId, THREE.Group>();
   private punchTimer = 0;
   private punchLeft = false;
+  private canopy?: THREE.Group;
+  private canopyPhase = 0;
 
   constructor(scene: THREE.Scene, position = new THREE.Vector3(0, 0, 260)) {
     this.group.position.copy(position); this.heading = Math.PI; this.group.rotation.y = this.heading; this.group.name = 'Player'; scene.add(this.group); this.buildModel();
@@ -155,6 +157,61 @@ export class Player {
     this.model.rotation.y *= Math.exp(-dt * 10); this.model.position.y = 0;
     this.torso.rotation.z *= Math.exp(-dt * 8); this.torso.scale.y = THREE.MathUtils.lerp(this.torso.scale.y, 1, blend);
     this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0, blend);
+  }
+
+  /** GTA-style canopy over the shoulders: a squashed half-dome on simple suspension lines, built lazily. */
+  setCanopy(visible: boolean): void {
+    if (visible && !this.canopy) this.canopy = this.buildCanopy();
+    if (this.canopy) this.canopy.visible = visible;
+  }
+
+  private buildCanopy(): THREE.Group {
+    const canopy = new THREE.Group(); canopy.name = 'Parachute';
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(2.7, 20, 10, 0, Math.PI * 2, 0, Math.PI * 0.5),
+      new THREE.MeshStandardMaterial({ color: 0xd75844, roughness: 0.85, side: THREE.DoubleSide }));
+    dome.scale.set(1, 0.52, 0.78); dome.position.y = 4.7; dome.castShadow = true;
+    const stripe = new THREE.Mesh(
+      new THREE.SphereGeometry(2.71, 20, 6, -Math.PI / 7, Math.PI * 2 / 7, 0, Math.PI * 0.5),
+      new THREE.MeshStandardMaterial({ color: 0xf2edda, roughness: 0.85, side: THREE.DoubleSide }));
+    stripe.scale.copy(dome.scale); stripe.position.copy(dome.position);
+    canopy.add(dome, stripe);
+    const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xd8d4c5 });
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+      const from = new THREE.Vector3(sx * 0.32, 1.5, sz * 0.1); const to = new THREE.Vector3(sx * 1.95, 4.35, sz * 1.15);
+      const delta = to.clone().sub(from);
+      const line = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, delta.length(), 4), lineMaterial);
+      line.position.copy(from).addScaledVector(delta, 0.5);
+      line.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
+      canopy.add(line);
+    }
+    canopy.visible = false; this.group.add(canopy);
+    return canopy;
+  }
+
+  /** Airborne pose, driven from Game during a skyfall: freefall spread-eagle tipping with the dive trim, or
+   *  hanging in the harness under a gently swaying canopy. Bank rolls the whole body into the turn. */
+  animateAirborne(dt: number, mode: 'freefall' | 'parachute', pitch: number, bank: number): void {
+    const blend = Math.min(1, dt * 8);
+    const pose = (part: THREE.Group, x: number, z?: number): void => { part.rotation.x = THREE.MathUtils.lerp(part.rotation.x, x, blend); if (z !== undefined) part.rotation.z = THREE.MathUtils.lerp(part.rotation.z, z, blend); };
+    if (mode === 'freefall') {
+      this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, 1.32 + pitch * 0.42, blend); // belly-to-earth, tipping head-down as W steepens the dive
+      pose(this.leftArm, -0.5, 1.15); pose(this.rightArm, -0.5, -1.15); // arms mirrored: left is +x, outward is +z
+      pose(this.leftForearm, -0.3); pose(this.rightForearm, -0.3);
+      pose(this.leftLeg, 0.25, 0.35); pose(this.rightLeg, 0.25, -0.35);
+      pose(this.leftShin, 0.5); pose(this.rightShin, 0.5);
+    } else {
+      this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, 0.08 + pitch * 0.14, blend); // upright in the harness
+      pose(this.leftArm, -2.5, 0.35); pose(this.rightArm, -2.5, -0.35); // hands up on the risers
+      pose(this.leftForearm, -0.15); pose(this.rightForearm, -0.15);
+      pose(this.leftLeg, -0.35, 0.08); pose(this.rightLeg, -0.35, -0.08); // legs dangling, knees soft
+      pose(this.leftShin, 0.55); pose(this.rightShin, 0.55);
+      this.canopyPhase += dt;
+      if (this.canopy) { this.canopy.rotation.x = Math.sin(this.canopyPhase * 1.3) * 0.05; this.canopy.rotation.z = Math.cos(this.canopyPhase * 1.1) * 0.06; }
+    }
+    this.group.rotation.z = THREE.MathUtils.lerp(this.group.rotation.z, -bank * 0.55, blend);
+    this.torso.rotation.y *= Math.exp(-dt * 8); this.torso.rotation.z *= Math.exp(-dt * 8);
+    this.model.position.y = 0; this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0, blend);
   }
 
   private applyPunch(dt: number): void {

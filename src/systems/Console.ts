@@ -1,4 +1,4 @@
-import { VEHICLE_SPECS, type VehicleKind } from '../config';
+import { VEHICLE_SPECS, WEAPONS, type VehicleKind, type WeaponId } from '../config';
 
 export const CHEAT_CASH = 1_000_000;
 export const STAR_HEAT = 20; // one wanted star spans 20 heat points
@@ -16,6 +16,14 @@ export type ConsoleCommand =
   | { kind: 'cash'; amount: number }
   | { kind: 'unwanted' }
   | { kind: 'shedding' }
+  | { kind: 'tp-coords'; x: number; z: number }
+  | { kind: 'tp-name'; name: string }
+  | { kind: 'tp-list' }
+  | { kind: 'skyfall'; name?: string }
+  | { kind: 'give-weapon'; weapon: WeaponId }
+  | { kind: 'give-ammo' }
+  | { kind: 'give-armour' }
+  | { kind: 'give-item'; item: 'parachute' | 'stim'; count: number }
   | { kind: 'error'; message: string };
 
 /** Game wires these in; the console never imports Game. Each handler returns its console feedback line. */
@@ -30,10 +38,19 @@ export interface ConsoleHost {
   setPedTarget(count?: number): string;
   setCarTarget(count?: number): string;
   busyInfo(): string;
+  teleport(x: number, z: number): string;
+  teleportNamed(name: string): string;
+  teleportList(): string[];
+  skyfall(name?: string): string;
+  giveWeapon(id: WeaponId): string;
+  giveAmmo(): string;
+  giveArmour(): string;
+  giveItem(item: 'parachute' | 'stim', count: number): string;
 }
 
 const KINDS = Object.keys(VEHICLE_SPECS) as VehicleKind[];
 const SPAWN_ALIAS: Record<string, VehicleKind> = { bakkie: 'van' }; // the Hilux Bakkie ships under kind "van"
+export const GIVE_WEAPON_IDS = WEAPONS.filter((spec) => !spec.melee).map((spec) => spec.id);
 
 const CHEAT_WORDS: Record<string, ConsoleCommand> = {
   bakkie: { kind: 'spawn', vehicle: 'van' },
@@ -46,6 +63,12 @@ const CHEAT_WORDS: Record<string, ConsoleCommand> = {
 
 export const HELP_LINES = [
   'help — this list',
+  'tp <x> <z> | tp <name> — teleport; tp list shows every named place',
+  'skyfall [name] — drop from skydive altitude (W/S pitch, A/D steer, SPACE deploys a carried chute)',
+  `give <${GIVE_WEAPON_IDS.join('|')}> — grant a weapon (or top up its ammo)`,
+  'give ammo — fully stock every owned weapon',
+  'give armour — strap on full body armour',
+  'give parachute [n] · give stim [n] — stock inventory items',
   'set time <HHMM> — jump the clock (e.g. set time 1200)',
   'set busy <10-1000> — crowd level in percent (100 = normal; clears peds/cars pins)',
   'set peds <n|auto> — pin the pedestrian target (auto = time-of-day table)',
@@ -60,6 +83,9 @@ export function tokenize(input: string): string[] { return input.trim().toLowerC
 
 /** Non-negative whole number; undefined when malformed. */
 export function parseCount(token: string): number | undefined { return /^\d+$/.test(token) ? Number(token) : undefined; }
+
+/** Signed decimal for teleport coordinates; undefined when malformed. */
+export function parseCoordinate(token: string): number | undefined { return /^-?\d+(\.\d+)?$/.test(token) ? Number(token) : undefined; }
 
 /** HHMM (0000–2359) → fractional hour for the day/night clock; undefined when malformed. */
 export function parseTimeToken(token: string): number | undefined {
@@ -104,6 +130,30 @@ export function parseCommand(input: string): ConsoleCommand {
     const vehicle = SPAWN_ALIAS[token] ?? (KINDS.includes(token as VehicleKind) ? (token as VehicleKind) : undefined);
     return vehicle ? { kind: 'spawn', vehicle } : { kind: 'error', message: `Eish, unknown vehicle: ${token}. Kinds: ${KINDS.join(', ')}, bakkie.` };
   }
+  if (head === 'tp') {
+    if (rest.length === 0) return { kind: 'error', message: 'Usage: tp <x> <z> · tp <name> · tp list' };
+    if (rest.length === 1 && rest[0] === 'list') return { kind: 'tp-list' };
+    const [first, second] = rest;
+    const x = first !== undefined ? parseCoordinate(first) : undefined;
+    const z = second !== undefined ? parseCoordinate(second) : undefined;
+    if (rest.length === 2 && x !== undefined && z !== undefined) return { kind: 'tp-coords', x, z };
+    if (rest.length === 1 && x !== undefined) return { kind: 'error', message: 'Teleport needs both coordinates: tp <x> <z>.' };
+    return { kind: 'tp-name', name: rest.join(' ') };
+  }
+  if (head === 'skyfall') return { kind: 'skyfall', name: rest.length > 0 ? rest.join(' ') : undefined };
+  if (head === 'give') {
+    const usage = `Usage: give <${GIVE_WEAPON_IDS.join('|')}> · give ammo · give armour · give parachute [n] · give stim [n]`;
+    const [what, countToken, extra] = rest;
+    if (!what || extra !== undefined) return { kind: 'error', message: usage };
+    if (what === 'ammo') return countToken === undefined ? { kind: 'give-ammo' } : { kind: 'error', message: usage };
+    if (what === 'armour' || what === 'armor') return countToken === undefined ? { kind: 'give-armour' } : { kind: 'error', message: usage };
+    if (what === 'parachute' || what === 'stim') {
+      const count = countToken === undefined ? 1 : parseCount(countToken);
+      return count === undefined || count < 1 ? { kind: 'error', message: `Invalid count "${countToken}" — use a whole number of at least 1.` } : { kind: 'give-item', item: what, count };
+    }
+    if ((GIVE_WEAPON_IDS as string[]).includes(what)) return countToken === undefined ? { kind: 'give-weapon', weapon: what as WeaponId } : { kind: 'error', message: usage };
+    return { kind: 'error', message: `Eish, can't give "${what}". ${usage}` };
+  }
   return { kind: 'error', message: `Eish, unknown command: ${input.trim()}. Type "help" for the list.` };
 }
 
@@ -123,5 +173,13 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'cash': return [host.giveCash(command.amount)];
     case 'unwanted': return [host.dropStar()];
     case 'shedding': return [host.toggleShedding()];
+    case 'tp-coords': return [host.teleport(command.x, command.z)];
+    case 'tp-name': return [host.teleportNamed(command.name)];
+    case 'tp-list': return host.teleportList();
+    case 'skyfall': return [host.skyfall(command.name)];
+    case 'give-weapon': return [host.giveWeapon(command.weapon)];
+    case 'give-ammo': return [host.giveAmmo()];
+    case 'give-armour': return [host.giveArmour()];
+    case 'give-item': return [host.giveItem(command.item, command.count)];
   }
 }

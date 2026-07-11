@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeSafehouses, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
-import type { CheatSettings, GameSettings, SavedVehicle, SavedWeapons } from '../types';
+import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeInventory, sanitizeSafehouses, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
+import type { CheatSettings, GameSettings, Inventory, SavedVehicle, SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
   value = new Map<string, string>();
@@ -170,6 +171,28 @@ describe('SaveManager', () => {
     expect(sanitizeSafehouses('brixton')).toEqual([STARTER_SAFEHOUSE]);
     expect(sanitizeSafehouses(['penthouse', 7, null])).toEqual([STARTER_SAFEHOUSE]);
     expect(sanitizeSafehouses(['brixton', 'brixton'])).toEqual([STARTER_SAFEHOUSE]);
+  });
+
+  it('round trips the item inventory', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, inventory: { armour: 60, stims: 2, parachutes: 1 } });
+    expect(manager.load().inventory).toEqual({ armour: 60, stims: 2, parachutes: 1 });
+  });
+
+  it('defaults old saves without an inventory to empty pockets', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
+    expect(manager.load().inventory).toEqual({ armour: 0, stims: 0, parachutes: 0 });
+  });
+
+  it('sanitizes garbage inventory data and clamps to the carry caps', () => {
+    expect(sanitizeInventory(undefined)).toEqual(DEFAULT_INVENTORY);
+    expect(sanitizeInventory('full')).toEqual(DEFAULT_INVENTORY);
+    expect(sanitizeInventory({ armour: 999, stims: 999, parachutes: 999 })).toEqual({ armour: ARMOUR_MAX, stims: STIM_MAX, parachutes: PARACHUTE_MAX });
+    expect(sanitizeInventory({ armour: -20, stims: 1.6, parachutes: Number.NaN } as Inventory)).toEqual({ armour: 0, stims: 2, parachutes: 0 });
+    expect(sanitizeInventory({ armour: 'lots', stims: 'many' } as unknown as Inventory)).toEqual(DEFAULT_INVENTORY);
+    const defaults = sanitizeInventory(undefined); defaults.armour = 40;
+    expect(DEFAULT_INVENTORY.armour).toBe(0);
   });
 
   it('migrates version 1 saves to neutral Living City state without losing progress', () => {
