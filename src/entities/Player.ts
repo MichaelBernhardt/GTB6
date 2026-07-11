@@ -39,7 +39,8 @@ export class Player {
 
   update(dt: number, input: InputManager, cameraYaw: number, city: City): void {
     if (this.inVehicle || this.health <= 0) return;
-    const aiming = input.firing && this.weapon !== 'fists';
+    const aimHeld = input.aiming && this.weapon !== 'fists'; // Ctrl: aim mode — raised gun, half speed, camera-facing
+    const aiming = aimHeld || (input.firing && this.weapon !== 'fists'); // hip fire still raises the gun while the trigger is down
     const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
     const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
     const move = new THREE.Vector3(side, 0, -forward);
@@ -47,14 +48,14 @@ export class Player {
     const sprinting = moving && input.down('ShiftLeft');
     if (moving) {
       move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
-      const speed = moveSpeed(sprinting, this.cheats.fastRun);
+      const speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld);
       const desired = this.group.position.clone().addScaledVector(move, speed * dt);
       this.group.position.copy(city.clampMove(this.group.position, desired, PLAYER.radius));
-      this.turnToward(Math.atan2(move.x, move.z), dt, sprinting ? 15 : 11);
+      this.turnToward(aimHeld ? cameraYaw + Math.PI : Math.atan2(move.x, move.z), dt, aimHeld ? 13 : sprinting ? 15 : 11);
       this.walkPhase += dt * speed * 1.05;
       this.animateLocomotion(dt, sprinting, aiming);
     } else {
-      if (input.firing) this.turnToward(cameraYaw + Math.PI, dt, 13);
+      if (input.firing || aimHeld) this.turnToward(cameraYaw + Math.PI, dt, 13);
       this.animateIdle(dt, aiming);
     }
     this.applyPunch(dt);
@@ -85,9 +86,9 @@ export class Player {
     const phase = 1 - this.punchTimer / 0.3; const thrust = Math.sin(Math.min(1, phase) * Math.PI);
     const arm = this.punchLeft ? this.leftArm : this.rightArm;
     const forearm = this.punchLeft ? this.leftForearm : this.rightForearm;
-    arm.rotation.x = -1.44 * thrust; arm.rotation.z = (this.punchLeft ? 0.14 : -0.14) * thrust;
+    arm.rotation.x = -1.44 * thrust; arm.rotation.z = (this.punchLeft ? -0.14 : 0.14) * thrust;
     forearm.rotation.x = -1.1 * (1 - thrust) - 0.08;
-    this.model.rotation.y = (this.punchLeft ? -0.2 : 0.2) * thrust;
+    this.model.rotation.y = (this.punchLeft ? 0.2 : -0.2) * thrust;
   }
 
   private turnToward(target: number, dt: number, rate: number): void {
@@ -134,16 +135,16 @@ export class Player {
 
   private animateAim(dt: number): void {
     if (this.weapon === 'rpg') {
-      this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.9, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, -0.32, dt * 12);
-      this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -0.55, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0.4, dt * 12);
+      this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.9, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, 0.32, dt * 12);
+      this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -0.55, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, -0.4, dt * 12);
       this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.55, dt * 14); this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.8, dt * 14);
-      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, -0.08, dt * 10);
+      this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0.08, dt * 10);
       return;
     }
-    this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.46, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, -0.09, dt * 12);
-    this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -1.28, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, 0.28, dt * 12);
+    this.rightArm.rotation.x = THREE.MathUtils.lerp(this.rightArm.rotation.x, -1.46, dt * 14); this.rightArm.rotation.z = THREE.MathUtils.lerp(this.rightArm.rotation.z, 0.09, dt * 12);
+    this.leftArm.rotation.x = THREE.MathUtils.lerp(this.leftArm.rotation.x, -1.28, dt * 14); this.leftArm.rotation.z = THREE.MathUtils.lerp(this.leftArm.rotation.z, -0.28, dt * 12);
     this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.06, dt * 14); this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.16, dt * 14);
-    this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0.06, dt * 10);
+    this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, -0.06, dt * 10);
   }
 
   private buildModel(): void {
@@ -159,8 +160,8 @@ export class Player {
 
     this.buildTorso(jacket, shirt, leather, metal);
     this.buildHead(skin, hair);
-    this.buildArm(this.leftArm, this.leftForearm, -0.355, jacket, skin);
-    this.buildArm(this.rightArm, this.rightForearm, 0.355, jacket, skin);
+    this.buildArm(this.leftArm, this.leftForearm, 0.355, jacket, skin); // model faces +z, so anatomical left is +x
+    this.buildArm(this.rightArm, this.rightForearm, -0.355, jacket, skin); // weapon hand: true right, the camera's shoulder side
     this.buildWeapons();
     this.buildLeg(this.leftLeg, this.leftShin, -0.14, denim, leather);
     this.buildLeg(this.rightLeg, this.rightShin, 0.14, denim, leather);
@@ -207,7 +208,7 @@ export class Player {
   private buildWeapons(): void {
     for (const id of ['pistol', 'smg', 'shotgun'] as const) { const mesh = buildWeaponModel(id); if (mesh) this.weaponMeshes.set(id, mesh); }
     const rpg = buildWeaponModel('rpg');
-    if (rpg) { rpg.rotation.x = -Math.PI / 2; rpg.position.set(0.3, 1.56, -0.28); this.weaponMeshes.set('rpg', rpg); }
+    if (rpg) { rpg.rotation.x = -Math.PI / 2; rpg.position.set(-0.3, 1.56, -0.28); this.weaponMeshes.set('rpg', rpg); }
     for (const [id, mesh] of this.weaponMeshes) { mesh.visible = id === this.weapon; (id === 'rpg' ? this.torso : this.rightForearm).add(mesh); }
   }
 

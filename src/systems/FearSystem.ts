@@ -6,7 +6,15 @@ export const FEAR_EVENTS = {
   kill: { base: 62, radius: 58 },
   assault: { base: 42, radius: 24 },
   body: { base: 22, radius: 10 },
+  brandish: { base: 45, radius: 30 }, // a raised gun, applied only to peds who can see it
+  panic: { base: 16, radius: 12 }, // contagion: a shrieking ped spooks bystanders a little
 } as const satisfies Record<string, FearEvent>;
+
+export const BRANDISH_SENSE_RADIUS = 8;
+/** A ped notices a raised gun when it's in their forward half-plane, or close enough to sense regardless of facing. */
+export function seesBrandish(facingX: number, facingZ: number, dx: number, dz: number, distance: number): boolean {
+  return distance < BRANDISH_SENSE_RADIUS || facingX * dx + facingZ * dz > 0;
+}
 
 export const FEAR_MAX = 100;
 export const FLEE_THRESHOLD = 35;

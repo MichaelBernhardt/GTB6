@@ -3,7 +3,7 @@ import { TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
-import { FEAR_EVENTS, fearContribution, FEAR_MAX, type FearEvent } from './FearSystem';
+import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
 import { MISSIONS } from './MissionSystem';
 import { RoutePlanner, type NavPoint } from './NavGraph';
 import type { City } from '../world/City';
@@ -69,13 +69,32 @@ export class PopulationSystem {
   }
 
   broadcastFear(origin: THREE.Vector3, event: FearEvent): void {
-    for (const ped of this.pedestrians) this.frighten(ped, fearContribution(event, ped.group.position.distanceTo(origin)), origin);
+    this.spreadPanic(this.pedestrians.filter((ped) => this.frighten(ped, fearContribution(event, ped.group.position.distanceTo(origin)), origin)));
   }
 
-  private frighten(ped: Pedestrian, amount: number, origin: THREE.Vector3): void {
+  /** A raised weapon frightens only peds who can see it: within radius and facing the player (or close enough to sense). */
+  broadcastBrandish(origin: THREE.Vector3, event: FearEvent = FEAR_EVENTS.brandish): void {
+    this.spreadPanic(this.pedestrians.filter((ped) => {
+      const distance = ped.group.position.distanceTo(origin);
+      if (distance >= event.radius || !seesBrandish(Math.sin(ped.group.rotation.y), Math.cos(ped.group.rotation.y), origin.x - ped.group.position.x, origin.z - ped.group.position.z, distance)) return false;
+      return this.frighten(ped, fearContribution(event, distance), origin);
+    }));
+  }
+
+  /** Fear contagion: each freshly panicked ped's shrieking rattles bystanders with a smaller secondary burst (one hop, no recursion). */
+  private spreadPanic(sources: Pedestrian[]): void {
+    for (const source of sources) for (const ped of this.pedestrians) {
+      if (ped !== source) this.frighten(ped, fearContribution(FEAR_EVENTS.panic, ped.group.position.distanceTo(source.group.position)), source.group.position);
+    }
+  }
+
+  /** Returns true when the fear pushed the ped into a fresh flee/cower panic. */
+  private frighten(ped: Pedestrian, amount: number, origin: THREE.Vector3): boolean {
     const before = ped.state;
     ped.applyFear(amount, origin);
-    if (before !== ped.state && (ped.state === 'flee' || ped.state === 'cower') && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+    const panicked = before !== ped.state && (ped.state === 'flee' || ped.state === 'cower');
+    if (panicked && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+    return panicked;
   }
 
   private taxiThrottle(vehicle: Vehicle, dt: number, player: THREE.Vector3, blocked: boolean): number {

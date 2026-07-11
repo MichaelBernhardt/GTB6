@@ -30,6 +30,7 @@ export class HudView {
   private vehicleHealth: HTMLElement;
   private fps: HTMLElement;
   private cheats: HTMLElement;
+  private crosshair: HTMLElement;
 
   constructor(root: HTMLElement) {
     root.innerHTML = `
@@ -50,14 +51,14 @@ export class HudView {
       <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
       <div class="hud-fps" data-hud="fps"></div><div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
-      <div class="hud-crosshair" aria-hidden="true"><i></i></div>`;
+      <div class="hud-crosshair" data-hud="crosshair" aria-hidden="true" hidden><i></i></div>`;
     this.district = required(root, '[data-hud="district"]'); this.clock = required(root, '[data-hud="clock"]'); this.reputation = required(root, '[data-hud="reputation"]');
     this.health = required(root, '[data-hud="health"]'); this.healthFill = required(root, '[data-hud="health-fill"]'); this.cash = required(root, '[data-hud="cash"]');
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i'));
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
     this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]');
-    this.fps = required(root, '[data-hud="fps"]'); this.cheats = required(root, '[data-hud="cheats"]');
+    this.fps = required(root, '[data-hud="fps"]'); this.cheats = required(root, '[data-hud="cheats"]'); this.crosshair = required(root, '[data-hud="crosshair"]');
   }
 
   update(state: HudState): void {
@@ -78,6 +79,6 @@ export class HudView {
     this.prompt.textContent = state.prompt; this.prompt.hidden = !state.prompt;
     this.vehicle.hidden = !state.vehicle;
     if (state.vehicle) { this.vehicleName.textContent = state.vehicle.name; this.vehicleSpeed.textContent = String(Math.round(state.vehicle.speedKph)); this.vehicleHealth.textContent = `${Math.ceil(state.vehicle.health)}% VEHICLE`; }
-    this.fps.textContent = `${Math.round(state.fps)} FPS`; this.fps.hidden = !state.settings.showFps; this.cheats.hidden = !state.cheatsOn;
+    this.fps.textContent = `${Math.round(state.fps)} FPS`; this.fps.hidden = !state.settings.showFps; this.cheats.hidden = !state.cheatsOn; this.crosshair.hidden = !state.crosshair;
   }
 }

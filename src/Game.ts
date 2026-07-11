@@ -8,14 +8,14 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { WEAPON_BY_ID, WEAPONS, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
-import { cycleWeapon, Economy, rollDrops, type PedKind } from './core/GameRules';
+import { canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, rollDrops, type PedKind } from './core/GameRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolvePurchase, weaponPrice } from './core/ShopRules';
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
-import { CombatSystem } from './systems/CombatSystem';
+import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
@@ -105,6 +105,7 @@ export class Game {
   private helperCooldown = 90;
   private previousWanted = false;
   private hostileGuardActivated = false;
+  private brandishCooldown = 0;
 
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
@@ -227,6 +228,8 @@ export class Game {
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    this.brandishCooldown = Math.max(0, this.brandishCooldown - dt);
+    if (this.input.aiming && !this.combat.spec.melee && !this.transition && this.brandishCooldown === 0) { this.population.broadcastBrandish(focus); this.brandishCooldown = 1.5; } // a raised gun scares witnesses; no police heat for merely aiming
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
@@ -328,7 +331,7 @@ export class Game {
     const scroll = this.input.consumeWheel(); if (scroll) this.combat.cycle(scroll > 0 ? 1 : -1);
     this.footstepTimer -= dt;
     if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { const running = this.input.down('ShiftLeft'); this.audio.footstep(running, this.city.isPark(this.player.group.position.x, this.player.group.position.z)); this.footstepTimer = running ? 0.24 : 0.38; }
-    const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles);
+    const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles, { aim: this.input.aiming, heading: this.player.heading });
     if (shot.fired && shot.melee) {
       this.player.punch();
       if (shot.victim) {
@@ -337,17 +340,7 @@ export class Game {
         if (shot.policeHit) this.reportCrime(this.player.group.position, 24, { copWitnessed: true });
         if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
       }
-    } else if (shot.fired) {
-      this.reportCrime(this.player.group.position, 7, { victims: shot.victim ? [shot.victim] : [], radius: FEAR_EVENTS.gunshot.radius, cityEvent: shot.victim && !shot.victim.hostile && !shot.victim.police ? (shot.killed ? 'civilian-murder' : 'civilian-assault') : undefined }); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.gunshot);
-      if (shot.victim && shot.hitPoint) {
-        this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
-        this.audio.splat(shot.killed ? 0.9 : 0.5, shot.hitPoint.x, shot.hitPoint.z);
-        this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z);
-        if (shot.killed) this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill);
-      }
-      if (shot.policeHit) this.reportCrime(this.player.group.position, 24, { copWitnessed: true });
-      if (shot.killed && shot.victim) { this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
-    }
+    } else if (shot.fired) this.handleGunshot(shot, this.player.group.position);
     this.player.setWeapon(this.combat.current);
     if (this.input.consume('KeyF')) this.tryMugOrMelee();
     if (this.input.consume('KeyE')) {
@@ -361,6 +354,19 @@ export class Game {
       if (shop?.driveIn && !vehicle) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
       if (vehicle) this.beginEnter(vehicle);
     }
+  }
+
+  /** Shared aftermath for a ranged player shot: witnesses, fear, gore, and drops — on foot or drive-by. */
+  private handleGunshot(shot: ShotResult, position: THREE.Vector3): void {
+    this.reportCrime(position, 7, { victims: shot.victim ? [shot.victim] : [], radius: FEAR_EVENTS.gunshot.radius, cityEvent: shot.victim && !shot.victim.hostile && !shot.victim.police ? (shot.killed ? 'civilian-murder' : 'civilian-assault') : undefined }); this.population.broadcastFear(position, FEAR_EVENTS.gunshot);
+    if (shot.victim && shot.hitPoint) {
+      this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
+      this.audio.splat(shot.killed ? 0.9 : 0.5, shot.hitPoint.x, shot.hitPoint.z);
+      this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z);
+      if (shot.killed) this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill);
+    }
+    if (shot.policeHit) this.reportCrime(position, 24, { copWitnessed: true });
+    if (shot.killed && shot.victim) { this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
   }
 
   private updateWeaponWheel(): boolean {
@@ -415,6 +421,11 @@ export class Game {
         this.etollCooldowns[index] = 20;
       }
     });
+    if (canFireFromVehicle(this.input.aiming, this.combat.spec.melee, Boolean(this.combat.spec.projectile))) { // drive-by: Ctrl to lean out, LMB fires along the camera ray; no aim, no shooting
+      this.combat.tryReload(this.input);
+      const shot = this.combat.fire(this.input, this.camera, vehicle.group.position, this.population, this.police.vehicles, { exclude: vehicle, cooldownScale: DRIVEBY_COOLDOWN_SCALE });
+      if (shot.fired) this.handleGunshot(shot, vehicle.group.position);
+    }
     if (this.input.consume('KeyE')) {
       const shop = this.shops.shopNear(vehicle.group.position);
       if (shop?.kind === 'spray') { this.useSpray(vehicle); return; }
@@ -695,7 +706,7 @@ export class Game {
     const firstPerson = view === 0;
     this.player.setVisible(!this.player.inVehicle && !(firstPerson && !this.activeVehicle && !this.transition));
     this.activeVehicle?.setFirstPerson(firstPerson);
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0);
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -755,7 +766,8 @@ export class Game {
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
     } : undefined;
     const vehicle = this.activeVehicle ? { name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health } : undefined;
-    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
+    const crosshair = this.mode === 'playing' && !this.transition && !this.weaponWheelOpen && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile);
+    this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
     const markers = [...this.shops.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [])];
     const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
     this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
