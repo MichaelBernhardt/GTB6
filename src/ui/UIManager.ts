@@ -6,9 +6,9 @@ import { ConsoleView } from './ConsoleView';
 import { HudView } from './HudView';
 import { MenuView } from './MenuView';
 import { MinimapView, type MapMarker, type MapPoint } from './MinimapView';
-import type { CheatWeaponEntry, HudState, MainMenuSummary, NotificationTone, ShopCatalogEntry, WheelEntry } from './UIModels';
+import type { CheatWeaponEntry, HudState, MainMenuSummary, NotificationTone, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
 
-export type { CheatWeaponEntry, HudState, MainMenuSummary, ShopCatalogEntry, WheelEntry } from './UIModels';
+export type { CheatWeaponEntry, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
 
 export class UIManager {
   root = document.createElement('div');
@@ -37,6 +37,7 @@ export class UIManager {
   onCheats?: (cheats: Partial<CheatSettings>) => void;
   onBuyWeapon?: (id: WeaponId) => void;
   onBuyAmmo?: (id: WeaponId) => void;
+  onBuyArmour?: () => void;
   onMissionChoice?: (id: MissionChoice['id']) => void;
   onSafehouseSave?: () => void;
   onSafehouseSleep?: () => void;
@@ -98,7 +99,7 @@ export class UIManager {
     this.lastSettings = settings; this.menuView.pause(settings, { resume: () => this.onResume?.(), restart: () => this.onRestart?.(), controls: () => this.showControls(), cheats: () => this.onShowCheats?.(), reset: () => this.onResetSave?.(), settings: (value) => this.onSettings?.(value) });
   }
   showControls(fromMain = false): void { this.controlsFromMain = fromMain; this.menuView.controls(fromMain, () => this.back()); }
-  showShop(entries: ShopCatalogEntry[], balance: number): void { this.menuView.shop(entries, balance, { buy: (id) => this.onBuyWeapon?.(id), ammo: (id) => this.onBuyAmmo?.(id), leave: () => this.back() }); }
+  showShop(entries: ShopCatalogEntry[], balance: number, armour?: ShopArmourEntry): void { this.menuView.shop(entries, balance, { buy: (id) => this.onBuyWeapon?.(id), ammo: (id) => this.onBuyAmmo?.(id), armour: () => this.onBuyArmour?.(), leave: () => this.back() }, armour); }
   showMissionChoice(title: string, choices: MissionChoice[]): void { this.menuView.choice(title, choices, (id) => this.onMissionChoice?.(id)); }
   showSafehouse(name: string, sleepHours: number): void { this.menuView.safehouse(name, sleepHours, { save: () => this.onSafehouseSave?.(), sleep: () => this.onSafehouseSleep?.(), leave: () => this.back() }); }
   showCheats(weapons: CheatWeaponEntry[], cheats: CheatSettings): void {

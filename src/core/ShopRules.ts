@@ -1,4 +1,5 @@
 import { WEAPON_BY_ID, type WeaponId } from '../config';
+import { ARMOUR_MAX } from './GameRules';
 
 /** Sticker prices at Jozi Arms. Ammo refills cost ~15% of the weapon price. */
 export const WEAPON_PRICES: Partial<Record<WeaponId, number>> = { pistol: 400, smg: 1200, shotgun: 900, rpg: 5000, sniper: 3500 };
@@ -8,7 +9,7 @@ export function weaponPrice(id: WeaponId): number { return WEAPON_PRICES[id] ?? 
 export function ammoPrice(id: WeaponId): number { return Math.round(weaponPrice(id) * AMMO_PRICE_FACTOR / 5) * 5; }
 export function adjustedShopPrice(price: number, multiplier: number): number { return Math.max(0, Math.round(price * multiplier / 5) * 5); }
 
-export type PurchaseDenial = 'no-price' | 'owned' | 'not-owned' | 'ammo-full' | 'funds';
+export type PurchaseDenial = 'no-price' | 'owned' | 'not-owned' | 'ammo-full' | 'armour-full' | 'funds';
 export interface PurchaseResult { ok: boolean; price: number; reason?: PurchaseDenial; }
 
 /** Resolves a shop transaction without applying it: weapons need to be unowned, ammo needs the weapon and reserve headroom, and both need cash. */
@@ -26,6 +27,15 @@ export function resolvePurchase(kind: 'weapon' | 'ammo', id: WeaponId, owned: bo
 export function reserveFull(id: WeaponId, reserve: number): boolean {
   const spec = WEAPON_BY_ID[id];
   return !spec || spec.melee || reserve >= spec.reserve * 3;
+}
+
+export const ARMOUR_PRICE = 350;
+/** Body armour at Jozi Arms: one fitting tops the pool to full — no sale when already plated or broke. */
+export function resolveArmourPurchase(armour: number, balance: number, multiplier = 1): PurchaseResult {
+  const price = adjustedShopPrice(ARMOUR_PRICE, multiplier);
+  if (armour >= ARMOUR_MAX) return { ok: false, price, reason: 'armour-full' };
+  if (balance < price) return { ok: false, price, reason: 'funds' };
+  return { ok: true, price };
 }
 
 export const DETAILER_RATE = 100;

@@ -39,7 +39,13 @@ export class CameraController {
   /** Firing kick: an instant upward pitch bump; a bit over half of it settles back over the next beats. */
   recoil(amount: number): void { this.pitch -= amount; this.recoilReturn += amount * 0.55; }
 
-  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0): void {
+  /** After a teleport: parks the boom straight behind the target so the camera doesn't fly across town. */
+  snapBehind(target: THREE.Vector3, distance = 6): void {
+    const horizontal = Math.cos(this.pitch) * distance;
+    this.camera.position.set(target.x + Math.sin(this.yaw) * horizontal, target.y + 1.45 + Math.sin(this.pitch) * distance, target.z + Math.cos(this.yaw) * horizontal);
+  }
+
+  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0, extraDistance = 0): void {
     const scoped = scopeFov > 0 && !vehicle; // sniper scope: first-person eye regardless of the chosen view
     const firstPerson = sanitizeView(view) === 0 || scoped;
     if (firstPerson && vehicle) { this.lookOffset = (this.lookOffset - input.mouseDX * sensitivity) * Math.exp(-dt * 1.4); this.yaw = vehicleHeading + Math.PI + this.lookOffset; }
@@ -50,7 +56,7 @@ export class CameraController {
     this.aimBlend += ((this.aiming ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 10));
     if (firstPerson) { this.updateFirstPerson(target, vehicle, vehicleHeading, scoped ? scopeFov : 0); return; }
     this.setFov(this.baseFov);
-    const distance = aimedViewDistance(view, vehicle, this.aimBlend);
+    const distance = aimedViewDistance(view, vehicle, this.aimBlend) + extraDistance; // skydives pull the boom further back
     const baseHeight = VEHICLE_VIEW_HEIGHTS[sanitizeView(view)];
     const height = vehicle ? THREE.MathUtils.lerp(baseHeight, Math.min(baseHeight, VEHICLE_VIEW_HEIGHTS[1]), this.aimBlend) : THREE.MathUtils.lerp(1.45, 1.78, this.aimBlend);
     this.focus.set(target.x, target.y + height, target.z);

@@ -10,6 +10,12 @@ export class HudView {
   private reputation: HTMLElement;
   private health: HTMLElement;
   private healthFill: HTMLElement;
+  private armourBox: HTMLElement;
+  private armour: HTMLElement;
+  private armourFill: HTMLElement;
+  private items: HTMLElement;
+  private stims: HTMLElement;
+  private chutes: HTMLElement;
   private cash: HTMLElement;
   private weaponName: HTMLElement;
   private ammo: HTMLElement;
@@ -46,6 +52,7 @@ export class HudView {
         <div class="hud-wanted" data-hud="wanted" aria-label="Wanted level 0 of 5">${Array.from({ length: 5 }, () => '<i aria-hidden="true">★</i>').join('')}</div>
         <div class="hud-health" role="progressbar" aria-label="Health" aria-valuemin="0" aria-valuemax="100"><span data-hud="health-fill"></span><b data-hud="health"></b></div>
         <div class="hud-cash"><small>ON HAND</small><b data-hud="cash"></b></div>
+        <div class="hud-armour" data-hud="armour-box" role="progressbar" aria-label="Armour" aria-valuemin="0" aria-valuemax="100" hidden><span data-hud="armour-fill"></span><b data-hud="armour"></b></div>
         <div class="hud-weapon"><small data-hud="weapon-name"></small><b data-hud="ammo"></b><span data-hud="reserve"></span><em data-hud="reload">RELOADING</em></div>
       </section>
       <section class="hud-objective" data-hud="objective" aria-label="Current objective">
@@ -54,10 +61,13 @@ export class HudView {
       </section>
       <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em><i class="hud-taxi" data-hud="taxi" role="status"></i></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
+      <div class="hud-items" data-hud="items" aria-label="Carried items" hidden><i data-hud="stims" hidden></i><i data-hud="chutes" hidden></i></div>
       <div class="hud-fps" data-hud="fps"></div><div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
       <div class="hud-crosshair" data-hud="crosshair" aria-hidden="true" hidden><i></i></div>`;
     this.district = required(root, '[data-hud="district"]'); this.clock = required(root, '[data-hud="clock"]'); this.reputation = required(root, '[data-hud="reputation"]');
     this.health = required(root, '[data-hud="health"]'); this.healthFill = required(root, '[data-hud="health-fill"]'); this.cash = required(root, '[data-hud="cash"]');
+    this.armourBox = required(root, '[data-hud="armour-box"]'); this.armour = required(root, '[data-hud="armour"]'); this.armourFill = required(root, '[data-hud="armour-fill"]');
+    this.items = required(root, '[data-hud="items"]'); this.stims = required(root, '[data-hud="stims"]'); this.chutes = required(root, '[data-hud="chutes"]');
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i'));
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
@@ -70,6 +80,11 @@ export class HudView {
     const health = clampPercent(state.health); this.district.textContent = state.district; this.clock.textContent = state.clock; this.reputation.textContent = state.reputation ? reputationLabel(state.reputation) : '';
     this.reputation.hidden = !state.reputation; this.health.textContent = `${health}`; this.healthFill.style.width = `${health}%`;
     const healthBox = this.health.closest<HTMLElement>('[role="progressbar"]'); healthBox?.setAttribute('aria-valuenow', String(health));
+    const armour = clampPercent(state.armour); this.armourBox.hidden = armour <= 0;
+    if (armour > 0) { this.armour.textContent = `${armour}`; this.armourFill.style.width = `${armour}%`; this.armourBox.setAttribute('aria-valuenow', String(armour)); }
+    this.stims.hidden = state.stims <= 0; if (state.stims > 0) this.stims.textContent = `STIM ×${state.stims} · H`;
+    this.chutes.hidden = state.parachutes <= 0; if (state.parachutes > 0) this.chutes.textContent = `CHUTE ×${state.parachutes}`;
+    this.items.hidden = state.stims <= 0 && state.parachutes <= 0;
     this.cash.textContent = formatMoney(state.money); this.weaponName.textContent = state.weaponName;
     this.ammo.textContent = state.melee ? '—' : String(state.ammo); this.reserve.textContent = state.melee ? '' : `/ ${state.reserve}`; this.reload.hidden = !state.reloading;
     this.wanted.forEach((star, index) => star.classList.toggle('is-hot', index < state.wanted)); this.wantedContainer.setAttribute('aria-label', `Wanted level ${state.wanted} of 5`);

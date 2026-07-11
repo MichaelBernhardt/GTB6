@@ -111,6 +111,23 @@ export function shouldKnockOff(impact: number): boolean { return impact >= KNOCK
 /** Riders wear no cocoon: collision energy above a bruising floor lands on the player's health bar. */
 export function riderImpactDamage(impact: number): number { return Math.max(0, Math.round((impact - 6) * 1.4)); }
 
+/** Carry caps for the item inventory. */
+export const ARMOUR_MAX = 100;
+export const STIM_MAX = 5;
+export const STIM_HEAL = 50;
+export const PARACHUTE_MAX = 3;
+
+/** Classic GTA body armour: the vest soaks damage point-for-point before health takes the remainder. */
+export function absorbDamage(armour: number, amount: number): { armour: number; through: number } {
+  const soaked = Math.min(Math.max(0, armour), Math.max(0, amount));
+  return { armour: Math.max(0, armour) - soaked, through: Math.max(0, amount) - soaked };
+}
+
+/** One stim pack: +50 health, clamped to the maximum. */
+export function stimHeal(health: number, maxHealth: number, amount = STIM_HEAL): number {
+  return Math.min(maxHealth, Math.max(0, health) + amount);
+}
+
 export function spreadOffset(spread: number, random: () => number = Math.random): [number, number] {
   const angle = random() * Math.PI * 2; const radius = Math.sqrt(random()) * spread;
   return [Math.cos(angle) * radius, Math.sin(angle) * radius];
