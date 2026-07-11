@@ -59,13 +59,29 @@ export function policeCarStealable(vehicle: { police: boolean; occupied: boolean
 /** G toggles the siren, but only a real cruiser has one to toggle. */
 export function toggleSiren(vehicle: { police: boolean; sirenOn: boolean }): boolean { return vehicle.police ? !vehicle.sirenOn : vehicle.sirenOn; }
 
+/** Per-unit angular fan for arrest slots: five distinct lanes at 36° spacing, capped at ±72° so a unit is
+ *  never sent around the far side of the suspect (through them) to reach its slot. */
+export function standoffSlotOffset(serial: number): number { return ((serial % 5) - 2) * (Math.PI / 5); }
+
+/** Half-overlap separation for two bodies closer than minDistance: apply the returned push to the second
+ *  body and its negation to the first, and they end exactly minDistance apart; null when already clear.
+ *  A dead-centre stack gets a deterministic axis split — nothing may occupy the same point. */
+export function separationPush(dx: number, dz: number, minDistance: number): { x: number; z: number } | null {
+  const distanceSq = dx * dx + dz * dz;
+  if (distanceSq >= minDistance * minDistance) return null;
+  const distance = Math.sqrt(distanceSq);
+  if (distance < 1e-4) return { x: minDistance / 2, z: 0 };
+  const factor = (minDistance - distance) / 2 / distance;
+  return { x: dx * factor, z: dz * factor };
+}
+
 export type PoliceEvent =
   | { kind: 'freeze'; x: number; z: number }
   | { kind: 'officers'; officers: Pedestrian[] }
   | { kind: 'reboard'; officers: Pedestrian[] }
   | { kind: 'abandoned'; vehicle: Vehicle };
 
-interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; mode: UnitMode; shootIn: number; contactIn: number; }
+interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; mode: UnitMode; shootIn: number; contactIn: number; bumpIn: number; }
 interface Officer { ped: Pedestrian; car?: Vehicle; role: 'cover' | 'chase'; side: 1 | -1; shootIn: number; }
 
 export class PoliceSystem {
@@ -99,7 +115,7 @@ export class PoliceSystem {
     const target = wanted.isWanted ? knowledge.lastKnown : null;
     for (const vehicle of active) {
       const brain = this.brainOf(vehicle);
-      brain.shootIn -= dt; brain.contactIn -= dt;
+      brain.shootIn -= dt; brain.contactIn -= dt; brain.bumpIn -= dt;
       const distance = vehicle.group.position.distanceTo(playerPosition);
       const seen = sighted && distance < SIGHT_RADIUS && this.hasLineOfSight(vehicle.group.position, playerPosition);
       if (brain.mode !== 'arrest') {
@@ -111,7 +127,7 @@ export class PoliceSystem {
         brain.chasing = true; brain.path = []; brain.index = 0; brain.replanIn = 0;
         const throttle = standoffThrottle(distance, Math.abs(vehicle.speed));
         if (throttle === 0) this.brake(vehicle, dt);
-        else vehicle.updateAI(dt, this.city, playerPosition, (0.82 + wanted.level * 0.035) * throttle);
+        else vehicle.updateAI(dt, this.city, this.standoffPoint(vehicle, brain, playerPosition), (0.82 + wanted.level * 0.035) * throttle);
       } else if (target) this.pursue(vehicle, brain, dt, target, seen, playerPosition, wanted);
       else this.patrol(vehicle, brain, dt);
       // Genuine contact with an on-foot player: speed-derived impact through the damage path, never scripted proximity harm.
@@ -126,6 +142,7 @@ export class PoliceSystem {
         if (Math.random() < copHitChance(distance)) damageCar(3 + wanted.level * 1.2);
       }
     }
+    this.separateUnits(dt, active, playerPosition);
     this.updateOfficers(dt, playerPosition, playerInVehicle, wanted, known, damagePlayer, damageCar);
     const alive = this.vehicles.filter((vehicle) => !vehicle.wrecked);
     const nearest = alive.reduce<Vehicle | undefined>((best, vehicle) => !best || vehicle.group.position.distanceToSquared(playerPosition) < best.group.position.distanceToSquared(playerPosition) ? vehicle : best, undefined);
@@ -188,6 +205,46 @@ export class PoliceSystem {
     const lane = (brain.serial % 2 === 0 ? 1 : -1) * Math.min(4, distance * 0.35);
     this.scratch.set(playerPosition.x - (dz / length) * lane, 0, playerPosition.z + (dx / length) * lane);
     vehicle.updateAI(dt, this.city, this.scratch, distance < 9 ? aggression * 0.45 : aggression);
+  }
+
+  /** This unit's own slot on the arrest ring: its bearing from the suspect fanned by a per-serial offset,
+   *  rotating on to the next lane when a slot lands inside a building. No two units brake onto one point. */
+  private standoffPoint(vehicle: Vehicle, brain: PoliceBrain, playerPosition: THREE.Vector3): THREE.Vector3 {
+    const bearing = Math.atan2(vehicle.group.position.x - playerPosition.x, vehicle.group.position.z - playerPosition.z);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const angle = bearing + standoffSlotOffset(brain.serial + attempt);
+      const x = playerPosition.x + Math.sin(angle) * STANDOFF_RANGE; const z = playerPosition.z + Math.cos(angle) * STANDOFF_RANGE;
+      if (!this.city.collides(x, z, 1.1)) return this.scratch.set(x, 0, z);
+    }
+    return this.scratch.set(playerPosition.x + Math.sin(bearing) * STANDOFF_RANGE, 0, playerPosition.z + Math.cos(bearing) * STANDOFF_RANGE);
+  }
+
+  /** Units respect each other's space: whoever has a colleague ahead in the lane lifts off, and any actual
+   *  touch resolves as a real collision — half-overlap push, mutual damage past a speed threshold, and a
+   *  crunch when the player is close enough to hear it. Cop pileups are possible; parking stacks are not. */
+  private separateUnits(dt: number, units: Vehicle[], playerPosition: THREE.Vector3): void {
+    for (let i = 0; i < units.length; i++) {
+      const unit = units[i]; if (!unit) continue;
+      for (let j = i + 1; j < units.length; j++) {
+        const other = units[j]; if (!other) continue;
+        const dx = other.group.position.x - unit.group.position.x; const dz = other.group.position.z - unit.group.position.z;
+        if (dx * dx + dz * dz < 64) {
+          if (Math.sin(unit.heading) * dx + Math.cos(unit.heading) * dz > 0 && Math.abs(unit.speed) > 4) unit.speed *= Math.exp(-2.6 * dt);
+          if (Math.sin(other.heading) * dx + Math.cos(other.heading) * dz < 0 && Math.abs(other.speed) > 4) other.speed *= Math.exp(-2.6 * dt);
+        }
+        const push = separationPush(dx, dz, 3.3);
+        if (!push) continue;
+        unit.group.position.x -= push.x; unit.group.position.z -= push.z;
+        other.group.position.x += push.x; other.group.position.z += push.z;
+        const impact = Math.abs(unit.speed - other.speed);
+        const brain = this.brainOf(unit);
+        if (impact > 6 && brain.bumpIn <= 0) {
+          unit.takeDamage(impact * 0.3); other.takeDamage(impact * 0.3); brain.bumpIn = 0.8;
+          if (unit.group.position.distanceTo(playerPosition) < 55) this.audio.collision(impact);
+        }
+        unit.speed *= 0.7; other.speed *= 0.7;
+      }
+    }
   }
 
   /** Roll to a stop while keeping heading and the lightbar alive (aiming at a point straight ahead, zero throttle). */
@@ -264,7 +321,7 @@ export class PoliceSystem {
         else { ped.state = 'idle'; ped.idleTime = 6; ped.takeCover(); ped.group.rotation.y = Math.atan2(playerPosition.x - position.x, playerPosition.z - position.z); }
       } else {
         ped.state = 'hostile';
-        if (position.distanceTo(playerPosition) < SIGHT_RADIUS && this.hasLineOfSight(position, playerPosition)) ped.destination.copy(playerPosition);
+        if (position.distanceTo(playerPosition) < SIGHT_RADIUS && this.hasLineOfSight(position, playerPosition)) { ped.destination.copy(playerPosition); ped.destination.x += officer.side * 0.9; } // shoulder-width apart, not one dogpile point
         else if (known) ped.destination.set(known.x, 0, known.z);
       }
       officer.shootIn -= dt;
@@ -276,6 +333,14 @@ export class PoliceSystem {
           if (Math.random() < copHitChance(distance)) { if (playerInVehicle) damageCar(4); else damagePlayer(4 + wanted.level); }
         }
       }
+    }
+    // Officers never share a tile: pairwise half-overlap separation, wall-clamped like any other ped move.
+    for (let i = 0; i < this.officers.length; i++) for (let j = i + 1; j < this.officers.length; j++) {
+      const a = this.officers[i]!.ped; const b = this.officers[j]!.ped;
+      const push = separationPush(b.group.position.x - a.group.position.x, b.group.position.z - a.group.position.z, 0.95);
+      if (!push) continue;
+      a.group.position.copy(this.city.clampMove(a.group.position, this.scratch.set(a.group.position.x - push.x, 0, a.group.position.z - push.z), 0.42));
+      b.group.position.copy(this.city.clampMove(b.group.position, this.scratch.set(b.group.position.x + push.x, 0, b.group.position.z + push.z), 0.42));
     }
   }
 
@@ -320,7 +385,7 @@ export class PoliceSystem {
 
   private brainOf(vehicle: Vehicle): PoliceBrain {
     let brain = this.brains.get(vehicle);
-    if (!brain) { brain = { serial: this.serials++, path: [], index: 0, replanIn: 0, chasing: false, roaming: false, dwell: 0, knownTime: -1, mode: 'drive', shootIn: 0, contactIn: 0 }; this.brains.set(vehicle, brain); }
+    if (!brain) { brain = { serial: this.serials++, path: [], index: 0, replanIn: 0, chasing: false, roaming: false, dwell: 0, knownTime: -1, mode: 'drive', shootIn: 0, contactIn: 0, bumpIn: 0 }; this.brains.set(vehicle, brain); }
     return brain;
   }
 

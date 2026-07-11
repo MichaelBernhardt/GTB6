@@ -22,7 +22,7 @@ import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, REPORT_DELAY, SIGHT_RADIUS, type WitnessCandidate } from './systems/PoliceKnowledge';
-import { PoliceSystem, toggleSiren } from './systems/PoliceSystem';
+import { PoliceSystem, separationPush, toggleSiren } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
@@ -728,7 +728,25 @@ export class Game {
   }
 
   private handleVehicleCollisions(dt: number): void {
-    for (const vehicle of this.population.vehicles) this.vehicleCollisionCooldown.set(vehicle, Math.max(0, (this.vehicleCollisionCooldown.get(vehicle) ?? 0) - dt));
+    for (const vehicle of [...this.population.vehicles, ...this.police.vehicles]) this.vehicleCollisionCooldown.set(vehicle, Math.max(0, (this.vehicleCollisionCooldown.get(vehicle) ?? 0) - dt));
+    // JMPD vs civilian traffic: cruisers and cars physically exclude each other (police-police lives in PoliceSystem).
+    for (const unit of this.police.vehicles) {
+      if (unit.wrecked) continue;
+      for (const other of this.population.vehicles) {
+        if (other === this.activeVehicle || other.wrecked) continue;
+        const push = separationPush(other.group.position.x - unit.group.position.x, other.group.position.z - unit.group.position.z, 3.3);
+        if (!push) continue;
+        unit.group.position.x -= push.x; unit.group.position.z -= push.z;
+        other.group.position.x += push.x; other.group.position.z += push.z;
+        if ((this.vehicleCollisionCooldown.get(unit) ?? 0) <= 0) {
+          const impact = Math.abs(unit.speed - other.speed);
+          unit.takeDamage(impact * 0.3); other.takeDamage(impact * 0.25);
+          if (impact > 6 && unit.group.position.distanceTo(this.player.group.position) < 55) this.audio.collision(impact);
+          this.vehicleCollisionCooldown.set(unit, 0.8);
+        }
+        unit.speed *= 0.7; other.speed *= 0.7;
+      }
+    }
     const driven = this.activeVehicle; if (!driven) return;
     for (const other of [...this.population.vehicles, ...this.police.vehicles]) { // JMPD contact is a genuine collision, never scripted damage
       if (other === driven || driven.group.position.distanceToSquared(other.group.position) > 10) continue;
