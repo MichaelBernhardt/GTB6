@@ -67,6 +67,16 @@ export class AudioManager {
   taxiHoot(pan = 0): void { this.horn(pan); setTimeout(() => this.horn(pan), 210); }
   beep(): void { this.blip(1245, 0.09, 0.09); }
 
+  /** Positional driver hooter (held-up traffic leaning on the horn): level and pan from the listener;
+   *  minibus taxis fire their signature double-tap instead of a single blast. */
+  hornAt(x: number, z: number, hoot = false): void {
+    const level = distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 14, 120);
+    if (level < 0.02) return;
+    const pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.6;
+    this.horn(pan, 0.05 * level);
+    if (hoot) setTimeout(() => this.horn(pan, 0.05 * level), 210);
+  }
+
   /** JMPD dispatch coming over the air: a squelch crackle opens the channel, two Motorola-ish ANI
    *  alert tones, a static bed under the "transmission", then a squelch tail closes it. ~1s, desk-radio level. */
   policeRadio(): void {
@@ -561,12 +571,12 @@ export class AudioManager {
     return { sources: [crackle, bed], lfo, gain, pan, nextPop: this.now() };
   }
 
-  private horn(pan: number): void {
+  private horn(pan: number, peak = 0.014): void {
     const context = this.context; const master = this.master;
     if (!context || !master) return;
     const t = this.now(); const base = [352, 380, 442][Math.floor(Math.random() * 3)];
     const gain = context.createGain();
-    gain.gain.setValueAtTime(0.0001, t); gain.gain.exponentialRampToValueAtTime(0.014, t + 0.03); gain.gain.setValueAtTime(0.014, t + 0.32); gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.44);
+    gain.gain.setValueAtTime(0.0001, t); gain.gain.exponentialRampToValueAtTime(peak, t + 0.03); gain.gain.setValueAtTime(peak, t + 0.32); gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.44);
     const filter = context.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 900;
     const panner = context.createStereoPanner(); panner.pan.value = pan;
     for (const detune of [0, 9]) {
