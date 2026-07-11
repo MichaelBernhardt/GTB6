@@ -41,6 +41,26 @@ describe('console parser', () => {
     }
   });
 
+  it('parses busy levels with auto restoring 100%', () => {
+    expect(parseCommand('set busy 300')).toEqual({ kind: 'set-busy', percent: 300 });
+    expect(parseCommand('SET BUSY 100')).toEqual({ kind: 'set-busy', percent: 100 });
+    expect(parseCommand('set busy auto')).toEqual({ kind: 'set-busy', percent: 100 });
+    for (const bad of ['set busy', 'set busy lots', 'set busy -50', 'set busy 3x']) expect(parseCommand(bad).kind, bad).toBe('error');
+  });
+
+  it('parses ped and car target pins with auto clearing them', () => {
+    expect(parseCommand('set peds 60')).toEqual({ kind: 'set-peds', count: 60 });
+    expect(parseCommand('set cars 0')).toEqual({ kind: 'set-cars', count: 0 });
+    expect(parseCommand('set peds auto')).toEqual({ kind: 'set-peds' });
+    expect(parseCommand('set cars auto')).toEqual({ kind: 'set-cars' });
+    for (const bad of ['set peds', 'set cars many', 'set peds -3', 'set cars 1.5']) expect(parseCommand(bad).kind, bad).toBe('error');
+  });
+
+  it('shows crowd state via bare busy but not with arguments', () => {
+    expect(parseCommand('busy')).toEqual({ kind: 'busy' });
+    expect(parseCommand('busy 300').kind).toBe('error');
+  });
+
   it('rejects unknown input with an eish and a help hint', () => {
     const result = parseCommand('gimme money');
     expect(result.kind).toBe('error');
@@ -81,6 +101,10 @@ describe('runConsoleCommand', () => {
     giveCash: (amount) => `cash:${amount}`,
     dropStar: () => 'star',
     toggleShedding: () => 'eskom',
+    setBusy: (percent) => `busy:${percent}`,
+    setPedTarget: (count) => `peds:${count ?? 'auto'}`,
+    setCarTarget: (count) => `cars:${count ?? 'auto'}`,
+    busyInfo: () => 'crowd',
   };
 
   it('routes parsed commands to host handlers and echoes their feedback', () => {
@@ -93,5 +117,14 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('help', host)).toEqual(HELP_LINES);
     expect(runConsoleCommand('', host)).toEqual([]);
     expect(runConsoleCommand('wololo', host)[0]).toContain('Eish');
+  });
+
+  it('routes the crowd commands', () => {
+    expect(runConsoleCommand('set busy 300', host)).toEqual(['busy:300']);
+    expect(runConsoleCommand('set busy auto', host)).toEqual(['busy:100']);
+    expect(runConsoleCommand('set peds 60', host)).toEqual(['peds:60']);
+    expect(runConsoleCommand('set peds auto', host)).toEqual(['peds:auto']);
+    expect(runConsoleCommand('set cars 40', host)).toEqual(['cars:40']);
+    expect(runConsoleCommand('busy', host)).toEqual(['crowd']);
   });
 });

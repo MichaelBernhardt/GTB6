@@ -37,6 +37,7 @@ export class PopulationSystem {
   private hootCooldown = 0;
   private parkedSpots: Array<[number, number]> = [];
   private policePatrols: Pedestrian[] = [];
+  private ambientSerial = 200; // seeds variety (colours, wallets, bravery) for lifecycle-spawned agents
   private frame = 0;
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
@@ -227,6 +228,37 @@ export class PopulationSystem {
       .filter((vehicle) => !vehicle.playerControlled && !vehicle.disabled)
       .sort((a, b) => a.group.position.distanceToSquared(position) - b.group.position.distanceToSquared(position))[0];
     return nearest && nearest.group.position.distanceTo(position) < maxDistance ? nearest : undefined;
+  }
+
+  /** Lifecycle spawn: one ambient citizen placed on a sidewalk point the lifecycle system already vetted as hidden. */
+  spawnAmbientPedestrian(x: number, z: number): Pedestrian {
+    const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++);
+    ped.pickDestination(this.city.sidewalkPoints); this.pedestrians.push(ped); return ped;
+  }
+
+  /** Lifecycle spawn: one AI-driven vehicle dropped on a vetted lane node and routed immediately. */
+  spawnTrafficVehicle(x: number, z: number): Vehicle {
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'taxi']; // same mix as the hand-authored traffic
+    const kind = kinds[this.ambientSerial % kinds.length] ?? 'compact';
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, 0, z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][this.ambientSerial % 4]);
+    this.ambientSerial++;
+    vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
+    return vehicle;
+  }
+
+  /** Removes a ped and its bookkeeping. Hostiles keep their `hostiles` entry so spawnHostiles() won't refill a cleared crew. */
+  removePedestrian(ped: Pedestrian): void {
+    this.scene.remove(ped.group);
+    const index = this.pedestrians.indexOf(ped); if (index >= 0) this.pedestrians.splice(index, 1);
+    const patrol = this.policePatrols.indexOf(ped); if (patrol >= 0) this.policePatrols.splice(patrol, 1);
+  }
+
+  /** Removes a vehicle and its route plan; fire FX (children of the group) leave the scene with it. */
+  removeVehicle(vehicle: Vehicle): void {
+    this.scene.remove(vehicle.group);
+    const index = this.vehicles.indexOf(vehicle); if (index >= 0) this.vehicles.splice(index, 1);
+    const traffic = this.traffic.indexOf(vehicle); if (traffic >= 0) this.traffic.splice(traffic, 1);
+    this.trafficPlans.delete(vehicle);
   }
 
   private spawnVehicles(): void {

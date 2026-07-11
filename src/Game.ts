@@ -22,6 +22,7 @@ import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
+import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
 import { PoliceSystem } from './systems/PoliceSystem';
@@ -64,6 +65,8 @@ export class Game {
   private player: Player;
   private cameraController: CameraController;
   private population: PopulationSystem;
+  private lifecycle: LifecycleSystem;
+  private cameraForward = new THREE.Vector3();
   private combat: CombatSystem;
   private gore: GoreSystem;
   private pickups: PickupSystem;
@@ -124,6 +127,7 @@ export class Game {
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
+    this.lifecycle = new LifecycleSystem(this.city, this.population);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene);
     this.pickups = new PickupSystem(this.scene);
@@ -228,7 +232,24 @@ export class Game {
     },
     dropStar: () => this.consoleDropStar(),
     toggleShedding: () => { const event = this.loadShedding.force(); this.applyEskom(event); return event === 'start' ? 'Load shedding forced. Stage 4 begins.' : 'Load shedding called off. Power restored.'; },
+    setBusy: (percent) => { this.lifecycle.tuning = { busy: clampBusy(percent) }; return `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`; }, // fresh tuning also clears peds/cars pins
+    setPedTarget: (count) => {
+      this.lifecycle.tuning.peds = count === undefined ? undefined : Math.min(PED_TARGET_CAP, count);
+      return count === undefined ? `Pedestrian target back on the clock. ${this.describeCrowd()}` : `Pedestrian target pinned at ${this.lifecycle.tuning.peds}. ${this.describeCrowd()}`;
+    },
+    setCarTarget: (count) => {
+      this.lifecycle.tuning.cars = count === undefined ? undefined : Math.min(CAR_TARGET_CAP, count);
+      return count === undefined ? `Traffic target back on the clock. ${this.describeCrowd()}` : `Traffic target pinned at ${this.lifecycle.tuning.cars}. ${this.describeCrowd()}`;
+    },
+    busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
   };
+
+  private describeCrowd(): string {
+    const target = this.lifecycle.targets(this.dayNight.hour); const tuning = this.lifecycle.tuning;
+    const livePeds = this.population.pedestrians.filter(isAmbientPedestrian).length;
+    const liveCars = this.population.traffic.filter((vehicle) => !vehicle.wrecked && !vehicle.disabled).length;
+    return `Targets: ${target.peds} peds${tuning.peds !== undefined ? ' (pinned)' : ''} / ${target.traffic} cars${tuning.cars !== undefined ? ' (pinned)' : ''} — live ${livePeds} / ${liveCars}.`;
+  }
 
   private spawnConsoleVehicle(kind: VehicleKind): string {
     const spec = VEHICLE_SPECS[kind];
@@ -307,6 +328,10 @@ export class Game {
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
+    const forward = this.camera.getWorldDirection(this.cameraForward);
+    const guarded = new Set<Vehicle>();
+    for (const vehicle of [this.activeVehicle, this.transition?.vehicle, this.garageVehicle]) if (vehicle) guarded.add(vehicle);
+    this.lifecycle.update(dt, this.dayNight.hour, { x: focus.x, z: focus.z, dirX: forward.x, dirZ: forward.z }, guarded);
     this.city.update(dt);
     this.applyEskom(this.loadShedding.update(dt));
     this.dayNight.update(dt, focus, this.population.vehicles, this.police.vehicles, this.activeVehicle ?? this.transition?.vehicle);
