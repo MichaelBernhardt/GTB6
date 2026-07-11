@@ -16,6 +16,7 @@ import type { Pedestrian } from './entities/Pedestrian';
 import { Player } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
 import { CombatSystem } from './systems/CombatSystem';
+import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
 import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
@@ -329,6 +330,12 @@ export class Game {
 
   private updateOnFoot(dt: number): void {
     this.player.update(dt, this.input, this.cameraController.yaw, this.city);
+    for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
+      if (!bump.assault) continue;
+      this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
+      this.reportCrime(bump.position, bump.killed ? 24 : BUMP_ASSAULT_HEAT, { victims: [bump.ped], radius: FEAR_EVENTS.assault.radius, cityEvent: bump.killed ? 'civilian-murder' : 'civilian-assault' });
+      if (bump.killed) this.spawnDrops(bump.ped);
+    }
     if (this.updateWeaponWheel()) return;
     this.combat.tryReload(this.input);
     WEAPONS.forEach((spec, index) => { if (this.input.consume(`Digit${index + 1}`)) this.combat.select(spec.id); });
