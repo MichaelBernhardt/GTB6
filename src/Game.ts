@@ -5,7 +5,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
+import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, riderImpactDamage, rollDrops, shouldKnockOff, type PedKind } from './core/GameRules';
@@ -13,18 +13,20 @@ import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolvePurchase, weaponPrice } from './core/ShopRules';
 import type { Pedestrian } from './entities/Pedestrian';
-import { Player } from './entities/Player';
+import { Player, type CoverPose } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
+import { clampT, cornerSide, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
+import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
-import { PoliceSystem } from './systems/PoliceSystem';
+import { PoliceSystem, separationPush, toggleSiren } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
@@ -66,6 +68,8 @@ export class Game {
   private player: Player;
   private cameraController: CameraController;
   private population: PopulationSystem;
+  private lifecycle: LifecycleSystem;
+  private cameraForward = new THREE.Vector3();
   private combat: CombatSystem;
   private gore: GoreSystem;
   private pickups: PickupSystem;
@@ -120,6 +124,9 @@ export class Game {
   private taxiDestination?: THREE.Vector3;
   private taxiHailCooldown = 0;
   private brandishCooldown = 0;
+  private cover?: { spot: CoverSpot; t: number; peek: number; corner: -1 | 0 | 1; exitTimer: number };
+  private coverAvailable = false;
+  private coverLean = 0;
 
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
@@ -131,6 +138,7 @@ export class Game {
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
+    this.lifecycle = new LifecycleSystem(this.city, this.population);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene);
     this.pickups = new PickupSystem(this.scene);
@@ -235,7 +243,24 @@ export class Game {
     },
     dropStar: () => this.consoleDropStar(),
     toggleShedding: () => { const event = this.loadShedding.force(); this.applyEskom(event); return event === 'start' ? 'Load shedding forced. Stage 4 begins.' : 'Load shedding called off. Power restored.'; },
+    setBusy: (percent) => { this.lifecycle.tuning = { busy: clampBusy(percent) }; return `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`; }, // fresh tuning also clears peds/cars pins
+    setPedTarget: (count) => {
+      this.lifecycle.tuning.peds = count === undefined ? undefined : Math.min(PED_TARGET_CAP, count);
+      return count === undefined ? `Pedestrian target back on the clock. ${this.describeCrowd()}` : `Pedestrian target pinned at ${this.lifecycle.tuning.peds}. ${this.describeCrowd()}`;
+    },
+    setCarTarget: (count) => {
+      this.lifecycle.tuning.cars = count === undefined ? undefined : Math.min(CAR_TARGET_CAP, count);
+      return count === undefined ? `Traffic target back on the clock. ${this.describeCrowd()}` : `Traffic target pinned at ${this.lifecycle.tuning.cars}. ${this.describeCrowd()}`;
+    },
+    busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
   };
+
+  private describeCrowd(): string {
+    const target = this.lifecycle.targets(this.dayNight.hour); const tuning = this.lifecycle.tuning;
+    const livePeds = this.population.pedestrians.filter(isAmbientPedestrian).length;
+    const liveCars = this.population.traffic.filter((vehicle) => !vehicle.wrecked && !vehicle.disabled).length;
+    return `Targets: ${target.peds} peds${tuning.peds !== undefined ? ' (pinned)' : ''} / ${target.traffic} cars${tuning.cars !== undefined ? ' (pinned)' : ''} — live ${livePeds} / ${liveCars}.`;
+  }
 
   private spawnConsoleVehicle(kind: VehicleKind): string {
     const spec = VEHICLE_SPECS[kind];
@@ -314,6 +339,10 @@ export class Game {
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
+    const forward = this.camera.getWorldDirection(this.cameraForward);
+    const guarded = new Set<Vehicle>();
+    for (const vehicle of [this.activeVehicle, this.transition?.vehicle, this.garageVehicle]) if (vehicle) guarded.add(vehicle);
+    this.lifecycle.update(dt, this.dayNight.hour, { x: focus.x, z: focus.z, dirX: forward.x, dirZ: forward.z }, guarded);
     this.city.update(dt);
     this.applyEskom(this.loadShedding.update(dt));
     this.dayNight.update(dt, focus, this.population.vehicles, this.police.vehicles, this.activeVehicle ?? this.transition?.vehicle);
@@ -327,8 +356,17 @@ export class Game {
     const districtState = this.livingCity.district(this.city.districtAt(focus.x, focus.z));
     const reinforcementModifier = policeReinforcementModifier(districtState);
     this.population.setPolicePatrolCount(reinforcementModifier, focus);
-    this.police.update(dt, focus, Boolean(this.activeVehicle && !this.activeVehicle.spec.twoWheeler), this.wanted, this.knowledge, (amount) => this.damagePlayer(amount), reinforcementModifier); // two-wheelers grant no cover: JMPD gunfire hits the rider
-    if (this.activeVehicle?.spec.twoWheeler) { // an interceptor ram is exactly the kind of hit that unseats a rider
+    // Two-wheelers stay a vehicle pursuit (no standoff/arrest), but they grant no cover: JMPD fire lands on the rider.
+    const riddenBike = Boolean(this.activeVehicle?.spec.twoWheeler);
+    this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, this.knowledge, (amount) => this.damagePlayer(amount), reinforcementModifier,
+      (amount) => { if (riddenBike) this.damagePlayer(amount); else this.activeVehicle?.takeDamage(amount); }, Boolean(this.activeVehicle?.police && this.activeVehicle.sirenOn));
+    for (const event of this.police.consumeEvents()) {
+      if (event.kind === 'freeze') this.ui.notify('JMPD', '"FREEZE! Hands where I can see them!"', false);
+      else if (event.kind === 'officers') this.population.pedestrians.push(...event.officers);
+      else if (event.kind === 'reboard') for (const officer of event.officers) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
+      else this.population.vehicles.push(event.vehicle); // abandoned cruiser joins the civilian pool — enterable like any parked car
+    }
+    if (this.activeVehicle?.spec.twoWheeler) { // genuine interceptor contact is exactly the kind of hit that unseats a rider
       const bike = this.activeVehicle;
       const rammer = this.police.vehicles.find((unit) => !unit.wrecked && Math.abs(unit.speed) > 8 && unit.group.position.distanceTo(focus) < 5);
       if (rammer && shouldKnockOff(Math.abs(rammer.speed - bike.speed))) this.knockOff(bike);
@@ -415,7 +453,7 @@ export class Game {
   }
 
   private updateOnFoot(dt: number): void {
-    this.player.update(dt, this.input, this.cameraController.yaw, this.city);
+    this.player.update(dt, this.input, this.cameraController.yaw, this.city, this.updateCoverState(dt));
     for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
       if (!bump.assault) continue;
       this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
@@ -445,14 +483,53 @@ export class Game {
       if (collectTarget && collectTarget.position.distanceTo(this.player.group.position) < 8) { this.collectedItem = true; return; }
       if (this.tryMissionInteraction()) return;
       const vehicle = this.population.nearestEnterable(this.player.group.position);
+      const cruiser = this.police.stealableNear(this.player.group.position);
       const shop = this.shops.shopNear(this.player.group.position);
       if (shop?.kind === 'weapons') { this.openWeaponShop(); return; }
       if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
       const safehouse = this.safehouses.near(this.player.group.position);
       if (safehouse) { this.enterSafehouse(safehouse); return; }
-      if (shop?.driveIn && !vehicle) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
-      if (vehicle) this.beginEnter(vehicle);
+      if (shop?.driveIn && !vehicle && !cruiser) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
+      const pick = cruiser && (!vehicle || cruiser.group.position.distanceToSquared(this.player.group.position) < vehicle.group.position.distanceToSquared(this.player.group.position)) ? cruiser : vehicle;
+      if (pick === cruiser && cruiser) { this.police.release(cruiser); this.population.vehicles.push(cruiser); } // stolen cruiser leaves the JMPD fleet
+      if (pick) this.beginEnter(pick);
     }
+  }
+
+  /** GTA-V-style cover: Q snaps flat against the nearest building face (third person only — in first person Q is a
+   *  no-op), A/D slides along the wall, Ctrl at a corner leans out to shoot, mid-wall Ctrl just shows the crosshair
+   *  without stepping out. Game owns the cover position; Player only performs the pose. */
+  private updateCoverState(dt: number): CoverPose | undefined {
+    const position = this.player.group.position;
+    if (this.settings.cameraViewFoot === 0 || this.player.tumbling) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble knocks you out of cover
+    if (!this.cover) {
+      const spot = position.y === 0 ? nearestCoverSpot(position.x, position.z, this.city.colliders) : undefined;
+      this.coverAvailable = Boolean(spot);
+      if (!spot || !this.input.consume('KeyQ')) return undefined;
+      const t = clampT(spot, coverT(spot, position.x, position.z), PLAYER.radius);
+      this.cover = { spot, t, peek: 0, corner: cornerSide(spot, t, PLAYER.radius), exitTimer: 0 };
+    }
+    this.coverAvailable = false;
+    const cover = this.cover; const yaw = this.cameraController.yaw;
+    const side = Number(this.input.down('KeyD')) - Number(this.input.down('KeyA'));
+    const forward = Number(this.input.down('KeyW')) - Number(this.input.down('KeyS'));
+    const move = new THREE.Vector3(side, 0, -forward).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    cover.exitTimer = movingAway(move, cover.spot.normal) ? cover.exitTimer + dt : 0;
+    if (this.input.consume('KeyQ') || cover.exitTimer >= COVER_EXIT_HOLD) { this.cover = undefined; return undefined; }
+    const tangent = cover.spot.tangent;
+    const slide = side * Math.sign(Math.cos(yaw) * tangent.x - Math.sin(yaw) * tangent.z || 1); // A/D are screen-relative along the wall
+    cover.t = clampT(cover.spot, cover.t + slide * SLIDE_SPEED * dt, PLAYER.radius);
+    cover.corner = cornerSide(cover.spot, cover.t, PLAYER.radius);
+    const aiming = this.input.aiming && !this.combat.spec.melee;
+    cover.peek += ((aiming && cover.corner !== 0 ? 1 : 0) - cover.peek) * (1 - Math.exp(-dt * 10)); // peek only exists at a corner
+    const base = coverPosition(cover.spot, cover.t, PLAYER.radius);
+    const desired = new THREE.Vector3(
+      base.x + (tangent.x * cover.corner * PEEK_STEP + cover.spot.normal.x * PEEK_OUT) * cover.peek, 0,
+      base.z + (tangent.z * cover.corner * PEEK_STEP + cover.spot.normal.z * PEEK_OUT) * cover.peek);
+    const clamped = this.city.clampMove(position, desired, PLAYER.radius);
+    const snap = 1 - Math.exp(-dt * 14); // one fast lerp covers the entry snap and the slide/peek motion
+    position.x = THREE.MathUtils.lerp(position.x, clamped.x, snap); position.z = THREE.MathUtils.lerp(position.z, clamped.z, snap);
+    return { heading: aiming ? yaw + Math.PI : coverHeading(cover.spot), peek: cover.peek, twist: cover.corner * cover.peek * 0.45, moving: slide !== 0 };
   }
 
   /** Shared aftermath for a ranged player shot: witnesses, fear, gore, and drops — on foot or drive-by. */
@@ -546,6 +623,7 @@ export class Game {
       if (this.input.consume('KeyT')) this.handleTaxiKey(vehicle);
       this.updateTaxiJob(dt, vehicle);
     }
+    if (vehicle.police && this.input.consume('KeyG')) { vehicle.sirenOn = toggleSiren(vehicle); this.ui.notify(vehicle.sirenOn ? 'Siren on' : 'Siren off', vehicle.sirenOn ? 'Clear the road. You are the law now.' : 'Back to creeping quietly.'); }
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
 
@@ -676,6 +754,7 @@ export class Game {
   }
 
   private beginEnter(vehicle: Vehicle): void {
+    this.cover = undefined;
     this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true; this.prevDrivenSpeed = 0;
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.6); this.player.group.position.copy(vehicle.group.position).add(side);
     if (vehicle.occupied) {
@@ -882,7 +961,7 @@ export class Game {
     if (watching) { this.ui.notify('Pik-’n’-Spray', 'The JMPD is watching — lose them first.', false); return; }
     const price = detailerPrice(this.wanted.level);
     if (!this.economy.spend(price)) { this.ui.notify('Pik-’n’-Spray', `Detailing costs R${price}. Come back with cash, boss.`, false); return; }
-    vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset();
+    vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice();
     this.ui.screenFade(); this.audio.ui(true);
     this.ui.notify('Pik-’n’-Spray', `Fresh coat, clean record. Sharp sharp. -R${price}`); this.persist();
   }
@@ -968,7 +1047,12 @@ export class Game {
     const riding = Boolean(this.player.inVehicle && this.activeVehicle?.spec.twoWheeler); // riders stay visible except in first person
     this.player.setVisible(riding ? !firstPerson : !this.player.inVehicle && !(firstPerson && !this.activeVehicle && !this.transition));
     this.activeVehicle?.setFirstPerson(firstPerson);
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee);
+    const cover = this.cover;
+    const leanTarget = cover && cover.corner !== 0 && !this.activeVehicle
+      ? Math.sign(Math.cos(this.cameraController.yaw) * cover.spot.tangent.x * cover.corner - Math.sin(this.cameraController.yaw) * cover.spot.tangent.z * cover.corner || 1) * (0.55 + 0.45 * cover.peek)
+      : 0; // pull the camera toward the exposed corner for visibility over the shoulder
+    this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), this.settings.mouseSensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee, this.coverLean);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -990,9 +1074,27 @@ export class Game {
   }
 
   private handleVehicleCollisions(dt: number): void {
-    for (const vehicle of this.population.vehicles) this.vehicleCollisionCooldown.set(vehicle, Math.max(0, (this.vehicleCollisionCooldown.get(vehicle) ?? 0) - dt));
+    for (const vehicle of [...this.population.vehicles, ...this.police.vehicles]) this.vehicleCollisionCooldown.set(vehicle, Math.max(0, (this.vehicleCollisionCooldown.get(vehicle) ?? 0) - dt));
+    // JMPD vs civilian traffic: cruisers and cars physically exclude each other (police-police lives in PoliceSystem).
+    for (const unit of this.police.vehicles) {
+      if (unit.wrecked) continue;
+      for (const other of this.population.vehicles) {
+        if (other === this.activeVehicle || other.wrecked) continue;
+        const push = separationPush(other.group.position.x - unit.group.position.x, other.group.position.z - unit.group.position.z, 3.3);
+        if (!push) continue;
+        unit.group.position.x -= push.x; unit.group.position.z -= push.z;
+        other.group.position.x += push.x; other.group.position.z += push.z;
+        if ((this.vehicleCollisionCooldown.get(unit) ?? 0) <= 0) {
+          const impact = Math.abs(unit.speed - other.speed);
+          unit.takeDamage(impact * 0.3); other.takeDamage(impact * 0.25);
+          if (impact > 6 && unit.group.position.distanceTo(this.player.group.position) < 55) this.audio.collision(impact);
+          this.vehicleCollisionCooldown.set(unit, 0.8);
+        }
+        unit.speed *= 0.7; other.speed *= 0.7;
+      }
+    }
     const driven = this.activeVehicle; if (!driven) return;
-    for (const other of this.population.vehicles) {
+    for (const other of [...this.population.vehicles, ...this.police.vehicles]) { // JMPD contact is a genuine collision, never scripted damage
       if (other === driven || driven.group.position.distanceToSquared(other.group.position) > 10) continue;
       const direction = driven.group.position.clone().sub(other.group.position).setY(0).normalize(); driven.group.position.addScaledVector(direction, 0.4); other.group.position.addScaledVector(direction, -0.35);
       if ((this.vehicleCollisionCooldown.get(driven) ?? 0) <= 0) {
@@ -1018,9 +1120,11 @@ export class Game {
           const taxiHint = !isTaxiKind(this.activeVehicle.spec.kind) ? ''
             : this.taxiRide.phase !== 'idle' ? '  ·  T  Cancel ride'
             : `  ·  T  ${this.taxiRide.duty === 'available' ? 'Go occupied' : 'Go available'}`;
-          prompt = `E  Exit vehicle  ·  F  Recover${taxiHint}`;
+          const sirenHint = this.activeVehicle.police ? '  ·  G  Siren' : '';
+          prompt = `E  Exit vehicle  ·  F  Recover${taxiHint}${sirenHint}`;
         }
       }
+      else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (this.missions.objective?.kind === 'choice') prompt = 'E  Decide the fate of Jozi Arms';
@@ -1029,8 +1133,9 @@ export class Game {
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
+      else if (this.coverAvailable) prompt = 'Q  Take cover';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
-      else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
+      else if (this.population.nearestEnterable(focus) || this.police.stealableNear(focus)) prompt = 'E  Enter vehicle';
     }
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
@@ -1045,7 +1150,7 @@ export class Game {
     const crosshair = this.mode === 'playing' && !this.transition && !this.weaponWheelOpen && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile);
     this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
     const markers = [...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : []), ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : [])];
-    const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
+    const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact && !ped.police).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z })); // arrest officers are on the map as JMPD, not as red hostiles
     this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles, this.settings.minimapZoom);
   }
 
@@ -1056,12 +1161,16 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.cover = undefined; this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     this.endTaxiShift(this.activeVehicle);
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
-    this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset(); this.mode = 'playing';
+    this.transition = undefined; this.cover = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.mode = 'playing';
+  }
+  /** Tears down the JMPD response and drops its foot officers from the population roster. */
+  private clearPolice(): void {
+    for (const officer of this.police.reset()) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses }; this.saveManager.save(this.save); }

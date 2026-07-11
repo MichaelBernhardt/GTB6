@@ -35,7 +35,7 @@ export class CameraController {
 
   constructor(private camera: THREE.PerspectiveCamera) { this.baseFov = camera.fov; }
 
-  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true): void {
+  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0): void {
     const firstPerson = sanitizeView(view) === 0;
     if (firstPerson && vehicle) { this.lookOffset = (this.lookOffset - input.mouseDX * sensitivity) * Math.exp(-dt * 1.4); this.yaw = vehicleHeading + Math.PI + this.lookOffset; }
     else { this.lookOffset = 0; this.yaw -= input.mouseDX * sensitivity; }
@@ -49,7 +49,7 @@ export class CameraController {
     const height = vehicle ? THREE.MathUtils.lerp(baseHeight, Math.min(baseHeight, VEHICLE_VIEW_HEIGHTS[1]), this.aimBlend) : THREE.MathUtils.lerp(1.45, 1.78, this.aimBlend);
     this.focus.set(target.x, target.y + height, target.z);
     if (!vehicle) {
-      const shoulder = 0.98 * this.aimBlend; // centered when relaxed, over the right shoulder while aiming
+      const shoulder = 0.98 * this.aimBlend + coverLean; // centered when relaxed, over the right shoulder while aiming; cover pulls toward the exposed corner
       this.focus.x += Math.cos(this.yaw) * shoulder;
       this.focus.z -= Math.sin(this.yaw) * shoulder;
     }
