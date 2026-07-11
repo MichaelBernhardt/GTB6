@@ -16,7 +16,12 @@ export const FOV_COS = 0.5; // cos(60°): half-angle of the ~120° forward visio
 
 export const LIFECYCLE_INTERVAL = 3; // real seconds between census passes
 export const CHANGE_BUDGET = 3; // max spawns+despawns per pass, so the street shifts gradually
-export const SPAWN_MIN_DISTANCE = 60; export const SPAWN_MAX_DISTANCE = 380;
+export const SPAWN_MIN_DISTANCE = 60;
+// Widened from 380 for the 36000u map: a fixed-unit band covers 1/6 the real ground it used to, so
+// the census had less road to populate. 470 fills more of the active bubble while staying inside the
+// player-relative AI_FREEZE_RADIUS (500) so fresh spawns don't immediately freeze. The busy dial
+// (`set busy`) scales the target counts for the rest.
+export const SPAWN_MAX_DISTANCE = 470;
 
 /** True when (x,z) is invisible to the viewer: past SIGHT_FAR, or outside the forward cone and past SIGHT_NEAR. */
 export function outOfSight(view: ViewPoint, x: number, z: number): boolean {

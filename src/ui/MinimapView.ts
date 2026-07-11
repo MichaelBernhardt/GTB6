@@ -4,11 +4,13 @@ export interface MapPoint { x: number; z: number; }
 export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; }
 
 /** Units-to-pixels factors, ordered widest view to tightest, over the 240px minimap canvas.
- *  'City' (0.04) frames the whole 6000u generated map (240/0.04 = 6000u across); 'Far' shows a
- *  ~2.5km slice; index 3 (Standard) keeps the original on-foot fixed scale. */
-export const MINIMAP_ZOOM_SCALES = [0.04, 0.095, 0.2, 0.29, 0.4, 0.54] as const;
-export const MINIMAP_ZOOM_NAMES = ['City', 'Far', 'Wide', 'Standard', 'Close', 'Street'] as const;
-export const DEFAULT_MINIMAP_ZOOM = 3; // Standard
+ *  'City' (0.00667) frames the whole 36000u generated map (240/0.00667 ≈ 36000u across) — though at
+ *  that scale the in-game MapView (M key) is the real whole-map view; 'Metro'/'District' cover the
+ *  larger driving radii the 6x scale-up introduced, and 'Standard'..'Street' keep the original
+ *  on-foot fixed scales for local navigation. */
+export const MINIMAP_ZOOM_SCALES = [0.00667, 0.02, 0.045, 0.095, 0.2, 0.29, 0.4, 0.54] as const;
+export const MINIMAP_ZOOM_NAMES = ['City', 'Metro', 'District', 'Far', 'Wide', 'Standard', 'Close', 'Street'] as const;
+export const DEFAULT_MINIMAP_ZOOM = 5; // Standard (on-foot fixed scale)
 
 export function sanitizeMinimapZoom(raw: unknown): number {
   return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 && raw < MINIMAP_ZOOM_SCALES.length ? raw : DEFAULT_MINIMAP_ZOOM;

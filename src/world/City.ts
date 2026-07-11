@@ -9,6 +9,7 @@ import {
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
+  METRES_PER_UNIT,
   nearestDistrict,
   pointInPolygon,
   WATER_POLYGONS,
@@ -43,9 +44,17 @@ const seeded = (x: number, z: number, salt = 0): number => {
   return value - Math.floor(value);
 };
 
-export const ROAD_SAMPLE_SPACING = 12;
-export const VEHICLE_NAV_JOIN = 15;
-export const PED_NAV_JOIN = 18;
+/**
+ * Unit-denominated layout spacings were authored against the 2.94 m/unit (6000u) map. They must
+ * track the map footprint so real-world density stays constant at any TARGET_SIZE: without this,
+ * the 6x scale-up to 36000u would sample 6x more nav nodes / sidewalk points per road (36x the
+ * nav-graph build cost) and space roadside buildings 6x closer in real terms. LAYOUT_SCALE is 1.0
+ * at the old scale and ~6.0 at 36000u, so ROAD_SAMPLE_SPACING/NAV joins hold the same *real* pitch.
+ */
+const LAYOUT_SCALE = 2.94 / METRES_PER_UNIT;
+export const ROAD_SAMPLE_SPACING = Math.round(12 * LAYOUT_SCALE);
+export const VEHICLE_NAV_JOIN = Math.round(15 * LAYOUT_SCALE);
+export const PED_NAV_JOIN = Math.round(18 * LAYOUT_SCALE);
 /** Static geometry merges per material per grid cell this size, keeping frustum culling useful. */
 export const MERGE_CHUNK_SIZE = 976;
 /** Lakes/dams at least this large (units²) get the tiered wavy/reflective water treatment. */
@@ -556,7 +565,7 @@ export class City {
     this.buildWaterTower();
     let variant = 0; let placed = 0;
     // This build round only masses the CBD test blocks around spawn (data-driven zones); the rest
-    // of the 6000u map stays bare roads. Widen TEST_BUILDING_ZONES + rebuild to populate more.
+    // of the 36000u map stays bare roads. Widen TEST_BUILDING_ZONES + rebuild to populate more.
     for (let index = 0; index < this.roadsidePoints.length && placed < TEST_BUILDING_BUDGET; index += 2) {
       const point = this.roadsidePoints[index]!;
       if (point.width < 7) continue;

@@ -34,14 +34,16 @@ export const MIN_WATER_AREA_M2 = 4000;
 
 /**
  * Target square footprint (game units). The real bbox is fitted inside, aspect preserved.
- * 6000 (~2.94 m/unit with the coast+corridor graft) is the Phase-2 driveable scale. It was
- * bumped from 4700 (+27%) on owner direction to give the dense CBD blocks breathing room:
- * ROAD_WIDTHS are game-scale (fixed) while the layout is map-scale, so scaling the footprint
- * up directly widens the gaps between roads — typical CBD block interiors go from ~50 u to
- * ~64 u across, comfortably fitting the game's ~15-40 u building parcels. A 2-unit-wide car
- * still gets a two-lane carriageway.
+ * 36000 (~0.49 m/unit with the coast+corridor graft) is the Phase-2 driveable scale, a 6x
+ * scale-up from the previous 6000 on owner direction ("way too compressed ... scale up by
+ * about a factor of 6"). ROAD_WIDTHS/TRACK_WIDTHS and the runway/pier/taxiway *widths* are
+ * game-scale (fixed) while the whole layout is map-scale, so the 6x goes entirely into block
+ * interiors and drive distances: typical CBD block interiors open from ~64 u to ~384 u across,
+ * and every metre-denominated feature below (corridor, runway/pier LENGTHS, dam, ring, meanders)
+ * scales with the map automatically because it is converted through fit.scale. A 2-unit-wide car
+ * still gets the same two-lane carriageway; there is just far more road between the lanes.
  */
-export const TARGET_SIZE = 6000;
+export const TARGET_SIZE = 36000;
 
 /** Game-unit road widths per OSM highway class. */
 export const ROAD_WIDTHS: Record<string, number> = {
@@ -105,8 +107,9 @@ export const RING_KIND = 'trunk' as const;
 export const CAPE_BBOX = { south: -33.93, west: 18.37, north: -33.87, east: 18.42 } as const;
 /**
  * Rural corridor width between the Joburg west edge and the coastal strip (metres).
- * Trimmed from 3300 m alongside the TARGET_SIZE bump so the corridor stays ~900 game units
- * wide (a "little drive") rather than ballooning with the larger footprint.
+ * Metre-denominated, so it scales with the map: at the 36000 u footprint (~0.49 m/u) the 2700 m
+ * corridor is a ~5500 u drive — the "little drive between them" grows proportionally with the
+ * scale-up, exactly as intended.
  */
 export const CORRIDOR_WIDTH_M = 2700;
 /** Coastal road sits this far inland of the waterline. */
@@ -154,7 +157,12 @@ export const MEANDER_MIN_VERTICES = 5;
 /** Regional airport in the southern farmland corridor. Base name is parodied via overrides. */
 export const AIRPORT_NAME = 'OR Tambourine Field';
 export const AIRPORT_ACCESS_ROAD_NAME = 'Aviator Avenue';
-/** Runway length (metres) — the owner asked for ~350-450 u; at ~2.94 m/u that is ~1250 m. */
+/**
+ * Runway length (metres). Metre-denominated, so it scales with the map: at ~0.49 m/u the 1250 m
+ * runway is ~2550 u long (up from ~425 u at the old 6000 footprint) — the runway *width* stays
+ * game-scale (14 u, set in process.ts), so planes get a long, proportionate strip rather than a
+ * postage stamp on the enlarged map.
+ */
 export const AIRPORT_RUNWAY_LENGTH_M = 1250;
 export const AIRPORT_RUNWAY_BEARING_RAD = 0.32; // gentle NE-SW tilt
 

@@ -30,6 +30,9 @@ import {
 } from './placements';
 
 const HALF = MAP_WORLD_SIZE / 2;
+// Distance thresholds authored on the 6000u map scale with the footprint (roads/blocks are ~6x further
+// apart at 36000u). Real kerb clearances (edge, pad-fronts-building) are NOT scaled.
+const SCALE = MAP_WORLD_SIZE / 6000;
 const inBounds = ({ x, z }: { x: number; z: number }): boolean => Math.abs(x) < HALF && Math.abs(z) < HALF;
 
 describe('data-driven anchors', () => {
@@ -59,13 +62,13 @@ describe('data-driven anchors', () => {
 
   it('spawns the player on a CBD sidewalk', () => {
     expect(districtAt(PLAYER_SPAWN[0], PLAYER_SPAWN[2])).toBe('Joburg CBD');
-    expect(Math.hypot(PLAYER_SPAWN[0] - CBD_CENTER.x, PLAYER_SPAWN[2] - CBD_CENTER.z)).toBeLessThan(160);
+    expect(Math.hypot(PLAYER_SPAWN[0] - CBD_CENTER.x, PLAYER_SPAWN[2] - CBD_CENTER.z)).toBeLessThan(160 * SCALE);
   });
 
   it('keeps the shops walking distance from the spawn', () => {
     for (const [name, site] of [['arms', ARMS_SITE], ['spray', SPRAY_SITE], ['garage', GARAGE_SITE], ['hotdog', HOTDOG_SITE], ['safehouse', SAFEHOUSE_SITE]] as const) {
       const distance = Math.hypot(site.pad.x - PLAYER_SPAWN[0], site.pad.z - PLAYER_SPAWN[2]);
-      expect(distance, `${name} close to spawn`).toBeLessThan(320);
+      expect(distance, `${name} close to spawn`).toBeLessThan(320 * SCALE);
       expect(Math.hypot(site.pad.x - site.building.x, site.pad.z - site.building.z), `${name} pad fronts its building`).toBeLessThan(16);
     }
   });
@@ -77,7 +80,7 @@ describe('data-driven anchors', () => {
       expect(edge, `${spot.kind} hugs a kerb`).toBeLessThan(6);
       expect(edge, `${spot.kind} not mid-lane`).toBeGreaterThan(-1.5);
     }
-    expect(Math.hypot(PORTIA_CAR_SPOT.x - PORTIA_START.x, PORTIA_CAR_SPOT.z - PORTIA_START.z)).toBeLessThan(60); // mission car near its contact
+    expect(Math.hypot(PORTIA_CAR_SPOT.x - PORTIA_START.x, PORTIA_CAR_SPOT.z - PORTIA_START.z)).toBeLessThan(60 * SCALE); // mission car near its contact
     expect(distanceToRoadEdge(GTI_SPOT.x, GTI_SPOT.z)).toBeLessThan(6);
   });
 
@@ -102,7 +105,7 @@ describe('data-driven anchors', () => {
     const named = SPAWN_SIGN_JUNCTIONS.filter((junction) => parody.test(junction.roadA) || parody.test(junction.roadB));
     expect(named.length).toBeGreaterThanOrEqual(3);
     for (const junction of SPAWN_SIGN_JUNCTIONS) {
-      expect(Math.hypot(junction.x - PLAYER_SPAWN[0], junction.z - PLAYER_SPAWN[2])).toBeLessThan(160);
+      expect(Math.hypot(junction.x - PLAYER_SPAWN[0], junction.z - PLAYER_SPAWN[2])).toBeLessThan(160 * SCALE);
     }
   });
 

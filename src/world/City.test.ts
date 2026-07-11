@@ -36,7 +36,8 @@ describe('generated Joburg road topology', () => {
     expect(CITY_JUNCTIONS.length).toBeLessThanOrEqual(80); // visual/update budget
     expect(CITY_JUNCTIONS.every((junction) => junction.roadA.length > 0 && junction.roadB.length > 0 && junction.roadA !== junction.roadB)).toBe(true);
     expect(CITY_JUNCTIONS.every((junction) => signalCornerOffset(junction.widest) > junction.widest / 2 + 2)).toBe(true);
-    const cbdSignals = CITY_JUNCTIONS.filter((junction) => Math.hypot(junction.x - CBD_CENTER.x, junction.z - CBD_CENTER.z) < 400);
+    // Radius scales with the footprint (junctions are ~6x further apart in units at 36000u).
+    const cbdSignals = CITY_JUNCTIONS.filter((junction) => Math.hypot(junction.x - CBD_CENTER.x, junction.z - CBD_CENTER.z) < 400 * (MAP_WORLD_SIZE / 6000));
     expect(cbdSignals.length).toBeGreaterThanOrEqual(3); // robots are visible around the spawn district
   });
 

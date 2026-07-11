@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN } from '../world/City';
+import { MAP_WORLD_SIZE } from '../world/mapData';
 import { bridgeIslands, buildNavGraph, components, findPath, nearestNode, ProgressWatchdog, replanInterval, RoutePlanner, STUCK_EPSILON, STUCK_TIMEOUT, type NavGraph } from './NavGraph';
 
 const line = (count: number, spacing: number, x0 = 0, z0 = 0): { x: number; z: number }[] =>
@@ -86,8 +87,10 @@ describe('city nav graphs', () => {
   });
 
   it('routes across the whole city between distant nodes', () => {
-    const start = nearestNode(vehicleNav, -330, 240);
-    const goal = nearestNode(vehicleNav, 300, -260);
+    // Probe coords scale with the footprint so the two nodes stay genuinely cross-city at 36000u.
+    const s = MAP_WORLD_SIZE / 6000;
+    const start = nearestNode(vehicleNav, -330 * s, 240 * s);
+    const goal = nearestNode(vehicleNav, 300 * s, -260 * s);
     const path = findPath(vehicleNav, start, goal);
     expect(path).toBeDefined();
     expect(path!.length).toBeGreaterThan(20);

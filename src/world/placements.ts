@@ -15,6 +15,7 @@ import {
   distanceToRoadEdge,
   GENERATED_ROADS,
   landmark,
+  METRES_PER_UNIT,
   SIGNAL_JUNCTIONS,
   WATER_POLYGONS,
   DIRT_POLYGONS,
@@ -38,6 +39,14 @@ export interface ShopSite {
 }
 
 export interface ReservedPad { x: number; z: number; radius: number; }
+
+/**
+ * The block-away "near" nudges and search radii below were authored against the 2.94 m/unit
+ * (6000u) layout. P tracks the map footprint (1.0 at the old scale, ~6.0 at 36000u) so anchors
+ * land on the same real block and the named-road search still reaches it after the 6x scale-up.
+ * Small kerb clearances (clearance/ownRadius/minEdge) are real geometry and stay unscaled.
+ */
+const P = 2.94 / METRES_PER_UNIT;
 
 const QUARTER = Math.PI / 2;
 /** Snap a yaw to the nearest quarter turn so box colliders stay axis-aligned. */
@@ -87,7 +96,8 @@ interface SpotQuery {
 /** Walks the matching polylines around `near` (samples every ~8u) and returns the clearest kerbside spot. */
 function bestKerbSpot(query: SpotQuery): KerbSpot {
   const { near, clearance, ownRadius, searchRadius = 200 } = query;
-  const searchSq = searchRadius * searchRadius;
+  const effRadius = searchRadius * P; // reach scales with the footprint so named roads stay findable
+  const searchSq = effRadius * effRadius;
   let best: KerbSpot | undefined; let bestScore = -Infinity;
   const consider = (px: number, pz: number, dirX: number, dirZ: number, road: GeneratedRoad, minEdge: number): void => {
     for (const side of [1, -1] as const) {
@@ -182,13 +192,13 @@ export const SPAWN_POINT: MapPt = spawnPoint;
 // ---- Shops --------------------------------------------------------------------
 
 /** Jozi Arms: Martial Street, near the spawn corner. */
-export const ARMS_SITE = shopSite('Martial Street', { x: CBD_CENTER.x - 40, z: CBD_CENTER.z }, 8.2, 3.8, 8, 3);
+export const ARMS_SITE = shopSite('Martial Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z }, 8.2, 3.8, 8, 3);
 /** Pik-'n'-Spray: Eish-loff Street, a block south-east (drive-in). */
-export const SPRAY_SITE = shopSite('Eish-loff Street', { x: CBD_CENTER.x + 55, z: CBD_CENTER.z + 60 }, 9.6, 3.4, 9, 4);
+export const SPRAY_SITE = shopSite('Eish-loff Street', { x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z + 60 * P }, 9.6, 3.4, 9, 4);
 /** Garage: Loadshed Lane, north-west block (drive-in storage). */
-export const GARAGE_SITE = shopSite('Loadshed Lane', { x: CBD_CENTER.x - 25, z: CBD_CENTER.z - 45 }, 8, 3.4, 7.5, 3.5);
+export const GARAGE_SITE = shopSite('Loadshed Lane', { x: CBD_CENTER.x - 25 * P, z: CBD_CENTER.z - 45 * P }, 8, 3.4, 7.5, 3.5);
 /** Boerie Stand: Fax Street sidewalk. */
-export const HOTDOG_SITE = shopSite('Fax Street', { x: CBD_CENTER.x + 25, z: CBD_CENTER.z - 38 }, 3, 1.9, 3, 0.8);
+export const HOTDOG_SITE = shopSite('Fax Street', { x: CBD_CENTER.x + 25 * P, z: CBD_CENTER.z - 38 * P }, 3, 1.9, 3, 0.8);
 
 /** Stored vehicle pose inside the garage, nose pointing out the door. */
 export const GARAGE_PARK: PlacedSite = {
@@ -204,7 +214,7 @@ export const GARAGE_EXIT: MapPt = {
 // ---- Safehouse ------------------------------------------------------------------
 
 /** Main Main Mansions: a flat on Main Main Street, a block from spawn. */
-export const SAFEHOUSE_SITE = shopSite('Main Main Street', { x: CBD_CENTER.x - 70, z: CBD_CENTER.z - 20 }, 9.4, 3.6, 9, 3.5);
+export const SAFEHOUSE_SITE = shopSite('Main Main Street', { x: CBD_CENTER.x - 70 * P, z: CBD_CENTER.z - 20 * P }, 9.4, 3.6, 9, 3.5);
 
 // ---- Districts / landmarks used by missions --------------------------------------
 
@@ -218,7 +228,7 @@ const zooLakeCenter: MapPt = zooLake ? { x: zooLake.cx, z: zooLake.cz } : { x: b
 // ---- Missions ---------------------------------------------------------------------
 
 /** Auntie Portia (Couch Run): You-Bet Street, around the corner from spawn. */
-export const PORTIA_START = walkSpot('You-Bet Street', { x: CBD_CENTER.x + 30, z: CBD_CENTER.z + 25 }, 3, 5);
+export const PORTIA_START = walkSpot('You-Bet Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z + 25 * P }, 3, 5);
 /** The three couch drops: Newtown, Braamfontein, Hillbrow roadside spots. */
 export const DELIVERY_STOPS: MapPt[] = [
   walkSpotNear({ x: newtown.x, z: newtown.z }, 3, 5),
@@ -227,21 +237,21 @@ export const DELIVERY_STOPS: MapPt[] = [
 ];
 
 /** Bra Vusi (Hot Copper): Pothole Street block. */
-export const VUSI_START = walkSpot('Pothole Street', { x: CBD_CENTER.x + 30, z: CBD_CENTER.z - 75 }, 3, 5);
+export const VUSI_START = walkSpot('Pothole Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z - 75 * P }, 3, 5);
 /** Braamfontein lock-up: roadside near the district centre. */
-export const LOCKUP_SPOT = walkSpotNear({ x: braamfontein.x - 30, z: braamfontein.z + 20 }, 4.5, 6);
+export const LOCKUP_SPOT = walkSpotNear({ x: braamfontein.x - 30 * P, z: braamfontein.z + 20 * P }, 4.5, 6);
 
 /** Candice (Rank Business): Jan Smuts Avenue at Zoo Lake. */
 export const CANDICE_START = walkSpot('Jan Smuts Avenue', zooLakeCenter, 3, 5);
 /** The stolen-permit taxi terminal: Wemmer Jubilee Road, south of the CBD (industrial belt). */
-const terminalSpot = bestKerbSpot({ name: 'Wemmer Jubilee Road', near: { x: CBD_CENTER.x + 20, z: CBD_CENTER.z + 120 }, clearance: 6, ownRadius: 12, minEdge: 5 });
+const terminalSpot = bestKerbSpot({ name: 'Wemmer Jubilee Road', near: { x: CBD_CENTER.x + 20 * P, z: CBD_CENTER.z + 120 * P }, clearance: 6, ownRadius: 12, minEdge: 5 });
 export const TERMINAL_SPOT: MapPt = { x: terminalSpot.x, z: terminalSpot.z };
 export const PERMIT_SPOT: MapPt = {
   x: terminalSpot.x + (terminalSpot.x - terminalSpot.roadX) * 0.7,
   z: terminalSpot.z + (terminalSpot.z - terminalSpot.roadZ) * 0.7,
 };
 /** Escape marker: back on Albertina Sisulu, north-west of the terminal. */
-export const ESCAPE_SPOT = walkSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 120, z: CBD_CENTER.z - 40 }, 3, 5);
+export const ESCAPE_SPOT = walkSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 120 * P, z: CBD_CENTER.z - 40 * P }, 3, 5);
 /** Braai kiosk on the Zoo Lake shore. */
 export const KIOSK_SPOT = walkSpotNear(zooLakeCenter, 3.4, 5);
 
@@ -265,22 +275,22 @@ const parkedEntry = (kind: string, site: PlacedSite, color?: number): ParkedVehi
 /** Auntie Portia's yellow Citi Golf — mission-critical, kerb near her driveway. */
 export const PORTIA_CAR_SPOT = kerbVehicleSpot('You-Bet Street', { x: PORTIA_START.x, z: PORTIA_START.z });
 /** The hot red GTI — mission-critical, Commissioner Street kerb. */
-export const GTI_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x + 55, z: CBD_CENTER.z - 55 });
+export const GTI_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z - 55 * P });
 
 export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('compact', PORTIA_CAR_SPOT, 0xf1c232),
   parkedEntry('sport', GTI_SPOT, 0xd83a40),
-  parkedEntry('van', kerbVehicleSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 150, z: CBD_CENTER.z - 45 })),
-  parkedEntry('compact', kerbVehicleSpot('Hairyson Street', { x: CBD_CENTER.x - 35, z: CBD_CENTER.z - 60 })),
-  parkedEntry('sport', kerbVehicleSpot('Eish-loff Street', { x: CBD_CENTER.x + 48, z: CBD_CENTER.z + 110 }), 0x3f6faa),
-  parkedEntry('van', kerbVehicleSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 80, z: CBD_CENTER.z + 140 })),
-  parkedEntry('compact', kerbVehicleSpot('Loadshed Lane', { x: CBD_CENTER.x - 25, z: CBD_CENTER.z - 90 })),
-  parkedEntry('cab', kerbVehicleSpot('Risk-It Street', { x: CBD_CENTER.x + 5, z: CBD_CENTER.z - 55 })),
-  parkedEntry('cab', kerbVehicleSpot('Fax Street', { x: CBD_CENTER.x + 60, z: CBD_CENTER.z - 35 })),
-  parkedEntry('bicycle', kerbVehicleSpot('Main Main Street', { x: CBD_CENTER.x + 25, z: CBD_CENTER.z - 20 }, 2.4)),
-  parkedEntry('bicycle', kerbVehicleSpot('Pothole Street', { x: CBD_CENTER.x - 40, z: CBD_CENTER.z - 78 }, 2.4), 0xc44f9a),
-  parkedEntry('motorbike', kerbVehicleSpot('You-Bet Street', { x: CBD_CENTER.x + 32, z: CBD_CENTER.z + 55 }, 2)),
-  parkedEntry('motorbike', kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 45, z: CBD_CENTER.z + 25 }, 2)),
+  parkedEntry('van', kerbVehicleSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 150 * P, z: CBD_CENTER.z - 45 * P })),
+  parkedEntry('compact', kerbVehicleSpot('Hairyson Street', { x: CBD_CENTER.x - 35 * P, z: CBD_CENTER.z - 60 * P })),
+  parkedEntry('sport', kerbVehicleSpot('Eish-loff Street', { x: CBD_CENTER.x + 48 * P, z: CBD_CENTER.z + 110 * P }), 0x3f6faa),
+  parkedEntry('van', kerbVehicleSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 80 * P, z: CBD_CENTER.z + 140 * P })),
+  parkedEntry('compact', kerbVehicleSpot('Loadshed Lane', { x: CBD_CENTER.x - 25 * P, z: CBD_CENTER.z - 90 * P })),
+  parkedEntry('cab', kerbVehicleSpot('Risk-It Street', { x: CBD_CENTER.x + 5 * P, z: CBD_CENTER.z - 55 * P })),
+  parkedEntry('cab', kerbVehicleSpot('Fax Street', { x: CBD_CENTER.x + 60 * P, z: CBD_CENTER.z - 35 * P })),
+  parkedEntry('bicycle', kerbVehicleSpot('Main Main Street', { x: CBD_CENTER.x + 25 * P, z: CBD_CENTER.z - 20 * P }, 2.4)),
+  parkedEntry('bicycle', kerbVehicleSpot('Pothole Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z - 78 * P }, 2.4), 0xc44f9a),
+  parkedEntry('motorbike', kerbVehicleSpot('You-Bet Street', { x: CBD_CENTER.x + 32 * P, z: CBD_CENTER.z + 55 * P }, 2)),
+  parkedEntry('motorbike', kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 25 * P }, 2)),
   (() => { const spot = bestKerbSpot({ near: { x: sandton.x, z: sandton.z }, clearance: 2, ownRadius: 3.4, minEdge: 0.1, minRoadWidth: 7 }); return { kind: 'superbike', x: spot.x, z: spot.z, heading: Math.atan2(spot.dirX, spot.dirZ) }; })(), // flashy toy on a Sandton kerb
 ];
 
@@ -308,8 +318,8 @@ function gantryAt(nearX: number, nearZ: number): GantrySpot {
 }
 
 export const ETOLL_SPOTS: GantrySpot[] = [
-  gantryAt(CBD_CENTER.x - 280, CBD_CENTER.z + 40),
-  gantryAt(braamfontein.x - 80, braamfontein.z - 240),
+  gantryAt(CBD_CENTER.x - 280 * P, CBD_CENTER.z + 40 * P),
+  gantryAt(braamfontein.x - 80 * P, braamfontein.z - 240 * P),
 ];
 
 // ---- Taxi ranks / transit stops -------------------------------------------------------
@@ -322,30 +332,30 @@ function labelledStop(roadName: string, near: MapPt, label: string, clearance = 
 }
 
 export const TRANSIT_STOPS: LabelledSpot[] = [
-  labelledStop('Lilian Ngoyi Street', { x: CBD_CENTER.x - 60, z: CBD_CENTER.z - 120 }, 'BREE RANK'),
-  labelledStop('Wanderers Street', { x: CBD_CENTER.x + 40, z: CBD_CENTER.z - 130 }, 'NOORD RANK'),
-  labelledStop('Albertina Sisulu Road', { x: CBD_CENTER.x - 90, z: CBD_CENTER.z - 42 }, 'MTN RANK'),
-  labelledStop('Commissioner Street', { x: CBD_CENTER.x + 110, z: CBD_CENTER.z - 50 }, 'KAZERNE RANK'),
+  labelledStop('Lilian Ngoyi Street', { x: CBD_CENTER.x - 60 * P, z: CBD_CENTER.z - 120 * P }, 'BREE RANK'),
+  labelledStop('Wanderers Street', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z - 130 * P }, 'NOORD RANK'),
+  labelledStop('Albertina Sisulu Road', { x: CBD_CENTER.x - 90 * P, z: CBD_CENTER.z - 42 * P }, 'MTN RANK'),
+  labelledStop('Commissioner Street', { x: CBD_CENTER.x + 110 * P, z: CBD_CENTER.z - 50 * P }, 'KAZERNE RANK'),
 ];
 
 // ---- Roadside signage -------------------------------------------------------------------
 
 export const ROADSIDE_SIGNS: LabelledSpot[] = [
-  labelledStop('Fax Street', { x: CBD_CENTER.x - 15, z: CBD_CENTER.z - 36 }, 'STOP', 1.6, 1.2),
-  labelledStop('Martial Street', { x: CBD_CENTER.x + 45, z: CBD_CENTER.z + 5 }, '60', 1.6, 1.2),
-  labelledStop('Albertina Sisulu Road', { x: CBD_CENTER.x - 40, z: CBD_CENTER.z - 45 }, 'HIJACKING HOTSPOT', 1.8, 1.4),
-  labelledStop('Commissioner Street', { x: CBD_CENTER.x - 65, z: CBD_CENTER.z - 52 }, 'SMASH & GRAB HOTSPOT', 1.8, 1.4),
-  labelledStop('Loadshed Lane', { x: CBD_CENTER.x - 22, z: CBD_CENTER.z - 62 }, 'P', 1.6, 1.2),
-  labelledStop('Risk-It Street', { x: CBD_CENTER.x + 2, z: CBD_CENTER.z + 60 }, 'TAXI', 1.6, 1.2),
-  labelledStop('Jan Smuts Avenue', { x: zooLakeCenter.x, z: zooLakeCenter.z - 60 }, '60', 1.6, 1.2),
-  labelledStop('Eish-loff Street', { x: CBD_CENTER.x + 46, z: CBD_CENTER.z - 90 }, 'STOP', 1.6, 1.2),
+  labelledStop('Fax Street', { x: CBD_CENTER.x - 15 * P, z: CBD_CENTER.z - 36 * P }, 'STOP', 1.6, 1.2),
+  labelledStop('Martial Street', { x: CBD_CENTER.x + 45 * P, z: CBD_CENTER.z + 5 * P }, '60', 1.6, 1.2),
+  labelledStop('Albertina Sisulu Road', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z - 45 * P }, 'HIJACKING HOTSPOT', 1.8, 1.4),
+  labelledStop('Commissioner Street', { x: CBD_CENTER.x - 65 * P, z: CBD_CENTER.z - 52 * P }, 'SMASH & GRAB HOTSPOT', 1.8, 1.4),
+  labelledStop('Loadshed Lane', { x: CBD_CENTER.x - 22 * P, z: CBD_CENTER.z - 62 * P }, 'P', 1.6, 1.2),
+  labelledStop('Risk-It Street', { x: CBD_CENTER.x + 2 * P, z: CBD_CENTER.z + 60 * P }, 'TAXI', 1.6, 1.2),
+  labelledStop('Jan Smuts Avenue', { x: zooLakeCenter.x, z: zooLakeCenter.z - 60 * P }, '60', 1.6, 1.2),
+  labelledStop('Eish-loff Street', { x: CBD_CENTER.x + 46 * P, z: CBD_CENTER.z - 90 * P }, 'STOP', 1.6, 1.2),
 ];
 
 // ---- Civic landmarks ----------------------------------------------------------------------
 
 export const PONTE_SPOT: MapPt = (() => {
   const ponte = landmark('Ponte Tower');
-  return ponte ? { x: ponte.x, z: ponte.z } : { x: hillbrow.x + 40, z: hillbrow.z + 20 };
+  return ponte ? { x: ponte.x, z: ponte.z } : { x: hillbrow.x + 40 * P, z: hillbrow.z + 20 * P };
 })();
 export const HILLBROW_TOWER_SPOT: MapPt = (() => {
   const tower = landmark('Hillbrow tower');
@@ -354,16 +364,16 @@ export const HILLBROW_TOWER_SPOT: MapPt = (() => {
 /** JOBURG WATER tower: on the first mine-dump/brownfield polygon (south mining belt flavour). */
 export const WATER_TOWER_SPOT: MapPt = (() => {
   const dump = DIRT_POLYGONS[0];
-  const anchor = dump ? { x: dump.cx, z: dump.cz } : { x: CBD_CENTER.x - 120, z: CBD_CENTER.z + 260 };
+  const anchor = dump ? { x: dump.cx, z: dump.cz } : { x: CBD_CENTER.x - 120 * P, z: CBD_CENTER.z + 260 * P };
   return walkSpotNear(anchor, 9, 8);
 })();
 
 // ---- Street-sign-only junctions near spawn (parody names must be readable on foot) ---------
 
 const signalKeys = new Set(SIGNAL_JUNCTIONS.map((junction) => `${junction.x}|${junction.z}`));
-export const SPAWN_SIGN_JUNCTIONS: SignalJunctionDef[] = computeSignalJunctions({ budget: 200, minSpacing: 30, minWidestWidth: 7, minSecondWidth: 7 })
+export const SPAWN_SIGN_JUNCTIONS: SignalJunctionDef[] = computeSignalJunctions({ budget: 200, minSpacing: 30 * P, minWidestWidth: 7, minSecondWidth: 7 })
   .filter((junction) => !signalKeys.has(`${junction.x}|${junction.z}`))
-  .filter((junction) => Math.hypot(junction.x - spawnPoint.x, junction.z - spawnPoint.z) < 150)
+  .filter((junction) => Math.hypot(junction.x - spawnPoint.x, junction.z - spawnPoint.z) < 150 * P)
   .slice(0, 8);
 
 // ---- Reserved pads (procedural buildings & street props must keep clear) --------------------
