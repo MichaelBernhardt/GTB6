@@ -22,6 +22,14 @@ describe('Cordova Arms purchase resolution', () => {
     expect(resolvePurchase('weapon', 'rpg', false, 5000)).toEqual({ ok: true, price: 5000 });
   });
 
+  it('stocks the sniper below the rpg with a consistent ammo refill', () => {
+    expect(weaponPrice('sniper')).toBe(3500);
+    expect(weaponPrice('sniper')).toBeLessThan(weaponPrice('rpg'));
+    expect(ammoPrice('sniper')).toBe(525); // the standard 15% refill, in five-rand increments
+    expect(resolvePurchase('weapon', 'sniper', false, 3500)).toEqual({ ok: true, price: 3500 });
+    expect(resolvePurchase('ammo', 'sniper', true, 525)).toEqual({ ok: true, price: 525 });
+  });
+
   it('refuses weapons already owned or beyond your means', () => {
     expect(resolvePurchase('weapon', 'smg', true, 99999)).toEqual({ ok: false, price: 1200, reason: 'owned' });
     expect(resolvePurchase('weapon', 'shotgun', false, 899)).toEqual({ ok: false, price: 900, reason: 'funds' });

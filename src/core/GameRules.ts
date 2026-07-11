@@ -14,8 +14,8 @@ export class Economy {
   }
 }
 
-export function calculateDamage(base: number, distance: number, armour = 0): number {
-  const falloff = Math.max(0.35, 1 - Math.max(0, distance - 15) / 100);
+export function calculateDamage(base: number, distance: number, armour = 0, falloffFloor = 0.35): number {
+  const falloff = Math.max(falloffFloor, 1 - Math.max(0, distance - 15) / 100);
   return Math.max(0, Math.round(base * falloff - armour * 0.45));
 }
 
@@ -39,7 +39,7 @@ export interface DropRoll { cash: number; weapon?: WeaponId; ammo?: boolean; }
 export function rollDrops(kind: PedKind, random: () => number = Math.random): DropRoll {
   if (kind === 'guard') {
     const cash = 40 + Math.floor(random() * 80); const roll = random();
-    return { cash, weapon: roll < 0.12 ? 'rpg' : roll < 0.56 ? 'smg' : 'shotgun' };
+    return { cash, weapon: roll < 0.12 ? 'rpg' : roll < 0.56 ? 'smg' : roll < 0.95 ? 'shotgun' : 'sniper' }; // sniper is the rare 5% prize; rpg/smg odds untouched
   }
   if (kind === 'police') return { cash: 5 + Math.floor(random() * 25), weapon: 'pistol' };
   const cash = 10 + Math.floor(random() * 50); const roll = random();
@@ -64,8 +64,8 @@ export function moveSpeed(sprinting: boolean, fastRun: boolean, aiming = false):
 }
 
 export function crosshairVisible(aiming: boolean, melee: boolean): boolean { return aiming && !melee; }
-/** Drive-by needs aim mode and a one-handed gun: no fists, no shoulder-launched rockets inside a Golf. */
-export function canFireFromVehicle(aiming: boolean, melee: boolean, projectile = false): boolean { return aiming && !melee && !projectile; }
+/** Drive-by needs aim mode and a one-handed gun: no fists, no shoulder-launched rockets and no scoped rifles inside a Golf. */
+export function canFireFromVehicle(aiming: boolean, melee: boolean, projectile = false, scopedWeapon = false): boolean { return aiming && !melee && !projectile && !scopedWeapon; }
 
 export function jumpVelocity(bigJump: boolean): number {
   return PLAYER.jumpSpeed * (bigJump ? CHEATS.jumpMultiplier : 1);

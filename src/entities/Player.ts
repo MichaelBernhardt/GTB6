@@ -272,7 +272,7 @@ export class Player {
   }
 
   private buildWeapons(): void {
-    for (const id of ['pistol', 'smg', 'shotgun'] as const) { const mesh = buildWeaponModel(id); if (mesh) this.weaponMeshes.set(id, mesh); }
+    for (const id of ['pistol', 'smg', 'shotgun', 'sniper'] as const) { const mesh = buildWeaponModel(id); if (mesh) this.weaponMeshes.set(id, mesh); }
     const rpg = buildWeaponModel('rpg');
     if (rpg) { rpg.rotation.x = -Math.PI / 2; rpg.position.set(-0.3, 1.56, -0.28); this.weaponMeshes.set('rpg', rpg); }
     for (const [id, mesh] of this.weaponMeshes) { mesh.visible = id === this.weapon; (id === 'rpg' ? this.torso : this.rightForearm).add(mesh); }

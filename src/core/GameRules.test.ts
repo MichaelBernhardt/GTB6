@@ -21,6 +21,11 @@ describe('damage', () => {
     expect(calculateDamage(40, 500)).toBe(14);
     expect(calculateDamage(40, 10, 20)).toBe(31);
   });
+
+  it('lets a falloff floor of 1 deliver full damage at any range', () => {
+    expect(calculateDamage(110, 400, 0, 1)).toBe(110);
+    expect(calculateDamage(110, 400)).toBeLessThan(110); // default floor still bites
+  });
 });
 
 describe('weapon rules', () => {
@@ -29,8 +34,9 @@ describe('weapon rules', () => {
     expect(cycleWeapon('pistol', 1)).toBe('smg');
     expect(cycleWeapon('smg', 1)).toBe('shotgun');
     expect(cycleWeapon('shotgun', 1)).toBe('rpg');
-    expect(cycleWeapon('rpg', 1)).toBe('fists');
-    expect(cycleWeapon('fists', -1)).toBe('rpg');
+    expect(cycleWeapon('rpg', 1)).toBe('sniper');
+    expect(cycleWeapon('sniper', 1)).toBe('fists');
+    expect(cycleWeapon('fists', -1)).toBe('sniper');
     let current = WEAPONS[0]!.id;
     for (let i = 0; i < WEAPONS.length; i++) current = cycleWeapon(current, 1);
     expect(current).toBe(WEAPONS[0]!.id);
@@ -117,6 +123,7 @@ describe('aim mode gating', () => {
     expect(canFireFromVehicle(false, false)).toBe(false);
     expect(canFireFromVehicle(true, true)).toBe(false);
     expect(canFireFromVehicle(true, false, true)).toBe(false); // no RPG out the window
+    expect(canFireFromVehicle(true, false, false, true)).toBe(false); // no drive-by sniping either
     expect(DRIVEBY_COOLDOWN_SCALE).toBeGreaterThan(1);
   });
 });
@@ -150,6 +157,18 @@ describe('drop tables', () => {
     expect(rollDrops('guard', rng(0, 0))).toEqual({ cash: 40, weapon: 'rpg' });
     expect(rollDrops('guard', rng(0.5, 0.3))).toEqual({ cash: 80, weapon: 'smg' });
     expect(rollDrops('guard', rng(0.99, 0.9))).toEqual({ cash: 119, weapon: 'shotgun' });
+  });
+
+  it('makes the sniper a rare 5% guard prize without moving the rpg/smg odds', () => {
+    expect(rollDrops('guard', rng(0.5, 0.949))).toEqual({ cash: 80, weapon: 'shotgun' });
+    expect(rollDrops('guard', rng(0.5, 0.95))).toEqual({ cash: 80, weapon: 'sniper' });
+    expect(rollDrops('guard', rng(0.5, 0.999))).toEqual({ cash: 80, weapon: 'sniper' });
+    expect(rollDrops('guard', rng(0.5, 0.1199))).toEqual({ cash: 80, weapon: 'rpg' }); // rpg band untouched at 12%
+    expect(rollDrops('guard', rng(0.5, 0.5599))).toEqual({ cash: 80, weapon: 'smg' }); // smg band untouched at 44%
+    for (let i = 0; i < 100; i++) { // civilians and police never leak a sniper
+      expect(rollDrops('civilian').weapon ?? 'pistol').toBe('pistol');
+      expect(rollDrops('police').weapon).toBe('pistol');
+    }
   });
 
   it('police always drop their pistol and pocket change', () => {

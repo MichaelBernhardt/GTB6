@@ -145,3 +145,41 @@ describe('camera views in the world', () => {
     expect(controller.yaw).toBeCloseTo(Math.PI * 1.5);
   });
 });
+
+describe('sniper scope camera', () => {
+  const scopeSettle = (view: number, scopeFov: number): THREE.PerspectiveCamera => {
+    const camera = new THREE.PerspectiveCamera(60, 1);
+    const controller = new CameraController(camera);
+    for (let i = 0; i < 240; i++) controller.update(1 / 60, input(0, 0, scopeFov > 0), new THREE.Vector3(), city, false, 0.0025, view, 0, true, 0, scopeFov);
+    return camera;
+  };
+
+  it('snaps to the first-person eye and the scope FOV from any third-person view', () => {
+    for (const view of [1, 2, 3]) {
+      const camera = scopeSettle(view, 10);
+      expect(camera.fov).toBe(10);
+      expect(camera.position.y).toBeCloseTo(1.62, 2);
+      expect(Math.hypot(camera.position.x, camera.position.z)).toBeLessThan(0.01);
+    }
+  });
+
+  it('restores the chosen view and resting FOV once the scope drops', () => {
+    const camera = new THREE.PerspectiveCamera(60, 1);
+    const controller = new CameraController(camera);
+    for (let i = 0; i < 60; i++) controller.update(1 / 60, input(0, 0, true), new THREE.Vector3(), city, false, 0.0025, 2, 0, true, 0, 4);
+    expect(camera.fov).toBe(4);
+    for (let i = 0; i < 240; i++) controller.update(1 / 60, input(0, 0), new THREE.Vector3(), city, false, 0.0025, 2);
+    expect(camera.fov).toBe(60);
+    expect(camera.position.distanceTo(new THREE.Vector3())).toBeGreaterThan(4); // back over the shoulder
+  });
+
+  it('kicks the pitch up on recoil and settles most of it back', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    const before = controller.pitch;
+    controller.recoil(0.05);
+    expect(controller.pitch).toBeCloseTo(before - 0.05);
+    for (let i = 0; i < 240; i++) controller.update(1 / 60, input(0, 0, true), new THREE.Vector3(), city, false, 0.0025, 0, 0, true, 0, 10);
+    expect(controller.pitch).toBeGreaterThan(before - 0.05); // partially recovered
+    expect(controller.pitch).toBeLessThan(before); // but the muzzle stays a touch high
+  });
+});
