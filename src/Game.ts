@@ -5,7 +5,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { PLAYER, WEAPON_BY_ID, WEAPONS, type WeaponId } from './config';
+import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, riderImpactDamage, rollDrops, shouldKnockOff, type PedKind } from './core/GameRules';
@@ -17,11 +17,13 @@ import { Player, type CoverPose } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
+import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
 import { clampT, cornerSide, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { FEAR_EVENTS } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
+import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
 import { PoliceSystem } from './systems/PoliceSystem';
@@ -64,6 +66,8 @@ export class Game {
   private player: Player;
   private cameraController: CameraController;
   private population: PopulationSystem;
+  private lifecycle: LifecycleSystem;
+  private cameraForward = new THREE.Vector3();
   private combat: CombatSystem;
   private gore: GoreSystem;
   private pickups: PickupSystem;
@@ -127,6 +131,7 @@ export class Game {
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
     this.cameraController = new CameraController(this.camera);
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
+    this.lifecycle = new LifecycleSystem(this.city, this.population);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene);
     this.pickups = new PickupSystem(this.scene);
@@ -212,6 +217,68 @@ export class Game {
       const update = this.missions.choose(id); this.mode = 'playing'; this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
       this.processMissionUpdate(update);
     };
+    this.ui.onConsoleCommand = (text) => this.ui.consolePrint(runConsoleCommand(text, this.consoleHost));
+    this.ui.onConsoleClose = () => this.closeConsole();
+  }
+
+  private openConsole(): void { this.closeWeaponWheel(); this.input.suspend(true); this.ui.openConsole(); }
+  private closeConsole(): void { if (!this.ui.consoleOpen) return; this.ui.closeConsole(); this.input.suspend(false); }
+
+  /** Console command handlers: every mutation goes through the same paths the game itself uses. */
+  private consoleHost: ConsoleHost = {
+    setTime: (hour) => { this.dayNight.hour = hour; this.persist(); return `Clock set to ${this.dayNight.clockText}.`; },
+    toggleFps: () => { this.settings.showFps = !this.settings.showFps; this.persist(); return `Performance display ${this.settings.showFps ? 'on' : 'off'}.`; },
+    spawn: (kind) => this.spawnConsoleVehicle(kind),
+    giveCash: (amount) => {
+      this.economy.earn(amount); this.persist();
+      this.ui.notify('Tender approved', `+R${amount.toLocaleString()}. Don't ask questions.`);
+      return `+R${amount.toLocaleString()} — balance R${this.economy.balance.toLocaleString()}.`;
+    },
+    dropStar: () => this.consoleDropStar(),
+    toggleShedding: () => { const event = this.loadShedding.force(); this.applyEskom(event); return event === 'start' ? 'Load shedding forced. Stage 4 begins.' : 'Load shedding called off. Power restored.'; },
+    setBusy: (percent) => { this.lifecycle.tuning = { busy: clampBusy(percent) }; return `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`; }, // fresh tuning also clears peds/cars pins
+    setPedTarget: (count) => {
+      this.lifecycle.tuning.peds = count === undefined ? undefined : Math.min(PED_TARGET_CAP, count);
+      return count === undefined ? `Pedestrian target back on the clock. ${this.describeCrowd()}` : `Pedestrian target pinned at ${this.lifecycle.tuning.peds}. ${this.describeCrowd()}`;
+    },
+    setCarTarget: (count) => {
+      this.lifecycle.tuning.cars = count === undefined ? undefined : Math.min(CAR_TARGET_CAP, count);
+      return count === undefined ? `Traffic target back on the clock. ${this.describeCrowd()}` : `Traffic target pinned at ${this.lifecycle.tuning.cars}. ${this.describeCrowd()}`;
+    },
+    busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
+  };
+
+  private describeCrowd(): string {
+    const target = this.lifecycle.targets(this.dayNight.hour); const tuning = this.lifecycle.tuning;
+    const livePeds = this.population.pedestrians.filter(isAmbientPedestrian).length;
+    const liveCars = this.population.traffic.filter((vehicle) => !vehicle.wrecked && !vehicle.disabled).length;
+    return `Targets: ${target.peds} peds${tuning.peds !== undefined ? ' (pinned)' : ''} / ${target.traffic} cars${tuning.cars !== undefined ? ' (pinned)' : ''} — live ${livePeds} / ${liveCars}.`;
+  }
+
+  private spawnConsoleVehicle(kind: VehicleKind): string {
+    const spec = VEHICLE_SPECS[kind];
+    const origin = this.activeVehicle?.group.position ?? this.player.group.position;
+    const yaw = this.activeVehicle?.heading ?? this.player.heading;
+    const ahead = new THREE.Vector3(origin.x + Math.sin(yaw) * 8, 0, origin.z + Math.cos(yaw) * 8);
+    const pose = this.city.nearestRoadPose(ahead);
+    const blocked = pose.position.distanceTo(origin) < 2.5
+      || [...this.population.vehicles, ...this.police.vehicles].some((other) => other.group.position.distanceTo(pose.position) < 3.5);
+    if (blocked) return 'Eish, no clear kerb for the drop-off. Move along and try again.';
+    const vehicle = new Vehicle(this.scene, kind, pose.position.clone());
+    vehicle.heading = Math.atan2(pose.position.x - origin.x, pose.position.z - origin.z); // nose away from the player
+    vehicle.group.rotation.y = vehicle.heading;
+    this.population.vehicles.push(vehicle);
+    this.ui.notify('Vehicle delivered', `${spec.name}, parked just ahead.`);
+    return `${spec.name} delivered just ahead.`;
+  }
+
+  private consoleDropStar(): string {
+    if (!this.wanted.isWanted) return 'JMPD already has nothing on you.';
+    const before = this.wanted.level;
+    this.wanted.heat = heatAfterStarDrop(this.wanted.heat);
+    if (!this.wanted.isWanted) { this.knowledge.reset(); this.previousWanted = false; }
+    this.ui.notify('Strings pulled', `Wanted level ${before} → ${this.wanted.level}.`);
+    return `Wanted level dropped: ${before} → ${this.wanted.level}.`;
   }
 
   private applyQuality(): void {
@@ -244,7 +311,7 @@ export class Game {
 
   private update(dt: number): void {
     if (this.input.consume('Escape')) { this.pause(); return; }
-    if (this.input.consume('Backquote')) { this.settings.showFps = !this.settings.showFps; this.persist(); }
+    if (this.input.consume('Backquote')) this.openConsole(); // input suspends, world keeps running
     if (this.input.consume('KeyV')) {
       const key = this.activeVehicle ? 'cameraViewVehicle' : 'cameraViewFoot';
       this.settings[key] = cycleView(this.settings[key]);
@@ -265,10 +332,12 @@ export class Game {
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount));
+    const forward = this.camera.getWorldDirection(this.cameraForward);
+    const guarded = new Set<Vehicle>();
+    for (const vehicle of [this.activeVehicle, this.transition?.vehicle, this.garageVehicle]) if (vehicle) guarded.add(vehicle);
+    this.lifecycle.update(dt, this.dayNight.hour, { x: focus.x, z: focus.z, dirX: forward.x, dirZ: forward.z }, guarded);
     this.city.update(dt);
-    const eskom = this.loadShedding.update(dt);
-    if (eskom === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
-    else if (eskom === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
+    this.applyEskom(this.loadShedding.update(dt));
     this.dayNight.update(dt, focus, this.population.vehicles, this.police.vehicles, this.activeVehicle ?? this.transition?.vehicle);
     for (const impact of this.population.consumeImpacts()) {
       const intensity = Math.min(1.6, Math.abs(impact.vehicle.speed) / 16);
@@ -305,6 +374,11 @@ export class Game {
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
     this.saveTimer += dt; if (this.saveTimer > 8) { this.persist(); this.saveTimer = 0; }
     if (this.player.health <= 0) this.die();
+  }
+
+  private applyEskom(event: 'start' | 'end' | undefined): void {
+    if (event === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
+    else if (event === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
   }
 
   private updateVehicleFires(dt: number, focus: THREE.Vector3): void {
@@ -917,7 +991,7 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.cover = undefined; this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.cover = undefined; this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
