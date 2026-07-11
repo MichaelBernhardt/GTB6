@@ -4,7 +4,7 @@ import { FAR_CHUNK, type ChunkStore } from './ChunkVisibility';
 
 interface Bucket { material: THREE.Material; geometries: THREE.BufferGeometry[]; castShadow: boolean; receiveShadow: boolean; cell: string; }
 
-const materialKey = (material: THREE.Material): string => {
+export const materialKey = (material: THREE.Material): string => {
   const m = material as THREE.MeshPhysicalMaterial;
   return [material.type, m.color?.getHexString(), m.map?.uuid ?? '', m.roughness, m.metalness, m.emissive?.getHexString(), m.emissiveIntensity, material.transparent, material.opacity, material.side, m.clearcoat ?? '', m.clearcoatRoughness ?? '', material.depthWrite].join('|');
 };
@@ -57,6 +57,53 @@ export function splitGeometryByCell(geometry: THREE.BufferGeometry, cellSize: nu
     output.set(key, part);
   }
   return output;
+}
+
+/**
+ * Incremental sibling of mergeStaticGeometry for the on-demand building tier. The heavy per-mesh
+ * work (toNonIndexed + world-transform bake) is done a few buildings at a time via addObject() so it
+ * spreads across frames within the generation budget; finalize() then does one cheap mergeGeometries
+ * per material. Meshes with identical material properties merge together (keyed like the static path),
+ * so a whole cell of buildings collapses to a handful of draw calls. No per-cell grid split is needed:
+ * every object handed in already belongs to one chunk cell.
+ */
+interface BakeBucket { material: THREE.Material; geometries: THREE.BufferGeometry[]; cast: boolean; receive: boolean; }
+
+export class GeometryBaker {
+  private buckets = new Map<string, BakeBucket>();
+
+  /** Bake every static mesh under `object` (its world transform is applied) into per-material buckets. */
+  addObject(object: THREE.Object3D): void {
+    object.updateWorldMatrix(true, true);
+    object.traverse((node) => {
+      if (!(node instanceof THREE.Mesh) || node instanceof THREE.InstancedMesh || node.userData.dynamic) return;
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      const source = (node.geometry.index ? node.geometry.toNonIndexed() : node.geometry.clone()) as THREE.BufferGeometry;
+      source.applyMatrix4(node.matrixWorld);
+      const parts = materials.length > 1 && source.groups.length > 0
+        ? source.groups.map((group) => ({ material: materials[group.materialIndex ?? 0] ?? materials[0]!, geometry: extractRange(source, group.start, group.count) }))
+        : [{ material: materials[0]!, geometry: source }];
+      for (const part of parts) {
+        part.geometry.clearGroups();
+        const key = `${materialKey(part.material)}#${Object.keys(part.geometry.attributes).sort().join(',')}`;
+        const bucket: BakeBucket = this.buckets.get(key) ?? { material: part.material, geometries: [], cast: false, receive: false };
+        bucket.cast ||= node.castShadow; bucket.receive ||= node.receiveShadow;
+        bucket.geometries.push(part.geometry); this.buckets.set(key, bucket);
+      }
+    });
+  }
+
+  /** Merge every bucket into one mesh per material and add it under `target`; resets the baker. */
+  finalize(target: THREE.Object3D): void {
+    for (const bucket of this.buckets.values()) {
+      const merged = bucket.geometries.length === 1 ? bucket.geometries[0]! : mergeGeometries(bucket.geometries, false);
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, bucket.material);
+      mesh.castShadow = bucket.cast; mesh.receiveShadow = bucket.receive; mesh.matrixAutoUpdate = false;
+      target.add(mesh);
+    }
+    this.buckets.clear();
+  }
 }
 
 const underFarFlag = (object: THREE.Object3D, root: THREE.Object3D): boolean => {

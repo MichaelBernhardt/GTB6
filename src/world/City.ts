@@ -3,23 +3,22 @@ import { COLORS, PLAYER, WORLD_SIZE } from '../config';
 import type { District, GameSettings } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import {
-  CBD_CENTER,
   districtAt as generatedDistrictAt,
   GENERATED_ROADS,
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
   METRES_PER_UNIT,
-  nearestDistrict,
   pointInPolygon,
   WATER_POLYGONS,
   type MapPolygon,
 } from './mapData';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
-import { inBuildZone, TEST_BUILDING_BUDGET } from './data/cityBuild';
-import { addInstancedChunks, ChunkStore, ChunkVisibility, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
+import { CELL_SIZE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
+import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
+import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
-import { mergeStaticGeometry } from './StaticGeometry';
+import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
 import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
@@ -93,15 +92,13 @@ const LAYOUT_SCALE = 2.94 / METRES_PER_UNIT;
 export const ROAD_SAMPLE_SPACING = Math.round(12 * LAYOUT_SCALE);
 export const VEHICLE_NAV_JOIN = Math.round(15 * LAYOUT_SCALE);
 export const PED_NAV_JOIN = Math.round(18 * LAYOUT_SCALE);
-/** Static geometry merges per material per grid cell this size, keeping frustum culling useful. */
-export const MERGE_CHUNK_SIZE = 976;
+/** Static geometry merges per material per grid cell this size, keeping frustum culling useful.
+ *  Tied to CityGen.CELL_SIZE so the on-demand building grid and the static merge grid are identical. */
+export const MERGE_CHUNK_SIZE = CELL_SIZE;
 /** Lakes/dams at least this large (units²) get the tiered wavy/reflective water treatment. */
 export const PREMIUM_WATER_AREA = 3200;
-/** Absolute procedural-building ceiling for a fully-populated map (future full-city build).
- *  This round uses the smaller, CBD-scoped TEST_BUILDING_BUDGET from ./data/cityBuild. */
-export const MAX_BUILDINGS = 1000;
-/** Sidewalk apron beyond the road strip: wide roads get the full pavement, lanes a narrow one. */
-export const sidewalkExtension = (width: number): number => (width >= 12 ? 7 : 5);
+/** Time (ms) per frame spent generating on-demand building chunks — the rest of the frame is the game. */
+export const BUILD_FRAME_BUDGET_MS = 4;
 
 export function sampleRoadPath(points: RoadPoint[], closed: boolean, spacing: number): RoadPoint[] {
   const source = closed ? [...points, points[0]].filter((point): point is RoadPoint => Boolean(point)) : points;
@@ -179,11 +176,12 @@ class RoadIndex {
   }
 }
 
-const FACADE_RANGES: Record<BuildingStyle, [number, number]> = { downtown: [0, 6], residential: [6, 4], industrial: [10, 2] };
+const FACADE_RANGES: Record<BuildingStyle, [number, number]> = { downtown: [0, 6], residential: [6, 4], industrial: [10, 2], estate: [6, 4] };
 const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
   downtown: [0x9db1ba, 0xa3563f, 0xd0c4a4, 0x99a4a9, 0x93a9b0],
   residential: [0xdfb094, 0x8f4f3a, 0xe6d1a2, 0xa8bcc4, 0xa3563f],
   industrial: [0xa2a6a2, 0xb5924c, 0xb5a28c],
+  estate: [0xe3d7bf, 0xd8cdb6, 0xcbbfa0, 0xe6d1a2, 0xdcc9a6],
 };
 
 const GENERIC_AREA_NAMES = new Set(['park', 'grass', 'forest', 'wood', 'scrub', 'golf_course', 'nature_reserve', 'green', 'water', 'brownfield', 'mine_dump']);
@@ -198,6 +196,18 @@ export class City {
    *  furniture…): sub-pixel long before its 1200u range, so it culls far earlier than the world. */
   private detailStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
   private detailCulling = new ChunkVisibility(this.detailStore, DETAIL_VISIBLE_RANGE, DETAIL_HYSTERESIS);
+  /** On-demand building tier: buildings are GENERATED per cell as the player approaches (frame-budgeted)
+   *  and their geometry disposed beyond the far radius — regenerable identically from CityGen's seeds. */
+  private buildingStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
+  private buildingCells = new Map<string, THREE.Group>();
+  private buildingColliderCells = new Set<string>();
+  private buildQueue: Array<[number, number]> = [];
+  private queuedCells = new Set<string>();
+  /** The cell currently being baked, a few buildings at a time, across frames (spreads the cost). */
+  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; index: number; baker: GeometryBaker; colliders: Collider[]; group: THREE.Group };
+  /** Where the building meshes for the current build go (a per-building local group, rotated to face
+   *  its street, then merged into the cell). Defaults to the root group for up-front geometry. */
+  private target: THREE.Group = this.group;
   colliders: Collider[] = [];
   props = new PropRegistry();
   potholes: Array<{ x: number; z: number; r: number }> = []; // road features, not props: no collider, cars rattle over them
@@ -231,7 +241,8 @@ export class City {
   constructor(scene: THREE.Scene, quality: GameSettings['quality'] = 'medium') {
     this.group.name = 'Joburg'; scene.add(this.group);
     this.architecture = new BuildingArchitecture(this.group);
-    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildParks(); this.buildDistricts();
+    ensureParcels(); // build the citywide parcel layout now (during load), not on the first frame
+    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildParks(); this.buildLandmarks();
     this.infrastructure = new UrbanInfrastructure(
       this.group,
       this.chunkStore,
@@ -259,6 +270,7 @@ export class City {
   updateVisibility(focus: THREE.Vector3): void {
     this.chunkCulling.update(focus.x, focus.z);
     this.detailCulling.update(focus.x, focus.z);
+    this.updateBuildingChunks(focus.x, focus.z);
   }
 
   /** (Re)builds every water surface for the given quality tier; safe to call live from the pause menu.
@@ -695,42 +707,159 @@ export class City {
 
   // ---- Buildings (procedural massing fed by district densities) ---------------
 
-  private buildDistricts(): void {
+  /** Up-front, never-culled civic landmarks + the manicured special sites (Stage 1: one stadium bowl).
+   *  The citywide procedural buildings are NOT built here — they stream in per cell (see updateBuildingChunks). */
+  private buildLandmarks(): void {
     this.buildPonte();
     this.buildHillbrowTower();
     this.buildWaterTower();
-    let variant = 0; let placed = 0;
-    // This build round only masses the CBD test blocks around spawn (data-driven zones); the rest
-    // of the map stays bare roads. Widen TEST_BUILDING_ZONES + rebuild to populate more.
-    for (let index = 0; index < this.roadsidePoints.length && placed < TEST_BUILDING_BUDGET; index += 2) {
-      const point = this.roadsidePoints[index]!;
-      if (point.width < 7) continue;
-      if (!inBuildZone(point.x, point.z)) continue;
-      const district = nearestDistrict(point.x, point.z);
-      // Downtown massing (tall towers) inside the CBD core and near Ponte; a residential ring
-      // beyond the core gives a natural height gradient to drive through. CBD_CENTER is data-driven,
-      // so this tracks the map: the OSM "building count" density alone under-reads the CBD skyline.
-      const inCbdCore = Math.hypot(point.x - CBD_CENTER.x, point.z - CBD_CENTER.z) < 260;
-      const style: BuildingStyle = district.density >= 350 || inCbdCore || Math.hypot(point.x - PONTE_SPOT.x, point.z - PONTE_SPOT.z) < 320 ? 'downtown'
-        : district.density < 40 ? 'industrial' : 'residential';
-      const acceptance = style === 'downtown' ? 0.62 : style === 'residential' ? Math.min(0.5, 0.14 + district.density / 900) : 0.26;
-      if (seeded(point.x, point.z, 90) > acceptance) continue;
-      const residential = style === 'residential'; const industrial = style === 'industrial';
-      const w = industrial ? 14 + seeded(point.x, point.z, 2) * 10 : residential ? 8 + seeded(point.x, point.z, 3) * 6 : 9 + seeded(point.x, point.z, 4) * 7;
-      const d = industrial ? 12 + seeded(point.x, point.z, 5) * 9 : residential ? 8 + seeded(point.x, point.z, 6) * 5 : 9 + seeded(point.x, point.z, 7) * 7;
-      const h = industrial ? 8 + seeded(point.x, point.z, 8) * 10 : residential ? 6 + seeded(point.x, point.z, 9) * 9 : 24 + seeded(point.x, point.z, 10) * 60;
-      // Roadside points sit 3.05 beyond the road edge; push the parcel centre out past the sidewalk apron.
-      const setback = Math.max(w, d) / 2 + sidewalkExtension(point.width) / 2 + 0.9 - 3.05;
-      const cx = point.x - point.inwardX * setback;
-      const cz = point.z - point.inwardZ * setback;
-      if (Math.abs(cx) > WORLD_SIZE / 2 - 20 || Math.abs(cz) > WORLD_SIZE / 2 - 20) continue;
-      const radius = Math.hypot(w, d) / 2;
-      if (this.roadIndex.edgeDistance(cx, cz) < Math.min(w, d) / 2 - 1.1) continue; // would hang into a street
-      if (this.isReserved(cx, cz, radius + 1.5) || this.inWater(cx, cz) || this.isPark(cx, cz)) continue;
-      if (this.overlapsCollider(cx, cz, radius + 1.2)) continue;
-      this.addBuilding(cx, cz, w, d, h, style, variant++);
-      placed++;
+    for (const site of RESOLVED_MANICURED_SITES) this.buildManicuredSite(site);
+  }
+
+  /** Runs one manicured site's named generator at its data-derived anchor. New generators (mansions,
+   *  the padstal, the pier…) plug in here as Stage 2/3 adds entries to data/manicured.ts. */
+  private buildManicuredSite(site: ResolvedManicuredSite): void {
+    if (site.generator === 'stadiumBowl') this.buildStadiumBowl(site);
+  }
+
+  /** Placeholder oval stadium bowl: a raked seating ring of stacked box segments around a pitch,
+   *  proving the manicure hook end-to-end. Fully procedural from the site's params. */
+  private buildStadiumBowl(site: ResolvedManicuredSite): void {
+    const rx = site.params?.radiusX ?? 76; const rz = site.params?.radiusZ ?? 60;
+    const wallH = site.params?.wall ?? 20; const tiers = Math.max(1, Math.round(site.params?.tiers ?? 3));
+    const concrete = new THREE.MeshStandardMaterial({ color: 0xbfc4c2, roughness: 0.82 });
+    const stand = new THREE.MeshStandardMaterial({ color: 0x3f6f9c, roughness: 0.7 });
+    const pitch = new THREE.MeshStandardMaterial({ color: 0x3f7a41, roughness: 0.95 });
+    const bowl = new THREE.Group(); bowl.position.set(site.x, 0, site.z);
+    const segments = 40;
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      const ca = Math.cos(a); const sa = Math.sin(a);
+      for (let t = 0; t < tiers; t++) {
+        const scale = 1 + t * 0.16;
+        const y = wallH * (t + 0.5) / tiers * 0.55;
+        const px = ca * rx * scale; const pz = sa * rz * scale;
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(rx, rz) / segments * 1.5 * scale, wallH / tiers, 7 + t * 2.2), t % 2 ? stand : concrete);
+        seg.position.set(px, y + wallH * 0.18, pz); seg.rotation.y = -a; seg.castShadow = true; seg.receiveShadow = true; bowl.add(seg);
+      }
     }
+    const field = new THREE.Mesh(new THREE.CircleGeometry(1, 48), pitch); field.scale.set(rx * 0.82, rz * 0.82, 1); field.rotation.x = -Math.PI / 2; field.position.y = 0.05; bowl.add(field);
+    this.group.add(bowl);
+    // Ring collider approximated as a hollow box border so players can't drive through the stands.
+    for (const [ox, oz, w, d] of [[0, rz, rx * 2, 6], [0, -rz, rx * 2, 6], [rx, 0, 6, rz * 2], [-rx, 0, 6, rz * 2]] as const) {
+      this.colliders.push({ minX: site.x + ox - w / 2, maxX: site.x + ox + w / 2, minZ: site.z + oz - d / 2, maxZ: site.z + oz + d / 2, y0: 0, height: wallH });
+    }
+  }
+
+  // ---- On-demand building chunk streaming ------------------------------------
+
+  /**
+   * Per frame: queue near cells for generation, dispose far cells, and bake pending cells under the
+   * frame budget. Buildings are baked a few at a time (each ~1ms of geometry work) so a whole dense
+   * cell streams in over several frames instead of hitching; the per-cell merge that keeps draw calls
+   * low is one cheap finalize step. Geometry beyond the far radius is disposed and regenerates
+   * identically from CityGen's seeds on re-approach.
+   */
+  private updateBuildingChunks(focusX: number, focusZ: number): void {
+    const size = MERGE_CHUNK_SIZE; const range = CHUNK_VISIBLE_RANGE;
+    const minX = Math.floor((focusX - range) / size); const maxX = Math.floor((focusX + range) / size);
+    const minZ = Math.floor((focusZ - range) / size); const maxZ = Math.floor((focusZ + range) / size);
+    for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
+      if (cellDistance(focusX, focusZ, cx, cz, size) > range) continue;
+      const key = `${cx},${cz}`;
+      if (this.buildingCells.has(key) || this.queuedCells.has(key)) continue;
+      this.queuedCells.add(key); this.buildQueue.push([cx, cz]);
+    }
+    // Dispose finished cells that fell out of range; abort a pending cell that did the same.
+    const toDispose: string[] = [];
+    for (const [key, group] of this.buildingCells) {
+      if (cellDistance(focusX, focusZ, group.userData.cellX as number, group.userData.cellZ as number, size) > range + CHUNK_HYSTERESIS) toDispose.push(key);
+    }
+    for (const key of toDispose) this.disposeBuildingCell(key);
+    if (this.pending && cellDistance(focusX, focusZ, this.pending.cellX, this.pending.cellZ, size) > range + CHUNK_HYSTERESIS) this.abortPending();
+
+    const start = performance.now();
+    while (performance.now() - start < BUILD_FRAME_BUDGET_MS) {
+      if (!this.pending) {
+        if (this.buildQueue.length === 0) break;
+        this.buildQueue.sort((a, b) => cellDistance(focusX, focusZ, a[0], a[1], size) - cellDistance(focusX, focusZ, b[0], b[1], size));
+        const [cx, cz] = this.buildQueue.shift()!; const key = `${cx},${cz}`;
+        this.queuedCells.delete(key);
+        if (this.buildingCells.has(key)) continue;
+        this.pending = { key, cellX: cx, cellZ: cz, specs: generateCell(cx, cz), index: 0, baker: new GeometryBaker(), colliders: [], group: this.buildingStore.groupForKey(key) };
+      }
+      const pending = this.pending;
+      if (pending.index < pending.specs.length) {
+        const { group, colliders } = this.buildOneBuilding(pending.specs[pending.index++]!);
+        pending.baker.addObject(group);
+        group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); // baker cloned the geometry
+        pending.colliders.push(...colliders);
+      }
+      if (pending.index >= pending.specs.length) { // cell complete: one cheap merge, register colliders once
+        pending.baker.finalize(pending.group);
+        if (!this.buildingColliderCells.has(pending.key)) { for (const collider of pending.colliders) this.colliders.push(collider); this.buildingColliderCells.add(pending.key); }
+        this.buildingCells.set(pending.key, pending.group);
+        this.pending = undefined;
+      }
+    }
+  }
+
+  /** Drop a half-baked pending cell (its group holds no merged meshes yet) so it can regenerate later. */
+  private abortPending(): void {
+    if (!this.pending) return;
+    this.buildingStore.parent.remove(this.pending.group);
+    this.buildingStore.groups.delete(this.pending.key);
+    this.pending = undefined;
+  }
+
+  /** Free a cell's building geometry and detach it; colliders are kept (append-only), so a later
+   *  regeneration reproduces identical meshes and reuses the already-registered colliders. */
+  private disposeBuildingCell(key: string): void {
+    const group = this.buildingCells.get(key);
+    if (!group) return;
+    group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+    this.buildingStore.parent.remove(group);
+    this.buildingStore.groups.delete(key);
+    this.buildingCells.delete(key);
+  }
+
+  /** Build one building at the origin inside its own group, then rotate it to face its street and
+   *  place it. Returns the group (unmerged) and its world-space collision tiers. */
+  private buildOneBuilding(spec: GeneratedBuilding): { group: THREE.Group; colliders: Collider[] } {
+    const group = new THREE.Group();
+    const previousTarget = this.target; this.target = group; this.architecture.retarget(group);
+    const { width: w, depth: d, height: h, style, variant } = spec;
+    const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 2, d + 6), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(0, -0.8, 0); parcel.receiveShadow = true; group.add(parcel);
+    const [rangeBase, rangeCount] = FACADE_RANGES[style];
+    const facadeIndex = rangeBase + variant % rangeCount;
+    const palette = BUILDING_PALETTES[style];
+    const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
+    const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);
+    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: 0, roughness: 0.72, metalness: style === 'downtown' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
+    const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
+    const detailed = style === 'downtown' || variant % 2 === 0;
+    this.addLedge(0, 0, w * 1.025, d * 1.025, Math.min(h - 0.5, 3.6));
+    if (detailed) this.addEntrance(0, 0, w, d, style);
+    if (detailed && style === 'residential') this.addBalconies(0, 0, w, d, h);
+    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, profile.roofY, variant);
+    if (detailed && (style === 'downtown' || style === 'residential')) this.addStreetLevelDetail(0, 0, w, d, style, variant);
+    this.addRoofEquipment(0, 0, w, d, h, profile.roofY, style, variant);
+    if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.roofY, variant);
+    group.position.set(spec.x, 0, spec.z); group.rotation.y = spec.heading;
+    const colliders = profile.tiers.map((tier) => this.tierToWorldCollider(tier, spec));
+    this.target = previousTarget; this.architecture.retarget(this.group);
+    return { group, colliders };
+  }
+
+  /** Transform a building-local massing tier (axis-aligned) by the building's quarter-snapped heading
+   *  into a world-space AABB collider. Quarter turns keep the box axis-aligned (width/depth may swap). */
+  private tierToWorldCollider(tier: { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number }, spec: GeneratedBuilding): Collider {
+    const c = Math.cos(spec.heading); const s = Math.sin(spec.heading);
+    const lx = (tier.minX + tier.maxX) / 2; const lz = (tier.minZ + tier.maxZ) / 2;
+    const hw = (tier.maxX - tier.minX) / 2; const hd = (tier.maxZ - tier.minZ) / 2;
+    const wx = spec.x + lx * c + lz * s; const wz = spec.z - lx * s + lz * c;
+    const nx = Math.abs(hw * c) + Math.abs(hd * s); const nz = Math.abs(hw * s) + Math.abs(hd * c);
+    return { minX: wx - nx, maxX: wx + nx, minZ: wz - nz, maxZ: wz + nz, y0: tier.y0, height: tier.y1 - tier.y0 };
   }
 
   private distanceToPath(x: number, z: number, path: RoadPoint[], closed: boolean): number {
@@ -744,68 +873,31 @@ export class City {
     return nearest;
   }
 
-  private addBuilding(x: number, z: number, w: number, d: number, h: number, style: BuildingStyle, variant: number): void {
-    const start = this.group.children.length;
-    const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 2, d + 6), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(x, -0.8, z); parcel.receiveShadow = true; this.group.add(parcel);
-    const [rangeBase, rangeCount] = FACADE_RANGES[style];
-    const facadeIndex = rangeBase + variant % rangeCount;
-    const palette = BUILDING_PALETTES[style];
-    const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
-    const key = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(key);
-    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: 0, roughness: 0.72, metalness: style === 'downtown' ? 0.12 : 0.02 }); this.buildingMaterial.set(key, facade); }
-    const profile = this.architecture.build({ x, z, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
-    // Full trim on downtown towers and every other building elsewhere: keeps the merged-mesh budget sane at city scale.
-    const detailed = style === 'downtown' || variant % 2 === 0;
-    this.addLedge(x, z, w * 1.025, d * 1.025, Math.min(h - 0.5, 3.6));
-    if (detailed) this.addEntrance(x, z, w, d, style);
-    if (detailed && style === 'residential') this.addBalconies(x, z, w, d, h);
-    if (style === 'industrial') this.addIndustrialDetail(x, z, w, d, h, profile.roofY, variant);
-    if (detailed && style !== 'industrial') this.addStreetLevelDetail(x, z, w, d, style, variant);
-    this.addRoofEquipment(x, z, w, d, h, profile.roofY, style, variant);
-    if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(x, z, w, d, profile.roofY, variant);
-    const base = this.terrainHeightAt(x, z);
-    this.liftNewChildren(start, base);
-    // one collider per massing tier: stepped setbacks become stacked boxes, so podium roofs are real floors
-    for (const tier of profile.tiers) this.colliders.push({ minX: tier.minX, maxX: tier.maxX, minZ: tier.minZ, maxZ: tier.maxZ, y0: base + tier.y0, height: tier.y1 - tier.y0 });
-  }
-
-  private liftNewChildren(start: number, fixedHeight?: number): void {
-    const matrix = new THREE.Matrix4(); const position = new THREE.Vector3(); const rotation = new THREE.Quaternion(); const scale = new THREE.Vector3();
-    for (const object of this.group.children.slice(start)) {
-      if (object instanceof THREE.InstancedMesh && fixedHeight === undefined) {
-        for (let index = 0; index < object.count; index++) {
-          object.getMatrixAt(index, matrix); matrix.decompose(position, rotation, scale); position.y += this.terrainHeightAt(position.x, position.z); matrix.compose(position, rotation, scale); object.setMatrixAt(index, matrix);
-        }
-        object.instanceMatrix.needsUpdate = true;
-      } else object.position.y += fixedHeight ?? this.terrainHeightAt(object.position.x, object.position.z);
-    }
-  }
-
   private addLedge(x: number, z: number, w: number, d: number, y: number): void {
-    const ledge = new THREE.Mesh(new THREE.BoxGeometry(w, 0.24, d), new THREE.MeshStandardMaterial({ color: 0xd0cec1, roughness: 0.76 })); ledge.position.set(x, y, z); ledge.castShadow = true; this.group.add(ledge);
+    const ledge = new THREE.Mesh(new THREE.BoxGeometry(w, 0.24, d), new THREE.MeshStandardMaterial({ color: 0xd0cec1, roughness: 0.76 })); ledge.position.set(x, y, z); ledge.castShadow = true; this.target.add(ledge);
   }
 
   private addEntrance(x: number, z: number, w: number, d: number, style: BuildingStyle): void {
     const glass = new THREE.MeshPhysicalMaterial({ color: style === 'industrial' ? 0x4a5353 : 0x3a6672, roughness: 0.16, metalness: 0.18, clearcoat: 0.6 });
-    const doorW = Math.min(5.5, w * 0.32); const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, 3.1, 0.12), glass); door.position.set(x, 1.72, z + d / 2 + 0.08); this.group.add(door);
-    const canopy = new THREE.Mesh(new THREE.BoxGeometry(doorW + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(x, 3.35, z + d / 2 + 0.72); canopy.castShadow = true; this.group.add(canopy);
+    const doorW = Math.min(5.5, w * 0.32); const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, 3.1, 0.12), glass); door.position.set(x, 1.72, z + d / 2 + 0.08); this.target.add(door);
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(doorW + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(x, 3.35, z + d / 2 + 0.72); canopy.castShadow = true; this.target.add(canopy);
   }
 
   private addBalconies(x: number, z: number, w: number, d: number, h: number): void {
     const railMaterial = new THREE.MeshStandardMaterial({ color: 0x3c4546, metalness: 0.58, roughness: 0.4 });
     for (let y = 4.4; y < h - 1; y += 3.2) {
-      const floor = new THREE.Mesh(new THREE.BoxGeometry(w * 0.38, 0.14, 1.35), new THREE.MeshStandardMaterial({ color: 0xbdb9aa, roughness: 0.85 })); floor.position.set(x + w * 0.22, y, z + d / 2 + 0.62); floor.castShadow = true; this.group.add(floor);
-      for (const px of [-w * 0.18, 0, w * 0.18]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.06), railMaterial); rail.position.set(x + w * 0.22 + px, y + 0.45, z + d / 2 + 1.16); this.group.add(rail); }
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(w * 0.4, 0.07, 0.07), railMaterial); bar.position.set(x + w * 0.22, y + 0.84, z + d / 2 + 1.16); this.group.add(bar);
+      const floor = new THREE.Mesh(new THREE.BoxGeometry(w * 0.38, 0.14, 1.35), new THREE.MeshStandardMaterial({ color: 0xbdb9aa, roughness: 0.85 })); floor.position.set(x + w * 0.22, y, z + d / 2 + 0.62); floor.castShadow = true; this.target.add(floor);
+      for (const px of [-w * 0.18, 0, w * 0.18]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.06), railMaterial); rail.position.set(x + w * 0.22 + px, y + 0.45, z + d / 2 + 1.16); this.target.add(rail); }
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(w * 0.4, 0.07, 0.07), railMaterial); bar.position.set(x + w * 0.22, y + 0.84, z + d / 2 + 1.16); this.target.add(bar);
     }
   }
 
   private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, roofY: number, variant: number): void {
-    const shutter = new THREE.Mesh(new THREE.BoxGeometry(w * 0.42, Math.min(5, h * 0.48), 0.14), new THREE.MeshStandardMaterial({ color: 0x5e6868, roughness: 0.52, metalness: 0.45 })); shutter.position.set(x, Math.min(5, h * 0.48) / 2 + 0.2, z + d / 2 + 0.09); this.group.add(shutter);
-    for (const side of [-1, 1]) { const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.58, 1.7, 16), new THREE.MeshStandardMaterial({ color: 0x555e60, metalness: 0.6, roughness: 0.48 })); vent.position.set(x + side * w * 0.24, h + 1, z); this.group.add(vent); }
+    const shutter = new THREE.Mesh(new THREE.BoxGeometry(w * 0.42, Math.min(5, h * 0.48), 0.14), new THREE.MeshStandardMaterial({ color: 0x5e6868, roughness: 0.52, metalness: 0.45 })); shutter.position.set(x, Math.min(5, h * 0.48) / 2 + 0.2, z + d / 2 + 0.09); this.target.add(shutter);
+    for (const side of [-1, 1]) { const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.58, 1.7, 16), new THREE.MeshStandardMaterial({ color: 0x555e60, metalness: 0.6, roughness: 0.48 })); vent.position.set(x + side * w * 0.24, h + 1, z); this.target.add(vent); }
     if (variant % 3 === 0) {
-      const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.05, Math.min(10, h * 0.7), 20), new THREE.MeshStandardMaterial({ color: 0x7a665d, roughness: 0.72, metalness: 0.16 })); stack.position.set(x - w * 0.28, h + Math.min(10, h * 0.7) / 2, z - d * 0.18); stack.castShadow = true; this.group.add(stack);
-      for (let band = 0; band < 3; band++) { const ring = new THREE.Mesh(new THREE.TorusGeometry(0.91 - band * 0.05, 0.08, 8, 20), new THREE.MeshStandardMaterial({ color: 0x363f42, metalness: 0.7, roughness: 0.38 })); ring.rotation.x = Math.PI / 2; ring.position.set(stack.position.x, h + 2.2 + band * 2.2, stack.position.z); this.group.add(ring); }
+      const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.05, Math.min(10, h * 0.7), 20), new THREE.MeshStandardMaterial({ color: 0x7a665d, roughness: 0.72, metalness: 0.16 })); stack.position.set(x - w * 0.28, h + Math.min(10, h * 0.7) / 2, z - d * 0.18); stack.castShadow = true; this.target.add(stack);
+      for (let band = 0; band < 3; band++) { const ring = new THREE.Mesh(new THREE.TorusGeometry(0.91 - band * 0.05, 0.08, 8, 20), new THREE.MeshStandardMaterial({ color: 0x363f42, metalness: 0.7, roughness: 0.38 })); ring.rotation.x = Math.PI / 2; ring.position.set(stack.position.x, h + 2.2 + band * 2.2, stack.position.z); this.target.add(ring); }
     }
     if (variant % 4 === 0) this.addRoofSign(x, z, w, d, roofY, variant);
   }
@@ -817,13 +909,13 @@ export class City {
     for (let bay = 0; bay < bays; bay++) {
       const px = x - w * 0.39 + bay * (w * 0.78 / Math.max(1, bays - 1));
       if (Math.abs(px - x) < Math.min(3, w * 0.18)) continue;
-      const window = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.2, w / bays * 0.62), style === 'downtown' ? 2.35 : 1.65, 0.09), glass); window.position.set(px, style === 'downtown' ? 1.55 : 1.65, z + d / 2 + 0.075); this.group.add(window);
-      const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, z + d / 2 + 0.13); this.group.add(sill);
+      const window = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.2, w / bays * 0.62), style === 'downtown' ? 2.35 : 1.65, 0.09), glass); window.position.set(px, style === 'downtown' ? 1.55 : 1.65, z + d / 2 + 0.075); this.target.add(window);
+      const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, z + d / 2 + 0.13); this.target.add(sill);
     }
     if (style === 'downtown' || variant % 3 === 0) {
       const colors = [0xc8503f, 0x2f7774, 0xd4a438, 0x586f91];
       const awning = new THREE.Mesh(new THREE.BoxGeometry(w * 0.46, 0.15, 1.25), new THREE.MeshStandardMaterial({ color: colors[variant % colors.length], roughness: 0.7 }));
-      awning.position.set(x + w * 0.22, 3.1, z + d / 2 + 0.58); awning.rotation.x = -0.12; awning.castShadow = true; this.group.add(awning);
+      awning.position.set(x + w * 0.22, 3.1, z + d / 2 + 0.58); awning.rotation.x = -0.12; awning.castShadow = true; this.target.add(awning);
     }
   }
 
@@ -831,21 +923,21 @@ export class City {
     const metal = new THREE.MeshStandardMaterial({ color: 0x596467, metalness: 0.62, roughness: 0.46 });
     const units = style === 'downtown' ? 2 : style === 'industrial' ? 1 : 0;
     for (let index = 0; index < units; index++) {
-      const unit = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.05, 1.35), metal); unit.position.set(x - w * 0.18 + index * 2.4, roofY + 0.52, z - d * 0.2); unit.castShadow = true; this.group.add(unit);
-      const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.06, 16), new THREE.MeshStandardMaterial({ color: 0x263033, metalness: 0.75, roughness: 0.35 })); fan.rotation.x = Math.PI / 2; fan.position.set(unit.position.x, roofY + 0.54, unit.position.z - 0.7); this.group.add(fan);
+      const unit = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.05, 1.35), metal); unit.position.set(x - w * 0.18 + index * 2.4, roofY + 0.52, z - d * 0.2); unit.castShadow = true; this.target.add(unit);
+      const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.06, 16), new THREE.MeshStandardMaterial({ color: 0x263033, metalness: 0.75, roughness: 0.35 })); fan.rotation.x = Math.PI / 2; fan.position.set(unit.position.x, roofY + 0.54, unit.position.z - 0.7); this.target.add(fan);
     }
     if (h > 42 && variant % 3 === 1) {
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.1, 8, 10), metal); mast.position.set(x + w * 0.2, roofY + 4, z); this.group.add(mast);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.1, 8, 10), metal); mast.position.set(x + w * 0.2, roofY + 4, z); this.target.add(mast);
       const beaconMaterial = new THREE.MeshStandardMaterial({ color: 0xff4b3e, emissive: 0xff1f16, emissiveIntensity: 2 });
       registerPowered(beaconMaterial, 0xff4b3e, 0x3a1a16);
-      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), beaconMaterial); beacon.position.set(mast.position.x, roofY + 8.05, z); this.group.add(beacon);
+      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), beaconMaterial); beacon.position.set(mast.position.x, roofY + 8.05, z); this.target.add(beacon);
     }
   }
 
   private addRoofSign(x: number, z: number, w: number, d: number, h: number, variant: number): void {
     const names = ['CHICKEN LEKKER', 'MR VRRR PHAA', 'PIK-A-PAY', 'DEBONERS']; const accent = variant % 2 ? '#72d8d2' : '#f0ae43';
-    const sign = createSignMesh(new THREE.PlaneGeometry(Math.min(12, w * 0.7), 3), names[variant % names.length] ?? 'CHICKEN LEKKER', accent, { powered: true }); sign.position.set(x, h + 3.2, z + d / 2 + 0.1); this.group.add(sign);
-    for (const px of [-3, 3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 8), new THREE.MeshStandardMaterial({ color: 0x343b3d, metalness: 0.7 })); post.position.set(x + px, h + 1.5, z + d / 2); this.group.add(post); }
+    const sign = createSignMesh(new THREE.PlaneGeometry(Math.min(12, w * 0.7), 3), names[variant % names.length] ?? 'CHICKEN LEKKER', accent, { powered: true }); sign.position.set(x, h + 3.2, z + d / 2 + 0.1); this.target.add(sign);
+    for (const px of [-3, 3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 8), new THREE.MeshStandardMaterial({ color: 0x343b3d, metalness: 0.7 })); post.position.set(x + px, h + 1.5, z + d / 2); this.target.add(post); }
   }
 
   private addParkTree(x: number, z: number, variant: number): void {

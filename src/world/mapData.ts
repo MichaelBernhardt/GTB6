@@ -31,7 +31,7 @@ export interface DistrictCenter {
 
 export interface MapPolygon {
   name: string;
-  kind: 'water' | 'green' | 'dirt';
+  kind: 'water' | 'green' | 'dirt' | 'farm' | 'aerodrome';
   points: MapPt[];
   minX: number; maxX: number; minZ: number; maxZ: number;
   cx: number; cz: number;
@@ -130,6 +130,8 @@ function buildPolygon(name: string, kind: MapPolygon['kind'], rawPoints: [number
 
 const GREEN_KINDS = new Set(['park', 'grass', 'golf_course', 'nature_reserve', 'forest', 'wood', 'scrub']);
 const DIRT_KINDS = new Set(['mine_dump', 'brownfield']);
+const FARM_KINDS = new Set(['farmland']);
+const AERODROME_KINDS = new Set(['aerodrome']);
 
 export const WATER_POLYGONS: MapPolygon[] = MAP.water
   .map((water) => buildPolygon(water.name, 'water', water.points))
@@ -148,6 +150,18 @@ export const DIRT_POLYGONS: MapPolygon[] = MAP.landuse
   .map((area) => buildPolygon(area.name, 'dirt', area.points))
   .filter((polygon): polygon is MapPolygon => polygon !== undefined);
 
+/** Farmland landuse: the rural corridor's cultivated fields (Stage-3 farm content anchors here). */
+export const FARM_POLYGONS: MapPolygon[] = MAP.landuse
+  .filter((area) => FARM_KINDS.has(area.kind))
+  .map((area) => buildPolygon(area.name, 'farm', area.points))
+  .filter((polygon): polygon is MapPolygon => polygon !== undefined);
+
+/** Aerodrome landuse: the airport apron/field — kept clear of procedural streets and buildings. */
+export const AERODROME_POLYGONS: MapPolygon[] = MAP.landuse
+  .filter((area) => AERODROME_KINDS.has(area.kind))
+  .map((area) => buildPolygon(area.name, 'aerodrome', area.points))
+  .filter((polygon): polygon is MapPolygon => polygon !== undefined);
+
 export function pointInPolygon(polygon: MapPolygon, x: number, z: number): boolean {
   if (x < polygon.minX || x > polygon.maxX || z < polygon.minZ || z > polygon.maxZ) return false;
   let inside = false;
@@ -157,6 +171,11 @@ export function pointInPolygon(polygon: MapPolygon, x: number, z: number): boole
     if (a.z > z !== b.z > z && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
   }
   return inside;
+}
+
+/** True when (x, z) lands inside any polygon in the set (bbox-guarded per polygon). */
+export function pointInAnyPolygon(polygons: readonly MapPolygon[], x: number, z: number): boolean {
+  return polygons.some((polygon) => pointInPolygon(polygon, x, z));
 }
 
 // ---- Landmarks ---------------------------------------------------------------

@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-export type BuildingStyle = 'downtown' | 'residential' | 'industrial';
+export type BuildingStyle = 'downtown' | 'residential' | 'industrial' | 'estate';
 
 export const ARCHITECTURE_VARIANTS: Record<BuildingStyle, number> = {
   downtown: 5,
   residential: 4,
   industrial: 4,
+  estate: 3,
 };
 
 export interface BuildingSpec {
@@ -52,10 +53,16 @@ export class BuildingArchitecture {
   private glass = new THREE.MeshPhysicalMaterial({ color: 0x335f69, roughness: 0.12, metalness: 0.2, clearcoat: 0.82 });
   private timber = new THREE.MeshStandardMaterial({ color: 0x704b32, roughness: 0.82 });
   private terracotta = new THREE.MeshStandardMaterial({ color: 0xa14b36, roughness: 0.84 });
+  private plaster = new THREE.MeshStandardMaterial({ color: 0xd8cdb6, roughness: 0.88 });
+  private pool = new THREE.MeshStandardMaterial({ color: 0x2f8fb8, roughness: 0.18, metalness: 0.1 });
 
   private tiers: MassingTier[] = [];
 
   constructor(private parent: THREE.Group) {}
+
+  /** Retarget where subsequent build() output is added — the on-demand chunk builder points this at
+   *  a fresh per-building group so the whole building can be rotated to face its street as a unit. */
+  retarget(parent: THREE.Group): void { this.parent = parent; }
 
   build(spec: BuildingSpec): BuildingProfile {
     this.tiers = [];
@@ -64,7 +71,9 @@ export class BuildingArchitecture {
       ? this.buildDowntown(spec, massing)
       : spec.style === 'residential'
         ? this.buildResidential(spec, massing)
-        : this.buildIndustrial(spec, massing);
+        : spec.style === 'estate'
+          ? this.buildEstate(spec, massing)
+          : this.buildIndustrial(spec, massing);
     this.addStructuralDetail(spec, massing, roofY);
     return { roofY, massing, tiers: this.tiers };
   }
@@ -161,6 +170,45 @@ export class BuildingArchitecture {
     return massing === 2 ? Math.max(h * 0.72 + roofRise, h * 0.9) + 0.2 : h + roofRise + 0.2;
   }
 
+  /** Low walled villa: a wide plastered house, a pool in the front yard, and a perimeter wall with a
+   *  street-facing gate. The house boxes are collision tiers; the wall is four collider segments with
+   *  a gap for the gate. Everything is built at the spec origin so the chunk builder can rotate it to
+   *  the street. Fully procedural — no hand coordinates. */
+  private buildEstate(spec: BuildingSpec, massing: number): number {
+    const { x, z, width: w, depth: d, height: h } = spec;
+    const roofRise = Math.min(3.4, Math.max(2, w * 0.05));
+    const wingSide = massing === 1 ? -1 : 1;
+    const mainW = w * 0.6; const mainD = d * 0.66;
+    this.addBox(spec, mainW, h, mainD, x - w * 0.02, h / 2 + 0.2, z - d * 0.04, true);
+    const wingH = h * (massing === 2 ? 1 : 0.82);
+    this.addBox(spec, w * 0.3, wingH, d * 0.5, x + wingSide * w * 0.26, wingH / 2 + 0.2, z + d * 0.12, true);
+    this.addGableRoof(spec, x - w * 0.02, z - d * 0.04, mainW + 0.6, mainD + 0.6, h + 0.2, roofRise);
+
+    // Perimeter garden wall (kept inside the reserved building radius), gated on the +z street face.
+    const wx = w * 0.5 + 1.2; const wz = d * 0.5 + 1.2; const wallH = 2.3; const th = 0.4;
+    this.addWall(x, wallH, z - wz, wx * 2 + th, wallH, th);                // back
+    this.addWall(x - wx, wallH, z, th, wallH, wz * 2 + th);               // left
+    this.addWall(x + wx, wallH, z, th, wallH, wz * 2 + th);               // right
+    const gateHalf = Math.min(3, w * 0.14);                               // gate opening on the street side
+    const frontRun = (wx * 2 - gateHalf * 2) / 2;
+    for (const side of [-1, 1]) this.addWall(x + side * (gateHalf + frontRun / 2), wallH, z + wz, frontRun, wallH, th);
+    for (const side of [-1, 1]) { const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3, 0.8), this.stone); pillar.position.set(x + side * gateHalf, 1.5, z + wz); pillar.castShadow = true; this.parent.add(pillar); }
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(gateHalf * 2, 2, 0.12), this.darkMetal); gate.position.set(x, 1, z + wz); this.parent.add(gate);
+
+    // Pool in the front yard, between house and gate.
+    const poolW = Math.min(w * 0.34, 12); const poolD = Math.min(d * 0.3, 8);
+    const pool = new THREE.Mesh(new THREE.BoxGeometry(poolW, 0.3, poolD), this.pool); pool.position.set(x + wingSide * -w * 0.16, 0.12, z + d * 0.24); pool.receiveShadow = true; this.parent.add(pool);
+    const coping = new THREE.Mesh(new THREE.BoxGeometry(poolW + 0.8, 0.16, poolD + 0.8), this.plaster); coping.position.set(pool.position.x, 0.06, pool.position.z); coping.receiveShadow = true; this.parent.add(coping);
+    return h + roofRise + 0.2;
+  }
+
+  /** A plastered wall segment that is both a mesh and an axis-aligned collision tier (grounded at +0.2). */
+  private addWall(cx: number, _cy: number, cz: number, w: number, h: number, d: number): void {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this.plaster);
+    wall.position.set(cx, h / 2 + 0.2, cz); wall.castShadow = true; wall.receiveShadow = true; this.parent.add(wall);
+    this.tiers.push({ minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2, y0: 0.2, y1: h + 0.2 });
+  }
+
   private addGableRoof(spec: BuildingSpec, x: number, z: number, width: number, depth: number, y: number, rise: number): void {
     const roof = new THREE.Mesh(createGableGeometry(width, depth, rise), spec.style === 'residential' ? this.terracotta : spec.roof); roof.position.set(x, y, z); roof.castShadow = true; roof.receiveShadow = true; this.parent.add(roof);
   }
@@ -172,6 +220,7 @@ export class BuildingArchitecture {
   private addStructuralDetail(spec: BuildingSpec, massing: number, roofY: number): void {
     if (spec.style === 'downtown') this.addDowntownDetail(spec, massing, roofY);
     else if (spec.style === 'residential') this.addResidentialDetail(spec, massing, roofY);
+    else if (spec.style === 'estate') this.addResidentialDetail(spec, massing, roofY); // villa porch/chimney/dormers
     else this.addIndustrialDetail(spec, massing, roofY);
   }
 
