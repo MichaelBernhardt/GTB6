@@ -1,5 +1,10 @@
 # Attributions
 
+## Map data
+
+- Map data © OpenStreetMap contributors, ODbL. The generated Johannesburg map (`src/world/generated/joburg-map.json`, built by `tools/mapgen`) is derived from [OpenStreetMap](https://www.openstreetmap.org/copyright) data fetched via the Overpass API and is made available under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+- Elevation data: NASA SRTM (public domain), fetched via [opentopodata.org](https://www.opentopodata.org/).
+
 ## Runtime dependencies
 
 - [Three.js](https://threejs.org/) - 3D rendering library, MIT License.
