@@ -20,6 +20,7 @@ export class Vehicle {
   playerControlled = false;
   occupied = false;
   police = false;
+  sirenOn = false; // police only: JMPD units run hot; a stolen cruiser starts silent and toggles via G
   disabled = false;
   onFire = false;
   wrecked = false;
@@ -159,7 +160,11 @@ export class Vehicle {
       if (this.bounce <= 0.001) { this.bounce = 0; this.group.position.y = 0.02; }
     }
     this.brakeLights.forEach((light) => (light.material as THREE.MeshBasicMaterial).color.setHex(braking ? 0xff2018 : 0x5b0808));
-    if (this.police) { this.lightPhase += dt * 11; const lights = this.group.getObjectByName('lightbar')?.children ?? []; lights.forEach((light: THREE.Object3D, i: number) => { light.visible = Math.sin(this.lightPhase + i * Math.PI) > 0; }); }
+    if (this.police) {
+      const lights = this.group.getObjectByName('lightbar')?.children ?? [];
+      if (this.sirenOn) { this.lightPhase += dt * 11; lights.forEach((light: THREE.Object3D, i: number) => { light.visible = Math.sin(this.lightPhase + i * Math.PI) > 0; }); }
+      else lights.forEach((light: THREE.Object3D) => { light.visible = true; }); // siren off: lightbar steady
+    }
   }
 
   private buildModel(): void {

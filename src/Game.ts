@@ -22,7 +22,7 @@ import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, REPORT_DELAY, SIGHT_RADIUS, type WitnessCandidate } from './systems/PoliceKnowledge';
-import { PoliceSystem } from './systems/PoliceSystem';
+import { PoliceSystem, toggleSiren } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
@@ -245,7 +245,14 @@ export class Game {
     const districtState = this.livingCity.district(this.city.districtAt(focus.x, focus.z));
     const reinforcementModifier = policeReinforcementModifier(districtState);
     this.population.setPolicePatrolCount(reinforcementModifier, focus);
-    this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, this.knowledge, (amount) => this.damagePlayer(amount), reinforcementModifier);
+    this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, this.knowledge, (amount) => this.damagePlayer(amount), reinforcementModifier,
+      (amount) => this.activeVehicle?.takeDamage(amount), Boolean(this.activeVehicle?.police && this.activeVehicle.sirenOn));
+    for (const event of this.police.consumeEvents()) {
+      if (event.kind === 'freeze') this.ui.notify('JMPD', '"FREEZE! Hands where I can see them!"', false);
+      else if (event.kind === 'officers') this.population.pedestrians.push(...event.officers);
+      else if (event.kind === 'reboard') for (const officer of event.officers) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
+      else this.population.vehicles.push(event.vehicle); // abandoned cruiser joins the civilian pool — enterable like any parked car
+    }
     for (const report of this.knowledge.update(dt, (reporter) => reporter.state !== 'down')) this.wanted.addCrime(report.heat);
     this.wanted.update(dt);
     if (this.previousWanted && !this.wanted.isWanted) this.recordCityEvent('police-evaded', focus);
@@ -355,11 +362,14 @@ export class Game {
       if (collectTarget && collectTarget.position.distanceTo(this.player.group.position) < 8) { this.collectedItem = true; return; }
       if (this.tryMissionInteraction()) return;
       const vehicle = this.population.nearestEnterable(this.player.group.position);
+      const cruiser = this.police.stealableNear(this.player.group.position);
       const shop = this.shops.shopNear(this.player.group.position);
       if (shop?.kind === 'weapons') { this.openWeaponShop(); return; }
       if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
-      if (shop?.driveIn && !vehicle) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
-      if (vehicle) this.beginEnter(vehicle);
+      if (shop?.driveIn && !vehicle && !cruiser) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
+      const pick = cruiser && (!vehicle || cruiser.group.position.distanceToSquared(this.player.group.position) < vehicle.group.position.distanceToSquared(this.player.group.position)) ? cruiser : vehicle;
+      if (pick === cruiser && cruiser) { this.police.release(cruiser); this.population.vehicles.push(cruiser); } // stolen cruiser leaves the JMPD fleet
+      if (pick) this.beginEnter(pick);
     }
   }
 
@@ -422,6 +432,7 @@ export class Game {
       this.beginExit(vehicle);
     }
     if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify('Bakkie recovered', vehicle.spec.name); }
+    if (vehicle.police && this.input.consume('KeyG')) { vehicle.sirenOn = toggleSiren(vehicle); this.ui.notify(vehicle.sirenOn ? 'Siren on' : 'Siren off', vehicle.sirenOn ? 'Clear the road. You are the law now.' : 'Back to creeping quietly.'); }
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
 
@@ -612,7 +623,7 @@ export class Game {
     if (watching) { this.ui.notify('Pik-’n’-Spray', 'The JMPD is watching — lose them first.', false); return; }
     const price = detailerPrice(this.wanted.level);
     if (!this.economy.spend(price)) { this.ui.notify('Pik-’n’-Spray', `Detailing costs R${price}. Come back with cash, boss.`, false); return; }
-    vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset();
+    vehicle.restore(); vehicle.speed = 0; this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice();
     this.ui.screenFade(); this.audio.ui(true);
     this.ui.notify('Pik-’n’-Spray', `Fresh coat, clean record. Sharp sharp. -R${price}`); this.persist();
   }
@@ -719,7 +730,7 @@ export class Game {
   private handleVehicleCollisions(dt: number): void {
     for (const vehicle of this.population.vehicles) this.vehicleCollisionCooldown.set(vehicle, Math.max(0, (this.vehicleCollisionCooldown.get(vehicle) ?? 0) - dt));
     const driven = this.activeVehicle; if (!driven) return;
-    for (const other of this.population.vehicles) {
+    for (const other of [...this.population.vehicles, ...this.police.vehicles]) { // JMPD contact is a genuine collision, never scripted damage
       if (other === driven || driven.group.position.distanceToSquared(other.group.position) > 10) continue;
       const direction = driven.group.position.clone().sub(other.group.position).setY(0).normalize(); driven.group.position.addScaledVector(direction, 0.4); other.group.position.addScaledVector(direction, -0.35);
       if ((this.vehicleCollisionCooldown.get(driven) ?? 0) <= 0) { const impact = Math.abs(driven.speed - other.speed); driven.takeDamage(impact * 0.35); other.takeDamage(impact * 0.25); this.audio.collision(impact); this.vehicleCollisionCooldown.set(driven, 0.8); }
@@ -736,7 +747,7 @@ export class Game {
       if (this.activeVehicle) {
         if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
-        else prompt = 'E  Exit vehicle  ·  F  Recover';
+        else prompt = this.activeVehicle.police ? 'E  Exit vehicle  ·  F  Recover  ·  G  Siren' : 'E  Exit vehicle  ·  F  Recover';
       }
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
@@ -746,7 +757,7 @@ export class Game {
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
-      else if (this.population.nearestEnterable(focus)) prompt = 'E  Enter vehicle';
+      else if (this.population.nearestEnterable(focus) || this.police.stealableNear(focus)) prompt = 'E  Enter vehicle';
     }
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
@@ -757,7 +768,7 @@ export class Game {
     const vehicle = this.activeVehicle ? { name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health } : undefined;
     this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
     const markers = [...this.shops.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c451' }] : [])];
-    const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
+    const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact && !ped.police).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
     this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles);
   }
 
@@ -772,7 +783,11 @@ export class Game {
   }
   private respawn(): void {
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
-    this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.police.reset(); this.mode = 'playing';
+    this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.mode = 'playing';
+  }
+  /** Tears down the JMPD response and drops its foot officers from the population roster. */
+  private clearPolice(): void {
+    for (const officer of this.police.reset()) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void { this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour }; this.saveManager.save(this.save); }
