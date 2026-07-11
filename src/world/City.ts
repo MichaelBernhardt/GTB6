@@ -3,16 +3,21 @@ import { COLORS, PLAYER, WORLD_SIZE } from '../config';
 import type { District, GameSettings } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import {
+  BEACH_POLYGONS,
+  COASTLINE,
   districtAt as generatedDistrictAt,
   GENERATED_ROADS,
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
+  HARBOUR_POINT,
   METRES_PER_UNIT,
+  OCEAN_POLYGON,
   pointInPolygon,
   WATER_POLYGONS,
   type MapPolygon,
 } from './mapData';
+import { beachBands, buildShoreRibbon, OCEAN_Y, SEABED_Y, SHORE_Y } from './coast';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
 import { CELL_SIZE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
@@ -242,7 +247,7 @@ export class City {
     this.group.name = 'Joburg'; scene.add(this.group);
     this.architecture = new BuildingArchitecture(this.group);
     ensureParcels(); // build the citywide parcel layout now (during load), not on the first frame
-    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildParks(); this.buildLandmarks();
+    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks();
     this.infrastructure = new UrbanInfrastructure(
       this.group,
       this.chunkStore,
@@ -663,6 +668,64 @@ export class City {
   /** True when the point is inside a generated water polygon (keeps buildings/trees dry). */
   private inWater(x: number, z: number): boolean {
     return WATER_POLYGONS.some((polygon) => pointInPolygon(polygon, x, z));
+  }
+
+  // ---- Coast: ocean fancy-water + beach/rock shore --------------------------
+
+  /** The Atlantic seaboard graft: a dark seabed, the ocean registered as one premium far-water site
+   *  (planar mirror on high, cheaper tiers below), a drivable sand/rock shore along the waterline, and
+   *  a small harbour apron. Built before the static merge so seabed/shore/apron chunk-cull with the rest;
+   *  the ocean surface itself is a live water site (see buildWaterBodies' premium dams). */
+  private buildCoast(): void {
+    if (!OCEAN_POLYGON) return;
+    const ocean = OCEAN_POLYGON;
+
+    // Dark seabed under the transparent ocean. Flagged `far` so it never culls — the always-visible
+    // sea floor that carries to the horizon behind the fog, like the ground plane's far representation.
+    const seabed = new THREE.Mesh(this.polygonGeometry(ocean), new THREE.MeshStandardMaterial({ color: 0x123038, roughness: 0.92 }));
+    seabed.position.set(ocean.cx, SEABED_Y, ocean.cz); seabed.userData.far = true; this.group.add(seabed);
+
+    // The ocean surface: one huge premium water site. On 'high' it becomes a planar mirror (sky/sun/moon),
+    // on 'medium'/'low' the cheaper physical/flat tiers — same path as the premium dams, so day/night mood,
+    // fog and the reflector's distance gating all apply for free.
+    this.waterSites.push({
+      kind: 'ocean', x: ocean.cx, y: OCEAN_Y, z: ocean.cz,
+      width: ocean.maxX - ocean.minX, depth: ocean.maxZ - ocean.minZ,
+      shape: ocean.points,
+    });
+
+    this.buildShore();
+    this.buildHarbourApron();
+  }
+
+  /** Drivable golden-sand-and-rock strip hugging the coastline: sand within the named beaches' z-spans,
+   *  dark rock elsewhere. No collider, so it's off-road fun to blast along at the waterline. */
+  private buildShore(): void {
+    if (COASTLINE.length < 2) return;
+    const ribbon = buildShoreRibbon(COASTLINE, {
+      y: SHORE_Y,
+      bands: beachBands(BEACH_POLYGONS),
+      sand: [1.0, 0.92, 0.72], // multiplies the sand texture: bright golden beach
+      rock: [0.42, 0.4, 0.36], // darker, greyer rock elsewhere along the shore
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(ribbon.positions, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(ribbon.uvs, 2));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(ribbon.colors, 3));
+    geometry.setIndex(ribbon.indices);
+    geometry.computeVertexNormals();
+    const material = new THREE.MeshStandardMaterial({ map: this.sand, vertexColors: true, roughness: 0.97, side: THREE.DoubleSide });
+    const shore = new THREE.Mesh(geometry, material); shore.receiveShadow = true;
+    this.group.add(shore);
+  }
+
+  /** Trivial dock apron where Kaapstad Quay meets the sea: a flat concrete slab at the waterline.
+   *  Placeholder for the Stage-3 harbour manicure (cranes, jetties, moored boats). */
+  private buildHarbourApron(): void {
+    if (!HARBOUR_POINT) return;
+    const apron = new THREE.Mesh(new THREE.PlaneGeometry(52, 34), new THREE.MeshStandardMaterial({ color: 0x8f8c85, map: this.concrete, roughness: 0.9 }));
+    apron.rotation.x = -Math.PI / 2; apron.position.set(HARBOUR_POINT.x + 18, OCEAN_Y + 0.02, HARBOUR_POINT.z); apron.receiveShadow = true;
+    this.group.add(apron);
   }
 
   // ---- Parks & green space (generated landuse polygons) ----------------------

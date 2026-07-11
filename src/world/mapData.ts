@@ -31,7 +31,7 @@ export interface DistrictCenter {
 
 export interface MapPolygon {
   name: string;
-  kind: 'water' | 'green' | 'dirt' | 'farm' | 'aerodrome';
+  kind: 'water' | 'green' | 'dirt' | 'farm' | 'aerodrome' | 'ocean' | 'beach';
   points: MapPt[];
   minX: number; maxX: number; minZ: number; maxZ: number;
   cx: number; cz: number;
@@ -60,6 +60,14 @@ interface RawMap {
   landmarks: Array<{ name: string; x: number; z: number; kind: string }>;
   tracks: Array<{ name: string; width: number; kind: 'track' | 'path'; points: [number, number][] }>;
   landuse: Array<{ name: string; kind: string; points: [number, number][] }>;
+  /** Jozi-by-the-Sea graft (tools/mapgen/coast.ts): synthetic Atlantic seaboard west of the crop. */
+  coast?: {
+    coastline: [number, number][];
+    ocean: [number, number][];
+    beaches: Array<{ name: string; points: [number, number][] }>;
+    harbour: { x: number; z: number };
+    corridor: { eastX: number; westX: number };
+  };
 }
 
 const MAP = rawMap as unknown as RawMap;
@@ -161,6 +169,31 @@ export const AERODROME_POLYGONS: MapPolygon[] = MAP.landuse
   .filter((area) => AERODROME_KINDS.has(area.kind))
   .map((area) => buildPolygon(area.name, 'aerodrome', area.points))
   .filter((polygon): polygon is MapPolygon => polygon !== undefined);
+
+// ---- Coast (Jozi-by-the-Sea graft) ------------------------------------------
+
+const RAW_COAST = MAP.coast;
+
+/** North→south shoreline polyline: the land/water boundary the beach strip and ocean share. */
+export const COASTLINE: MapPt[] = RAW_COAST ? toPts(RAW_COAST.coastline) : [];
+
+/** Closed ocean polygon (west of the coastline, extending past the world edge). One premium water site. */
+export const OCEAN_POLYGON: MapPolygon | undefined =
+  RAW_COAST ? buildPolygon('Ocean', 'ocean', RAW_COAST.ocean) : undefined;
+
+/** Named OSM beach polygons. NB: the real Cape coords sit inland of the *synthetic* coastline, so the
+ *  runtime uses only their z-spans (where along the shore the golden sand goes), not their x-position. */
+export const BEACH_POLYGONS: MapPolygon[] = RAW_COAST
+  ? RAW_COAST.beaches
+      .map((beach) => buildPolygon(beach.name, 'beach', beach.points))
+      .filter((polygon): polygon is MapPolygon => polygon !== undefined)
+  : [];
+
+/** Quay end where the coastal highway meets the sea (dock apron anchor). */
+export const HARBOUR_POINT: MapPt | undefined = RAW_COAST ? { x: RAW_COAST.harbour.x, z: RAW_COAST.harbour.z } : undefined;
+
+/** Rural corridor x-band separating the Joburg crop (east) from the seaboard (west). */
+export const COAST_CORRIDOR: { eastX: number; westX: number } | undefined = RAW_COAST ? { ...RAW_COAST.corridor } : undefined;
 
 export function pointInPolygon(polygon: MapPolygon, x: number, z: number): boolean {
   if (x < polygon.minX || x > polygon.maxX || z < polygon.minZ || z > polygon.maxZ) return false;
