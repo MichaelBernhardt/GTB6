@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN } from '../world/City';
-import { bridgeIslands, buildNavGraph, components, findPath, nearestNode, replanInterval, RoutePlanner, type NavGraph } from './NavGraph';
+import { bridgeIslands, buildNavGraph, components, findPath, nearestNode, ProgressWatchdog, replanInterval, RoutePlanner, STUCK_EPSILON, STUCK_TIMEOUT, type NavGraph } from './NavGraph';
 
 const line = (count: number, spacing: number, x0 = 0, z0 = 0): { x: number; z: number }[] =>
   Array.from({ length: count }, (_, index) => ({ x: x0 + index * spacing, z: z0 }));
@@ -98,6 +98,28 @@ describe('replanInterval', () => {
     const intervals = Array.from({ length: 8 }, (_, serial) => replanInterval(serial));
     for (const interval of intervals) { expect(interval).toBeGreaterThanOrEqual(1.5); expect(interval).toBeLessThan(2); }
     expect(new Set(intervals.map((interval) => interval.toFixed(3))).size).toBe(8);
+  });
+});
+
+describe('ProgressWatchdog', () => {
+  it('fires only after STUCK_TIMEOUT seconds without STUCK_EPSILON of progress', () => {
+    expect(STUCK_TIMEOUT).toBe(10);
+    expect(STUCK_EPSILON).toBe(3);
+    const watchdog = new ProgressWatchdog();
+    expect(watchdog.update(50, 1)).toBe(false); // baseline
+    expect(watchdog.update(48, 8)).toBe(false); // 2u closer: below epsilon, stall accrues
+    expect(watchdog.update(49, 1.5)).toBe(false); // 9.5s stalled
+    expect(watchdog.update(48, 0.6)).toBe(true); // 10.1s: stuck
+  });
+
+  it('clears the stall on meaningful progress and on reset()', () => {
+    const watchdog = new ProgressWatchdog();
+    watchdog.update(50, 1); watchdog.update(50, 8);
+    expect(watchdog.update(46, 5)).toBe(false); // beat the best approach by >epsilon: stall cleared
+    expect(watchdog.update(46, 9.9)).toBe(false);
+    expect(watchdog.update(46, 0.2)).toBe(true);
+    watchdog.reset();
+    expect(watchdog.update(46, 9.9)).toBe(false); // fresh baseline after reset (waypoint advance, thaw, replan)
   });
 });
 

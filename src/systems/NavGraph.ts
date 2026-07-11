@@ -144,6 +144,27 @@ export function replanInterval(serial: number, base = 1.5, spread = 0.5): number
   return base + ((serial * GOLDEN) % 1) * spread;
 }
 
+/** Seconds of no meaningful progress toward the current waypoint before an agent abandons its route. */
+export const STUCK_TIMEOUT = 10;
+/** Progress must beat the best distance achieved so far by this many units to count as meaningful. */
+export const STUCK_EPSILON = 3;
+
+/** Progress watchdog: feed it the distance to the current waypoint every frame; fires (returns true) once
+ *  STUCK_TIMEOUT seconds pass without closing in by STUCK_EPSILON on the best approach so far. Reset it
+ *  whenever the goal changes: waypoint advance, replan, state change, freeze/thaw. */
+export class ProgressWatchdog {
+  private best = Infinity;
+  private stalled = 0;
+
+  reset(): void { this.best = Infinity; this.stalled = 0; }
+
+  update(distance: number, dt: number): boolean {
+    if (distance < this.best - STUCK_EPSILON) { this.best = distance; this.stalled = 0; return false; }
+    this.stalled += dt;
+    return this.stalled >= STUCK_TIMEOUT;
+  }
+}
+
 /** Budgeted A* front-end shared by the agents of one system: at most perFrame solves per beginFrame(). */
 export class RoutePlanner {
   private budget = 0;

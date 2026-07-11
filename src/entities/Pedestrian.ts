@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { accumulateFear, CALM_THRESHOLD, decayFear, fearResponse, FEAR_MAX } from '../systems/FearSystem';
+import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
@@ -29,6 +30,7 @@ export class Pedestrian {
   route: RoadPoint[] = [];
   private routeIndex = 0;
   private routed = false;
+  private watchdog = new ProgressWatchdog();
   private punchTimer = 0;
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
@@ -60,6 +62,12 @@ export class Pedestrian {
     if (this.destination.distanceToSquared(this.group.position) < 5) {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }
       if (this.state !== 'walk' || !this.advanceRoute()) { this.state = 'idle'; this.idleTime = 1 + Math.random() * 4; return; }
+    }
+    if (this.state !== 'walk') this.watchdog.reset(); // progress is only tracked while walking a route; fear states manage themselves
+    else if (this.watchdog.update(Math.hypot(this.destination.x - this.group.position.x, this.destination.z - this.group.position.z), dt)) {
+      // 10s without closing on the current waypoint: abandon the route, pause briefly (so it doesn't look robotic), then pick fresh.
+      this.watchdog.reset(); this.route = []; this.routeIndex = 0; this.routed = false;
+      this.state = 'idle'; this.idleTime = 0.4 + Math.random() * 0.9; return;
     }
     const direction = this.destination.clone().sub(this.group.position); direction.y = 0; direction.normalize();
     const pace = this.state === 'flee' ? 5.5 + this.fear * 0.014 : this.state === 'hostile' ? 5.5 : this.speed;
@@ -104,8 +112,11 @@ export class Pedestrian {
     return cash;
   }
 
+  /** Freeze/thaw boundary: stalled time must not carry across a frozen gap. */
+  resetProgress(): void { this.watchdog.reset(); }
+
   pickDestination(choices: RoadPoint[]): void {
-    this.route = []; this.routeIndex = 0; this.routed = false; // fallback wander until the population planner budgets a graph route
+    this.route = []; this.routeIndex = 0; this.routed = false; this.watchdog.reset(); // fallback wander until the population planner budgets a graph route
     const point = choices[Math.floor(Math.random() * choices.length)];
     if (point) this.destination.set(point.x + (Math.random() - 0.5) * 6, 0, point.z + (Math.random() - 0.5) * 6); // small jitter keeps peds off single-file rails without aiming them inside parcels
     this.state = this.hostile ? 'hostile' : 'walk';
@@ -120,6 +131,7 @@ export class Pedestrian {
   }
 
   private advanceRoute(): boolean {
+    this.watchdog.reset(); // new waypoint, new progress baseline
     const point = this.route[this.routeIndex];
     if (!point) { this.routed = false; return false; }
     this.routeIndex += 1;
