@@ -379,7 +379,7 @@ export class Game {
     const target = this.lifecycle.targets(this.dayNight.hour); const tuning = this.lifecycle.tuning;
     const livePeds = this.population.pedestrians.filter(isAmbientPedestrian).length;
     const liveCars = this.population.traffic.filter((vehicle) => !vehicle.wrecked && !vehicle.disabled).length;
-    return `Targets: ${target.peds} peds${tuning.peds !== undefined ? ' (pinned)' : ''} / ${target.traffic} cars${tuning.cars !== undefined ? ' (pinned)' : ''} — live ${livePeds} / ${liveCars}.`;
+    return `Nearby targets: ${target.peds} peds${tuning.peds !== undefined ? ' (pinned)' : ''} / ${target.traffic} cars${tuning.cars !== undefined ? ' (pinned)' : ''} — live ${livePeds} / ${liveCars}.`;
   }
 
   private spawnConsoleVehicle(kind: VehicleKind): string {

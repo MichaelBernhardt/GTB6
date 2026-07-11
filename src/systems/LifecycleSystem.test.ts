@@ -3,13 +3,22 @@ import { describe, expect, it } from 'vitest';
 import type { AudioManager } from '../core/AudioManager';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN, type City } from '../world/City';
 import { CALM_THRESHOLD } from './FearSystem';
+import { activeZones, axisIndex, zoneCharacter, ZONE_SIZE } from '../world/data/zoneGrid';
 import {
-  BUSY_MAX, BUSY_MIN, CAR_TARGET_CAP, censusBudget, CHANGE_BUDGET, clampBusy, CLEANUP_HOURS, cleanupEligible,
-  corpseCleanable, dayPhase, FOV_COS, isAmbientPedestrian, LifecycleSystem, outOfSight, PED_TARGET_CAP,
-  pedDespawnable, POPULATION_TARGETS, resolveTargets, SIGHT_FAR, SIGHT_NEAR, targetPopulation, vehicleDespawnable, type ViewPoint,
+  AMBIENT_SPAWN_TRICKLE, BUSY_MAX, BUSY_MIN, CAR_TARGET_CAP, censusBudget, CHANGE_BUDGET, clampBusy, CLEANUP_HOURS, cleanupEligible,
+  corpseCleanable, dayPhase, FOV_COS, isAmbientPedestrian, LIFECYCLE_INTERVAL, LifecycleSystem, outOfSight, PED_SPAWN_SPACING, PED_TARGET_CAP,
+  pedDespawnable, PHASE_MULTIPLIER, SIGHT_FAR, SIGHT_NEAR, vehicleDespawnable, ZONE_DENSITY, zoneTarget, type ViewPoint,
 } from './LifecycleSystem';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
 import { PopulationSystem } from './PopulationSystem';
+import { SPAWN_POINT } from '../world/placements';
+
+/** Sum each active zone's own target across the 3×3 around a cell — the theoretical area population. */
+const areaTarget = (col: number, row: number, hour: number, busy: number) =>
+  activeZones({ col, row }).reduce((acc, cell) => {
+    const target = zoneTarget(zoneCharacter(cell.col, cell.row), hour, busy);
+    return { peds: acc.peds + target.peds, cars: acc.cars + target.cars };
+  }, { peds: 0, cars: 0 });
 
 const view = (x = 0, z = 0, dirX = 0, dirZ = 1): ViewPoint => ({ x, z, dirX, dirZ });
 
@@ -70,52 +79,46 @@ describe('cleanupEligible', () => {
   });
 });
 
-describe('targetPopulation', () => {
-  it('maps hours onto the day/shoulder/night table', () => {
+describe('dayPhase', () => {
+  it('maps hours onto the day/shoulder/night bands', () => {
     expect(dayPhase(12)).toBe('day'); expect(dayPhase(8)).toBe('day'); expect(dayPhase(17.9)).toBe('day');
     expect(dayPhase(18)).toBe('shoulder'); expect(dayPhase(21.9)).toBe('shoulder'); expect(dayPhase(5)).toBe('shoulder'); expect(dayPhase(7.9)).toBe('shoulder');
     expect(dayPhase(22)).toBe('night'); expect(dayPhase(0)).toBe('night'); expect(dayPhase(3)).toBe('night'); expect(dayPhase(4.9)).toBe('night');
-  });
-
-  it('returns the tuned counts for each phase', () => {
-    expect(targetPopulation(12)).toEqual({ peds: 28, traffic: 15 });
-    expect(targetPopulation(19)).toEqual({ peds: 20, traffic: 11 });
-    expect(targetPopulation(2)).toEqual({ peds: 8, traffic: 6 });
-    expect(targetPopulation(2)).toBe(POPULATION_TARGETS.night);
-  });
-
-  it('is quietest overnight and busiest in the day', () => {
-    expect(POPULATION_TARGETS.night.peds).toBeLessThan(POPULATION_TARGETS.shoulder.peds);
-    expect(POPULATION_TARGETS.shoulder.peds).toBeLessThan(POPULATION_TARGETS.day.peds);
-    expect(POPULATION_TARGETS.night.traffic).toBeLessThan(POPULATION_TARGETS.shoulder.traffic);
-    expect(POPULATION_TARGETS.shoulder.traffic).toBeLessThan(POPULATION_TARGETS.day.traffic);
   });
 
   it('wraps out-of-range hours', () => {
     expect(dayPhase(26)).toBe('night'); // 02:00
     expect(dayPhase(-12)).toBe('day'); // 12:00
   });
+
+  it('runs the time-of-day curve fullest by day and quietest overnight', () => {
+    expect(PHASE_MULTIPLIER.night).toBeLessThan(PHASE_MULTIPLIER.shoulder);
+    expect(PHASE_MULTIPLIER.shoulder).toBeLessThan(PHASE_MULTIPLIER.day);
+    expect(PHASE_MULTIPLIER.day).toBe(1);
+  });
 });
 
-describe('resolveTargets', () => {
-  it('scales the time-of-day table by the busy percent', () => {
-    expect(resolveTargets(12, { busy: 100 })).toEqual(targetPopulation(12));
-    expect(resolveTargets(12, { busy: 300 })).toEqual({ peds: 84, traffic: 45 });
-    expect(resolveTargets(2, { busy: 300 })).toEqual({ peds: 24, traffic: 18 }); // still quieter at night
-    expect(resolveTargets(12, { busy: 50 })).toEqual({ peds: 14, traffic: 8 });
+describe('zoneTarget', () => {
+  it('is base density × time-of-day curve × busy percent', () => {
+    expect(zoneTarget('commercial-highrise', 12, 100)).toEqual(ZONE_DENSITY['commercial-highrise']); // day, normal busy = base
+    expect(zoneTarget('commercial-highrise', 12, 300)).toEqual({ peds: 66, cars: 27 }); // 3× busy
+    expect(zoneTarget('commercial-highrise', 2, 100)).toEqual({ peds: 22 * PHASE_MULTIPLIER.night, cars: 9 * PHASE_MULTIPLIER.night }); // small hours
+    expect(zoneTarget('none', 12, 500)).toEqual({ peds: 0, cars: 0 }); // parks/water never populate
   });
 
-  it('lets absolute pins win over the table, each independently', () => {
-    expect(resolveTargets(12, { busy: 100, peds: 3 })).toEqual({ peds: 3, traffic: 15 });
-    expect(resolveTargets(12, { busy: 300, cars: 2 })).toEqual({ peds: 84, traffic: 2 });
-    expect(resolveTargets(2, { busy: 100, peds: 50, cars: 40 })).toEqual({ peds: 50, traffic: 40 });
+  it('ranks the built characters densest-first, suburbs moderate, outskirts sparse', () => {
+    const peds = (zone: Parameters<typeof zoneTarget>[0]) => zoneTarget(zone, 12, 100).peds;
+    expect(peds('commercial-highrise')).toBeGreaterThan(peds('commercial-strip'));
+    expect(peds('commercial-strip')).toBeGreaterThan(peds('residential'));
+    expect(peds('residential')).toBeGreaterThan(peds('estate'));
+    expect(peds('estate')).toBeGreaterThan(peds('rural'));
+    expect(peds('rural')).toBeGreaterThan(peds('none'));
   });
 
-  it('clamps busy percent and caps absolute targets', () => {
+  it('clamps the busy percent to the console bounds', () => {
     expect(clampBusy(5)).toBe(BUSY_MIN); expect(clampBusy(99999)).toBe(BUSY_MAX); expect(clampBusy(100)).toBe(100);
-    expect(resolveTargets(12, { busy: BUSY_MAX })).toEqual({ peds: PED_TARGET_CAP, traffic: CAR_TARGET_CAP }); // 10× would exceed both caps
-    expect(resolveTargets(12, { busy: 100, peds: 9999, cars: 9999 })).toEqual({ peds: PED_TARGET_CAP, traffic: CAR_TARGET_CAP });
-    expect(resolveTargets(12, { busy: 100, peds: 0, cars: 0 })).toEqual({ peds: 0, traffic: 0 });
+    expect(zoneTarget('commercial-highrise', 12, 5)).toEqual(zoneTarget('commercial-highrise', 12, BUSY_MIN)); // below floor pins to the floor
+    expect(zoneTarget('commercial-highrise', 12, 99999)).toEqual(zoneTarget('commercial-highrise', 12, BUSY_MAX)); // above ceiling pins to the ceiling
   });
 });
 
@@ -252,34 +255,69 @@ describe('lifecycle simulation', () => {
     expect(population.pedestrians).toContain(enforcer); // mission cast decays in place
   });
 
-  it('converges the ambient population down to the night target, sparing the mission cast', () => {
+  it('fills the local area to the summed nine-zone target, sparing the mission cast', () => {
     const city = makeCity();
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const lifecycle = new LifecycleSystem(city, population);
     const contacts = population.pedestrians.filter((p) => p.contact).length;
-    const edgeView = { x: -300, z: -300, dirX: -0.71, dirZ: -0.71 }; // map corner, facing out: the city is behind
-    for (let i = 0; i < 120; i++) lifecycle.update(1, 2, edgeView, new Set()); // 02:00
-    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(POPULATION_TARGETS.night.peds);
-    expect(population.traffic.length).toBe(POPULATION_TARGETS.night.traffic);
+    const cbdView = { x: SPAWN_POINT.x, z: SPAWN_POINT.z, dirX: 0, dirZ: 1 }; // stand in the CBD
+    const nightArea = areaTarget(axisIndex(SPAWN_POINT.x), axisIndex(SPAWN_POINT.z), 2, 100);
+    for (let i = 0; i < 240; i++) lifecycle.update(1, 2, cbdView, new Set()); // 02:00
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(lifecycle.targets(2).peds);
+    expect(population.traffic.length).toBe(lifecycle.targets(2).traffic);
+    expect(lifecycle.targets(2).peds).toBe(Math.round(nightArea.peds)); // the census equals the manual sum-over-active-zones
     expect(population.pedestrians.filter((p) => p.contact).length).toBe(contacts); // contacts untouched
-    for (let i = 0; i < 240; i++) lifecycle.update(1, 12, edgeView, new Set()); // noon: fill back up
-    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(POPULATION_TARGETS.day.peds);
-    expect(population.traffic.length).toBe(POPULATION_TARGETS.day.traffic);
+    const nightPeds = population.pedestrians.filter(isAmbientPedestrian).length;
+    for (let i = 0; i < 300; i++) lifecycle.update(1, 12, cbdView, new Set()); // noon: the same block fills far busier
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(lifecycle.targets(12).peds);
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBeGreaterThan(nightPeds); // daytime CBD bustles
+    expect(population.traffic.length).toBe(lifecycle.targets(12).traffic);
   });
 
-  it('floods the streets within ~15 seconds of `set busy 300`, then honours pins on the way back down', () => {
+  it('trickles a freshly-active area in over several ticks, spaced apart — never a mob', () => {
     const city = makeCity();
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const lifecycle = new LifecycleSystem(city, population);
-    const edgeView = { x: -300, z: -300, dirX: -0.71, dirZ: -0.71 }; // map corner, facing out
-    lifecycle.tuning = { busy: 300 };
-    for (let i = 0; i < 27; i++) lifecycle.update(1, 12, edgeView, new Set()); // 9 census passes (~27s)
-    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(84); // 3 × 28
-    expect(population.traffic.length).toBe(45); // 3 × 15
-    lifecycle.tuning = { busy: 100, cars: 3 }; // back to normal, traffic pinned low
-    const farView = { x: 2000, z: 2000, dirX: 0, dirZ: 1 }; // player leaves: everything is fair game
-    for (let i = 0; i < 30; i++) lifecycle.update(1, 12, farView, new Set());
-    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(28);
-    expect(population.traffic.length).toBe(3);
+    const fresh = { x: -600, z: 1769, dirX: 0, dirZ: 1 }; // teleport away from the CBD spawn crowd to a cold district
+    lifecycle.update(LIFECYCLE_INTERVAL, 12, fresh, new Set()); // one census: CBD crowd (now a dead zone) cleared, fresh area begins filling
+    const firstBatch = population.pedestrians.filter(isAmbientPedestrian);
+    expect(firstBatch.length).toBeGreaterThan(0); // it does start filling
+    expect(firstBatch.length).toBeLessThanOrEqual(AMBIENT_SPAWN_TRICKLE); // temporal stagger: no one-tick mob of the whole target
+    firstBatch.forEach((a, i) => firstBatch.slice(i + 1).forEach((b) => // spatial stagger: the batch is scattered, not stacked
+      expect(a.group.position.distanceTo(b.group.position)).toBeGreaterThanOrEqual(PED_SPAWN_SPACING - 1e-6)));
+    for (let k = 0; k < 300; k++) lifecycle.update(1, 12, fresh, new Set()); // let it keep trickling
+    const full = population.pedestrians.filter(isAmbientPedestrian).length;
+    expect(full).toBe(lifecycle.targets(12).peds); // eventually reaches the full area target...
+    expect(full).toBeGreaterThan(firstBatch.length); // ...which took many ticks, not the first one
+  });
+
+  it('empties the dead ring when the player drives off to a fresh area', () => {
+    const city = makeCity();
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const lifecycle = new LifecycleSystem(city, population);
+    const cbdView = { x: SPAWN_POINT.x, z: SPAWN_POINT.z, dirX: 0, dirZ: 1 };
+    for (let i = 0; i < 300; i++) lifecycle.update(1, 12, cbdView, new Set());
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBeGreaterThan(40); // a lively crowd is standing
+    const farView = { x: -8000, z: -8000, dirX: 0, dirZ: 1 }; // teleport to the far corner
+    for (let i = 0; i < 5; i++) lifecycle.update(1, 12, farView, new Set());
+    // the whole CBD crowd (now two-plus zones away, always out of sight) has been cleared
+    for (const ped of population.pedestrians.filter(isAmbientPedestrian))
+      expect(Math.hypot(ped.group.position.x - SPAWN_POINT.x, ped.group.position.z - SPAWN_POINT.z)).toBeGreaterThan(ZONE_SIZE);
+  });
+
+  it('scales the whole active area with `set busy`, caps the summed total, and honours pins', () => {
+    const city = makeCity();
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const lifecycle = new LifecycleSystem(city, population);
+    const cbdView = { x: SPAWN_POINT.x, z: SPAWN_POINT.z, dirX: 0, dirZ: 1 };
+    lifecycle.tuning = { busy: 300 }; // crank the CBD: the summed target blows past the perf cap
+    for (let i = 0; i < 300; i++) lifecycle.update(1, 12, cbdView, new Set());
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(PED_TARGET_CAP);
+    expect(population.traffic.length).toBe(CAR_TARGET_CAP);
+    lifecycle.tuning = { busy: 100, peds: 18, cars: 6 }; // pin the area totals low
+    const elsewhere = { x: -600, z: 1769, dirX: 0, dirZ: 1 }; // drive to a fresh district: the CBD crowd is left behind (dead zone) and the pin fills here
+    for (let i = 0; i < 90; i++) lifecycle.update(1, 12, elsewhere, new Set());
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBe(18);
+    expect(population.traffic.length).toBe(6);
   });
 });
