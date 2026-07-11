@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { City, RoadPoint } from '../world/City';
 import { Pedestrian } from './Pedestrian';
 
-const city = { clampMove: (_from: THREE.Vector3, to: THREE.Vector3) => to.clone() } as unknown as City;
+const city = { clampMove: (_from: THREE.Vector3, to: THREE.Vector3) => to.clone(), surfaceHeightAt: () => 0 } as unknown as City;
 const choices: RoadPoint[] = [{ x: 40, z: 40 }];
 const expectDown = (ped: Pedestrian): void => {
   expect(ped.state).toBe('down');

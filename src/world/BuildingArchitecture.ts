@@ -21,9 +21,15 @@ export interface BuildingSpec {
   roof: THREE.Material;
 }
 
+/** One solid massing volume in world XZ and building-local Y (the city lifts y by the parcel's terrain height). */
+export interface MassingTier { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number; }
+
 export interface BuildingProfile {
   roofY: number;
   massing: number;
+  /** Every stacked box of the massing, bottom tier first — the collision registry mirrors these exactly.
+   *  Gable roofs are left out: the player stands on the eaves plane beneath them. */
+  tiers: MassingTier[];
 }
 
 const boxMaterials = (facade: THREE.Material, roof: THREE.Material): THREE.Material[] => [facade, facade, roof, roof, facade, facade];
@@ -47,9 +53,12 @@ export class BuildingArchitecture {
   private timber = new THREE.MeshStandardMaterial({ color: 0x704b32, roughness: 0.82 });
   private terracotta = new THREE.MeshStandardMaterial({ color: 0xa14b36, roughness: 0.84 });
 
+  private tiers: MassingTier[] = [];
+
   constructor(private parent: THREE.Group) {}
 
   build(spec: BuildingSpec): BuildingProfile {
+    this.tiers = [];
     const massing = spec.variant % ARCHITECTURE_VARIANTS[spec.style];
     const roofY = spec.style === 'downtown'
       ? this.buildDowntown(spec, massing)
@@ -57,12 +66,14 @@ export class BuildingArchitecture {
         ? this.buildResidential(spec, massing)
         : this.buildIndustrial(spec, massing);
     this.addStructuralDetail(spec, massing, roofY);
-    return { roofY, massing };
+    return { roofY, massing, tiers: this.tiers };
   }
 
+  /** Every massing box doubles as a collision tier; decorative details are plain meshes and stay out of the registry. */
   private addBox(spec: BuildingSpec, width: number, height: number, depth: number, x: number, y: number, z: number, rounded = false): THREE.Mesh {
     const radius = Math.min(1.25, width * 0.06, depth * 0.06);
     const geometry = rounded ? new RoundedBoxGeometry(width, height, depth, 5, radius) : new THREE.BoxGeometry(width, height, depth);
+    this.tiers.push({ minX: x - width / 2, maxX: x + width / 2, minZ: z - depth / 2, maxZ: z + depth / 2, y0: y - height / 2, y1: y + height / 2 });
     const mesh = new THREE.Mesh(geometry, boxMaterials(spec.facade, spec.roof)); mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; this.parent.add(mesh); return mesh;
   }
 
@@ -103,6 +114,7 @@ export class BuildingArchitecture {
     const podiumH = Math.min(9, h * 0.2); this.addBox(spec, w, podiumH, d, x, podiumH / 2 + 0.2, z, true);
     const radius = d * 0.39;
     const tower = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 1.04, h - podiumH, 32), spec.facade); tower.scale.set(w / Math.max(d, 1), 1, 1); tower.position.set(x, podiumH + (h - podiumH) / 2 + 0.2, z); tower.castShadow = true; tower.receiveShadow = true; this.parent.add(tower);
+    this.tiers.push({ minX: x - w * 0.39, maxX: x + w * 0.39, minZ: z - radius, maxZ: z + radius, y0: podiumH + 0.2, y1: h + 0.2 }); // scaled cylinder tower, boxed
     const crown = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.78, radius, 3.2, 32), spec.roof); crown.scale.x = w / Math.max(d, 1); crown.position.set(x, h + 1.8, z); crown.castShadow = true; this.parent.add(crown);
     return h + 3.4;
   }

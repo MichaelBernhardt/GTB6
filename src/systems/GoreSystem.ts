@@ -10,7 +10,7 @@ export class GoreSystem {
   private bloodMaterial = new THREE.MeshStandardMaterial({ color: 0x5d0005, roughness: 0.64, metalness: 0.02 });
   private decalMaterial = new THREE.MeshStandardMaterial({ map: this.createBloodTexture(), color: 0x7b0509, transparent: true, depthWrite: false, roughness: 0.72, polygonOffset: true, polygonOffsetFactor: -2 });
 
-  constructor(private scene: THREE.Scene) {}
+  constructor(private scene: THREE.Scene, private groundHeight: (x: number, z: number) => number = () => 0) {}
 
   burst(position: THREE.Vector3, force = 1, large = false): void {
     const count = Math.round((large ? 34 : 18) * THREE.MathUtils.clamp(force, 0.6, 1.7));
@@ -27,8 +27,9 @@ export class GoreSystem {
     for (let i = this.droplets.length - 1; i >= 0; i--) {
       const drop = this.droplets[i]; if (!drop) continue;
       drop.life -= dt; drop.velocity.y -= 18 * dt; drop.mesh.position.addScaledVector(drop.velocity, dt);
-      if (drop.mesh.position.y <= 0.06 || drop.life <= 0) {
-        if (drop.mesh.position.y <= 0.06 && Math.random() > 0.5) this.addDecal(drop.mesh.position, 0.16 + Math.random() * 0.32);
+      const ground = this.groundHeight(drop.mesh.position.x, drop.mesh.position.z) + 0.06;
+      if (drop.mesh.position.y <= ground || drop.life <= 0) {
+        if (drop.mesh.position.y <= ground && Math.random() > 0.5) this.addDecal(drop.mesh.position, 0.16 + Math.random() * 0.32);
         this.scene.remove(drop.mesh); this.droplets.splice(i, 1);
       }
     }
@@ -42,7 +43,7 @@ export class GoreSystem {
 
   private addDecal(position: THREE.Vector3, size: number): void {
     const material = this.decalMaterial.clone();
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), material); mesh.rotation.x = -Math.PI / 2; mesh.rotation.z = Math.random() * Math.PI * 2; mesh.position.set(position.x, 0.055 + this.decals.length * 0.0001, position.z); this.scene.add(mesh); this.decals.push({ mesh, life: 75 });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), material); mesh.rotation.x = -Math.PI / 2; mesh.rotation.z = Math.random() * Math.PI * 2; mesh.position.set(position.x, this.groundHeight(position.x, position.z) + 0.055 + this.decals.length * 0.0001, position.z); this.scene.add(mesh); this.decals.push({ mesh, life: 75 });
   }
 
   private createBloodTexture(): THREE.CanvasTexture {

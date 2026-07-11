@@ -81,7 +81,7 @@ Joburg CBD remembers what you do. Civilian crime lowers community standing and r
 - **Cordova Commons**: a formal civic park with paths, mature planting, fountain, and public sculpture. Harbor Courts and Las Palmas Garden provide two additional distinct parks.
 - A detailed articulated player character with GPT Image fabric materials, layered clothing, facial features, jointed elbows and knees, procedural footwork, breathing, sprinting, jumping, and two-handed aiming poses.
 - Compact, sport, van, and police vehicle configurations with distinct speed, acceleration, turning, braking, durability, wheels, brake lights, engine synthesis, and recovery.
-- Twelve connected road systems with curved arterials, diagonal boulevards, district loops, industrial spurs, residential crescents, a harbor drive, parking areas, named street signs, regulatory signs, crossings, and road-derived traffic/minimap routing.
+- Twelve connected road systems with curved arterials, diagonal boulevards, district loops, industrial spurs, residential crescents, a harbor drive, gentle citywide hills and dips, parking areas, named street signs, regulatory signs, crossings, and road-derived traffic/minimap routing.
 - Seven animated traffic-light junctions, raised road-clipped curbs, paved sidewalks, tactile crossing corners, road-facing curbside lighting, bus shelters, benches, hydrants, shrubs, broadleaf street trees, and coastal palms.
 - Pooled lane-following traffic routes, recycling, stuck recovery, simplified distance updates, and collision response.
 - Raycast pistol combat with ammunition, reloads, distance damage, muzzle light, impact particles, and generated sound.

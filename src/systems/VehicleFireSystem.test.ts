@@ -12,7 +12,7 @@ import {
 import { WantedSystem } from './WantedSystem';
 
 const farPlayer = new THREE.Vector3(0, 0, -500);
-const openCity = { clampMove: (_from: THREE.Vector3, to: THREE.Vector3) => to.clone() } as unknown as City;
+const openCity = { clampMove: (_from: THREE.Vector3, to: THREE.Vector3) => to.clone(), roadHeightAt: () => 0, surfaceNormalAt: () => new THREE.Vector3(0, 1, 0) } as unknown as City;
 const idleInput = { down: () => false } as unknown as InputManager;
 
 const makePed = (position: THREE.Vector3) => {

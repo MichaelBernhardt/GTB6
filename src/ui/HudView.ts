@@ -32,9 +32,12 @@ export class HudView {
   private fps: HTMLElement;
   private cheats: HTMLElement;
   private crosshair: HTMLElement;
+  private scope: HTMLElement;
+  private scopeZoom: HTMLElement;
 
   constructor(root: HTMLElement) {
     root.innerHTML = `
+      <div class="hud-scope" data-hud="scope" aria-hidden="true" hidden><div class="scope-lens"><i class="scope-mil-h"></i><i class="scope-mil-v"></i><span class="scope-dot"></span></div><b data-hud="scope-zoom"></b></div>
       <header class="hud-masthead" aria-label="Location and reputation">
         <div class="hud-wordmark"><span>GROOT THEFT</span><strong>BAKKIE</strong></div>
         <div class="hud-location"><span data-hud="district"></span><b data-hud="clock"></b><em data-hud="reputation"></em></div>
@@ -60,6 +63,7 @@ export class HudView {
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
     this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.taxi = required(root, '[data-hud="taxi"]');
     this.fps = required(root, '[data-hud="fps"]'); this.cheats = required(root, '[data-hud="cheats"]'); this.crosshair = required(root, '[data-hud="crosshair"]');
+    this.scope = required(root, '[data-hud="scope"]'); this.scopeZoom = required(root, '[data-hud="scope-zoom"]');
   }
 
   update(state: HudState): void {
@@ -85,5 +89,6 @@ export class HudView {
       if (taxi) { this.taxi.textContent = taxi.text; this.taxi.classList.toggle('is-on', taxi.available); }
     }
     this.fps.textContent = `${Math.round(state.fps)} FPS`; this.fps.hidden = !state.settings.showFps; this.cheats.hidden = !state.cheatsOn; this.crosshair.hidden = !state.crosshair;
+    this.scope.hidden = !state.scope; if (state.scope) this.scopeZoom.textContent = state.scope.zoom;
   }
 }

@@ -25,6 +25,16 @@ export function buildWeaponModel(id: WeaponId): THREE.Group | undefined {
     const pump = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.17, 0.08, 3, 0.02), wood); pump.position.set(0, -0.68, -0.01);
     const stock = new THREE.Mesh(new RoundedBoxGeometry(0.075, 0.22, 0.12, 3, 0.025), wood); stock.position.set(0, -0.32, -0.03); stock.rotation.x = -0.22;
     group.add(tube, under, pump, stock);
+  } else if (id === 'sniper') {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.023, 0.023, 0.8, 12), metal); barrel.position.set(0, -0.9, 0.03);
+    const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.031, 0.031, 0.1, 10), polymer); muzzle.position.set(0, -1.27, 0.03);
+    const receiver = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.34, 0.1, 3, 0.02), metal); receiver.position.set(0, -0.46, 0.02);
+    const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.28, 12), polymer); scopeTube.position.set(0, -0.5, 0.12);
+    const scopeEye = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.05, 12), polymer); scopeEye.position.set(0, -0.38, 0.12);
+    const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.09, 8), metal); bolt.rotation.z = Math.PI / 2; bolt.position.set(0.06, -0.42, 0.02);
+    const magazine = new THREE.Mesh(new RoundedBoxGeometry(0.05, 0.13, 0.07, 2, 0.015), polymer); magazine.position.set(0, -0.6, -0.045);
+    const stock = new THREE.Mesh(new RoundedBoxGeometry(0.072, 0.3, 0.13, 3, 0.025), wood); stock.position.set(0, -0.24, -0.03); stock.rotation.x = -0.2;
+    group.add(barrel, muzzle, receiver, scopeTube, scopeEye, bolt, magazine, stock);
   } else if (id === 'rpg') {
     const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 1.05, 14, 1, true), olive); tube.position.y = -0.68; tube.material.side = THREE.DoubleSide;
     const flare = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.075, 0.16, 14, 1, true), olive); flare.position.y = -0.12;

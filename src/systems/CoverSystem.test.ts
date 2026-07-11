@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Collider } from '../world/City';
 import {
   clampT, cornerSide, CORNER_HOLD, COVER_ENTER_RANGE, COVER_GAP, coverHeading, coverPosition, coverT,
-  MIN_COVER_HEIGHT, movingAway, nearestCoverSpot, peekEligible, tangentOf,
+  MIN_COVER_HEIGHT, movingAway, nearestCoverSpot, nearestGroundedCoverSpot, peekEligible, tangentOf,
 } from './CoverSystem';
 
 const box = (minX: number, maxX: number, minZ: number, maxZ: number, height = 20): Collider => ({ minX, maxX, minZ, maxZ, height });
@@ -37,6 +37,12 @@ describe('nearest-face detection', () => {
     const spot = nearestCoverSpot(12.2, 0, [building, other]); // 2.2 from building's +X, 1.8 from other's -X
     expect(spot?.collider).toBe(other);
     expect(spot?.normal).toEqual({ x: -1, z: 0 });
+  });
+
+  it('allows cover while grounded above world zero and rejects airborne entry', () => {
+    // Elevation is deliberately absent from cover math: grounding state is the source of truth.
+    expect(nearestGroundedCoverSpot(11.5, 0, true, [building])?.normal).toEqual({ x: 1, z: 0 });
+    expect(nearestGroundedCoverSpot(11.5, 0, false, [building])).toBeUndefined();
   });
 });
 
@@ -113,5 +119,37 @@ describe('facing and release', () => {
     expect(movingAway({ x: 0, z: 1 }, normal)).toBe(false);   // sliding along the wall
     expect(movingAway({ x: -1, z: 0 }, normal)).toBe(false);  // pushing into the wall
     expect(movingAway({ x: 0, z: 0 }, normal)).toBe(false);   // idle
+  });
+});
+
+describe('elevation-aware cover', () => {
+  const podium = { ...box(-10, 10, -10, 10, 9), y0: 0 };
+  const tier = { ...box(-6, 6, -6, 6, 26), y0: 9 }; // setback tower standing on the podium roof
+
+  it('keeps street-level cover against a ground wall', () => {
+    expect(nearestCoverSpot(11.5, 0, [podium], COVER_ENTER_RANGE, 0)?.normal).toEqual({ x: 1, z: 0 });
+  });
+
+  it('rejects walls the player already stands on top of', () => {
+    // On the podium roof (feet at 9) the podium's own faces shield nothing — only the tower does.
+    expect(nearestCoverSpot(7.5, 0, [podium], COVER_ENTER_RANGE, 9)).toBeUndefined();
+    const spot = nearestCoverSpot(7.5, 0, [podium, tier], COVER_ENTER_RANGE, 9);
+    expect(spot?.collider).toBe(tier);
+    expect(spot?.normal).toEqual({ x: 1, z: 0 });
+  });
+
+  it('rejects floating tiers with no wall at street level', () => {
+    expect(nearestCoverSpot(7.5, 0, [tier], COVER_ENTER_RANGE, 0)).toBeUndefined();
+  });
+
+  it('rejects walls too short to hide a player at his own elevation', () => {
+    const parapet = { ...box(-10, 10, -10, 10, 9 + MIN_COVER_HEIGHT - 0.1), y0: 0 };
+    expect(nearestCoverSpot(11.5, 0, [parapet], COVER_ENTER_RANGE, 9)).toBeUndefined();
+    expect(nearestCoverSpot(11.5, 0, [parapet], COVER_ENTER_RANGE, 0)?.normal).toEqual({ x: 1, z: 0 }); // plenty of wall from the street
+  });
+
+  it('still gates on grounding first, as restored by the elevated-cover fix', () => {
+    expect(nearestGroundedCoverSpot(11.5, 0, false, [podium], COVER_ENTER_RANGE, 0)).toBeUndefined();
+    expect(nearestGroundedCoverSpot(11.5, 0, true, [podium], COVER_ENTER_RANGE, 0)?.normal).toEqual({ x: 1, z: 0 });
   });
 });

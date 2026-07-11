@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COLORS, WORLD_SIZE } from '../config';
+import { COLORS, PLAYER, WORLD_SIZE } from '../config';
 import type { District, GameSettings } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import {
@@ -26,11 +26,48 @@ import { CITY_JUNCTIONS, UrbanInfrastructure } from './UrbanInfrastructure';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
 
-export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; }
+/** XZ AABB with a real vertical span: `height` above `y0`. `y0` is world-space; when omitted the collider is
+ *  grounded on the terrain under its centre (the flat-world registrations keep working untouched). */
+export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; y0?: number; }
+export const colliderBase = (box: Collider): number => box.y0 ?? terrainHeightAt((box.minX + box.maxX) / 2, (box.minZ + box.maxZ) / 2);
+export const colliderTop = (box: Collider): number => colliderBase(box) + box.height;
+
+/** Pure y-aware AABB occupancy: a collider blocks the band (y0, y1) only when its own span crosses it. */
+export function collidersBlock(colliders: readonly Collider[], x: number, z: number, radius: number, y0: number, y1: number): boolean {
+  return colliders.some((box) => x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ && colliderBase(box) < y1 && colliderTop(box) > y0);
+}
+
+/** Highest collider top at or below feetY + stepUp under the query circle; undefined when nothing is underfoot. */
+export function highestColliderTop(colliders: readonly Collider[], x: number, z: number, feetY: number, radius = 0.35): number | undefined {
+  const limit = feetY + PLAYER.stepUp; let best: number | undefined;
+  for (const box of colliders) {
+    if (x + radius <= box.minX || x - radius >= box.maxX || z + radius <= box.minZ || z - radius >= box.maxZ) continue;
+    const top = colliderTop(box);
+    if (top <= limit && (best === undefined || top > best)) best = top;
+  }
+  return best;
+}
 export interface RoadPoint { x: number; z: number; }
 export interface RoadsidePoint extends RoadPoint { inwardX: number; inwardZ: number; width: number; }
 export interface RoadPose { position: THREE.Vector3; heading: number; }
 export interface RoadDefinition { name: string; width: number; closed?: boolean; points: RoadPoint[]; }
+export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
+
+export const ROAD_SURFACE_OFFSET = 0.055;
+export const SIDEWALK_RISE = 0.22;
+
+/** Broad deterministic relief: visible across a district, but gentle enough for urban driving. */
+/**
+ * Phase-2 merge decision: the generated 18000u Johannesburg map ships FLAT. Main's terrain
+ * machinery (surfaceHeightAt/roadHeightAt/sidewalkHeightAt/supportHeight, the y-aware colliders and
+ * the whole 3D-collision stack) is kept fully wired, but it is fed a neutral zero grid here so the
+ * world lays out flat-but-stable. Driving relief from the map JSON's SRTM heightgrid is the Phase-3
+ * terrain task; until then this returns 0 so roads/buildings/water/props all sit on a single plane.
+ */
+export function terrainHeightAt(x: number, z: number): number {
+  void x; void z; // args kept for the Phase-3 heightgrid signature; the Phase-2 grid is flat everywhere
+  return 0;
+}
 
 /** District ownership comes from the generated map's place nodes (nearest centre). */
 export const districtAt = generatedDistrictAt;
@@ -203,6 +240,7 @@ export class City {
       (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius),
       (x, z, margin) => this.isOnRoad(x, z, margin),
       this.props,
+      (x, z) => this.sidewalkHeightAt(x, z),
     );
     mergeStaticGeometry(this.group, MERGE_CHUNK_SIZE, this.chunkStore); // water is built after the merge: its meshes stay live for per-frame animation
     this.setWaterQuality(quality);
@@ -257,10 +295,19 @@ export class City {
     return RESERVED_PADS.some((pad) => (pad.x - x) ** 2 + (pad.z - z) ** 2 < (pad.radius + radius) ** 2);
   }
 
+  /** Ground-band test kept for peds/vehicles/nav: identical to the flat-world behaviour for anything rooted at street level. */
   collides(x: number, z: number, radius: number): boolean {
     if (Math.abs(x) > WORLD_SIZE / 2 - radius || Math.abs(z) > WORLD_SIZE / 2 - radius) return true;
     if (this.props.blocked(x, z, radius)) return true;
     return this.overlapsCollider(x, z, radius);
+  }
+
+  /** True 3D occupancy: world bounds, standing props and colliders whose vertical span crosses (y0, y1).
+   *  The player's 3D physics goes through here; the linear collidersBlock is fine for the single player. */
+  collidesAt(x: number, z: number, radius: number, y0: number, y1: number): boolean {
+    if (Math.abs(x) > WORLD_SIZE / 2 - radius || Math.abs(z) > WORLD_SIZE / 2 - radius) return true;
+    if (this.props.blockedBetween(x, z, radius, y0, y1, (px, pz) => this.surfaceHeightAt(px, pz))) return true;
+    return collidersBlock(this.colliders, x, z, radius, y0, y1);
   }
 
   /** Colliders are appended by shops/safehouses after construction: index incrementally on demand. */
@@ -278,12 +325,16 @@ export class City {
     }
   }
 
+  /** Fast ground-band occupancy for the many peds/vehicles/nav queries: the spatial grid keeps each
+   *  query single-cell, and the y-span filter matches collides()'s (ground, ground+2) band so a
+   *  floating setback tier over an open plaza doesn't block the street the way a podium wall does. */
   private overlapsCollider(x: number, z: number, radius: number): boolean {
     this.indexNewColliders();
+    const ground = terrainHeightAt(x, z);
     const key = `${Math.floor(x / this.colliderCellSize)},${Math.floor(z / this.colliderCellSize)}`;
     for (const index of this.colliderCells.get(key) ?? []) {
       const box = this.colliders[index]!;
-      if (x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ) return true;
+      if (x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ && colliderBase(box) < ground + 2 && colliderTop(box) > ground) return true;
     }
     return false;
   }
@@ -293,6 +344,61 @@ export class City {
     if (this.collides(output.x, from.z, radius)) output.x = from.x;
     if (this.collides(output.x, output.z, radius)) output.z = from.z;
     return output;
+  }
+
+  /** Player-grade clamp: geometry blocks only where it crosses the capsule band above the step allowance,
+   *  so a curb is walked up while a wall at head height still stops you — and a roof edge doesn't. */
+  clampMoveAt(from: THREE.Vector3, desired: THREE.Vector3, radius: number, height = PLAYER.height): THREE.Vector3 {
+    const y0 = from.y + PLAYER.stepUp; const y1 = from.y + height;
+    const output = desired.clone();
+    if (this.collidesAt(output.x, from.z, radius, y0, y1)) output.x = from.x;
+    if (this.collidesAt(output.x, output.z, radius, y0, y1)) output.z = from.z;
+    return output;
+  }
+
+  /** Highest standable surface whose top sits at or below feetY + stepUp: stacked building tiers, containers
+   *  and flat-topped props, falling back to the walkable ground. Feeds the player's landing/edge physics. */
+  supportHeight(x: number, z: number, feetY: number, radius = 0.35): number {
+    const best = highestColliderTop(this.colliders, x, z, feetY, radius);
+    const propTop = this.props.supportTop(x, z, radius, feetY + PLAYER.stepUp, (px, pz) => this.surfaceHeightAt(px, pz));
+    return Math.max(this.surfaceHeightAt(x, z), best ?? -Infinity, propTop ?? -Infinity);
+  }
+
+  terrainHeightAt(x: number, z: number): number { return terrainHeightAt(x, z); }
+
+  roadHeightAt(x: number, z: number): number { return terrainHeightAt(x, z) + ROAD_SURFACE_OFFSET; }
+
+  sidewalkHeightAt(x: number, z: number): number { return terrainHeightAt(x, z) + ROAD_SURFACE_OFFSET + SIDEWALK_RISE; }
+
+  isOnSidewalk(x: number, z: number): boolean {
+    if (this.isOnRoad(x, z)) return false;
+    return this.roadSurfaces.some((surface) => {
+      const distance = this.distanceToPath(x, z, surface.points, surface.closed);
+      return distance <= surface.width / 2 + 3.5;
+    });
+  }
+
+  surfaceHeightAt(x: number, z: number, preferred: SurfaceKind = 'auto'): number {
+    if (preferred === 'terrain') return this.terrainHeightAt(x, z);
+    if (preferred === 'road') return this.roadHeightAt(x, z);
+    if (preferred === 'sidewalk') return this.sidewalkHeightAt(x, z);
+    if (this.isOnRoad(x, z)) return this.roadHeightAt(x, z);
+    if (this.isOnSidewalk(x, z)) return this.sidewalkHeightAt(x, z);
+    // Generated parks are near-flat GREEN_POLYGON lawns (buildParks); no raised-planter offset here.
+    return this.terrainHeightAt(x, z);
+  }
+
+  surfaceNormalAt(x: number, z: number, preferred: SurfaceKind = 'auto', sample = 1.5): THREE.Vector3 {
+    const left = this.surfaceHeightAt(x - sample, z, preferred); const right = this.surfaceHeightAt(x + sample, z, preferred);
+    const back = this.surfaceHeightAt(x, z - sample, preferred); const front = this.surfaceHeightAt(x, z + sample, preferred);
+    return new THREE.Vector3(left - right, sample * 2, back - front).normalize();
+  }
+
+  private surfaceSegmentQuaternion(startX: number, startZ: number, endX: number, endZ: number, surface: SurfaceKind): THREE.Quaternion {
+    const forward = new THREE.Vector3(endX - startX, this.surfaceHeightAt(endX, endZ, surface) - this.surfaceHeightAt(startX, startZ, surface), endZ - startZ).normalize();
+    const normal = this.surfaceNormalAt((startX + endX) / 2, (startZ + endZ) / 2, surface);
+    const right = new THREE.Vector3().crossVectors(normal, forward).normalize(); const up = new THREE.Vector3().crossVectors(forward, right).normalize();
+    return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward));
   }
 
   private buildGround(): void {
@@ -318,15 +424,18 @@ export class City {
       const mapPath = sampled.map((point) => ({ ...point }));
       if (closed && mapPath[0]) mapPath.push({ ...mapPath[0] });
       this.roadPaths.push(mapPath);
-      const sidewalk = this.createRoadStrip(sampled, definition.width + sidewalkExtension(definition.width), sidewalkMat, 0.025, closed); sidewalk.receiveShadow = true; this.group.add(sidewalk);
-      const road = this.createRoadStrip(sampled, definition.width, roadMat, 0.055, closed); road.receiveShadow = true; road.name = definition.name; this.group.add(road);
-      if (definition.width >= 9) this.addRoadMarkings(sampled, definition.width, closed, dashTransforms, definition.width >= 11 ? edgeTransforms : undefined);
       const leftLane = this.offsetPath(sampled, -definition.width * 0.23, closed);
       const rightLane = this.offsetPath(sampled, definition.width * 0.23, closed).reverse();
       this.trafficRoutes.push(leftLane, rightLane);
       this.roadPoints.push(...leftLane, ...rightLane);
       const leftWalk = this.offsetPath(sampled, -(definition.width / 2 + 2.2), closed);
       const rightWalk = this.offsetPath(sampled, definition.width / 2 + 2.2, closed);
+      // Raised kerb-height sidewalk ribbons (main's terrain-aware model): sit at sidewalkHeightAt so
+      // peds placed via surfaceHeightAt('sidewalk') stand on them rather than floating over a flat apron.
+      for (const walk of [leftWalk, rightWalk]) { const sidewalk = this.createRoadStrip(walk, 3.5, sidewalkMat, SIDEWALK_RISE + ROAD_SURFACE_OFFSET, closed); sidewalk.receiveShadow = true; this.group.add(sidewalk); }
+      const road = this.createRoadStrip(sampled, definition.width, roadMat, ROAD_SURFACE_OFFSET, closed); road.receiveShadow = true; road.name = definition.name; this.group.add(road);
+      // Markings only on the wider carriageways: the generated map has many 6u lanes that read better bare.
+      if (definition.width >= 9) this.addRoadMarkings(sampled, definition.width, closed, dashTransforms, definition.width >= 11 ? edgeTransforms : undefined);
       this.sidewalkPoints.push(...leftWalk.filter((_, index) => index % 2 === 0), ...rightWalk.filter((_, index) => index % 2 === 0));
       this.addRoadsidePoints(sampled, definition.width, closed);
     }
@@ -406,7 +515,7 @@ export class City {
       if (distance < bestDistance) { bestDistance = distance; bestRoute = route; bestIndex = index; }
     }
     const point = bestRoute[bestIndex] ?? { x: 0, z: 0 }; const next = bestRoute[Math.min(bestIndex + 1, bestRoute.length - 1)] ?? bestRoute[Math.max(0, bestIndex - 1)] ?? point;
-    return { position: new THREE.Vector3(point.x, 0, point.z), heading: Math.atan2(next.x - point.x, next.z - point.z) };
+    return { position: new THREE.Vector3(point.x, this.roadHeightAt(point.x, point.z), point.z), heading: Math.atan2(next.x - point.x, next.z - point.z) };
   }
 
   roadPoseAwayFrom(position: THREE.Vector3, minimum: number, maximum: number): RoadPose {
@@ -441,7 +550,7 @@ export class City {
       const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz); if (length < 0.5) continue;
       const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
       if (CITY_JUNCTIONS.some((junction) => Math.hypot(midX - junction.x, midZ - junction.z) < junction.widest / 2 + 7)) continue;
-      const normalX = -dz / length; const normalZ = dx / length; quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(dx, dz));
+      const normalX = -dz / length; const normalZ = dx / length;
       for (const side of [-1, 1]) {
         const offset = side * (width / 2 + 0.22);
         const crossesRoad = [0, 0.5, 1].some((t) => {
@@ -450,7 +559,9 @@ export class City {
           return this.roadIndex.onRoad(sx, sz, 1.2, surface);
         });
         if (crossesRoad) continue;
-        matrix.compose(new THREE.Vector3(midX + normalX * offset, 0.15, midZ + normalZ * offset), quaternion, new THREE.Vector3(0.38, 0.22, length + 0.35)); transforms.push(matrix.clone());
+        const x = midX + normalX * offset; const z = midZ + normalZ * offset;
+        quaternion.copy(this.surfaceSegmentQuaternion(start.x + normalX * offset, start.z + normalZ * offset, end.x + normalX * offset, end.z + normalZ * offset, 'road'));
+        matrix.compose(new THREE.Vector3(x, this.roadHeightAt(x, z) + SIDEWALK_RISE / 2, z), quaternion, new THREE.Vector3(0.38, SIDEWALK_RISE, length + 0.35)); transforms.push(matrix.clone());
       }
     }
   }
@@ -463,8 +574,9 @@ export class City {
       const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle)); const right = new THREE.Vector3(forward.z, 0, -forward.x);
       quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), junction.angle);
       for (const forwardSide of [-1, 1]) for (const rightSide of [-1, 1]) {
-        const center = new THREE.Vector3(junction.x, 0.24, junction.z).addScaledVector(forward, forwardSide * reach).addScaledVector(right, rightSide * reach);
+        const center = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, forwardSide * reach).addScaledVector(right, rightSide * reach);
         if (this.isOnRoad(center.x, center.z, 0.4)) continue; // corner landed on tar: no tactile paving in a lane
+        center.y = this.sidewalkHeightAt(center.x, center.z) + 0.04; // sit the paving on the raised kerb
         matrix.compose(center, quaternion, new THREE.Vector3(2.5, 0.09, 1.65)); patchTransforms.push(matrix.clone());
         for (let row = -1; row <= 1; row++) for (let column = -2; column <= 2; column++) {
           const local = new THREE.Vector3(column * 0.38, 0.09, row * 0.38).applyQuaternion(quaternion);
@@ -483,7 +595,9 @@ export class City {
     for (let index = 0; index < points.length; index++) {
       if (index > 0) { const previous = points[index - 1]; const point = points[index]; if (previous && point) distance += Math.hypot(point.x - previous.x, point.z - previous.z); }
       const left = sides[index]; const right = opposite[index]; if (!left || !right) continue;
-      vertices.push(left.x, y, left.z, right.x, y, right.z); uvs.push(0, distance / 18, 1, distance / 18);
+      const leftOffset = y > ROAD_SURFACE_OFFSET && this.isOnRoad(left.x, left.z) ? ROAD_SURFACE_OFFSET : y;
+      const rightOffset = y > ROAD_SURFACE_OFFSET && this.isOnRoad(right.x, right.z) ? ROAD_SURFACE_OFFSET : y;
+      vertices.push(left.x, terrainHeightAt(left.x, left.z) + leftOffset, left.z, right.x, terrainHeightAt(right.x, right.z) + rightOffset, right.z); uvs.push(0, distance / 18, 1, distance / 18);
       if (index < points.length - 1) { const base = index * 2; indices.push(base, base + 2, base + 1, base + 2, base + 3, base + 1); }
     }
     if (closed && points.length > 2) { const last = (points.length - 1) * 2; indices.push(last, 0, last + 1, 0, 1, last + 1); }
@@ -497,12 +611,12 @@ export class City {
     for (let index = 0; index < segmentCount; index++) {
       const start = points[index]; const end = points[(index + 1) % points.length]; if (!start || !end) continue;
       const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz); if (length < 0.5) continue;
-      const angle = Math.atan2(dx, dz); const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
-      quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-      if (index % 2 === 0) { matrix.compose(new THREE.Vector3(midX, 0.088, midZ), quaternion, new THREE.Vector3(0.24, 0.025, Math.min(6.4, length * 0.64))); dashTransforms.push(matrix.clone()); }
+      const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
+      quaternion.copy(this.surfaceSegmentQuaternion(start.x, start.z, end.x, end.z, 'road'));
+      if (index % 2 === 0) { matrix.compose(new THREE.Vector3(midX, this.roadHeightAt(midX, midZ) + 0.033, midZ), quaternion, new THREE.Vector3(0.24, 0.025, Math.min(6.4, length * 0.64))); dashTransforms.push(matrix.clone()); }
       if (!edgeTransforms) continue;
       const normalX = -dz / length; const normalZ = dx / length;
-      for (const side of [-1, 1]) { matrix.compose(new THREE.Vector3(midX + normalX * side * (width / 2 - 0.72), 0.084, midZ + normalZ * side * (width / 2 - 0.72)), quaternion, new THREE.Vector3(0.13, 0.018, length + 0.35)); edgeTransforms.push(matrix.clone()); }
+      for (const side of [-1, 1]) { const x = midX + normalX * side * (width / 2 - 0.72); const z = midZ + normalZ * side * (width / 2 - 0.72); matrix.compose(new THREE.Vector3(x, this.roadHeightAt(x, z) + 0.029, z), quaternion, new THREE.Vector3(0.13, 0.018, length + 0.35)); edgeTransforms.push(matrix.clone()); }
     }
   }
 
@@ -619,8 +733,20 @@ export class City {
     }
   }
 
+  private distanceToPath(x: number, z: number, path: RoadPoint[], closed: boolean): number {
+    let nearest = Infinity; const segmentCount = closed ? path.length : path.length - 1;
+    for (let index = 0; index < segmentCount; index++) {
+      const start = path[index]; const end = path[(index + 1) % path.length]; if (!start || !end) continue;
+      const dx = end.x - start.x; const dz = end.z - start.z; const lengthSquared = dx * dx + dz * dz || 1;
+      const t = THREE.MathUtils.clamp(((x - start.x) * dx + (z - start.z) * dz) / lengthSquared, 0, 1);
+      nearest = Math.min(nearest, Math.hypot(x - (start.x + dx * t), z - (start.z + dz * t)));
+    }
+    return nearest;
+  }
+
   private addBuilding(x: number, z: number, w: number, d: number, h: number, style: BuildingStyle, variant: number): void {
-    const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 4, 0.2, d + 4), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(x, 0.1, z); parcel.receiveShadow = true; this.group.add(parcel);
+    const start = this.group.children.length;
+    const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 2, d + 6), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(x, -0.8, z); parcel.receiveShadow = true; this.group.add(parcel);
     const [rangeBase, rangeCount] = FACADE_RANGES[style];
     const facadeIndex = rangeBase + variant % rangeCount;
     const palette = BUILDING_PALETTES[style];
@@ -637,7 +763,22 @@ export class City {
     if (detailed && style !== 'industrial') this.addStreetLevelDetail(x, z, w, d, style, variant);
     this.addRoofEquipment(x, z, w, d, h, profile.roofY, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(x, z, w, d, profile.roofY, variant);
-    this.colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, height: h });
+    const base = this.terrainHeightAt(x, z);
+    this.liftNewChildren(start, base);
+    // one collider per massing tier: stepped setbacks become stacked boxes, so podium roofs are real floors
+    for (const tier of profile.tiers) this.colliders.push({ minX: tier.minX, maxX: tier.maxX, minZ: tier.minZ, maxZ: tier.maxZ, y0: base + tier.y0, height: tier.y1 - tier.y0 });
+  }
+
+  private liftNewChildren(start: number, fixedHeight?: number): void {
+    const matrix = new THREE.Matrix4(); const position = new THREE.Vector3(); const rotation = new THREE.Quaternion(); const scale = new THREE.Vector3();
+    for (const object of this.group.children.slice(start)) {
+      if (object instanceof THREE.InstancedMesh && fixedHeight === undefined) {
+        for (let index = 0; index < object.count; index++) {
+          object.getMatrixAt(index, matrix); matrix.decompose(position, rotation, scale); position.y += this.terrainHeightAt(position.x, position.z); matrix.compose(position, rotation, scale); object.setMatrixAt(index, matrix);
+        }
+        object.instanceMatrix.needsUpdate = true;
+      } else object.position.y += fixedHeight ?? this.terrainHeightAt(object.position.x, object.position.z);
+    }
   }
 
   private addLedge(x: number, z: number, w: number, d: number, y: number): void {
@@ -730,7 +871,7 @@ export class City {
     const roof = new THREE.Mesh(new THREE.RingGeometry(15, radius, 40), new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, side: THREE.DoubleSide })); roof.rotation.x = -Math.PI / 2; roof.position.y = height;
     const crown = createSignMesh(new THREE.CylinderGeometry(radius + 1, radius + 1, 8, 40, 1, true, 0, Math.PI), 'VODACOMB', '#e4372e', { doubleSide: true, powered: true }); crown.position.y = height + 4;
     ponte.add(shell, core, roof, crown); this.group.add(ponte);
-    this.colliders.push({ minX: x - radius, maxX: x + radius, minZ: z - radius, maxZ: z + radius, height });
+    this.colliders.push({ minX: x - radius, maxX: x + radius, minZ: z - radius, maxZ: z + radius, y0: this.terrainHeightAt(x, z), height });
   }
 
   private buildHillbrowTower(): void {

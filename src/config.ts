@@ -20,6 +20,7 @@ export const PLAYER = {
   gravity: 27,
   radius: 0.65,
   height: 1.8,
+  stepUp: 0.55, // curbs, plinths and low ledges are stepped onto, not collided with
   maxHealth: 100,
 };
 export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2 };
@@ -53,8 +54,8 @@ export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
   superbike: { kind: 'superbike', name: 'Sandton Rocket', color: 0x84f01c, maxSpeed: 60, acceleration: 46, brake: 46, steering: 3.1, drag: 0.5, health: 55, size: [0.78, 1.05, 2.2], twoWheeler: true, saddle: [0.1, -0.3] },
 };
 
-export type WeaponId = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rpg';
-export type WeaponSound = 'punch' | 'pistol' | 'smg' | 'shotgun' | 'launcher';
+export type WeaponId = 'fists' | 'pistol' | 'smg' | 'shotgun' | 'rpg' | 'sniper';
+export type WeaponSound = 'punch' | 'pistol' | 'smg' | 'shotgun' | 'launcher' | 'sniper';
 export interface ProjectileSpec { speed: number; radius: number; damage: number; }
 export interface WeaponSpec {
   id: WeaponId;
@@ -71,6 +72,7 @@ export interface WeaponSpec {
   spread: number;
   pellets: number;
   projectile?: ProjectileSpec;
+  falloffFloor?: number; // minimum damage falloff multiplier; the sniper's 1 means full damage at any range
   sound: WeaponSound;
 }
 
@@ -80,6 +82,8 @@ export const WEAPONS: WeaponSpec[] = [
   { id: 'smg', name: 'MICRO SMG', melee: false, auto: true, starter: false, damage: 16, cooldown: 0.09, range: 90, magazine: 30, reserve: 120, reloadTime: 1.6, spread: 0.022, pellets: 1, sound: 'smg' },
   { id: 'shotgun', name: 'PUMP SHOTGUN', melee: false, auto: false, starter: false, damage: 13, cooldown: 0.85, range: 42, magazine: 6, reserve: 24, reloadTime: 2.2, spread: 0.05, pellets: 7, sound: 'shotgun' },
   { id: 'rpg', name: 'RPG', melee: false, auto: false, starter: false, damage: 150, cooldown: 0.9, range: 200, magazine: 1, reserve: 4, reloadTime: 3, spread: 0, pellets: 0, projectile: { speed: 62, radius: 7, damage: 150 }, sound: 'launcher' },
+  // Bolt-action: the 1.6s cooldown is the bolt cycle. Range sits inside the 950 camera far plane and light fog.
+  { id: 'sniper', name: 'HUNTER .303', melee: false, auto: false, starter: false, damage: 110, cooldown: 1.6, range: 420, magazine: 5, reserve: 15, reloadTime: 2.8, spread: 0, pellets: 1, falloffFloor: 1, sound: 'sniper' },
 ];
 export const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map((spec) => [spec.id, spec])) as Record<WeaponId, WeaponSpec>;
 

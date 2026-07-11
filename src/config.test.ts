@@ -45,7 +45,7 @@ describe('vehicle configuration', () => {
 
 describe('weapon configuration', () => {
   it('gives each weapon a distinct combat role', () => {
-    expect(WEAPONS.map((spec) => spec.id)).toEqual(['fists', 'pistol', 'smg', 'shotgun', 'rpg']);
+    expect(WEAPONS.map((spec) => spec.id)).toEqual(['fists', 'pistol', 'smg', 'shotgun', 'rpg', 'sniper']); // order sets wheel slots and digit keys: sniper is Digit6
     expect(WEAPON_BY_ID.fists.melee).toBe(true);
     expect(WEAPON_BY_ID.smg.auto).toBe(true);
     expect(WEAPON_BY_ID.pistol.auto).toBe(false);
@@ -66,6 +66,25 @@ describe('weapon configuration', () => {
     expect(rpg.projectile!.speed).toBeLessThanOrEqual(70);
     expect(rpg.projectile!.radius).toBeGreaterThan(3);
     for (const spec of WEAPONS.filter((entry) => entry.id !== 'rpg')) expect(spec.projectile).toBeUndefined();
+  });
+
+  it('makes the sniper a slow, surgical, long-range one-shot rifle', () => {
+    const sniper = WEAPON_BY_ID.sniper; const pistol = WEAPON_BY_ID.pistol;
+    expect(sniper.starter).toBe(false);
+    expect(sniper.auto).toBe(false); // semi-auto: one crack per click
+    expect(sniper.spread).toBe(0);
+    expect(sniper.pellets).toBe(1);
+    expect(sniper.magazine).toBe(5);
+    expect(sniper.reserve).toBe(15);
+    expect(sniper.cooldown).toBeGreaterThanOrEqual(1.5); // the bolt cycle dwarfs every other trigger
+    for (const spec of WEAPONS.filter((entry) => entry.id !== 'sniper')) expect(spec.cooldown).toBeLessThan(sniper.cooldown);
+    expect(sniper.range).toBeGreaterThanOrEqual(400);
+    expect(sniper.range).toBeLessThan(950); // stays inside the camera far plane
+    expect(sniper.range).toBeGreaterThan(pistol.range * 3);
+    expect(sniper.falloffFloor).toBe(1); // no falloff: full damage across the whole range
+    expect(calculateDamage(sniper.damage, sniper.range, 0, sniper.falloffFloor)).toBe(sniper.damage);
+    expect(sniper.damage).toBeGreaterThanOrEqual(100); // one-shots a 60-health ped anywhere in range
+    expect(sniper.sound).toBe('sniper');
   });
 
   it('makes the shotgun devastating up close but capped at short range', () => {

@@ -61,9 +61,9 @@ export class SafehouseSystem {
 
   private addPadMarker(place: SafehousePlace): void {
     const disc = new THREE.Mesh(new THREE.CylinderGeometry(1.9, 1.9, 0.06, 26), new THREE.MeshBasicMaterial({ color: 0x58c97a, transparent: true, opacity: 0.5 }));
-    disc.position.set(place.pad.x, 0.32, place.pad.z);
+    disc.position.set(place.pad.x, place.pad.y + 0.32, place.pad.z);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(2.18, 0.09, 8, 26), new THREE.MeshBasicMaterial({ color: 0x74e392 }));
-    ring.rotation.x = Math.PI / 2; ring.position.set(place.pad.x, 0.34, place.pad.z);
+    ring.rotation.x = Math.PI / 2; ring.position.set(place.pad.x, place.pad.y + 0.34, place.pad.z);
     this.discs.push(disc); this.group.add(disc, ring);
   }
 

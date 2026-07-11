@@ -15,6 +15,13 @@ describe('FearSystem', () => {
     expect(fearContribution(FEAR_EVENTS.kill, 10)).toBeGreaterThan(fearContribution(FEAR_EVENTS.gunshot, 10));
   });
 
+  it('carries the sniper crack louder and much further than a pistol shot', () => {
+    expect(FEAR_EVENTS.sniperShot.base).toBeGreaterThan(FEAR_EVENTS.gunshot.base);
+    expect(FEAR_EVENTS.sniperShot.radius).toBeGreaterThanOrEqual(FEAR_EVENTS.gunshot.radius * 1.5);
+    expect(fearContribution(FEAR_EVENTS.sniperShot, 60)).toBeGreaterThan(0); // still heard beyond the pistol's whole radius
+    expect(fearContribution(FEAR_EVENTS.gunshot, 60)).toBe(0);
+  });
+
   it('accumulates repeated events up to the cap and ignores negatives', () => {
     let fear = 0;
     for (let i = 0; i < 6; i++) fear = accumulateFear(fear, fearContribution(FEAR_EVENTS.gunshot, 5));

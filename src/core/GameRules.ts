@@ -14,8 +14,8 @@ export class Economy {
   }
 }
 
-export function calculateDamage(base: number, distance: number, armour = 0): number {
-  const falloff = Math.max(0.35, 1 - Math.max(0, distance - 15) / 100);
+export function calculateDamage(base: number, distance: number, armour = 0, falloffFloor = 0.35): number {
+  const falloff = Math.max(falloffFloor, 1 - Math.max(0, distance - 15) / 100);
   return Math.max(0, Math.round(base * falloff - armour * 0.45));
 }
 
@@ -39,7 +39,7 @@ export interface DropRoll { cash: number; weapon?: WeaponId; ammo?: boolean; }
 export function rollDrops(kind: PedKind, random: () => number = Math.random): DropRoll {
   if (kind === 'guard') {
     const cash = 40 + Math.floor(random() * 80); const roll = random();
-    return { cash, weapon: roll < 0.12 ? 'rpg' : roll < 0.56 ? 'smg' : 'shotgun' };
+    return { cash, weapon: roll < 0.12 ? 'rpg' : roll < 0.56 ? 'smg' : roll < 0.95 ? 'shotgun' : 'sniper' }; // sniper is the rare 5% prize; rpg/smg odds untouched
   }
   if (kind === 'police') return { cash: 5 + Math.floor(random() * 25), weapon: 'pistol' };
   const cash = 10 + Math.floor(random() * 50); const roll = random();
@@ -64,11 +64,39 @@ export function moveSpeed(sprinting: boolean, fastRun: boolean, aiming = false):
 }
 
 export function crosshairVisible(aiming: boolean, melee: boolean): boolean { return aiming && !melee; }
-/** Drive-by needs aim mode and a one-handed gun: no fists, no shoulder-launched rockets inside a Golf. */
-export function canFireFromVehicle(aiming: boolean, melee: boolean, projectile = false): boolean { return aiming && !melee && !projectile; }
+/** Drive-by needs aim mode and a one-handed gun: no fists, no shoulder-launched rockets and no scoped rifles inside a Golf. */
+export function canFireFromVehicle(aiming: boolean, melee: boolean, projectile = false, scopedWeapon = false): boolean { return aiming && !melee && !projectile && !scopedWeapon; }
 
 export function jumpVelocity(bigJump: boolean): number {
   return PLAYER.jumpSpeed * (bigJump ? CHEATS.jumpMultiplier : 1);
+}
+
+/** GTA-style fall damage: drops within the safe height are free, then every unit costs health; ~32u is lethal.
+ *  The drop is measured from the fall origin (jump take-off or the edge walked off), which naturally exempts
+ *  big-jump landings back at their own launch height. */
+export const FALL_SAFE_DROP = 12;
+export const FALL_DAMAGE_PER_UNIT = 5;
+export function fallDamage(drop: number): number {
+  return drop <= FALL_SAFE_DROP ? 0 : Math.min(100, Math.round((drop - FALL_SAFE_DROP) * FALL_DAMAGE_PER_UNIT));
+}
+
+export interface VerticalMotion { y: number; velocityY: number; onGround: boolean; fallOriginY: number; }
+/** One tick of the player's vertical life against the highest standable support underfoot: step-up/step-down
+ *  snapping while grounded, gravity while airborne (walking off an edge starts a fall), and a landing report
+ *  whose drop is measured from the recorded fall origin. Pure, so headless sims can run the same physics. */
+export function stepVertical(motion: VerticalMotion, dt: number, support: number, jump?: number, stepUp = PLAYER.stepUp, gravity = PLAYER.gravity): { landed: boolean; drop: number } {
+  if (motion.onGround) {
+    if (jump !== undefined) { motion.velocityY = jump; motion.onGround = false; motion.fallOriginY = motion.y; }
+    else if (motion.y - support <= stepUp) { motion.y = support; motion.velocityY = 0; return { landed: false, drop: 0 }; }
+    else { motion.onGround = false; motion.velocityY = 0; motion.fallOriginY = motion.y; } // walked off an edge
+  }
+  motion.velocityY -= gravity * dt; motion.y += motion.velocityY * dt;
+  if (motion.velocityY <= 0 && motion.y <= support) {
+    const drop = motion.fallOriginY - support;
+    motion.y = support; motion.velocityY = 0; motion.onGround = true;
+    return { landed: true, drop };
+  }
+  return { landed: false, drop: 0 };
 }
 
 /** Bicycles have no throttle: W turns the cranks at a cruise, Shift (the sprint key) stands on the pedals. */

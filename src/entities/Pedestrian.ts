@@ -30,6 +30,7 @@ export class Pedestrian {
   speed = 2.4;
   idleTime = 0;
   route: RoadPoint[] = [];
+  private groundY = 0;
   private routeIndex = 0;
   private routed = false;
   private watchdog = new ProgressWatchdog();
@@ -41,7 +42,7 @@ export class Pedestrian {
   private arms: THREE.Mesh[] = [];
 
   constructor(scene: THREE.Scene, position: THREE.Vector3, index: number, hostile = false, police = false) {
-    this.group.position.copy(position); this.hostile = hostile; this.police = police; this.state = hostile ? 'hostile' : 'walk';
+    this.group.position.copy(position); this.groundY = position.y; this.hostile = hostile; this.police = police; this.state = hostile ? 'hostile' : 'walk';
     this.group.name = police ? 'JMPD Officer' : hostile ? 'Rank Enforcer' : 'Citizen'; this.group.userData.pedestrian = this;
     this.aggressive = !hostile && !police && index % 9 === 0; this.wallet = 25 + (index * 47) % 180; this.bravery = ((index * 37 + 11) % 100) / 100;
     scene.add(this.group); this.buildModel(index);
@@ -49,11 +50,13 @@ export class Pedestrian {
 
   update(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
     if (this.state === 'down') {
+      this.groundY = city.surfaceHeightAt(this.group.position.x, this.group.position.z); this.group.position.y = this.groundY + 0.36;
       if (this.downTimer <= 0) return; // health depleted: stays down
       this.downTimer -= dt;
       if (this.downTimer <= 0) this.rise(player);
       return;
     }
+    this.groundY = city.surfaceHeightAt(this.group.position.x, this.group.position.z); this.group.position.y = this.groundY;
     this.fear = decayFear(this.fear, dt);
     if (this.stumbleTimer > 0) {
       this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
@@ -76,7 +79,7 @@ export class Pedestrian {
     if (this.state === 'hostile') this.setGuardPose(distance); else { this.group.rotation.x = 0; this.setPanicPose(this.state === 'flee', false); }
     if (this.hailing && this.state === 'idle') { const arm = this.arms[1]; if (arm) { arm.rotation.x = Math.PI * 0.95; arm.rotation.z = -0.22; } } // curbside hail: one arm out for the cab
     if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(choices); return; }
-    if (this.destination.distanceToSquared(this.group.position) < 5) {
+    if ((this.destination.x - this.group.position.x) ** 2 + (this.destination.z - this.group.position.z) ** 2 < 5) {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }
       if (this.state !== 'walk' || !this.advanceRoute()) { this.state = 'idle'; this.idleTime = 1 + Math.random() * 4; return; }
     }
@@ -91,6 +94,7 @@ export class Pedestrian {
     const step = pace * dt;
     const desired = this.group.position.clone().addScaledVector(direction, step);
     const moved = city.clampMove(this.group.position, desired, 0.42); this.group.position.copy(moved);
+    this.groundY = city.surfaceHeightAt(moved.x, moved.z); this.group.position.y = this.groundY;
     if (moved.distanceToSquared(desired) > step * step * 0.25) { // blocked = progress well below the frame step (an absolute threshold never fires at 60fps and pinned peds on walls forever)
       if (this.state !== 'walk') this.pickDestination(choices);
       else if (!this.advanceRoute()) { this.state = 'idle'; this.idleTime = 0.4 + Math.random() * 0.9; } // skip the snagged waypoint; wedged with no route left → brief pause, then a fresh pick
@@ -112,7 +116,7 @@ export class Pedestrian {
     if (this.state === 'down' || this.contact) return false;
     this.health = Math.max(0, this.health - amount); this.fear = FEAR_MAX; this.enraged = this.aggressive && this.health > 0;
     this.state = this.health === 0 ? 'down' : this.aggressive ? 'hostile' : 'flee';
-    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = 0.36; }
+    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36; }
     return this.health === 0;
   }
 
