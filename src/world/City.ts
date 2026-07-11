@@ -63,6 +63,7 @@ export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
 
 export const ROAD_SURFACE_OFFSET = 0.055;
 export const SIDEWALK_RISE = 0.22;
+export const STOP_LINE_DEPTH = 0.6; // thickness (along travel) of an intersection stop bar — bold, reads as the feature
 
 /** True when (x, z) sits on any paved junction surface — used to blank lane markings there so a 4-way reads
  *  as one clean intersection instead of two ribbons' edge/centre lines crossing in an X. Same shape the
@@ -496,6 +497,7 @@ export class City {
     }
     this.addInstanced(box, curbMat, curbTransforms, { cast: true, receive: true });
     this.buildJunctionSurfaces(roadMat);
+    this.buildStopLines();
     this.buildIntersections();
     this.buildPotholes();
   }
@@ -524,6 +526,32 @@ export class City {
     const merged = parts.length ? mergeGeometries(parts, false) : null;
     if (!merged) return;
     const mesh = new THREE.Mesh(merged, roadMat); mesh.receiveShadow = true; this.group.add(mesh);
+  }
+
+  /** SA-style intersection stop bars: a solid transverse white line across each STOPPING approach, set just
+   *  outside the paved junction mouth and spanning the inbound half of the carriageway (left-hand traffic, so
+   *  the near lane is offset to the -dz,+dx side of the outward bearing). Which approaches stop is decided by
+   *  road hierarchy in computeStopLines — the continuous main road at an uncontrolled T gets none. Same paint
+   *  as the zebra crossings, merged into one mesh so mergeStaticGeometry folds it into the chunked buckets. */
+  private buildStopLines(): void {
+    const paint = new THREE.MeshStandardMaterial({ color: 0xe9e6d6, roughness: 0.78 });
+    const lift = ROAD_SURFACE_OFFSET + 0.035; // marking layer: above the junction disc (0.067) and dashes
+    const bars: THREE.BufferGeometry[] = [];
+    for (const surface of JUNCTION_SURFACES) {
+      const setback = junctionReach(surface) + STOP_LINE_DEPTH / 2 + 0.5; // clear of the paved junction, at the approach mouth
+      for (const line of surface.stopLines) {
+        const half = line.width / 2; // paint only the inbound lane(s) — the near half of the carriageway
+        const cx = surface.x + line.dirX * setback + -line.dirZ * (line.width / 4);
+        const cz = surface.z + line.dirZ * setback + line.dirX * (line.width / 4);
+        const bar = new THREE.BoxGeometry(half, 0.02, STOP_LINE_DEPTH); // x spans the lane, z is the bar's thickness
+        bar.rotateY(Math.atan2(line.dirX, line.dirZ)); // local +z onto the road bearing, +x across it
+        bar.translate(cx, terrainHeightAt(cx, cz) + lift, cz);
+        bars.push(bar);
+      }
+    }
+    const merged = bars.length ? mergeGeometries(bars, false) : null;
+    if (!merged) return;
+    const mesh = new THREE.Mesh(merged, paint); mesh.receiveShadow = true; this.group.add(mesh);
   }
 
   private buildPotholes(): void {

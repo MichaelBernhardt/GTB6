@@ -415,6 +415,55 @@ export interface JunctionSurface {
   /** The distinct incident carriageways, so the renderer can pave each arm's strip through the node — a disc
    *  alone leaves the square crossing's corners (and the ribbon edge-lines) poking out as an "X". */
   arms: JunctionArm[];
+  /** The approaches that carry a painted stop/yield bar (outward bearing + carriageway width). SA rule: a
+   *  signalised junction and every 4-way stops all its approaches; at an uncontrolled T the continuous
+   *  through-road is exempt and only the terminating minor(s) get a line. See computeStopLines. */
+  stopLines: JunctionArm[];
+}
+
+/** Collapse arms sharing the SAME outward bearing (not opposed — a through-road's two ends stay separate,
+ *  each is its own approach), keeping the widest width. Deterministic. */
+function distinctBearings(arms: JunctionArm[]): JunctionArm[] {
+  const out: JunctionArm[] = [];
+  for (const arm of arms) {
+    const match = out.find((existing) => existing.dirX * arm.dirX + existing.dirZ * arm.dirZ > 0.985);
+    if (match) { if (arm.width > match.width) match.width = arm.width; }
+    else out.push({ ...arm });
+  }
+  return out;
+}
+
+/**
+ * Which approaches at a junction get a painted stop bar, from the incident-road tally and whether the node
+ * is signalised. A road that contributes >= 2 incident segments passes/bends through the node (continuous);
+ * one segment terminates there. SA marking convention:
+ *  - signalised (robot): every approach stops -> line on all.
+ *  - >= 2 through-roads (a proper crossing / 4-way): line on all approaches.
+ *  - otherwise (a T or minor spur): the continuous through-road is priority and gets NO line; only the
+ *    terminating minor approaches are painted.
+ */
+export function computeStopLines(
+  incident: Array<{ name: string; width: number; dirX: number; dirZ: number }>,
+  signalised: boolean,
+): JunctionArm[] {
+  const byName = new Map<string, { width: number; dirs: JunctionArm[] }>();
+  for (const entry of incident) {
+    const length = Math.hypot(entry.dirX, entry.dirZ);
+    if (length < 1e-6) continue; // degenerate spot: no bearing
+    const road = byName.get(entry.name) ?? { width: entry.width, dirs: [] };
+    road.width = Math.max(road.width, entry.width);
+    road.dirs.push({ dirX: entry.dirX / length, dirZ: entry.dirZ / length, width: entry.width });
+    byName.set(entry.name, road);
+  }
+  const throughRoads = [...byName.values()].filter((road) => distinctBearings(road.dirs).length >= 2);
+  const paintAll = signalised || throughRoads.length >= 2;
+  const lines: JunctionArm[] = [];
+  for (const road of byName.values()) {
+    const isThrough = distinctBearings(road.dirs).length >= 2;
+    if (!paintAll && isThrough) continue; // the continuous main road at an uncontrolled T keeps priority — no bar
+    for (const dir of distinctBearings(road.dirs)) lines.push({ dirX: dir.dirX, dirZ: dir.dirZ, width: road.width });
+  }
+  return distinctBearings(lines);
 }
 
 /** Collapse a node's incident roads to distinct outward directions (a through-road's two opposed vertices
@@ -448,13 +497,18 @@ export interface JunctionSurfaceOptions {
  */
 export function computeJunctionSurfaces(options: JunctionSurfaceOptions = {}): JunctionSurface[] {
   const { minDegree = 3, margin = 1 } = options;
+  const signalised = new Set(SIGNAL_JUNCTIONS.map((junction) => `${junction.x}|${junction.z}`)); // robots stop every approach
   const surfaces: JunctionSurface[] = [];
   for (const accumulator of junctionAccumulators()) {
     if (accumulator.degree < minDegree) continue;
     let widest = 0;
     for (const incident of accumulator.incident) if (incident.width > widest) widest = incident.width;
     if (widest <= 0) continue;
-    surfaces.push({ x: accumulator.x, z: accumulator.z, radius: widest / 2 + margin, widest, degree: accumulator.degree, arms: distinctArms(accumulator.incident) });
+    surfaces.push({
+      x: accumulator.x, z: accumulator.z, radius: widest / 2 + margin, widest, degree: accumulator.degree,
+      arms: distinctArms(accumulator.incident),
+      stopLines: computeStopLines(accumulator.incident, signalised.has(`${accumulator.x}|${accumulator.z}`)),
+    });
   }
   return surfaces;
 }

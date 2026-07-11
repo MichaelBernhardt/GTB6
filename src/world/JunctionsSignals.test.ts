@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeJunctionSurfaces, JUNCTION_SURFACES, junctionPaves, junctionReach, SIGNAL_JUNCTIONS } from './mapData';
+import { computeJunctionSurfaces, computeStopLines, JUNCTION_SURFACES, junctionPaves, junctionReach, SIGNAL_JUNCTIONS } from './mapData';
 import { signalHoldsDriver, signalPhaseState, SIGNAL_STOP_APPROACH, type JunctionDefinition } from './UrbanInfrastructure';
 
 describe('intersection surfaces (BUG B: unify overlapping road ribbons)', () => {
@@ -65,6 +65,45 @@ describe('intersection surfaces (BUG B: unify overlapping road ribbons)', () => 
       expect(reach).toBeGreaterThanOrEqual(surface.radius); // never smaller than the centre disc
       expect(reach).toBeGreaterThanOrEqual(surface.widest * 0.71); // spans the square crossing's half-diagonal
       expect(junctionPaves(surface, surface.x, surface.z)).toBe(true); // the node centre is always paved
+    }
+  });
+
+  it('picks stop-line approaches by SA hierarchy: 4-way all, T stem only, robots all', () => {
+    const cross = [ // two through roads crossing: a 4-way
+      { name: 'Main', width: 12, dirX: 1, dirZ: 0 }, { name: 'Main', width: 12, dirX: -1, dirZ: 0 },
+      { name: 'Cross', width: 12, dirX: 0, dirZ: 1 }, { name: 'Cross', width: 12, dirX: 0, dirZ: -1 },
+    ];
+    expect(computeStopLines(cross, false).length).toBe(4); // every approach of a 4-way stops
+
+    const tee = [ // a through main + a terminating stem
+      { name: 'Main', width: 14, dirX: 1, dirZ: 0 }, { name: 'Main', width: 14, dirX: -1, dirZ: 0 },
+      { name: 'Stem', width: 8, dirX: 0, dirZ: 1 },
+    ];
+    const teeLines = computeStopLines(tee, false);
+    expect(teeLines.length).toBe(1); // only the stem stops...
+    expect(teeLines[0]).toMatchObject({ dirX: 0, dirZ: 1, width: 8 }); // ...and it is the stem, not the main road
+    expect(computeStopLines(tee, true).length).toBe(3); // but a robot on that same T stops all three approaches
+  });
+
+  it('stop lines are well-formed, and the through-road exemption really fires on real T-junctions', () => {
+    for (const surface of JUNCTION_SURFACES) {
+      for (const line of surface.stopLines) {
+        expect(Math.hypot(line.dirX, line.dirZ)).toBeCloseTo(1);
+        expect(line.width).toBeGreaterThan(0);
+      }
+    }
+    // A real T (one through-road collapses to a single arm + a stem) paints exactly the stem: fewer lines
+    // than it has approaches, proving the main road stays bare.
+    const tees = JUNCTION_SURFACES.filter((s) => s.degree === 3 && s.arms.length === 2 && s.stopLines.length === 1);
+    expect(tees.length).toBeGreaterThan(20);
+    // True 4-way crossings (two through-roads) paint every approach: four stop lines.
+    const crossings = JUNCTION_SURFACES.filter((s) => s.degree >= 4 && s.stopLines.length >= 4);
+    expect(crossings.length).toBeGreaterThan(15);
+    // Signalised junctions stop every approach — never fewer lines than distinct arms, always at least one.
+    const signalKeys = new Set(SIGNAL_JUNCTIONS.map((j) => `${j.x}|${j.z}`));
+    for (const surface of JUNCTION_SURFACES) {
+      if (!signalKeys.has(`${surface.x}|${surface.z}`)) continue;
+      expect(surface.stopLines.length).toBeGreaterThanOrEqual(surface.arms.length);
     }
   });
 
