@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { DEFAULT_CHEATS, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeSafehouses, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
 import type { CheatSettings, GameSettings, SavedVehicle, SavedWeapons } from '../types';
 
 class MemoryStorage implements StorageLike {
@@ -145,6 +145,21 @@ describe('SaveManager', () => {
     expect(sanitizeCheats({ fastRun: true })).toEqual({ fastRun: true, bigJump: false, invulnerable: false });
     const defaults = sanitizeCheats(undefined); defaults.fastRun = true;
     expect(DEFAULT_CHEATS.fastRun).toBe(false);
+  });
+
+  it('round trips owned safehouses and defaults old saves to the starter flat', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, safehouses: [STARTER_SAFEHOUSE] });
+    expect(manager.load().safehouses).toEqual([STARTER_SAFEHOUSE]);
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
+    expect(manager.load().safehouses).toEqual([STARTER_SAFEHOUSE]);
+  });
+
+  it('sanitizes safehouse lists: junk ids drop, the starter is always owned, duplicates collapse', () => {
+    expect(sanitizeSafehouses(undefined)).toEqual([STARTER_SAFEHOUSE]);
+    expect(sanitizeSafehouses('brixton')).toEqual([STARTER_SAFEHOUSE]);
+    expect(sanitizeSafehouses(['penthouse', 7, null])).toEqual([STARTER_SAFEHOUSE]);
+    expect(sanitizeSafehouses(['brixton', 'brixton'])).toEqual([STARTER_SAFEHOUSE]);
   });
 
   it('migrates version 1 saves to neutral Living City state without losing progress', () => {

@@ -1,6 +1,7 @@
 import type { Vector3 } from 'three';
 import type { VehicleKind, WeaponId } from './config';
 import type { LivingCityState } from './systems/LivingCitySystem';
+import type { SafehouseId } from './systems/SafehouseSystem';
 
 export type GameMode = 'loading' | 'menu' | 'playing' | 'paused' | 'dead';
 export type District = 'Joburg CBD' | 'Sandton' | 'City Deep' | 'Braamfontein' | 'Zoo Lake';
@@ -21,6 +22,7 @@ export interface SavedGame {
   garage: SavedVehicle | null;
   livingCity: LivingCityState;
   timeOfDay: number;
+  safehouses: SafehouseId[];
 }
 export interface GameSettings {
   masterVolume: number;

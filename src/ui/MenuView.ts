@@ -51,6 +51,14 @@ export class MenuView {
     for (const entry of entries) { this.bind(`[data-buy="${entry.id}"]`, () => actions.buy(entry.id)); this.bind(`[data-ammo="${entry.id}"]`, () => actions.ammo(entry.id)); } this.bind('[data-action="leave"]', actions.leave);
   }
 
+  safehouse(name: string, sleepHours: number, actions: { save: () => void; sleep: () => void; leave: () => void }): void {
+    this.set('safehouse', `<section class="menu-card"><header><p class="eyebrow">SAFEHOUSE · ${name.toUpperCase()}</p><h2>Home, sharp sharp.</h2><span>Saving or sleeping sets your wake-up spot to this door.</span></header><nav class="pause-nav">
+      <button class="action-primary" data-action="save">Save game</button>
+      <button data-action="sleep">Sleep &middot; skip ${sleepHours} hours, heal up</button>
+      <button data-action="leave">Back to the street</button></nav></section>`);
+    this.bind('[data-action="save"]', actions.save); this.bind('[data-action="sleep"]', actions.sleep); this.bind('[data-action="leave"]', actions.leave);
+  }
+
   choice(title: string, choices: MissionChoice[], choose: (id: MissionChoice['id']) => void): void {
     this.set('choice', `<section class="menu-card menu-card--choice"><header><p class="eyebrow">THE CITY WILL REMEMBER</p><h2>${title}</h2><span>This decision cannot be undone.</span></header><div class="choice-grid">${choices.map((choice, index) => `<button data-choice="${choice.id}"><small>OPTION 0${index + 1}</small><b>${choice.label}</b><span>${choice.detail}</span><em>REWARD ${formatMoney(choice.reward)}</em></button>`).join('')}</div></section>`); for (const choice of choices) this.bind(`[data-choice="${choice.id}"]`, () => choose(choice.id));
   }

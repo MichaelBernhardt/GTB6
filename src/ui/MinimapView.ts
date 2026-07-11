@@ -1,7 +1,7 @@
 import type { RoadPoint } from '../world/City';
 
 export interface MapPoint { x: number; z: number; }
-export interface MapMarker extends MapPoint { color: string; }
+export interface MapMarker extends MapPoint { color: string; shape?: 'house'; }
 
 export class MinimapView {
   readonly canvas = document.createElement('canvas');
@@ -20,7 +20,13 @@ export class MinimapView {
     for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (const point of road.slice(1)) ctx.lineTo(point.x * scale, point.z * scale); ctx.stroke(); }
     ctx.strokeStyle = '#c8c4ad'; ctx.lineWidth = 7 * scale;
     for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (const point of road.slice(1)) ctx.lineTo(point.x * scale, point.z * scale); ctx.stroke(); }
-    for (const marker of markers) { ctx.fillStyle = marker.color; ctx.beginPath(); ctx.arc(marker.x * scale, marker.z * scale, 6, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#111817'; ctx.lineWidth = 2; ctx.stroke(); }
+    for (const marker of markers) {
+      ctx.fillStyle = marker.color; ctx.strokeStyle = '#111817'; ctx.lineWidth = 2;
+      const mx = marker.x * scale; const mz = marker.z * scale;
+      if (marker.shape === 'house') { ctx.beginPath(); ctx.moveTo(mx, mz - 7.5); ctx.lineTo(mx + 6, mz - 1.5); ctx.lineTo(mx + 6, mz + 6); ctx.lineTo(mx - 6, mz + 6); ctx.lineTo(mx - 6, mz - 1.5); ctx.closePath(); }
+      else { ctx.beginPath(); ctx.arc(mx, mz, 6, 0, Math.PI * 2); }
+      ctx.fill(); ctx.stroke();
+    }
     ctx.fillStyle = '#56b7d7'; for (const unit of police) { ctx.fillRect(unit.x * scale - 4, unit.z * scale - 4, 8, 8); }
     ctx.fillStyle = '#e3533f'; for (const foe of hostiles) { ctx.beginPath(); ctx.arc(foe.x * scale, foe.z * scale, 4, 0, Math.PI * 2); ctx.fill(); }
     ctx.restore();
