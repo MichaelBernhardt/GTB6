@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { PropRegistry } from '../systems/PropSystem';
+import { addInstancedChunks, type ChunkStore, type InstanceItem, type InstanceSlot } from './ChunkVisibility';
 import type { RoadPoint, RoadsidePoint } from './City';
 import { SIGNAL_JUNCTIONS } from './mapData';
 import { ETOLL_SPOTS, ROADSIDE_SIGNS, SPAWN_SIGN_JUNCTIONS, TRANSIT_STOPS } from './placements';
@@ -8,6 +9,9 @@ import { createSignMesh } from './ProceduralMaterials';
 import { onPowerChange } from './powerGrid';
 
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+
+/** Hide one instance of a per-cell InstancedMesh (knocked-over prop). */
+const hideSlot = (slot: InstanceSlot): void => { slot.mesh.setMatrixAt(slot.index, HIDDEN_MATRIX); slot.mesh.instanceMatrix.needsUpdate = true; };
 
 export interface JunctionDefinition {
   x: number;
@@ -43,7 +47,8 @@ export class UrbanInfrastructure {
   lampsXZ = new Float32Array(0);
   private group = new THREE.Group();
   private lenses: SignalLens[] = [];
-  private lensMesh?: THREE.InstancedMesh;
+  private lensSlots: InstanceSlot[] = [];
+  private lensDirty = new Set<THREE.InstancedMesh>();
   private lensColor = new THREE.Color();
   private elapsed = 0;
   private bulbMaterial?: THREE.MeshBasicMaterial;
@@ -51,6 +56,10 @@ export class UrbanInfrastructure {
 
   constructor(
     parent: THREE.Group,
+    /** World-tier chunk grid (~2500u): trees and everything with a far-readable silhouette. */
+    private chunks: ChunkStore,
+    /** Detail-tier chunk grid (~1200u): furniture, lamp hardware, lenses — sub-pixel beyond it. */
+    private detail: ChunkStore,
     private roadsidePoints: RoadsidePoint[],
     private isBlocked: (x: number, z: number, radius: number) => boolean,
     private isRoad: (x: number, z: number, margin: number) => boolean,
@@ -69,15 +78,18 @@ export class UrbanInfrastructure {
 
   update(dt: number): void {
     this.elapsed = (this.elapsed + dt) % 30;
-    const mesh = this.lensMesh; if (!mesh) return;
+    this.lensDirty.clear();
     this.lenses.forEach((lens, index) => {
-      const cycle = (this.elapsed + lens.phase + lens.axis * 15) % 30;
+      const slot = this.lensSlots[index];
+      if (!slot) return;
+      const cycle = (this.elapsed + lens.phase + lens.axis * 15) % 30; // culled lens meshes still get colors: the GPU upload only happens when their chunk is rendered again
       const on = this.powered && (lens.channel === 2 ? cycle < 11 : lens.channel === 1 ? cycle >= 11 && cycle < 14 : cycle >= 14);
       this.lensColor.setHex(on ? SIGNAL_COLORS[lens.channel] : 0x14100e);
       if (on) this.lensColor.multiplyScalar(2.1);
-      mesh.setColorAt(index, this.lensColor);
+      slot.mesh.setColorAt(slot.index, this.lensColor);
+      this.lensDirty.add(slot.mesh);
     });
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    for (const mesh of this.lensDirty) if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
 
   /** 0 = day (dim panel), 1 = night: pushes the shared bulb material into HDR so streetlamp heads bloom.
@@ -102,73 +114,77 @@ export class UrbanInfrastructure {
 
     const shrubSites = sites.filter((_, index) => index % 3 === 0);
     const shrubGeometry = new THREE.SphereGeometry(1, 16, 10);
-    const shrubs = new THREE.InstancedMesh(shrubGeometry, new THREE.MeshStandardMaterial({ color: 0x365f3d, roughness: 0.94 }), shrubSites.length * 3);
     const shrubDebrisMaterial = new THREE.MeshStandardMaterial({ color: 0x3c6a41, roughness: 0.94 });
-    const matrix = new THREE.Matrix4(); const color = new THREE.Color(); let shrubIndex = 0;
+    const items: InstanceItem[] = [];
+    const placed: Array<{ x: number; z: number; scale: number }> = [];
     shrubSites.forEach((site, index) => {
       for (let cluster = 0; cluster < 3; cluster++) {
         const angle = cluster / 3 * Math.PI * 2 + index; const scale = 0.42 + ((index + cluster) % 4) * 0.08;
         const x = site.x + Math.cos(angle) * 1.35; const z = site.z + Math.sin(angle) * 1.35;
-        matrix.compose(new THREE.Vector3(x, scale * 0.75, z), new THREE.Quaternion(), new THREE.Vector3(scale * 1.25, scale, scale));
-        shrubs.setMatrixAt(shrubIndex, matrix); shrubs.setColorAt(shrubIndex, color.setHex(cluster === 1 ? 0x4f7d45 : 0x315c3b));
-        const instance = shrubIndex;
-        this.props.register('shrub', x, z, scale * 1.1, scale * 1.5, {
-          hide: () => { shrubs.setMatrixAt(instance, HIDDEN_MATRIX); shrubs.instanceMatrix.needsUpdate = true; },
-          debris: () => {
-            const group = new THREE.Group(); group.position.set(x, 0, z);
-            const tuft = new THREE.Mesh(shrubGeometry, shrubDebrisMaterial); tuft.position.y = scale * 0.75; tuft.scale.set(scale * 1.25, scale, scale); tuft.castShadow = true; group.add(tuft);
-            return group;
-          },
-        });
-        shrubIndex++;
+        const matrix = new THREE.Matrix4().compose(new THREE.Vector3(x, scale * 0.75, z), new THREE.Quaternion(), new THREE.Vector3(scale * 1.25, scale, scale));
+        items.push({ x, z, matrix, color: new THREE.Color(cluster === 1 ? 0x4f7d45 : 0x315c3b) });
+        placed.push({ x, z, scale });
       }
     });
-    shrubs.castShadow = true; shrubs.receiveShadow = true; this.group.add(shrubs);
+    const slots = addInstancedChunks(this.detail, shrubGeometry, new THREE.MeshStandardMaterial({ color: 0x365f3d, roughness: 0.94 }), items, { cast: true, receive: true });
+    placed.forEach(({ x, z, scale }, index) => {
+      const slot = slots[index]!;
+      this.props.register('shrub', x, z, scale * 1.1, scale * 1.5, {
+        hide: () => hideSlot(slot),
+        debris: () => {
+          const group = new THREE.Group(); group.position.set(x, 0, z);
+          const tuft = new THREE.Mesh(shrubGeometry, shrubDebrisMaterial); tuft.position.y = scale * 0.75; tuft.scale.set(scale * 1.25, scale, scale); tuft.castShadow = true; group.add(tuft);
+          return group;
+        },
+      });
+    });
   }
 
   private buildBroadleafTrees(sites: RoadPoint[]): void {
     const trunkGeometry = new THREE.CylinderGeometry(0.32, 0.58, 5.2, 14);
     const crownGeometry = new THREE.SphereGeometry(1, 20, 14);
-    const trunks = new THREE.InstancedMesh(trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x5c402c, roughness: 0.96 }), sites.length);
-    const crowns = new THREE.InstancedMesh(crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }), sites.length * 5);
-    const matrix = new THREE.Matrix4(); const color = new THREE.Color(); const quaternion = new THREE.Quaternion();
+    const trunkItems: InstanceItem[] = []; const crownItems: InstanceItem[] = [];
+    const quaternion = new THREE.Quaternion();
     sites.forEach((site, index) => {
       const height = 0.9 + (index % 5) * 0.035;
       this.props.register('tree', site.x, site.z, 0.5, 5.2 * height); // trunk-sized, so the sidewalk stays walkable
-      matrix.compose(new THREE.Vector3(site.x, 2.6 * height, site.z), quaternion, new THREE.Vector3(height, height, height)); trunks.setMatrixAt(index, matrix);
+      trunkItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 2.6 * height, site.z), quaternion, new THREE.Vector3(height, height, height)) });
       const offsets: Array<[number, number, number, number]> = [[0, 6.2, 0, 2.25], [-1.45, 5.65, 0.3, 1.8], [1.35, 5.75, -0.35, 1.9], [0.25, 5.6, 1.3, 1.65], [-0.35, 6.45, -0.9, 1.55]];
       const palette = index % 4 === 0 ? [0x8a6cc4, 0x9b7fd4, 0xb18ae0, 0x8a6cc4] : [0x4c6b38, 0x5d7a3e, 0x6f8646, 0x445e34];
       offsets.forEach(([ox, oy, oz, scale], cluster) => {
         const sway = ((index * 17 + cluster * 7) % 11 - 5) * 0.055;
-        matrix.compose(new THREE.Vector3(site.x + ox + sway, oy * height, site.z + oz - sway), quaternion, new THREE.Vector3(scale * (1 + sway * 0.2), scale * 0.78, scale));
-        const instance = index * offsets.length + cluster; crowns.setMatrixAt(instance, matrix);
-        crowns.setColorAt(instance, color.setHex(palette[(index + cluster) % 4] ?? 0x5d7a3e));
+        crownItems.push({
+          x: site.x, z: site.z,
+          matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x + ox + sway, oy * height, site.z + oz - sway), quaternion, new THREE.Vector3(scale * (1 + sway * 0.2), scale * 0.78, scale)),
+          color: new THREE.Color(palette[(index + cluster) % 4] ?? 0x5d7a3e),
+        });
       });
     });
-    trunks.castShadow = true; trunks.receiveShadow = true; crowns.castShadow = true; crowns.receiveShadow = true;
-    this.group.add(trunks, crowns);
+    addInstancedChunks(this.chunks, trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x5c402c, roughness: 0.96 }), trunkItems, { cast: true, receive: true });
+    addInstancedChunks(this.chunks, crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }), crownItems, { cast: true, receive: true });
   }
 
   private buildJacarandas(sites: RoadPoint[]): void {
     const trunkGeometry = new THREE.CylinderGeometry(0.26, 0.52, 4.6, 14);
     const crownGeometry = new THREE.SphereGeometry(1, 20, 14);
-    const trunks = new THREE.InstancedMesh(trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x6b4d38, roughness: 0.92 }), sites.length);
-    const crowns = new THREE.InstancedMesh(crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86 }), sites.length * 5);
-    const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion(); const color = new THREE.Color();
+    const trunkItems: InstanceItem[] = []; const crownItems: InstanceItem[] = [];
+    const quaternion = new THREE.Quaternion();
     sites.forEach((site, index) => {
       const height = 0.92 + (index % 4) * 0.045;
       this.props.register('tree', site.x, site.z, 0.45, 4.6 * height); // jacaranda trunks are as solid as any other tree
-      matrix.compose(new THREE.Vector3(site.x, 2.3 * height, site.z), quaternion, new THREE.Vector3(height, height, height)); trunks.setMatrixAt(index, matrix);
+      trunkItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 2.3 * height, site.z), quaternion, new THREE.Vector3(height, height, height)) });
       const offsets: Array<[number, number, number, number]> = [[0, 5.4, 0, 2.5], [-1.7, 4.9, 0.4, 1.9], [1.6, 5, -0.4, 2], [0.3, 4.8, 1.55, 1.75], [-0.45, 5.6, -1.05, 1.6]];
       offsets.forEach(([ox, oy, oz, scale], cluster) => {
         const sway = ((index * 13 + cluster * 5) % 9 - 4) * 0.06;
-        matrix.compose(new THREE.Vector3(site.x + ox + sway, oy * height, site.z + oz - sway), quaternion, new THREE.Vector3(scale * 1.1, scale * 0.66, scale * 1.1));
-        const instance = index * offsets.length + cluster; crowns.setMatrixAt(instance, matrix);
-        crowns.setColorAt(instance, color.setHex([0x9b7fd4, 0xb18ae0, 0x8a6cc4][(index + cluster) % 3] ?? 0x9b7fd4));
+        crownItems.push({
+          x: site.x, z: site.z,
+          matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x + ox + sway, oy * height, site.z + oz - sway), quaternion, new THREE.Vector3(scale * 1.1, scale * 0.66, scale * 1.1)),
+          color: new THREE.Color([0x9b7fd4, 0xb18ae0, 0x8a6cc4][(index + cluster) % 3] ?? 0x9b7fd4),
+        });
       });
     });
-    trunks.castShadow = true; trunks.receiveShadow = true; crowns.castShadow = true; crowns.receiveShadow = true;
-    this.group.add(trunks, crowns);
+    addInstancedChunks(this.chunks, trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x6b4d38, roughness: 0.92 }), trunkItems, { cast: true, receive: true });
+    addInstancedChunks(this.chunks, crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86 }), crownItems, { cast: true, receive: true });
   }
 
   private buildStreetlights(): void {
@@ -180,28 +196,36 @@ export class UrbanInfrastructure {
     const collarGeometry = new THREE.CylinderGeometry(0.23, 0.28, 0.42, 14);
     const fixtureGeometry = new RoundedBoxGeometry(0.9, 0.22, 0.42, 3, 0.07);
     const bulbGeometry = new THREE.PlaneGeometry(0.62, 0.22);
-    const poles = new THREE.InstancedMesh(poleGeometry, metal, sites.length);
-    const arms = new THREE.InstancedMesh(armGeometry, metal, sites.length);
-    const collars = new THREE.InstancedMesh(collarGeometry, metal, sites.length);
-    const fixtures = new THREE.InstancedMesh(fixtureGeometry, metal, sites.length);
-    const bulbs = new THREE.InstancedMesh(bulbGeometry, new THREE.MeshBasicMaterial({ color: BULB_COLOR, side: THREE.DoubleSide }), sites.length);
-    this.bulbMaterial = bulbs.material as THREE.MeshBasicMaterial; this.setLampGlow(0); // day/night + load shedding drive this material instead of registerPowered
+    const bulbMaterial = new THREE.MeshBasicMaterial({ color: BULB_COLOR, side: THREE.DoubleSide });
+    this.bulbMaterial = bulbMaterial; this.setLampGlow(0); // day/night + load shedding drive this material instead of registerPowered
     const lampsXZ = new Float32Array(sites.length * 2); this.lampsXZ = lampsXZ;
-    const matrix = new THREE.Matrix4(); const up = new THREE.Vector3(0, 1, 0);
+    const up = new THREE.Vector3(0, 1, 0); const one = new THREE.Vector3(1, 1, 1);
+    const poleItems: InstanceItem[] = []; const armItems: InstanceItem[] = []; const collarItems: InstanceItem[] = [];
+    const fixtureItems: InstanceItem[] = []; const bulbItems: InstanceItem[] = [];
+    const lampData: Array<{ direction: THREE.Vector3; armRotation: THREE.Quaternion; headRotation: THREE.Quaternion; bulbRotation: THREE.Quaternion }> = [];
     sites.forEach((site, index) => {
       const direction = new THREE.Vector3(site.inwardX, 0, site.inwardZ).normalize();
       lampsXZ[index * 2] = site.x + direction.x * 1.18; lampsXZ[index * 2 + 1] = site.z + direction.z * 1.18;
       const headRotation = new THREE.Quaternion().setFromAxisAngle(up, Math.atan2(-direction.z, direction.x));
-      matrix.compose(new THREE.Vector3(site.x, 3.25, site.z), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1)); poles.setMatrixAt(index, matrix);
-      matrix.makeTranslation(site.x, 0.23, site.z); collars.setMatrixAt(index, matrix);
       const armRotation = new THREE.Quaternion().setFromUnitVectors(up, direction);
-      matrix.compose(new THREE.Vector3(site.x, 6.08, site.z).addScaledVector(direction, 0.58), armRotation, new THREE.Vector3(1, 1, 1)); arms.setMatrixAt(index, matrix);
-      matrix.compose(new THREE.Vector3(site.x, 6.15, site.z).addScaledVector(direction, 1.18), headRotation, new THREE.Vector3(1, 1, 1)); fixtures.setMatrixAt(index, matrix);
       const bulbRotation = headRotation.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
-      matrix.compose(new THREE.Vector3(site.x, 6.02, site.z).addScaledVector(direction, 1.18), bulbRotation, new THREE.Vector3(1, 1, 1)); bulbs.setMatrixAt(index, matrix);
+      poleItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 3.25, site.z), new THREE.Quaternion(), one) });
+      collarItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().makeTranslation(site.x, 0.23, site.z) });
+      armItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 6.08, site.z).addScaledVector(direction, 0.58), armRotation, one) });
+      fixtureItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 6.15, site.z).addScaledVector(direction, 1.18), headRotation, one) });
+      bulbItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 6.02, site.z).addScaledVector(direction, 1.18), bulbRotation, one) });
+      lampData.push({ direction, armRotation, headRotation, bulbRotation });
+    });
+    const poleSlots = addInstancedChunks(this.detail, poleGeometry, metal, poleItems, { cast: true });
+    const armSlots = addInstancedChunks(this.detail, armGeometry, metal, armItems, { cast: true });
+    const collarSlots = addInstancedChunks(this.detail, collarGeometry, metal, collarItems);
+    const fixtureSlots = addInstancedChunks(this.detail, fixtureGeometry, metal, fixtureItems, { cast: true });
+    const bulbSlots = addInstancedChunks(this.detail, bulbGeometry, bulbMaterial, bulbItems);
+    sites.forEach((site, index) => {
+      const { direction, armRotation, headRotation, bulbRotation } = lampData[index]!;
       this.props.register('streetlight', site.x, site.z, 0.2, 6.5, {
         hide: () => {
-          for (const mesh of [poles, arms, collars, fixtures, bulbs]) { mesh.setMatrixAt(index, HIDDEN_MATRIX); mesh.instanceMatrix.needsUpdate = true; }
+          for (const slots of [poleSlots, armSlots, collarSlots, fixtureSlots, bulbSlots]) hideSlot(slots[index]!);
           lampsXZ[index * 2] = 1e9; lampsXZ[index * 2 + 1] = 1e9; // evict from the day/night light pool: felled lamps shine no more
         },
         debris: () => {
@@ -217,7 +241,6 @@ export class UrbanInfrastructure {
         },
       });
     });
-    poles.castShadow = true; arms.castShadow = true; fixtures.castShadow = true; this.group.add(poles, arms, collars, fixtures, bulbs);
   }
 
   private buildTrafficSignals(): void {
@@ -242,10 +265,8 @@ export class UrbanInfrastructure {
       const right = new THREE.Vector3(forward.z, 0, -forward.x);
       this.addStreetSigns({ ...junction, widest: junction.widest }, forward, right);
     }
-    const lensMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(0.19, 20), new THREE.MeshBasicMaterial(), lensTransforms.length);
-    lensTransforms.forEach((transform, index) => { lensMesh.setMatrixAt(index, transform); lensMesh.setColorAt(index, this.lensColor.setHex(0x14100e)); });
-    lensMesh.instanceMatrix.needsUpdate = true;
-    this.lensMesh = lensMesh; this.group.add(lensMesh);
+    const lensItems: InstanceItem[] = lensTransforms.map((matrix) => ({ x: matrix.elements[12]!, z: matrix.elements[14]!, matrix, color: new THREE.Color(0x14100e) }));
+    this.lensSlots = addInstancedChunks(this.detail, new THREE.CircleGeometry(0.19, 20), new THREE.MeshBasicMaterial(), lensItems);
   }
 
   private addSignalPole(position: THREE.Vector3, heading: number, axis: 0 | 1, phase: number, lensTransforms: THREE.Matrix4[]): void {
@@ -292,7 +313,7 @@ export class UrbanInfrastructure {
       sign.position.y = y; sign.rotation.y = angle; assembly.add(sign);
     }
     assembly.traverse((object) => { object.userData.dynamic = true; }); // knock-over props stay unmerged so they can tip
-    this.group.add(assembly);
+    this.detail.group(postPosition.x, postPosition.z).add(assembly); // unmerged, but still distance-culled with its chunk
     this.props.register('sign', postPosition.x, postPosition.z, 0.14, 3.6, { debris: () => assembly });
   }
 
@@ -309,7 +330,7 @@ export class UrbanInfrastructure {
       const sign = createSignMesh(geometry, label, foreground, { background, doubleSide: true });
       sign.position.y = 2.45; sign.rotation.y = angle; assembly.add(sign);
       assembly.traverse((object) => { object.userData.dynamic = true; }); // knock-over props stay unmerged so they can tip
-      this.group.add(assembly);
+      this.detail.group(x, z).add(assembly); // unmerged, but still distance-culled with its chunk
       this.props.register('sign', x, z, 0.14, 2.6, { debris: () => assembly });
     }
   }
@@ -324,27 +345,35 @@ export class UrbanInfrastructure {
     const backGeometry = new RoundedBoxGeometry(2.25, 0.62, 0.1, 2, 0.03);
     const bodyGeometry = new THREE.CylinderGeometry(0.17, 0.23, 0.7, 16);
     const capGeometry = new THREE.SphereGeometry(0.23, 14, 9);
-    const slats = new THREE.InstancedMesh(slatGeometry, wood, sites.length * 3);
-    const legs = new THREE.InstancedMesh(legGeometry, metal, sites.length * 2);
-    const backs = new THREE.InstancedMesh(backGeometry, wood, sites.length);
-    const bodies = new THREE.InstancedMesh(bodyGeometry, red, sites.length);
-    const caps = new THREE.InstancedMesh(capGeometry, red, sites.length);
-    const matrix = new THREE.Matrix4(); const identity = new THREE.Quaternion(); const one = new THREE.Vector3(1, 1, 1);
+    const identity = new THREE.Quaternion(); const one = new THREE.Vector3(1, 1, 1);
     const up = new THREE.Vector3(0, 1, 0); const backTilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.12);
-    sites.forEach((site, index) => {
+    const slatItems: InstanceItem[] = []; const legItems: InstanceItem[] = []; const backItems: InstanceItem[] = [];
+    const bodyItems: InstanceItem[] = []; const capItems: InstanceItem[] = [];
+    const furnitureData: Array<{ yaw: number; bx: number; bz: number; hx: number; hz: number }> = [];
+    sites.forEach((site) => {
       const yaw = Math.atan2(site.inwardX, site.inwardZ);
       const rotation = new THREE.Quaternion().setFromAxisAngle(up, yaw);
       const bx = site.x - site.inwardX * 0.8; const bz = site.z - site.inwardZ * 0.8; // benches sit back from the walk line so their 0.85u shell doesn't clip routed peds
       const world = (lx: number, ly: number, lz: number) => new THREE.Vector3(lx, ly, lz).applyQuaternion(rotation).add(new THREE.Vector3(bx, 0, bz));
-      [-0.22, 0, 0.22].forEach((lz, slot) => { matrix.compose(world(0, 0.62, lz), rotation, one); slats.setMatrixAt(index * 3 + slot, matrix); });
-      [-0.78, 0.78].forEach((lx, slot) => { matrix.compose(world(lx, 0.3, 0), rotation, one); legs.setMatrixAt(index * 2 + slot, matrix); });
-      matrix.compose(world(0, 0.98, -0.29), rotation.clone().multiply(backTilt), one); backs.setMatrixAt(index, matrix);
+      for (const lz of [-0.22, 0, 0.22]) slatItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(0, 0.62, lz), rotation, one) });
+      for (const lx of [-0.78, 0.78]) legItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(lx, 0.3, 0), rotation, one) });
+      backItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(0, 0.98, -0.29), rotation.clone().multiply(backTilt), one) });
+      const hx = site.x - site.inwardX * 0.75; const hz = site.z - site.inwardZ * 0.75; // hydrants sit off the walk line so they don't embed spawned peds
+      bodyItems.push({ x: hx, z: hz, matrix: new THREE.Matrix4().compose(new THREE.Vector3(hx, 0.36, hz), identity, one) });
+      capItems.push({ x: hx, z: hz, matrix: new THREE.Matrix4().compose(new THREE.Vector3(hx, 0.76, hz), identity, one) });
+      furnitureData.push({ yaw, bx, bz, hx, hz });
+    });
+    const slatSlots = addInstancedChunks(this.detail, slatGeometry, wood, slatItems, { cast: true, receive: true });
+    const legSlots = addInstancedChunks(this.detail, legGeometry, metal, legItems, { cast: true, receive: true });
+    const backSlots = addInstancedChunks(this.detail, backGeometry, wood, backItems, { cast: true, receive: true });
+    const bodySlots = addInstancedChunks(this.detail, bodyGeometry, red, bodyItems, { cast: true, receive: true });
+    const capSlots = addInstancedChunks(this.detail, capGeometry, red, capItems, { cast: true, receive: true });
+    furnitureData.forEach(({ yaw, bx, bz, hx, hz }, index) => {
       this.props.register('bench', bx, bz, 0.85, 1.1, {
         hide: () => {
-          for (const slot of [0, 1, 2]) slats.setMatrixAt(index * 3 + slot, HIDDEN_MATRIX);
-          for (const slot of [0, 1]) legs.setMatrixAt(index * 2 + slot, HIDDEN_MATRIX);
-          backs.setMatrixAt(index, HIDDEN_MATRIX);
-          for (const mesh of [slats, legs, backs]) mesh.instanceMatrix.needsUpdate = true;
+          for (const slot of [0, 1, 2]) hideSlot(slatSlots[index * 3 + slot]!);
+          for (const slot of [0, 1]) hideSlot(legSlots[index * 2 + slot]!);
+          hideSlot(backSlots[index]!);
         },
         debris: () => {
           const group = new THREE.Group(); group.position.set(bx, 0, bz); group.rotation.y = yaw;
@@ -355,11 +384,8 @@ export class UrbanInfrastructure {
           return group;
         },
       });
-      const hx = site.x - site.inwardX * 0.75; const hz = site.z - site.inwardZ * 0.75; // hydrants sit off the walk line so they don't embed spawned peds
-      matrix.compose(new THREE.Vector3(hx, 0.36, hz), identity, one); bodies.setMatrixAt(index, matrix);
-      matrix.compose(new THREE.Vector3(hx, 0.76, hz), identity, one); caps.setMatrixAt(index, matrix);
       this.props.register('hydrant', hx, hz, 0.24, 0.9, {
-        hide: () => { bodies.setMatrixAt(index, HIDDEN_MATRIX); caps.setMatrixAt(index, HIDDEN_MATRIX); bodies.instanceMatrix.needsUpdate = true; caps.instanceMatrix.needsUpdate = true; },
+        hide: () => { hideSlot(bodySlots[index]!); hideSlot(capSlots[index]!); },
         debris: () => {
           const group = new THREE.Group(); group.position.set(hx, 0, hz);
           const body = new THREE.Mesh(bodyGeometry, red); body.position.y = 0.36; body.castShadow = true;
@@ -368,7 +394,6 @@ export class UrbanInfrastructure {
         },
       });
     });
-    for (const mesh of [slats, legs, backs, bodies, caps]) { mesh.castShadow = true; mesh.receiveShadow = true; this.group.add(mesh); }
   }
 
   private buildEtollGantries(): void {

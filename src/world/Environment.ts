@@ -15,7 +15,7 @@ const SUN_DISTANCE = 240;
 export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'medium' | 'high'): EnvironmentHandle {
   const shadows = quality !== 'low';
   scene.background = new THREE.Color(0x6fa8dd);
-  scene.fog = new THREE.FogExp2(0xc4b48c, quality === 'low' ? 0.00028 : 0.00022); // retuned for the 36000u generated map (camera far 8000): the CBD skyline reads clear out to ~2200u, then hazes to near-opaque by the far plane so the bare outskirts and the cut stay hidden
+  scene.fog = new THREE.FogExp2(0xc4b48c, quality === 'low' ? 0.00032 : 0.00025); // tuned for the 36000u map with chunk culling (~2500u radius) and camera far 8000: the CBD skyline still reads out to ~2200u, the chunk boundary sits in a solid haze band, and the horizon is near-opaque by the far plane so it reads hazy, never clipped
 
   const hemisphere = new THREE.HemisphereLight(0xcfe4f5, 0x8a7c4d, 1.6); scene.add(hemisphere);
   const ambient = new THREE.AmbientLight(0xffead0, 0.28); scene.add(ambient);

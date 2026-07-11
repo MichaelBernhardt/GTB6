@@ -349,7 +349,8 @@ export class Game {
     else if (this.input.consume('Escape')) this.ui.back();
     this.updateCamera(dt); this.updateMarker(dt); this.renderHUD();
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
-    const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 1;
+    this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position); // staggered chunk culling — runs in every mode so the menu backdrop is culled too
+    const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 2; // >2s: the staggered chunk culling needs its first full pass before the number means anything
     if (measure) { this.renderer.info.autoReset = false; this.renderer.info.reset(); }
     if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
     if (measure) { this.loggedDrawCalls = true; console.info(`[render] calls=${this.renderer.info.render.calls} tris=${this.renderer.info.render.triangles}`); this.renderer.info.autoReset = true; }

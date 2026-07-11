@@ -17,6 +17,7 @@ import {
 } from './mapData';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
 import { inBuildZone, TEST_BUILDING_BUDGET } from './data/cityBuild';
+import { addInstancedChunks, ChunkStore, ChunkVisibility, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
@@ -152,6 +153,14 @@ const GENERIC_AREA_NAMES = new Set(['park', 'grass', 'forest', 'wood', 'scrub', 
 
 export class City {
   group = new THREE.Group();
+  /** Per-cell chunk groups on the MERGE_CHUNK_SIZE grid: every piece of static world geometry
+   *  (merged meshes and per-cell instanced props) lives in one, so distance culling can detach it. */
+  private chunkStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
+  private chunkCulling = new ChunkVisibility(this.chunkStore);
+  /** Tighter second tier for street micro-detail (markings, curbs, potholes, tactile paving,
+   *  furniture…): sub-pixel long before its 1200u range, so it culls far earlier than the world. */
+  private detailStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
+  private detailCulling = new ChunkVisibility(this.detailStore, DETAIL_VISIBLE_RANGE, DETAIL_HYSTERESIS);
   colliders: Collider[] = [];
   props = new PropRegistry();
   potholes: Array<{ x: number; z: number; r: number }> = []; // road features, not props: no collider, cars rattle over them
@@ -188,18 +197,30 @@ export class City {
     this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildParks(); this.buildDistricts();
     this.infrastructure = new UrbanInfrastructure(
       this.group,
+      this.chunkStore,
+      this.detailStore,
       this.roadsidePoints,
       (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius),
       (x, z, margin) => this.isOnRoad(x, z, margin),
       this.props,
     );
-    mergeStaticGeometry(this.group, MERGE_CHUNK_SIZE); // water is built after the merge: its meshes stay live for per-frame animation
+    mergeStaticGeometry(this.group, MERGE_CHUNK_SIZE, this.chunkStore); // water is built after the merge: its meshes stay live for per-frame animation
     this.setWaterQuality(quality);
   }
 
   update(dt: number): void {
     this.waterHandle?.update(dt);
     this.infrastructure.update(dt);
+  }
+
+  /** Frame-budgeted distance culling: chunks near the focus join the scene, far ones detach (with
+   *  hysteresis). Geometry is kept in memory, so re-entering a chunk costs nothing. Colliders, nav
+   *  graphs, the minimap and the map overlay are data, not scene geometry — culling never touches
+   *  them. Water stays global: each surface is a bounded per-site mesh that frustum culling already
+   *  handles, and the premium dams double as the always-visible distant-water representation. */
+  updateVisibility(focus: THREE.Vector3): void {
+    this.chunkCulling.update(focus.x, focus.z);
+    this.detailCulling.update(focus.x, focus.z);
   }
 
   /** (Re)builds every water surface for the given quality tier; safe to call live from the pause menu.
@@ -276,7 +297,9 @@ export class City {
 
   private buildGround(): void {
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE), new THREE.MeshStandardMaterial({ color: COLORS.grass, map: this.grass, roughness: 0.96 }));
-    ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; this.group.add(ground);
+    ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+    ground.userData.far = true; // the always-visible far representation: 2 triangles of grass so the earth never vanishes beyond the chunk radius; fog carries it to the horizon
+    this.group.add(ground);
   }
 
   private buildRoads(): void {
@@ -315,14 +338,14 @@ export class City {
       const strip = this.createRoadStrip(sampled, track.width, dirtMat, 0.04, false); strip.receiveShadow = true; this.group.add(strip);
     }
     const box = new THREE.BoxGeometry(1, 1, 1);
-    this.addInstanced(box, centerMat, dashTransforms, false);
-    this.addInstanced(box, edgeMat, edgeTransforms, false);
+    this.addInstanced(box, centerMat, dashTransforms, {});
+    this.addInstanced(box, edgeMat, edgeTransforms, {});
     const curbTransforms: THREE.Matrix4[] = [];
     for (let index = 0; index < ROAD_NETWORK.length; index++) {
       const surface = this.roadSurfaces[index]!;
       if (surface.width >= 9) this.addCurbs(surface.points, surface.width, surface.closed, index, curbTransforms);
     }
-    this.addInstanced(box, curbMat, curbTransforms, true);
+    this.addInstanced(box, curbMat, curbTransforms, { cast: true, receive: true });
     this.buildIntersections();
     this.buildPotholes();
   }
@@ -336,23 +359,23 @@ export class City {
       if (CITY_JUNCTIONS.some((junction) => Math.hypot(x - junction.x, z - junction.z) < 16)) continue;
       this.potholes.push({ x, z, r: 1.1 + seeded(point.x, point.z, 58) * 0.9 });
     }
-    const holes = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 14), new THREE.MeshBasicMaterial({ color: 0x0d1113 }), this.potholes.length);
-    const rims = new THREE.InstancedMesh(new THREE.RingGeometry(1, 1.22, 14), new THREE.MeshBasicMaterial({ color: 0x3f4649 }), this.potholes.length);
-    const matrix = new THREE.Matrix4(); const flat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
-    this.potholes.forEach((pothole, index) => {
-      matrix.compose(new THREE.Vector3(pothole.x, 0.07, pothole.z), flat, new THREE.Vector3(pothole.r, pothole.r, 1)); holes.setMatrixAt(index, matrix);
-      matrix.compose(new THREE.Vector3(pothole.x, 0.072, pothole.z), flat, new THREE.Vector3(pothole.r, pothole.r, 1)); rims.setMatrixAt(index, matrix);
-    });
-    holes.instanceMatrix.needsUpdate = true; rims.instanceMatrix.needsUpdate = true;
-    this.group.add(holes, rims);
+    const holeItems: InstanceItem[] = []; const rimItems: InstanceItem[] = [];
+    const flat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+    for (const pothole of this.potholes) {
+      const scale = new THREE.Vector3(pothole.r, pothole.r, 1);
+      holeItems.push({ x: pothole.x, z: pothole.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(pothole.x, 0.07, pothole.z), flat, scale) });
+      rimItems.push({ x: pothole.x, z: pothole.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(pothole.x, 0.072, pothole.z), flat, scale) });
+    }
+    addInstancedChunks(this.detailStore, new THREE.CircleGeometry(1, 14), new THREE.MeshBasicMaterial({ color: 0x0d1113 }), holeItems);
+    addInstancedChunks(this.detailStore, new THREE.RingGeometry(1, 1.22, 14), new THREE.MeshBasicMaterial({ color: 0x3f4649 }), rimItems);
   }
 
-  private addInstanced(geometry: THREE.BufferGeometry, material: THREE.Material, transforms: THREE.Matrix4[], shadows: boolean): void {
-    const mesh = new THREE.InstancedMesh(geometry, material, transforms.length);
-    transforms.forEach((transform, index) => mesh.setMatrixAt(index, transform));
-    mesh.instanceMatrix.needsUpdate = true;
-    if (shadows) { mesh.castShadow = true; mesh.receiveShadow = true; }
-    this.group.add(mesh);
+  /** Instanced street micro-detail, re-bucketed into one InstancedMesh per detail-tier cell
+   *  (position read from each transform) so the short-range culling tier can drop far cells
+   *  instead of vertex-shading the whole map. */
+  private addInstanced(geometry: THREE.BufferGeometry, material: THREE.Material, transforms: THREE.Matrix4[], shadows: { cast?: boolean; receive?: boolean }): void {
+    const items: InstanceItem[] = transforms.map((matrix) => ({ x: matrix.elements[12]!, z: matrix.elements[14]!, matrix }));
+    addInstancedChunks(this.detailStore, geometry, material, items, shadows);
   }
 
   private buildIntersections(): void {
@@ -450,9 +473,8 @@ export class City {
       }
     }
     const tactile = new THREE.MeshStandardMaterial({ color: 0xd0a744, roughness: 0.82 });
-    const patches = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), tactile, patchTransforms.length); patchTransforms.forEach((transform, index) => patches.setMatrixAt(index, transform));
-    const bumps = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.09, 0.11, 0.07, 10), tactile, bumpTransforms.length); bumpTransforms.forEach((transform, index) => bumps.setMatrixAt(index, transform));
-    patches.instanceMatrix.needsUpdate = true; bumps.instanceMatrix.needsUpdate = true; patches.receiveShadow = true; this.group.add(patches, bumps);
+    this.addInstanced(new THREE.BoxGeometry(1, 1, 1), tactile, patchTransforms, { receive: true });
+    this.addInstanced(new THREE.CylinderGeometry(0.09, 0.11, 0.07, 10), tactile, bumpTransforms, {});
   }
 
   private createRoadStrip(points: RoadPoint[], width: number, material: THREE.Material, y: number, closed: boolean): THREE.Mesh {
@@ -700,6 +722,7 @@ export class City {
   private buildPonte(): void {
     const x = PONTE_SPOT.x; const z = PONTE_SPOT.z; const height = 105; const radius = 24;
     const ponte = new THREE.Group(); ponte.position.set(x, 0, z);
+    ponte.userData.far = true; // skyline landmark: merged into the never-culled far bucket so the silhouette doesn't pop at the chunk radius
     const facadeTexture = this.facades[0]?.clone(); if (facadeTexture) { facadeTexture.repeat.set(8, 6); facadeTexture.needsUpdate = true; }
     const facade = new THREE.MeshStandardMaterial({ color: 0x9aa3a8, map: facadeTexture, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
     const shell = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 40, 1, true), facade); shell.position.y = height / 2; shell.castShadow = true; shell.receiveShadow = true;
@@ -713,6 +736,7 @@ export class City {
   private buildHillbrowTower(): void {
     const x = HILLBROW_TOWER_SPOT.x; const z = HILLBROW_TOWER_SPOT.z; const height = 90;
     const tower = new THREE.Group(); tower.position.set(x, 0, z);
+    tower.userData.far = true; // skyline landmark: never culled, same as Ponte
     const concrete = new THREE.MeshStandardMaterial({ color: 0xb8b4a8, roughness: 0.8 });
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.4, height, 24), concrete); shaft.position.y = height / 2; shaft.castShadow = true;
     const pod = new THREE.Mesh(new THREE.CylinderGeometry(7.4, 6.2, 11, 24), new THREE.MeshStandardMaterial({ color: 0x8fa3ab, roughness: 0.5, metalness: 0.25 })); pod.position.y = height - 8; pod.castShadow = true;
