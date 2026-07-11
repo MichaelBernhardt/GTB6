@@ -12,6 +12,7 @@ export type ConsoleCommand =
   | { kind: 'set-peds'; count?: number } // undefined = back to the time-of-day table
   | { kind: 'set-cars'; count?: number }
   | { kind: 'busy' }
+  | { kind: 'map' }
   | { kind: 'spawn'; vehicle: VehicleKind }
   | { kind: 'cash'; amount: number }
   | { kind: 'unwanted' }
@@ -30,6 +31,7 @@ export interface ConsoleHost {
   setPedTarget(count?: number): string;
   setCarTarget(count?: number): string;
   busyInfo(): string;
+  openMap(): string;
 }
 
 const KINDS = Object.keys(VEHICLE_SPECS) as VehicleKind[];
@@ -51,6 +53,7 @@ export const HELP_LINES = [
   'set peds <n|auto> — pin the pedestrian target (auto = time-of-day table)',
   'set cars <n|auto> — pin the traffic target (auto = time-of-day table)',
   'busy — show the current crowd targets and live counts',
+  'map — open the city map (or press M)',
   'fps — toggle the performance display',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
   'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding',
@@ -79,6 +82,7 @@ export function parseCommand(input: string): ConsoleCommand {
   if (head === 'help' && rest.length === 0) return { kind: 'help' };
   if (head === 'fps' && rest.length === 0) return { kind: 'fps' };
   if (head === 'busy' && rest.length === 0) return { kind: 'busy' };
+  if (head === 'map' && rest.length === 0) return { kind: 'map' };
   if (head === 'set') {
     const [key, value] = rest;
     if (key === 'busy') {
@@ -119,6 +123,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'set-peds': return [host.setPedTarget(command.count)];
     case 'set-cars': return [host.setCarTarget(command.count)];
     case 'busy': return [host.busyInfo()];
+    case 'map': return [host.openMap()];
     case 'spawn': return [host.spawn(command.vehicle)];
     case 'cash': return [host.giveCash(command.amount)];
     case 'unwanted': return [host.dropStar()];

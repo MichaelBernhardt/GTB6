@@ -4,6 +4,7 @@ import type { CheatSettings, GameSettings } from '../types';
 import type { RoadPoint } from '../world/City';
 import { ConsoleView } from './ConsoleView';
 import { HudView } from './HudView';
+import { MapView, type MapViewFrame } from './MapView';
 import { MenuView } from './MenuView';
 import { MinimapView, type MapMarker, type MapPoint } from './MinimapView';
 import type { CheatWeaponEntry, HudState, MainMenuSummary, NotificationTone, ShopCatalogEntry, WheelEntry } from './UIModels';
@@ -21,6 +22,7 @@ export class UIManager {
   private menuView: MenuView;
   private minimapView = new MinimapView();
   private consoleView = new ConsoleView();
+  private mapView = new MapView();
   private toastTimer = 0;
   private fadeTimer?: ReturnType<typeof setTimeout>;
   private controlsFromMain = false;
@@ -42,19 +44,26 @@ export class UIManager {
   onSafehouseSleep?: () => void;
   onConsoleCommand?: (text: string) => void;
   onConsoleClose?: () => void;
+  onMapClose?: () => void;
 
   constructor() {
     this.root.id = 'ui'; this.hud.id = 'hud'; this.toast.id = 'toast'; this.toast.setAttribute('role', 'status'); this.toast.setAttribute('aria-live', 'polite'); this.toast.setAttribute('aria-atomic', 'true');
     this.wheel.id = 'weapon-wheel'; this.vignette.id = 'vignette'; this.fade.id = 'fade';
     this.menuView = new MenuView(document.createElement('div')); this.hudView = new HudView(this.hud);
     this.consoleView.onSubmit = (text) => this.onConsoleCommand?.(text); this.consoleView.onClose = () => this.onConsoleClose?.();
-    this.root.append(this.vignette, this.hud, this.minimapView.canvas, this.toast, this.wheel, this.consoleView.root, this.menuView.root, this.fade); document.body.append(this.root); this.showLoading();
+    this.mapView.onClose = () => this.onMapClose?.();
+    this.root.append(this.vignette, this.hud, this.minimapView.canvas, this.toast, this.wheel, this.mapView.root, this.consoleView.root, this.menuView.root, this.fade); document.body.append(this.root); this.showLoading();
   }
 
   get consoleOpen(): boolean { return this.consoleView.open; }
   openConsole(): void { this.consoleView.show(); }
   closeConsole(): void { this.consoleView.hide(); }
   consolePrint(lines: string[]): void { this.consoleView.print(lines); }
+
+  get mapOpen(): boolean { return this.mapView.open; }
+  openMap(frame: MapViewFrame): void { this.mapView.show(frame); }
+  closeMap(): void { this.mapView.hide(); }
+  updateMap(frame: MapViewFrame): void { this.mapView.update(frame); }
 
   update(state: HudState): void {
     this.hudView.update(state); this.toastTimer = Math.max(0, this.toastTimer - 1 / 60); if (this.toastTimer === 0) this.toast.classList.remove('is-visible');

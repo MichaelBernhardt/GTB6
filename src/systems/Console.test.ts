@@ -105,6 +105,7 @@ describe('runConsoleCommand', () => {
     setPedTarget: (count) => `peds:${count ?? 'auto'}`,
     setCarTarget: (count) => `cars:${count ?? 'auto'}`,
     busyInfo: () => 'crowd',
+    openMap: () => 'map-open',
   };
 
   it('routes parsed commands to host handlers and echoes their feedback', () => {
@@ -126,5 +127,6 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('set peds auto', host)).toEqual(['peds:auto']);
     expect(runConsoleCommand('set cars 40', host)).toEqual(['cars:40']);
     expect(runConsoleCommand('busy', host)).toEqual(['crowd']);
+    expect(runConsoleCommand('map', host)).toEqual(['map-open']);
   });
 });

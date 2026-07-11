@@ -38,7 +38,9 @@ import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
 import type { CheatSettings, GameMode, GameSettings, SavedGame, WorldTarget } from './types';
-import { MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
+import { weaponWheelResponds } from './ui/mapRender';
+import type { MapViewFrame } from './ui/MapView';
+import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
 import { DELIVERY_STOPS, GTI_SPOT, PORTIA_CAR_SPOT } from './world/placements';
@@ -227,10 +229,41 @@ export class Game {
     };
     this.ui.onConsoleCommand = (text) => this.ui.consolePrint(runConsoleCommand(text, this.consoleHost));
     this.ui.onConsoleClose = () => this.closeConsole();
+    this.ui.onMapClose = () => this.closeMap();
   }
 
   private openConsole(): void { this.closeWeaponWheel(); this.input.suspend(true); this.ui.openConsole(); }
   private closeConsole(): void { if (!this.ui.consoleOpen) return; this.ui.closeConsole(); this.input.suspend(false); }
+
+  /** City map overlay: like the console, world keeps running but input is suspended and the pointer freed. */
+  private openMap(): void {
+    if (this.ui.mapOpen) return;
+    this.closeWeaponWheel(); this.input.suspend(true); document.exitPointerLock();
+    this.ui.openMap(this.mapFrame());
+  }
+  private closeMap(): void { if (!this.ui.mapOpen) return; this.ui.closeMap(); this.input.suspend(false); }
+
+  /** Live snapshot fed to the map overlay: player pose plus markers in the minimap's language. */
+  private mapFrame(): MapViewFrame {
+    const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    return {
+      x: focus.x, z: focus.z, heading: this.activeVehicle?.heading ?? this.player.heading,
+      markers: this.mapMarkers(), police: this.mapPolice(), hostiles: this.mapHostiles(),
+    };
+  }
+  private mapMarkers(): MapMarker[] {
+    return [
+      ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
+      ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : []),
+      ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : []),
+    ];
+  }
+  private mapPolice(): MapPoint[] {
+    return this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z }));
+  }
+  private mapHostiles(): MapPoint[] {
+    return this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact && !ped.police).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
+  }
 
   /** Console command handlers: every mutation goes through the same paths the game itself uses. */
   private consoleHost: ConsoleHost = {
@@ -254,6 +287,7 @@ export class Game {
       return count === undefined ? `Traffic target back on the clock. ${this.describeCrowd()}` : `Traffic target pinned at ${this.lifecycle.tuning.cars}. ${this.describeCrowd()}`;
     },
     busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
+    openMap: () => { this.closeConsole(); this.openMap(); return 'Opening the city map. Press M or ESC to close.'; },
   };
 
   private describeCrowd(): string {
@@ -321,6 +355,7 @@ export class Game {
   private update(dt: number): void {
     if (this.input.consume('Escape')) { this.pause(); return; }
     if (this.input.consume('Backquote')) this.openConsole(); // input suspends, world keeps running
+    if (this.input.consume('KeyM')) this.openMap(); // Esc/M closes it (handled by the overlay while open)
     if (this.input.consume('KeyV')) {
       const key = this.activeVehicle ? 'cameraViewVehicle' : 'cameraViewFoot';
       this.settings[key] = cycleView(this.settings[key]);
@@ -465,7 +500,7 @@ export class Game {
     if (this.updateWeaponWheel()) return;
     this.combat.tryReload(this.input);
     WEAPONS.forEach((spec, index) => { if (this.input.consume(`Digit${index + 1}`)) this.combat.select(spec.id); });
-    const scroll = this.input.consumeWheel(); if (scroll) this.combat.cycle(scroll > 0 ? 1 : -1);
+    const scroll = this.input.consumeWheel(); if (scroll && weaponWheelResponds(this.ui.mapOpen)) this.combat.cycle(scroll > 0 ? 1 : -1);
     this.footstepTimer -= dt;
     if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { const running = this.input.down('ShiftLeft'); this.audio.footstep(running, this.city.isPark(this.player.group.position.x, this.player.group.position.z)); this.footstepTimer = running ? 0.24 : 0.38; }
     const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, this.police.vehicles, { aim: this.input.aiming, heading: this.player.heading });
@@ -1152,9 +1187,12 @@ export class Game {
     } : undefined;
     const crosshair = this.mode === 'playing' && !this.transition && !this.weaponWheelOpen && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile);
     this.ui.update({ health: this.player.health, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
-    const markers = [...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : []), ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : [])];
-    const hostiles = this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact && !ped.police).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z })); // arrest officers are on the map as JMPD, not as red hostiles
-    this.ui.drawMap(focus.x, focus.z, this.activeVehicle?.heading ?? this.player.heading, this.city.roadPaths, markers, this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z })), hostiles, this.settings.minimapZoom);
+    const markers = this.mapMarkers();
+    const police = this.mapPolice();
+    const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles
+    const heading = this.activeVehicle?.heading ?? this.player.heading;
+    this.ui.drawMap(focus.x, focus.z, heading, this.city.roadPaths, markers, police, hostiles, this.settings.minimapZoom);
+    if (this.ui.mapOpen) this.ui.updateMap({ x: focus.x, z: focus.z, heading, markers, police, hostiles });
   }
 
   private damagePlayer(amount: number): void { if (this.cheats.invulnerable) return; if (amount > 0) this.ui.damageFlash(); this.player.takeDamage(amount); }
@@ -1164,7 +1202,7 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
-    this.cover = undefined; this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.cover = undefined; this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     this.endTaxiShift(this.activeVehicle);
