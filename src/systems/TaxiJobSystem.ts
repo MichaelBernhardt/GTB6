@@ -50,23 +50,39 @@ export function canHail(ped: HailCandidate, distance: number): boolean {
     && !ped.frozen && !ped.stumbling && ped.fear < FLEE_THRESHOLD && distance <= HAIL_RADIUS;
 }
 
-export function taxiHudText(phase: TaxiPhase, available: boolean, fare: number, tip: number): string {
-  if (!available) return 'TAXI · OCCUPIED';
+export function taxiHudText(phase: TaxiPhase, onDuty: boolean, fare: number, tip: number): string {
   if (phase === 'riding') return `FARE R${fare} · TIP R${Math.max(0, Math.round(tip))}`;
   if (phase === 'hailed' || phase === 'boarding') return 'TAXI · PICKING UP';
-  return 'TAXI · AVAILABLE';
+  return onDuty ? 'TAXI · AVAILABLE' : 'TAXI · OCCUPIED';
 }
 
-/** Ride state machine: idle -> hailed -> boarding -> riding -> (payout | bail) -> idle. No scene types. */
+export type TaxiDuty = 'available' | 'occupied';
+
+/** Ride state machine: idle -> hailed -> boarding -> riding -> (payout | bail) -> idle. No scene types.
+ *  Duty is the driver's sign: boarding a fare auto-occupies (the `available` getter), a completed or
+ *  bailed ride auto-returns to available, and only a driver cancel forces OCCUPIED until T is pressed. */
 export class TaxiRide {
   phase: TaxiPhase = 'idle';
+  duty: TaxiDuty = 'occupied';
   fare = 0;
   tip = 0;
   distance = 0;
   passengerFear = 0;
   bailed = false;
 
-  hail(): boolean { if (this.phase !== 'idle') return false; this.phase = 'hailed'; return true; }
+  /** Roof-light truth: on duty and not yet collecting/carrying a fare — boarding dims it automatically. */
+  get available(): boolean { return this.duty === 'available' && (this.phase === 'idle' || this.phase === 'hailed'); }
+
+  /** Driver flips the sign; only meaningful between rides — T during a ride is a cancel, not a toggle. */
+  toggleDuty(): TaxiDuty {
+    if (this.phase === 'idle') this.duty = this.duty === 'available' ? 'occupied' : 'available';
+    return this.duty;
+  }
+
+  /** Driver aborts the hail/ride: everything resets and the cab STAYS occupied until T is pressed again. */
+  cancelByDriver(): void { this.reset(); this.duty = 'occupied'; }
+
+  hail(): boolean { if (this.phase !== 'idle' || this.duty !== 'available') return false; this.phase = 'hailed'; return true; }
   beginBoarding(): boolean { if (this.phase !== 'hailed') return false; this.phase = 'boarding'; return true; }
 
   /** Passenger is in the seat: prices the meter off the planned route distance and returns the fare. */
@@ -98,5 +114,6 @@ export class TaxiRide {
     return { fare: this.fare, tip, total: this.fare + tip };
   }
 
+  /** Clears the ride but NOT the duty sign: a paid drop-off or a bail leaves the driver available again. */
   reset(): void { this.phase = 'idle'; this.fare = 0; this.tip = 0; this.distance = 0; this.passengerFear = 0; this.bailed = false; }
 }

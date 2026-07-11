@@ -10,7 +10,7 @@ const walker = (overrides: Partial<HailCandidate> = {}): HailCandidate =>
 
 const boardedRide = (distance = 350): TaxiRide => {
   const ride = new TaxiRide();
-  ride.hail(); ride.beginBoarding(); ride.board(distance);
+  ride.toggleDuty(); ride.hail(); ride.beginBoarding(); ride.board(distance);
   return ride;
 };
 
@@ -81,6 +81,8 @@ describe('hail eligibility', () => {
 describe('ride state transitions', () => {
   it('walks idle -> hailed -> boarding -> riding and refuses out-of-order jumps', () => {
     const ride = new TaxiRide();
+    expect(ride.hail()).toBe(false); // fresh cab starts OCCUPIED: no hails until the driver goes available
+    ride.toggleDuty();
     expect(ride.beginBoarding()).toBe(false);
     expect(ride.board(200)).toBe(0);
     expect(ride.hail()).toBe(true);
@@ -101,6 +103,45 @@ describe('ride state transitions', () => {
     expect(ride.tip).toBe(0);
     expect(ride.bailed).toBe(false);
     expect(ride.hail()).toBe(true);
+  });
+
+  it('starts occupied, toggles duty between rides only, and never mid-ride', () => {
+    const ride = new TaxiRide();
+    expect(ride.duty).toBe('occupied');
+    expect(ride.toggleDuty()).toBe('available');
+    ride.hail();
+    expect(ride.toggleDuty()).toBe('available'); // T mid-ride is a cancel in the Game layer, never a toggle
+    ride.beginBoarding(); ride.board(200);
+    expect(ride.toggleDuty()).toBe('available');
+    ride.reset();
+    expect(ride.toggleDuty()).toBe('occupied');
+  });
+
+  it('auto-occupies while collecting or carrying a fare: the roof light follows the ride', () => {
+    const ride = new TaxiRide();
+    expect(ride.available).toBe(false); // occupied sign
+    ride.toggleDuty();
+    expect(ride.available).toBe(true); // idle + on duty
+    ride.hail();
+    expect(ride.available).toBe(true); // still shining for the hailer
+    ride.beginBoarding();
+    expect(ride.available).toBe(false); // fare inbound: auto-occupied
+    ride.board(200);
+    expect(ride.available).toBe(false); // fare aboard
+  });
+
+  it('auto-returns to available after a drop-off or bail, but stays occupied after a driver cancel', () => {
+    const dropped = boardedRide();
+    dropped.reset(); // payout path clears the ride, not the sign
+    expect(dropped.duty).toBe('available');
+    expect(dropped.available).toBe(true);
+    expect(dropped.hail()).toBe(true);
+    const cancelled = boardedRide();
+    cancelled.cancelByDriver();
+    expect(cancelled.phase).toBe('idle');
+    expect(cancelled.duty).toBe('occupied');
+    expect(cancelled.available).toBe(false);
+    expect(cancelled.hail()).toBe(false); // no fares until T flips the sign again
   });
 
   it('drains the tip while speeding but never below zero, and only mid-ride', () => {
@@ -154,5 +195,6 @@ describe('ride state transitions', () => {
     expect(taxiHudText('hailed', true, 0, 0)).toBe('TAXI · PICKING UP');
     expect(taxiHudText('boarding', true, 0, 0)).toBe('TAXI · PICKING UP');
     expect(taxiHudText('riding', true, 48, 11.4)).toBe('FARE R48 · TIP R11');
+    expect(taxiHudText('riding', false, 48, 11.4)).toBe('FARE R48 · TIP R11'); // meter always wins mid-ride
   });
 });
