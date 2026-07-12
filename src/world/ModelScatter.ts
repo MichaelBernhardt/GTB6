@@ -326,7 +326,7 @@ function tryPlace(
   if (pointInAnyPolygon(WATER_POLYGONS, x, z) || pointInAnyPolygon(AERODROME_POLYGONS, x, z)) return false;
   if (footprintRoadClearance(x, z, w, d, heading) < roadClear) return false;
   const footR = Math.hypot(w, d) / 2;
-  if (craftedBlocks(x, z, footR)) return false; // full footprint: a crafted story pad (Jozi Arms, safehouse…) must never be overlapped — no snug-up allowance like procedural buildings get
+  if (craftedBlocks(x, z, footR * 0.7)) return false;
   if (buildings.blocks(x, z, footR * 0.85)) return false;
   if (!occ.free(x, z, footR, def.spacing, name)) return false;
   occ.add(x, z, footR, def.spacing, name);
