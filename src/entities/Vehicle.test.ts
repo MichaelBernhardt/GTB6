@@ -30,6 +30,12 @@ describe('bikeLeanTarget', () => {
 });
 
 describe('two-wheeler never flips onto its side while turning', () => {
+  it('builds the Sixty-Sekonds bike with a branded grocery box', () => {
+    const bike = new Vehicle(new THREE.Scene(), 'courier', new THREE.Vector3());
+    const box = bike.group.getObjectByName('courierbox');
+    expect(box).toBeDefined(); expect(box?.getObjectByName('sign')).toBeDefined();
+  });
+
   it('keeps world roll modest through a sustained turn on sloped terrain (regression: terrain-elevation)', () => {
     const scene = new THREE.Scene();
     const bike = new Vehicle(scene, 'motorbike', new THREE.Vector3(0, 0, 0));

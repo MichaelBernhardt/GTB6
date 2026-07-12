@@ -25,7 +25,7 @@ export const PLAYER = {
 };
 export const CHEATS = { runMultiplier: 1.8, jumpMultiplier: 2.85 };
 
-export type VehicleKind = 'compact' | 'sport' | 'van' | 'police' | 'taxi' | 'cab' | 'bicycle' | 'motorbike' | 'superbike';
+export type VehicleKind = 'compact' | 'sport' | 'van' | 'police' | 'taxi' | 'cab' | 'bicycle' | 'motorbike' | 'courier' | 'superbike';
 export interface VehicleSpec {
   kind: VehicleKind;
   name: string;
@@ -51,6 +51,7 @@ export const VEHICLE_SPECS: Record<VehicleKind, VehicleSpec> = {
   // maxSpeed = 2x sprint (13): W cruises at BICYCLE_CRUISE_FACTOR of this, Shift pedals hard for the full cap
   bicycle: { kind: 'bicycle', name: 'Kasi Cruiser', color: 0x3d7dc4, maxSpeed: 26, acceleration: 11, brake: 20, steering: 2.9, drag: 0.9, health: 40, size: [0.55, 1.1, 1.85], twoWheeler: true, saddle: [0.12, -0.2] },
   motorbike: { kind: 'motorbike', name: 'Soweto Scrambler', color: 0x9a3b2c, maxSpeed: 46, acceleration: 35, brake: 40, steering: 2.95, drag: 0.6, health: 60, size: [0.75, 1.2, 2.25], twoWheeler: true, saddle: [0.08, -0.18] },
+  courier: { kind: 'courier', name: 'Sixty-Sekonds Delivery Bike', color: 0x84f01c, maxSpeed: 43, acceleration: 33, brake: 40, steering: 2.9, drag: 0.62, health: 58, size: [0.76, 1.2, 2.3], twoWheeler: true, saddle: [0.08, -0.14] },
   superbike: { kind: 'superbike', name: 'Sandton Rocket', color: 0x84f01c, maxSpeed: 60, acceleration: 46, brake: 46, steering: 3.1, drag: 0.5, health: 55, size: [0.78, 1.05, 2.2], twoWheeler: true, saddle: [0.1, -0.3] },
 };
 

@@ -218,6 +218,11 @@ export const GARAGE_EXIT: MapPt = {
 /** Salisbury Court: a flat on Salisbury Street, deep south-east. */
 export const SAFEHOUSE_SITE = shopSite('Salisbury Street', { x: CBD_CENTER.x + 92 * P, z: CBD_CENTER.z + 92 * P }, 9.4, 3.6, 9, 3.5);
 
+// ---- Side-job depots ---------------------------------------------------------------
+
+/** Sixty-Sekonds dispatch: a kerbside grocery hatch in the CBD. Riders return here for every new basket. */
+export const COURIER_DEPOT = walkSpot('Commissioner Street', { x: CBD_CENTER.x + 25 * P, z: CBD_CENTER.z - 18 * P }, 4.2, 6);
+
 // ---- Districts / landmarks used by missions --------------------------------------
 
 const braamfontein = districtCenter('Braamfontein') ?? CBD_CENTER;
@@ -293,6 +298,7 @@ export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('bicycle', kerbVehicleSpot('Pothole Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z - 78 * P }, 2.4), 0xc44f9a),
   parkedEntry('motorbike', kerbVehicleSpot('You-Bet Street', { x: CBD_CENTER.x + 32 * P, z: CBD_CENTER.z + 55 * P }, 2)),
   parkedEntry('motorbike', kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 25 * P }, 2)),
+  parkedEntry('courier', kerbVehicleSpot('Commissioner Street', { x: COURIER_DEPOT.x, z: COURIER_DEPOT.z }, 2), 0x84f01c),
   (() => { const spot = bestKerbSpot({ near: { x: sandton.x, z: sandton.z }, clearance: 2, ownRadius: 3.4, minEdge: 0.1, minRoadWidth: 7 }); return { kind: 'superbike', x: spot.x, z: spot.z, heading: Math.atan2(spot.dirX, spot.dirZ) }; })(), // flashy toy on a Sandton kerb
 ];
 
@@ -391,6 +397,7 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: HOTDOG_SITE.building.x, z: HOTDOG_SITE.building.z, radius: 6 },
   { x: SAFEHOUSE_SITE.building.x, z: SAFEHOUSE_SITE.building.z, radius: 12 },
   { x: SAFEHOUSE_SITE.pad.x, z: SAFEHOUSE_SITE.pad.z, radius: 5 },
+  { x: COURIER_DEPOT.x, z: COURIER_DEPOT.z, radius: 7 },
   { x: PORTIA_START.x, z: PORTIA_START.z, radius: 7 },
   { x: VUSI_START.x, z: VUSI_START.z, radius: 7 },
   { x: CANDICE_START.x, z: CANDICE_START.z, radius: 7 },

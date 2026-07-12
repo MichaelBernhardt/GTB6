@@ -336,7 +336,7 @@ export class PopulationSystem {
 
   /** Lifecycle spawn: one AI-driven vehicle dropped on a vetted lane node and routed immediately. */
   spawnTrafficVehicle(x: number, z: number): Vehicle {
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'taxi']; // same mix as the hand-authored traffic
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'courier', 'taxi']; // the lime courier is actually working, allegedly
     const kind = kinds[this.ambientSerial % kinds.length] ?? 'compact';
     const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][this.ambientSerial % 4]);
     this.ambientSerial++;
@@ -367,7 +367,7 @@ export class PopulationSystem {
       vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([spot.x, spot.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'cab', 'sport', 'motorbike', 'van']; // the odd commuter bike weaves through traffic
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'cab', 'sport', 'motorbike', 'courier', 'van']; // the odd commuter and delivery bikes weave through traffic
     // Seed the opening traffic on lanes around the player spawn (the map is far bigger than the
     // AI wake radius; the lifecycle system keeps density right as the player moves).
     const nearbyRoutes = this.city.trafficRoutes.filter((route) => {

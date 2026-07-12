@@ -52,6 +52,7 @@ The workflow runs install, lint, tests, and the production build before deployme
 | Left mouse | Fire pistol | - |
 | `R` | Reload | - |
 | `F` | Mug or melee a nearby pedestrian | Recover vehicle to the nearest road |
+| `T` / `Y` | - | Taxi duty / Sixty-Sekonds courier shift |
 | `Escape` | Pause and settings | Pause and settings |
 | Backquote | Toggle FPS display | Toggle FPS display |
 
@@ -60,6 +61,8 @@ Click the game view to recapture the mouse after leaving pointer lock.
 ## Playing
 
 Gold columns mark the nearest available contact or current objective. Approach a contact and press `E`.
+
+For less respectable employment, grab a lime **Sixty-Sekonds** delivery bike and press `Y`. Collect absurd grocery orders from dispatch, beat the now-now timer, and keep the eggs intact for care, speed, and clean-streak bonuses. Potholes turn the basket into soup; the algorithm remains unsympathetic.
 
 1. **Delivery Run**: borrow Mara Velez's yellow Cielo, complete three timed deliveries, and return the car.
 2. **Hot Property**: steal a red Veloce downtown, survive the resulting pursuit, lose the SCPD, and reach the Costa Azul garage.
