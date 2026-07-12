@@ -37,6 +37,7 @@ export class Vehicle {
   burnTimer = 0;
   aiTarget = new THREE.Vector3();
   aiStuck = 0;
+  routeCooldown = 0; // seconds until this car may ask the planner again — set when a plan request comes back empty, so an unplanned car can't re-solve A* every frame
   frozen = false; // set by PopulationSystem distance culling: frozen traffic gets no plan/AI/visual updates
   bounce = 0;
   riderDamage = 0; // pending player damage while a two-wheeler is player-ridden: no vehicle health cocoon

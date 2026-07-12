@@ -152,6 +152,26 @@ describe('RoutePlanner budget', () => {
   });
 });
 
+describe('RoutePlanner solve accounting (perf HUD)', () => {
+  it('counts real A* solves and accumulates their wall-time', () => {
+    const graph = buildNavGraph([{ points: line(10, 10) }], 5);
+    const planner = new RoutePlanner(graph, 5);
+    expect(planner.solves).toBe(0);
+    expect(planner.solveMs).toBe(0);
+    planner.plan(0, 0, 9);
+    planner.plan(0, 0, 5);
+    expect(planner.solves).toBe(2); // two genuine findPath runs
+    expect(planner.solveMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('does not count a call that never reaches A* (empty graph, no goal node)', () => {
+    const planner = new RoutePlanner({ nodes: [], edges: [] }, 5);
+    expect(planner.plan(0, 0)).toBeUndefined(); // randomGoal() = -1 on an empty graph → short-circuits before findPath
+    expect(planner.solves).toBe(0);
+    expect(planner.solveMs).toBe(0);
+  });
+});
+
 describe('RoutePlanner.planTo (road-preferring offroad targets)', () => {
   const graph = buildNavGraph([{ points: line(10, 10) }], 5); // straight road, nodes x = 0..90
   const planner = new RoutePlanner(graph, 2);

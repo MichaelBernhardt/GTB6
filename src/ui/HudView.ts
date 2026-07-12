@@ -103,7 +103,7 @@ export class HudView {
       const taxi = state.vehicle.taxi; this.taxi.hidden = !taxi;
       if (taxi) { this.taxi.textContent = taxi.text; this.taxi.classList.toggle('is-on', taxi.available); }
     }
-    this.fps.textContent = `${Math.round(state.fps)} FPS`; this.fps.hidden = !state.settings.showFps; this.cheats.hidden = !state.cheatsOn; this.crosshair.hidden = !state.crosshair;
+    this.fps.textContent = `${Math.round(state.fps)} FPS · A* ${state.navCalls}/s ${state.navMs.toFixed(1)}ms`; this.fps.hidden = !state.settings.showFps; this.cheats.hidden = !state.cheatsOn; this.crosshair.hidden = !state.crosshair;
     this.scope.hidden = !state.scope; if (state.scope) this.scopeZoom.textContent = state.scope.zoom;
   }
 }

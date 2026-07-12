@@ -33,6 +33,7 @@ export class Pedestrian {
   private groundY = 0;
   private routeIndex = 0;
   private routed = false;
+  private replanCooldown = 0; // seconds until this ped may ask the planner again — set when a plan attempt yields nothing (budget-starved or unreachable) so a ped can't hammer A* every frame
   private watchdog = new ProgressWatchdog();
   private punchTimer = 0;
   private downTimer = 0;
@@ -80,6 +81,7 @@ export class Pedestrian {
     if (this.aggressive && !this.contact && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); }
     if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); }
     this.punchTimer = Math.max(0, this.punchTimer - dt);
+    this.replanCooldown = Math.max(0, this.replanCooldown - dt);
     if (this.state === 'hostile') this.setGuardPose(distance); else { this.group.rotation.x = 0; this.setPanicPose(this.state === 'flee', false); }
     if (this.hailing && this.state === 'idle') { const arm = this.arms[1]; if (arm) { arm.rotation.x = Math.PI * 0.95; arm.rotation.z = -0.22; } } // curbside hail: one arm out for the cab
     if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(choices); return; }
@@ -184,8 +186,14 @@ export class Pedestrian {
   /** True while reeling from a soft bump: mid-stumble peds should not be offered taxi hails. */
   get stumbling(): boolean { return this.stumbleTimer > 0; }
 
-  /** True while wandering without a planned sidewalk route: the population system should assign one. */
-  get wantsRoute(): boolean { return this.state === 'walk' && !this.contact && !this.hostile && !this.routed && !this.hailing; }
+  /** True while wandering without a planned sidewalk route: the population system should assign one. The
+   *  cooldown gate means a ped whose last request came back empty waits before asking again, so a crowd that
+   *  can't be served this frame (budget spent, or goals the graph can't reach) doesn't re-solve A* every frame. */
+  get wantsRoute(): boolean { return this.state === 'walk' && !this.contact && !this.hostile && !this.routed && !this.hailing && this.replanCooldown <= 0; }
+
+  /** No route came back (frame budget spent, or an unreachable goal exhausted the search). Hold off before the
+   *  next attempt — staggered so a whole backlog doesn't retry in lockstep — instead of hammering the planner. */
+  deferRoute(): void { this.replanCooldown = 0.8 + Math.random() * 1.2; }
 
   setRoute(points: RoadPoint[]): void {
     this.route = points; this.routeIndex = 0; this.routed = true; this.state = 'walk';

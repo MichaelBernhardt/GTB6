@@ -65,7 +65,7 @@ export class PopulationSystem {
       }
       if (ped.frozen) return; // far agents: no motion, routing, or animation until the player closes in again
       ped.update(dt, this.city, this.city.sidewalkPoints, player);
-      if (ped.wantsRoute) { const points = this.pedPlanner.tryPlanTo(ped.group.position.x, ped.group.position.z, ped.destination.x, ped.destination.z); if (points) ped.setRoute(points); }
+      if (ped.wantsRoute) { const points = this.pedPlanner.tryPlanTo(ped.group.position.x, ped.group.position.z, ped.destination.x, ped.destination.z); if (points) ped.setRoute(points); else ped.deferRoute(); }
       this.pedestrianImpactCooldown.set(ped, Math.max(0, (this.pedestrianImpactCooldown.get(ped) ?? 0) - dt));
     });
     this.witnessBodies(dt);
@@ -73,6 +73,7 @@ export class PopulationSystem {
     this.hootCooldown = Math.max(0, this.hootCooldown - dt);
     this.traffic.forEach((vehicle, index) => {
       if (vehicle.playerControlled || vehicle.disabled) return;
+      vehicle.routeCooldown = Math.max(0, vehicle.routeCooldown - dt);
       if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0) {
         const wasFrozen = vehicle.frozen;
         vehicle.frozen = resolveFrozen(vehicle.frozen, vehicle.group.position.distanceToSquared(player));
@@ -205,6 +206,11 @@ export class PopulationSystem {
 
   /** Traffic-vs-on-foot-player contacts since last frame; Game applies damage/tumble (cheats respected there). */
   consumePlayerVehicleHits(): PlayerVehicleHit[] { return this.playerVehicleHits.splice(0); }
+
+  /** Cumulative A* solves (ped + car planners) — the perf HUD samples the per-second delta. */
+  navSolveCount(): number { return this.pedPlanner.solves + this.vehiclePlanner.solves; }
+  /** Cumulative wall-time (ms) spent in A* across both planners — HUD samples the per-second delta. */
+  navSolveMs(): number { return this.pedPlanner.solveMs + this.vehiclePlanner.solveMs; }
 
   /** One civilian driver vs the on-foot player: resolves body contact (crawl = the car yields, speed =
    *  shove/damage on the player), then the forward corridor measured from the FRONT BUMPER — brake while
@@ -409,7 +415,7 @@ export class PopulationSystem {
    *  stall-reverse is in progress (callers skip normal driving that frame). */
   private followDrivePlan(vehicle: Vehicle, dt: number): boolean {
     const plan = this.trafficPlans.get(vehicle);
-    if (!plan) { this.assignVehicleRoute(vehicle, false); return true; }
+    if (!plan) { if (vehicle.routeCooldown <= 0 && !this.assignVehicleRoute(vehicle, false)) vehicle.routeCooldown = 0.8 + Math.random() * 1.2; return true; } // no plan yet: request one, but back off after an empty result instead of re-solving every frame
     if (plan.backoff > 0) {
       plan.backoff -= dt; vehicle.reverse(dt, this.city);
       if (plan.backoff <= 0) { this.trafficPlans.delete(vehicle); this.assignVehicleRoute(vehicle, false); } // replan from wherever we backed out to
@@ -432,14 +438,15 @@ export class PopulationSystem {
     return true;
   }
 
-  private assignVehicleRoute(vehicle: Vehicle, free: boolean): void {
+  private assignVehicleRoute(vehicle: Vehicle, free: boolean): boolean {
     const position = vehicle.group.position;
     const points = free ? this.vehiclePlanner.plan(position.x, position.z) : this.vehiclePlanner.tryPlan(position.x, position.z);
-    if (!points?.length) return; // budget spent or destination unreachable: retry next frame
+    if (!points?.length) return false; // budget spent or destination unreachable: caller backs off before retrying
     this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });
     const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);
     const next = points[1];
     if (next && Math.abs(vehicle.speed) < 1) { vehicle.heading = Math.atan2(next.x - position.x, next.z - position.z); vehicle.group.rotation.y = vehicle.heading; }
+    return true;
   }
 
   /** Snaps a lost/stuck vehicle back onto the nearest lane node and forces a replan. */

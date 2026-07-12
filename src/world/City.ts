@@ -29,7 +29,7 @@ import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTex
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
-import { CITY_JUNCTIONS, signalHoldsDriver, UrbanInfrastructure } from './UrbanInfrastructure';
+import { CITY_JUNCTIONS, type JunctionDefinition, signalHoldsDriver, SIGNAL_STOP_APPROACH, UrbanInfrastructure } from './UrbanInfrastructure';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
@@ -235,6 +235,12 @@ class RoadIndex {
   }
 }
 
+/** Cell size for the signalised-junction spatial index (see City.signalStops). Comfortably larger than any
+ *  junction's influence radius (widest/2 + SIGNAL_STOP_APPROACH), so buckets stay small. */
+const SIGNAL_CELL = 48;
+/** Width of the walkable sidewalk band beyond a road edge — a point this far off the tar reads as pavement. */
+const SIDEWALK_BAND = 3.5;
+
 const FACADE_RANGES: Record<BuildingStyle, [number, number]> = { downtown: [0, 6], residential: [6, 4], industrial: [10, 2], estate: [6, 4] };
 const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
   downtown: [0x9db1ba, 0xa3563f, 0xd0c4a4, 0x99a4a9, 0x93a9b0],
@@ -283,6 +289,7 @@ export class City {
   pedNav: NavGraph = bridgeIslands(buildNavGraph(this.navPaths.walks, PED_NAV_JOIN));
   private roadSurfaces: Array<{ points: RoadPoint[]; width: number; closed: boolean }> = [];
   private roadIndex = new RoadIndex();
+  private signalCells?: Map<string, JunctionDefinition[]>; // lazily-built junction spatial index for signalStops
   private colliderCells = new Map<string, number[]>();
   private colliderCellSize = 48;
   private collidersIndexed = 0;
@@ -330,10 +337,31 @@ export class City {
    *  clock the lenses animate on, so drivers stop exactly when the light the player sees turns red. */
   signalStops(position: THREE.Vector3, heading: number): boolean {
     const clock = this.infrastructure.signalClock;
-    for (const junction of CITY_JUNCTIONS) {
+    // Grid lookup instead of scanning all ~3800 junctions per car per frame: each junction is bucketed into
+    // every cell its influence radius touches, so the driver's single cell holds every robot that could stop it.
+    const cells = (this.signalCells ??= this.buildSignalIndex());
+    const bucket = cells.get(`${Math.floor(position.x / SIGNAL_CELL)},${Math.floor(position.z / SIGNAL_CELL)}`);
+    if (!bucket) return false;
+    for (const junction of bucket) {
       if (signalHoldsDriver(junction, position.x, position.z, heading, clock)) return true;
     }
     return false;
+  }
+
+  /** Buckets every signalised junction into the SIGNAL_CELL grid, padded by its influence radius
+   *  (widest/2 + approach), so signalStops resolves with one cell lookup. Built once, lazily. */
+  private buildSignalIndex(): Map<string, JunctionDefinition[]> {
+    const cells = new Map<string, JunctionDefinition[]>();
+    for (const junction of CITY_JUNCTIONS) {
+      const reach = junction.widest / 2 + SIGNAL_STOP_APPROACH;
+      const minX = Math.floor((junction.x - reach) / SIGNAL_CELL); const maxX = Math.floor((junction.x + reach) / SIGNAL_CELL);
+      const minZ = Math.floor((junction.z - reach) / SIGNAL_CELL); const maxZ = Math.floor((junction.z + reach) / SIGNAL_CELL);
+      for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
+        const key = `${cx},${cz}`; const bucket = cells.get(key);
+        if (bucket) bucket.push(junction); else cells.set(key, [junction]);
+      }
+    }
+    return cells;
   }
 
   /** Frame-budgeted distance culling: chunks near the focus join the scene, far ones detach (with
@@ -475,11 +503,10 @@ export class City {
   sidewalkHeightAt(x: number, z: number): number { return terrainHeightAt(x, z) + ROAD_SURFACE_OFFSET + SIDEWALK_RISE; }
 
   isOnSidewalk(x: number, z: number): boolean {
-    if (this.isOnRoad(x, z)) return false;
-    return this.roadSurfaces.some((surface) => {
-      const distance = this.distanceToPath(x, z, surface.points, surface.closed);
-      return distance <= surface.width / 2 + 3.5;
-    });
+    // Grid lookup instead of scanning ~4000 road polylines every ped/frame: edgeDistance already subtracts each
+    // segment's half-width, so "beyond the tar but within the sidewalk band" is a single grid query.
+    const edge = this.roadIndex.edgeDistance(x, z);
+    return edge > 0 && edge <= SIDEWALK_BAND;
   }
 
   surfaceHeightAt(x: number, z: number, preferred: SurfaceKind = 'auto'): number {
@@ -1066,17 +1093,6 @@ export class City {
     const wx = spec.x + lx * c + lz * s; const wz = spec.z - lx * s + lz * c;
     const nx = Math.abs(hw * c) + Math.abs(hd * s); const nz = Math.abs(hw * s) + Math.abs(hd * c);
     return { minX: wx - nx, maxX: wx + nx, minZ: wz - nz, maxZ: wz + nz, y0: tier.y0, height: tier.y1 - tier.y0 };
-  }
-
-  private distanceToPath(x: number, z: number, path: RoadPoint[], closed: boolean): number {
-    let nearest = Infinity; const segmentCount = closed ? path.length : path.length - 1;
-    for (let index = 0; index < segmentCount; index++) {
-      const start = path[index]; const end = path[(index + 1) % path.length]; if (!start || !end) continue;
-      const dx = end.x - start.x; const dz = end.z - start.z; const lengthSquared = dx * dx + dz * dz || 1;
-      const t = THREE.MathUtils.clamp(((x - start.x) * dx + (z - start.z) * dz) / lengthSquared, 0, 1);
-      nearest = Math.min(nearest, Math.hypot(x - (start.x + dx * t), z - (start.z + dz * t)));
-    }
-    return nearest;
   }
 
   private addLedge(x: number, z: number, w: number, d: number, y: number): void {

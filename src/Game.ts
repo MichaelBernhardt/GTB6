@@ -117,6 +117,8 @@ export class Game {
   private wallCrashCooldown = 0;
   private fps = 60;
   private simStepCostMs = 0; // EMA of one update()'s wall time; sizes the per-frame catch-up budget (see maxCatchupSteps)
+  private navHudCalls = 0; private navHudMs = 0; // A* solves/sec and ms/sec, shown beside the FPS counter
+  private navHudTimer = 0; private navHudLastSolves = 0; private navHudLastMs = 0; // rolling 1s sampler state
   private weaponWheelOpen = false;
   private wheelVector = new THREE.Vector2();
   private wheelHighlight: WeaponId = 'pistol';
@@ -429,6 +431,13 @@ export class Game {
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     const raw = this.clock.getDelta(); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
+    this.navHudTimer += raw; // once a real second, convert the A* solve/ms totals into per-second rates for the HUD
+    if (this.navHudTimer >= 1) {
+      const solves = this.population.navSolveCount(); const ms = this.population.navSolveMs();
+      this.navHudCalls = Math.round((solves - this.navHudLastSolves) / this.navHudTimer);
+      this.navHudMs = (ms - this.navHudLastMs) / this.navHudTimer;
+      this.navHudLastSolves = solves; this.navHudLastMs = ms; this.navHudTimer = 0;
+    }
     const steps = simSteps(raw); let frameDt = steps.reduce((total, step) => total + step, 0); // wall-clock time the world advances this frame — real time under slow frames, capped only at the catch-up ceiling
     if (this.mode === 'playing') {
       // sub-steps: a 15fps frame runs two updates instead of stretching one past the physics-stable step. But
@@ -1379,7 +1388,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.inventory.armour, stims: this.inventory.stims, parachutes: this.inventory.parachutes, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
+    this.ui.update({ health: this.player.health, armour: this.inventory.armour, stims: this.inventory.stims, parachutes: this.inventory.parachutes, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

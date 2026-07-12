@@ -168,6 +168,10 @@ export class ProgressWatchdog {
 /** Budgeted A* front-end shared by the agents of one system: at most perFrame solves per beginFrame(). */
 export class RoutePlanner {
   private budget = 0;
+  /** Cumulative count of real A* solves and the wall-time spent in them. The on-screen perf HUD reads the
+   *  per-second delta; only genuine findPath runs are counted (budget short-circuits and cache hits are not). */
+  solves = 0;
+  solveMs = 0;
   constructor(private graph: NavGraph, private perFrame = 2, private random: () => number = Math.random) {}
 
   beginFrame(): void { this.budget = this.perFrame; }
@@ -179,7 +183,10 @@ export class RoutePlanner {
   /** Unbudgeted solve (spawn-time setup). Goal defaults to a random node. */
   plan(fromX: number, fromZ: number, goal = this.randomGoal()): NavPoint[] | undefined {
     const start = nearestNode(this.graph, fromX, fromZ);
-    const path = start < 0 || goal < 0 ? undefined : findPath(this.graph, start, goal);
+    if (start < 0 || goal < 0) return undefined;
+    const started = performance.now();
+    const path = findPath(this.graph, start, goal);
+    this.solveMs += performance.now() - started; this.solves += 1;
     return path?.map((index) => this.graph.nodes[index]).filter((point): point is NavPoint => Boolean(point));
   }
 
