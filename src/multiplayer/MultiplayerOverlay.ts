@@ -8,6 +8,7 @@ export class MultiplayerOverlay {
   private chatLog = document.createElement('div');
   private form = document.createElement('form');
   private input = document.createElement('input');
+  private playerListSignature = '';
   onChat?: (text: string) => void;
 
   constructor() {
@@ -25,6 +26,9 @@ export class MultiplayerOverlay {
   setStatus(text: string, danger = false): void { this.status.textContent = text; this.status.classList.toggle('is-danger', danger); }
   setPlayers(players: NetPlayer[], selfId?: string): void {
     const ordered = [...players].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+    const signature = JSON.stringify(ordered.map((player) => [player.id, player.name, player.kills, player.deaths, player.id === selfId]));
+    if (signature === this.playerListSignature) return;
+    this.playerListSignature = signature;
     this.scoreboard.replaceChildren();
     const title = document.createElement('strong'); title.textContent = `ONLINE · ${players.length}/16`; this.scoreboard.append(title);
     for (const player of ordered) {
