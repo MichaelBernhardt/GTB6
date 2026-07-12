@@ -113,6 +113,7 @@ export class DayNightSystem {
   private lampXZ: Float32Array;
   private lampIndices: number[] = []; private lampDistances: number[] = [];
   private streetPool: THREE.PointLight[] = [];
+  private streetFound = 0; private streetRefresh = Infinity; private streetFocusX = Infinity; private streetFocusZ = Infinity; private streetActive = false;
   private headPool: THREE.SpotLight[] = [];
   private facades: THREE.MeshStandardMaterial[];
   private candidates: Vehicle[] = [];
@@ -142,14 +143,15 @@ export class DayNightSystem {
     this.headPool = Array.from({ length: HEADLIGHT_POOL[quality] }, () => {
       const light = new THREE.SpotLight(HEADLIGHT_COLOR, 0, HEADLIGHT_RANGE, 0.52, 0.55, 1.3); light.castShadow = false; this.scene.add(light, light.target); return light;
     });
+    this.streetActive = false; this.streetRefresh = Infinity; this.streetFound = 0;
   }
 
   update(dt: number, focus: THREE.Vector3, traffic: readonly Vehicle[], police: readonly Vehicle[], playerVehicle?: Vehicle): void {
     this.hour = advanceHour(this.hour, dt * this.timeRate);
-    this.apply(focus, traffic, police, playerVehicle);
+    this.apply(focus, traffic, police, playerVehicle, dt);
   }
 
-  private apply(focus: THREE.Vector3, traffic: readonly Vehicle[] = [], police: readonly Vehicle[] = [], playerVehicle?: Vehicle): void {
+  private apply(focus: THREE.Vector3, traffic: readonly Vehicle[] = [], police: readonly Vehicle[] = [], playerVehicle?: Vehicle, dt = Infinity): void {
     const sky = sampleSky(this.hour, this.sample); const night = nightFactor(this.hour);
     const env = this.environment;
     env.sun.color.copy(sky.sun); env.sun.intensity = sky.sunIntensity;
@@ -167,19 +169,28 @@ export class DayNightSystem {
     const gridNight = powerOn() ? night : 0; // load shedding: mains-fed lights go dark, whatever the hour
     this.city.setStreetlightGlow(night); // the bulb material checks the grid itself so panels also read dark by day
     for (const material of this.facades) material.emissiveIntensity = gridNight * FACADE_NIGHT_EMISSIVE;
-    this.updateStreetlightPool(focus, gridNight);
+    this.updateStreetlightPool(focus, gridNight, dt);
     this.updateHeadlightPool(focus, night, traffic, police, playerVehicle); // cars run on batteries — Eskom can't touch these
   }
 
-  private updateStreetlightPool(focus: THREE.Vector3, night: number): void {
+  private updateStreetlightPool(focus: THREE.Vector3, night: number, dt: number): void {
     const pool = this.streetPool;
-    if (night <= 0.001) { for (const light of pool) light.intensity = 0; return; }
-    const found = selectNearest(this.lampXZ, focus.x, focus.z, pool.length, this.lampIndices, this.lampDistances);
+    if (night <= 0.001) { for (const light of pool) light.intensity = 0; this.streetActive = false; return; }
+    this.streetRefresh += dt;
+    const movedSq = (focus.x - this.streetFocusX) ** 2 + (focus.z - this.streetFocusZ) ** 2;
+    // Lamp anchors are static. Re-sorting every fixture every frame only changes the result after meaningful
+    // movement; a periodic refresh also notices a nearby lamp that has just been knocked down.
+    if (!this.streetActive || movedSq >= 36 || this.streetRefresh >= 0.5) {
+      this.streetFound = selectNearest(this.lampXZ, focus.x, focus.z, pool.length, this.lampIndices, this.lampDistances);
+      this.streetFocusX = focus.x; this.streetFocusZ = focus.z; this.streetRefresh = 0; this.streetActive = true;
+      for (let slot = 0; slot < this.streetFound; slot++) {
+        const lamp = this.lampIndices[slot]!;
+        pool[slot]!.position.set(this.lampXZ[lamp * 2]!, LAMP_HEIGHT, this.lampXZ[lamp * 2 + 1]!);
+      }
+    }
     for (let slot = 0; slot < pool.length; slot++) {
       const light = pool[slot]!;
-      if (slot >= found) { light.intensity = 0; continue; }
-      const lamp = this.lampIndices[slot]!;
-      light.position.set(this.lampXZ[lamp * 2]!, LAMP_HEIGHT, this.lampXZ[lamp * 2 + 1]!);
+      if (slot >= this.streetFound) { light.intensity = 0; continue; }
       light.intensity = night * STREETLIGHT_INTENSITY;
     }
   }

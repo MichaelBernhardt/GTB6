@@ -123,8 +123,9 @@ export const PED_NAV_JOIN = Math.round(18 * LAYOUT_SCALE);
 export const MERGE_CHUNK_SIZE = CELL_SIZE;
 /** Lakes/dams at least this large (units²) get the tiered wavy/reflective water treatment. */
 export const PREMIUM_WATER_AREA = 3200;
-/** Time (ms) per frame spent generating on-demand building chunks — the rest of the frame is the game. */
-export const BUILD_FRAME_BUDGET_MS = 4;
+/** Time (ms) per frame spent generating on-demand building chunks. A short stream-in is preferable to
+ *  repeatedly consuming a quarter of a 60fps frame and turning initial traversal into visible hitches. */
+export const BUILD_FRAME_BUDGET_MS = 2;
 
 export function sampleRoadPath(points: RoadPoint[], closed: boolean, spacing: number): RoadPoint[] {
   const source = closed ? [...points, points[0]].filter((point): point is RoadPoint => Boolean(point)) : points;
