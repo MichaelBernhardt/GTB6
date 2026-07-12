@@ -92,6 +92,8 @@ export class UrbanInfrastructure {
     /** Detail-tier chunk grid (~1200u): furniture, lamp hardware, lenses — sub-pixel beyond it. */
     private detail: ChunkStore,
     private roadsidePoints: RoadsidePoint[],
+    /** Distance-spaced, kerb-alternating lamp anchors — one per STREETLAMP_SPACING of road. */
+    private streetlampPoints: RoadsidePoint[],
     private isBlocked: (x: number, z: number, radius: number) => boolean,
     private isRoad: (x: number, z: number, margin: number) => boolean,
     private props: PropRegistry,
@@ -239,7 +241,10 @@ export class UrbanInfrastructure {
   }
 
   private buildStreetlights(): void {
-    const sites = this.roadsidePoints.filter((point, index) => index % 7 === 1 && point.width >= 9 && !this.isBlocked(point.x, point.z, 1.2) && !this.isRoad(point.x, point.z, 0.9));
+    // Lamps line every road at a consistent ~36u pitch, alternating kerbs, drawn from the arc-length
+    // streetlampPoints (not the coarse verge stride). The width floor lives in addStreetlampPoints, so
+    // here we only drop anchors that landed inside a building footprint or back on the tar.
+    const sites = this.streetlampPoints.filter((point) => !this.isBlocked(point.x, point.z, 1.2) && !this.isRoad(point.x, point.z, 0.9));
     const metal = new THREE.MeshStandardMaterial({ color: 0x253033, roughness: 0.34, metalness: 0.82 });
     const deadBulbMaterial = new THREE.MeshBasicMaterial({ color: 0x2a2d2f, side: THREE.DoubleSide }); // a downed lamp is dark, day or night, powered or not
     const poleGeometry = new THREE.CylinderGeometry(0.08, 0.17, 6.5, 12);
