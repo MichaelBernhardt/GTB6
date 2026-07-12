@@ -12,6 +12,8 @@ import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraCon
 import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
 import { InputManager } from './core/InputManager';
+import { MultiplayerOverlay } from './multiplayer/MultiplayerOverlay';
+import { OnlineSession } from './multiplayer/OnlineSession';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
@@ -100,6 +102,9 @@ export class Game {
   private activeSafehouse?: SafehousePlace;
   private garageVehicle?: Vehicle;
   private ui = new UIManager();
+  private multiplayerOverlay = new MultiplayerOverlay();
+  private online?: OnlineSession;
+  private onlineWasDead = false;
   private mode: GameMode = 'menu';
   private activeVehicle?: Vehicle;
   private transition?: Transition;
@@ -218,6 +223,7 @@ export class Game {
 
   private bindUI(): void {
     this.ui.onStart = (fresh) => this.startGame(fresh);
+    this.ui.onOnline = (name) => this.startOnline(name);
     this.ui.onResume = () => { this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); if (this.activeVehicle && !this.activeVehicle.spec.twoWheeler) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
     this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
@@ -281,6 +287,7 @@ export class Game {
     };
   }
   private mapMarkers(): MapMarker[] {
+    if (this.online) return this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const }));
     return [
       ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
       ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : []),
@@ -288,9 +295,11 @@ export class Game {
     ];
   }
   private mapPolice(): MapPoint[] {
+    if (this.online) return [];
     return this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z }));
   }
   private mapHostiles(): MapPoint[] {
+    if (this.online) return [];
     return this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact && !ped.police).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
   }
 
@@ -439,9 +448,21 @@ export class Game {
   }
 
   private startGame(fresh: boolean): void {
+    this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
+  }
+
+  private startOnline(name: string): void {
+    this.endTaxiShift(); this.endCourierShift(); this.online?.close();
+    this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
+    this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined;
+    this.player.group.position.set(2050, 0, 3850); this.player.group.position.y = this.city.surfaceHeightAt(2050, 3850);
+    this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
+    this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
+    void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+    this.ui.notify('Global world', 'Open PvP is active. Press Enter to chat.');
   }
 
   private animate = (): void => {
@@ -463,7 +484,7 @@ export class Game {
       frameDt = 0;
       for (let i = 0; i < steps.length && i < allowed; i++) {
         const stepStart = performance.now();
-        this.update(steps[i]!);
+        if (this.online) this.updateOnline(steps[i]!); else this.update(steps[i]!);
         this.simStepCostMs = this.simStepCostMs === 0 ? performance.now() - stepStart : this.simStepCostMs * 0.9 + (performance.now() - stepStart) * 0.1;
         frameDt += steps[i]!; // camera/marker advance only by the sim time actually run, so the view can't outrun the world under overload
         if (this.mode !== 'playing') break;
@@ -564,6 +585,32 @@ export class Game {
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
     this.saveTimer += dt; if (this.saveTimer > 8) { this.persist(); this.saveTimer = 0; }
     if (this.player.health <= 0) this.die();
+  }
+
+  private updateOnline(dt: number): void {
+    const online = this.online; if (!online) return;
+    if (this.input.consume('Escape')) { this.pause(); return; }
+    const stateBefore = online.localState;
+    if (this.input.consume('KeyE')) online.interact();
+    if (!stateBefore?.dead && !stateBefore?.vehicleId) {
+      this.player.setVisible(true); this.player.update(dt, this.input, this.cameraController.yaw, this.city);
+      this.combat.tryReload(this.input); this.combat.update(dt);
+      const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
+      if (shot.fired && !shot.melee) online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize());
+    }
+    const state = online.update(dt, {
+      forward: Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')),
+      side: Number(this.input.down('KeyD')) - Number(this.input.down('KeyA')),
+      sprint: this.input.down('ShiftLeft'), yaw: this.cameraController.yaw,
+    });
+    if (!state) return;
+    const correction = state.dead ? 1 : 1 - Math.exp(-dt * 7);
+    this.player.group.position.x = THREE.MathUtils.lerp(this.player.group.position.x, state.x, correction);
+    this.player.group.position.z = THREE.MathUtils.lerp(this.player.group.position.z, state.z, correction);
+    this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
+    this.player.health = state.health; this.player.setVisible(!state.dead && !state.vehicleId);
+    if (state.dead && !this.onlineWasDead) { this.ui.notify('EISH', 'You were eliminated. Respawning in three seconds.', false); this.audio.setFire(false); }
+    this.onlineWasDead = state.dead;
   }
 
   private applyEskom(event: 'start' | 'end' | undefined): void {
@@ -1456,7 +1503,8 @@ export class Game {
     if (this.mode === 'playing' && !this.transition) {
       const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
-      if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
+      if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat' : 'E  Enter nearby vehicle  ·  ENTER  Global chat  ·  Open PvP';
+      else if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
       else if (this.activeVehicle) {
         if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
@@ -1485,7 +1533,7 @@ export class Game {
     }
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
-    const objective = this.missions.objective ? {
+    const objective = !this.online && this.missions.objective ? {
       missionName: this.missions.active?.name ?? '', text: this.missions.objective.text, progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
     } : undefined;
@@ -1497,7 +1545,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.inventory.armour, stims: this.inventory.stims, parachutes: this.inventory.parachutes, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable) });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles
