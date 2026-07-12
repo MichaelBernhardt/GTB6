@@ -175,11 +175,10 @@ export class ProgressWatchdog {
   }
 }
 
-/** Node-grid cell for goalNear, and how many cells out to gather candidates (≈ 5 × 240u ≈ 1200u range) — a
- *  car's destination stays local (cheap, reachable A*) but ranges far enough to spread traffic across the
- *  area around the player instead of orbiting its spawn. */
-const GOAL_CELL = 240;
-const GOAL_REACH_CELLS = 5;
+/** Node-grid cell for goalNear, and how many cells out to gather candidates (≈ 4 × 150u ≈ 600u range) — a
+ *  car's destination stays local so each solve is cheap and reachable; the census bubble handles distribution. */
+const GOAL_CELL = 150;
+const GOAL_REACH_CELLS = 4;
 
 /** Budgeted A* front-end shared by the agents of one system: at most perFrame solves per beginFrame(). */
 export class RoutePlanner {

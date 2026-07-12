@@ -14,6 +14,12 @@ export interface ViewPoint { x: number; z: number; dirX: number; dirZ: number; }
 export const CLEANUP_HOURS = 6; // in-game hours a corpse/wreck must age before the city removes it
 export const SIGHT_FAR = 500; // beyond this the player can never tell what despawns
 export const SIGHT_NEAR = 40; // within this nothing is ever removed, even directly behind the camera
+// Population bubble: an ambient agent this far from the viewer (always well out of sight, > SIGHT_FAR) is
+// recycled even when it's still inside the 3×3 active block. Without this, a crowd left behind when the player
+// moves stays alive inside the block, keeps the head-count at target, and starves fresh spawns near the player
+// — a full population but a ghost town wherever you actually are. Comfortably beyond the ~825u spawn+wander
+// spread so a stationary viewer's crowd is never churned; a real relocation clears the stragglers promptly.
+export const REFRESH_RADIUS = 1150;
 export const FOV_COS = 0.5; // cos(60°): half-angle of the ~120° forward vision cone
 
 export const LIFECYCLE_INTERVAL = 3; // real seconds between census passes
@@ -50,6 +56,12 @@ export function outOfSight(view: ViewPoint, x: number, z: number): boolean {
 /** A body or wreck may be cleaned only once it is BOTH old enough and unobserved. */
 export function cleanupEligible(deadHours: number, view: ViewPoint, x: number, z: number): boolean {
   return deadHours >= CLEANUP_HOURS && outOfSight(view, x, z);
+}
+
+/** True when (x,z) is outside the population bubble around the viewer — a straggler the census should recycle
+ *  toward the player (REFRESH_RADIUS > SIGHT_FAR, so anything this far out is always invisible to recycle). */
+export function beyondBubble(view: ViewPoint, x: number, z: number): boolean {
+  return (x - view.x) ** 2 + (z - view.z) ** 2 > REFRESH_RADIUS * REFRESH_RADIUS;
 }
 
 export type DayPhase = 'day' | 'shoulder' | 'night';
@@ -241,8 +253,8 @@ export class LifecycleSystem {
 
   /** Ambient pedestrians: clear the dead ring, then trim over / spawn under the active-area target. */
   private reconcilePeds(view: ViewPoint, activeKeys: Set<number>, target: Map<number, number>, total: number): void {
-    for (const ped of this.population.pedestrians.filter(isAmbientPedestrian)) // dead zones sit ≥1 zone (1800u) past the 3×3, always out of sight
-      if (!activeKeys.has(pointZone(ped.group.position.x, ped.group.position.z)) && pedDespawnable(ped)) this.population.removePedestrian(ped);
+    for (const ped of this.population.pedestrians.filter(isAmbientPedestrian)) // dead zones (past the 3×3) AND stragglers left behind inside it: both out of sight, both recycled toward the player
+      if ((!activeKeys.has(pointZone(ped.group.position.x, ped.group.position.z)) || beyondBubble(view, ped.group.position.x, ped.group.position.z)) && pedDespawnable(ped)) this.population.removePedestrian(ped);
 
     const live = this.population.pedestrians.filter(isAmbientPedestrian);
     const zoneLive = countByZone(live.map((ped) => ped.group.position));
@@ -265,7 +277,7 @@ export class LifecycleSystem {
   private reconcileTraffic(view: ViewPoint, protectedVehicles: ReadonlySet<Vehicle>, activeKeys: Set<number>, target: Map<number, number>, total: number): void {
     const drivable = (vehicle: Vehicle) => !vehicle.wrecked && !vehicle.disabled;
     for (const vehicle of this.population.traffic.filter(drivable))
-      if (!activeKeys.has(pointZone(vehicle.group.position.x, vehicle.group.position.z)) && !protectedVehicles.has(vehicle) && vehicleDespawnable(vehicle)) this.population.removeVehicle(vehicle);
+      if ((!activeKeys.has(pointZone(vehicle.group.position.x, vehicle.group.position.z)) || beyondBubble(view, vehicle.group.position.x, vehicle.group.position.z)) && !protectedVehicles.has(vehicle) && vehicleDespawnable(vehicle)) this.population.removeVehicle(vehicle);
 
     const live = this.population.traffic.filter(drivable);
     const zoneLive = countByZone(live.map((vehicle) => vehicle.group.position));

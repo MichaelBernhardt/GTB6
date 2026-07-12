@@ -7,7 +7,7 @@ import { activeZones, axisIndex, zoneCharacter, ZONE_SIZE } from '../world/data/
 import {
   AMBIENT_SPAWN_TRICKLE, BUSY_MAX, BUSY_MIN, CAR_TARGET_CAP, censusBudget, CHANGE_BUDGET, clampBusy, CLEANUP_HOURS, cleanupEligible,
   corpseCleanable, dayPhase, FOV_COS, isAmbientPedestrian, LIFECYCLE_INTERVAL, LifecycleSystem, outOfSight, PED_SPAWN_SPACING, PED_TARGET_CAP,
-  pedDespawnable, PHASE_MULTIPLIER, SIGHT_FAR, SIGHT_NEAR, vehicleDespawnable, ZONE_DENSITY, zoneTarget, type ViewPoint,
+  pedDespawnable, PHASE_MULTIPLIER, REFRESH_RADIUS, SIGHT_FAR, SIGHT_NEAR, vehicleDespawnable, ZONE_DENSITY, zoneTarget, type ViewPoint,
 } from './LifecycleSystem';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
 import { PopulationSystem } from './PopulationSystem';
@@ -305,6 +305,26 @@ describe('lifecycle simulation', () => {
     // the whole CBD crowd (now two-plus zones away, always out of sight) has been cleared
     for (const ped of population.pedestrians.filter(isAmbientPedestrian))
       expect(Math.hypot(ped.group.position.x - SPAWN_POINT.x, ped.group.position.z - SPAWN_POINT.z)).toBeGreaterThan(ZONE_SIZE);
+  });
+
+  it('recycles a crowd left behind when the player moves WITHIN the active block, refilling around them', () => {
+    const city = makeCity();
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const lifecycle = new LifecycleSystem(city, population);
+    const viewA = { x: SPAWN_POINT.x, z: SPAWN_POINT.z, dirX: 0, dirZ: 1 };
+    for (let i = 0; i < 300; i++) lifecycle.update(1, 12, viewA, new Set());
+    expect(population.pedestrians.filter(isAmbientPedestrian).length).toBeGreaterThan(20); // a crowd gathered at A
+
+    // Move ~1600u — still inside the 3×3 block (viewA's zone is a neighbour of viewB's, so NOT a dead-ring
+    // clear), but far enough that the crowd left at A falls outside the population bubble around B.
+    const viewB = { x: SPAWN_POINT.x + 1600, z: SPAWN_POINT.z, dirX: 0, dirZ: 1 };
+    for (let i = 0; i < 15; i++) lifecycle.update(1, 12, viewB, new Set());
+
+    const ambient = population.pedestrians.filter(isAmbientPedestrian);
+    for (const ped of ambient) // nobody is stranded beyond the bubble around the player's new position
+      expect(Math.hypot(ped.group.position.x - viewB.x, ped.group.position.z - viewB.z)).toBeLessThan(REFRESH_RADIUS + 400);
+    const nearB = ambient.filter((p) => Math.hypot(p.group.position.x - viewB.x, p.group.position.z - viewB.z) < REFRESH_RADIUS).length;
+    expect(nearB).toBeGreaterThan(15); // and the crowd has refilled where the player actually is
   });
 
   it('scales the whole active area with `set busy`, caps the summed total, and honours pins', () => {
