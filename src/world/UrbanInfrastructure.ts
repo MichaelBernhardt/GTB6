@@ -382,7 +382,9 @@ export class UrbanInfrastructure {
     // Each blade runs ALONG the street it names (its face perpendicular to that street, read head-on by that
     // road's traffic) — hence the +90° from the road bearing. Two back-to-back front-side planes give correct,
     // un-mirrored text on both faces (a single double-sided plane shows the back reflected/backwards).
-    const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle + Math.PI / 2, 3.25], [junction.roadB, junction.angle + Math.PI, 2.78]];
+    // Two blades (0.92 tall) stacked ABOVE the 3.6m post, like a real street-name assembly: the lower blade's
+    // bottom edge meets the post top (3.6), the upper blade sits directly on top of it — touching, no overlap.
+    const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle + Math.PI / 2, 4.98], [junction.roadB, junction.angle + Math.PI, 4.06]];
     for (const [label, angle, y] of labels) {
       for (const flip of [0, Math.PI]) {
         const sign = createSignMesh(new THREE.PlaneGeometry(4.2, 0.92), label, '#f2f4e9', { background: '#176a5a' });
