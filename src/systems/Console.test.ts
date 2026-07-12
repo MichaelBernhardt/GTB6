@@ -12,6 +12,8 @@ describe('console parser', () => {
   it('parses plain commands', () => {
     expect(parseCommand('help')).toEqual({ kind: 'help' });
     expect(parseCommand('fps')).toEqual({ kind: 'fps' });
+    expect(parseCommand('save')).toEqual({ kind: 'save' });
+    expect(parseCommand('save now').kind).toBe('error'); // save takes no arguments
     expect(parseCommand('   ')).toEqual({ kind: 'noop' });
   });
 
@@ -149,6 +151,7 @@ describe('runConsoleCommand', () => {
     setCarTarget: (count) => `cars:${count ?? 'auto'}`,
     busyInfo: () => 'crowd',
     openMap: () => 'map-open',
+    save: () => 'saved',
     teleport: (x, z) => `tp:${x},${z}`,
     teleportNamed: (name) => `tpn:${name}`,
     teleportList: () => ['place one', 'place two'],
@@ -180,6 +183,7 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('set cars 40', host)).toEqual(['cars:40']);
     expect(runConsoleCommand('busy', host)).toEqual(['crowd']);
     expect(runConsoleCommand('map', host)).toEqual(['map-open']);
+    expect(runConsoleCommand('save', host)).toEqual(['saved']);
   });
 
   it('routes teleports, skyfall and the give family', () => {

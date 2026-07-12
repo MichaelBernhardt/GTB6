@@ -14,6 +14,7 @@ export type ConsoleCommand =
   | { kind: 'set-cars'; count?: number }
   | { kind: 'busy' }
   | { kind: 'map' }
+  | { kind: 'save' }
   | { kind: 'spawn'; vehicle: VehicleKind }
   | { kind: 'cash'; amount: number }
   | { kind: 'unwanted' }
@@ -44,6 +45,7 @@ export interface ConsoleHost {
   setCarTarget(count?: number): string;
   busyInfo(): string;
   openMap(): string;
+  save(): string;
   teleport(x: number, z: number): string;
   teleportNamed(name: string): string;
   teleportList(): string[];
@@ -83,6 +85,7 @@ export const HELP_LINES = [
   'set cars <n|auto> — pin the traffic target for the area around you (auto = per-zone by district)',
   'busy — show the current nearby crowd targets and live counts',
   'map — open the city map (or press M)',
+  'save — save the current game to this browser',
   'fps — toggle the performance display',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
   'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens',
@@ -115,6 +118,7 @@ export function parseCommand(input: string): ConsoleCommand {
   if (head === 'fps' && rest.length === 0) return { kind: 'fps' };
   if (head === 'busy' && rest.length === 0) return { kind: 'busy' };
   if (head === 'map' && rest.length === 0) return { kind: 'map' };
+  if (head === 'save' && rest.length === 0) return { kind: 'save' };
   if (head === 'set') {
     const [key, value] = rest;
     if (key === 'busy') {
@@ -179,6 +183,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'help': return HELP_LINES;
     case 'error': return [command.message];
     case 'fps': return [host.toggleFps()];
+    case 'save': return [host.save()];
     case 'set-time': return [host.setTime(command.hour)];
     case 'set-timerate': return [host.setTimerate(command.rate)];
     case 'set-busy': return [host.setBusy(command.percent)];

@@ -312,6 +312,7 @@ export class Game {
     },
     busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
     openMap: () => { this.closeConsole(); this.openMap(); return 'Opening the city map. Press M or ESC to close.'; },
+    save: () => { this.persist(); return 'Game saved.'; },
     teleport: (x, z) => this.teleportPlayer(clampToWorld(x), clampToWorld(z), `${Math.round(x)}, ${Math.round(z)}`),
     teleportNamed: (name) => {
       const target = resolveTeleport(name, this.teleportTargets());
