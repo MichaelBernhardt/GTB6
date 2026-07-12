@@ -23,6 +23,8 @@ import {
 import { beachBands, buildShoreRibbon, OCEAN_Y, SEABED_Y, SHORE_Y } from './coast';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
 import { CELL_SIZE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
+import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter';
+import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
@@ -273,7 +275,7 @@ export class City {
   private buildQueue: Array<[number, number]> = [];
   private queuedCells = new Set<string>();
   /** The cell currently being baked, a few buildings at a time, across frames (spreads the cost). */
-  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; index: number; baker: GeometryBaker; colliders: Collider[]; group: THREE.Group };
+  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; index: number; models: ScatteredModel[]; modelIndex: number; baker: GeometryBaker; colliders: Collider[]; group: THREE.Group };
   /** Where the building meshes for the current build go (a per-building local group, rotated to face
    *  its street, then merged into the cell). Defaults to the root group for up-front geometry. */
   private target: THREE.Group = this.group;
@@ -316,6 +318,7 @@ export class City {
     this.group.name = 'Joburg'; scene.add(this.group);
     this.architecture = new BuildingArchitecture(this.group);
     ensureParcels(); // build the citywide parcel layout now (during load), not on the first frame
+    ensureScatter(); // and the scattered structure/foliage layout (same on-demand streaming path)
     this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks();
     this.infrastructure = new UrbanInfrastructure(
       this.group,
@@ -1049,16 +1052,23 @@ export class City {
         const [cx, cz] = this.buildQueue.shift()!; const key = `${cx},${cz}`;
         this.queuedCells.delete(key);
         if (this.buildingCells.has(key)) continue;
-        this.pending = { key, cellX: cx, cellZ: cz, specs: generateCell(cx, cz), index: 0, baker: new GeometryBaker(), colliders: [], group: this.buildingStore.groupForKey(key) };
+        this.pending = { key, cellX: cx, cellZ: cz, specs: generateCell(cx, cz), index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], group: this.buildingStore.groupForKey(key) };
       }
       const pending = this.pending;
+      // One item per budget slice — procedural buildings first, then the scattered structures/foliage;
+      // both feed the same per-cell baker so the whole cell still collapses to a handful of draw calls.
       if (pending.index < pending.specs.length) {
         const { group, colliders } = this.buildOneBuilding(pending.specs[pending.index++]!);
         pending.baker.addObject(group);
         group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); // baker cloned the geometry
         pending.colliders.push(...colliders);
+      } else if (pending.modelIndex < pending.models.length) {
+        const { group, colliders } = this.buildOneModel(pending.models[pending.modelIndex++]!);
+        pending.baker.addObject(group);
+        group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+        pending.colliders.push(...colliders);
       }
-      if (pending.index >= pending.specs.length) { // cell complete: one cheap merge, register colliders once
+      if (pending.index >= pending.specs.length && pending.modelIndex >= pending.models.length) { // cell complete: one cheap merge, register colliders once
         pending.baker.finalize(pending.group);
         if (!this.buildingColliderCells.has(pending.key)) { for (const collider of pending.colliders) this.colliders.push(collider); this.buildingColliderCells.add(pending.key); }
         this.buildingCells.set(pending.key, pending.group);
@@ -1109,18 +1119,30 @@ export class City {
     this.addRoofEquipment(0, 0, w, d, h, profile.roofY, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.roofY, variant);
     group.position.set(spec.x, 0, spec.z); group.rotation.y = spec.heading;
-    const colliders = profile.tiers.map((tier) => this.tierToWorldCollider(tier, spec));
+    const colliders = profile.tiers.map((tier) => this.tierToWorldCollider(tier, spec.x, spec.z, spec.heading));
     this.target = previousTarget; this.architecture.retarget(this.group);
     return { group, colliders };
   }
 
-  /** Transform a building-local massing tier (axis-aligned) by the building's quarter-snapped heading
-   *  into a world-space AABB collider. Quarter turns keep the box axis-aligned (width/depth may swap). */
-  private tierToWorldCollider(tier: { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number }, spec: GeneratedBuilding): Collider {
-    const c = Math.cos(spec.heading); const s = Math.sin(spec.heading);
+  /** Build one scattered catalog model at the origin, then place + face it exactly like a building.
+   *  Foliage never registers colliders (thin trunks, dense instancing) — you brush through leaves;
+   *  every structure registers its (true-3D, standable-aware) tier colliders. */
+  private buildOneModel(spec: ScatteredModel): { group: THREE.Group; colliders: Collider[] } {
+    const built = buildModel(spec.name, spec.seed, { variant: spec.variant });
+    built.group.position.set(spec.x, 0, spec.z); built.group.rotation.y = spec.heading;
+    const foliage = MODEL_INDEX.get(spec.name)?.category === 'foliage';
+    const colliders = foliage ? [] : built.tiers.map((tier) => this.tierToWorldCollider(tier, spec.x, spec.z, spec.heading));
+    return { group: built.group, colliders };
+  }
+
+  /** Transform a local massing tier (axis-aligned) by a quarter-snapped heading into a world-space
+   *  AABB collider. Quarter turns keep the box axis-aligned (width/depth may swap). Shared by the
+   *  procedural buildings and the scattered catalog models — both carry the same MassingTier shape. */
+  private tierToWorldCollider(tier: { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number }, x: number, z: number, heading: number): Collider {
+    const c = Math.cos(heading); const s = Math.sin(heading);
     const lx = (tier.minX + tier.maxX) / 2; const lz = (tier.minZ + tier.maxZ) / 2;
     const hw = (tier.maxX - tier.minX) / 2; const hd = (tier.maxZ - tier.minZ) / 2;
-    const wx = spec.x + lx * c + lz * s; const wz = spec.z - lx * s + lz * c;
+    const wx = x + lx * c + lz * s; const wz = z - lx * s + lz * c;
     const nx = Math.abs(hw * c) + Math.abs(hd * s); const nz = Math.abs(hw * s) + Math.abs(hd * c);
     return { minX: wx - nx, maxX: wx + nx, minZ: wz - nz, maxZ: wz + nz, y0: tier.y0, height: tier.y1 - tier.y0 };
   }
