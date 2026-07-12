@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { MultiplayerOverlay } from './MultiplayerOverlay';
+import { extrapolateVehicle } from './latency';
 import { MULTIPLAYER_PROTOCOL_VERSION, multiplayerWebSocketUrl, parseServerMessage, type ClientMessage, type NetPlayer, type NetVehicle } from './protocol';
 
-export interface OnlineInput { forward: number; side: number; sprint: boolean; yaw: number }
+export interface OnlineInput { forward: number; side: number; sprint: boolean; aiming: boolean; yaw: number }
 
 const TOKEN_KEY = 'groot-theft-bakkie-multiplayer-token';
 const INPUT_RATE = 20;
@@ -13,10 +14,11 @@ const normalizedInput = (input: OnlineInput): OnlineInput => ({
   forward: Math.round(input.forward * 100) / 100,
   side: Math.round(input.side * 100) / 100,
   sprint: input.sprint,
+  aiming: input.aiming,
   yaw: Math.round(input.yaw * 10_000) / 10_000,
 });
 
-const sameInput = (left: OnlineInput | undefined, right: OnlineInput): boolean => Boolean(left && left.forward === right.forward && left.side === right.side && left.sprint === right.sprint && left.yaw === right.yaw);
+const sameInput = (left: OnlineInput | undefined, right: OnlineInput): boolean => Boolean(left && left.forward === right.forward && left.side === right.side && left.sprint === right.sprint && left.aiming === right.aiming && left.yaw === right.yaw);
 
 class RemoteAvatar {
   group = new THREE.Group();
@@ -43,14 +45,20 @@ class RemoteVehicle {
   group = new THREE.Group();
   private target = new THREE.Vector3();
   private targetHeading = 0;
+  private targetSpeed = 0;
+  private extrapolationSeconds = 0;
   constructor(scene: THREE.Scene, state: NetVehicle) {
     const colors = { compact: 0xd8b23d, sport: 0xd84b3d, bakkie: 0x4d83a8 };
     const body = new THREE.Mesh(new THREE.BoxGeometry(state.kind === 'bakkie' ? 2.1 : 1.8, 0.75, state.kind === 'sport' ? 3.8 : 4.2), new THREE.MeshStandardMaterial({ color: colors[state.kind], roughness: 0.55, metalness: 0.18 })); body.position.y = 0.72; body.castShadow = true;
     const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.65, 1.75), new THREE.MeshStandardMaterial({ color: 0x26383c, roughness: 0.3, metalness: 0.4 })); cabin.position.set(0, 1.34, state.kind === 'bakkie' ? 0.55 : 0); cabin.castShadow = true;
     this.group.add(body, cabin); this.group.name = `OnlineVehicle:${state.id}`; scene.add(this.group); this.setState(state);
   }
-  setState(state: NetVehicle): void { this.target.set(state.x, state.y, state.z); this.targetHeading = state.heading; }
-  update(dt: number): void { this.group.position.lerp(this.target, 1 - Math.exp(-dt * 14)); this.group.rotation.y += Math.atan2(Math.sin(this.targetHeading - this.group.rotation.y), Math.cos(this.targetHeading - this.group.rotation.y)) * (1 - Math.exp(-dt * 14)); }
+  setState(state: NetVehicle): void { this.target.set(state.x, state.y, state.z); this.targetHeading = state.heading; this.targetSpeed = state.speed; this.extrapolationSeconds = 0; }
+  update(dt: number): void {
+    const extrapolate = Math.min(dt, Math.max(0, 0.25 - this.extrapolationSeconds)); this.extrapolationSeconds += extrapolate;
+    [this.target.x, this.target.z] = extrapolateVehicle(this.target.x, this.target.z, this.targetHeading, this.targetSpeed, extrapolate);
+    this.group.position.lerp(this.target, 1 - Math.exp(-dt * 14)); this.group.rotation.y += Math.atan2(Math.sin(this.targetHeading - this.group.rotation.y), Math.cos(this.targetHeading - this.group.rotation.y)) * (1 - Math.exp(-dt * 14));
+  }
   dispose(scene: THREE.Scene): void { scene.remove(this.group); this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.geometry.dispose(); const material = object.material; if (Array.isArray(material)) material.forEach((item) => item.dispose()); else material.dispose(); } }); }
 }
 
@@ -67,6 +75,7 @@ export class OnlineSession {
   private intentionallyClosed = false;
   private players: NetPlayer[] = [];
   private playerNames = new Map<string, string>();
+  private localCorrection?: NetPlayer;
   selfId?: string;
   connected = false;
   localState?: NetPlayer;
@@ -95,7 +104,7 @@ export class OnlineSession {
     } else if (message.type === 'error') this.overlay.setStatus(message.message, true);
   }
   private snapshot(players: NetPlayer[], vehicles: NetVehicle[]): void {
-    this.players = players; this.playerNames = new Map(players.map((player) => [player.id, player.name])); this.localState = players.find((player) => player.id === this.selfId); this.overlay.setPlayers(players, this.selfId);
+    this.players = players; this.playerNames = new Map(players.map((player) => [player.id, player.name])); this.localState = players.find((player) => player.id === this.selfId); this.localCorrection = this.localState; this.overlay.setPlayers(players, this.selfId);
     const live = new Set(players.map((player) => player.id));
     for (const state of players) {
       if (state.id === this.selfId) continue;
@@ -130,6 +139,7 @@ export class OnlineSession {
     this.socket.send(JSON.stringify({ type: 'input', seq: ++this.inputSeq, ...input } satisfies ClientMessage)); return true;
   }
   private send(message: ClientMessage): void { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message)); }
+  consumeLocalCorrection(): NetPlayer | undefined { const state = this.localCorrection; this.localCorrection = undefined; return state; }
   close(): void { this.intentionallyClosed = true; clearTimeout(this.reconnectTimer); this.socket?.close(); for (const avatar of this.avatars.values()) avatar.dispose(this.scene); for (const vehicle of this.vehicles.values()) vehicle.dispose(this.scene); this.avatars.clear(); this.vehicles.clear(); this.overlay.hide(); }
   get playerCount(): number { return this.players.length; }
   get playerStates(): readonly NetPlayer[] { return this.players; }
