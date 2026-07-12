@@ -1,129 +1,151 @@
-# San Cordova: Neon Reckoning
+# Groot Theft Bakkie
 
-San Cordova is a compact, original open-world crime game built with Three.js and TypeScript. Explore five stylised districts on foot, take vehicles, weave through traffic, fight hostile crews, draw an escalating SCPD response, and complete four missions for local contacts.
+An original open-world Jozi misadventure built with Three.js and TypeScript. Walk, drive, take questionable freelance work, annoy the JMPD, and try to keep the bakkie facing mostly forwards.
 
-The world is built at runtime from procedural geometry, instancing, canvas materials, CSS, and Web Audio, with two original GPT Image surface textures for asphalt and concrete. There are no borrowed maps, dialogue, music, or franchise assets.
+The city combines OpenStreetMap-derived Johannesburg roads with procedural buildings, vegetation, traffic, pedestrians, shops, missions, a day/night cycle, and a deliberately impossible strip of coast. Cape Town kept the mountain, so Jozi borrowed the sea.
 
-![San Cordova downtown gameplay](screenshots/san-cordova-rich.png)
+![Groot Theft Bakkie gameplay in Johannesburg](screenshots/san-cordova-rich.png)
 
-## Run locally
+## What is in the game?
 
-Requirements: Node.js 22.x and npm 10.x.
+- A large Jozi map with 3,939 roads, 117 named districts, roughly 775 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
+- On-foot movement, third- and first-person cameras, cover, melee combat, firearms, armour, stim packs, parachutes, pickups, and a weapon wheel.
+- Cars, bakkies, taxis, bicycles, delivery bikes, superbikes, vehicle damage, drive-bys, police sirens, and four synthesised radio stations.
+- Traffic that follows lanes and robots. “Robot” means traffic light here; no metal oke is coming to steal your job.
+- A five-star wanted system with witnesses, dispatch callouts, foot patrols, road pursuits, arrests, and persistent police pressure.
+- Four story jobs, repeatable taxi work, and **Sixty-Sekonds** courier shifts for anyone who believes eggs are suspension components.
+- Shops for weapons, armour, food, resprays, and garage storage, plus a safehouse where you can save, sleep, heal, and wait for things to become somebody else’s problem.
+- A searchable city map, rotating minimap, district reputation, dynamic crowds, a ten-minute day/night cycle, weathered streets, and authentic load shedding at no additional charge.
+- Procedural audio, vehicle engines, weapons, UI sounds, and original in-car stations inspired by amapiano, maskandi, gqom, and kwaito.
+
+Everything is original or procedurally generated except the dependencies and credited source material listed in [ATTRIBUTIONS.md](ATTRIBUTIONS.md). No borrowed franchise maps, characters, dialogue, music, or logos are used.
+
+## Quick start
+
+You need Node.js 22.x and npm 10.x.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Vite prints the local URL, normally `http://localhost:5173`.
+Open the URL printed by Vite, normally `http://localhost:5173`. Click the game view when the browser asks for pointer lock; the mouse cannot steer itself, despite what the taxi rank may claim.
 
-```bash
-npm run build   # strict TypeScript check and production bundle
-npm run lint    # ESLint
-npm test        # rendering-independent gameplay tests
-```
-
-## Heroku deployment
-
-The production process builds the Vite bundle and serves `dist` from a small Node HTTP server. It listens on Heroku's assigned `PORT`, provides `/healthz`, compresses text assets, applies immutable caching to hashed assets, and falls back to `index.html` for client-side routes.
+For multiplayer development, build once and run the world server in a second terminal; Vite proxies WebSocket connections to it:
 
 ```bash
 npm run build
-PORT=4174 npm start
+npm run dev:multiplayer-server
 ```
 
-Pushes to `main` are verified and deployed to the `groot-theft-bakkie-6` Heroku app by `.github/workflows/deploy-heroku.yml`. Configure it once:
+## Multiplayer
 
-1. Push this repository to GitHub and keep `main` as the default branch.
-2. In GitHub, open **Settings > Secrets and variables > Actions** and create the repository secret `HEROKU_API_KEY` using a Heroku authorization token or account API key.
-3. Push to `main`, or run **Verify and deploy to Heroku** manually from the GitHub Actions tab.
+Choose **Enter global world** on the main menu and supply a display name. Every online player joins the same 16-player world automatically—there are no rooms or matchmaking. Movement and pistol damage are server-authoritative, PvP is open, deaths respawn after three seconds, remote players appear on the minimap, and the scoreboard tracks kills and deaths. Press `Enter` for rate-limited global text chat.
 
-The workflow runs install, lint, tests, and the production build before deployment. Do not also enable Heroku's dashboard auto-deploy for the same branch, because that would create duplicate releases.
+Solo missions, money, wanted level, shops, jobs, saves, cheats, and reputation stay in the separate solo mode.
 
 ## Controls
 
-| Input | On foot | In a vehicle |
-| --- | --- | --- |
-| `WASD` | Camera-relative movement | Accelerate, brake/reverse, steer |
-| Mouse | Orbit camera and aim | Orbit chase camera |
-| `Shift` | Sprint | - |
-| `Space` | Jump | Handbrake |
-| `E` | Talk, collect, enter vehicle | Exit vehicle |
-| Left mouse | Fire pistol | - |
-| `R` | Reload | - |
-| `F` | Mug or melee a nearby pedestrian | Recover vehicle to the nearest road |
-| `T` / `Y` | - | Taxi duty / Sixty-Sekonds courier shift |
-| `Escape` | Pause and settings | Pause and settings |
-| Backquote | Toggle FPS display | Toggle FPS display |
+| Input | Action |
+| --- | --- |
+| `WASD` | Move, drive, or steer in freefall |
+| Mouse | Look and aim |
+| `Shift` | Sprint |
+| `Ctrl` / right mouse | Aim or fire a drive-by weapon |
+| Left mouse | Fire or punch |
+| `Space` | Jump, handbrake, or deploy/flare a parachute |
+| `E` | Interact, enter/exit a vehicle, collect, shop, or use a safehouse |
+| `Q` | Enter/leave cover in third-person view |
+| `F` | Mug/melee, recover a vehicle, or deploy a parachute |
+| `Tab` | Hold for the weapon wheel |
+| Scroll / `1`–`6` | Cycle or directly select weapons; scroll also changes sniper zoom |
+| `R` | Reload |
+| `H` | Use a stim pack |
+| `V` | Change camera view |
+| `T` | Start or stop taxi duty in a meter cab |
+| `Y` | Start or stop a Sixty-Sekonds shift on its delivery bike |
+| `N` / `Shift+N` | Next / previous radio station |
+| `G` | Toggle the siren in a police car you definitely acquired legally |
+| `M` | Open the searchable city map |
+| `Page Up` / `Page Down` | Change minimap zoom |
+| `Escape` | Pause |
+| Backquote (`~`) | Open the developer console |
 
-Click the game view to recapture the mouse after leaving pointer lock.
+The field guide on the main and pause menus keeps this list in-game. The city map supports drag, wheel zoom, street and district search, hover names, and marker filters.
 
-## Playing
+## Jobs and consequences
 
-Gold columns mark the nearest available contact or current objective. Approach a contact and press `E`.
+Gold markers identify contacts and current objectives. Walk up and press `E`.
 
-For less respectable employment, grab a lime **Sixty-Sekonds** delivery bike and press `Y`. Collect absurd grocery orders from dispatch, beat the now-now timer, and keep the eggs intact for care, speed, and clean-streak bonuses. Potholes turn the basket into soup; the algorithm remains unsympathetic.
+1. **Couch Run** — Borrow Auntie Portia’s yellow Citi Golf, make three drops now-now, and bring it back in roughly the same number of pieces.
+2. **Hot Copper** — Take a red GTI from the CBD, lose the JMPD, and deliver it to a Braamfontein lock-up.
+3. **Rank Business** — Visit the Wemmer taxi terminal, moer three enforcers, collect a route permit, escape, and return it to Candice at Zoo Lake.
+4. **The Arms Deal** — Protect Jozi Arms or rob its shipment. The choice permanently changes your CBD reputation, prices, and police pressure.
 
-1. **Delivery Run**: borrow Mara Velez's yellow Cielo, complete three timed deliveries, and return the car.
-2. **Hot Property**: steal a red Veloce downtown, survive the resulting pursuit, lose the SCPD, and reach the Costa Azul garage.
-3. **Dockside Signal**: travel to Breakwater, defeat three guards, retrieve a radio key, escape the docks, and return it to the park.
-4. **The Arms Deal**: decide whether to protect Jozi Arms or rob its shipment, permanently changing how the CBD treats you.
+Civilian crime lowers community standing and increases long-term police attention. Helpful behaviour improves prices, witness delays, and local support. Temporary wanted heat can disappear; your reputation has a memory like a tannie who saw you skip the queue in 2009.
 
-Crimes add heat across five wanted levels. Police units spawn on distant roads, pursue the current player vehicle or the player on foot, and maintain heat while they have a nearby sighting. Break line of contact and stay away long enough for heat to decay.
+For honest-ish money, take a meter cab and press `T`, or grab a lime delivery bike and press `Y`. Sixty-Sekonds rewards speed, careful riding, and clean streaks. Potholes convert groceries into a smoothie, and the algorithm does not accept affidavits.
 
-Progress is saved periodically and after mission rewards. Money, completed missions, spawn location, audio level, mouse sensitivity, and the FPS preference use `localStorage`. The pause menu can reset the save.
+Progress is saved periodically and after important events. Money, completed jobs, weapons, inventory, garage storage, safehouse spawn, reputation, time of day, settings, and cheats use browser `localStorage`. You can also save at Main Main Mansions or with the `save` console command. The pause menu can reset everything.
 
-Joburg CBD remembers what you do. Civilian crime lowers community standing and raises long-term police pressure; trusted players earn slower witness calls, shop discounts, and occasional local support, while notorious players face fearful civilians, hostile guards, higher prices, faster reports, foot patrols, and reinforced pursuits. Reputation and mission choices persist independently of temporary wanted heat.
+## Development
 
-## World and systems
+```bash
+npm run lint       # ESLint
+npm test           # Vitest gameplay and world tests
+npm run build      # TypeScript project build + production Vite bundle
+npm run test:watch # Vitest in watch mode
+npm run map:build  # Regenerate the checked-in map data
+```
 
-- **Downtown**: a dense skyline built from five architectural families, including stepped towers, twin slabs with glass bridges, cross-plan high-rises, rounded towers, elliptical crowns, facade fins, fire escapes, storefronts, roof plant, and signs.
-- **Las Palmas**: landscaped residential streets with four house and apartment families, pitched terracotta roofs, offset wings, dormers, porches, balconies, chimneys, a garden park, and local shops.
-- **Mercado Industrial**: four warehouse families with repeated gables and sawtooth profiles, loading docks, exterior pipework, ducts, silos, stacks, a water tower, containers, gantry cranes, and loading yards.
-- **Costa Azul**: beach frontage, animated water, boardwalk kiosks, palms, lifeguard station, marina sculpture, and promenade railings.
-- **Cordova Commons**: a formal civic park with paths, mature planting, fountain, and public sculpture. Harbor Courts and Las Palmas Garden provide two additional distinct parks.
-- A detailed articulated player character with GPT Image fabric materials, layered clothing, facial features, jointed elbows and knees, procedural footwork, breathing, sprinting, jumping, and two-handed aiming poses.
-- Compact, sport, van, and police vehicle configurations with distinct speed, acceleration, turning, braking, durability, wheels, brake lights, engine synthesis, and recovery.
-- Twelve connected road systems with curved arterials, diagonal boulevards, district loops, industrial spurs, residential crescents, a harbor drive, gentle citywide hills and dips, parking areas, named street signs, regulatory signs, crossings, and road-derived traffic/minimap routing.
-- Seven animated traffic-light junctions, raised road-clipped curbs, paved sidewalks, tactile crossing corners, road-facing curbside lighting, bus shelters, benches, hydrants, shrubs, broadleaf street trees, and coastal palms.
-- Pooled lane-following traffic routes, recycling, stuck recovery, simplified distance updates, and collision response.
-- Raycast pistol combat with ammunition, reloads, distance damage, muzzle light, impact particles, and generated sound.
-- Carjacking with fleeing drivers, street mugging, aggressive civilians, melee attacks, and persistent stylized blood spray and ground decals.
-- Health, death, timed respawn, mission rewards, five-level wanted state, SCPD chase units, circular rotating minimap, and contextual HUD.
-- Persistent Joburg CBD reputation and police pressure with mission-driven outcomes, witness timing, responsive pricing, civilian reactions, foot patrols, and reinforcements.
-- A responsive Jozi street-editorial interface with persistent HUD components, accessible menu navigation, reduced-motion support, objective progress, reputation feedback, and a restyled rotating street map.
+`npm run map:build` uses the map-generation pipeline under `tools/mapgen/`. The generated map data is checked in, so ordinary development does not need to call Overpass or regenerate Johannesburg before breakfast.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for code ownership and data flow and [GAME_DESIGN.md](GAME_DESIGN.md) for game rules and tuning intent.
-
-## Project layout
+## Project structure
 
 ```text
 src/
-  core/       game rules, input, audio, camera, persistence
-  entities/   player, vehicle, and pedestrian implementations
-  systems/    combat, missions, population, police, wanted level
-  ui/         DOM HUD, menus, and canvas minimap
-  world/      deterministic procedural city and collision data
-  Game.ts     composition root and runtime orchestration
+  core/        input, audio, camera, rules, radio, and persistence
+  entities/    player, pedestrian, vehicle, and weapon models
+  systems/     missions, combat, police, population, jobs, shops, and city life
+  ui/          HUD, menus, console, city map, and minimap
+  world/       generated map data, city building, environment, and streaming
+  Game.ts      composition root and runtime orchestration
+tools/mapgen/  OpenStreetMap processing and deterministic map generation
+server.mjs     production static server
 ```
 
-## Performance
+See [ARCHITECTURE.md](ARCHITECTURE.md) for runtime ownership and data flow, and [GAME_DESIGN.md](GAME_DESIGN.md) for rules and tuning intent.
 
-Repeated tree crowns, trunks, palms, shrubs, streetlights, and promenade railings use instanced meshes. Geometry and materials are shared within entities and districts, shadows are limited, distant traffic skips simulation, effects are short lived, and the renderer caps pixel ratio. The pause menu exposes an FPS display, and backquote toggles it directly.
+## Production and Heroku
+
+The production command serves the Vite bundle from a small Node HTTP server with compression, asset caching, SPA fallback, and a `/healthz` endpoint.
+
+```bash
+npm run build
+PORT=4173 npm start
+```
+
+The same web process owns the global multiplayer shard. Attach Heroku Postgres and expose its standard `DATABASE_URL` to persist guest names and kill/death statistics. Without a database the server falls back to in-memory profiles, which reset on restart. Keep the app at one web dyno because live world state is process-local.
+
+Pushes to `main` run the `.github/workflows/deploy-heroku.yml` workflow. It installs dependencies, runs lint, tests, and the production build, then deploys to the `groot-theft-bakkie-6` Heroku app. Add a `HEROKU_API_KEY` repository secret before expecting the robot—traffic or otherwise—to deploy anything.
+
+Do not also enable Heroku dashboard auto-deploy for `main`; that creates duplicate releases and twice the suspense.
+
+## Performance notes
+
+The world uses instanced vegetation and street furniture, shared geometry and materials, distance-based building streaming, pooled traffic and effects, spatial indexes, bounded fixed-timestep catch-up, and throttled AI routing. Graphics quality and an FPS display are available in the pause menu.
+
+If Jozi starts moving like the M1 at 17:00, lower the graphics quality first.
 
 ## Known limitations
 
-- Collision uses a stable 2D arcade model, not rigid-body suspension or destructible architecture.
-- Traffic follows approximate lane corridors; animated signals are currently presentational and vehicles do not reserve intersections by phase.
-- Pedestrian avoidance is collider based rather than navmesh or reciprocal crowd steering.
-- Police search is proximity/timeout based; there is no street-by-street vision cone simulation.
-- The compact campaign has one checkpoint spawn and no multiple save slots.
+- Collision and vehicle handling use a predictable arcade model, not rigid-body suspension or destructible buildings.
+- Pedestrian navigation is graph/collider based rather than full crowd simulation.
+- Police search uses knowledge, sightings, proximity, and timeouts rather than a perfect citywide vision simulation.
+- The campaign is compact, with one browser save and no cloud sync.
 - Touch and gamepad controls are not implemented.
+- The procedural city is an artistic game world, not a navigation tool. Please do not use it to find Sandton during load shedding.
 
-## Future improvements
+## Credits
 
-Useful next steps are navmesh sidewalk routing, intersection reservations, vehicle suspension, occlusion-aware police vision, gamepad support, more ambient activity, and additional data-authored missions.
-
-## Licensing
-
-The project code and original procedural game content are provided under the repository's license. Dependency and asset details are in [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
+Map data is © OpenStreetMap contributors and used under ODbL 1.0. Dependency, texture, and source-data details are recorded in [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
