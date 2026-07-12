@@ -15,7 +15,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import type { MassingTier } from '../BuildingArchitecture';
 import { createSignMesh } from '../ProceduralMaterials';
 
-export type ModelCategory = 'rural' | 'commercial' | 'industrial' | 'coastal' | 'residential' | 'civic';
+export type ModelCategory = 'rural' | 'commercial' | 'industrial' | 'coastal' | 'residential' | 'civic' | 'foliage';
 
 export interface BuiltModel {
   /** Meshes in model-local space: origin at footprint centre, ground at y=0, front faces +z. */

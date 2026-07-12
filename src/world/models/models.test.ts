@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { MODEL_CATALOG, MODEL_INDEX, buildModel } from './catalog';
+import { paint } from './kit';
 
 const SEEDS = [1, 7, 42, 1337];
 const MAX_MESHES = 130;
@@ -28,7 +29,7 @@ function meshStats(group: THREE.Group): { count: number; signature: string } {
 describe('structure model catalog', () => {
   it('has unique names, sane metadata, and covers every required category', () => {
     expect(new Set(MODEL_CATALOG.map((def) => def.name)).size).toBe(MODEL_CATALOG.length);
-    for (const category of ['rural', 'commercial', 'industrial', 'coastal', 'residential', 'civic'] as const) {
+    for (const category of ['rural', 'commercial', 'industrial', 'coastal', 'residential', 'civic', 'foliage'] as const) {
       expect(MODEL_CATALOG.filter((def) => def.category === category).length).toBeGreaterThanOrEqual(5);
     }
     for (const def of MODEL_CATALOG) {
@@ -70,7 +71,8 @@ describe('structure model catalog', () => {
             expect(bounds.min.y).toBeLessThanOrEqual(0.4);
             expect(bounds.max.y).toBeGreaterThan(1);
 
-            expect(built.tiers.length).toBeGreaterThan(0);
+            // Foliage dressing (grass tufts) may legitimately have no collider at all.
+            if (def.category !== 'foliage') expect(built.tiers.length).toBeGreaterThan(0);
             for (const tier of built.tiers) {
               expect(tier.maxX).toBeGreaterThan(tier.minX);
               expect(tier.maxZ).toBeGreaterThan(tier.minZ);
@@ -98,4 +100,85 @@ describe('structure model catalog', () => {
       });
     });
   }
+});
+
+// ---- Foliage set ------------------------------------------------------------------------------
+
+const FOLIAGE = ['jacaranda', 'shade-tree', 'gum', 'pine', 'acacia', 'palm', 'aloe', 'agave', 'bougainvillea', 'veld-grass', 'hedge-unit', 'landmark-tree'];
+/** Everything except grass dressing is solid somewhere — a trunk, core, or clipped body. */
+const TRUNK_COLLIDERS = FOLIAGE.filter((name) => name !== 'veld-grass');
+/** Trees whose colliders must stay trunk-slim so the player walks under the canopy, not into it. */
+const SLIM_TRUNKS = ['jacaranda', 'shade-tree', 'gum', 'pine', 'acacia', 'palm', 'landmark-tree'];
+/** Instancing budget: worst-case triangles per build (foliage scatters in the thousands). */
+const TRI_BUDGET: Record<string, number> = {
+  'jacaranda': 300, 'shade-tree': 320, 'gum': 260, 'pine': 160, 'acacia': 240, 'palm': 260,
+  'aloe': 420, 'agave': 240, 'bougainvillea': 200, 'veld-grass': 130, 'hedge-unit': 200, 'landmark-tree': 900,
+};
+
+function triangleCount(group: THREE.Group): number {
+  let triangles = 0;
+  group.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const geometry = object.geometry as THREE.BufferGeometry;
+    triangles += (geometry.index ? geometry.index.count : geometry.getAttribute('position').count) / 3;
+  });
+  return triangles;
+}
+
+describe('foliage set', () => {
+  it('registers every foliage model as non-standable scatter', () => {
+    for (const name of FOLIAGE) {
+      const def = MODEL_INDEX.get(name);
+      expect(def, name).toBeDefined();
+      expect(def!.category).toBe('foliage');
+      expect(def!.standable).toBe(false);
+    }
+  });
+
+  for (const name of TRUNK_COLLIDERS) {
+    it(`${name} exposes a solid collider tier for every seed and variant`, () => {
+      const def = MODEL_INDEX.get(name)!;
+      for (const seed of SEEDS) {
+        for (let variant = 0; variant < def.variants; variant++) {
+          const built = def.build(seed, { variant });
+          expect(built.tiers.length).toBeGreaterThan(0);
+          expect(built.tiers.some((tier) => tier.y1 - tier.y0 >= 0.5)).toBe(true);
+          if (SLIM_TRUNKS.includes(name)) { // canopy must not collide — every tier stays trunk-sized
+            for (const tier of built.tiers) {
+              expect(tier.maxX - tier.minX).toBeLessThanOrEqual(3);
+              expect(tier.maxZ - tier.minZ).toBeLessThanOrEqual(3);
+            }
+          }
+        }
+      }
+    });
+  }
+
+  it('veld-grass is pure dressing with no collider', () => {
+    for (const seed of SEEDS) expect(buildModel('veld-grass', seed).tiers).toEqual([]);
+  });
+
+  it('stays inside its per-model instancing triangle budget', () => {
+    for (const name of FOLIAGE) {
+      const def = MODEL_INDEX.get(name)!;
+      for (const seed of SEEDS) {
+        for (let variant = 0; variant < def.variants; variant++) {
+          expect(triangleCount(def.build(seed, { variant }).group), `${name} v${variant} seed ${seed}`).toBeLessThanOrEqual(TRI_BUDGET[name]!);
+        }
+      }
+    }
+  });
+
+  it('jacaranda toggles the purple bloom canopy by variant', () => {
+    const bloom = paint(0x8f74c8, 0.9); // paint() caches per colour — same instance the builder uses
+    const usesBloom = (variant: number): boolean => {
+      let found = false;
+      buildModel('jacaranda', 11, { variant }).group.traverse((object) => {
+        if (object instanceof THREE.Mesh && object.material === bloom) found = true;
+      });
+      return found;
+    };
+    expect(usesBloom(1)).toBe(true);
+    expect(usesBloom(0)).toBe(false);
+  });
 });
