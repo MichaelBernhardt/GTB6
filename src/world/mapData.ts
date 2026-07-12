@@ -393,6 +393,81 @@ export function computeSignalJunctions(options: SignalSelectionOptions = {}): Si
 /** The signal set the game builds — computed once at module load. */
 export const SIGNAL_JUNCTIONS: SignalJunctionDef[] = computeSignalJunctions();
 
+// ---- Street-name sign junctions ------------------------------------------------
+
+/** A named crossing that carries street-name boards (no signal phase — signs only). */
+export interface StreetSignJunctionDef {
+  x: number;
+  z: number;
+  angle: number;
+  roadA: string;
+  roadB: string;
+  /** Width of the widest incident road — the board post's corner offset scales from it. */
+  widest: number;
+}
+
+/** Placeholder / generic labels that shouldn't headline a street-name board. Real crossings need two
+ *  distinct *named* roads: OSM's "Unnamed …" ramp links and the odd "Water" placeholder are excluded. */
+function isNamedRoad(name: string): boolean {
+  return name.trim().length > 0 && !/^unnamed\b/i.test(name) && !/^water$/i.test(name);
+}
+
+export interface StreetSignSelectionOptions {
+  budget?: number;
+  minSpacing?: number;
+  minWidestWidth?: number;
+  minSecondWidth?: number;
+}
+
+/**
+ * The junctions that get street-name signs: every real NAMED intersection — degree >= 3 with at least
+ * two DISTINCT named incident roads — labelled with the two most prominent (widest) of those names, and
+ * angled to the widest road's bearing so roadA's board runs along it. Far broader than the ~64 signalised
+ * junctions, so named corners read across the whole map like the old hand-authored city ("plenty" of them).
+ * Scored widest-first with a spacing constraint so the budget spreads rather than clumping in the CBD grid.
+ * Pure, deterministic and cached-friendly (reads the shared junction accumulators).
+ */
+export function computeStreetSignJunctions(options: StreetSignSelectionOptions = {}): StreetSignJunctionDef[] {
+  const { budget = 1200, minSpacing = 34, minWidestWidth = 7, minSecondWidth = 7 } = options;
+  interface Candidate { x: number; z: number; angle: number; roadA: string; roadB: string; widest: number; score: number; }
+  const candidates: Candidate[] = [];
+  for (const accumulator of junctionAccumulators()) {
+    if (accumulator.degree < 3) continue;
+    // Named arms with a real bearing: a road that doubles back on itself here leaves a zero-length
+    // direction (no street to align a board to), so it can't headline roadA — drop it.
+    const named = accumulator.incident
+      .filter((entry) => isNamedRoad(entry.name) && Math.hypot(entry.dirX, entry.dirZ) > 1e-6)
+      .sort((a, b) => b.width - a.width);
+    const widest = named[0];
+    const other = named.find((entry) => entry.name !== widest?.name);
+    if (!widest || !other) continue; // needs two DISTINCT named roads: a lone-named corner gets no board
+    if (widest.width < minWidestWidth || other.width < minSecondWidth) continue;
+    candidates.push({
+      x: accumulator.x, z: accumulator.z,
+      angle: Math.atan2(widest.dirX, widest.dirZ),
+      roadA: widest.name.toUpperCase(), roadB: other.name.toUpperCase(),
+      widest: widest.width,
+      score: widest.width * 2 + other.width + accumulator.degree,
+    });
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  const chosen: Candidate[] = [];
+  const spacingSq = minSpacing * minSpacing;
+  for (const candidate of candidates) {
+    if (chosen.length >= budget) break;
+    if (chosen.some((existing) => (existing.x - candidate.x) ** 2 + (existing.z - candidate.z) ** 2 < spacingSq)) continue;
+    chosen.push(candidate);
+  }
+  return chosen.map((candidate) => ({
+    x: candidate.x, z: candidate.z, angle: candidate.angle,
+    roadA: candidate.roadA, roadB: candidate.roadB, widest: candidate.widest,
+  }));
+}
+
+/** The street-sign set the game builds — computed once at module load. Signalised junctions already carry
+ *  boards via the signal path, so the placement loop skips any that coincide (see UrbanInfrastructure). */
+export const STREET_SIGN_JUNCTIONS: StreetSignJunctionDef[] = computeStreetSignJunctions();
+
 // ---- Intersection surfaces (paved crossing polygons) --------------------------
 
 /** One carriageway meeting a junction: a unit outward direction and the road's width. Distinct directions
