@@ -5,6 +5,7 @@ import { extname, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { createGzip } from 'node:zlib';
+import { attachMultiplayer } from './server/multiplayer.mjs';
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -90,6 +91,8 @@ const entryPath = process.argv[1] ? resolve(process.argv[1]) : '';
 if (entryPath === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT) || 4173;
   const server = createStaticServer();
-  server.listen(port, '0.0.0.0', () => console.log(`San Cordova listening on port ${port}`));
-  process.on('SIGTERM', () => server.close(() => process.exit(0)));
+  const multiplayer = await attachMultiplayer(server);
+  server.listen(port, '0.0.0.0', () => console.log(`Groot Theft Bakkie listening on port ${port} with one global multiplayer world`));
+  const shutdown = () => server.close(() => { void multiplayer.close().finally(() => process.exit(0)); });
+  process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
