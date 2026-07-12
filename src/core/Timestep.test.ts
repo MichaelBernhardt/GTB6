@@ -4,7 +4,7 @@ import { PLAYER } from '../config';
 import type { InputManager } from './InputManager';
 import type { City } from '../world/City';
 import { Player } from '../entities/Player';
-import { SIM_CATCHUP_STEPS, SIM_STEP_MAX, simSteps } from './Timestep';
+import { maxCatchupSteps, SIM_CATCHUP_BUDGET_MS, SIM_CATCHUP_STEPS, SIM_STEP_MAX, simSteps } from './Timestep';
 
 // Player's rig loads jacket/denim textures through THREE.TextureLoader, which needs a DOM
 // image element even in the node test environment; a create-only stub keeps the loader inert.
@@ -59,6 +59,32 @@ describe('simSteps slicing', () => {
   it('yields nothing for a zero or negative delta', () => {
     expect(simSteps(0)).toEqual([]);
     expect(simSteps(-0.01)).toEqual([]);
+  });
+});
+
+describe('maxCatchupSteps catch-up budget (death-spiral guard)', () => {
+  it('grants the full ceiling before any step has been measured', () => {
+    expect(maxCatchupSteps(0)).toBe(SIM_CATCHUP_STEPS);
+    expect(maxCatchupSteps(-1)).toBe(SIM_CATCHUP_STEPS);
+  });
+
+  it('lets a cheap step take the full ceiling but never more', () => {
+    expect(maxCatchupSteps(1)).toBe(SIM_CATCHUP_STEPS); // 1ms step: budget fits far more than the ceiling
+    expect(maxCatchupSteps(SIM_CATCHUP_BUDGET_MS / SIM_CATCHUP_STEPS)).toBe(SIM_CATCHUP_STEPS);
+  });
+
+  it('clamps toward a single step as the step cost approaches the whole budget', () => {
+    expect(maxCatchupSteps(SIM_CATCHUP_BUDGET_MS / 2 + 1)).toBe(1); // two would overrun the budget
+    expect(maxCatchupSteps(SIM_CATCHUP_BUDGET_MS)).toBe(1);
+    expect(maxCatchupSteps(SIM_CATCHUP_BUDGET_MS * 4)).toBe(1); // never returns 0: the world must always advance
+  });
+
+  it('scales the allowance down monotonically as steps get more expensive', () => {
+    const costs = [2, 8, 15, 25, 40, 80];
+    const allowances = costs.map(maxCatchupSteps);
+    for (let i = 1; i < allowances.length; i++) expect(allowances[i]).toBeLessThanOrEqual(allowances[i - 1]!);
+    expect(Math.max(...allowances)).toBeLessThanOrEqual(SIM_CATCHUP_STEPS);
+    expect(Math.min(...allowances)).toBeGreaterThanOrEqual(1);
   });
 });
 

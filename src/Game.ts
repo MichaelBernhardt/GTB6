@@ -12,7 +12,7 @@ import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWe
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
 import { InputManager } from './core/InputManager';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
-import { simSteps } from './core/Timestep';
+import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
@@ -116,6 +116,7 @@ export class Game {
   private prevDrivenSpeed = 0;
   private wallCrashCooldown = 0;
   private fps = 60;
+  private simStepCostMs = 0; // EMA of one update()'s wall time; sizes the per-frame catch-up budget (see maxCatchupSteps)
   private weaponWheelOpen = false;
   private wheelVector = new THREE.Vector2();
   private wheelHighlight: WeaponId = 'pistol';
@@ -428,8 +429,21 @@ export class Game {
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     const raw = this.clock.getDelta(); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
-    const steps = simSteps(raw); const frameDt = steps.reduce((total, step) => total + step, 0); // wall-clock time the world advances this frame — real time under slow frames, capped only at the catch-up ceiling
-    if (this.mode === 'playing') { for (const dt of steps) { this.update(dt); if (this.mode !== 'playing') break; } } // sub-steps: a 15fps frame runs two updates instead of stretching one past the physics-stable step
+    const steps = simSteps(raw); let frameDt = steps.reduce((total, step) => total + step, 0); // wall-clock time the world advances this frame — real time under slow frames, capped only at the catch-up ceiling
+    if (this.mode === 'playing') {
+      // sub-steps: a 15fps frame runs two updates instead of stretching one past the physics-stable step. But
+      // never run more than the measured per-step cost can fit in SIM_CATCHUP_BUDGET_MS — otherwise catch-up
+      // work keeps every frame slow and the step count spirals to the ceiling, locking idle fps below 10.
+      const allowed = maxCatchupSteps(this.simStepCostMs);
+      frameDt = 0;
+      for (let i = 0; i < steps.length && i < allowed; i++) {
+        const stepStart = performance.now();
+        this.update(steps[i]!);
+        this.simStepCostMs = this.simStepCostMs === 0 ? performance.now() - stepStart : this.simStepCostMs * 0.9 + (performance.now() - stepStart) * 0.1;
+        frameDt += steps[i]!; // camera/marker advance only by the sim time actually run, so the view can't outrun the world under overload
+        if (this.mode !== 'playing') break;
+      }
+    }
     else if (this.mode === 'dead') { this.deathTimer -= frameDt; if (this.deathTimer <= 0) this.respawn(); }
     else if (this.input.consume('Escape')) this.ui.back();
     this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
