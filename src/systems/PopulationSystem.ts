@@ -8,7 +8,7 @@ import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent }
 import { MISSIONS } from './MissionSystem';
 import { ProgressWatchdog, RoutePlanner, type NavPoint } from './NavGraph';
 import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, vehicleHitDamage } from './TrafficAvoidance';
-import type { City } from '../world/City';
+import type { City, RoadPoint } from '../world/City';
 import { HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
 import { CITY_JUNCTIONS } from '../world/UrbanInfrastructure';
 import { powerOn } from '../world/powerGrid';
@@ -290,7 +290,7 @@ export class PopulationSystem {
       });
       const point = candidates[(this.policePatrols.length * 17 + 5) % candidates.length]; if (!point) break;
       const officer = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), 90 + this.policePatrols.length, false, true);
-      officer.pickDestination(this.city.sidewalkPoints); this.policePatrols.push(officer); this.pedestrians.push(officer);
+      officer.pickDestination(this.localChoice(officer.group.position.x, officer.group.position.z)); this.policePatrols.push(officer); this.pedestrians.push(officer);
     }
   }
 
@@ -323,7 +323,15 @@ export class PopulationSystem {
   /** Lifecycle spawn: one ambient citizen placed on a sidewalk point the lifecycle system already vetted as hidden. */
   spawnAmbientPedestrian(x: number, z: number): Pedestrian {
     const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++);
-    ped.pickDestination(this.city.sidewalkPoints); this.pedestrians.push(ped); return ped;
+    ped.pickDestination(this.localChoice(ped.group.position.x, ped.group.position.z)); this.pedestrians.push(ped); return ped;
+  }
+
+  /** A one-element choice list at a nearby sidewalk point, so a spawning ped's FIRST route is short and
+   *  reachable rather than a citywide solve that blows the A* budget. Falls back to the full set only if the
+   *  spawn spot has no sidewalk nearby. */
+  private localChoice(x: number, z: number): RoadPoint[] {
+    const near = this.city.wanderTarget(x, z);
+    return near ? [near] : this.city.sidewalkPoints;
   }
 
   /** Lifecycle spawn: one AI-driven vehicle dropped on a vetted lane node and routed immediately. */
@@ -393,7 +401,7 @@ export class PopulationSystem {
     const pool = nearby.length >= 40 ? nearby : this.city.sidewalkPoints;
     for (let i = 0; i < 28; i++) {
       const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
-      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i); ped.pickDestination(this.city.sidewalkPoints); this.pedestrians.push(ped);
+      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
     }
     MISSIONS.forEach((mission, index) => {
       const contactPosition = mission.start.position.clone(); contactPosition.y = this.city.surfaceHeightAt(contactPosition.x, contactPosition.z);
@@ -440,7 +448,8 @@ export class PopulationSystem {
 
   private assignVehicleRoute(vehicle: Vehicle, free: boolean): boolean {
     const position = vehicle.group.position;
-    const points = free ? this.vehiclePlanner.plan(position.x, position.z) : this.vehiclePlanner.tryPlan(position.x, position.z);
+    const goal = this.vehiclePlanner.goalNear(position.x, position.z); // a nearby lane node, not a citywide one: short, reachable route
+    const points = free ? this.vehiclePlanner.plan(position.x, position.z, goal) : this.vehiclePlanner.tryPlan(position.x, position.z, goal);
     if (!points?.length) return false; // budget spent or destination unreachable: caller backs off before retrying
     this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });
     const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);

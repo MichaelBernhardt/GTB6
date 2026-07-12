@@ -73,18 +73,18 @@ export class Pedestrian {
     const distance = this.group.position.distanceTo(player);
     if (this.state === 'cower') {
       this.setPanicPose(true, true);
-      if (this.fear < CALM_THRESHOLD) { this.setPanicPose(false, false); this.pickDestination(choices); }
+      if (this.fear < CALM_THRESHOLD) { this.setPanicPose(false, false); this.pickDestination(this.localTarget(city, choices)); }
       return;
     }
-    if (this.enraged) { if (this.fear < CALM_THRESHOLD) { this.enraged = false; this.setPanicPose(false, false); this.pickDestination(choices); } else { this.state = 'hostile'; this.destination.copy(player); } }
-    if (this.state === 'flee' && this.fear < CALM_THRESHOLD) this.pickDestination(choices); // calm down even when a wall kept the flee point unreachable
+    if (this.enraged) { if (this.fear < CALM_THRESHOLD) { this.enraged = false; this.setPanicPose(false, false); this.pickDestination(this.localTarget(city, choices)); } else { this.state = 'hostile'; this.destination.copy(player); } }
+    if (this.state === 'flee' && this.fear < CALM_THRESHOLD) this.pickDestination(this.localTarget(city, choices)); // calm down even when a wall kept the flee point unreachable
     if (this.aggressive && !this.contact && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); }
     if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); }
     this.punchTimer = Math.max(0, this.punchTimer - dt);
     this.replanCooldown = Math.max(0, this.replanCooldown - dt);
     if (this.state === 'hostile') this.setGuardPose(distance); else { this.group.rotation.x = 0; this.setPanicPose(this.state === 'flee', false); }
     if (this.hailing && this.state === 'idle') { const arm = this.arms[1]; if (arm) { arm.rotation.x = Math.PI * 0.95; arm.rotation.z = -0.22; } } // curbside hail: one arm out for the cab
-    if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(choices); return; }
+    if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(this.localTarget(city, choices)); return; }
     if ((this.destination.x - this.group.position.x) ** 2 + (this.destination.z - this.group.position.z) ** 2 < 5) {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }
       if (this.state !== 'walk' || !this.advanceRoute()) { this.state = 'idle'; this.idleTime = 1 + Math.random() * 4; return; }
@@ -102,7 +102,7 @@ export class Pedestrian {
     const moved = city.clampMove(this.group.position, desired, 0.42); this.group.position.copy(moved);
     this.groundY = city.surfaceHeightAt(moved.x, moved.z); this.group.position.y = this.groundY;
     if (moved.distanceToSquared(desired) > step * step * 0.25) { // blocked = progress well below the frame step (an absolute threshold never fires at 60fps and pinned peds on walls forever)
-      if (this.state !== 'walk') this.pickDestination(choices);
+      if (this.state !== 'walk') this.pickDestination(this.localTarget(city, choices));
       else if (!this.advanceRoute()) { this.state = 'idle'; this.idleTime = 0.4 + Math.random() * 0.9; } // skip the snagged waypoint; wedged with no route left → brief pause, then a fresh pick
     }
     this.group.rotation.y = Math.atan2(direction.x, direction.z); this.phase += dt * pace * 2.4;
@@ -175,6 +175,15 @@ export class Pedestrian {
 
   /** Freeze/thaw boundary: stalled time must not carry across a frozen gap. */
   resetProgress(): void { this.watchdog.reset(); }
+
+  /** Prefer a sidewalk point near where the ped is standing over a citywide-random one: a nearby goal makes the
+   *  A* route short and reachable (no map-spanning solve, no unreachable-goal exhaustion). Wrapped as a
+   *  one-element choice list so pickDestination is unchanged; falls back to the full list when the ped is
+   *  somewhere with no sidewalk nearby (or the city has no wander grid, e.g. under a unit-test stub). */
+  private localTarget(city: City, choices: RoadPoint[]): RoadPoint[] {
+    const near = city.wanderTarget(this.group.position.x, this.group.position.z);
+    return near ? [near] : choices;
+  }
 
   pickDestination(choices: RoadPoint[]): void {
     this.route = []; this.routeIndex = 0; this.routed = false; this.watchdog.reset(); // fallback wander until the population planner budgets a graph route

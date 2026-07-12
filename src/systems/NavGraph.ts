@@ -48,6 +48,11 @@ export function nearestNode(graph: NavGraph, x: number, z: number): number {
 }
 
 /** A* over the nav graph with a binary heap open list. Returns node indices start..goal, or undefined if unreachable. */
+/** Upper bound on nodes A* will settle before declaring a goal unreachable. Generous for any local route
+ *  (ambient wander goals settle a few hundred at most) but far below the full graph, so a mis-aimed or
+ *  cross-island goal costs a bounded slice instead of the whole city. */
+export const MAX_PATH_EXPANSIONS = 4000;
+
 export function findPath(graph: NavGraph, start: number, goal: number): number[] | undefined {
   const { nodes, edges } = graph; const count = nodes.length;
   if (start < 0 || goal < 0 || start >= count || goal >= count) return undefined;
@@ -83,6 +88,7 @@ export function findPath(graph: NavGraph, start: number, goal: number): number[]
   };
   const heuristic = (index: number): number => { const node = nodes[index]; return node ? Math.hypot(goalNode.x - node.x, goalNode.z - node.z) : 0; };
   push(start, heuristic(start));
+  let settledCount = 0;
   while (heapNode.length) {
     const current = pop();
     if (current === goal) {
@@ -91,6 +97,10 @@ export function findPath(graph: NavGraph, start: number, goal: number): number[]
     }
     if (current < 0 || settled[current]) continue;
     settled[current] = 1;
+    // Hard cap on work: a goal that isn't found within this many settled nodes is treated as unreachable
+    // rather than letting one solve scan the whole ~40k-node graph. Ambient wander goals are local, so a real
+    // route settles far fewer than this; the cap only bites pathological far/unreachable goals.
+    if (++settledCount > MAX_PATH_EXPANSIONS) return undefined;
     const currentNode = nodes[current]; if (!currentNode) continue;
     for (const neighbor of edges[current] ?? []) {
       if (settled[neighbor]) continue;
@@ -165,9 +175,14 @@ export class ProgressWatchdog {
   }
 }
 
+/** Node-grid cell for goalNear, and how many cells out to gather candidates (≈ 4 × 120u ≈ 480u wander). */
+const GOAL_CELL = 120;
+const GOAL_REACH_CELLS = 4;
+
 /** Budgeted A* front-end shared by the agents of one system: at most perFrame solves per beginFrame(). */
 export class RoutePlanner {
   private budget = 0;
+  private nodeGrid?: Map<string, number[]>; // lazily-built spatial index over graph nodes, for goalNear
   /** Cumulative count of real A* solves and the wall-time spent in them. The on-screen perf HUD reads the
    *  per-second delta; only genuine findPath runs are counted (budget short-circuits and cache hits are not). */
   solves = 0;
@@ -179,6 +194,31 @@ export class RoutePlanner {
   nearest(x: number, z: number): number { return nearestNode(this.graph, x, z); }
   node(index: number): NavPoint | undefined { return this.graph.nodes[index]; }
   randomGoal(): number { return this.graph.nodes.length ? Math.floor(this.random() * this.graph.nodes.length) : -1; }
+
+  /** A random graph node within ~GOAL_REACH cells of (x, z): a nearby, near-certainly-reachable goal so a car's
+   *  route is a short local A* rather than a citywide solve. Widens the search if the area is sparse, and only
+   *  falls back to a fully-random citywide node when nothing sits nearby. */
+  goalNear(x: number, z: number): number {
+    const grid = (this.nodeGrid ??= this.buildNodeGrid());
+    const cx = Math.floor(x / GOAL_CELL); const cz = Math.floor(z / GOAL_CELL);
+    for (let reach = GOAL_REACH_CELLS; reach <= GOAL_REACH_CELLS + 6; reach++) {
+      const candidates: number[] = [];
+      for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
+        const bucket = grid.get(`${cx + dx},${cz + dz}`); if (bucket) candidates.push(...bucket);
+      }
+      if (candidates.length) return candidates[Math.floor(this.random() * candidates.length)]!;
+    }
+    return this.randomGoal();
+  }
+
+  private buildNodeGrid(): Map<string, number[]> {
+    const grid = new Map<string, number[]>();
+    this.graph.nodes.forEach((node, index) => {
+      const key = `${Math.floor(node.x / GOAL_CELL)},${Math.floor(node.z / GOAL_CELL)}`;
+      const bucket = grid.get(key); if (bucket) bucket.push(index); else grid.set(key, [index]);
+    });
+    return grid;
+  }
 
   /** Unbudgeted solve (spawn-time setup). Goal defaults to a random node. */
   plan(fromX: number, fromZ: number, goal = this.randomGoal()): NavPoint[] | undefined {

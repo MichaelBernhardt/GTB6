@@ -199,6 +199,7 @@ const makeCity = (): City => ({
   vehicleNav: bridgeIslands(buildNavGraph(lanes, VEHICLE_NAV_JOIN)),
   pedNav: bridgeIslands(buildNavGraph(walks, PED_NAV_JOIN)),
   sidewalkPoints: walks.flatMap((walk) => walk.points),
+  wanderTarget: () => undefined, // fall back to the citywide set: this harness asserts census counts, not route locality
   trafficRoutes: lanes.map((lane) => lane.points),
   collides: () => false,
   isOnRoad: () => true,

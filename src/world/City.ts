@@ -240,6 +240,10 @@ class RoadIndex {
 const SIGNAL_CELL = 48;
 /** Width of the walkable sidewalk band beyond a road edge — a point this far off the tar reads as pavement. */
 const SIDEWALK_BAND = 3.5;
+/** Sidewalk-point grid for local ped wander goals. Cell 100u, gathered over a ±WANDER_REACH_CELLS box, so a
+ *  wander destination lands within ~400u of the ped — a short, reachable A* instead of a citywide solve. */
+const WANDER_CELL = 100;
+const WANDER_REACH_CELLS = 4;
 
 const FACADE_RANGES: Record<BuildingStyle, [number, number]> = { downtown: [0, 6], residential: [6, 4], industrial: [10, 2], estate: [6, 4] };
 const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
@@ -290,6 +294,7 @@ export class City {
   private roadSurfaces: Array<{ points: RoadPoint[]; width: number; closed: boolean }> = [];
   private roadIndex = new RoadIndex();
   private signalCells?: Map<string, JunctionDefinition[]>; // lazily-built junction spatial index for signalStops
+  private sidewalkGrid?: Map<string, RoadPoint[]>; // lazily-built sidewalk-point grid for local ped wander goals
   private colliderCells = new Map<string, number[]>();
   private colliderCellSize = 48;
   private collidersIndexed = 0;
@@ -507,6 +512,31 @@ export class City {
     // segment's half-width, so "beyond the tar but within the sidewalk band" is a single grid query.
     const edge = this.roadIndex.edgeDistance(x, z);
     return edge > 0 && edge <= SIDEWALK_BAND;
+  }
+
+  /** A random sidewalk point within ~400u of (x, z), for local ped wander goals — keeps each A* solve short
+   *  and reachable instead of routing citywide. Widens the search if the immediate area has no sidewalk, and
+   *  returns undefined only when the map has none anywhere near (caller falls back to its own choice list). */
+  wanderTarget(x: number, z: number, rng: () => number = Math.random): RoadPoint | undefined {
+    const grid = (this.sidewalkGrid ??= this.buildSidewalkGrid());
+    const cx = Math.floor(x / WANDER_CELL); const cz = Math.floor(z / WANDER_CELL);
+    for (let reach = WANDER_REACH_CELLS; reach <= WANDER_REACH_CELLS + 8; reach++) {
+      const candidates: RoadPoint[] = [];
+      for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
+        const bucket = grid.get(`${cx + dx},${cz + dz}`); if (bucket) candidates.push(...bucket);
+      }
+      if (candidates.length) return candidates[Math.floor(rng() * candidates.length)];
+    }
+    return undefined;
+  }
+
+  private buildSidewalkGrid(): Map<string, RoadPoint[]> {
+    const grid = new Map<string, RoadPoint[]>();
+    for (const point of this.sidewalkPoints) {
+      const key = `${Math.floor(point.x / WANDER_CELL)},${Math.floor(point.z / WANDER_CELL)}`;
+      const bucket = grid.get(key); if (bucket) bucket.push(point); else grid.set(key, [point]);
+    }
+    return grid;
   }
 
   surfaceHeightAt(x: number, z: number, preferred: SurfaceKind = 'auto'): number {

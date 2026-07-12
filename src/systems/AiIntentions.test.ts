@@ -16,6 +16,12 @@ const makeCity = (): City => ({
   vehicleNav: bridgeIslands(buildNavGraph(lanes, VEHICLE_NAV_JOIN)),
   pedNav: bridgeIslands(buildNavGraph(walks, PED_NAV_JOIN)),
   sidewalkPoints: walks.flatMap((walk) => walk.points),
+  wanderTarget: (x: number, z: number) => { // mirror production: hand back a NEARBY sidewalk point so routes stay short and reachable
+    const points = walks.flatMap((walk) => walk.points);
+    const near = points.filter((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < 250 * 250);
+    const pool = near.length ? near : points;
+    return pool[Math.floor(Math.random() * pool.length)];
+  },
   trafficRoutes: lanes.map((lane) => lane.points),
   collides: () => false,
   collidesAt: () => false,

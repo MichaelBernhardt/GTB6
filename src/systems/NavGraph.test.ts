@@ -172,6 +172,22 @@ describe('RoutePlanner solve accounting (perf HUD)', () => {
   });
 });
 
+describe('RoutePlanner.goalNear (local goals)', () => {
+  it('returns a node near the query point, never the far end of a long road', () => {
+    const graph = buildNavGraph([{ points: line(40, 20) }], 5); // nodes x = 0..780
+    const planner = new RoutePlanner(graph, 2, () => 0.5);
+    const node = planner.node(planner.goalNear(100, 0))!;
+    expect(node).toBeDefined();
+    expect(Math.abs(node.x - 100)).toBeLessThan(600); // within the local search box, not the 780 far end
+  });
+
+  it('falls back to a citywide node only when nothing sits nearby', () => {
+    const graph = buildNavGraph([{ points: line(5, 20) }], 5); // a tiny cluster near the origin
+    const planner = new RoutePlanner(graph, 2, () => 0);
+    expect(planner.goalNear(50_000, 50_000)).toBeGreaterThanOrEqual(0); // miles away → still yields a valid goal
+  });
+});
+
 describe('RoutePlanner.planTo (road-preferring offroad targets)', () => {
   const graph = buildNavGraph([{ points: line(10, 10) }], 5); // straight road, nodes x = 0..90
   const planner = new RoutePlanner(graph, 2);

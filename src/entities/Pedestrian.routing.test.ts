@@ -5,7 +5,7 @@ import { Pedestrian } from './Pedestrian';
 
 // Free-movement stub: the ped walks unobstructed toward its destination, so it stays in the 'walk' state
 // across the frames a cooldown test needs (no wall snags flipping it to idle).
-const city = { clampMove: (_from: THREE.Vector3, to: THREE.Vector3) => to.clone(), surfaceHeightAt: () => 0 } as unknown as City;
+const city = { clampMove: (_from: THREE.Vector3, to: THREE.Vector3) => to.clone(), surfaceHeightAt: () => 0, wanderTarget: () => undefined } as unknown as City;
 const far: RoadPoint[] = [{ x: 500, z: 500 }]; // kept far so the ped never arrives and keeps wanting a route
 
 describe('Pedestrian replan cooldown', () => {
