@@ -57,4 +57,14 @@ describe('authoritative multiplayer world', () => {
     expect(vehicle.z).not.toBe(before); expect(world.interact(first)).toBe(true); expect(vehicle.driverId).toBeUndefined();
     second.x = vehicle.x; second.z = vehicle.z; expect(world.interact(second)).toBe(true); await world.close();
   });
+
+  it('quantizes snapshots to avoid sending meaningless floating-point precision', async () => {
+    const world = new MultiplayerWorld({ store: new MemoryProfileStore() }); await world.init();
+    const player = await world.join(socket(), { version: PROTOCOL_VERSION, name: 'Data Saver' });
+    player.x = 12.34567; player.z = -98.76543; player.heading = Math.PI;
+    const vehicle = world.vehicles.values().next().value; vehicle.speed = 12.34567; vehicle.heading = Math.PI / 3;
+    expect(world.snapshot()[0]).toMatchObject({ x: 12.35, z: -98.77, heading: 3.142 });
+    expect(world.vehicleSnapshot()[0]).toMatchObject({ speed: 12.35, heading: 1.047 });
+    await world.close();
+  });
 });

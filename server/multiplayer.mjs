@@ -6,6 +6,7 @@ export const PROTOCOL_VERSION = 1;
 export const TICK_RATE = 20;
 export const SNAPSHOT_RATE = 10;
 export const CAPACITY = 16;
+export const SNAPSHOT_BACKPRESSURE_BYTES = 16 * 1024;
 const WORLD_LIMIT = 8800;
 const PLAYER_RADIUS = 0.65;
 const FIRE_RANGE = 120;
@@ -17,6 +18,10 @@ const SPAWNS = [[2050, 3850], [2200, 4020], [1850, 4200], [2450, 3900]];
 const VEHICLE_SPAWNS = [[2053, 3850, 0], [2203, 4020, Math.PI / 2], [1853, 4200, Math.PI], [2453, 3900, -Math.PI / 2], [2130, 4100, Math.PI], [1980, 3950, 0]];
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
+const quantize = (value, places = 2) => {
+  const scale = 10 ** places;
+  return Math.round(value * scale) / scale;
+};
 export function cleanName(value) {
   return [...String(value ?? '')].filter((character) => character.charCodeAt(0) >= 32 && character !== '<' && character !== '>').join('').replace(/\s+/g, ' ').trim().slice(0, 24) || 'Player';
 }
@@ -131,16 +136,28 @@ export class MultiplayerWorld {
   }
   snapshot() {
     const now = this.now();
-    return [...this.players.values()].map((p) => ({ id: p.id, name: p.name, x: p.x, y: p.y, z: p.z, heading: p.heading, health: p.health, kills: p.kills, deaths: p.deaths, dead: Boolean(p.deadUntil), protected: now < p.protectedUntil, vehicleId: p.vehicleId }));
+    return [...this.players.values()].map((p) => ({ id: p.id, name: p.name, x: quantize(p.x), y: quantize(p.y), z: quantize(p.z), heading: quantize(p.heading, 3), health: p.health, kills: p.kills, deaths: p.deaths, dead: Boolean(p.deadUntil), protected: now < p.protectedUntil, vehicleId: p.vehicleId }));
   }
-  vehicleSnapshot() { return [...this.vehicles.values()].map((vehicle) => ({ ...vehicle })); }
+  vehicleSnapshot() { return [...this.vehicles.values()].map((vehicle) => ({ ...vehicle, x: quantize(vehicle.x), y: quantize(vehicle.y), z: quantize(vehicle.z), heading: quantize(vehicle.heading, 3), speed: quantize(vehicle.speed) })); }
   async close() { for (const player of this.players.values()) await this.store.save(player.token, { name: player.name, kills: player.kills, deaths: player.deaths }); await this.store.close(); }
 }
 
 const send = (socket, message) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); };
+const sendSnapshot = (socket, message) => {
+  // Snapshots replace one another. On a constrained connection, dropping an old frame is much
+  // better than queueing seconds of stale positions and making the world appear progressively laggier.
+  if (socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) return false;
+  socket.send(JSON.stringify(message)); return true;
+};
 export async function attachMultiplayer(server, options = {}) {
   const world = new MultiplayerWorld(options); await world.init();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 4096,
+    // State snapshots contain repeated keys and similar coordinates, so deflate cuts bandwidth
+    // substantially while remaining transparent to browser clients.
+    perMessageDeflate: { threshold: 512, concurrencyLimit: 4, zlibDeflateOptions: { level: 3 } },
+  });
   server.on('upgrade', (request, socket, head) => {
     if (new URL(request.url ?? '/', 'http://localhost').pathname !== '/multiplayer') { socket.destroy(); return; }
     wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws));
@@ -168,6 +185,6 @@ export async function attachMultiplayer(server, options = {}) {
     socket.on('close', () => { clearTimeout(helloTimer); if (player) { void world.leave(player); broadcast({ type: 'chat', name: 'World', text: `${player.name} left Johannesburg.`, system: true }); } });
   });
   const tickTimer = setInterval(() => { for (const event of world.tick()) broadcast({ type: 'combat', ...event }); }, 1000 / TICK_RATE);
-  const snapshotTimer = setInterval(() => { const players = world.snapshot(); const vehicles = world.vehicleSnapshot(); for (const player of world.players.values()) send(player.socket, { type: 'snapshot', tick: world.tickNumber, acknowledgedInput: player.input.seq, players, vehicles }); }, 1000 / SNAPSHOT_RATE);
+  const snapshotTimer = setInterval(() => { const players = world.snapshot(); const vehicles = world.vehicleSnapshot(); for (const player of world.players.values()) sendSnapshot(player.socket, { type: 'snapshot', tick: world.tickNumber, acknowledgedInput: player.input.seq, players, vehicles }); }, 1000 / SNAPSHOT_RATE);
   return { world, wss, async close() { clearInterval(tickTimer); clearInterval(snapshotTimer); for (const client of wss.clients) client.close(1012, 'Server restarting'); await new Promise((resolve) => wss.close(resolve)); await world.close(); } };
 }

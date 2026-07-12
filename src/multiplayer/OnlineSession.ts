@@ -2,7 +2,21 @@ import * as THREE from 'three';
 import { MultiplayerOverlay } from './MultiplayerOverlay';
 import { MULTIPLAYER_PROTOCOL_VERSION, multiplayerWebSocketUrl, parseServerMessage, type ClientMessage, type NetPlayer, type NetVehicle } from './protocol';
 
+export interface OnlineInput { forward: number; side: number; sprint: boolean; yaw: number }
+
 const TOKEN_KEY = 'groot-theft-bakkie-multiplayer-token';
+const INPUT_RATE = 20;
+const INPUT_KEEPALIVE_SECONDS = 0.5;
+const INPUT_BACKPRESSURE_BYTES = 16 * 1024;
+
+const normalizedInput = (input: OnlineInput): OnlineInput => ({
+  forward: Math.round(input.forward * 100) / 100,
+  side: Math.round(input.side * 100) / 100,
+  sprint: input.sprint,
+  yaw: Math.round(input.yaw * 10_000) / 10_000,
+});
+
+const sameInput = (left: OnlineInput | undefined, right: OnlineInput): boolean => Boolean(left && left.forward === right.forward && left.side === right.side && left.sprint === right.sprint && left.yaw === right.yaw);
 
 class RemoteAvatar {
   group = new THREE.Group();
@@ -40,8 +54,6 @@ class RemoteVehicle {
   dispose(scene: THREE.Scene): void { scene.remove(this.group); this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.geometry.dispose(); const material = object.material; if (Array.isArray(material)) material.forEach((item) => item.dispose()); else material.dispose(); } }); }
 }
 
-export interface OnlineInput { forward: number; side: number; sprint: boolean; yaw: number }
-
 export class OnlineSession {
   private socket?: WebSocket;
   private avatars = new Map<string, RemoteAvatar>();
@@ -49,6 +61,8 @@ export class OnlineSession {
   private inputSeq = 0;
   private fireSeq = 0;
   private sendAccumulator = 0;
+  private inputKeepalive = INPUT_KEEPALIVE_SECONDS;
+  private lastSentInput?: OnlineInput;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private intentionallyClosed = false;
   private players: NetPlayer[] = [];
@@ -63,7 +77,7 @@ export class OnlineSession {
   private connect(): void {
     this.overlay.setStatus('Connecting to the global world…');
     const socket = new WebSocket(multiplayerWebSocketUrl()); this.socket = socket;
-    socket.addEventListener('open', () => this.send({ type: 'hello', version: MULTIPLAYER_PROTOCOL_VERSION, name: this.name, token: localStorage.getItem(TOKEN_KEY) ?? undefined }));
+    socket.addEventListener('open', () => { this.lastSentInput = undefined; this.inputKeepalive = INPUT_KEEPALIVE_SECONDS; this.send({ type: 'hello', version: MULTIPLAYER_PROTOCOL_VERSION, name: this.name, token: localStorage.getItem(TOKEN_KEY) ?? undefined }); });
     socket.addEventListener('message', (event) => this.message(String(event.data)));
     socket.addEventListener('close', () => { this.connected = false; this.overlay.setStatus('Connection lost · reconnecting…', true); if (!this.intentionallyClosed) this.reconnectTimer = setTimeout(() => this.connect(), 2000); });
     socket.addEventListener('error', () => this.overlay.setStatus('Could not reach the multiplayer server.', true));
@@ -99,12 +113,22 @@ export class OnlineSession {
   update(dt: number, input: OnlineInput): NetPlayer | undefined {
     for (const avatar of this.avatars.values()) avatar.update(dt);
     for (const vehicle of this.vehicles.values()) vehicle.update(dt);
-    this.sendAccumulator += dt;
-    if (this.sendAccumulator >= 1 / 30) { this.sendAccumulator %= 1 / 30; this.send({ type: 'input', seq: ++this.inputSeq, ...input }); }
+    this.sendAccumulator += dt; this.inputKeepalive += dt;
+    if (this.sendAccumulator >= 1 / INPUT_RATE) {
+      this.sendAccumulator %= 1 / INPUT_RATE;
+      const latest = normalizedInput(input);
+      if ((!sameInput(this.lastSentInput, latest) || this.inputKeepalive >= INPUT_KEEPALIVE_SECONDS) && this.sendInput(latest)) {
+        this.lastSentInput = latest; this.inputKeepalive = 0;
+      }
+    }
     return this.localState;
   }
   fire(direction: THREE.Vector3): void { this.send({ type: 'fire', seq: ++this.fireSeq, direction: [direction.x, direction.y, direction.z] }); }
   interact(): void { this.send({ type: 'interact' }); }
+  private sendInput(input: OnlineInput): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > INPUT_BACKPRESSURE_BYTES) return false;
+    this.socket.send(JSON.stringify({ type: 'input', seq: ++this.inputSeq, ...input } satisfies ClientMessage)); return true;
+  }
   private send(message: ClientMessage): void { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message)); }
   close(): void { this.intentionallyClosed = true; clearTimeout(this.reconnectTimer); this.socket?.close(); for (const avatar of this.avatars.values()) avatar.dispose(this.scene); for (const vehicle of this.vehicles.values()) vehicle.dispose(this.scene); this.avatars.clear(); this.vehicles.clear(); this.overlay.hide(); }
   get playerCount(): number { return this.players.length; }
