@@ -29,7 +29,7 @@ describe('vehicle configuration', () => {
   });
 
   it('orders the two-wheelers bicycle < motorbike < superbike around the JMPD interceptor', () => {
-    const { bicycle, motorbike, superbike, police } = VEHICLE_SPECS;
+    const { bicycle, motorbike, courier, superbike, police } = VEHICLE_SPECS;
     expect(bicycle.maxSpeed).toBeLessThan(motorbike.maxSpeed);
     expect(motorbike.maxSpeed).toBeLessThan(superbike.maxSpeed);
     expect(motorbike.maxSpeed).toBeGreaterThan(police.maxSpeed); // just barely outruns the law
@@ -38,7 +38,8 @@ describe('vehicle configuration', () => {
     expect(superbike.maxSpeed).toBeLessThanOrEqual(police.maxSpeed * 1.5);
     expect(bicycle.maxSpeed / PLAYER.sprintSpeed).toBeGreaterThanOrEqual(1.8); // about twice a sprint
     expect(bicycle.maxSpeed / PLAYER.sprintSpeed).toBeLessThanOrEqual(2.2);
-    for (const spec of [bicycle, motorbike, superbike]) { expect(spec.twoWheeler).toBe(true); expect(spec.saddle).toBeDefined(); expect(spec.size[0]).toBeLessThan(1); }
+    for (const spec of [bicycle, motorbike, courier, superbike]) { expect(spec.twoWheeler).toBe(true); expect(spec.saddle).toBeDefined(); expect(spec.size[0]).toBeLessThan(1); }
+    expect(courier.name).toContain('Sixty-Sekonds');
     for (const spec of Object.values(VEHICLE_SPECS)) if (!spec.twoWheeler) expect(spec.saddle).toBeUndefined();
   });
 });

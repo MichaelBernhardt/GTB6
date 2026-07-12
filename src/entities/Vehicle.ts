@@ -365,6 +365,13 @@ export class Vehicle {
       const fender = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.05, 0.5, 2, 0.02), paint); fender.position.set(0, 0.66, -0.72);
       this.group.add(tank, seat, engine, fender, tube(0, 0.83, 0.52, 0, 0.68, -0.7, 0.045, paint), tube(0, wheelRadius, -axleZ, 0, 0.44, -0.2, 0.035, dark)); // spine + swingarm
       this.group.add(tube(0.16, 0.3, 0.05, 0.2, 0.44, -0.88, 0.05, chrome)); // exhaust
+      if (this.spec.kind === 'courier') {
+        const box = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.62, 0.58, 4, 0.08), new THREE.MeshStandardMaterial({ color: 0x84f01c, roughness: 0.48 }));
+        box.name = 'courierbox'; box.position.set(0, 1.08, -0.78);
+        const sign = createSignMesh(new THREE.PlaneGeometry(0.5, 0.29), '60-SEK', '#10220b', { background: '#f4ffea' });
+        sign.name = 'sign'; sign.position.set(0, 0, 0.296); box.add(sign);
+        this.group.add(box);
+      }
     }
     if (!bicycle) {
       const lamp = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.12, 0.06, 2, 0.02), new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 }));
