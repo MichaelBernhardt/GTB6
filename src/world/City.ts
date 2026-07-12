@@ -242,10 +242,12 @@ class RoadIndex {
 const SIGNAL_CELL = 48;
 /** Width of the walkable sidewalk band beyond a road edge — a point this far off the tar reads as pavement. */
 const SIDEWALK_BAND = 3.5;
-/** Sidewalk-point grid for local ped wander goals. Cell 100u, gathered over a ±WANDER_REACH_CELLS box, so a
- *  wander destination lands within ~400u of the ped — a short, reachable A* instead of a citywide solve. */
-const WANDER_CELL = 100;
-const WANDER_REACH_CELLS = 4;
+/** Sidewalk-point grid for ambient ped wander goals. Cell 200u, gathered over a ±WANDER_REACH_CELLS box, so a
+ *  wander destination lands within ~1200u of the ped: wide enough that the crowd disperses across the area
+ *  around the player (no clumping where they spawned) yet local enough that each A* solve stays cheap and
+ *  reachable — nowhere near the old citywide solves. */
+const WANDER_CELL = 200;
+const WANDER_REACH_CELLS = 6;
 
 const FACADE_RANGES: Record<BuildingStyle, [number, number]> = { downtown: [0, 6], residential: [6, 4], industrial: [10, 2], estate: [6, 4] };
 const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {

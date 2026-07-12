@@ -174,11 +174,11 @@ describe('RoutePlanner solve accounting (perf HUD)', () => {
 
 describe('RoutePlanner.goalNear (local goals)', () => {
   it('returns a node near the query point, never the far end of a long road', () => {
-    const graph = buildNavGraph([{ points: line(40, 20) }], 5); // nodes x = 0..780
+    const graph = buildNavGraph([{ points: line(300, 40) }], 5); // a 12000u road, nodes x = 0..11960
     const planner = new RoutePlanner(graph, 2, () => 0.5);
     const node = planner.node(planner.goalNear(100, 0))!;
     expect(node).toBeDefined();
-    expect(Math.abs(node.x - 100)).toBeLessThan(600); // within the local search box, not the 780 far end
+    expect(Math.abs(node.x - 100)).toBeLessThan(1600); // within the local search box (~1200u + a cell), never the 12000u far end
   });
 
   it('falls back to a citywide node only when nothing sits nearby', () => {
