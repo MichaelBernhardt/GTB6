@@ -29,7 +29,7 @@ export interface NetVehicle {
 
 export type ClientMessage =
   | { type: 'hello'; version: number; name: string; token?: string }
-  | { type: 'input'; seq: number; forward: number; side: number; sprint: boolean; yaw: number }
+  | { type: 'input'; seq: number; forward: number; side: number; sprint: boolean; aiming: boolean; yaw: number }
   | { type: 'fire'; seq: number; direction: [number, number, number] }
   | { type: 'interact' }
   | { type: 'chat'; text: string }

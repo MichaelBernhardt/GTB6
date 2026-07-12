@@ -21,7 +21,9 @@ describe('authoritative multiplayer world', () => {
     world.input(player, { seq: 2, forward: 1, side: 0, sprint: true, yaw: 0 });
     world.input(player, { seq: 1, forward: -1, side: 0, sprint: false, yaw: 0 });
     world.tick(1);
-    expect(player.z).toBeLessThan(startZ); expect(player.input.seq).toBe(2);
+    expect(startZ - player.z).toBeCloseTo(13); expect(player.input.seq).toBe(2);
+    world.input(player, { seq: 3, forward: 1, side: 0, sprint: true, aiming: true, yaw: 0 }); const aimedStart = player.z; world.tick(1);
+    expect(aimedStart - player.z).toBeCloseTo(6.5);
     await expect(world.join(socket(), { version: PROTOCOL_VERSION, name: 'Other' })).rejects.toMatchObject({ code: 'SERVER_FULL' });
     now += 100; await world.close();
   });

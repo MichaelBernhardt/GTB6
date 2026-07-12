@@ -14,6 +14,9 @@ const FIRE_DAMAGE = 34;
 const FIRE_COOLDOWN_MS = 330;
 const RESPAWN_MS = 3000;
 const SPAWN_PROTECTION_MS = 2500;
+const WALK_SPEED = 8;
+const SPRINT_SPEED = 13;
+const AIM_SPEED_MULTIPLIER = 0.5;
 const SPAWNS = [[2050, 3850], [2200, 4020], [1850, 4200], [2450, 3900]];
 const VEHICLE_SPAWNS = [[2053, 3850, 0], [2203, 4020, Math.PI / 2], [1853, 4200, Math.PI], [2453, 3900, -Math.PI / 2], [2130, 4100, Math.PI], [1980, 3950, 0]];
 
@@ -49,7 +52,7 @@ export class MultiplayerWorld {
     const spawn = SPAWNS[this.players.size % SPAWNS.length]; const now = this.now();
     const player = { id: randomUUID(), socket, token: loaded.token, name, kills: loaded.profile.kills, deaths: loaded.profile.deaths,
       x: spawn[0], y: 0, z: spawn[1], heading: Math.PI, health: 100, deadUntil: 0, protectedUntil: now + SPAWN_PROTECTION_MS,
-      input: { seq: 0, forward: 0, side: 0, sprint: false, yaw: Math.PI }, lastFire: 0, ammo: 12, reserve: 120, reloadingUntil: 0, chatTimes: [] };
+      input: { seq: 0, forward: 0, side: 0, sprint: false, aiming: false, yaw: Math.PI }, lastFire: 0, ammo: 12, reserve: 120, reloadingUntil: 0, chatTimes: [] };
     this.players.set(player.id, player);
     return player;
   }
@@ -70,7 +73,7 @@ export class MultiplayerWorld {
   }
   input(player, message) {
     if (!player || !Number.isInteger(message.seq) || message.seq <= player.input.seq) return;
-    player.input = { seq: message.seq, forward: clamp(message.forward, -1, 1), side: clamp(message.side, -1, 1), sprint: Boolean(message.sprint), yaw: clamp(message.yaw, -Math.PI * 8, Math.PI * 8) };
+    player.input = { seq: message.seq, forward: clamp(message.forward, -1, 1), side: clamp(message.side, -1, 1), sprint: Boolean(message.sprint), aiming: Boolean(message.aiming), yaw: clamp(message.yaw, -Math.PI * 8, Math.PI * 8) };
   }
   fire(player, message) {
     const now = this.now();
@@ -126,7 +129,7 @@ export class MultiplayerWorld {
       }
       const length = Math.hypot(input.side, input.forward); player.heading = input.yaw + Math.PI;
       if (length > 0) {
-        const side = input.side / Math.max(1, length); const forward = input.forward / Math.max(1, length); const speed = input.sprint ? 11 : 6;
+        const side = input.side / Math.max(1, length); const forward = input.forward / Math.max(1, length); const speed = (input.sprint ? SPRINT_SPEED : WALK_SPEED) * (input.aiming ? AIM_SPEED_MULTIPLIER : 1);
         const sin = Math.sin(input.yaw); const cos = Math.cos(input.yaw);
         player.x = clamp(player.x + (side * cos - forward * sin) * speed * dt, -WORLD_LIMIT, WORLD_LIMIT);
         player.z = clamp(player.z + (-side * sin - forward * cos) * speed * dt, -WORLD_LIMIT, WORLD_LIMIT);

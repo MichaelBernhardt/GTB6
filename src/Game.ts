@@ -14,6 +14,7 @@ import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, S
 import { InputManager } from './core/InputManager';
 import { MultiplayerOverlay } from './multiplayer/MultiplayerOverlay';
 import { OnlineSession } from './multiplayer/OnlineSession';
+import { onlineCorrectionFactor } from './multiplayer/latency';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
@@ -601,12 +602,17 @@ export class Game {
     const state = online.update(dt, {
       forward: Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')),
       side: Number(this.input.down('KeyD')) - Number(this.input.down('KeyA')),
-      sprint: this.input.down('ShiftLeft'), yaw: this.cameraController.yaw,
+      sprint: this.input.down('ShiftLeft'), aiming: this.input.aiming, yaw: this.cameraController.yaw,
     });
     if (!state) return;
-    const correction = state.dead ? 1 : 1 - Math.exp(-dt * 7);
-    this.player.group.position.x = THREE.MathUtils.lerp(this.player.group.position.x, state.x, correction);
-    this.player.group.position.z = THREE.MathUtils.lerp(this.player.group.position.z, state.z, correction);
+    const authoritative = online.consumeLocalCorrection();
+    if (authoritative) {
+      const error = Math.hypot(authoritative.x - this.player.group.position.x, authoritative.z - this.player.group.position.z);
+      const moving = this.input.down('KeyW') || this.input.down('KeyS') || this.input.down('KeyA') || this.input.down('KeyD');
+      const correction = onlineCorrectionFactor(error, moving, authoritative.dead, Boolean(authoritative.vehicleId));
+      this.player.group.position.x = THREE.MathUtils.lerp(this.player.group.position.x, authoritative.x, correction);
+      this.player.group.position.z = THREE.MathUtils.lerp(this.player.group.position.z, authoritative.z, correction);
+    }
     this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
     this.player.health = state.health; this.player.setVisible(!state.dead && !state.vehicleId);
     if (state.dead && !this.onlineWasDead) { this.ui.notify('EISH', 'You were eliminated. Respawning in three seconds.', false); this.audio.setFire(false); }
