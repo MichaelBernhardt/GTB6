@@ -3,7 +3,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import type { PropRegistry } from '../systems/PropSystem';
 import { addInstancedChunks, type ChunkStore, type InstanceItem, type InstanceSlot } from './ChunkVisibility';
 import type { RoadPoint, RoadsidePoint } from './City';
-import { SIGNAL_JUNCTIONS } from './mapData';
+import { SIGNAL_JUNCTIONS, STREET_SIGN_JUNCTIONS } from './mapData';
 import { ETOLL_SPOTS, ROADSIDE_SIGNS, SPAWN_SIGN_JUNCTIONS, TRANSIT_STOPS } from './placements';
 import { createSignMesh } from './ProceduralMaterials';
 import { onPowerChange } from './powerGrid';
@@ -102,6 +102,7 @@ export class UrbanInfrastructure {
     this.buildVegetation();
     this.buildStreetlights();
     this.buildTrafficSignals();
+    this.buildStreetSigns();
     this.buildRoadsideSigns();
     this.buildStreetFurniture();
     this.buildTransitStops();
@@ -313,10 +314,26 @@ export class UrbanInfrastructure {
     for (const junction of SPAWN_SIGN_JUNCTIONS) {
       const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle));
       const right = new THREE.Vector3(forward.z, 0, -forward.x);
-      this.addStreetSigns({ ...junction, widest: junction.widest }, forward, right);
+      this.addStreetSigns(junction, forward, right);
     }
     const lensItems: InstanceItem[] = lensTransforms.map((matrix) => ({ x: matrix.elements[12]!, z: matrix.elements[14]!, matrix, color: new THREE.Color(0x14100e) }));
     this.lensSlots = addInstancedChunks(this.detail, new THREE.CircleGeometry(0.19, 20), new THREE.MeshBasicMaterial(), lensItems);
+  }
+
+  /** Street-name boards across every named crossing on the generated map, not just the ~64 signalised
+   *  ones — so junctions everywhere read their two street names like the old hand-authored city. Signal
+   *  and spawn corners already carry boards via buildTrafficSignals, so those keys are skipped (no double
+   *  posts). Each board stays an unmerged, chunk-culled knock-over prop, exactly like the signal signs. */
+  private buildStreetSigns(): void {
+    const placed = new Set<string>();
+    for (const junction of CITY_JUNCTIONS) placed.add(`${junction.x}|${junction.z}`);
+    for (const junction of SPAWN_SIGN_JUNCTIONS) placed.add(`${junction.x}|${junction.z}`);
+    for (const junction of STREET_SIGN_JUNCTIONS) {
+      if (placed.has(`${junction.x}|${junction.z}`)) continue;
+      const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle));
+      const right = new THREE.Vector3(forward.z, 0, -forward.x);
+      this.addStreetSigns(junction, forward, right);
+    }
   }
 
   private addSignalPole(position: THREE.Vector3, heading: number, axis: 0 | 1, phase: number, lensTransforms: THREE.Matrix4[]): void {
@@ -350,7 +367,7 @@ export class UrbanInfrastructure {
     return false;
   }
 
-  private addStreetSigns(junction: JunctionDefinition, forward: THREE.Vector3, right: THREE.Vector3): void {
+  private addStreetSigns(junction: Omit<JunctionDefinition, 'phase'>, forward: THREE.Vector3, right: THREE.Vector3): void {
     const offset = signalCornerOffset(junction.widest);
     const postPosition = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, offset).addScaledVector(right, offset);
     if (!this.clearOfRoad(postPosition, junction)) return;
