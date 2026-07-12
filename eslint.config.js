@@ -3,7 +3,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage'] },
+  { ignores: ['dist', 'coverage', '.claude/**'] }, // .claude/worktrees hold sibling checkouts (built dist, server.mjs) — never lint those
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
