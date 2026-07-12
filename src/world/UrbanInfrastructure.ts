@@ -374,10 +374,15 @@ export class UrbanInfrastructure {
     if (this.isBlocked(postPosition.x, postPosition.z, 0.5)) return;
     const assembly = new THREE.Group(); assembly.position.copy(postPosition);
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.y = 1.8; assembly.add(post);
-    const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle, 3.25], [junction.roadB, junction.angle + Math.PI / 2, 2.78]];
+    // Each blade runs ALONG the street it names (its face perpendicular to that street, read head-on by that
+    // road's traffic) — hence the +90° from the road bearing. Two back-to-back front-side planes give correct,
+    // un-mirrored text on both faces (a single double-sided plane shows the back reflected/backwards).
+    const labels: Array<[string, number, number]> = [[junction.roadA, junction.angle + Math.PI / 2, 3.25], [junction.roadB, junction.angle + Math.PI, 2.78]];
     for (const [label, angle, y] of labels) {
-      const sign = createSignMesh(new THREE.PlaneGeometry(4.2, 0.92), label, '#f2f4e9', { background: '#176a5a', doubleSide: true });
-      sign.position.y = y; sign.rotation.y = angle; assembly.add(sign);
+      for (const flip of [0, Math.PI]) {
+        const sign = createSignMesh(new THREE.PlaneGeometry(4.2, 0.92), label, '#f2f4e9', { background: '#176a5a' });
+        sign.position.y = y; sign.rotation.y = angle + flip; assembly.add(sign);
+      }
     }
     assembly.traverse((object) => { object.userData.dynamic = true; }); // knock-over props stay unmerged so they can tip
     this.detail.group(postPosition.x, postPosition.z).add(assembly); // unmerged, but still distance-culled with its chunk
