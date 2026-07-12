@@ -108,6 +108,12 @@ const seeded = (x: number, z: number, salt = 0): number => {
  */
 const LAYOUT_SCALE = 2.94 / METRES_PER_UNIT;
 export const ROAD_SAMPLE_SPACING = Math.round(12 * LAYOUT_SCALE);
+/** Streetlamp pitch: a lamp every ~36u of road, alternating kerbs — the classic staggered layout that
+ *  lines the whole map like the old hand-authored city. Scaled with the footprint so the real-world
+ *  pitch (~35m) holds at any TARGET_SIZE, exactly like ROAD_SAMPLE_SPACING and the nav joins. */
+export const STREETLAMP_SPACING = Math.round(12 * LAYOUT_SCALE);
+/** Even the narrowest generated streets (6u residential) get lit; only sub-road dirt tracks stay dark. */
+export const STREETLAMP_MIN_WIDTH = 6;
 export const VEHICLE_NAV_JOIN = Math.round(15 * LAYOUT_SCALE);
 export const PED_NAV_JOIN = Math.round(18 * LAYOUT_SCALE);
 /** Static geometry merges per material per grid cell this size, keeping frustum culling useful.
@@ -151,6 +157,41 @@ export function buildCityNavPaths(network: RoadDefinition[] = ROAD_NETWORK): { l
     for (const side of [-1, 1]) walks.push({ points: offsetRoadPath(sampled, side * (definition.width / 2 + 2.2), closed).filter((_, index) => index % 2 === 0), closed });
   }
   return { lanes, walks };
+}
+
+/** Pure builder for the staggered streetlamp anchors: walk each road's centreline by arc length and drop
+ *  a lamp every STREETLAMP_SPACING, alternating kerbs (the classic staggered layout that lines the whole
+ *  map). Distance-based, so the pitch is identical on a short residential stub and a long arterial — the
+ *  fix for the old per-point modulo stride, which lit only the odd wide road and skipped the suburbs.
+ *  Each anchor carries the roadsidePoint shape (x/z on the verge + inward normal over the carriageway +
+ *  road width) so UrbanInfrastructure aims each fixture's arm exactly as it does the verge furniture.
+ *  Exported so placement is unit-testable without constructing a City (which needs THREE + textures). */
+export function buildStreetlampPoints(network: RoadDefinition[] = ROAD_NETWORK): RoadsidePoint[] {
+  const lamps: RoadsidePoint[] = [];
+  for (const definition of network) {
+    if (definition.width < STREETLAMP_MIN_WIDTH) continue; // only sub-road dirt tracks stay dark
+    const closed = definition.closed ?? false;
+    const sampled = sampleRoadPath(definition.points, closed, ROAD_SAMPLE_SPACING);
+    const source = closed ? [...sampled, sampled[0]].filter((point): point is RoadPoint => Boolean(point)) : sampled;
+    const offset = definition.width / 2 + 3.05; // verge line, same setback as the roadside furniture
+    let travelled = 0; let next = STREETLAMP_SPACING / 2; let side: -1 | 1 = 1; // first lamp half a span in
+    for (let segment = 0; segment < source.length - 1; segment++) {
+      const start = source[segment]; const end = source[segment + 1]; if (!start || !end) continue;
+      const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz); if (length < 1e-4) continue;
+      const normalX = -dz / length; const normalZ = dx / length; // left-hand normal of the local road direction
+      while (next <= travelled + length) {
+        const t = (next - travelled) / length;
+        const cx = start.x + dx * t; const cz = start.z + dz * t; // point on the centreline
+        lamps.push({
+          x: cx + normalX * offset * side, z: cz + normalZ * offset * side,
+          inwardX: -normalX * side, inwardZ: -normalZ * side, width: definition.width, // inward faces back over the road
+        });
+        side = side === 1 ? -1 : 1; next += STREETLAMP_SPACING;
+      }
+      travelled += length;
+    }
+  }
+  return lamps;
 }
 
 interface IndexedSegment { ax: number; az: number; bx: number; bz: number; half: number; surface: number; }
@@ -232,6 +273,9 @@ export class City {
   roadPoints: RoadPoint[] = [];
   sidewalkPoints: RoadPoint[] = [];
   roadsidePoints: RoadsidePoint[] = [];
+  /** Staggered streetlamp anchors, one every STREETLAMP_SPACING of road, alternating kerbs. Kept apart
+   *  from the verge roadsidePoints so lamp pitch is set by arc length, not the coarser roadside stride. */
+  streetlampPoints: RoadsidePoint[] = buildStreetlampPoints(ROAD_NETWORK);
   roadPaths: RoadPoint[][] = [];
   trafficRoutes: RoadPoint[][] = [];
   private navPaths = buildCityNavPaths(ROAD_NETWORK);
@@ -266,6 +310,7 @@ export class City {
       this.chunkStore,
       this.detailStore,
       this.roadsidePoints,
+      this.streetlampPoints,
       (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius),
       (x, z, margin) => this.isOnRoad(x, z, margin),
       this.props,
