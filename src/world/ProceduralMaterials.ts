@@ -75,6 +75,56 @@ export function createGeneratedSurfaceTexture(url: string, fallback: SurfaceKind
   return texture;
 }
 
+/**
+ * Large-format municipal paving for the sidewalk ribbons.  This deliberately lives in its own
+ * texture instead of reusing the generic concrete photograph: the old 10x repeat made the paving
+ * look like a noisy graph-paper sheet from normal play height.  One tile is sixteen 3u-deep bays,
+ * with staggered joints, aggregate and a few subtly replaced slabs, so repetition only becomes
+ * apparent across a much longer walk.
+ */
+export function createSidewalkTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 1024;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D is unavailable');
+
+  context.fillStyle = '#aaa99f'; context.fillRect(0, 0, canvas.width, canvas.height);
+  const rows = 16; const rowHeight = canvas.height / rows;
+  for (let row = 0; row < rows; row++) {
+    const tone = 157 + Math.round(seeded(row, 81) * 13);
+    context.fillStyle = `rgb(${tone + 4}, ${tone + 3}, ${tone - 3})`;
+    context.fillRect(2, row * rowHeight + 2, canvas.width - 4, rowHeight - 4);
+
+    // Two broad flags across the walking width; alternate the joint slightly to avoid a rigid grid.
+    const joint = 124 + (seeded(row, 82) - 0.5) * 12;
+    context.fillStyle = 'rgba(74, 76, 72, 0.34)';
+    context.fillRect(joint, row * rowHeight + 3, 2, rowHeight - 6);
+    context.fillStyle = 'rgba(232, 229, 215, 0.2)';
+    context.fillRect(joint + 2, row * rowHeight + 3, 1, rowHeight - 6);
+  }
+
+  // Recessed transverse expansion joints with a slim sun-catching lip.
+  for (let row = 0; row <= rows; row++) {
+    const y = row * rowHeight;
+    context.fillStyle = 'rgba(67, 70, 68, 0.5)'; context.fillRect(0, y, canvas.width, 2);
+    context.fillStyle = 'rgba(232, 229, 216, 0.24)'; context.fillRect(0, y + 2, canvas.width, 1);
+  }
+
+  // Fine stone aggregate and restrained staining keep close-up pavement from reading as flat paint.
+  for (let i = 0; i < 7200; i++) {
+    const x = seeded(i, 83) * canvas.width; const y = seeded(i, 84) * canvas.height;
+    const light = seeded(i, 85) > 0.48;
+    context.globalAlpha = 0.035 + seeded(i, 86) * 0.11;
+    context.fillStyle = light ? '#f0eee3' : '#464c49';
+    const size = 0.4 + seeded(i, 87) * 1.4; context.fillRect(x, y, size, size);
+  }
+  context.globalAlpha = 1;
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
+  return texture;
+}
+
 export const FACADE_VARIANTS = 12;
 interface FacadeStyle { wall: string; dark: string; frame: string; lit: number; columns: number; rows: number; band: boolean; }
 const FACADE_STYLES: FacadeStyle[] = [
