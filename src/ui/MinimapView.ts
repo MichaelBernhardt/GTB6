@@ -31,6 +31,7 @@ export function stepMinimapZoom(zoom: number, direction: 1 | -1): number {
 export class MinimapView {
   readonly canvas = document.createElement('canvas');
   private context: CanvasRenderingContext2D;
+  private visibleRoads: RoadPoint[][] = [];
 
   constructor() {
     this.canvas.id = 'minimap'; this.canvas.width = 240; this.canvas.height = 240; this.canvas.setAttribute('aria-label', 'Local street map'); this.canvas.setAttribute('role', 'img');
@@ -56,17 +57,18 @@ export class MinimapView {
   draw(x: number, z: number, heading: number, allRoads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom = DEFAULT_MINIMAP_ZOOM): void {
     const ctx = this.context; const size = this.canvas.width; const scale = MINIMAP_ZOOM_SCALES[sanitizeMinimapZoom(zoom)];
     const viewRadius = (size * 0.75) / scale; // canvas half-diagonal in world units, with rotation slack
-    const roads = allRoads.filter((road) => {
+    const roads = this.visibleRoads; roads.length = 0;
+    for (const road of allRoads) {
       const bounds = this.boundsOf(road);
-      return bounds.minX < x + viewRadius && bounds.maxX > x - viewRadius && bounds.minZ < z + viewRadius && bounds.maxZ > z - viewRadius;
-    });
+      if (bounds.minX < x + viewRadius && bounds.maxX > x - viewRadius && bounds.minZ < z + viewRadius && bounds.maxZ > z - viewRadius) roads.push(road);
+    }
     const counter = Math.PI - heading; // undo map rotation so blip shapes stay screen-aligned
     ctx.clearRect(0, 0, size, size); ctx.fillStyle = '#17211f'; ctx.fillRect(0, 0, size, size);
     ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading - Math.PI); ctx.translate(-x * scale, -z * scale);
     ctx.strokeStyle = '#465451'; ctx.lineWidth = Math.max(2.5, 22 * scale); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (const point of road.slice(1)) ctx.lineTo(point.x * scale, point.z * scale); ctx.stroke(); }
+    for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (let index = 1; index < road.length; index++) { const point = road[index]!; ctx.lineTo(point.x * scale, point.z * scale); } ctx.stroke(); }
     ctx.strokeStyle = '#c8c4ad'; ctx.lineWidth = Math.max(1.2, 7 * scale);
-    for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (const point of road.slice(1)) ctx.lineTo(point.x * scale, point.z * scale); ctx.stroke(); }
+    for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (let index = 1; index < road.length; index++) { const point = road[index]!; ctx.lineTo(point.x * scale, point.z * scale); } ctx.stroke(); }
     for (const marker of markers) {
       ctx.save(); ctx.translate(marker.x * scale, marker.z * scale); ctx.rotate(counter);
       ctx.fillStyle = marker.color; ctx.strokeStyle = '#111817'; ctx.lineWidth = 2; ctx.beginPath();

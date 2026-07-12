@@ -105,6 +105,7 @@ export class Game {
   private transition?: Transition;
   private marker = new THREE.Group();
   private markerTarget?: WorldTarget;
+  private markerColor = '';
   private markerPhase = 0;
   private collectedItem = false;
   private hostileDefeated = 0;
@@ -181,7 +182,7 @@ export class Game {
   }
 
   private setupRenderer(): void {
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); this.renderer.setSize(innerWidth, innerHeight);
+    this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = this.settings.quality !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
     this.renderer.shadowMap.autoUpdate = true;
@@ -199,9 +200,11 @@ export class Game {
   private setupComposer(): void {
     this.composer?.dispose(); this.composer = undefined; this.gtao = undefined;
     if (this.settings.quality === 'low') return; // low quality: plain renderer.render, no post stack
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    const composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(size.width, size.height, { type: THREE.HalfFloatType, samples: 4 }));
-    composer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); composer.setSize(innerWidth, innerHeight);
+    const composer = new EffectComposer(this.renderer);
+    // Two samples preserve edge stability while halving the multisample bandwidth/memory of the old 4x
+    // full-screen half-float targets. Resolution is already quality-capped by renderPixelRatio().
+    composer.renderTarget1.samples = 2; composer.renderTarget2.samples = 2;
+    composer.setSize(innerWidth, innerHeight);
     composer.addPass(new RenderPass(this.scene, this.camera));
     if (this.settings.quality === 'high') { // GTAO is the expensive pass — high only
       this.gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
@@ -422,10 +425,17 @@ export class Game {
 
   private applyQuality(): void {
     const shadows = this.settings.quality !== 'low';
+    this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
     this.dayNight.setQuality(this.settings.quality);
     this.city.setWaterQuality(this.settings.quality); // rebuilds water meshes; disposes the old tier's materials and mirror target
     this.setupComposer();
+  }
+
+  /** Keep Retina/HiDPI displays from multiplying every full-screen pass beyond the selected quality tier. */
+  private renderPixelRatio(): number {
+    const cap: Record<GameSettings['quality'], number> = { low: 1, medium: 1.25, high: 1.5 };
+    return Math.min(devicePixelRatio || 1, cap[this.settings.quality]);
   }
 
   private startGame(fresh: boolean): void {
@@ -1350,7 +1360,12 @@ export class Game {
     }
     if (objective?.target) { const position = objective.target.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...objective.target, position }; }
     if (!this.missions.active) {
-      const nearest = MISSIONS.filter((mission) => !this.missions.completed.has(mission.id)).sort((a, b) => ((a.start.position.x - this.player.group.position.x) ** 2 + (a.start.position.z - this.player.group.position.z) ** 2) - ((b.start.position.x - this.player.group.position.x) ** 2 + (b.start.position.z - this.player.group.position.z) ** 2))[0];
+      let nearest: (typeof MISSIONS)[number] | undefined; let nearestDistance = Infinity;
+      for (const mission of MISSIONS) {
+        if (this.missions.completed.has(mission.id)) continue;
+        const distance = (mission.start.position.x - this.player.group.position.x) ** 2 + (mission.start.position.z - this.player.group.position.z) ** 2;
+        if (distance < nearestDistance) { nearest = mission; nearestDistance = distance; }
+      }
       if (nearest) { const position = nearest.start.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...nearest.start, position }; }
       return undefined;
     }
@@ -1394,7 +1409,11 @@ export class Game {
     this.markerTarget = this.currentTarget(); this.marker.visible = Boolean(this.markerTarget);
     if (!this.markerTarget) return;
     this.marker.position.copy(this.markerTarget.position); this.markerPhase += dt; this.marker.rotation.y += dt * 0.7; this.marker.position.y += 0.2 + Math.sin(this.markerPhase * 2) * 0.15;
-    const color = new THREE.Color(this.markerTarget.color ?? '#f5c542'); this.marker.children.forEach((child: THREE.Object3D) => { const mesh = child as THREE.Mesh; (mesh.material as THREE.MeshBasicMaterial).color.copy(color); });
+    const color = this.markerTarget.color ?? '#f5c542';
+    if (color !== this.markerColor) {
+      this.markerColor = color;
+      this.marker.children.forEach((child: THREE.Object3D) => { const mesh = child as THREE.Mesh; (mesh.material as THREE.MeshBasicMaterial).color.set(color); });
+    }
   }
 
   private handleVehicleCollisions(dt: number): void {
@@ -1435,7 +1454,7 @@ export class Game {
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     let prompt = '';
     if (this.mode === 'playing' && !this.transition) {
-      const nearbyTarget = this.currentTarget();
+      const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
       if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
       else if (this.activeVehicle) {

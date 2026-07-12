@@ -41,6 +41,8 @@ export class Pedestrian {
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
+  private direction = new THREE.Vector3();
+  private desired = new THREE.Vector3();
 
   constructor(scene: THREE.Scene, position: THREE.Vector3, index: number, hostile = false, police = false) {
     this.group.position.copy(position); this.groundY = position.y; this.hostile = hostile; this.police = police; this.state = hostile ? 'hostile' : 'walk';
@@ -95,10 +97,10 @@ export class Pedestrian {
       this.watchdog.reset(); this.route = []; this.routeIndex = 0; this.routed = false;
       this.state = 'idle'; this.idleTime = 0.4 + Math.random() * 0.9; return;
     }
-    const direction = this.destination.clone().sub(this.group.position); direction.y = 0; direction.normalize();
+    const direction = this.direction.subVectors(this.destination, this.group.position); direction.y = 0; direction.normalize();
     const pace = this.state === 'flee' ? 5.5 + this.fear * 0.014 : this.state === 'hostile' ? 5.5 : this.speed;
     const step = pace * dt;
-    const desired = this.group.position.clone().addScaledVector(direction, step);
+    const desired = this.desired.copy(this.group.position).addScaledVector(direction, step);
     const moved = city.clampMove(this.group.position, desired, 0.42); this.group.position.copy(moved);
     this.groundY = city.surfaceHeightAt(moved.x, moved.z); this.group.position.y = this.groundY;
     if (moved.distanceToSquared(desired) > step * step * 0.25) { // blocked = progress well below the frame step (an absolute threshold never fires at 60fps and pinned peds on walls forever)
@@ -219,7 +221,7 @@ export class Pedestrian {
   }
 
   private fleeFrom(origin: THREE.Vector3): void {
-    const away = this.group.position.clone().sub(origin); away.y = 0;
+    const away = this.direction.subVectors(this.group.position, origin); away.y = 0;
     if (away.lengthSq() < 0.01) away.set(Math.random() - 0.5, 0, Math.random() - 0.5);
     this.destination.copy(this.group.position).addScaledVector(away.normalize(), 55);
   }
