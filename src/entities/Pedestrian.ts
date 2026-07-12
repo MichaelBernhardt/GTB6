@@ -48,6 +48,10 @@ export class Pedestrian {
     scene.add(this.group); this.buildModel(index);
   }
 
+  /** Free this ped's GPU geometry when it despawns — otherwise every culled/replaced ped leaks its meshes
+   *  and the session slowly degrades. Geometries are built per-ped (unique), so disposing them is safe. */
+  dispose(): void { this.group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); }
+
   update(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
     if (this.state === 'down') {
       this.groundY = city.surfaceHeightAt(this.group.position.x, this.group.position.z); this.group.position.y = this.groundY + 0.36;

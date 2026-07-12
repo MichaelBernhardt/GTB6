@@ -60,6 +60,10 @@ export class Vehicle {
     scene.add(this.group); this.buildModel();
   }
 
+  /** Free this vehicle's GPU geometry when it despawns (fire FX included via the group) — per-vehicle
+   *  geometries, so disposal is safe and stops the traffic churn leaking meshes over a session. */
+  dispose(): void { this.group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); }
+
   updatePlayer(dt: number, input: InputManager, city: City): number {
     if (this.disabled) return 0;
     const throttle = Number(input.down('KeyW')) - Number(input.down('KeyS'));
@@ -299,7 +303,7 @@ export class Vehicle {
       for (const [x, color] of [[-0.28, 0x226dff], [0.28, 0xff3028]] as const) { const light = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.14, 0.18, 2, 0.03), new THREE.MeshBasicMaterial({ color })); light.position.x = x; bar.add(light); }
       this.group.add(bar); this.cabinParts.push(bar);
     }
-    this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.frustumCulled = false; } });
+    this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; } }); // frustumCulled left default (true): an off-screen bakkie must not render in the main AND shadow pass
   }
 
   /** Frame tubes and spoked wheels; the whole front assembly (fork, bars, front wheel) yaws in steerGroup.
@@ -370,7 +374,7 @@ export class Vehicle {
     }
     this.buildRider();
     this.group.rotation.z = 0.15; // spawn resting on the kickstand; updateVisuals takes over once ridden
-    this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.frustumCulled = false; } });
+    this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; } }); // frustumCulled left default (true): an off-screen bakkie must not render in the main AND shadow pass
   }
 
   /** Seated dummy shown while an AI ped rides this two-wheeler (hidden the moment the player takes it). */

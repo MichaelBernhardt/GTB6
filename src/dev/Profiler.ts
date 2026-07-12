@@ -9,7 +9,8 @@
  *    ?profile=probe                          — log district anchors, spawn, water sites, then exit
  *    ?profile=matrix&x=..&z=..&label=..      — full toggle matrix (baseline/gtao/post/shadows/water/agents/medium) at a spot
  *    ?profile=traverse&x=..&z=..&x2=..&z2=.. — glide the player between two points, logging per-frame spikes
- *  Common: &frames=N (measure length), &warmup=N, &speed=U (traverse u/s). */
+ *  Common: &frames=N (measure length), &warmup=N, &speed=U (traverse u/s),
+ *  &only=a,b,c (matrix: keep just the named phases — baseline always runs first for the A/B). */
 
 interface FrameSample { dt: number; calls: number; tris: number; heap: number; buckets: Record<string, number>; }
 
@@ -123,6 +124,12 @@ function run(game: any): void {
       { name: `${label}:agents-off`, warmup: 60, frames, apply: () => { game.lifecycle.tuning.peds = 0; game.lifecycle.tuning.cars = 0; despawnAgents(game); }, restore: () => { game.lifecycle.tuning.peds = undefined; game.lifecycle.tuning.cars = undefined; } },
       { name: `${label}:medium`, warmup: 60, frames, apply: () => { game.settings.quality = 'medium'; game.applyQuality(); }, restore: () => { game.settings.quality = 'high'; game.applyQuality(); } },
     );
+    const only = query().get('only');
+    if (only) {
+      const wanted = new Set(only.split(',').map((name) => name.trim()));
+      const kept = phases.filter((phase, index) => index === 0 || wanted.has(phase.name.slice(label.length + 1)));
+      phases.length = 0; phases.push(...kept);
+    }
   } else if (plan === 'traverse') {
     const x2 = num('x2', x); const z2 = num('z2', z); const speed = num('speed', 30);
     const dir = Math.hypot(x2 - x, z2 - z) || 1;

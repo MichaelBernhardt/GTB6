@@ -332,14 +332,14 @@ export class PopulationSystem {
 
   /** Removes a ped and its bookkeeping. Hostiles keep their `hostiles` entry so spawnHostiles() won't refill a cleared crew. */
   removePedestrian(ped: Pedestrian): void {
-    this.scene.remove(ped.group);
+    this.scene.remove(ped.group); ped.dispose();
     const index = this.pedestrians.indexOf(ped); if (index >= 0) this.pedestrians.splice(index, 1);
     const patrol = this.policePatrols.indexOf(ped); if (patrol >= 0) this.policePatrols.splice(patrol, 1);
   }
 
   /** Removes a vehicle and its route plan; fire FX (children of the group) leave the scene with it. */
   removeVehicle(vehicle: Vehicle): void {
-    this.scene.remove(vehicle.group);
+    this.scene.remove(vehicle.group); vehicle.dispose();
     const index = this.vehicles.indexOf(vehicle); if (index >= 0) this.vehicles.splice(index, 1);
     const traffic = this.traffic.indexOf(vehicle); if (traffic >= 0) this.traffic.splice(traffic, 1);
     this.trafficPlans.delete(vehicle);
