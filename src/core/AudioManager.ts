@@ -1,5 +1,6 @@
 import type { WeaponSound } from '../config';
 import { distanceGain, engineCutoff, engineFrequency, engineLevel, engineProfile, engineState, engineThrob, shiftGlide, stereoPan, trafficEngineGain, type EngineProfile } from './AudioMath';
+import { cycleRadioStation, radioStation, type RadioStation, type RadioStationId } from './RadioStations';
 
 interface BurstOptions { duration: number; type: BiquadFilterType; frequency: number; q?: number; peak: number; decay: number; at?: number; pan?: number; echo?: number; rate?: number; rateTo?: number; }
 interface BlipOptions { type?: OscillatorType; slide?: number; at?: number; pan?: number; attack?: number; }
@@ -28,6 +29,9 @@ export class AudioManager {
   private radioTimer?: ReturnType<typeof setInterval>;
   private radioGain?: GainNode;
   private radioNextBeat = 0;
+  private radioStep = 0;
+  private radioInCar = false;
+  private radioSelection?: RadioStationId = 'jozi-fm';
   volume = 0.65;
 
   async resume(): Promise<void> {
@@ -87,43 +91,104 @@ export class AudioManager {
     this.burst({ duration: 0.07, type: 'highpass', frequency: 3000, peak: 0.05, decay: 0.045, at: 0.82 });
   }
 
-  startRadio(): void {
-    if (!this.context || !this.master || this.radioTimer) return;
-    const context = this.context;
-    this.radioGain = context.createGain(); this.radioGain.gain.value = 1; this.radioGain.connect(this.master);
-    const eighth = 60 / 112 / 2;
-    this.radioNextBeat = context.currentTime + 0.1;
-    let step = 0;
-    this.radioTimer = setInterval(() => {
-      while (this.radioNextBeat < context.currentTime + 0.5) {
-        const inBar = step % 8;
-        if (inBar === 0 || inBar === 3 || inBar === 6 || inBar === 7) this.logDrum(this.radioNextBeat, inBar === 0 ? 168 : 148);
-        this.shaker(this.radioNextBeat);
-        step++; this.radioNextBeat += eighth;
-      }
-    }, 200);
+  get currentRadio(): RadioStation | undefined { return this.radioSelection ? radioStation(this.radioSelection) : undefined; }
+
+  startRadio(): void { this.radioInCar = true; this.startRadioLoop(); }
+
+  stopRadio(): void { this.radioInCar = false; this.stopRadioLoop(); }
+
+  cycleRadio(direction = 1): RadioStation | undefined {
+    this.radioSelection = cycleRadioStation(this.radioSelection, direction);
+    this.stopRadioLoop();
+    if (this.radioInCar) { this.tuningSweep(); this.startRadioLoop(); }
+    return this.currentRadio;
   }
 
-  stopRadio(): void {
+  private startRadioLoop(): void {
+    const station = this.currentRadio;
+    if (!this.context || !this.master || !station || this.radioTimer) return;
+    const context = this.context;
+    this.radioGain = context.createGain(); this.radioGain.gain.value = 0.82; this.radioGain.connect(this.master);
+    this.radioNextBeat = context.currentTime + 0.08; this.radioStep = 0;
+    const eighth = 60 / station.bpm / 2;
+    this.radioTimer = setInterval(() => {
+      while (this.radioNextBeat < context.currentTime + 0.45) {
+        this.scheduleRadioStep(station.id, this.radioNextBeat, this.radioStep);
+        this.radioStep++; this.radioNextBeat += eighth;
+      }
+    }, 160);
+  }
+
+  private stopRadioLoop(): void {
     if (this.radioTimer) { clearInterval(this.radioTimer); this.radioTimer = undefined; }
     this.radioGain?.disconnect(); this.radioGain = undefined;
   }
 
-  private logDrum(time: number, startFrequency: number): void {
+  private scheduleRadioStep(station: RadioStationId, time: number, step: number): void {
+    const bar = step % 16;
+    if (station === 'jozi-fm') {
+      if ([0, 6, 11, 14].includes(bar)) this.radioDrum(time, bar === 0 ? 172 : 148, 0.055);
+      if (bar % 2 === 1) this.radioNoise(time, 6200, 0.025, 0.009);
+      if ([0, 3, 7, 10, 13].includes(bar)) this.radioTone(time, [55, 65.41, 73.42, 49][Math.floor(step / 16) % 4]!, 0.28, 0.045, 'sine', 0.45);
+      if (bar === 0 || bar === 8) this.radioChord(time, bar === 0 ? 220 : 246.94, 0.72, 0.012);
+    } else if (station === 'rank-radio') {
+      if (bar % 2 === 0) this.radioPluck(time, [196, 246.94, 293.66, 329.63, 293.66, 246.94, 220, 164.81][(step / 2) % 8]!, bar % 4 === 0 ? 0.025 : 0.018);
+      if (bar === 0 || bar === 8) this.radioDrum(time, 118, 0.036);
+      if ([3, 7, 11, 15].includes(bar)) this.radioNoise(time, 2400, 0.055, 0.012);
+      if (bar === 12) this.radioPluck(time, 392, 0.032);
+    } else if (station === 'braam-beats') {
+      if ([0, 5, 9, 14].includes(bar)) this.radioDrum(time, 94, 0.09);
+      if ([2, 6, 10, 13].includes(bar)) this.radioTone(time, bar === 13 ? 43.65 : 49, 0.34, 0.065, 'square', 0.62);
+      if ([4, 12].includes(bar)) this.radioNoise(time, 1100, 0.11, 0.018);
+      if (bar === 15) this.radioNoise(time, 4800, 0.025, 0.012);
+    } else {
+      if ([0, 4, 8, 12].includes(bar)) this.radioDrum(time, 132, 0.045);
+      if ([2, 6, 10, 14].includes(bar)) this.radioNoise(time, 3600, 0.045, 0.012);
+      if (bar % 2 === 0) this.radioTone(time, [110, 130.81, 146.83, 164.81][Math.floor(step / 8) % 4]!, 0.18, 0.026, 'triangle', 0.2);
+      if (bar === 0 || bar === 8) this.radioChord(time, bar === 0 ? 220 : 196, 0.8, 0.014);
+    }
+  }
+
+  private radioDrum(time: number, startFrequency: number, level: number): void {
     if (!this.context || !this.radioGain) return;
     const oscillator = this.context.createOscillator(); const gain = this.context.createGain();
     oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(startFrequency, time);
     oscillator.frequency.exponentialRampToValueAtTime(62, time + 0.16);
-    gain.gain.setValueAtTime(0.055, time); gain.gain.exponentialRampToValueAtTime(0.001, time + 0.22);
+    gain.gain.setValueAtTime(level, time); gain.gain.exponentialRampToValueAtTime(0.001, time + 0.22);
     oscillator.connect(gain).connect(this.radioGain); oscillator.start(time); oscillator.stop(time + 0.24);
   }
 
-  private shaker(time: number): void {
+  private radioTone(time: number, frequency: number, duration: number, level: number, type: OscillatorType, slide = 1): void {
     if (!this.context || !this.radioGain) return;
     const oscillator = this.context.createOscillator(); const gain = this.context.createGain();
-    oscillator.type = 'triangle'; oscillator.frequency.value = 6200;
-    gain.gain.setValueAtTime(0.008, time); gain.gain.exponentialRampToValueAtTime(0.0008, time + 0.03);
-    oscillator.connect(gain).connect(this.radioGain); oscillator.start(time); oscillator.stop(time + 0.04);
+    oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, time); oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, frequency * slide), time + duration);
+    gain.gain.setValueAtTime(level, time); gain.gain.exponentialRampToValueAtTime(0.0008, time + duration);
+    oscillator.connect(gain).connect(this.radioGain); oscillator.start(time); oscillator.stop(time + duration + 0.02);
+  }
+
+  private radioPluck(time: number, frequency: number, level: number): void {
+    this.radioTone(time, frequency, 0.13, level, 'triangle', 0.996);
+    this.radioTone(time, frequency * 2.01, 0.08, level * 0.38, 'sine', 0.992);
+  }
+
+  private radioChord(time: number, root: number, duration: number, level: number): void {
+    for (const ratio of [1, 1.2, 1.5]) this.radioTone(time, root * ratio, duration, level, 'sine', 0.998);
+  }
+
+  private radioNoise(time: number, frequency: number, duration: number, level: number): void {
+    if (!this.context || !this.radioGain || !this.noise) return;
+    const source = this.context.createBufferSource(); source.buffer = this.noise;
+    const filter = this.context.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.value = frequency; filter.Q.value = 1.3;
+    const gain = this.context.createGain(); gain.gain.setValueAtTime(level, time); gain.gain.exponentialRampToValueAtTime(0.0005, time + duration);
+    source.connect(filter).connect(gain).connect(this.radioGain); source.start(time); source.stop(time + duration + 0.02);
+  }
+
+  private tuningSweep(): void {
+    if (!this.context || !this.master || !this.noise) return;
+    const time = this.now(); const source = this.context.createBufferSource(); source.buffer = this.noise;
+    const filter = this.context.createBiquadFilter(); filter.type = 'bandpass'; filter.frequency.setValueAtTime(900, time); filter.frequency.exponentialRampToValueAtTime(4200, time + 0.16);
+    const gain = this.context.createGain(); gain.gain.setValueAtTime(0.035, time); gain.gain.exponentialRampToValueAtTime(0.0005, time + 0.18);
+    source.connect(filter).connect(gain).connect(this.master); source.start(time); source.stop(time + 0.2);
   }
 
   gunshot(kind: WeaponSound = 'pistol'): void {
