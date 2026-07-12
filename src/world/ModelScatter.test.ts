@@ -14,6 +14,7 @@ import { MODEL_INDEX } from './models/catalog';
 import { MAP_WORLD_SIZE, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, pointInAnyPolygon } from './mapData';
 import { classifyZone } from './data/zoning';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
+import { RESERVED_PADS } from './placements';
 
 const HALF = MAP_WORLD_SIZE / 2;
 const QUARTER = Math.PI / 2;
@@ -74,6 +75,24 @@ describe('citywide model scatter', () => {
         expect(d, `${m.name} intrudes on ${site.id}`).toBeGreaterThan(site.radius * 0.5);
       }
     }
+  });
+
+  it('never lands a model footprint on a reserved anchor pad (Jozi Arms and the other story sites)', () => {
+    const footR = new Map<string, number>();
+    const radiusOf = (name: string): number => {
+      let r = footR.get(name);
+      if (r === undefined) { const def = MODEL_INDEX.get(name)!; r = Math.hypot(def.maxFootprint.w, def.maxFootprint.d) / 2; footR.set(name, r); }
+      return r;
+    };
+    const overlaps: string[] = []; // collect in plain JS, assert once (millions of expect() calls would time out)
+    for (const m of all) {
+      const r = radiusOf(m.name);
+      for (const pad of RESERVED_PADS) {
+        const clearance = pad.radius + r - 0.01;
+        if ((m.x - pad.x) ** 2 + (m.z - pad.z) ** 2 < clearance * clearance) overlaps.push(`${m.name} @ ${Math.round(m.x)},${Math.round(m.z)} overlaps pad @ ${Math.round(pad.x)},${Math.round(pad.z)} (r=${pad.radius})`);
+      }
+    }
+    expect(overlaps).toEqual([]);
   });
 
   it('never places a model inside water or on the aerodrome', () => {
