@@ -7,6 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
+import { radioDial } from './core/RadioStations';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
@@ -846,6 +847,10 @@ export class Game {
       this.updateTaxiJob(dt, vehicle);
     }
     if (vehicle.police && this.input.consume('KeyG')) { vehicle.sirenOn = toggleSiren(vehicle); this.ui.notify(vehicle.sirenOn ? 'Siren on' : 'Siren off', vehicle.sirenOn ? 'Clear the road. You are the law now.' : 'Back to creeping quietly.'); }
+    if (!vehicle.spec.twoWheeler && this.input.consume('KeyN')) {
+      const station = this.audio.cycleRadio(this.input.down('ShiftLeft') || this.input.down('ShiftRight') ? -1 : 1);
+      this.ui.notify(station ? `${station.name} ${station.frequency}` : 'Radio off', station?.tagline ?? 'Just the engine and the city outside.', true, 'music');
+    }
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
 
@@ -1008,7 +1013,8 @@ export class Game {
       this.activeVehicle = transition.vehicle; this.player.inVehicle = true; this.player.setVisible(transition.vehicle.spec.twoWheeler === true);
       if (!transition.vehicle.spec.twoWheeler) { // no radio in the open air
         this.audio.startRadio();
-        if (!this.radioIntroShown) { this.radioIntroShown = true; this.ui.notify('Jozi FM 94.7', 'Amapiano o\'clock. It is always amapiano o\'clock.'); }
+        const station = this.audio.currentRadio;
+        if (!this.radioIntroShown) { this.radioIntroShown = true; this.ui.notify(station ? `${station.name} ${station.frequency}` : 'Radio off', station ? `${station.tagline} · N changes station.` : 'Press N to tune in.', true, 'music'); }
       }
     }
     else {
@@ -1361,7 +1367,8 @@ export class Game {
             : this.taxiRide.phase !== 'idle' ? '  ·  T  Cancel ride'
             : `  ·  T  ${this.taxiRide.duty === 'available' ? 'Go occupied' : 'Go available'}`;
           const sirenHint = this.activeVehicle.police ? '  ·  G  Siren' : '';
-          prompt = `E  Exit vehicle  ·  F  Recover${taxiHint}${sirenHint}`;
+          const radioHint = this.activeVehicle.spec.twoWheeler ? '' : '  ·  N  Radio';
+          prompt = `E  Exit vehicle  ·  F  Recover${radioHint}${taxiHint}${sirenHint}`;
         }
       }
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
@@ -1385,6 +1392,7 @@ export class Game {
     } : undefined;
     const vehicle = this.activeVehicle ? {
       name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health,
+      radio: this.activeVehicle.spec.twoWheeler ? undefined : radioDial(this.audio.currentRadio),
       taxi: isTaxiKind(this.activeVehicle.spec.kind) ? { text: taxiHudText(this.taxiRide.phase, this.taxiRide.duty === 'available', this.taxiRide.fare, this.taxiRide.tip), available: this.taxiRide.available } : undefined,
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing

@@ -73,6 +73,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-vehicle > small { display: block; color: var(--yellow); font: 900 10px Inter, sans-serif; letter-spacing: 1.1px; text-transform: uppercase; }
 .hud-vehicle > div { display: flex; align-items: baseline; justify-content: flex-end; gap: 5px; }.hud-vehicle b { font-size: 52px; line-height: .95; }.hud-vehicle div span { font-size: 10px; font-weight: 900; }
 .hud-vehicle em { color: var(--paper-dim); font: 800 10px Inter, sans-serif; font-style: normal; letter-spacing: .8px; }
+.hud-radio { display: block; margin-top: 5px; color: var(--blue); font: 900 9px "Courier New", ui-monospace, monospace; font-style: normal; letter-spacing: .4px; text-transform: uppercase; }
 .hud-taxi { display: block; margin-top: 3px; color: var(--paper-dim); font: 900 10px Inter, sans-serif; font-style: normal; letter-spacing: 1px; }
 .hud-taxi.is-on { color: var(--yellow); text-shadow: 0 0 8px rgba(242, 197, 33, .55); }
 .hud-prompt { position: absolute; bottom: 28px; left: 50%; max-width: min(620px, 60vw); padding: 10px 16px; transform: translateX(-50%); color: var(--ink); background: var(--paper); border-left: 7px solid var(--yellow); box-shadow: var(--shadow); font: 900 13px Inter, sans-serif; letter-spacing: .35px; text-align: center; }
@@ -130,6 +131,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 #toast.is-visible { opacity: 1; transform: translate(-50%, 0) rotate(-.4deg); }
 #toast.tone-danger { border-color: var(--red); }#toast.tone-reputation { border-color: var(--yellow); }#toast.tone-info { border-color: var(--blue); }
 #toast.tone-radio { border-color: var(--blue); background: #e3edee; }#toast.tone-radio strong, #toast.tone-radio span { font-family: "Courier New", ui-monospace, monospace; }#toast.tone-radio small { color: #2c7d99; }
+#toast.tone-music { border-color: var(--yellow); background: #151d1b; color: var(--paper); }#toast.tone-music strong { color: var(--yellow); }#toast.tone-music small { color: var(--blue); }#toast.tone-music span { color: var(--paper-dim); }
 #toast small, #toast strong, #toast span { display: block; }#toast small { font: 900 8px Inter, sans-serif; letter-spacing: 1.7px; }#toast strong { margin: 1px 0; font-size: 22px; line-height: 1; text-transform: uppercase; }#toast span { color: #43504d; font-size: 12px; }
 #vignette { position: absolute; inset: 0; z-index: 65; opacity: 0; background: radial-gradient(ellipse at center, transparent 48%, rgba(196, 28, 18, .68) 100%); }
 #vignette.is-flashing { animation: damage-flash .45s ease-out; }@keyframes damage-flash { 0% { opacity: 1; } 100% { opacity: 0; } }

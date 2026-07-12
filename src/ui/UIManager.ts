@@ -85,7 +85,7 @@ export class UIManager {
   hideWeaponWheel(): void { this.wheel.classList.remove('is-visible'); }
 
   notify(title: string, detail = '', success = true, tone?: NotificationTone): void {
-    const resolved = tone ?? (success ? 'success' : 'danger'); this.toast.innerHTML = `<small>${resolved === 'danger' ? 'CITY ALERT' : resolved === 'reputation' ? 'STREET WORD' : resolved === 'radio' ? 'JMPD DISPATCH' : 'UPDATE'}</small><strong>${title}</strong><span>${detail}</span>`;
+    const resolved = tone ?? (success ? 'success' : 'danger'); this.toast.innerHTML = `<small>${resolved === 'danger' ? 'CITY ALERT' : resolved === 'reputation' ? 'STREET WORD' : resolved === 'radio' ? 'JMPD DISPATCH' : resolved === 'music' ? 'NOW TUNED' : 'UPDATE'}</small><strong>${title}</strong><span>${detail}</span>`;
     this.toast.className = `is-visible tone-${resolved}`; this.toastTimer = 4;
   }
   hideMenu(): void { this.menuView.hide(); }
