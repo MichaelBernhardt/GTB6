@@ -11,7 +11,7 @@ export const SHOP_ICON_COLOR = '#3fd1c4'; // teal diamonds — distinct from gol
 export const SHOPS: ShopPlace[] = [
   { kind: 'weapons', name: 'Jozi Arms', pad: new THREE.Vector3(ARMS_SITE.pad.x, 0, ARMS_SITE.pad.z), radius: 3.6, driveIn: false },
   { kind: 'spray', name: 'Pik-’n’-Spray', pad: new THREE.Vector3(SPRAY_SITE.pad.x, 0, SPRAY_SITE.pad.z), radius: 5, driveIn: true },
-  { kind: 'garage', name: 'Loadshed Lane Garage', pad: new THREE.Vector3(GARAGE_SITE.pad.x, 0, GARAGE_SITE.pad.z), radius: 5, driveIn: true },
+  { kind: 'garage', name: 'Sisulu Garage', pad: new THREE.Vector3(GARAGE_SITE.pad.x, 0, GARAGE_SITE.pad.z), radius: 5, driveIn: true },
   { kind: 'hotdog', name: 'Boerie Stand', pad: new THREE.Vector3(HOTDOG_SITE.pad.x, 0, HOTDOG_SITE.pad.z), radius: 3.2, driveIn: false },
 ];
 /** Where a stored vehicle sits inside the garage, nose pointing out the door. */

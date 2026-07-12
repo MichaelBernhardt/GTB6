@@ -191,14 +191,16 @@ export const SPAWN_POINT: MapPt = spawnPoint;
 
 // ---- Shops --------------------------------------------------------------------
 
-/** Jozi Arms: Martial Street, near the spawn corner. */
-export const ARMS_SITE = shopSite('Martial Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z }, 8.2, 3.8, 8, 3);
-/** Pik-'n'-Spray: Eish-loff Street, a block south-east (drive-in). */
-export const SPRAY_SITE = shopSite('Eish-loff Street', { x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z + 60 * P }, 9.6, 3.4, 9, 4);
-/** Garage: Loadshed Lane, north-west block (drive-in storage). */
-export const GARAGE_SITE = shopSite('Loadshed Lane', { x: CBD_CENTER.x - 25 * P, z: CBD_CENTER.z - 45 * P }, 8, 3.4, 7.5, 3.5);
-/** Boerie Stand: Fax Street sidewalk. */
-export const HOTDOG_SITE = shopSite('Fax Street', { x: CBD_CENTER.x + 25 * P, z: CBD_CENTER.z - 38 * P }, 3, 1.9, 3, 0.8);
+// The story anchors used to be forced into one tight cluster by the old small map; on the 1:1 CBD (1u ≈ 1m)
+// they now sit a real drive apart — one to each far quarter, the boerie stand near the central plaza.
+/** Jozi Arms: Simmonds Street, deep south-west. */
+export const ARMS_SITE = shopSite('Simmonds Street', { x: CBD_CENTER.x - 80 * P, z: CBD_CENTER.z + 32 * P }, 8.2, 3.8, 8, 3);
+/** Pik-'n'-Spray: Kruis Street, far north-east (drive-in). */
+export const SPRAY_SITE = shopSite('Kruis Street', { x: CBD_CENTER.x + 114 * P, z: CBD_CENTER.z - 42 * P }, 9.6, 3.4, 9, 4);
+/** Garage: Albertina Sisulu Road, far north-west (drive-in storage, wide carriageway). */
+export const GARAGE_SITE = shopSite('Albertina Sisulu Road', { x: CBD_CENTER.x - 41 * P, z: CBD_CENTER.z - 102 * P }, 8, 3.4, 7.5, 3.5);
+/** Boerie Stand: Anderson Street, near the central plaza a block off spawn. */
+export const HOTDOG_SITE = shopSite('Anderson Street', { x: CBD_CENTER.x + 5 * P, z: CBD_CENTER.z + 22 * P }, 3, 1.9, 3, 0.8);
 
 /** Stored vehicle pose inside the garage, nose pointing out the door. */
 export const GARAGE_PARK: PlacedSite = {
@@ -213,8 +215,8 @@ export const GARAGE_EXIT: MapPt = {
 
 // ---- Safehouse ------------------------------------------------------------------
 
-/** Main Main Mansions: a flat on Main Main Street, a block from spawn. */
-export const SAFEHOUSE_SITE = shopSite('Main Main Street', { x: CBD_CENTER.x - 70 * P, z: CBD_CENTER.z - 20 * P }, 9.4, 3.6, 9, 3.5);
+/** Salisbury Court: a flat on Salisbury Street, deep south-east. */
+export const SAFEHOUSE_SITE = shopSite('Salisbury Street', { x: CBD_CENTER.x + 92 * P, z: CBD_CENTER.z + 92 * P }, 9.4, 3.6, 9, 3.5);
 
 // ---- Districts / landmarks used by missions --------------------------------------
 
