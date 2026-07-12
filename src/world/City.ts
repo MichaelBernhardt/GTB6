@@ -348,7 +348,15 @@ export class City {
   collidesAt(x: number, z: number, radius: number, y0: number, y1: number): boolean {
     if (Math.abs(x) > WORLD_SIZE / 2 - radius || Math.abs(z) > WORLD_SIZE / 2 - radius) return true;
     if (this.props.blockedBetween(x, z, radius, y0, y1, (px, pz) => this.surfaceHeightAt(px, pz))) return true;
-    return collidersBlock(this.colliders, x, z, radius, y0, y1);
+    // Grid lookup, not a scan of the whole (append-only, ever-growing) collider list — otherwise the player's
+    // per-frame clamp cost climbs with every cell ever visited and the framerate decays as you drive around.
+    this.indexNewColliders();
+    const bucket = this.colliderCells.get(`${Math.floor(x / this.colliderCellSize)},${Math.floor(z / this.colliderCellSize)}`);
+    if (bucket) for (const index of bucket) {
+      const box = this.colliders[index]!;
+      if (x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ && colliderBase(box) < y1 && colliderTop(box) > y0) return true;
+    }
+    return false;
   }
 
   /** Colliders are appended by shops/safehouses after construction: index incrementally on demand. */
@@ -400,9 +408,19 @@ export class City {
   /** Highest standable surface whose top sits at or below feetY + stepUp: stacked building tiers, containers
    *  and flat-topped props, falling back to the walkable ground. Feeds the player's landing/edge physics. */
   supportHeight(x: number, z: number, feetY: number, radius = 0.35): number {
-    const best = highestColliderTop(this.colliders, x, z, feetY, radius);
+    // Grid lookup for the same reason as collidesAt: the player calls this every frame and the collider
+    // list only grows, so a full scan makes the framerate decay the longer you play.
+    this.indexNewColliders();
+    const limit = feetY + PLAYER.stepUp; let best = -Infinity;
+    const bucket = this.colliderCells.get(`${Math.floor(x / this.colliderCellSize)},${Math.floor(z / this.colliderCellSize)}`);
+    if (bucket) for (const index of bucket) {
+      const box = this.colliders[index]!;
+      if (x + radius <= box.minX || x - radius >= box.maxX || z + radius <= box.minZ || z - radius >= box.maxZ) continue;
+      const top = colliderTop(box);
+      if (top <= limit && top > best) best = top;
+    }
     const propTop = this.props.supportTop(x, z, radius, feetY + PLAYER.stepUp, (px, pz) => this.surfaceHeightAt(px, pz));
-    return Math.max(this.surfaceHeightAt(x, z), best ?? -Infinity, propTop ?? -Infinity);
+    return Math.max(this.surfaceHeightAt(x, z), best, propTop ?? -Infinity);
   }
 
   terrainHeightAt(x: number, z: number): number { return terrainHeightAt(x, z); }
