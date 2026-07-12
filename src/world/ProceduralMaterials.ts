@@ -133,11 +133,27 @@ export function createFacadeGlowTexture(style: number): THREE.CanvasTexture {
   return finish(canvas);
 }
 
-const SIGN_ATLAS = { width: 1024, height: 4096, slotW: 512, slotH: 128 };
+// 512 slots (8 cols × 64 rows) in a single 2048×4096 texture (~32MB). The whole 1:1 map has a FIXED ~470
+// unique signs (372 street names + shop/model boards), so this holds them all with headroom — no wrapping.
+const SIGN_ATLAS = { width: 2048, height: 4096, slotW: 256, slotH: 64 };
 interface SignSlot { u0: number; v0: number; u1: number; v1: number; }
 let signAtlas: { context: CanvasRenderingContext2D; texture: THREE.CanvasTexture; next: number } | undefined;
 const signSlots = new Map<string, SignSlot>();
 const signMaterials = new Map<string, THREE.MeshBasicMaterial>();
+
+/** Column/row layout of the sign atlas; capacity is the last-usable index (one slot reserved for overflow). */
+export function signAtlasLayout(): { columns: number; rows: number; capacity: number } {
+  const columns = Math.floor(SIGN_ATLAS.width / SIGN_ATLAS.slotW);
+  const rows = Math.floor(SIGN_ATLAS.height / SIGN_ATLAS.slotH);
+  return { columns, rows, capacity: columns * rows };
+}
+
+/** Next atlas slot for the Nth distinct sign. Fills sequentially and, once full, parks every further sign on
+ *  the single last slot instead of wrapping back over slot 0 — so an already-drawn sign (a landmark board, a
+ *  street name) is NEVER overwritten with someone else's text. Pure + exported for the allocation test. */
+export function signSlotIndex(order: number, capacity: number): number {
+  return order < capacity - 1 ? order : capacity - 1;
+}
 
 function signSlot(text: string, accent: string, background: string): SignSlot {
   const key = `${text}|${accent}|${background}`;
@@ -148,13 +164,14 @@ function signSlot(text: string, accent: string, background: string): SignSlot {
     const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
     signAtlas = { context, texture, next: 0 };
   }
-  const columns = Math.floor(SIGN_ATLAS.width / SIGN_ATLAS.slotW); const capacity = columns * Math.floor(SIGN_ATLAS.height / SIGN_ATLAS.slotH);
-  const index = signAtlas.next++ % capacity;
+  const { columns, capacity } = signAtlasLayout();
+  const index = signSlotIndex(signAtlas.next, capacity);
+  if (signAtlas.next < capacity - 1) signAtlas.next++;
   const x = (index % columns) * SIGN_ATLAS.slotW; const y = Math.floor(index / columns) * SIGN_ATLAS.slotH;
   const context = signAtlas.context;
   context.fillStyle = background; context.fillRect(x, y, SIGN_ATLAS.slotW, SIGN_ATLAS.slotH);
-  context.strokeStyle = accent; context.lineWidth = 9; context.strokeRect(x + 8, y + 8, SIGN_ATLAS.slotW - 16, SIGN_ATLAS.slotH - 16);
-  context.fillStyle = accent; context.font = '700 56px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(text, x + 256, y + 66, 470);
+  context.strokeStyle = accent; context.lineWidth = 5; context.strokeRect(x + 4, y + 4, SIGN_ATLAS.slotW - 8, SIGN_ATLAS.slotH - 8);
+  context.fillStyle = accent; context.font = '700 30px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(text, x + SIGN_ATLAS.slotW / 2, y + SIGN_ATLAS.slotH / 2 + 1, SIGN_ATLAS.slotW - 20);
   signAtlas.texture.needsUpdate = true;
   const slot: SignSlot = { u0: x / SIGN_ATLAS.width, v0: 1 - (y + SIGN_ATLAS.slotH) / SIGN_ATLAS.height, u1: (x + SIGN_ATLAS.slotW) / SIGN_ATLAS.width, v1: 1 - y / SIGN_ATLAS.height };
   signSlots.set(key, slot); return slot;
