@@ -66,16 +66,30 @@ describe('district naming (generated place nodes)', () => {
   });
 });
 
-describe('Phase-2 flat terrain grid', () => {
-  // The terrain machinery (colliders, surface heights, the whole 3D-collision stack) is fully wired
-  // but fed a neutral zero grid on the generated 18000u map. Driving relief from the map JSON's SRTM
-  // heightgrid is the Phase-3 terrain task; until then terrainHeightAt is flat everywhere.
-  it('feeds the terrain machinery a neutral zero grid everywhere', () => {
-    const samples = [[-320, 220], [-120, 40], [80, 260], [300, -80], [120, -340]] as const;
-    for (const [x, z] of samples) expect(terrainHeightAt(x, z)).toBe(0);
+describe('terrain relief from the SRTM heightgrid', () => {
+  // The heightgrid is detrended into a tamed regional trend (scaled down so Johannesburg's ~1760 m
+  // plateau doesn't tower over the 0 m ocean) plus an exaggerated, capped local residual (so the flat
+  // plateau reads as rolling hills). terrainHeightAt is the single sampler everything downstream uses.
+  it('samples deterministic, finite relief that varies across the map', () => {
+    const samples = [[-320, 220], [-120, 40], [80, 260], [300, -80], [3063, 5434], [-8200, 5434]] as const;
+    const heights = samples.map(([x, z]) => terrainHeightAt(x, z));
+    for (const h of heights) expect(Number.isFinite(h)).toBe(true);
+    for (const [x, z] of samples) expect(terrainHeightAt(x, z)).toBe(terrainHeightAt(x, z)); // pure/deterministic
+    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(1); // real relief, not a single plane
   });
 
-  it('keeps sidewalks stepped above roads above the flat ground', () => {
+  it('stays within the detrended envelope everywhere (no runaway escarpment cliffs)', () => {
+    // Regional band maxes near maxElevation * scale; local band is capped either side. Sample a coarse
+    // grid over the whole world and assert nothing blows past a generous bound.
+    let lo = Infinity; let hi = -Infinity;
+    for (let x = -8900; x <= 8900; x += 445) for (let z = -8900; z <= 8900; z += 445) {
+      const h = terrainHeightAt(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h);
+    }
+    expect(lo).toBeGreaterThan(-200);
+    expect(hi).toBeLessThan(400);
+  });
+
+  it('keeps sidewalks stepped above roads above the terrain', () => {
     expect(ROAD_SURFACE_OFFSET).toBeGreaterThan(0);
     expect(SIDEWALK_RISE).toBeCloseTo(0.22);
   });

@@ -138,14 +138,14 @@ export class Pedestrian {
     const outcome = knockdownOutcome(this.health, damage);
     this.health = outcome.health; this.downTimer = outcome.downTime; this.threat.copy(origin);
     this.fear = accumulateFear(this.fear, FEAR_EVENTS.assault.base); this.stumbleTimer = 0; this.state = 'down';
-    this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = 0.36;
+    this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36;
     if (outcome.killed) this.enraged = false;
     return outcome.killed;
   }
 
   /** Back on their feet after a knockdown: personality decides fight or flight. */
   private rise(player: THREE.Vector3): void {
-    this.group.rotation.z = 0; this.group.position.y = 0;
+    this.group.rotation.z = 0; this.group.position.y = this.groundY;
     const response = fearResponse(this.fear, this.aggressive, this.bravery);
     if (response === 'fight') { this.enraged = true; this.state = 'hostile'; this.destination.copy(player); }
     else if (response === 'cower') this.state = 'cower';

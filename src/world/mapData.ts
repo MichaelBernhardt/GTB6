@@ -68,6 +68,9 @@ interface RawMap {
     harbour: { x: number; z: number };
     corridor: { eastX: number; westX: number };
   };
+  /** SRTM 90 m heightgrid (+ synthetic corridor/coast composite): row-major from the NW corner, values in
+   *  metres above sea level, placed in world XZ by an affine origin (x0,z0) + spacing (dx,dz) in game units. */
+  elevation?: { cols: number; rows: number; x0: number; z0: number; dx: number; dz: number; data: number[] };
 }
 
 const MAP = rawMap as unknown as RawMap;
@@ -76,6 +79,71 @@ export const MAP_STATS = MAP.stats;
 /** Square world footprint in game units — the generated map is fitted into this. */
 export const MAP_WORLD_SIZE = MAP.stats.targetSize;
 export const METRES_PER_UNIT = MAP.stats.metresPerUnit;
+
+// ---- Elevation heightgrid (SRTM composite) ----------------------------------
+
+/**
+ * The generated map ships a coarse heightgrid in metres ASL. Two problems make the raw values
+ * unusable as world Y: (a) Johannesburg is a ~1760 m plateau while the synthetic ocean sits at 0 m,
+ * so raw scale towers the whole city a mile above the sea; (b) the plateau itself is very flat
+ * (~40 m of relief across the CBD), so at any sane scale the land looks dead level.
+ *
+ * We therefore detrend: a heavily-blurred REGIONAL field carries the broad plateau/coast trend, and the
+ * LOCAL residual (raw − regional) carries the fine undulation. City.terrainHeightAt scales them
+ * independently — regional DOWN to tame the escarpment, local UP to make the flat land read as hills —
+ * with the ocean (0 m) staying anchored at Y≈0 because both fields vanish there.
+ */
+const EL = MAP.elevation;
+
+/** Blur radius for the regional trend, in grid cells (~1 cell = dx units). */
+const REGIONAL_BLUR_CELLS = 6;
+
+/** Separable box-blur of the heightgrid → the smooth regional trend. Computed once; clamped at edges. */
+const REGIONAL_DATA: number[] | undefined = (() => {
+  if (!EL) return undefined;
+  const { cols, rows, data } = EL;
+  const clamp = (v: number, hi: number): number => (v < 0 ? 0 : v > hi ? hi : v);
+  const pass = (src: number[], horizontal: boolean): number[] => {
+    const out = new Array<number>(src.length);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      let sum = 0;
+      for (let k = -REGIONAL_BLUR_CELLS; k <= REGIONAL_BLUR_CELLS; k++) {
+        const cc = horizontal ? clamp(c + k, cols - 1) : c;
+        const rr = horizontal ? r : clamp(r + k, rows - 1);
+        sum += src[rr * cols + cc]!;
+      }
+      out[r * cols + c] = sum / (REGIONAL_BLUR_CELLS * 2 + 1);
+    }
+    return out;
+  };
+  return pass(pass(data, true), false);
+})();
+
+/** True when the runtime map carries real (non-flat) elevation data. */
+export const HAS_ELEVATION = EL !== undefined && EL.data.some((v) => v !== EL.data[0]);
+
+function sampleGrid(grid: number[], x: number, z: number): number {
+  const { cols, rows, x0, z0, dx, dz } = EL!;
+  let c = (x - x0) / dx; let r = (z - z0) / dz;
+  c = c < 0 ? 0 : c > cols - 1 ? cols - 1 : c;
+  r = r < 0 ? 0 : r > rows - 1 ? rows - 1 : r;
+  const c0 = Math.floor(c); const r0 = Math.floor(r);
+  const c1 = c0 + 1 < cols ? c0 + 1 : c0; const r1 = r0 + 1 < rows ? r0 + 1 : r0;
+  const fc = c - c0; const fr = r - r0;
+  const top = grid[r0 * cols + c0]! + (grid[r0 * cols + c1]! - grid[r0 * cols + c0]!) * fc;
+  const bot = grid[r1 * cols + c0]! + (grid[r1 * cols + c1]! - grid[r1 * cols + c0]!) * fc;
+  return top + (bot - top) * fr;
+}
+
+/** Bilinear-sampled raw elevation at a world point, in metres ASL (0 where the map has no grid). */
+export function elevationMetresAt(x: number, z: number): number {
+  return EL ? sampleGrid(EL.data, x, z) : 0;
+}
+
+/** Bilinear-sampled REGIONAL (blurred) elevation — the broad plateau/coast trend, in metres ASL. */
+export function regionalMetresAt(x: number, z: number): number {
+  return REGIONAL_DATA ? sampleGrid(REGIONAL_DATA, x, z) : 0;
+}
 
 const toPts = (points: [number, number][]): MapPt[] => points.map(([x, z]) => ({ x, z }));
 

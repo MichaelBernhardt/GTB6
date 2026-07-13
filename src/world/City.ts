@@ -5,7 +5,11 @@ import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture
 import {
   BEACH_POLYGONS,
   COASTLINE,
+  COAST_CORRIDOR,
   districtAt as generatedDistrictAt,
+  elevationMetresAt,
+  regionalMetresAt,
+  HAS_ELEVATION,
   GENERATED_ROADS,
   GENERATED_TRACKS,
   GREEN_POLYGONS,
@@ -19,6 +23,7 @@ import {
   pointInPolygon,
   WATER_POLYGONS,
   type MapPolygon,
+  type MapPt,
 } from './mapData';
 import { beachBands, buildShoreRibbon, OCEAN_Y, SEABED_Y, SHORE_Y } from './coast';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
@@ -65,6 +70,9 @@ export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
 
 export const ROAD_SURFACE_OFFSET = 0.055;
 export const SIDEWALK_RISE = 0.22;
+/** How far the ground mesh sinks beneath an inland water body's surface, so dams/ponds read as basins
+ *  instead of a flat sheet coplanar with the land (the original z-fighting the relief pass set out to kill). */
+export const WATER_BASIN_DEPTH = 2.6;
 export const STOP_LINE_DEPTH = 0.6; // thickness (along travel) of an intersection stop bar — bold, reads as the feature
 
 /** True when (x, z) sits on any paved junction surface — used to blank lane markings there so a 4-way reads
@@ -75,17 +83,79 @@ function insideJunction(x: number, z: number): boolean {
   return false;
 }
 
-/** Broad deterministic relief: visible across a district, but gentle enough for urban driving. */
 /**
- * Phase-2 merge decision: the generated 18000u Johannesburg map ships FLAT. Main's terrain
- * machinery (surfaceHeightAt/roadHeightAt/sidewalkHeightAt/supportHeight, the y-aware colliders and
- * the whole 3D-collision stack) is kept fully wired, but it is fed a neutral zero grid here so the
- * world lays out flat-but-stable. Driving relief from the map JSON's SRTM heightgrid is the Phase-3
- * terrain task; until then this returns 0 so roads/buildings/water/props all sit on a single plane.
+ * Land relief from the map JSON's SRTM heightgrid, DETRENDED so it's usable as world Y (raw metres put
+ * Johannesburg's ~1760 m plateau a mile above the synthetic 0 m ocean — see mapData's elevation section).
+ * We split elevation into a heavily-blurred REGIONAL trend and the fine LOCAL residual (raw − regional):
+ *   - REGIONAL is subtracted OUT (scale 0): this brings the whole plateau DOWN to tidily meet the ocean
+ *     at Y≈0, and — crucially — the big coastal escarpment lives entirely in this discarded trend, so it
+ *     never reaches the output as a cliff. (Dial this up for a hint of large-scale height back.)
+ *   - LOCAL is exaggerated (×2), turning the otherwise-flat plateau into rolling hills around that shared
+ *     zero. Capped either side first, so the blur's overshoot at the escarpment kink can't spike.
+ * Result: a hilly world centred on sea level, land below 0 wherever water wants depth. Bilinearly
+ * interpolated (mapData) so the whole-metre source data reads as smooth slopes, not 1 m terraces.
+ * Everything downstream (roads, buildings, water, props, colliders, ped & vehicle grounding, bullets)
+ * samples this one function, so relief propagates for free.
  */
+export const TERRAIN_REGIONAL_SCALE = 0; // subtract the broad plateau/coast trend out entirely (land meets ocean at 0)
+export const TERRAIN_LOCAL_SCALE = 2.0; // fine residual: metres → units (exaggerate the flat land into hills)
+/** Cap on the local residual (metres) BEFORE exaggeration, so the blur's overshoot at the steep synthetic
+ *  escarpment kink can't blow up into a spike; gentle CBD undulation is well under this. */
+export const TERRAIN_LOCAL_CAP = 18;
+/** Coastline vertices sorted by z, for a per-z land/sea boundary lookup: the synthetic shore meanders
+ *  across x by ~1.6 km, so a single global coast x would sink real coastal land (roads, beach) below sea
+ *  level. terrain crosses 0 at coastlineXAt(z); seaward of it the ground sinks into the seabed slope. */
+const COAST_BY_Z: readonly MapPt[] = COASTLINE.length ? [...COASTLINE].sort((a, b) => a.z - b.z) : [];
+
+/** The coastline x at world z (interpolated), i.e. where the land meets the sea on this east-west line. */
+function coastlineXAt(z: number): number {
+  const pts = COAST_BY_Z; const n = pts.length;
+  if (n === 0) return Number.NEGATIVE_INFINITY;
+  if (z <= pts[0]!.z) return pts[0]!.x;
+  if (z >= pts[n - 1]!.z) return pts[n - 1]!.x;
+  let lo = 0; let hi = n - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid]!.z <= z) lo = mid; else hi = mid; }
+  const a = pts[lo]!; const b = pts[hi]!;
+  return a.x + (b.x - a.x) * ((z - a.z) / (b.z - a.z || 1));
+}
+
+/** How far the seabed sinks below sea level at the far west map edge, so it stays under the waving ocean
+ *  surface instead of z-fighting a flat plane coplanar with the water at the shore. */
+export const SEABED_SLOPE_DEPTH = 5;
+
+/** The detrended, exaggerated, capped land relief at a point (before any coastal fade). */
+function landRelief(x: number, z: number): number {
+  const regional = regionalMetresAt(x, z);
+  let local = elevationMetresAt(x, z) - regional;
+  if (local > TERRAIN_LOCAL_CAP) local = TERRAIN_LOCAL_CAP;
+  else if (local < -TERRAIN_LOCAL_CAP) local = -TERRAIN_LOCAL_CAP;
+  return regional * TERRAIN_REGIONAL_SCALE + local * TERRAIN_LOCAL_SCALE;
+}
+
 export function terrainHeightAt(x: number, z: number): number {
-  void x; void z; // args kept for the Phase-3 heightgrid signature; the Phase-2 grid is flat everywhere
-  return 0;
+  if (!HAS_ELEVATION) return 0;
+  const eastX = COAST_CORRIDOR?.eastX;
+  // Fast path — well inland of any coast: full relief, no per-z coastline lookup.
+  if (eastX === undefined || x >= eastX) return landRelief(x, z);
+  const coastX = coastlineXAt(z); // the land/sea boundary on this east-west line
+  // Seaward of the coastline: no land relief. The ground keeps sinking, from 0 at the shore to
+  // -SEABED_SLOPE_DEPTH at the map's west edge, so the seabed stays below the ocean surface (rather than a
+  // flat plane coplanar with the water, which z-fights as the waves roll).
+  if (x < coastX) {
+    const westEdge = -WORLD_SIZE / 2;
+    const t = coastX > westEdge ? Math.min(1, (coastX - x) / (coastX - westEdge)) : 0;
+    return -SEABED_SLOPE_DEPTH * t;
+  }
+  // Coastal land: fade relief to 0 reaching the coastline (full at the city edge), so the amplified hills
+  // meet the shore cleanly — beach sand and coast road sit right at the 0 crossing, rising inland.
+  const raw = (x - coastX) / (eastX - coastX);
+  const fade = raw < 0 ? 0 : raw > 1 ? 1 : raw;
+  let h = landRelief(x, z) * fade;
+  // The detrended relief is mean-zero, so its negative lobes would sink coastal land below the waterline
+  // and flood the beach/road. Suppress below-sea land hardest at the shore (×fade²), relaxing to full
+  // relief inland so genuine valleys survive deeper in. Positive relief (hills) is untouched.
+  if (h < 0) h *= fade;
+  return h;
 }
 
 /** District ownership comes from the generated map's place nodes (nearest centre). */
@@ -566,9 +636,24 @@ export class City {
   }
 
   private buildGround(): void {
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE), new THREE.MeshStandardMaterial({ color: COLORS.grass, map: this.grass, roughness: 0.96 }));
-    ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
-    ground.userData.far = true; // the always-visible far representation: 2 triangles of grass so the earth never vanishes beyond the chunk radius; fog carries it to the horizon
+    // A tessellated grass sheet displaced by the heightgrid — the relief every wired system samples via
+    // terrainHeightAt. Segment pitch (~70u at 256) oversamples the ~140u heightgrid cells for smooth slopes.
+    // Flagged `far` so it never culls: the always-visible earth that carries to the horizon behind the fog.
+    const SEGMENTS = 256;
+    const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, SEGMENTS, SEGMENTS);
+    geometry.rotateX(-Math.PI / 2); // into the XZ plane, +Y up — vertex (x, 0, z) now maps straight to world XZ
+    const pos = geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i); const z = pos.getZ(i);
+      let y = terrainHeightAt(x, z);
+      if (this.inWater(x, z)) y -= WATER_BASIN_DEPTH; // sink inland dam/pond beds below their water surface
+      pos.setY(i, y);
+    }
+    pos.needsUpdate = true;
+    geometry.computeVertexNormals(); // real normals so slopes catch the light instead of reading flat
+    const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: COLORS.grass, map: this.grass, roughness: 0.96 }));
+    ground.receiveShadow = true;
+    ground.userData.far = true;
     this.group.add(ground);
   }
 
@@ -710,8 +795,9 @@ export class City {
     for (const { x, z, angle, widest } of CITY_JUNCTIONS) {
       const span = widest / 2 + 2.5;
       for (let stripe = -span; stripe <= span; stripe += 2.5) {
+        const px = x + Math.cos(angle) * stripe; const pz = z - Math.sin(angle) * stripe;
         const crossing = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.025, Math.min(6.2, widest * 0.45)), paint);
-        crossing.position.set(x + Math.cos(angle) * stripe, 0.09, z - Math.sin(angle) * stripe); crossing.rotation.y = angle; this.group.add(crossing);
+        crossing.position.set(px, terrainHeightAt(px, pz) + 0.09, pz); crossing.rotation.y = angle; this.group.add(crossing);
       }
     }
     this.buildTactileCorners();
@@ -852,18 +938,21 @@ export class City {
   private buildWaterBodies(): void {
     const bedMaterial = new THREE.MeshStandardMaterial({ color: 0x1c3a3e, roughness: 0.95 });
     for (const polygon of WATER_POLYGONS) {
+      // Sit each inland water body on the terrain of its basin (the ground mesh is carved down by
+      // WATER_BASIN_DEPTH inside the same polygon, so the surface floats above a real sunk bed).
+      const surfaceY = terrainHeightAt(polygon.cx, polygon.cz) + 0.045;
       if (polygon.area >= PREMIUM_WATER_AREA) {
         // Big dams get the tiered treatment (waves/reflections per quality) over a dark bed for depth.
         const bed = new THREE.Mesh(this.polygonGeometry(polygon), bedMaterial);
-        bed.position.set(polygon.cx, 0.012, polygon.cz); this.group.add(bed);
+        bed.position.set(polygon.cx, surfaceY - WATER_BASIN_DEPTH + 0.02, polygon.cz); this.group.add(bed);
         this.waterSites.push({
-          kind: 'ocean', x: polygon.cx, y: 0.045, z: polygon.cz,
+          kind: 'ocean', x: polygon.cx, y: surfaceY, z: polygon.cz,
           width: polygon.maxX - polygon.minX, depth: polygon.maxZ - polygon.minZ,
           shape: polygon.points,
         });
       } else {
         // Small ponds stay on the cheap rippling basin whatever the quality (perf policy: there are dozens).
-        this.waterSites.push({ kind: 'pond', x: polygon.cx, y: 0.045, z: polygon.cz, radius: Math.max(3, Math.sqrt(polygon.area / Math.PI) * 0.9) });
+        this.waterSites.push({ kind: 'pond', x: polygon.cx, y: surfaceY, z: polygon.cz, radius: Math.max(3, Math.sqrt(polygon.area / Math.PI) * 0.9) });
       }
     }
   }
@@ -996,7 +1085,7 @@ export class City {
     const concrete = new THREE.MeshStandardMaterial({ color: 0xbfc4c2, roughness: 0.82 });
     const stand = new THREE.MeshStandardMaterial({ color: 0x3f6f9c, roughness: 0.7 });
     const pitch = new THREE.MeshStandardMaterial({ color: 0x3f7a41, roughness: 0.95 });
-    const bowl = new THREE.Group(); bowl.position.set(site.x, 0, site.z);
+    const bowl = new THREE.Group(); bowl.position.set(site.x, terrainHeightAt(site.x, site.z), site.z);
     const segments = 40;
     for (let i = 0; i < segments; i++) {
       const a = (i / segments) * Math.PI * 2;
@@ -1118,8 +1207,9 @@ export class City {
     if (detailed && (style === 'downtown' || style === 'residential')) this.addStreetLevelDetail(0, 0, w, d, style, variant);
     this.addRoofEquipment(0, 0, w, d, h, profile.roofY, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.roofY, variant);
-    group.position.set(spec.x, 0, spec.z); group.rotation.y = spec.heading;
-    const colliders = profile.tiers.map((tier) => this.tierToWorldCollider(tier, spec.x, spec.z, spec.heading));
+    const baseY = terrainHeightAt(spec.x, spec.z); // lift the whole massing onto the terrain under its parcel
+    group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
+    const colliders = profile.tiers.map((tier) => this.tierToWorldCollider(tier, spec.x, spec.z, spec.heading, baseY));
     this.target = previousTarget; this.architecture.retarget(this.group);
     return { group, colliders };
   }
@@ -1129,22 +1219,23 @@ export class City {
    *  every structure registers its (true-3D, standable-aware) tier colliders. */
   private buildOneModel(spec: ScatteredModel): { group: THREE.Group; colliders: Collider[] } {
     const built = buildModel(spec.name, spec.seed, { variant: spec.variant });
-    built.group.position.set(spec.x, 0, spec.z); built.group.rotation.y = spec.heading;
+    const baseY = terrainHeightAt(spec.x, spec.z); // sit the scattered model on the terrain like a building
+    built.group.position.set(spec.x, baseY, spec.z); built.group.rotation.y = spec.heading;
     const foliage = MODEL_INDEX.get(spec.name)?.category === 'foliage';
-    const colliders = foliage ? [] : built.tiers.map((tier) => this.tierToWorldCollider(tier, spec.x, spec.z, spec.heading));
+    const colliders = foliage ? [] : built.tiers.map((tier) => this.tierToWorldCollider(tier, spec.x, spec.z, spec.heading, baseY));
     return { group: built.group, colliders };
   }
 
   /** Transform a local massing tier (axis-aligned) by a quarter-snapped heading into a world-space
    *  AABB collider. Quarter turns keep the box axis-aligned (width/depth may swap). Shared by the
    *  procedural buildings and the scattered catalog models — both carry the same MassingTier shape. */
-  private tierToWorldCollider(tier: { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number }, x: number, z: number, heading: number): Collider {
+  private tierToWorldCollider(tier: { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number }, x: number, z: number, heading: number, baseY = 0): Collider {
     const c = Math.cos(heading); const s = Math.sin(heading);
     const lx = (tier.minX + tier.maxX) / 2; const lz = (tier.minZ + tier.maxZ) / 2;
     const hw = (tier.maxX - tier.minX) / 2; const hd = (tier.maxZ - tier.minZ) / 2;
     const wx = x + lx * c + lz * s; const wz = z - lx * s + lz * c;
     const nx = Math.abs(hw * c) + Math.abs(hd * s); const nz = Math.abs(hw * s) + Math.abs(hd * c);
-    return { minX: wx - nx, maxX: wx + nx, minZ: wz - nz, maxZ: wz + nz, y0: tier.y0, height: tier.y1 - tier.y0 };
+    return { minX: wx - nx, maxX: wx + nx, minZ: wz - nz, maxZ: wz + nz, y0: tier.y0 + baseY, height: tier.y1 - tier.y0 };
   }
 
   private addLedge(x: number, z: number, w: number, d: number, y: number): void {
@@ -1228,7 +1319,7 @@ export class City {
 
   private buildPonte(): void {
     const x = PONTE_SPOT.x; const z = PONTE_SPOT.z; const height = 105; const radius = 24;
-    const ponte = new THREE.Group(); ponte.position.set(x, 0, z);
+    const ponte = new THREE.Group(); ponte.position.set(x, terrainHeightAt(x, z), z); // sit on the terrain (matches its collider base below)
     ponte.userData.far = true; // skyline landmark: merged into the never-culled far bucket so the silhouette doesn't pop at the chunk radius
     const facadeTexture = this.facades[0]?.clone(); if (facadeTexture) { facadeTexture.repeat.set(8, 6); facadeTexture.needsUpdate = true; }
     const facade = new THREE.MeshStandardMaterial({ color: 0x9aa3a8, map: facadeTexture, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
@@ -1242,7 +1333,7 @@ export class City {
 
   private buildHillbrowTower(): void {
     const x = HILLBROW_TOWER_SPOT.x; const z = HILLBROW_TOWER_SPOT.z; const height = 90;
-    const tower = new THREE.Group(); tower.position.set(x, 0, z);
+    const tower = new THREE.Group(); tower.position.set(x, terrainHeightAt(x, z), z);
     tower.userData.far = true; // skyline landmark: never culled, same as Ponte
     const concrete = new THREE.MeshStandardMaterial({ color: 0xb8b4a8, roughness: 0.8 });
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.4, height, 24), concrete); shaft.position.y = height / 2; shaft.castShadow = true;
@@ -1255,7 +1346,7 @@ export class City {
 
   private buildWaterTower(): void {
     const metal = new THREE.MeshStandardMaterial({ color: 0x3d4b4e, metalness: 0.72, roughness: 0.38 });
-    const tower = new THREE.Group(); tower.position.set(WATER_TOWER_SPOT.x, 0, WATER_TOWER_SPOT.z);
+    const tower = new THREE.Group(); tower.position.set(WATER_TOWER_SPOT.x, terrainHeightAt(WATER_TOWER_SPOT.x, WATER_TOWER_SPOT.z), WATER_TOWER_SPOT.z);
     for (const x of [-2.4, 2.4]) for (const z of [-2.4, 2.4]) { const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.25, 14, 10), metal); leg.position.set(x, 7, z); leg.rotation.z = x * 0.014; tower.add(leg); this.props.register('post', tower.position.x + x, tower.position.z + z, 0.3, 14); }
     const tank = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 3.8, 5.2, 32), new THREE.MeshStandardMaterial({ color: 0x738b8d, metalness: 0.42, roughness: 0.52 })); tank.position.y = 15.3; tank.castShadow = true; tower.add(tank);
     const cap = new THREE.Mesh(new THREE.SphereGeometry(4.6, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x80999a, metalness: 0.38, roughness: 0.5 })); cap.position.y = 17.9; cap.castShadow = true; tower.add(cap);
