@@ -11,6 +11,7 @@ const FP_EYE_FOOT = 1.62;
 const FP_EYE_VEHICLE = 1.25;
 const FP_PITCH_LIMIT = 1.2;
 const FP_AIM_ZOOM = 8; // degrees of FOV tightening at full aim (60 -> 52)
+const FP_VEHICLE_RECENTER_DELAY = 1.5; // seconds the mouse must sit still before a first-person driving glance eases back to forward (GTA-ish; tune by feel)
 
 export function sanitizeView(raw: unknown): number {
   return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 && raw < CAMERA_VIEW_NAMES.length ? raw : DEFAULT_CAMERA_VIEW;
@@ -29,6 +30,7 @@ export class CameraController {
   aiming = false;
   private aimBlend = 0;
   private lookOffset = 0;
+  private lookIdle = 0; // seconds the mouse has been still, gating the first-person driving recenter (no tug-of-war mid-glance)
   private recoilReturn = 0;
   private baseFov: number;
   private focus = new THREE.Vector3();
@@ -48,7 +50,15 @@ export class CameraController {
   update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0, extraDistance = 0, steerLock = false): void {
     const scoped = scopeFov > 0 && !vehicle; // sniper scope: first-person eye regardless of the chosen view
     const firstPerson = sanitizeView(view) === 0 || scoped;
-    if (firstPerson && vehicle) { const glance = steerLock ? 0 : input.mouseDX * sensitivity; this.lookOffset = (this.lookOffset - glance) * Math.exp(-dt * 1.4); this.yaw = vehicleHeading + Math.PI + this.lookOffset; } // mouse-steering holds the view forward (glance suppressed) so the drag turns the wheel, not the head
+    if (firstPerson && vehicle) {
+      if (steerLock) { this.lookIdle = 0; this.lookOffset *= Math.exp(-dt * 1.4); } // mouse-steering holds the view forward — the drag turns the wheel, not the head
+      else {
+        this.lookOffset = THREE.MathUtils.clamp(this.lookOffset - input.mouseDX * sensitivity, -Math.PI, Math.PI); // glance accumulates freely while the mouse moves (can look full left/right/behind, never winds up past it)
+        this.lookIdle = input.mouseDX === 0 && input.mouseDY === 0 ? this.lookIdle + dt : 0;
+        if (this.lookIdle > FP_VEHICLE_RECENTER_DELAY) this.lookOffset *= Math.exp(-dt * 1.4); // only ease back to forward after the mouse has been still — no fighting the player mid-glance
+      }
+      this.yaw = vehicleHeading + Math.PI + this.lookOffset;
+    }
     else if (steerLock && vehicle) { this.lookOffset = 0; const behind = vehicleHeading + Math.PI; this.yaw += Math.atan2(Math.sin(behind - this.yaw), Math.cos(behind - this.yaw)) * (1 - Math.exp(-dt * 6)); } // mouse-steering: the drag turns the vehicle, so tail behind the heading instead of letting mouseDX orbit
     else { this.lookOffset = 0; this.yaw -= input.mouseDX * sensitivity; }
     if (this.recoilReturn > 0) { const back = this.recoilReturn * (1 - Math.exp(-dt * 5)); this.pitch += back; this.recoilReturn -= back; }

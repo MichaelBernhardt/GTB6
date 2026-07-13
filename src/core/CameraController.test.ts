@@ -166,6 +166,19 @@ describe('camera views in the world', () => {
     expect(Math.abs(Math.atan2(Math.sin(forward - glancing.yaw), Math.cos(forward - glancing.yaw)))).toBeGreaterThan(0.05);
   });
 
+  it('first-person driving holds a glance while the mouse moves, easing back to forward only after it idles', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    const heading = 0; const forward = heading + Math.PI;
+    const off = (yaw: number) => Math.abs(Math.atan2(Math.sin(forward - yaw), Math.cos(forward - yaw)));
+    controller.update(1 / 60, input(300, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading); // glance off-centre
+    const glanced = controller.yaw;
+    expect(off(glanced)).toBeGreaterThan(0.5);
+    for (let i = 0; i < 60; i++) controller.update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading); // ~1s idle, under the delay
+    expect(controller.yaw).toBeCloseTo(glanced); // still holding — no tug-of-war
+    for (let i = 0; i < 600; i++) controller.update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading); // several more idle seconds
+    expect(off(controller.yaw)).toBeCloseTo(0); // now eased back to forward
+  });
+
   it('without steerLock the same drag orbits the third-person vehicle camera as before', () => {
     const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
     controller.yaw = 0;
