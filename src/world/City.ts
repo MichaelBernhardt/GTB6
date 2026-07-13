@@ -837,22 +837,33 @@ export class City {
   private buildJunctionSurfaces(roadMat: THREE.Material): void {
     const lift = ROAD_SURFACE_OFFSET + 0.012; // above the ribbons (buries the seam) but below dashes (~0.088) and zebra (0.09)
     const parts: THREE.BufferGeometry[] = [];
+    // Arm strips pave each carriageway across the node; a central disc unifies the rounded middle. Both are
+    // tessellated and DRAPED onto the terrain (not laid flat at the node's centre) so the crossing stays glued
+    // to sloped ground. They overlap by design, so once draped they'd be near-coplanar and z-fight — stagger
+    // each part by a hair of extra lift (arms first, disc on top) so the top surface always wins cleanly.
+    const STAGGER = 0.004; // per-layer depth separation, tiny enough to stay under the dash/zebra markings
     for (const surface of JUNCTION_SURFACES) {
-      const y = terrainHeightAt(surface.x, surface.z) + lift;
-      // Central disc covers the rounded middle; a strip per incident carriageway paves each arm clear across
-      // the node, so the square crossing's corners are covered too and no ribbon edge pokes out as an "X".
-      const disc = new THREE.CircleGeometry(surface.radius, 18);
-      disc.rotateX(-Math.PI / 2); disc.translate(surface.x, y, surface.z); parts.push(disc);
       const reach = junctionReach(surface); // half-length of each arm strip: spans past the far kerb of the widest road
+      let layer = 0;
       for (const arm of surface.arms) {
-        const strip = new THREE.PlaneGeometry(arm.width, reach * 2);
+        const strip = new THREE.PlaneGeometry(arm.width, reach * 2, 2, Math.max(2, Math.ceil(reach * 2 / ROAD_STRIP_SUBSTEP)));
         strip.rotateX(-Math.PI / 2); strip.rotateY(Math.atan2(arm.dirX, arm.dirZ)); // align the strip's length with the carriageway
-        strip.translate(surface.x, y, surface.z); parts.push(strip);
+        strip.translate(surface.x, 0, surface.z); this.drapeGeometryToTerrain(strip, lift + layer * STAGGER); parts.push(strip); layer++;
       }
+      const disc = new THREE.CircleGeometry(surface.radius, 24); // on top of the arms so the centre reads as one clean surface
+      disc.rotateX(-Math.PI / 2); disc.translate(surface.x, 0, surface.z); this.drapeGeometryToTerrain(disc, lift + layer * STAGGER); parts.push(disc);
     }
     const merged = parts.length ? mergeGeometries(parts, false) : null;
     if (!merged) return;
     const mesh = new THREE.Mesh(merged, roadMat); mesh.receiveShadow = true; this.group.add(mesh);
+  }
+
+  /** Push every vertex of an already-XZ-placed geometry onto the terrain (+ lift), so a flat paved shape
+   *  drapes over the relief. Recomputes normals for correct lighting on the new slopes. */
+  private drapeGeometryToTerrain(geometry: THREE.BufferGeometry, lift: number): void {
+    const pos = geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) pos.setY(i, terrainHeightAt(pos.getX(i), pos.getZ(i)) + lift);
+    pos.needsUpdate = true; geometry.computeVertexNormals();
   }
 
   /** SA-style intersection stop bars: a solid transverse white line across each STOPPING approach, set just
