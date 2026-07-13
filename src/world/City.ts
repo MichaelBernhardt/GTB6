@@ -979,16 +979,49 @@ export class City {
       if (CITY_JUNCTIONS.some((junction) => Math.hypot(x - junction.x, z - junction.z) < 16)) continue;
       this.potholes.push({ x, z, r: 1.1 + seeded(point.x, point.z, 58) * 0.9 });
     }
-    const holeItems: InstanceItem[] = []; const rimItems: InstanceItem[] = [];
-    const flat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+    // Each pothole is DRAPED onto the road surface (every vertex sampled at roadHeightAt) rather than a flat
+    // disc laid at its centre's height — so on a slope, or across a crease where the tar steps to a steeper
+    // pitch, it hugs the surface instead of the road rising up and swallowing half of it. Double-sided so
+    // winding never culls them; merged into two meshes so they fold into the chunked road buckets.
+    const holeParts: THREE.BufferGeometry[] = []; const rimParts: THREE.BufferGeometry[] = [];
     for (const pothole of this.potholes) {
-      const scale = new THREE.Vector3(pothole.r, pothole.r, 1);
-      const roadY = this.roadHeightAt(pothole.x, pothole.z); // sit on the tar, not the flat-world plane
-      holeItems.push({ x: pothole.x, z: pothole.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(pothole.x, roadY + 0.015, pothole.z), flat, scale) });
-      rimItems.push({ x: pothole.x, z: pothole.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(pothole.x, roadY + 0.017, pothole.z), flat, scale) });
+      holeParts.push(this.drapedPotholeDisc(pothole.x, pothole.z, pothole.r, 0.03));
+      rimParts.push(this.drapedPotholeRing(pothole.x, pothole.z, pothole.r, pothole.r * 1.22, 0.036));
     }
-    addInstancedChunks(this.detailStore, new THREE.CircleGeometry(1, 14), new THREE.MeshBasicMaterial({ color: 0x0d1113 }), holeItems);
-    addInstancedChunks(this.detailStore, new THREE.RingGeometry(1, 1.22, 14), new THREE.MeshBasicMaterial({ color: 0x3f4649 }), rimItems);
+    if (!holeParts.length) return;
+    const holeMesh = new THREE.Mesh(mergeGeometries(holeParts, false), new THREE.MeshBasicMaterial({ color: 0x0d1113, side: THREE.DoubleSide }));
+    const rimMesh = new THREE.Mesh(mergeGeometries(rimParts, false), new THREE.MeshBasicMaterial({ color: 0x3f4649, side: THREE.DoubleSide }));
+    this.group.add(holeMesh, rimMesh);
+  }
+
+  /** A pothole's dark disc, tessellated (centre + two radial rings × 14) and draped onto the road so it
+   *  follows slopes and crease transitions instead of a flat plane the tar swallows. */
+  private drapedPotholeDisc(cx: number, cz: number, r: number, lift: number): THREE.BufferGeometry {
+    const SEG = 14;
+    const positions: number[] = [cx, this.roadHeightAt(cx, cz) + lift, cz]; // centre = index 0
+    for (const rad of [r * 0.55, r]) for (let s = 0; s < SEG; s++) {
+      const ang = (s / SEG) * Math.PI * 2; const x = cx + Math.cos(ang) * rad; const z = cz + Math.sin(ang) * rad;
+      positions.push(x, this.roadHeightAt(x, z) + lift, z);
+    }
+    const indices: number[] = [];
+    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; indices.push(0, 1 + s, 1 + s1); } // centre fan to the inner ring
+    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; const a = 1 + s; const b = 1 + s1; const c = 1 + SEG + s; const d = 1 + SEG + s1; indices.push(a, c, b, b, c, d); }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices);
+    return geometry;
+  }
+
+  /** A pothole's grey rim ring, draped onto the road like the disc. */
+  private drapedPotholeRing(cx: number, cz: number, rIn: number, rOut: number, lift: number): THREE.BufferGeometry {
+    const SEG = 14; const positions: number[] = []; const indices: number[] = [];
+    for (let s = 0; s < SEG; s++) {
+      const ang = (s / SEG) * Math.PI * 2; const c = Math.cos(ang); const sn = Math.sin(ang);
+      for (const rad of [rIn, rOut]) { const x = cx + c * rad; const z = cz + sn * rad; positions.push(x, this.roadHeightAt(x, z) + lift, z); }
+    }
+    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; const a = s * 2; const b = s * 2 + 1; const c = s1 * 2; const d = s1 * 2 + 1; indices.push(a, c, b, b, c, d); }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices);
+    return geometry;
   }
 
   /** Instanced street micro-detail, re-bucketed into one InstancedMesh per detail-tier cell
