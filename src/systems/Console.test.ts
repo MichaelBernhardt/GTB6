@@ -152,6 +152,8 @@ describe('runConsoleCommand', () => {
     busyInfo: () => 'crowd',
     openMap: () => 'map-open',
     save: () => 'saved',
+    ghost: () => 'ghost toggled',
+    setPosition: (axis, value) => `pos:${axis}:${value}`,
     teleport: (x, z) => `tp:${x},${z}`,
     teleportNamed: (name) => `tpn:${name}`,
     teleportList: () => ['place one', 'place two'],
@@ -184,6 +186,15 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('busy', host)).toEqual(['crowd']);
     expect(runConsoleCommand('map', host)).toEqual(['map-open']);
     expect(runConsoleCommand('save', host)).toEqual(['saved']);
+  });
+
+  it('routes ghost mode and per-axis position sets', () => {
+    expect(runConsoleCommand('ghost', host)).toEqual(['ghost toggled']);
+    expect(runConsoleCommand('set x 300', host)).toEqual(['pos:x:300']);
+    expect(runConsoleCommand('set y -12.5', host)).toEqual(['pos:y:-12.5']);
+    expect(runConsoleCommand('set z 0', host)).toEqual(['pos:z:0']);
+    expect(runConsoleCommand('set x', host)[0]).toContain('Usage');
+    expect(runConsoleCommand('set y north', host)[0]).toContain('Invalid');
   });
 
   it('routes teleports, skyfall and the give family', () => {

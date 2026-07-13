@@ -32,6 +32,7 @@ export interface HudState {
   fps: number;
   navCalls: number; // A* solves per second (both planners), shown beside FPS when the perf display is on
   navMs: number; // wall-time per second spent in A* (ms)
+  position: { x: number; y: number; z: number }; // player world position, shown on the perf line
   settings: GameSettings;
   cheatsOn: boolean;
 }

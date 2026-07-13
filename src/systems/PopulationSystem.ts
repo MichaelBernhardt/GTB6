@@ -439,7 +439,10 @@ export class PopulationSystem {
       return false;
     }
     const position = vehicle.group.position;
-    if (position.distanceToSquared(vehicle.aiTarget) < 85) {
+    // Horizontal-only arrival: the vehicle's y tracks terrain height while the waypoint's y is 0, so a 3D
+    // distance never converges on sloped ground (the car orbits the point until the watchdog rehomes it).
+    const toTargetX = vehicle.aiTarget.x - position.x; const toTargetZ = vehicle.aiTarget.z - position.z;
+    if (toTargetX * toTargetX + toTargetZ * toTargetZ < 85) {
       plan.watchdog.reset(); plan.index += 1;
       const point = plan.points[plan.index];
       if (point) vehicle.aiTarget.set(point.x, 0, point.z);

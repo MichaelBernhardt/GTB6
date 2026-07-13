@@ -15,12 +15,20 @@ export interface CoverPose { heading: number; peek: number; twist: number; movin
 export const FREEFALL_TIP = 1.22;
 export const FREEFALL_TIP_RANGE = 0.28;
 
+/** Ghost (free-fly) test mode tuning. Walking (no Shift) keeps the normal player speed for fine control;
+ *  running (Shift) blazes at GHOST_RUN_SPEED units/sec to cross the big map fast.
+ *  GHOST_WHEEL_STEP is the altitude change per mouse-wheel notch. */
+export const GHOST_RUN_SPEED = 168;
+export const GHOST_WHEEL_STEP = 4;
+
 export class Player {
   group = new THREE.Group();
   health = PLAYER.maxHealth;
   maxHealth = PLAYER.maxHealth;
   velocityY = 0;
   onGround = true;
+  ghost = false; // free-fly test mode: no gravity, no clipping, wheel controls altitude
+  private ghostRise = 0; // pending altitude change from the mouse wheel this frame
   inVehicle = false;
   heading = 0;
   moving = false;
@@ -59,6 +67,7 @@ export class Player {
   update(dt: number, input: InputManager, cameraYaw: number, city: City, cover?: CoverPose): void {
     this.moving = false; this.sprinting = false;
     if (this.inVehicle || this.health <= 0) return;
+    if (this.ghost) { this.updateGhost(dt, input, cameraYaw); return; }
     if (this.tumbleTimer > 0) { this.applyTumble(dt); return; }
     const aimHeld = input.aiming && this.weapon !== 'fists'; // Ctrl: aim mode — raised gun, half speed, camera-facing
     const aiming = aimHeld || (input.firing && this.weapon !== 'fists'); // hip fire still raises the gun while the trigger is down
@@ -99,6 +108,32 @@ export class Player {
       if (damage > 0) { this.pendingFallDamage += damage; this.tumble(); } // hard landing: eat tar, Game settles the bill
     }
   }
+
+  /** Free-fly: WASD glides horizontally (relative to the camera) with no collision, the mouse wheel raises
+   *  and lowers altitude, and gravity is off — a testing camera that clips through ground and buildings. */
+  private updateGhost(dt: number, input: InputManager, cameraYaw: number): void {
+    const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
+    const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
+    const move = new THREE.Vector3(side, 0, -forward);
+    const sprinting = input.down('ShiftLeft');
+    if (move.lengthSq() > 0) {
+      this.moving = true; this.sprinting = sprinting;
+      move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
+      const speed = sprinting ? GHOST_RUN_SPEED : moveSpeed(false, this.cheats.fastRun, false); // Shift = blaze; walk = normal speed
+      this.group.position.addScaledVector(move, speed * dt); // no clampMove: clip through everything
+      this.turnToward(Math.atan2(move.x, move.z), dt, 12);
+      this.walkPhase += dt * speed; this.animateLocomotion(dt, sprinting, false);
+    } else this.animateIdle(dt, false);
+    this.group.position.y += this.ghostRise; this.ghostRise = 0; // wheel-driven altitude
+    this.velocityY = 0; this.onGround = false;
+    this.group.rotation.z *= Math.exp(-dt * 12);
+  }
+
+  /** Toggle free-fly; returns the new state. Resets vertical motion so exiting drops cleanly to the ground. */
+  toggleGhost(): boolean { this.ghost = !this.ghost; this.velocityY = 0; this.onGround = !this.ghost; this.ghostRise = 0; return this.ghost; }
+
+  /** Mouse-wheel altitude in ghost mode: one notch = GHOST_WHEEL_STEP units, up = climb. */
+  ghostAdjustAltitude(scroll: number): void { this.ghostRise += (scroll > 0 ? 1 : -1) * GHOST_WHEEL_STEP; }
 
   /** Landing bill accrued since the last query; Game routes it through the usual damage path (cheats respected). */
   consumeFallDamage(): number { const amount = this.pendingFallDamage; this.pendingFallDamage = 0; return amount; }

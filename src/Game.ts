@@ -335,6 +335,12 @@ export class Game {
     busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
     openMap: () => { this.closeConsole(); this.openMap(); return 'Opening the city map. Press M or ESC to close.'; },
     save: () => { this.persist(); return 'Game saved.'; },
+    ghost: () => {
+      this.closeConsole();
+      const on = this.player.toggleGhost();
+      return on ? 'Ghost mode ON — mouse wheel = altitude, gravity off, clipping off. Type "ghost" again to land.' : 'Ghost mode OFF — gravity restored.';
+    },
+    setPosition: (axis, value) => { this.player.group.position[axis] = value; return `Player ${axis} set to ${value}.`; },
     teleport: (x, z) => this.teleportPlayer(clampToWorld(x), clampToWorld(z), `${Math.round(x)}, ${Math.round(z)}`),
     teleportNamed: (name) => {
       const target = resolveTeleport(name, this.teleportTargets());
@@ -701,7 +707,8 @@ export class Game {
     WEAPONS.forEach((spec, index) => { if (this.input.consume(`Digit${index + 1}`)) this.combat.select(spec.id); });
     // Wheel precedence: map-open (handled by the map overlay) > scoped zoom ladder > weapon cycling.
     const scroll = this.input.consumeWheel();
-    if (scroll && weaponWheelResponds(this.ui.mapOpen)) {
+    if (scroll && this.player.ghost) this.player.ghostAdjustAltitude(scroll); // free-fly: wheel flies up/down instead of cycling weapons
+    else if (scroll && weaponWheelResponds(this.ui.mapOpen)) {
       if (wheelAction(this.scoped) === 'zoom') this.scopeLevel = stepScopeLevel(this.scopeLevel, scroll > 0 ? -1 : 1);
       else this.combat.cycle(scroll > 0 ? 1 : -1);
     }
@@ -1571,7 +1578,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable) });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable) });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

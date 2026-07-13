@@ -12,6 +12,8 @@ export type ConsoleCommand =
   | { kind: 'set-busy'; percent: number }
   | { kind: 'set-peds'; count?: number } // undefined = back to the time-of-day table
   | { kind: 'set-cars'; count?: number }
+  | { kind: 'set-pos'; axis: 'x' | 'y' | 'z'; value: number }
+  | { kind: 'ghost' }
   | { kind: 'busy' }
   | { kind: 'map' }
   | { kind: 'save' }
@@ -46,6 +48,8 @@ export interface ConsoleHost {
   busyInfo(): string;
   openMap(): string;
   save(): string;
+  ghost(): string;
+  setPosition(axis: 'x' | 'y' | 'z', value: number): string;
   teleport(x: number, z: number): string;
   teleportNamed(name: string): string;
   teleportList(): string[];
@@ -84,9 +88,11 @@ export const HELP_LINES = [
   'set peds <n|auto> — pin the pedestrian target for the area around you (auto = per-zone by district)',
   'set cars <n|auto> — pin the traffic target for the area around you (auto = per-zone by district)',
   'busy — show the current nearby crowd targets and live counts',
+  'set x|y|z <n> — move the player along one axis (pair with ghost to hold altitude)',
   'map — open the city map (or press M)',
   'save — save the current game to this browser',
-  'fps — toggle the performance display',
+  'ghost — free-fly test mode: wheel = altitude, gravity off, clip through everything',
+  'fps — toggle the performance display (shows X/Y/Z position)',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
   'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens',
 ];
@@ -119,8 +125,14 @@ export function parseCommand(input: string): ConsoleCommand {
   if (head === 'busy' && rest.length === 0) return { kind: 'busy' };
   if (head === 'map' && rest.length === 0) return { kind: 'map' };
   if (head === 'save' && rest.length === 0) return { kind: 'save' };
+  if (head === 'ghost' && rest.length === 0) return { kind: 'ghost' };
   if (head === 'set') {
     const [key, value] = rest;
+    if (key === 'x' || key === 'y' || key === 'z') {
+      if (!value) return { kind: 'error', message: `Usage: set ${key} <coord> — moves the player's ${key} (use ghost to hold altitude)` };
+      const coord = parseCoordinate(value);
+      return coord === undefined ? { kind: 'error', message: `Invalid ${key} "${value}" — use a number like 300 or -120.5.` } : { kind: 'set-pos', axis: key, value: coord };
+    }
     if (key === 'busy') {
       if (!value) return { kind: 'error', message: 'Usage: set busy <percent> (100 = normal, e.g. set busy 300)' };
       if (value === 'auto') return { kind: 'set-busy', percent: 100 };
@@ -139,7 +151,7 @@ export function parseCommand(input: string): ConsoleCommand {
       const rate = parseCoordinate(value);
       return rate === undefined || rate < 0 ? { kind: 'error', message: `Invalid rate "${value}" — use a number ≥ 0 (0 freezes time, 1 = normal).` } : { kind: 'set-timerate', rate };
     }
-    if (key !== 'time' || !value) return { kind: 'error', message: 'Usage: set time <HHMM> · set timerate <n> · set busy <percent> · set peds <n|auto> · set cars <n|auto>' };
+    if (key !== 'time' || !value) return { kind: 'error', message: 'Usage: set time <HHMM> · set timerate <n> · set busy <percent> · set peds <n|auto> · set cars <n|auto> · set x|y|z <n>' };
     const hour = parseTimeToken(value);
     return hour === undefined ? { kind: 'error', message: `Invalid time "${value}" — use HHMM between 0000 and 2359.` } : { kind: 'set-time', hour };
   }
@@ -189,6 +201,8 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'set-busy': return [host.setBusy(command.percent)];
     case 'set-peds': return [host.setPedTarget(command.count)];
     case 'set-cars': return [host.setCarTarget(command.count)];
+    case 'set-pos': return [host.setPosition(command.axis, command.value)];
+    case 'ghost': return [host.ghost()];
     case 'busy': return [host.busyInfo()];
     case 'map': return [host.openMap()];
     case 'spawn': return [host.spawn(command.vehicle)];

@@ -114,7 +114,7 @@ export class HudView {
       const job = state.vehicle.courier ?? state.vehicle.taxi; setHidden(this.taxi, !job);
       if (job) { setText(this.taxi, job.text); this.taxi.classList.toggle('is-on', job.available); }
     }
-    setText(this.fps, `${Math.round(state.fps)} FPS · A* ${state.navCalls}/s ${state.navMs.toFixed(1)}ms`); setHidden(this.fps, !state.settings.showFps); setHidden(this.cheats, !state.cheatsOn); setHidden(this.crosshair, !state.crosshair);
+    setText(this.fps, `${Math.round(state.fps)} FPS · A* ${state.navCalls}/s ${state.navMs.toFixed(1)}ms · X ${state.position.x.toFixed(1)} Y ${state.position.y.toFixed(1)} Z ${state.position.z.toFixed(1)}`); setHidden(this.fps, !state.settings.showFps); setHidden(this.cheats, !state.cheatsOn); setHidden(this.crosshair, !state.crosshair);
     setHidden(this.scope, !state.scope); if (state.scope) setText(this.scopeZoom, state.scope.zoom);
   }
 }

@@ -239,7 +239,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
   const buildOcean = (site: OceanSite): void => {
     if (tier === 'flat') {
       const texture = createSurfaceTexture('water', 7); textures.push(texture); scrollTextures.push(texture);
-      const material = new THREE.MeshPhysicalMaterial({ color: 0x2f7589, map: texture, roughness: 0.16, metalness: 0.05, clearcoat: 0.85, clearcoatRoughness: 0.16, transparent: true, opacity: 0.9 });
+      const material = new THREE.MeshPhysicalMaterial({ color: 0x2f7589, map: texture, roughness: 0.16, metalness: 0.05, clearcoat: 0.85, clearcoatRoughness: 0.16, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
       moodMaterials.push(material);
       addMesh(oceanGeometryXY(site).rotateX(-Math.PI / 2), material, site);
       return;
@@ -248,6 +248,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
       const vertexChunk = `vec3 transformed = vec3( position );\n\tvWaterPos = transformed.xz;\n\ttransformed.y += ${waveHeightGlsl('vWaterPos.x', 'vWaterPos.y', 'uTime')};`;
       const fragmentChunk = `\tvec2 waterSlope = ${waveSlopeGlsl('vWaterPos.x', 'vWaterPos.y', 'uTime', [...OCEAN_WAVES, ...DETAIL_WAVES])};\n\twaterSlope += ${detailSlopeGlsl()};\n\t${slopeFadeGlsl('length(vViewPosition)')}\n\t${slopeToViewNormalGlsl}`;
       const material = wavyMaterial('water-ocean', vertexChunk, fragmentChunk, OCEAN_ALPHA);
+      material.side = THREE.DoubleSide; // visible from underwater too (looking up at the surface)
       addMesh(oceanGeometryXY(site, OCEAN_SEGMENTS).rotateX(-Math.PI / 2), material, site);
       return;
     }
@@ -322,7 +323,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
     });
     const material = reflector.material as THREE.ShaderMaterial;
     material.uniforms.uTime = timeUniform; material.uniforms.uDetail!.value = detail;
-    material.transparent = true; material.fog = true;
+    material.transparent = true; material.fog = true; material.side = THREE.DoubleSide; // seen from underwater too
     reflectorUniforms = material.uniforms;
     reflector.rotation.x = -Math.PI / 2; reflector.position.set(site.x, site.y, site.z); reflector.userData.dynamic = true;
     const render = reflector.onBeforeRender;

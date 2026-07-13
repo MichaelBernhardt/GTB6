@@ -129,6 +129,20 @@ export class UrbanInfrastructure {
     }
   }
 
+  /** Bake sidewalk height into each instance's Y at build time. Trees, streetlamps, shrubs, signal lenses
+   *  and benches go into the chunk/detail stores, which are SHARED with City's already-grounded scatter —
+   *  so groundInfrastructure() can't blanket-walk them (it would double-count). Each build pass instead
+   *  grounds only its own items through here, right before handing them to addInstancedChunks. */
+  private groundItems(items: InstanceItem[]): InstanceItem[] {
+    const position = new THREE.Vector3(); const rotation = new THREE.Quaternion(); const scale = new THREE.Vector3();
+    for (const item of items) {
+      item.matrix.decompose(position, rotation, scale);
+      position.y += this.surfaceHeight(item.x, item.z);
+      item.matrix.compose(position, rotation, scale);
+    }
+    return items;
+  }
+
   update(dt: number): void {
     this.elapsed = (this.elapsed + dt) % 30;
     // Generated signal phases and all three state boundaries land on whole seconds. Recolouring every
@@ -191,13 +205,13 @@ export class UrbanInfrastructure {
         placed.push({ x, z, scale });
       }
     });
-    const slots = addInstancedChunks(this.detail, shrubGeometry, new THREE.MeshStandardMaterial({ color: 0x365f3d, roughness: 0.94 }), items, { cast: true, receive: true });
+    const slots = addInstancedChunks(this.detail, shrubGeometry, new THREE.MeshStandardMaterial({ color: 0x365f3d, roughness: 0.94 }), this.groundItems(items), { cast: true, receive: true });
     placed.forEach(({ x, z, scale }, index) => {
       const slot = slots[index]!;
       this.props.register('shrub', x, z, scale * 1.1, scale * 1.5, {
         hide: () => hideSlot(slot),
         debris: () => {
-          const group = new THREE.Group(); group.position.set(x, 0, z);
+          const group = new THREE.Group(); group.position.set(x, this.surfaceHeight(x, z), z);
           const tuft = new THREE.Mesh(shrubGeometry, shrubDebrisMaterial); tuft.position.y = scale * 0.75; tuft.scale.set(scale * 1.25, scale, scale); tuft.castShadow = true; group.add(tuft);
           return group;
         },
@@ -225,8 +239,8 @@ export class UrbanInfrastructure {
         });
       });
     });
-    addInstancedChunks(this.chunks, trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x5c402c, roughness: 0.96 }), trunkItems, { cast: true, receive: true });
-    addInstancedChunks(this.chunks, crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }), crownItems, { cast: true, receive: true });
+    addInstancedChunks(this.chunks, trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x5c402c, roughness: 0.96 }), this.groundItems(trunkItems), { cast: true, receive: true });
+    addInstancedChunks(this.chunks, crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }), this.groundItems(crownItems), { cast: true, receive: true });
   }
 
   private buildJacarandas(sites: RoadPoint[]): void {
@@ -248,8 +262,8 @@ export class UrbanInfrastructure {
         });
       });
     });
-    addInstancedChunks(this.chunks, trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x6b4d38, roughness: 0.92 }), trunkItems, { cast: true, receive: true });
-    addInstancedChunks(this.chunks, crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86 }), crownItems, { cast: true, receive: true });
+    addInstancedChunks(this.chunks, trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x6b4d38, roughness: 0.92 }), this.groundItems(trunkItems), { cast: true, receive: true });
+    addInstancedChunks(this.chunks, crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86 }), this.groundItems(crownItems), { cast: true, receive: true });
   }
 
   private buildStreetlights(): void {
@@ -284,11 +298,11 @@ export class UrbanInfrastructure {
       bulbItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 6.02, site.z).addScaledVector(direction, 1.18), bulbRotation, one) });
       lampData.push({ direction, armRotation, headRotation, bulbRotation });
     });
-    const poleSlots = addInstancedChunks(this.detail, poleGeometry, metal, poleItems, { cast: true });
-    const armSlots = addInstancedChunks(this.detail, armGeometry, metal, armItems, { cast: true });
-    const collarSlots = addInstancedChunks(this.detail, collarGeometry, metal, collarItems);
-    const fixtureSlots = addInstancedChunks(this.detail, fixtureGeometry, metal, fixtureItems, { cast: true });
-    const bulbSlots = addInstancedChunks(this.detail, bulbGeometry, bulbMaterial, bulbItems);
+    const poleSlots = addInstancedChunks(this.detail, poleGeometry, metal, this.groundItems(poleItems), { cast: true });
+    const armSlots = addInstancedChunks(this.detail, armGeometry, metal, this.groundItems(armItems), { cast: true });
+    const collarSlots = addInstancedChunks(this.detail, collarGeometry, metal, this.groundItems(collarItems));
+    const fixtureSlots = addInstancedChunks(this.detail, fixtureGeometry, metal, this.groundItems(fixtureItems), { cast: true });
+    const bulbSlots = addInstancedChunks(this.detail, bulbGeometry, bulbMaterial, this.groundItems(bulbItems));
     sites.forEach((site, index) => {
       const { direction, armRotation, headRotation, bulbRotation } = lampData[index]!;
       this.props.register('streetlight', site.x, site.z, 0.2, 6.5, {
@@ -297,7 +311,7 @@ export class UrbanInfrastructure {
           lampsXZ[index * 2] = 1e9; lampsXZ[index * 2 + 1] = 1e9; // evict from the day/night light pool: felled lamps shine no more
         },
         debris: () => {
-          const group = new THREE.Group(); group.position.set(site.x, 0, site.z);
+          const group = new THREE.Group(); group.position.set(site.x, this.surfaceHeight(site.x, site.z), site.z);
           const pole = new THREE.Mesh(poleGeometry, metal); pole.position.y = 3.25;
           const collar = new THREE.Mesh(collarGeometry, metal); collar.position.y = 0.23;
           const arm = new THREE.Mesh(armGeometry, metal); arm.position.set(direction.x * 0.58, 6.08, direction.z * 0.58); arm.quaternion.copy(armRotation);
@@ -334,7 +348,7 @@ export class UrbanInfrastructure {
       this.addStreetSigns(junction, forward, right);
     }
     const lensItems: InstanceItem[] = lensTransforms.map((matrix) => ({ x: matrix.elements[12]!, z: matrix.elements[14]!, matrix, color: new THREE.Color(0x14100e) }));
-    this.lensSlots = addInstancedChunks(this.detail, new THREE.CircleGeometry(0.19, 20), new THREE.MeshBasicMaterial(), lensItems);
+    this.lensSlots = addInstancedChunks(this.detail, new THREE.CircleGeometry(0.19, 20), new THREE.MeshBasicMaterial(), this.groundItems(lensItems));
   }
 
   /** Street-name boards across every named crossing on the generated map, not just the ~64 signalised
@@ -390,6 +404,7 @@ export class UrbanInfrastructure {
     if (!this.clearOfRoad(postPosition, junction)) return;
     if (this.isBlocked(postPosition.x, postPosition.z, 0.5)) return;
     const assembly = new THREE.Group(); assembly.position.copy(postPosition);
+    assembly.position.y = this.surfaceHeight(postPosition.x, postPosition.z); // sit the post on the terrain, not the flat-world plane
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.y = 1.8; assembly.add(post);
     // Each blade runs ALONG the street it names (its face perpendicular to that street, read head-on by that
     // road's traffic) — hence the +90° from the road bearing. Two back-to-back front-side planes give correct,
@@ -413,7 +428,7 @@ export class UrbanInfrastructure {
     for (const { x, z, angle, label } of ROADSIDE_SIGNS) {
       if (this.isRoad(x, z, 0.45)) continue;
       const hotspot = label.includes('HOTSPOT');
-      const assembly = new THREE.Group(); assembly.position.set(x, 0, z);
+      const assembly = new THREE.Group(); assembly.position.set(x, this.surfaceHeight(x, z), z); // grounded onto the terrain
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 2.6, 9), poleMaterial); pole.position.y = 1.3; assembly.add(pole);
       const background = label === 'STOP' ? '#b62f2d' : label === 'P' ? '#28619a' : label === 'TAXI' ? '#f2c521' : '#f0eee2';
       const foreground = label === 'STOP' || label === 'P' ? '#ffffff' : '#182326';
@@ -454,11 +469,11 @@ export class UrbanInfrastructure {
       capItems.push({ x: hx, z: hz, matrix: new THREE.Matrix4().compose(new THREE.Vector3(hx, 0.76, hz), identity, one) });
       furnitureData.push({ yaw, bx, bz, hx, hz });
     });
-    const slatSlots = addInstancedChunks(this.detail, slatGeometry, wood, slatItems, { cast: true, receive: true });
-    const legSlots = addInstancedChunks(this.detail, legGeometry, metal, legItems, { cast: true, receive: true });
-    const backSlots = addInstancedChunks(this.detail, backGeometry, wood, backItems, { cast: true, receive: true });
-    const bodySlots = addInstancedChunks(this.detail, bodyGeometry, red, bodyItems, { cast: true, receive: true });
-    const capSlots = addInstancedChunks(this.detail, capGeometry, red, capItems, { cast: true, receive: true });
+    const slatSlots = addInstancedChunks(this.detail, slatGeometry, wood, this.groundItems(slatItems), { cast: true, receive: true });
+    const legSlots = addInstancedChunks(this.detail, legGeometry, metal, this.groundItems(legItems), { cast: true, receive: true });
+    const backSlots = addInstancedChunks(this.detail, backGeometry, wood, this.groundItems(backItems), { cast: true, receive: true });
+    const bodySlots = addInstancedChunks(this.detail, bodyGeometry, red, this.groundItems(bodyItems), { cast: true, receive: true });
+    const capSlots = addInstancedChunks(this.detail, capGeometry, red, this.groundItems(capItems), { cast: true, receive: true });
     furnitureData.forEach(({ yaw, bx, bz, hx, hz }, index) => {
       this.props.register('bench', bx, bz, 0.85, 1.1, {
         hide: () => {
@@ -467,7 +482,7 @@ export class UrbanInfrastructure {
           hideSlot(backSlots[index]!);
         },
         debris: () => {
-          const group = new THREE.Group(); group.position.set(bx, 0, bz); group.rotation.y = yaw;
+          const group = new THREE.Group(); group.position.set(bx, this.surfaceHeight(bx, bz), bz); group.rotation.y = yaw;
           for (const lz of [-0.22, 0, 0.22]) { const slat = new THREE.Mesh(slatGeometry, wood); slat.position.set(0, 0.62, lz); group.add(slat); }
           for (const lx of [-0.78, 0.78]) { const leg = new THREE.Mesh(legGeometry, metal); leg.position.set(lx, 0.3, 0); group.add(leg); }
           const back = new THREE.Mesh(backGeometry, wood); back.position.set(0, 0.98, -0.29); back.rotation.x = -0.12; group.add(back);
@@ -478,7 +493,7 @@ export class UrbanInfrastructure {
       this.props.register('hydrant', hx, hz, 0.24, 0.9, {
         hide: () => { hideSlot(bodySlots[index]!); hideSlot(capSlots[index]!); },
         debris: () => {
-          const group = new THREE.Group(); group.position.set(hx, 0, hz);
+          const group = new THREE.Group(); group.position.set(hx, this.surfaceHeight(hx, hz), hz);
           const body = new THREE.Mesh(bodyGeometry, red); body.position.y = 0.36; body.castShadow = true;
           const cap = new THREE.Mesh(capGeometry, red); cap.position.y = 0.76; group.add(body, cap);
           return group;
