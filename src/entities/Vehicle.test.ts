@@ -57,6 +57,25 @@ describe('two-wheeler never flips onto its side while turning', () => {
   });
 });
 
+describe('steered front wheels spin cleanly (no wobble)', () => {
+  const flat = slopedCity(0, 0);
+  const frontWheel = (car: Vehicle) => (car as unknown as { wheels: THREE.Object3D[] }).wheels[0]!;
+  const axleInCarFrame = (wheel: THREE.Object3D) => new THREE.Vector3(1, 0, 0).applyQuaternion(wheel.quaternion).normalize(); // local: strips out the car's heading
+
+  it('rolls about the steered axle, so a turned wheel keeps a fixed spin axis instead of precessing', () => {
+    const car = new Vehicle(new THREE.Scene(), 'compact', new THREE.Vector3());
+    car.playerControlled = true; car.speed = 20;
+    const turn = heldInput(new Set(['KeyW', 'KeyD'])); // throttle + steer, held
+    for (let i = 0; i < 60; i++) car.updatePlayer(1 / 60, turn, flat); // settle the steer angle and build roll
+    const wheel = frontWheel(car);
+    expect(Math.abs(wheel.rotation.y)).toBeGreaterThan(0.1); // the wheel really is steered
+    const before = axleInCarFrame(wheel);
+    for (let i = 0; i < 60; i++) car.updatePlayer(1 / 60, turn, flat); // steer holds; the wheel rolls a lot more
+    const after = axleInCarFrame(wheel);
+    expect(before.dot(after)).toBeGreaterThan(0.999); // axle unchanged by rolling — clean spin (with the old XYZ order it precesses and this drops well below 1)
+  });
+});
+
 describe('mouse steering (LMB-drag) feeds the same steer input as the keys', () => {
   const flat = slopedCity(0, 0);
   const drive = (steer: 'keyA' | 'mouse' | 'both', primed = 20): Vehicle => {

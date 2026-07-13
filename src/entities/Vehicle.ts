@@ -273,6 +273,7 @@ export class Vehicle {
     const wheelMat = new THREE.MeshStandardMaterial({ color: 0x101315, roughness: 0.76 });
     for (const z of [length * 0.31, -length * 0.31]) for (const x of [-width * 0.52, width * 0.52]) {
       const assembly = new THREE.Group(); assembly.position.set(x, wheelRadius, z);
+      if (z > 0) assembly.rotation.order = 'YXZ'; // front (steered) wheels: apply steer (Y) before roll (X) so the roll spins about the steered axle — default XYZ rolls about the original axle and the turned wheel wobbles
       const wheel = new THREE.Mesh(wheelGeo, wheelMat); wheel.castShadow = true;
       const rim = new THREE.Mesh(rimGeo, chrome); assembly.add(wheel, rim); this.group.add(assembly); this.wheels.push(assembly);
     }
