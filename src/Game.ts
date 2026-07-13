@@ -47,7 +47,7 @@ import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADI
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
-import type { CheatSettings, GameMode, GameSettings, Inventory, SavedGame, WorldTarget } from './types';
+import type { BaseQuality, CheatSettings, GameMode, GameSettings, Inventory, SavedGame, WorldTarget } from './types';
 import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
@@ -60,6 +60,8 @@ import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
+const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and downsamples — real supersampling AA. The floor bites hardest on LOW-dpi screens (a 1× monitor jumps to 2×, where aliasing shows most); HiDPI already renders dense, so it just stays at native.
+const ULTRA_MAX_SCALE = 3; // …but cap the buffer so a 4×-dpi panel doesn't blow up VRAM/fill
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
@@ -164,9 +166,9 @@ export class Game {
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.setupRenderer(); this.setupScene();
-    this.city = new City(this.scene, this.settings.quality);
+    this.city = new City(this.scene, this.baseQuality());
     this.districtTargets = districtAnchors((x, z) => this.city.districtAt(x, z));
-    this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.settings.quality, this.save.timeOfDay);
+    this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.baseQuality(), this.save.timeOfDay);
     this.shops = new ShopSystem(this.scene, this.city);
     this.safehouses = new SafehouseSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.position)); // resume where the last save actually left off (Continue); New Game repositions to spawn in startGame
@@ -204,7 +206,7 @@ export class Game {
   }
 
   private setupScene(): void {
-    this.environment = buildEnvironment(this.scene, this.settings.quality);
+    this.environment = buildEnvironment(this.scene, this.baseQuality());
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture; pmrem.dispose();
     this.scene.environmentIntensity = 0.32;
@@ -214,13 +216,16 @@ export class Game {
   private setupComposer(): void {
     this.composer?.dispose(); this.composer = undefined; this.gtao = undefined;
     if (this.settings.quality === 'low') return; // low quality: plain renderer.render, no post stack
+    const ultra = this.settings.quality === 'ultra';
     const composer = new EffectComposer(this.renderer);
     // Two samples preserve edge stability while halving the multisample bandwidth/memory of the old 4x
-    // full-screen half-float targets. Resolution is already quality-capped by renderPixelRatio().
-    composer.renderTarget1.samples = 2; composer.renderTarget2.samples = 2;
+    // full-screen half-float targets. Resolution is already quality-capped by renderPixelRatio(). Ultra
+    // stacks 4x MSAA on top of its 2x supersample for the cleanest possible edges.
+    const samples = ultra ? 4 : 2;
+    composer.renderTarget1.samples = samples; composer.renderTarget2.samples = samples;
     composer.setSize(innerWidth, innerHeight);
     composer.addPass(new RenderPass(this.scene, this.camera));
-    if (this.settings.quality === 'high') { // GTAO is the expensive pass — high only
+    if (this.settings.quality === 'high' || ultra) { // GTAO is the expensive pass — high and ultra only
       this.gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
       this.gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 2, thickness: 1 }); this.gtao.blendIntensity = 0.9;
       composer.addPass(this.gtao);
@@ -468,14 +473,23 @@ export class Game {
     const shadows = this.settings.quality !== 'low';
     this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
-    this.dayNight.setQuality(this.settings.quality);
-    this.city.setWaterQuality(this.settings.quality); // rebuilds water meshes; disposes the old tier's materials and mirror target
+    this.dayNight.setQuality(this.baseQuality());
+    this.city.setWaterQuality(this.baseQuality()); // rebuilds water meshes; disposes the old tier's materials and mirror target
     this.setupComposer();
   }
 
-  /** Keep Retina/HiDPI displays from multiplying every full-screen pass beyond the selected quality tier. */
+  /** Visual tier the world subsystems (city, lights, water, environment) render at. `ultra` is a render-only
+   *  super-tier — everything except the renderer's pixel ratio and post stack treats it as `high`. */
+  private baseQuality(): BaseQuality { return this.settings.quality === 'ultra' ? 'high' : this.settings.quality; }
+
+  /** Render resolution multiplier. Base tiers only CAP the ratio (min with devicePixelRatio → never above
+   *  native, so they're a HiDPI perf throttle, NOT antialiasing). Ultra instead FORCES the ratio up to at
+   *  least ULTRA_MIN_SCALE — genuine supersampling that downsamples geometry, textures and specular alike.
+   *  Because it's a floor (max, not min), the boost lands hardest on low-dpi screens where aliasing is most
+   *  visible: a 1× monitor renders at 2× (2× SSAA); a 2× Retina panel is already dense, so it stays at native. */
   private renderPixelRatio(): number {
-    const cap: Record<GameSettings['quality'], number> = { low: 1, medium: 1.25, high: 1.5 };
+    if (this.settings.quality === 'ultra') return Math.min(ULTRA_MAX_SCALE, Math.max(devicePixelRatio || 1, ULTRA_MIN_SCALE));
+    const cap: Record<BaseQuality, number> = { low: 1, medium: 1.25, high: 1.5 };
     return Math.min(devicePixelRatio || 1, cap[this.settings.quality]);
   }
 

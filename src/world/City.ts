@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { COLORS, PLAYER, WORLD_SIZE } from '../config';
-import type { District, GameSettings } from '../types';
+import type { BaseQuality, District } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import {
   COASTLINE,
@@ -465,7 +465,7 @@ export class City {
   private architecture: BuildingArchitecture;
   private infrastructure: UrbanInfrastructure;
 
-  constructor(scene: THREE.Scene, quality: GameSettings['quality'] = 'medium') {
+  constructor(scene: THREE.Scene, quality: BaseQuality = 'medium') {
     this.group.name = 'Joburg'; scene.add(this.group);
     this.architecture = new BuildingArchitecture(this.group);
     ensureParcels(); // build the citywide parcel layout now (during load), not on the first frame
@@ -536,7 +536,7 @@ export class City {
 
   /** (Re)builds every water surface for the given quality tier; safe to call live from the pause menu.
    *  The old handle disposes its geometries, materials, and the planar mirror's render target. */
-  setWaterQuality(quality: GameSettings['quality']): void {
+  setWaterQuality(quality: BaseQuality): void {
     this.waterHandle?.dispose();
     this.waterHandle = createWater(this.waterSites, waterTier(quality));
     this.group.add(this.waterHandle.group);

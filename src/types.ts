@@ -30,9 +30,13 @@ export interface SavedGame {
   safehouses: SafehouseId[];
   inventory: Inventory;
 }
+/** Tiers the world subsystems understand. `ultra` is a render-only super-tier (High visuals + extra AA);
+ *  it maps down to `high` for everything except the renderer's pixel ratio and post-processing. */
+export type BaseQuality = 'low' | 'medium' | 'high';
+
 export interface GameSettings {
   masterVolume: number;
-  quality: 'low' | 'medium' | 'high';
+  quality: BaseQuality | 'ultra';
   showFps: boolean;
   mouseSensitivity: number;
   cameraViewFoot: number;
