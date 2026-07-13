@@ -16,7 +16,9 @@ export type ConsoleCommand =
   | { kind: 'ghost' }
   | { kind: 'busy' }
   | { kind: 'map' }
+  | { kind: 'mapnpcs' }
   | { kind: 'save' }
+  | { kind: 'reload' }
   | { kind: 'spawn'; vehicle: VehicleKind }
   | { kind: 'cash'; amount: number }
   | { kind: 'unwanted' }
@@ -47,9 +49,11 @@ export interface ConsoleHost {
   setCarTarget(count?: number): string;
   busyInfo(): string;
   openMap(): string;
+  toggleMapNpcs(): string;
   save(): string;
   ghost(): string;
   setPosition(axis: 'x' | 'y' | 'z', value: number): string;
+  reload(): string;
   teleport(x: number, z: number): string;
   teleportNamed(name: string): string;
   teleportList(): string[];
@@ -90,7 +94,9 @@ export const HELP_LINES = [
   'busy — show the current nearby crowd targets and live counts',
   'set x|y|z <n> — move the player along one axis (pair with ghost to hold altitude)',
   'map — open the city map (or press M)',
-  'save — save the current game to this browser',
+  'mapnpcs — toggle debug NPC dots on the map (cars magenta, peds deep blue)',
+  'save — stamp a checkpoint (progress autosaves anyway; this marks a spot `reload` returns to)',
+  'reload — jump back to your last `save` checkpoint (position, facing, time, money, kit)',
   'ghost — free-fly test mode: wheel = altitude, gravity off, clip through everything',
   'fps — toggle the performance display (shows X/Y/Z position)',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
@@ -124,8 +130,10 @@ export function parseCommand(input: string): ConsoleCommand {
   if (head === 'fps' && rest.length === 0) return { kind: 'fps' };
   if (head === 'busy' && rest.length === 0) return { kind: 'busy' };
   if (head === 'map' && rest.length === 0) return { kind: 'map' };
+  if (head === 'mapnpcs' && rest.length === 0) return { kind: 'mapnpcs' };
   if (head === 'save' && rest.length === 0) return { kind: 'save' };
   if (head === 'ghost' && rest.length === 0) return { kind: 'ghost' };
+  if (head === 'reload' && rest.length === 0) return { kind: 'reload' };
   if (head === 'set') {
     const [key, value] = rest;
     if (key === 'x' || key === 'y' || key === 'z') {
@@ -196,6 +204,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'error': return [command.message];
     case 'fps': return [host.toggleFps()];
     case 'save': return [host.save()];
+    case 'reload': return [host.reload()];
     case 'set-time': return [host.setTime(command.hour)];
     case 'set-timerate': return [host.setTimerate(command.rate)];
     case 'set-busy': return [host.setBusy(command.percent)];
@@ -205,6 +214,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'ghost': return [host.ghost()];
     case 'busy': return [host.busyInfo()];
     case 'map': return [host.openMap()];
+    case 'mapnpcs': return [host.toggleMapNpcs()];
     case 'spawn': return [host.spawn(command.vehicle)];
     case 'cash': return [host.giveCash(command.amount)];
     case 'unwanted': return [host.dropStar()];

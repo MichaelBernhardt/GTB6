@@ -18,7 +18,9 @@ export interface SavedGame {
   version: 2;
   money: number;
   completedMissions: string[];
-  spawn: [number, number, number];
+  spawn: [number, number, number]; // death/wasted respawn anchor (last safehouse, or the default)
+  position: [number, number, number]; // where the player actually was at the last save (x, y, z) — Continue resumes here
+  heading: number; // the direction the player was facing at the last save — restored with position
   settings: GameSettings;
   weapons: SavedWeapons;
   cheats: CheatSettings;
