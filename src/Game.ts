@@ -458,7 +458,7 @@ export class Game {
   private startOnline(name: string): void {
     this.endTaxiShift(); this.endCourierShift(); this.online?.close();
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
-    this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined;
+    this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose();
     this.player.group.position.set(2050, 0, 3850); this.player.group.position.y = this.city.surfaceHeightAt(2050, 3850);
     this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
@@ -677,6 +677,7 @@ export class Game {
     this.player.inVehicle = false; this.player.setVisible(true);
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(2.2);
     this.player.group.position.copy(vehicle.group.position).add(side); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
+    this.player.resetAirbornePose(); // a two-wheeler rider's group carries the bike's orientation; wipe it so a wreck-eject doesn't leave the player inverted
     this.audio.setEngine(false);
   }
 
@@ -1161,6 +1162,7 @@ export class Game {
     }
     else {
       transition.vehicle.playerControlled = false; transition.vehicle.setFirstPerson(false); this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position);
+      this.player.resetAirbornePose(); // a two-wheeler rider's group inherited the bike's full orientation (incl. terrain pitch); wipe it on dismount or the player stands up inverted, feet under the ground
       const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(transition.vehicle.group.position) < 14);
       if (guard) {
         const tipped = this.economy.spend(2);
@@ -1358,7 +1360,7 @@ export class Game {
     const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
     this.garageVehicle = vehicle;
     this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
-    this.player.group.position.set(GARAGE_STEP_OUT.x, this.city.surfaceHeightAt(GARAGE_STEP_OUT.x, GARAGE_STEP_OUT.z), GARAGE_STEP_OUT.z); this.audio.setEngine(false); this.audio.ui(true);
+    this.player.group.position.set(GARAGE_STEP_OUT.x, this.city.surfaceHeightAt(GARAGE_STEP_OUT.x, GARAGE_STEP_OUT.z), GARAGE_STEP_OUT.z); this.player.resetAirbornePose(); this.audio.setEngine(false); this.audio.ui(true);
     this.save.garage = { kind: vehicle.spec.kind, color: vehicle.spec.color, health: Math.round(vehicle.health) };
     this.persist();
     this.ui.notify('Vehicle stored', `${vehicle.spec.name} is tucked away in the garage.`);

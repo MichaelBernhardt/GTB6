@@ -62,4 +62,23 @@ describe('two-wheeler knock-off tumble', () => {
     expect(player.group.rotation.x).toBeCloseTo(0);
     expect(player.bodyUp().y).toBeGreaterThan(0.999);
   });
+
+  // A plain dismount (no tumble) off a bike that was pitched/banked used to leave the rider standing
+  // inverted, feet under the ground: the group kept the bike's inherited orientation and nothing on the
+  // on-foot path clears rotation.x. The dismount paths now call resetAirbornePose(), same as the crash.
+  it('stands upright after dismounting a pitched bike (resetAirbornePose on the exit path)', () => {
+    const player = new Player(new THREE.Scene(), new THREE.Vector3(0, GROUND, 0));
+    player.group.rotation.set(1.2, Math.PI, 0.5); // inherited bike pitch + lean + heading at the moment of dismount
+    const heading = player.group.rotation.y;
+
+    player.resetAirbornePose(); // what the dismount exit branch now does
+    player.onGround = true; player.velocityY = 0;
+    for (let i = 0; i < 30; i++) player.update(1 / 60, idle, 0, city);
+
+    expect(player.group.rotation.x).toBeCloseTo(0);
+    expect(player.group.rotation.z).toBeCloseTo(0);
+    expect(player.group.rotation.y).toBeCloseTo(heading); // heading survives the dismount
+    expect(player.bodyUp().y).toBeGreaterThan(0.999); // upright, not inverted under the tar
+    expect(player.tumbling).toBe(false);
+  });
 });
