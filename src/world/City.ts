@@ -1627,10 +1627,32 @@ export class City {
    *  every structure registers its (true-3D, standable-aware) tier colliders. */
   private buildOneModel(spec: ScatteredModel): { group: THREE.Group; colliders: Collider[] } {
     const built = buildModel(spec.name, spec.seed, { variant: spec.variant });
-    const baseY = terrainHeightAt(spec.x, spec.z); // sit the scattered model on the terrain like a building
-    built.group.position.set(spec.x, baseY, spec.z); built.group.rotation.y = spec.heading;
     const foliage = MODEL_INDEX.get(spec.name)?.category === 'foliage';
+    // Footprint from the model's massing tiers (local AABB union).
+    let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
+    for (const tier of built.tiers) { minX = Math.min(minX, tier.minX); maxX = Math.max(maxX, tier.maxX); minZ = Math.min(minZ, tier.minZ); maxZ = Math.max(maxZ, tier.maxZ); }
+    const structure = !foliage && minX < maxX;
+    let baseY = terrainHeightAt(spec.x, spec.z); let hMin = baseY;
+    if (structure) {
+      // Fit a scattered STRUCTURE to sloped terrain like a building: sit on the highest footprint corner so
+      // nothing sinks in, and level up from the lowest with a plinth (foliage just plants at its centre).
+      const cs = Math.cos(spec.heading); const sn = Math.sin(spec.heading); let hMax = -Infinity; hMin = Infinity;
+      for (const fx of [minX, (minX + maxX) / 2, maxX]) for (const fz of [minZ, (minZ + maxZ) / 2, maxZ]) {
+        const cornerH = terrainHeightAt(spec.x + fx * cs + fz * sn, spec.z - fx * sn + fz * cs);
+        if (cornerH > hMax) hMax = cornerH; if (cornerH < hMin) hMin = cornerH;
+      }
+      baseY = hMax;
+    }
+    built.group.position.set(spec.x, baseY, spec.z); built.group.rotation.y = spec.heading;
     const colliders = foliage ? [] : built.tiers.map((tier) => this.tierToWorldCollider(tier, spec.x, spec.z, spec.heading, baseY));
+    if (structure && baseY - hMin > PLAYER.stepUp) {
+      // Concrete levelling pad under the footprint, buried past the low corner, with a collider so you can't
+      // walk into the raised understory on the downhill side.
+      const plinthDrop = baseY - hMin + 1.2; const plinthH = plinthDrop + 0.2;
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(maxX - minX + 1.4, plinthH, maxZ - minZ + 1.4), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 }));
+      plinth.position.set((minX + maxX) / 2, 0.2 - plinthH / 2, (minZ + maxZ) / 2); plinth.receiveShadow = true; built.group.add(plinth);
+      colliders.push(this.tierToWorldCollider({ minX: minX - 0.7, maxX: maxX + 0.7, minZ: minZ - 0.7, maxZ: maxZ + 0.7, y0: -plinthDrop, y1: 0 }, spec.x, spec.z, spec.heading, baseY));
+    }
     return { group: built.group, colliders };
   }
 
