@@ -4,7 +4,6 @@ import type { City } from '../world/City';
 import { activeZones, advanceZone, axisIndex, zoneCharacter, zoneKey, zoneOf, type ZoneCell } from '../world/data/zoneGrid';
 import type { Zone } from '../world/data/zoning';
 import { DAY_CYCLE_SECONDS } from '../world/DayNight';
-import { CALM_THRESHOLD } from './FearSystem';
 import { MISSIONS } from './MissionSystem';
 import type { PopulationSystem } from './PopulationSystem';
 
@@ -123,14 +122,19 @@ export function isAmbientPedestrian(ped: PedShape): boolean {
   return !ped.contact && !ped.police && !ped.hostile && !ped.carGuard && ped.state !== 'down';
 }
 
-/** Safe to silently remove: a calm, uninvolved wanderer — never mission cast, police, or anyone reacting to the player. */
+/** Safe to silently remove: any anonymous wanderer — mission cast, police, hostiles, guards and corpses
+ *  excluded. Panic is deliberately NOT a gate: the recycle only ever fires on agents already out of sight or
+ *  beyond the active block, so a fleeing civilian the player can't see must still make way for fresh spawns. */
 export function pedDespawnable(ped: PedShape): boolean {
-  return isAmbientPedestrian(ped) && (ped.state === 'walk' || ped.state === 'idle') && ped.fear < CALM_THRESHOLD;
+  return isAmbientPedestrian(ped);
 }
 
-/** Safe to silently remove: healthy anonymous traffic — never the player's ride, police, or anything damaged/burning. */
+/** Safe to silently remove: anonymous traffic that isn't the player's ride, police, or already burning/wrecked
+ *  (those go through the slower wreck-cleanup). Damage is deliberately NOT a gate — potholes and fender-benders
+ *  dent nearly every car, and the recycle only fires out of sight, so a dinged car far away must still be free
+ *  to make room for fresh traffic near the player. */
 export function vehicleDespawnable(vehicle: VehicleShape): boolean {
-  return !vehicle.playerControlled && !vehicle.police && !vehicle.disabled && !vehicle.onFire && !vehicle.wrecked && vehicle.health >= vehicle.maxHealth;
+  return !vehicle.playerControlled && !vehicle.police && !vehicle.disabled && !vehicle.onFire && !vehicle.wrecked;
 }
 
 /** Mission cast decays in place: cleaning a downed rank enforcer would let the mission respawn the whole crew. */
@@ -277,14 +281,14 @@ export class LifecycleSystem {
   private reconcileTraffic(view: ViewPoint, protectedVehicles: ReadonlySet<Vehicle>, activeKeys: Set<number>, target: Map<number, number>, total: number): void {
     const drivable = (vehicle: Vehicle) => !vehicle.wrecked && !vehicle.disabled;
     for (const vehicle of this.population.traffic.filter(drivable))
-      if ((!activeKeys.has(pointZone(vehicle.group.position.x, vehicle.group.position.z)) || beyondBubble(view, vehicle.group.position.x, vehicle.group.position.z)) && !protectedVehicles.has(vehicle) && vehicleDespawnable(vehicle)) this.population.removeVehicle(vehicle);
+      if ((!activeKeys.has(pointZone(vehicle.group.position.x, vehicle.group.position.z)) || beyondBubble(view, vehicle.group.position.x, vehicle.group.position.z)) && !protectedVehicles.has(vehicle) && !MISSION_VEHICLE_COLORS.has(vehicle.spec.color) && vehicleDespawnable(vehicle)) this.population.removeVehicle(vehicle);
 
     const live = this.population.traffic.filter(drivable);
     const zoneLive = countByZone(live.map((vehicle) => vehicle.group.position));
     let deficit = total - live.length; let budget = censusBudget(deficit);
     if (deficit < 0) {
       const surplus = (vehicle: Vehicle) => (zoneLive.get(pointZone(vehicle.group.position.x, vehicle.group.position.z)) ?? 0) - (target.get(pointZone(vehicle.group.position.x, vehicle.group.position.z)) ?? 0);
-      const trimmable = live.filter((vehicle) => !protectedVehicles.has(vehicle) && vehicleDespawnable(vehicle) && outOfSight(view, vehicle.group.position.x, vehicle.group.position.z)).sort((a, b) => surplus(b) - surplus(a));
+      const trimmable = live.filter((vehicle) => !protectedVehicles.has(vehicle) && !MISSION_VEHICLE_COLORS.has(vehicle.spec.color) && vehicleDespawnable(vehicle) && outOfSight(view, vehicle.group.position.x, vehicle.group.position.z)).sort((a, b) => surplus(b) - surplus(a));
       for (const vehicle of trimmable) { if (deficit >= 0 || budget <= 0) break; this.population.removeVehicle(vehicle); deficit++; budget--; }
     } else {
       const deficitKeys = deficitZones(activeKeys, zoneLive, target);
@@ -308,7 +312,11 @@ export class LifecycleSystem {
     for (let i = 0; i < points.length; i++) {
       const point = points[(start + i) % points.length]; if (!point) continue;
       const distance = Math.hypot(point.x - view.x, point.z - view.z);
-      if (distance < SPAWN_MIN_DISTANCE || distance > SPAWN_MAX_DISTANCE || !outOfSight(view, point.x, point.z)) continue;
+      if (distance < SPAWN_MIN_DISTANCE || distance > SPAWN_MAX_DISTANCE) continue;
+      // Hidden from the player = behind the view cone OR (in front but) with a building blocking the sight line.
+      // The latter lets fresh agents appear within the player's own cell, ahead of them, obscured — instead of
+      // only ever behind, so the world populates the way you're heading rather than the way you came.
+      if (!outOfSight(view, point.x, point.z) && !this.city.sightBlocked(view.x, view.z, point.x, point.z)) continue;
       const key = pointZone(point.x, point.z);
       if (!activeKeys.has(key) || crowded(point)) continue;
       if (deficitKeys.has(key)) return point; // ideal: a zone that still wants people, well clear of the batch

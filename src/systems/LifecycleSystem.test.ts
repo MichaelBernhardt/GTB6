@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { AudioManager } from '../core/AudioManager';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN, type City } from '../world/City';
-import { CALM_THRESHOLD } from './FearSystem';
 import { activeZones, axisIndex, zoneCharacter, ZONE_SIZE } from '../world/data/zoneGrid';
 import {
   AMBIENT_SPAWN_TRICKLE, BUSY_MAX, BUSY_MIN, CAR_TARGET_CAP, censusBudget, CHANGE_BUDGET, clampBusy, CLEANUP_HOURS, cleanupEligible,
@@ -148,39 +147,34 @@ describe('isAmbientPedestrian', () => {
 });
 
 describe('pedDespawnable', () => {
-  it('allows only calm, idle-or-walking anonymous citizens', () => {
+  it('allows any anonymous wanderer, panicked or not (the recycle only ever fires out of sight)', () => {
     expect(pedDespawnable(ped())).toBe(true);
     expect(pedDespawnable(ped({ state: 'idle' }))).toBe(true);
+    expect(pedDespawnable(ped({ state: 'flee', fear: 80 }))).toBe(true); // fear no longer pins a far, unseen civilian in place
+    expect(pedDespawnable(ped({ state: 'cower', fear: 95 }))).toBe(true);
   });
 
-  it('never despawns anyone involved with the player', () => {
-    expect(pedDespawnable(ped({ state: 'flee', fear: 80 }))).toBe(false); // actively fleeing
-    expect(pedDespawnable(ped({ state: 'cower', fear: 95 }))).toBe(false);
-    expect(pedDespawnable(ped({ state: 'hostile' }))).toBe(false);
-    expect(pedDespawnable(ped({ fear: CALM_THRESHOLD }))).toBe(false); // still rattled
-    expect(pedDespawnable(ped({ fear: CALM_THRESHOLD - 1 }))).toBe(true);
-  });
-
-  it('never despawns mission contacts, guards, or police', () => {
+  it('never despawns mission contacts, guards, police, hostiles, or corpses', () => {
     expect(pedDespawnable(ped({ contact: true }))).toBe(false);
     expect(pedDespawnable(ped({ carGuard: true }))).toBe(false);
     expect(pedDespawnable(ped({ police: true }))).toBe(false);
     expect(pedDespawnable(ped({ hostile: true }))).toBe(false);
+    expect(pedDespawnable(ped({ state: 'down' }))).toBe(false); // a corpse goes through the slower cleanup path, not the recycle
   });
 });
 
 describe('vehicleDespawnable', () => {
-  it('allows healthy anonymous traffic only', () => {
+  it('allows anonymous traffic regardless of damage (potholes dent nearly everything)', () => {
     expect(vehicleDespawnable(vehicle())).toBe(true);
+    expect(vehicleDespawnable(vehicle({ health: 1 }))).toBe(true); // a dinged car far out of sight is still recyclable
   });
 
-  it('never despawns the player ride, police, or anything damaged or burning', () => {
+  it('never despawns the player ride, police, or anything already burning or wrecked', () => {
     expect(vehicleDespawnable(vehicle({ playerControlled: true }))).toBe(false);
     expect(vehicleDespawnable(vehicle({ police: true }))).toBe(false);
     expect(vehicleDespawnable(vehicle({ disabled: true }))).toBe(false);
     expect(vehicleDespawnable(vehicle({ onFire: true }))).toBe(false);
     expect(vehicleDespawnable(vehicle({ wrecked: true }))).toBe(false);
-    expect(vehicleDespawnable(vehicle({ health: 99 }))).toBe(false); // recently damaged: leave it be
   });
 });
 
@@ -202,6 +196,7 @@ const makeCity = (): City => ({
   wanderTarget: () => undefined, // fall back to the citywide set: this harness asserts census counts, not route locality
   trafficRoutes: lanes.map((lane) => lane.points),
   collides: () => false,
+  sightBlocked: () => false, // no buildings in the harness: nothing occludes the sight line
   isOnRoad: () => true,
   signalStops: () => false, // no robots in this lifecycle harness
   surfaceHeightAt: () => 0,
@@ -305,6 +300,39 @@ describe('lifecycle simulation', () => {
     // the whole CBD crowd (now two-plus zones away, always out of sight) has been cleared
     for (const ped of population.pedestrians.filter(isAmbientPedestrian))
       expect(Math.hypot(ped.group.position.x - SPAWN_POINT.x, ped.group.position.z - SPAWN_POINT.z)).toBeGreaterThan(ZONE_SIZE);
+  });
+
+  it('recycles damaged cars left behind — a dinged car is no longer immortal (regression: pristine-only gate)', () => {
+    const city = makeCity();
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const lifecycle = new LifecycleSystem(city, population);
+    const cbdView = { x: SPAWN_POINT.x, z: SPAWN_POINT.z, dirX: 0, dirZ: 1 };
+    for (let i = 0; i < 300; i++) lifecycle.update(1, 12, cbdView, new Set());
+    const cars = population.traffic.filter((vehicle) => !vehicle.wrecked && !vehicle.disabled);
+    expect(cars.length).toBeGreaterThan(0);
+    cars.forEach((vehicle) => vehicle.takeDamage(1)); // a pothole ding: below full health, but still drivable — the old gate stranded exactly these
+    expect(cars.every((vehicle) => vehicle.health < vehicle.maxHealth)).toBe(true);
+    const farView = { x: -8000, z: -8000, dirX: 0, dirZ: 1 }; // drive off to the far corner
+    for (let i = 0; i < 5; i++) lifecycle.update(1, 12, farView, new Set());
+    for (const vehicle of population.traffic.filter((veh) => !veh.wrecked && !veh.disabled))
+      expect(Math.hypot(vehicle.group.position.x - SPAWN_POINT.x, vehicle.group.position.z - SPAWN_POINT.z)).toBeGreaterThan(ZONE_SIZE); // every dented car left behind was recycled, not stranded near the old spot
+  });
+
+  it('spawns at occluded in-cone spots (behind a building) within the player cell, not only behind the view', () => {
+    // Every available sidewalk node is placed dead ahead of the player, in view range — so the only way any
+    // may spawn is if a building blocks the sight line to it.
+    const ahead = Array.from({ length: 24 }, (_, i) => ({ x: SPAWN_POINT.x + 20 * (i % 6), z: SPAWN_POINT.z + 120 + 20 * Math.floor(i / 6) }));
+    const view = { x: SPAWN_POINT.x, z: SPAWN_POINT.z, dirX: 0, dirZ: 1 }; // looking straight at the nodes
+    const run = (sightBlocked: () => boolean): number => {
+      const city = { ...makeCity(), sidewalkPoints: ahead, sightBlocked } as unknown as City;
+      const population = new PopulationSystem(new THREE.Scene(), city, audio);
+      population.pedestrians.length = 0; population.traffic.length = 0; // drop the opening seed crowd: start from an empty area
+      const lifecycle = new LifecycleSystem(city, population);
+      lifecycle.update(LIFECYCLE_INTERVAL, 12, view, new Set());
+      return population.pedestrians.filter(isAmbientPedestrian).length;
+    };
+    expect(run(() => false)).toBe(0); // clear line of sight: nodes are all in view, so nobody may appear there
+    expect(run(() => true)).toBeGreaterThan(0); // a building occludes them: the same in-cone nodes are now valid hidden spawns
   });
 
   it('recycles a crowd left behind when the player moves WITHIN the active block, refilling around them', () => {

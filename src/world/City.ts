@@ -497,6 +497,20 @@ export class City {
   /** Fast ground-band occupancy for the many peds/vehicles/nav queries: the spatial grid keeps each
    *  query single-cell, and the y-span filter matches collides()'s (ground, ground+2) band so a
    *  floating setback tier over an open plaza doesn't block the street the way a podium wall does. */
+  /** Cheap line-of-sight proxy: true when a building/wall collider straddles the straight ground line
+   *  between two points. Buildings only — thin props are ignored, so it never falsely reports a spot in the
+   *  open as hidden. Used to spawn ambient agents where a structure blocks the player's view of the spot. */
+  sightBlocked(ax: number, az: number, bx: number, bz: number): boolean {
+    const dx = bx - ax; const dz = bz - az; const dist = Math.hypot(dx, dz);
+    if (dist < 2) return false;
+    const steps = Math.min(160, Math.ceil(dist / 3)); // ~3u samples along the ray, capped for the far end of the spawn ring
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      if (this.overlapsCollider(ax + dx * t, az + dz * t, 0.4)) return true;
+    }
+    return false;
+  }
+
   private overlapsCollider(x: number, z: number, radius: number): boolean {
     this.indexNewColliders();
     const ground = terrainHeightAt(x, z);
