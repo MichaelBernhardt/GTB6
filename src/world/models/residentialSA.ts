@@ -92,7 +92,7 @@ export function buildApartmentBlock(seed: number, options: BuildOptions = {}): B
   const bays = 3;
   for (let floor = 1; floor <= floors; floor++) for (let bay = 0; bay < bays; bay++) {
     const x = (bay - (bays - 1) / 2) * (w / bays); const y = floor * floorH - 0.6;
-    kit.box(M.concrete, w / bays - 1.4, 0.14, 1.3, x, y, d / 2 + 0.65, { cast: false });
+    kit.box(M.concrete, w / bays - 1.4, 0.14, 1.3, x, y, d / 2 + 0.65, { cast: false, collide: true }); // balcony floor — standable
     kit.box(M.darkMetal, w / bays - 1.4, 0.75, 0.06, x, y + 0.14, d / 2 + 1.28, { cast: false });
     kit.box(M.glassDark, w / bays - 2, 1.6, 0.1, x, y + 0.2, d / 2 + 0.04, { cast: false });
   }

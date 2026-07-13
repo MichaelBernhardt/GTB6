@@ -17,7 +17,7 @@ export function buildStripMall(seed: number, options: BuildOptions = {}): BuiltM
 
   kit.box(wall, w, h, d, 0, 0, 0, { collide: true }); // flat roof — standable via the tier top
   kit.box(wall, w, 1, 0.3, 0, h, d / 2 - 0.15, { cast: false }); // parapet lip
-  kit.box(M.concrete, w + 0.4, 0.22, 2.6, 0, 3.1, d / 2 + 1.3, { cast: false }); // walkway canopy
+  kit.box(M.concrete, w + 0.4, 0.22, 2.6, 0, 3.1, d / 2 + 1.3, { cast: false, collide: true }); // walkway canopy / balcony — standable
   kit.box(M.paving, w, 0.14, 3, 0, 0, d / 2 + 1.5, { cast: false });
   for (let unit = 0; unit <= units; unit++) kit.box(M.steel, 0.14, 3.1, 0.14, -w / 2 + unit * unitW, 0, d / 2 + 2.4);
   for (let unit = 0; unit < units; unit++) {
@@ -25,7 +25,7 @@ export function buildStripMall(seed: number, options: BuildOptions = {}): BuiltM
     kit.box(M.glassDark, unitW - 1.1, 2.5, 0.12, x, 0.14, d / 2 + 0.05, { cast: false });
     kit.sign(kit.pick(10 + unit, SHOP_NAMES), kit.pick(20 + unit, ACCENTS), unitW - 1.4, 0.85, x, 3.85, d / 2 + 0.32);
   }
-  for (let vent = 0; vent < units - 1; vent++) kit.box(M.steel, 1.1, 0.7, 1.1, -w / 2 + unitW * (vent + 1), h, -d * 0.2); // roof plant
+  for (let vent = 0; vent < units - 1; vent++) kit.box(M.steel, 1.1, 0.7, 1.1, -w / 2 + unitW * (vent + 1), h, -d * 0.2, { collide: true }); // roof plant — standable
   return kit.done();
 }
 
@@ -106,7 +106,7 @@ export function buildOfficeBlock(seed: number, options: BuildOptions = {}): Buil
   kit.box(M.concrete, 4.4, 0.2, 1.8, w * 0.12, 3, d / 2 + 0.9, { cast: false }); // entrance canopy
   kit.box(M.glassDark, 3.4, 2.6, 0.12, w * 0.12, 0, d / 2 + 0.06, { cast: false });
   kit.sign(kit.pick(4, ['SANLAMB', 'OLD NEUTRAL', 'MEDIOCRE HOLDINGS', 'PRICEY WATERHOUSE', 'DISCOVERY CHANNEL MEDICAL']), '#c8d6dd', w * 0.5, 0.7, 0, h - 0.6, d / 2 + 0.08);
-  for (let unit = 0; unit < 2; unit++) kit.box(M.steel, 1.4, 0.9, 1.1, -w * 0.1 + unit * 3, h, -d * 0.18);
+  for (let unit = 0; unit < 2; unit++) kit.box(M.steel, 1.4, 0.9, 1.1, -w * 0.1 + unit * 3, h, -d * 0.18, { collide: true }); // roof plant — standable
   return kit.done();
 }
 
@@ -130,7 +130,7 @@ export function buildBigBox(seed: number, options: BuildOptions = {}): BuiltMode
   kit.box(M.steel, 0.5, 8.5, 0.5, w / 2 + 2.6, 0, d / 2 - 1); // pylon
   kit.sign(brand.name, brand.accent, 3.6, 1.7, w / 2 + 2.6, 9.6, d / 2 - 1, { doubleSide: true });
   for (let unit = 0; unit < 4 + variant * 2; unit++) {
-    kit.box(M.steel, 1.6, 1, 1.3, -w * 0.3 + (unit % 3) * w * 0.3, h, -d * 0.28 + Math.floor(unit / 3) * d * 0.3);
+    kit.box(M.steel, 1.6, 1, 1.3, -w * 0.3 + (unit % 3) * w * 0.3, h, -d * 0.28 + Math.floor(unit / 3) * d * 0.3, { collide: true }); // roof HVAC — standable
   }
   kit.box(M.paving, w * 0.8, 0.12, 5, 0, 0, d / 2 + 4.4, { cast: false }); // apron + trolley bay
   kit.box(M.steel, 2.4, 1.1, 1.1, w * 0.28, 0.12, d / 2 + 4, { cast: false });
