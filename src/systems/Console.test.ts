@@ -14,6 +14,8 @@ describe('console parser', () => {
     expect(parseCommand('fps')).toEqual({ kind: 'fps' });
     expect(parseCommand('save')).toEqual({ kind: 'save' });
     expect(parseCommand('save now').kind).toBe('error'); // save takes no arguments
+    expect(parseCommand('mapnpcs')).toEqual({ kind: 'mapnpcs' });
+    expect(parseCommand('mapnpcs on').kind).toBe('error'); // no-arg toggle
     expect(parseCommand('   ')).toEqual({ kind: 'noop' });
   });
 
@@ -151,6 +153,7 @@ describe('runConsoleCommand', () => {
     setCarTarget: (count) => `cars:${count ?? 'auto'}`,
     busyInfo: () => 'crowd',
     openMap: () => 'map-open',
+    toggleMapNpcs: () => 'mapnpcs toggled',
     save: () => 'saved',
     teleport: (x, z) => `tp:${x},${z}`,
     teleportNamed: (name) => `tpn:${name}`,
@@ -170,6 +173,7 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('shedding', host)).toEqual(['eskom']);
     expect(runConsoleCommand('nomoresirens', host)).toEqual(['sirens toggled']);
     expect(runConsoleCommand('fps', host)).toEqual(['fps']);
+    expect(runConsoleCommand('mapnpcs', host)).toEqual(['mapnpcs toggled']);
     expect(runConsoleCommand('help', host)).toEqual(HELP_LINES);
     expect(runConsoleCommand('', host)).toEqual([]);
     expect(runConsoleCommand('wololo', host)[0]).toContain('Eish');

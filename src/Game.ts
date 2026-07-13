@@ -123,6 +123,7 @@ export class Game {
   private potholeCooldown = 0;
   private etollCooldowns: number[] = ETOLL_GANTRIES.map(() => 0);
   private radioIntroShown = false;
+  private debugMapNpcs = false; // `mapnpcs` console toggle: draw every ambient car/ped as a dot on the full map
   private mouseSteerHintShown = false;
   private driveSteer = 0; // virtual steering-wheel offset [-1,1] wound by LMB-drag mouse steering (only in a vehicle, third person, not aiming)
   private driveSteerActive = false;
@@ -290,6 +291,7 @@ export class Game {
     return {
       x: focus.x, z: focus.z, heading: this.activeVehicle?.heading ?? this.player.heading,
       markers: this.mapMarkers(), police: this.mapPolice(), hostiles: this.mapHostiles(),
+      cars: this.mapCars(), peds: this.mapPeds(),
     };
   }
   private mapMarkers(): MapMarker[] {
@@ -307,6 +309,15 @@ export class Game {
   private mapHostiles(): MapPoint[] {
     if (this.online) return [];
     return this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact && !ped.police).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
+  }
+  /** `mapnpcs` debug dots: every ambient car / ped, only while the toggle is on (empty otherwise, so it costs nothing). */
+  private mapCars(): MapPoint[] {
+    if (!this.debugMapNpcs || this.online) return [];
+    return this.population.traffic.filter((vehicle) => !vehicle.wrecked).map((vehicle) => ({ x: vehicle.group.position.x, z: vehicle.group.position.z }));
+  }
+  private mapPeds(): MapPoint[] {
+    if (!this.debugMapNpcs || this.online) return [];
+    return this.population.pedestrians.map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
   }
 
   /** Console command handlers: every mutation goes through the same paths the game itself uses. */
@@ -334,6 +345,7 @@ export class Game {
     },
     busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
     openMap: () => { this.closeConsole(); this.openMap(); return 'Opening the city map. Press M or ESC to close.'; },
+    toggleMapNpcs: () => { this.debugMapNpcs = !this.debugMapNpcs; return this.debugMapNpcs ? 'NPC map dots ON — cars magenta, peds deep blue. Open the map with M.' : 'NPC map dots off.'; },
     save: () => { this.persist(); return 'Game saved.'; },
     teleport: (x, z) => this.teleportPlayer(clampToWorld(x), clampToWorld(z), `${Math.round(x)}, ${Math.round(z)}`),
     teleportNamed: (name) => {
@@ -1577,7 +1589,7 @@ export class Game {
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles
     const heading = this.activeVehicle?.heading ?? this.player.heading;
     this.ui.drawMap(focus.x, focus.z, heading, this.city.roadPaths, markers, police, hostiles, this.settings.minimapZoom);
-    if (this.ui.mapOpen) this.ui.updateMap({ x: focus.x, z: focus.z, heading, markers, police, hostiles });
+    if (this.ui.mapOpen) this.ui.updateMap({ x: focus.x, z: focus.z, heading, markers, police, hostiles, cars: this.mapCars(), peds: this.mapPeds() });
   }
 
   /** Single damage funnel: the invulnerable cheat short-circuits, then armour soaks before health bleeds. */

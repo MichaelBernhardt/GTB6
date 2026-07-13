@@ -42,6 +42,7 @@ export function mapOverlayKeyAction(code: string, repeat: boolean): 'close' | 's
 export interface MapViewFrame {
   x: number; z: number; heading: number;
   markers: MapMarker[]; police: MapPoint[]; hostiles: MapPoint[];
+  cars?: MapPoint[]; peds?: MapPoint[]; // `mapnpcs` debug overlay: every ambient car / ped as a tiny dot (empty/undefined when off)
 }
 
 /**
@@ -168,6 +169,7 @@ export class MapView {
 
     // Live game markers, drawn in the minimap's language, in crisp screen space.
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.drawNpcDots(ctx, cam); // `mapnpcs` debug layer, under the mission markers/player
     for (const unit of this.frame.police) {
       const p = markerScreen(unit, cam); if (p.onScreen) drawMarker(ctx, p.sx, p.sy, '#56b7d7', 'square', 6);
     }
@@ -179,6 +181,22 @@ export class MapView {
     }
     const self = markerScreen(this.frame, cam);
     drawPlayerArrow(ctx, self.sx, self.sy, this.frame.heading);
+  }
+
+  /** `mapnpcs` debug overlay: a tiny dot per ambient car (magenta) / ped (deep blue). Batched by colour —
+   *  one path + fill for the whole set — so hundreds of dots stay cheap; no per-dot stroke. */
+  private drawNpcDots(ctx: CanvasRenderingContext2D, cam: MapCamera): void {
+    const dots = (points: MapPoint[] | undefined, color: string, radius: number): void => {
+      if (!points?.length) return;
+      ctx.fillStyle = color; ctx.beginPath();
+      for (const point of points) {
+        const p = markerScreen(point, cam); if (!p.onScreen) continue;
+        ctx.moveTo(p.sx + radius, p.sy); ctx.arc(p.sx, p.sy, radius, 0, Math.PI * 2); // moveTo first so each dot is its own sub-path
+      }
+      ctx.fill();
+    };
+    dots(this.frame.peds, '#1e40ff', 1.8); // deep blue
+    dots(this.frame.cars, '#ff33cc', 2.2); // magenta, a touch larger so cars read over the ped swarm
   }
 
   /** Search box + results dropdown: jump the map to a street by name (GTA-style). */

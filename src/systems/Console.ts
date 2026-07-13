@@ -14,6 +14,7 @@ export type ConsoleCommand =
   | { kind: 'set-cars'; count?: number }
   | { kind: 'busy' }
   | { kind: 'map' }
+  | { kind: 'mapnpcs' }
   | { kind: 'save' }
   | { kind: 'spawn'; vehicle: VehicleKind }
   | { kind: 'cash'; amount: number }
@@ -45,6 +46,7 @@ export interface ConsoleHost {
   setCarTarget(count?: number): string;
   busyInfo(): string;
   openMap(): string;
+  toggleMapNpcs(): string;
   save(): string;
   teleport(x: number, z: number): string;
   teleportNamed(name: string): string;
@@ -85,6 +87,7 @@ export const HELP_LINES = [
   'set cars <n|auto> — pin the traffic target for the area around you (auto = per-zone by district)',
   'busy — show the current nearby crowd targets and live counts',
   'map — open the city map (or press M)',
+  'mapnpcs — toggle debug NPC dots on the map (cars magenta, peds deep blue)',
   'save — save the current game to this browser',
   'fps — toggle the performance display',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
@@ -118,6 +121,7 @@ export function parseCommand(input: string): ConsoleCommand {
   if (head === 'fps' && rest.length === 0) return { kind: 'fps' };
   if (head === 'busy' && rest.length === 0) return { kind: 'busy' };
   if (head === 'map' && rest.length === 0) return { kind: 'map' };
+  if (head === 'mapnpcs' && rest.length === 0) return { kind: 'mapnpcs' };
   if (head === 'save' && rest.length === 0) return { kind: 'save' };
   if (head === 'set') {
     const [key, value] = rest;
@@ -191,6 +195,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'set-cars': return [host.setCarTarget(command.count)];
     case 'busy': return [host.busyInfo()];
     case 'map': return [host.openMap()];
+    case 'mapnpcs': return [host.toggleMapNpcs()];
     case 'spawn': return [host.spawn(command.vehicle)];
     case 'cash': return [host.giveCash(command.amount)];
     case 'unwanted': return [host.dropStar()];
