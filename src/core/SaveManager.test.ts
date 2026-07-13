@@ -23,6 +23,46 @@ describe('SaveManager', () => {
     expect(manager.load().completedMissions).toEqual(['delivery-run']);
   });
 
+  it('round trips the live player position and facing, kept separate from the respawn anchor', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, position: [1234, 2, -5678], heading: 1.25 }); // spawn stays the (valid) default anchor
+    const loaded = manager.load();
+    expect(loaded.position).toEqual([1234, 2, -5678]); // full x/y/z resume, even off-road
+    expect(loaded.heading).toBeCloseTo(1.25); // facing is restored too
+    expect(loaded.spawn).toEqual(DEFAULT_SAVE.spawn); // death still sends you to the safehouse anchor, independent of position
+  });
+
+  it('defaults an old save with no position/heading to sane values', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 2, money: 900, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings }));
+    const loaded = manager.load();
+    expect(loaded.position).toEqual(loaded.spawn); // no live position stored yet → resume at the anchor, not a wrong spot
+    expect(loaded.heading).toBe(Math.PI); // missing heading → default facing
+  });
+
+  it('keeps the manual checkpoint in its own slot, untouched by ordinary saves', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    expect(manager.hasCheckpoint()).toBe(false);
+    expect(manager.loadCheckpoint()).toBeNull();
+    manager.saveCheckpoint({ ...DEFAULT_SAVE, money: 5000, position: [10, 1, 20], heading: 2 });
+    manager.save({ ...DEFAULT_SAVE, money: 1, position: [999, 1, 999] }); // an ordinary/autosave write
+    expect(manager.hasCheckpoint()).toBe(true);
+    const checkpoint = manager.loadCheckpoint()!;
+    expect(checkpoint.money).toBe(5000); // checkpoint is not overwritten by the ordinary save
+    expect(checkpoint.position).toEqual([10, 1, 20]);
+    expect(manager.load().money).toBe(1); // the main slot moved on independently
+    manager.clearCheckpoint();
+    expect(manager.hasCheckpoint()).toBe(false);
+  });
+
+  it('reset() wipes both the save and the checkpoint', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save(DEFAULT_SAVE); manager.saveCheckpoint(DEFAULT_SAVE);
+    manager.reset();
+    expect(manager.hasSave()).toBe(false);
+    expect(manager.hasCheckpoint()).toBe(false);
+  });
+
   it('recovers from malformed storage and resets', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     storage.setItem('groot-theft-bakkie-save-v1', 'bad json');

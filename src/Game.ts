@@ -169,9 +169,11 @@ export class Game {
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.settings.quality, this.save.timeOfDay);
     this.shops = new ShopSystem(this.scene, this.city);
     this.safehouses = new SafehouseSystem(this.scene, this.city);
-    this.player = new Player(this.scene, new THREE.Vector3(...this.save.spawn));
-    this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
+    this.player = new Player(this.scene, new THREE.Vector3(...this.save.position)); // resume where the last save actually left off (Continue); New Game repositions to spawn in startGame
+    this.player.group.position.y = this.restoreY(this.save.position[0], this.save.position[2], this.save.position[1]); // keep saved elevation (rooftop/overpass), else sit on the ground
+    this.player.setHeading(this.save.heading); // resume facing the saved direction
     this.cameraController = new CameraController(this.camera);
+    this.cameraController.yaw = this.save.heading + Math.PI; // camera parked behind, looking the way the player faces
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
     this.lifecycle = new LifecycleSystem(this.city, this.population);
     this.combat = new CombatSystem(this.scene, this.audio);
@@ -346,7 +348,8 @@ export class Game {
     busyInfo: () => `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`,
     openMap: () => { this.closeConsole(); this.openMap(); return 'Opening the city map. Press M or ESC to close.'; },
     toggleMapNpcs: () => { this.debugMapNpcs = !this.debugMapNpcs; return this.debugMapNpcs ? 'NPC map dots ON — cars magenta, peds deep blue. Open the map with M.' : 'NPC map dots off.'; },
-    save: () => { this.persist(); return 'Game saved.'; },
+    save: () => { this.persist(); this.saveManager.saveCheckpoint(this.save); return 'Checkpoint saved. Progress is autosaved continuously; `reload` returns to this exact spot.'; },
+    reload: () => this.reloadSavedGame(),
     teleport: (x, z) => this.teleportPlayer(clampToWorld(x), clampToWorld(z), `${Math.round(x)}, ${Math.round(z)}`),
     teleportNamed: (name) => {
       const target = resolveTeleport(name, this.teleportTargets());
@@ -379,7 +382,8 @@ export class Game {
   /** Drops the player safely at (x, z): vehicle, cover and airborne states end cleanly, the spot nudges off any
    *  collider, and the camera snaps behind the new position instead of flying across town. Driving? You arrive
    *  on foot — the vehicle stays where it was. */
-  private teleportPlayer(x: number, z: number, label: string): string {
+  /** Put the player on foot: exit/free any vehicle, drop cover, cancel airborne/canopy, unwind the airborne pose. */
+  private leaveVehicleOnFoot(): void {
     const vehicle = this.activeVehicle ?? this.transition?.vehicle;
     if (vehicle) {
       this.endTaxiShift(vehicle);
@@ -390,6 +394,10 @@ export class Game {
     }
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose();
     this.player.inVehicle = false; this.player.setVisible(true);
+  }
+
+  private teleportPlayer(x: number, z: number, label: string): string {
+    this.leaveVehicleOnFoot();
     const spot = safePlacement(x, z, (px, pz) => this.city.collides(px, pz, PLAYER.radius));
     this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
     this.player.velocityY = 0; this.player.onGround = true;
@@ -467,7 +475,7 @@ export class Game {
 
   private startGame(fresh: boolean): void {
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
@@ -1609,6 +1617,42 @@ export class Game {
     this.endCourierShift();
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
+  /** `reload` console command: restore the manual checkpoint live (no page refresh) — money, time, kit, cheats,
+   *  living-city and mission progress, wanted cleared, and the player set back at the checkpoint position/facing.
+   *  Reads the checkpoint slot the autosave never touches, so it always returns to the last `save`. */
+  /** Restore height: keep a saved elevation only when it's clearly above the ground (a rooftop/overpass);
+   *  otherwise sit on the surface — which also absorbs the placeholder y in the default spawn. */
+  private restoreY(x: number, z: number, savedY: number): number {
+    const surface = this.city.surfaceHeightAt(x, z);
+    return savedY > surface + 0.5 ? savedY : surface;
+  }
+
+  private reloadSavedGame(): string {
+    const checkpoint = this.saveManager.loadCheckpoint();
+    if (!checkpoint) return 'No checkpoint yet — type `save` to stamp one, then `reload` returns to it.';
+    this.closeConsole();
+    this.save = checkpoint;
+    this.economy.balance = this.save.money;
+    this.inventory = { ...this.save.inventory };
+    Object.assign(this.cheats, this.save.cheats);
+    this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current);
+    this.livingCity = new LivingCitySystem(this.save.livingCity);
+    this.missions.completed = new Set(this.save.completedMissions);
+    this.dayNight.hour = this.save.timeOfDay;
+    this.player.heal();
+    this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice();
+    this.leaveVehicleOnFoot();
+    // Place at the EXACT saved spot — no safePlacement nudge, which reads a rooftop footprint as "blocked" and
+    // rings the player outward off the roof edge. The checkpoint is a spot the player already stood on.
+    const [px, , pz] = this.save.position;
+    this.player.group.position.set(px, this.restoreY(px, pz, this.save.position[1]), pz);
+    this.player.velocityY = 0; this.player.onGround = true;
+    this.player.setHeading(this.save.heading);
+    this.cameraController.yaw = this.save.heading + Math.PI; this.cameraController.snapBehind(this.player.group.position);
+    this.ui.screenFade();
+    return `Reloaded checkpoint — ${this.dayNight.clockText}, R${this.economy.balance.toLocaleString()}.`;
+  }
+
   private respawn(): void {
     this.endTaxiShift(this.activeVehicle);
     this.endCourierShift(this.activeVehicle);
@@ -1620,6 +1664,11 @@ export class Game {
     for (const officer of this.police.reset()) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
-  private persist(): void { this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } }; this.saveManager.save(this.save); }
+  private persist(): void {
+    const at = this.activeVehicle?.group.position ?? this.player.group.position; // live location (the vehicle is the player while driving)
+    const heading = this.activeVehicle?.heading ?? this.player.heading;
+    this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, position: [at.x, at.y, at.z], heading, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } };
+    this.saveManager.save(this.save);
+  }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
 }

@@ -16,6 +16,7 @@ export type ConsoleCommand =
   | { kind: 'map' }
   | { kind: 'mapnpcs' }
   | { kind: 'save' }
+  | { kind: 'reload' }
   | { kind: 'spawn'; vehicle: VehicleKind }
   | { kind: 'cash'; amount: number }
   | { kind: 'unwanted' }
@@ -48,6 +49,7 @@ export interface ConsoleHost {
   openMap(): string;
   toggleMapNpcs(): string;
   save(): string;
+  reload(): string;
   teleport(x: number, z: number): string;
   teleportNamed(name: string): string;
   teleportList(): string[];
@@ -88,7 +90,8 @@ export const HELP_LINES = [
   'busy — show the current nearby crowd targets and live counts',
   'map — open the city map (or press M)',
   'mapnpcs — toggle debug NPC dots on the map (cars magenta, peds deep blue)',
-  'save — save the current game to this browser',
+  'save — stamp a checkpoint (progress autosaves anyway; this marks a spot `reload` returns to)',
+  'reload — jump back to your last `save` checkpoint (position, facing, time, money, kit)',
   'fps — toggle the performance display',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
   'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens',
@@ -123,6 +126,7 @@ export function parseCommand(input: string): ConsoleCommand {
   if (head === 'map' && rest.length === 0) return { kind: 'map' };
   if (head === 'mapnpcs' && rest.length === 0) return { kind: 'mapnpcs' };
   if (head === 'save' && rest.length === 0) return { kind: 'save' };
+  if (head === 'reload' && rest.length === 0) return { kind: 'reload' };
   if (head === 'set') {
     const [key, value] = rest;
     if (key === 'busy') {
@@ -188,6 +192,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'error': return [command.message];
     case 'fps': return [host.toggleFps()];
     case 'save': return [host.save()];
+    case 'reload': return [host.reload()];
     case 'set-time': return [host.setTime(command.hour)];
     case 'set-timerate': return [host.setTimerate(command.rate)];
     case 'set-busy': return [host.setBusy(command.percent)];

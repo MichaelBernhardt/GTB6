@@ -128,6 +128,9 @@ export class Player {
 
   punch(): void { this.punchTimer = 0.3; this.punchLeft = !this.punchLeft; }
 
+  /** Snap the player to face a heading (used when a save/checkpoint restores the last-faced direction). */
+  setHeading(heading: number): void { this.heading = heading; this.group.rotation.y = heading; }
+
   /** Knocked off a two-wheeler: borrow the pedestrian down-pose (rolled onto the side) for a beat, then get up. */
   tumble(duration = 1.15): void { this.tumbleTimer = duration; this.tumbleDuration = duration; this.tumbleDir = Math.random() < 0.5 ? -1 : 1; this.tumbleBaseY = this.group.position.y; this.velocityY = 0; this.onGround = true; }
   get tumbling(): boolean { return this.tumbleTimer > 0; }
