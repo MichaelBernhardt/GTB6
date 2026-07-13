@@ -23,6 +23,10 @@ describe('intersection surfaces (BUG B: unify overlapping road ribbons)', () => 
     expect(SIGNAL_JUNCTIONS.every((junction) => surfaceKeys.has(`${junction.x}|${junction.z}`))).toBe(true);
   });
 
+  it('keeps generated signal phases on whole seconds so visual uploads can be event-driven', () => {
+    expect(SIGNAL_JUNCTIONS.every((junction) => Number.isInteger(junction.phase))).toBe(true);
+  });
+
   it('gives every crossing its distinct incident arms (unit dirs, no opposed duplicates)', () => {
     for (const surface of JUNCTION_SURFACES) {
       expect(surface.arms.length).toBeGreaterThanOrEqual(1); // usually 2+ dirs; collinear stubs collapse to one

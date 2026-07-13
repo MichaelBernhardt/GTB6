@@ -46,6 +46,7 @@ export class PopulationSystem {
   private policePatrols: Pedestrian[] = [];
   private ambientSerial = 200; // seeds variety (colours, wallets, bravery) for lifecycle-spawned agents
   private frame = 0;
+  private forward = new THREE.Vector3();
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.vehiclePlanner = new RoutePlanner(city.vehicleNav, 2);
@@ -72,7 +73,7 @@ export class PopulationSystem {
     const robotsOut = !powerOn();
     this.hootCooldown = Math.max(0, this.hootCooldown - dt);
     this.traffic.forEach((vehicle, index) => {
-      if (vehicle.playerControlled || vehicle.disabled) return;
+      if (vehicle.playerControlled || vehicle.disabled || !vehicle.occupied) return; // no NPC aboard (e.g. a carjacked car the player has since left): sit still, don't plan routes
       vehicle.routeCooldown = Math.max(0, vehicle.routeCooldown - dt);
       if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0) {
         const wasFrozen = vehicle.frozen;
@@ -86,7 +87,7 @@ export class PopulationSystem {
       const signalStop = !robotsOut && !taxiKind && this.city.signalStops(vehicle.group.position, vehicle.heading);
       if (signalStop) this.trafficPlans.get(vehicle)?.watchdog.reset(); // a legal red-light wait (up to ~16s) is not a stall
       if (!this.followDrivePlan(vehicle, dt)) return; // reversing out of a watchdog stall this frame
-      const forward = new THREE.Vector3(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
+      const forward = this.forward.set(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
       const blocked = this.vehicles.some((other) => { // same-lane car just ahead; a wide dot>0 sweep used to gridlock oncoming lanes on narrow roads
         if (other === vehicle) return false;
         const dx = other.group.position.x - vehicle.group.position.x; const dz = other.group.position.z - vehicle.group.position.z;
@@ -119,7 +120,7 @@ export class PopulationSystem {
   private updateTrafficEngineAudio(player: THREE.Vector3): void {
     let nearest: Vehicle | undefined; let best = 60 * 60;
     for (const vehicle of this.traffic) {
-      if (vehicle.playerControlled || vehicle.disabled || vehicle.spec.kind === 'bicycle') continue; // no engine to hum
+      if (vehicle.playerControlled || vehicle.disabled || !vehicle.occupied || vehicle.spec.kind === 'bicycle') continue; // no engine to hum (an abandoned car sits silent)
       const d2 = vehicle.group.position.distanceToSquared(player);
       if (d2 < best) { best = d2; nearest = vehicle; }
     }
@@ -295,8 +296,13 @@ export class PopulationSystem {
   }
 
   nearestPedestrian(position: THREE.Vector3, maxDistance = 3.2): Pedestrian | undefined {
-    const nearest = this.pedestrians.filter((ped) => !ped.contact && ped.state !== 'down').sort((a, b) => a.group.position.distanceToSquared(position) - b.group.position.distanceToSquared(position))[0];
-    return nearest && nearest.group.position.distanceTo(position) <= maxDistance ? nearest : undefined;
+    let nearest: Pedestrian | undefined; let best = maxDistance * maxDistance;
+    for (const ped of this.pedestrians) {
+      if (ped.contact || ped.state === 'down') continue;
+      const distance = ped.group.position.distanceToSquared(position);
+      if (distance <= best) { nearest = ped; best = distance; }
+    }
+    return nearest;
   }
 
   ejectDriver(vehicle: Vehicle, threat: THREE.Vector3, police = false): Pedestrian {
@@ -314,10 +320,13 @@ export class PopulationSystem {
   }
 
   nearestEnterable(position: THREE.Vector3, maxDistance = 4.2): Vehicle | undefined {
-    const nearest = this.vehicles
-      .filter((vehicle) => !vehicle.playerControlled && !vehicle.disabled)
-      .sort((a, b) => a.group.position.distanceToSquared(position) - b.group.position.distanceToSquared(position))[0];
-    return nearest && nearest.group.position.distanceTo(position) < maxDistance ? nearest : undefined;
+    let nearest: Vehicle | undefined; let best = maxDistance * maxDistance;
+    for (const vehicle of this.vehicles) {
+      if (vehicle.playerControlled || vehicle.disabled) continue;
+      const distance = vehicle.group.position.distanceToSquared(position);
+      if (distance < best) { nearest = vehicle; best = distance; }
+    }
+    return nearest;
   }
 
   /** Lifecycle spawn: one ambient citizen placed on a sidewalk point the lifecycle system already vetted as hidden. */
@@ -336,7 +345,7 @@ export class PopulationSystem {
 
   /** Lifecycle spawn: one AI-driven vehicle dropped on a vetted lane node and routed immediately. */
   spawnTrafficVehicle(x: number, z: number): Vehicle {
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'taxi']; // same mix as the hand-authored traffic
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'courier', 'taxi']; // the lime courier is actually working, allegedly
     const kind = kinds[this.ambientSerial % kinds.length] ?? 'compact';
     const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][this.ambientSerial % 4]);
     this.ambientSerial++;
@@ -367,7 +376,7 @@ export class PopulationSystem {
       vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([spot.x, spot.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'cab', 'sport', 'motorbike', 'van']; // the odd commuter bike weaves through traffic
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'cab', 'sport', 'motorbike', 'courier', 'van']; // the odd commuter and delivery bikes weave through traffic
     // Seed the opening traffic on lanes around the player spawn (the map is far bigger than the
     // AI wake radius; the lifecycle system keeps density right as the player moves).
     const nearbyRoutes = this.city.trafficRoutes.filter((route) => {

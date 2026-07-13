@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "vite",
+    "dev:multiplayer-server": "PORT=4173 node server.mjs",
     "build": "tsc -b && vite build",
     "heroku-postbuild": "npm run build",
     "lint": "eslint .",
@@ -18,12 +19,16 @@
     "map:build": "tsx tools/mapgen/index.ts"
   },
   "dependencies": {
-    "three": "^0.178.0"
+    "pg": "^8.22.0",
+    "three": "^0.178.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.1",
     "@types/node": "^26.1.1",
+    "@types/pg": "^8.20.0",
     "@types/three": "^0.178.1",
+    "@types/ws": "^8.18.1",
     "eslint": "^9.30.1",
     "globals": "^16.3.0",
     "tsx": "^4.23.0",

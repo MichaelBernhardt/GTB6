@@ -65,10 +65,10 @@ export class Vehicle {
    *  geometries, so disposal is safe and stops the traffic churn leaking meshes over a session. */
   dispose(): void { this.group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); }
 
-  updatePlayer(dt: number, input: InputManager, city: City): number {
+  updatePlayer(dt: number, input: InputManager, city: City, mouseSteer = 0): number {
     if (this.disabled) return 0;
     const throttle = Number(input.down('KeyW')) - Number(input.down('KeyS'));
-    const steer = Number(input.down('KeyA')) - Number(input.down('KeyD'));
+    const steer = THREE.MathUtils.clamp(Number(input.down('KeyA')) - Number(input.down('KeyD')) + mouseSteer, -1, 1); // A/D keys and the LMB-drag mouse wheel share one clamped steer input
     const handbrake = input.down('Space');
     if (throttle !== 0) {
       const sameDirection = this.speed === 0 || Math.sign(this.speed) === Math.sign(throttle);
@@ -86,7 +86,7 @@ export class Vehicle {
   }
 
   updateAI(dt: number, city: City, target?: THREE.Vector3, aggression = 0.65): void {
-    if (this.playerControlled || this.disabled) return;
+    if (this.playerControlled || this.disabled || !this.occupied) return; // an empty vehicle has no driver to steer it
     const destination = target ?? this.aiTarget;
     const dx = destination.x - this.group.position.x; const dz = destination.z - this.group.position.z;
     const desired = Math.atan2(dx, dz); const delta = Math.atan2(Math.sin(desired - this.heading), Math.cos(desired - this.heading));
@@ -273,6 +273,7 @@ export class Vehicle {
     const wheelMat = new THREE.MeshStandardMaterial({ color: 0x101315, roughness: 0.76 });
     for (const z of [length * 0.31, -length * 0.31]) for (const x of [-width * 0.52, width * 0.52]) {
       const assembly = new THREE.Group(); assembly.position.set(x, wheelRadius, z);
+      if (z > 0) assembly.rotation.order = 'YXZ'; // front (steered) wheels: apply steer (Y) before roll (X) so the roll spins about the steered axle — default XYZ rolls about the original axle and the turned wheel wobbles
       const wheel = new THREE.Mesh(wheelGeo, wheelMat); wheel.castShadow = true;
       const rim = new THREE.Mesh(rimGeo, chrome); assembly.add(wheel, rim); this.group.add(assembly); this.wheels.push(assembly);
     }
@@ -287,16 +288,16 @@ export class Vehicle {
     if (sport) { const spoiler = new THREE.Mesh(new RoundedBoxGeometry(width * 0.62, 0.09, 0.2, 2, 0.03), bodyMat); spoiler.position.set(0, 1.02, -length * 0.43); this.group.add(spoiler); }
     if (taxi) {
       const stripe = new THREE.Mesh(new THREE.BoxGeometry(width + 0.04, 0.22, length * 0.82), new THREE.MeshStandardMaterial({ color: 0xf2c521, roughness: 0.5 }));
-      stripe.position.y = 1; this.group.add(stripe);
+      stripe.name = 'taxistripe'; stripe.position.y = 1; this.group.add(stripe); this.cabinParts.push(stripe); // a full-length livery slab at eye height: hide it in first person or the driver just sees solid yellow
       const board = createSignMesh(new THREE.PlaneGeometry(1.7, 0.4), 'QUANTUM EXPRESS', '#f2c521', { doubleSide: true });
-      board.name = 'sign'; board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board);
+      board.name = 'sign'; board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board); this.cabinParts.push(board); // roof sign: hide it from the raised driver's eye in first person, like the police lightbar
     }
     if (this.spec.kind === 'cab') { // meter cab: glowing roof box (the duty light) wearing a TAXI decal on both faces
       const box = new THREE.Mesh(new RoundedBoxGeometry(0.68, 0.26, 0.3, 2, 0.05), new THREE.MeshStandardMaterial({ color: 0xf6df7a, emissive: 0xffd75e, emissiveIntensity: 0.2, roughness: 0.4 }));
       box.name = 'taxilight'; box.position.set(0, roof.position.y + 0.2, roof.position.z);
       const decal = createSignMesh(new THREE.PlaneGeometry(0.6, 0.2), 'TAXI', '#141414', { background: '#f2c521' });
       decal.name = 'sign'; decal.position.z = 0.16; const back = decal.clone(); back.position.z = -0.16; back.rotation.y = Math.PI;
-      box.add(decal, back); this.group.add(box);
+      box.add(decal, back); this.group.add(box); this.cabinParts.push(box); // roof duty-light box: hide it in first person too
     }
     if (this.police) {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;
@@ -365,6 +366,13 @@ export class Vehicle {
       const fender = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.05, 0.5, 2, 0.02), paint); fender.position.set(0, 0.66, -0.72);
       this.group.add(tank, seat, engine, fender, tube(0, 0.83, 0.52, 0, 0.68, -0.7, 0.045, paint), tube(0, wheelRadius, -axleZ, 0, 0.44, -0.2, 0.035, dark)); // spine + swingarm
       this.group.add(tube(0.16, 0.3, 0.05, 0.2, 0.44, -0.88, 0.05, chrome)); // exhaust
+      if (this.spec.kind === 'courier') {
+        const box = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.62, 0.58, 4, 0.08), new THREE.MeshStandardMaterial({ color: 0x84f01c, roughness: 0.48 }));
+        box.name = 'courierbox'; box.position.set(0, 1.08, -0.78);
+        const sign = createSignMesh(new THREE.PlaneGeometry(0.5, 0.29), '60-SEK', '#10220b', { background: '#f4ffea' });
+        sign.name = 'sign'; sign.position.set(0, 0, 0.296); box.add(sign);
+        this.group.add(box);
+      }
     }
     if (!bicycle) {
       const lamp = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.12, 0.06, 2, 0.02), new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 }));

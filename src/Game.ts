@@ -7,10 +7,14 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
+import { radioDial } from './core/RadioStations';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
 import { InputManager } from './core/InputManager';
+import { MultiplayerOverlay } from './multiplayer/MultiplayerOverlay';
+import { OnlineSession } from './multiplayer/OnlineSession';
+import { onlineCorrectionFactor } from './multiplayer/latency';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
@@ -22,6 +26,7 @@ import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
 import { clampT, cornerSide, COVER_ENTER_RANGE, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestGroundedCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
+import { COURIER_MIN_TRIP_DISTANCE, COURIER_STOP_RADIUS, COURIER_STOP_SPEED, CourierJob, courierHudText } from './systems/CourierJobSystem';
 import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
@@ -48,11 +53,13 @@ import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
-import { DELIVERY_STOPS, GTI_SPOT, PORTIA_CAR_SPOT } from './world/placements';
+import { COURIER_DEPOT, DELIVERY_STOPS, GTI_SPOT, PORTIA_CAR_SPOT } from './world/placements';
 import { DayNightSystem } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
+
+const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
@@ -98,11 +105,15 @@ export class Game {
   private activeSafehouse?: SafehousePlace;
   private garageVehicle?: Vehicle;
   private ui = new UIManager();
+  private multiplayerOverlay = new MultiplayerOverlay();
+  private online?: OnlineSession;
+  private onlineWasDead = false;
   private mode: GameMode = 'menu';
   private activeVehicle?: Vehicle;
   private transition?: Transition;
   private marker = new THREE.Group();
   private markerTarget?: WorldTarget;
+  private markerColor = '';
   private markerPhase = 0;
   private collectedItem = false;
   private hostileDefeated = 0;
@@ -112,6 +123,9 @@ export class Game {
   private potholeCooldown = 0;
   private etollCooldowns: number[] = ETOLL_GANTRIES.map(() => 0);
   private radioIntroShown = false;
+  private mouseSteerHintShown = false;
+  private driveSteer = 0; // virtual steering-wheel offset [-1,1] wound by LMB-drag mouse steering (only in a vehicle, third person, not aiming)
+  private driveSteerActive = false;
   private footstepTimer = 0;
   private prevDrivenSpeed = 0;
   private wallCrashCooldown = 0;
@@ -135,6 +149,8 @@ export class Game {
   private taxiPassenger?: Pedestrian;
   private taxiDestination?: THREE.Vector3;
   private taxiHailCooldown = 0;
+  private courierJob = new CourierJob();
+  private courierDestination?: THREE.Vector3;
   private brandishCooldown = 0;
   private scopeLevel = 0;
   private cover?: { spot: CoverSpot; t: number; peek: number; corner: -1 | 0 | 1; exitTimer: number };
@@ -177,7 +193,7 @@ export class Game {
   }
 
   private setupRenderer(): void {
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); this.renderer.setSize(innerWidth, innerHeight);
+    this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = this.settings.quality !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
     this.renderer.shadowMap.autoUpdate = true;
@@ -195,9 +211,11 @@ export class Game {
   private setupComposer(): void {
     this.composer?.dispose(); this.composer = undefined; this.gtao = undefined;
     if (this.settings.quality === 'low') return; // low quality: plain renderer.render, no post stack
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    const composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(size.width, size.height, { type: THREE.HalfFloatType, samples: 4 }));
-    composer.setPixelRatio(Math.min(devicePixelRatio, 1.75)); composer.setSize(innerWidth, innerHeight);
+    const composer = new EffectComposer(this.renderer);
+    // Two samples preserve edge stability while halving the multisample bandwidth/memory of the old 4x
+    // full-screen half-float targets. Resolution is already quality-capped by renderPixelRatio().
+    composer.renderTarget1.samples = 2; composer.renderTarget2.samples = 2;
+    composer.setSize(innerWidth, innerHeight);
     composer.addPass(new RenderPass(this.scene, this.camera));
     if (this.settings.quality === 'high') { // GTAO is the expensive pass — high only
       this.gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
@@ -211,6 +229,7 @@ export class Game {
 
   private bindUI(): void {
     this.ui.onStart = (fresh) => this.startGame(fresh);
+    this.ui.onOnline = (name) => this.startOnline(name);
     this.ui.onResume = () => { this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); if (this.activeVehicle && !this.activeVehicle.spec.twoWheeler) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
     this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
@@ -274,6 +293,7 @@ export class Game {
     };
   }
   private mapMarkers(): MapMarker[] {
+    if (this.online) return this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const }));
     return [
       ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
       ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : []),
@@ -281,9 +301,11 @@ export class Game {
     ];
   }
   private mapPolice(): MapPoint[] {
+    if (this.online) return [];
     return this.police.vehicles.filter((unit) => !unit.wrecked).map((unit) => ({ x: unit.group.position.x, z: unit.group.position.z }));
   }
   private mapHostiles(): MapPoint[] {
+    if (this.online) return [];
     return this.population.pedestrians.filter((ped) => ped.state === 'hostile' && !ped.contact && !ped.police).map((ped) => ({ x: ped.group.position.x, z: ped.group.position.z }));
   }
 
@@ -349,6 +371,7 @@ export class Game {
     const vehicle = this.activeVehicle ?? this.transition?.vehicle;
     if (vehicle) {
       this.endTaxiShift(vehicle);
+      this.endCourierShift();
       vehicle.playerControlled = false; vehicle.setFirstPerson(false);
       this.activeVehicle = undefined; this.transition = undefined;
       this.audio.setEngine(false); this.audio.stopRadio();
@@ -417,16 +440,35 @@ export class Game {
 
   private applyQuality(): void {
     const shadows = this.settings.quality !== 'low';
+    this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
     this.dayNight.setQuality(this.settings.quality);
     this.city.setWaterQuality(this.settings.quality); // rebuilds water meshes; disposes the old tier's materials and mirror target
     this.setupComposer();
   }
 
+  /** Keep Retina/HiDPI displays from multiplying every full-screen pass beyond the selected quality tier. */
+  private renderPixelRatio(): number {
+    const cap: Record<GameSettings['quality'], number> = { low: 1, medium: 1.25, high: 1.5 };
+    return Math.min(devicePixelRatio || 1, cap[this.settings.quality]);
+  }
+
   private startGame(fresh: boolean): void {
-    if (fresh) { this.endTaxiShift(); this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
+    this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
+  }
+
+  private startOnline(name: string): void {
+    this.endTaxiShift(); this.endCourierShift(); this.online?.close();
+    this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
+    this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose();
+    this.player.group.position.set(2050, 0, 3850); this.player.group.position.y = this.city.surfaceHeightAt(2050, 3850);
+    this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
+    this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
+    void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+    this.ui.notify('Global world', 'Open PvP is active. Press Enter to chat.');
   }
 
   private animate = (): void => {
@@ -448,7 +490,7 @@ export class Game {
       frameDt = 0;
       for (let i = 0; i < steps.length && i < allowed; i++) {
         const stepStart = performance.now();
-        this.update(steps[i]!);
+        if (this.online) this.updateOnline(steps[i]!); else this.update(steps[i]!);
         this.simStepCostMs = this.simStepCostMs === 0 ? performance.now() - stepStart : this.simStepCostMs * 0.9 + (performance.now() - stepStart) * 0.1;
         frameDt += steps[i]!; // camera/marker advance only by the sim time actually run, so the view can't outrun the world under overload
         if (this.mode !== 'playing') break;
@@ -456,7 +498,7 @@ export class Game {
     }
     else if (this.mode === 'dead') { this.deathTimer -= frameDt; if (this.deathTimer <= 0) this.respawn(); }
     else if (this.input.consume('Escape')) this.ui.back();
-    this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
+    this.tickMouseSteer(frameDt); this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
     this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position); // staggered chunk culling — runs in every mode so the menu backdrop is culled too
     const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 2; // >2s: the staggered chunk culling needs its first full pass before the number means anything
@@ -551,6 +593,37 @@ export class Game {
     if (this.player.health <= 0) this.die();
   }
 
+  private updateOnline(dt: number): void {
+    const online = this.online; if (!online) return;
+    if (this.input.consume('Escape')) { this.pause(); return; }
+    const stateBefore = online.localState;
+    if (this.input.consume('KeyE')) online.interact();
+    if (!stateBefore?.dead && !stateBefore?.vehicleId) {
+      this.player.setVisible(true); this.player.update(dt, this.input, this.cameraController.yaw, this.city);
+      this.combat.tryReload(this.input); this.combat.update(dt);
+      const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
+      if (shot.fired && !shot.melee) online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize());
+    }
+    const state = online.update(dt, {
+      forward: Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')),
+      side: Number(this.input.down('KeyD')) - Number(this.input.down('KeyA')),
+      sprint: this.input.down('ShiftLeft'), aiming: this.input.aiming, yaw: this.cameraController.yaw,
+    });
+    if (!state) return;
+    const authoritative = online.consumeLocalCorrection();
+    if (authoritative) {
+      const error = Math.hypot(authoritative.x - this.player.group.position.x, authoritative.z - this.player.group.position.z);
+      const moving = this.input.down('KeyW') || this.input.down('KeyS') || this.input.down('KeyA') || this.input.down('KeyD');
+      const correction = onlineCorrectionFactor(error, moving, authoritative.dead, Boolean(authoritative.vehicleId));
+      this.player.group.position.x = THREE.MathUtils.lerp(this.player.group.position.x, authoritative.x, correction);
+      this.player.group.position.z = THREE.MathUtils.lerp(this.player.group.position.z, authoritative.z, correction);
+    }
+    this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
+    this.player.health = state.health; this.player.setVisible(!state.dead && !state.vehicleId);
+    if (state.dead && !this.onlineWasDead) { this.ui.notify('EISH', 'You were eliminated. Respawning in three seconds.', false); this.audio.setFire(false); }
+    this.onlineWasDead = state.dead;
+  }
+
   private applyEskom(event: 'start' | 'end' | undefined): void {
     if (event === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
     else if (event === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
@@ -604,10 +677,12 @@ export class Game {
 
   private ejectFromWreck(vehicle: Vehicle): void {
     this.endTaxiShift(vehicle);
+    this.endCourierShift(vehicle);
     vehicle.playerControlled = false; this.activeVehicle = undefined; this.transition = undefined;
     this.player.inVehicle = false; this.player.setVisible(true);
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(2.2);
     this.player.group.position.copy(vehicle.group.position).add(side); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
+    this.player.resetAirbornePose(); // a two-wheeler rider's group carries the bike's orientation; wipe it so a wreck-eject doesn't leave the player inverted
     this.audio.setEngine(false);
   }
 
@@ -795,7 +870,8 @@ export class Game {
 
   private updateDriving(dt: number): void {
     const vehicle = this.activeVehicle; if (!vehicle) return;
-    const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position);
+    const speed = vehicle.updatePlayer(dt, this.input, this.city, this.driveSteer); this.player.group.position.copy(vehicle.group.position);
+    if (!this.mouseSteerHintShown) { this.mouseSteerHintShown = true; this.ui.notify('Mouse steering', 'Hold Left-Click (when not aiming) to steer with the mouse.', false); }
     const driveBy = canFireFromVehicle(this.input.aiming, this.combat.spec.melee, Boolean(this.combat.spec.projectile), scopeWeapon(this.combat.current));
     if (vehicle.spec.twoWheeler) { // rider stays visible in the saddle — and wears no cocoon: hits land on the player
       const [saddleY, saddleZ] = vehicle.spec.saddle ?? [0.1, -0.2];
@@ -809,7 +885,7 @@ export class Game {
     const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
     this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed, vehicle.spec.kind); // 'bicycle' routes to the freewheel/wind voice, everything else to an engine profile
     this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
-    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; this.taxiRide.recordCrash(this.prevDrivenSpeed); }
+    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; this.taxiRide.recordCrash(this.prevDrivenSpeed); this.recordCourierCrash(this.prevDrivenSpeed); }
     this.prevDrivenSpeed = speed;
     this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
     if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
@@ -817,6 +893,7 @@ export class Game {
       const hit = this.city.potholes.find((hole) => (hole.x - position.x) ** 2 + (hole.z - position.z) ** 2 < hole.r * hole.r);
       if (hit) {
         vehicle.speed *= 0.8; vehicle.bounce = Math.min(0.28, Math.abs(vehicle.speed) * 0.012); vehicle.takeDamage(2);
+        this.recordCourierCrash(7);
         this.audio.collision(14); this.potholeCooldown = 0.9;
         if (Math.random() < 0.3) this.ui.notify('Pothole', 'Wheel alignment: R850. Cash only.', false);
       }
@@ -845,17 +922,29 @@ export class Game {
       if (this.input.consume('KeyT')) this.handleTaxiKey(vehicle);
       this.updateTaxiJob(dt, vehicle);
     }
+    if (vehicle.spec.kind === 'courier') {
+      if (this.input.consume('KeyY')) this.handleCourierKey();
+      this.updateCourierJob(dt, vehicle);
+    }
     if (vehicle.police && this.input.consume('KeyG')) { vehicle.sirenOn = toggleSiren(vehicle); this.ui.notify(vehicle.sirenOn ? 'Siren on' : 'Siren off', vehicle.sirenOn ? 'Clear the road. You are the law now.' : 'Back to creeping quietly.'); }
+    if (!vehicle.spec.twoWheeler && this.input.consume('KeyN')) {
+      const station = this.audio.cycleRadio(this.input.down('ShiftLeft') || this.input.down('ShiftRight') ? -1 : 1);
+      this.ui.notify(station ? `${station.name} ${station.frequency}` : 'Radio off', station?.tagline ?? 'Just the engine and the city outside.', true, 'music');
+    }
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
 
   /** A hard hit on a two-wheeler throws the rider: the bike drops on the spot, the player tumbles beside it
    *  (pedestrian down-pose machinery, no death) and stands back up. */
   private knockOff(vehicle: Vehicle): void {
+    if (vehicle.spec.kind === 'courier') this.endCourierShift(undefined, false);
     vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.speed = 0;
     this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.5);
-    this.player.group.position.copy(vehicle.group.position).add(side); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
+    const target = vehicle.group.position.clone().add(side);
+    const spot = safePlacement(target.x, target.z, (px, pz) => this.city.collides(px, pz, PLAYER.radius)); // a hard crash into a wall can drop the side-offset inside the building; ring out to clear ground so the rider isn't trapped
+    this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
+    this.player.resetAirbornePose(); // the rider's group inherited the bike's full orientation (incl. terrain pitch on rotation.x); wipe it before the tumble or the body lands inverted under the tar
     this.player.tumble();
     this.audio.setEngine(false); this.audio.stopRadio(); this.shake = Math.min(0.7, this.shake + 0.35);
     this.ui.notify('Knocked off', 'Tar 1, rider 0. The bike is right there.', false);
@@ -975,6 +1064,70 @@ export class Game {
     this.cancelTaxi(quiet); this.taxiRide.duty = 'occupied'; vehicle?.setTaxiLight(false);
   }
 
+  /** Y starts or ends a repeating Sixty-Sekonds shift. Every basket begins back at dispatch. */
+  private handleCourierKey(): void {
+    if (this.courierJob.active) {
+      const abandoned = this.courierJob.phase === 'delivering';
+      this.endCourierShift(); this.audio.ui(false);
+      this.ui.notify('Sixty-Sekonds: CLOCKED OUT', abandoned ? 'The abandoned groceries have been promoted to pavement specials.' : 'Your acceptance rate is now between you and the algorithm.', false);
+      return;
+    }
+    if (this.wanted.isWanted) { this.audio.ui(false); this.ui.notify('Application declined', 'Lose the JMPD first. Even the algorithm has standards.', false); return; }
+    if (this.missions.active) { this.audio.ui(false); this.ui.notify('Too many jobs', 'Finish your current dramatic storyline before joining the gig economy.', false); return; }
+    this.courierJob.clockIn(); this.audio.ui(true);
+    this.ui.notify('Sixty-Sekonds: CLOCKED IN', 'Collect order 1 at the lime dispatch marker. Your manager is a push notification.');
+  }
+
+  private updateCourierJob(dt: number, vehicle: Vehicle): void {
+    const job = this.courierJob; if (!job.active) return;
+    if (job.update(dt)) this.ui.notify('Delivery is now “just now”', 'The ice cream has resigned. Deliver it anyway for the base pay.', false);
+    if (vehicle.onFire || vehicle.disabled) { this.endCourierShift(); this.ui.notify('Shift auto-ended', 'The app has detected unusual heat near the groceries.', false); return; }
+    if (Math.abs(vehicle.speed) >= COURIER_STOP_SPEED) return;
+    if (job.phase === 'collecting') {
+      const depot = new THREE.Vector3(COURIER_DEPOT.x, this.city.roadHeightAt(COURIER_DEPOT.x, COURIER_DEPOT.z), COURIER_DEPOT.z);
+      if (vehicle.group.position.distanceTo(depot) > COURIER_STOP_RADIUS) return;
+      const trip = this.planCourierTrip(vehicle.group.position);
+      if (!job.collect(trip.distance)) return;
+      this.courierDestination = trip.destination; this.audio.ui(true);
+      this.ui.notify(`Order ${job.completed + 1}: ${job.order.basket}`, `${job.order.note} · ${Math.ceil(job.timeLeft)} seconds. Eggs dislike shortcuts.`);
+      return;
+    }
+    if (!this.courierDestination || vehicle.group.position.distanceTo(this.courierDestination) > COURIER_STOP_RADIUS) return;
+    const order = job.order; const pay = job.deliver(); if (!pay) return;
+    this.courierDestination = undefined; this.economy.earn(pay.total); this.audio.ui(!pay.late && pay.condition >= 70);
+    const bonuses = [`R${pay.base} base`, `R${pay.careBonus} un-scrambling fee`, ...(pay.timeBonus ? [`R${pay.timeBonus} now-now bonus`] : []), ...(pay.streakBonus ? [`R${pay.streakBonus} streak`] : [])].join(' + ');
+    const verdict = pay.late ? 'Customer says the tracking dot went on holiday.' : pay.condition < 35 ? 'Customer accepted the smoothie formerly known as groceries.' : pay.condition < 70 ? 'Some of the avocados will need counselling.' : `Perfect drop. ${pay.streak} clean in a row.`;
+    this.ui.notify(`Delivered: ${order.basket}`, `${bonuses} = R${pay.total}. ${verdict}`, !pay.late && pay.condition >= 70);
+    this.persist();
+  }
+
+  /** Same navigation truth as taxi fares: pick a reachable cross-town node and measure the actual A* route. */
+  private planCourierTrip(from: THREE.Vector3): { destination: THREE.Vector3; distance: number } {
+    const graph = this.city.vehicleNav; const start = nearestNode(graph, from.x, from.z);
+    for (let attempt = 0; attempt < 18; attempt++) {
+      const goal = Math.floor(Math.random() * graph.nodes.length); const node = graph.nodes[goal];
+      if (!node || Math.hypot(node.x - from.x, node.z - from.z) < COURIER_MIN_TRIP_DISTANCE) continue;
+      const path = findPath(graph, start, goal); if (!path) continue;
+      const points = path.map((index) => graph.nodes[index]).filter((point): point is NavPoint => Boolean(point));
+      return { destination: new THREE.Vector3(node.x, this.city.roadHeightAt(node.x, node.z), node.z), distance: routeDistance(points) };
+    }
+    const fallback = graph.nodes[nearestNode(graph, -from.x, -from.z)] ?? { x: 0, z: 0 };
+    return { destination: new THREE.Vector3(fallback.x, this.city.roadHeightAt(fallback.x, fallback.z), fallback.z), distance: Math.hypot(fallback.x - from.x, fallback.z - from.z) };
+  }
+
+  private recordCourierCrash(impact: number): void {
+    const before = this.courierJob.condition; const damage = this.courierJob.recordCrash(impact); if (!damage) return;
+    const after = this.courierJob.condition;
+    if (before > 75 && after <= 75) this.ui.notify('Groceries bruised', 'The avocados have opened a workplace injury claim.', false);
+    else if (before > 35 && after <= 35) this.ui.notify('Basket critical', 'Congratulations: the eggs are now a family-size omelette.', false);
+  }
+
+  private endCourierShift(_vehicle?: Vehicle, quiet = true): void {
+    if (!this.courierJob.active) return;
+    this.courierJob.clockOut(); this.courierDestination = undefined;
+    if (!quiet) this.ui.notify('Sixty-Sekonds shift ended', 'The algorithm has marked you “temporarily horizontal”.', false);
+  }
+
   private beginEnter(vehicle: Vehicle): void {
     this.cover = undefined;
     this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true; this.prevDrivenSpeed = 0;
@@ -997,6 +1150,7 @@ export class Game {
     left.y = this.city.surfaceHeightAt(left.x, left.z); right.y = this.city.surfaceHeightAt(right.x, right.z);
     const exit = !this.city.collides(left.x, left.z, 0.7) ? left : !this.city.collides(right.x, right.z, 0.7) ? right : undefined;
     if (!exit) { this.ui.notify('Exit blocked', 'Move the vehicle into open space.', false); return; }
+    if (vehicle.spec.kind === 'courier') this.endCourierShift(vehicle, false);
     this.transition = { vehicle, timer: 0.42, entering: false, exitPosition: exit }; this.audio.setEngine(false); this.audio.stopRadio();
   }
 
@@ -1008,11 +1162,13 @@ export class Game {
       this.activeVehicle = transition.vehicle; this.player.inVehicle = true; this.player.setVisible(transition.vehicle.spec.twoWheeler === true);
       if (!transition.vehicle.spec.twoWheeler) { // no radio in the open air
         this.audio.startRadio();
-        if (!this.radioIntroShown) { this.radioIntroShown = true; this.ui.notify('Jozi FM 94.7', 'Amapiano o\'clock. It is always amapiano o\'clock.'); }
+        const station = this.audio.currentRadio;
+        if (!this.radioIntroShown) { this.radioIntroShown = true; this.ui.notify(station ? `${station.name} ${station.frequency}` : 'Radio off', station ? `${station.tagline} · N changes station.` : 'Press N to tune in.', true, 'music'); }
       }
     }
     else {
       transition.vehicle.playerControlled = false; transition.vehicle.setFirstPerson(false); this.activeVehicle = undefined; this.player.inVehicle = false; this.player.setVisible(true); this.player.group.position.copy(transition.exitPosition ?? transition.vehicle.group.position);
+      this.player.resetAirbornePose(); // a two-wheeler rider's group inherited the bike's full orientation (incl. terrain pitch); wipe it on dismount or the player stands up inverted, feet under the ground
       const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(transition.vehicle.group.position) < 14);
       if (guard) {
         const tipped = this.economy.spend(2);
@@ -1203,13 +1359,14 @@ export class Game {
   private storeVehicle(vehicle: Vehicle): void {
     if (vehicle.onFire || vehicle.wrecked || vehicle.disabled) { this.ui.notify('Avenida Garage', 'They refuse the wreck. Bring something roadworthy.', false); return; }
     if (isTaxiKind(vehicle.spec.kind)) this.endTaxiShift(vehicle, false);
+    if (vehicle.spec.kind === 'courier') this.endCourierShift(vehicle, false);
     if (this.garageVehicle && this.garageVehicle !== vehicle) this.removeGarageVehicle();
     vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.occupied = false;
     vehicle.heading = GARAGE_PARK.heading; vehicle.reset(new THREE.Vector3(GARAGE_PARK.x, 0, GARAGE_PARK.z), this.city);
     const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
     this.garageVehicle = vehicle;
     this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
-    this.player.group.position.set(GARAGE_STEP_OUT.x, this.city.surfaceHeightAt(GARAGE_STEP_OUT.x, GARAGE_STEP_OUT.z), GARAGE_STEP_OUT.z); this.audio.setEngine(false); this.audio.ui(true);
+    this.player.group.position.set(GARAGE_STEP_OUT.x, this.city.surfaceHeightAt(GARAGE_STEP_OUT.x, GARAGE_STEP_OUT.z), GARAGE_STEP_OUT.z); this.player.resetAirbornePose(); this.audio.setEngine(false); this.audio.ui(true);
     this.save.garage = { kind: vehicle.spec.kind, color: vehicle.spec.color, health: Math.round(vehicle.health) };
     this.persist();
     this.ui.notify('Vehicle stored', `${vehicle.spec.name} is tucked away in the garage.`);
@@ -1258,6 +1415,8 @@ export class Game {
 
   private currentTarget(): WorldTarget | undefined {
     if (this.taxiDestination) return { position: this.taxiDestination, label: 'Drop-off', color: '#7fe08d' }; // active fare outranks mission breadcrumbs
+    if (this.courierJob.phase === 'collecting') return { position: new THREE.Vector3(COURIER_DEPOT.x, this.city.roadHeightAt(COURIER_DEPOT.x, COURIER_DEPOT.z), COURIER_DEPOT.z), label: 'Sixty-Sekonds dispatch', color: '#84f01c' };
+    if (this.courierDestination) return { position: this.courierDestination, label: `Order ${this.courierJob.completed + 1}`, color: '#84f01c' };
     const objective = this.missions.objective;
     if (objective?.kind === 'checkpoints') {
       const stop = DELIVERY_STOPS[Math.min(this.deliveryIndex, DELIVERY_STOPS.length - 1)];
@@ -1265,7 +1424,12 @@ export class Game {
     }
     if (objective?.target) { const position = objective.target.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...objective.target, position }; }
     if (!this.missions.active) {
-      const nearest = MISSIONS.filter((mission) => !this.missions.completed.has(mission.id)).sort((a, b) => ((a.start.position.x - this.player.group.position.x) ** 2 + (a.start.position.z - this.player.group.position.z) ** 2) - ((b.start.position.x - this.player.group.position.x) ** 2 + (b.start.position.z - this.player.group.position.z) ** 2))[0];
+      let nearest: (typeof MISSIONS)[number] | undefined; let nearestDistance = Infinity;
+      for (const mission of MISSIONS) {
+        if (this.missions.completed.has(mission.id)) continue;
+        const distance = (mission.start.position.x - this.player.group.position.x) ** 2 + (mission.start.position.z - this.player.group.position.z) ** 2;
+        if (distance < nearestDistance) { nearest = mission; nearestDistance = distance; }
+      }
       if (nearest) { const position = nearest.start.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...nearest.start, position }; }
       return undefined;
     }
@@ -1274,6 +1438,15 @@ export class Game {
       if (vehicle) return { position: vehicle.group.position, label: vehicle.spec.name, color: '#65d8ff' };
     }
     return undefined;
+  }
+
+  /** LMB-drag mouse steering: while a non-aiming player holds the fire button in a vehicle (third person),
+   *  the horizontal drag winds a self-centring virtual steering wheel that feeds Vehicle.updatePlayer like the
+   *  A/D keys. Ticked once per frame (mouseDX is a whole-frame delta) — the camera tails the heading meanwhile. */
+  private tickMouseSteer(dt: number): void {
+    this.driveSteerActive = Boolean(this.activeVehicle) && this.input.firing && !this.input.aiming;
+    if (this.driveSteerActive) this.driveSteer = THREE.MathUtils.clamp(this.driveSteer - this.input.mouseDX * MOUSE_STEER_GAIN, -1, 1); // drag right -> negative steer -> turn right, matching the D key
+    else this.driveSteer *= Math.exp(-dt * 12); // released: the wheel springs back to centre
   }
 
   private updateCamera(dt: number): void {
@@ -1291,7 +1464,7 @@ export class Game {
     this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
     const sensitivity = scoped ? scopeSensitivity(this.settings.mouseSensitivity, this.scopeLevel) : this.settings.mouseSensitivity;
     const airborneBoost = this.airborne ? (this.airborne.mode === 'freefall' ? 6 : 4) : 0; // skydives read better with the boom pulled back
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost);
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, this.activeVehicle?.spec.size[1] ?? 0);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -1309,7 +1482,11 @@ export class Game {
     this.markerTarget = this.currentTarget(); this.marker.visible = Boolean(this.markerTarget);
     if (!this.markerTarget) return;
     this.marker.position.copy(this.markerTarget.position); this.markerPhase += dt; this.marker.rotation.y += dt * 0.7; this.marker.position.y += 0.2 + Math.sin(this.markerPhase * 2) * 0.15;
-    const color = new THREE.Color(this.markerTarget.color ?? '#f5c542'); this.marker.children.forEach((child: THREE.Object3D) => { const mesh = child as THREE.Mesh; (mesh.material as THREE.MeshBasicMaterial).color.copy(color); });
+    const color = this.markerTarget.color ?? '#f5c542';
+    if (color !== this.markerColor) {
+      this.markerColor = color;
+      this.marker.children.forEach((child: THREE.Object3D) => { const mesh = child as THREE.Mesh; (mesh.material as THREE.MeshBasicMaterial).color.set(color); });
+    }
   }
 
   private handleVehicleCollisions(dt: number): void {
@@ -1339,7 +1516,7 @@ export class Game {
       if ((this.vehicleCollisionCooldown.get(driven) ?? 0) <= 0) {
         const impact = Math.abs(driven.speed - other.speed);
         if (driven.spec.twoWheeler) this.damagePlayer(riderImpactDamage(impact)); else driven.takeDamage(impact * 0.35); // riders eat the hit themselves
-        other.takeDamage(impact * 0.25); this.audio.collision(impact); this.taxiRide.recordCrash(impact); this.vehicleCollisionCooldown.set(driven, 0.8);
+        other.takeDamage(impact * 0.25); this.audio.collision(impact); this.taxiRide.recordCrash(impact); this.recordCourierCrash(impact); this.vehicleCollisionCooldown.set(driven, 0.8);
         if (driven.spec.twoWheeler && shouldKnockOff(impact)) { this.knockOff(driven); return; }
       }
       driven.speed *= 0.6; other.speed *= 0.7;
@@ -1350,9 +1527,10 @@ export class Game {
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     let prompt = '';
     if (this.mode === 'playing' && !this.transition) {
-      const nearbyTarget = this.currentTarget();
+      const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
-      if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
+      if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat' : 'E  Enter nearby vehicle  ·  ENTER  Global chat  ·  Open PvP';
+      else if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
       else if (this.activeVehicle) {
         if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
@@ -1360,8 +1538,10 @@ export class Game {
           const taxiHint = !isTaxiKind(this.activeVehicle.spec.kind) ? ''
             : this.taxiRide.phase !== 'idle' ? '  ·  T  Cancel ride'
             : `  ·  T  ${this.taxiRide.duty === 'available' ? 'Go occupied' : 'Go available'}`;
+          const courierHint = this.activeVehicle.spec.kind !== 'courier' ? '' : `  ·  Y  ${this.courierJob.active ? 'Clock out' : 'Clock in'}`;
           const sirenHint = this.activeVehicle.police ? '  ·  G  Siren' : '';
-          prompt = `E  Exit vehicle  ·  F  Recover${taxiHint}${sirenHint}`;
+          const radioHint = this.activeVehicle.spec.twoWheeler ? '' : '  ·  N  Radio';
+          prompt = `E  Exit vehicle  ·  F  Recover${radioHint}${taxiHint}${courierHint}${sirenHint}`;
         }
       }
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
@@ -1379,17 +1559,19 @@ export class Game {
     }
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
-    const objective = this.missions.objective ? {
+    const objective = !this.online && this.missions.objective ? {
       missionName: this.missions.active?.name ?? '', text: this.missions.objective.text, progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
     } : undefined;
     const vehicle = this.activeVehicle ? {
       name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health,
+      radio: this.activeVehicle.spec.twoWheeler ? undefined : radioDial(this.audio.currentRadio),
       taxi: isTaxiKind(this.activeVehicle.spec.kind) ? { text: taxiHudText(this.taxiRide.phase, this.taxiRide.duty === 'available', this.taxiRide.fare, this.taxiRide.tip), available: this.taxiRide.available } : undefined,
+      courier: this.activeVehicle.spec.kind === 'courier' ? { text: courierHudText(this.courierJob), available: this.courierJob.active } : undefined,
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.inventory.armour, stims: this.inventory.stims, parachutes: this.inventory.parachutes, money: this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.wanted.level, district, clock: this.dayNight.clockText, reputation: district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, settings: this.settings, cheatsOn: this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable) });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles
@@ -1412,10 +1594,12 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
+    this.endCourierShift();
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   private respawn(): void {
     this.endTaxiShift(this.activeVehicle);
+    this.endCourierShift(this.activeVehicle);
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
     this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose(); this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.mode = 'playing';
   }

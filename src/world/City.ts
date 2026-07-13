@@ -32,7 +32,7 @@ import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter'
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
+import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
@@ -74,6 +74,12 @@ export const SIDEWALK_RISE = 0.22;
  *  instead of a flat sheet coplanar with the land (the original z-fighting the relief pass set out to kill). */
 export const WATER_BASIN_DEPTH = 2.6;
 export const STOP_LINE_DEPTH = 0.6; // thickness (along travel) of an intersection stop bar — bold, reads as the feature
+/** Pavement begins just behind the kerb and ends exactly at the walkable-band query boundary. */
+export const SIDEWALK_INNER_EDGE = 0.38;
+export const SIDEWALK_WIDTH = 3.12;
+export const SIDEWALK_CENTER = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH / 2;
+const SIDEWALK_UV_LENGTH = 48; // one procedural tile contains sixteen 3u-deep paving bays
+const CLIP_PROBE_SPACING = 3; // narrower than the smallest road: a crossing cannot hide between probes
 
 /** True when (x, z) sits on any paved junction surface — used to blank lane markings there so a 4-way reads
  *  as one clean intersection instead of two ribbons' edge/centre lines crossing in an X. Same shape the
@@ -193,8 +199,9 @@ export const PED_NAV_JOIN = Math.round(18 * LAYOUT_SCALE);
 export const MERGE_CHUNK_SIZE = CELL_SIZE;
 /** Lakes/dams at least this large (units²) get the tiered wavy/reflective water treatment. */
 export const PREMIUM_WATER_AREA = 3200;
-/** Time (ms) per frame spent generating on-demand building chunks — the rest of the frame is the game. */
-export const BUILD_FRAME_BUDGET_MS = 4;
+/** Time (ms) per frame spent generating on-demand building chunks. A short stream-in is preferable to
+ *  repeatedly consuming a quarter of a 60fps frame and turning initial traversal into visible hitches. */
+export const BUILD_FRAME_BUDGET_MS = 2;
 
 export function sampleRoadPath(points: RoadPoint[], closed: boolean, spacing: number): RoadPoint[] {
   const source = closed ? [...points, points[0]].filter((point): point is RoadPoint => Boolean(point)) : points;
@@ -217,6 +224,34 @@ export function offsetRoadPath(points: RoadPoint[], offset: number, closed: bool
   });
 }
 
+/**
+ * Clear portions of a path segment, with binary-refined transitions.  Long street runs remain one
+ * quad; only the neighbourhood of a crossing is sampled.  Keeping this pure makes the clipping rule
+ * independently testable (and avoids the old all-or-nothing 36u gaps around intersections).
+ */
+export function clearPathIntervals(length: number, blockedAt: (distance: number) => boolean, probeSpacing = CLIP_PROBE_SPACING): Array<[number, number]> {
+  if (length <= 1e-6) return [];
+  const steps = Math.max(1, Math.ceil(length / Math.max(0.1, probeSpacing)));
+  const intervals: Array<[number, number]> = [];
+  let previous = 0; let blocked = blockedAt(0); let openStart = blocked ? undefined : 0;
+  for (let step = 1; step <= steps; step++) {
+    const distance = length * step / steps; const nextBlocked = blockedAt(distance);
+    if (nextBlocked !== blocked) {
+      let low = previous; let high = distance;
+      for (let iteration = 0; iteration < 9; iteration++) {
+        const mid = (low + high) / 2;
+        if (blockedAt(mid) === blocked) low = mid; else high = mid;
+      }
+      const edge = (low + high) / 2;
+      if (blocked) openStart = edge;
+      else if (openStart !== undefined && edge - openStart > 0.08) intervals.push([openStart, edge]);
+    }
+    previous = distance; blocked = nextBlocked;
+  }
+  if (!blocked && openStart !== undefined && length - openStart > 0.08) intervals.push([openStart, length]);
+  return intervals;
+}
+
 /** Pure builder for the nav-graph source polylines: one lane pair and one sidewalk pair per road,
  *  sampled exactly like the rendered geometry so waypoints sit on the drawn lanes and sidewalks. */
 export function buildCityNavPaths(network: RoadDefinition[] = ROAD_NETWORK): { lanes: NavPath[]; walks: NavPath[] } {
@@ -226,7 +261,7 @@ export function buildCityNavPaths(network: RoadDefinition[] = ROAD_NETWORK): { l
     const sampled = sampleRoadPath(definition.points, closed, ROAD_SAMPLE_SPACING);
     lanes.push({ points: offsetRoadPath(sampled, -definition.width * 0.23, closed), closed });
     lanes.push({ points: offsetRoadPath(sampled, definition.width * 0.23, closed).reverse(), closed });
-    for (const side of [-1, 1]) walks.push({ points: offsetRoadPath(sampled, side * (definition.width / 2 + 2.2), closed).filter((_, index) => index % 2 === 0), closed });
+    for (const side of [-1, 1]) walks.push({ points: offsetRoadPath(sampled, side * (definition.width / 2 + SIDEWALK_CENTER), closed).filter((_, index) => index % 2 === 0), closed });
   }
   return { lanes, walks };
 }
@@ -311,7 +346,7 @@ class RoadIndex {
  *  junction's influence radius (widest/2 + SIGNAL_STOP_APPROACH), so buckets stay small. */
 const SIGNAL_CELL = 48;
 /** Width of the walkable sidewalk band beyond a road edge — a point this far off the tar reads as pavement. */
-const SIDEWALK_BAND = 3.5;
+const SIDEWALK_BAND = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH;
 /** Sidewalk-point grid for ambient ped wander goals within ~500u of the ped — short, reachable A* solves.
  *  Crowd distribution is handled by the census bubble (cull-far/spawn-near), not by long wander hops. */
 const WANDER_CELL = 120;
@@ -365,6 +400,9 @@ export class City {
   pedNav: NavGraph = bridgeIslands(buildNavGraph(this.navPaths.walks, PED_NAV_JOIN));
   private roadSurfaces: Array<{ points: RoadPoint[]; width: number; closed: boolean }> = [];
   private roadIndex = new RoadIndex();
+  /** Tight sibling used only while baking kerbs/paving. The general index keeps a 64u query halo for
+   *  gameplay distance checks; probing that broad bucket millions of times during load is needless. */
+  private roadClipIndex = new RoadIndex(36, 6);
   private signalCells?: Map<string, JunctionDefinition[]>; // lazily-built junction spatial index for signalStops
   private sidewalkGrid?: Map<string, RoadPoint[]>; // lazily-built sidewalk-point grid for local ped wander goals
   private colliderCells = new Map<string, number[]>();
@@ -373,6 +411,7 @@ export class City {
   private buildingMaterial = new Map<string, THREE.MeshStandardMaterial>();
   private asphalt = createGeneratedSurfaceTexture('/textures/asphalt-gpt.jpg', 'asphalt', 1);
   private concrete = createGeneratedSurfaceTexture('/textures/concrete-gpt.jpg', 'concrete', 10);
+  private sidewalk = createSidewalkTexture();
   private grass = createSurfaceTexture('grass', 22);
   private sand = createSurfaceTexture('sand', 14);
   private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
@@ -661,15 +700,34 @@ export class City {
     const roadMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.asphalt, roughness: 0.9, metalness: 0.02 });
     const centerMat = new THREE.MeshStandardMaterial({ color: 0xe7c564, roughness: 0.74 });
     const edgeMat = new THREE.MeshStandardMaterial({ color: 0xdedbc9, roughness: 0.8 });
-    const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xa9aaa2, map: this.concrete, roughness: 0.92 });
-    const curbMat = new THREE.MeshStandardMaterial({ color: 0xc8c7bb, map: this.concrete, roughness: 0.88 });
+    const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xf0eee5, map: this.sidewalk, roughness: 0.96, metalness: 0 });
+    const curbMat = new THREE.MeshStandardMaterial({ color: 0xd5d1c4, map: this.concrete, roughness: 0.9 });
+    const gutterMat = new THREE.MeshStandardMaterial({ color: 0x4b504d, roughness: 0.96 });
     const dirtMat = new THREE.MeshStandardMaterial({ color: 0x7a6547, map: this.sand, roughness: 0.98 });
     const dashTransforms: THREE.Matrix4[] = []; const edgeTransforms: THREE.Matrix4[] = [];
-    for (const definition of ROAD_NETWORK) {
+
+    // Geometry is deliberately two-pass.  Previously each sidewalk was emitted as its road entered the
+    // index, so it could not see roads processed later and long raised triangles bridged straight across
+    // them.  Index every paved road and track first; the render pass can then clip against the complete city.
+    const paved = ROAD_NETWORK.map((definition) => {
       const closed = definition.closed ?? false;
       const sampled = this.samplePath(definition.points, closed, ROAD_SAMPLE_SPACING);
-      this.roadIndex.addSurface(sampled, definition.width, this.roadSurfaces.length);
+      const surface = this.roadSurfaces.length;
+      this.roadIndex.addSurface(sampled, definition.width, surface);
+      this.roadClipIndex.addSurface(sampled, definition.width, surface);
       this.roadSurfaces.push({ points: sampled, width: definition.width, closed });
+      return { definition, closed, sampled, surface };
+    });
+    const tracks = TRACK_NETWORK.map((definition) => {
+      const sampled = this.samplePath(definition.points, false, ROAD_SAMPLE_SPACING);
+      const surface = this.roadSurfaces.length;
+      this.roadIndex.addSurface(sampled, definition.width, surface);
+      this.roadClipIndex.addSurface(sampled, definition.width, surface);
+      this.roadSurfaces.push({ points: sampled, width: definition.width, closed: false });
+      return { definition, sampled };
+    });
+
+    for (const { definition, closed, sampled, surface } of paved) {
       const mapPath = sampled.map((point) => ({ ...point }));
       if (closed && mapPath[0]) mapPath.push({ ...mapPath[0] });
       this.roadPaths.push(mapPath);
@@ -677,11 +735,14 @@ export class City {
       const rightLane = this.offsetPath(sampled, definition.width * 0.23, closed).reverse();
       this.trafficRoutes.push(leftLane, rightLane);
       this.roadPoints.push(...leftLane, ...rightLane);
-      const leftWalk = this.offsetPath(sampled, -(definition.width / 2 + 2.2), closed);
-      const rightWalk = this.offsetPath(sampled, definition.width / 2 + 2.2, closed);
-      // Raised kerb-height sidewalk ribbons (main's terrain-aware model): sit at sidewalkHeightAt so
-      // peds placed via surfaceHeightAt('sidewalk') stand on them rather than floating over a flat apron.
-      for (const walk of [leftWalk, rightWalk]) { const sidewalk = this.createRoadStrip(walk, 3.5, sidewalkMat, SIDEWALK_RISE + ROAD_SURFACE_OFFSET, closed); sidewalk.receiveShadow = true; this.group.add(sidewalk); }
+      const leftWalk = this.offsetPath(sampled, -(definition.width / 2 + SIDEWALK_CENTER), closed);
+      const rightWalk = this.offsetPath(sampled, definition.width / 2 + SIDEWALK_CENTER, closed);
+      // Raised, panelled sidewalks are clipped against every OTHER road surface.  The owning road is
+      // excluded, allowing the paving to hug its kerb while ending cleanly at crossing carriageways.
+      for (const walk of [leftWalk, rightWalk]) {
+        const sidewalk = this.createClippedSidewalkStrip(walk, surface, sidewalkMat, closed);
+        sidewalk.receiveShadow = true; this.group.add(sidewalk);
+      }
       const road = this.createRoadStrip(sampled, definition.width, roadMat, ROAD_SURFACE_OFFSET, closed); road.receiveShadow = true; road.name = definition.name; this.group.add(road);
       // Markings only on the wider carriageways: the generated map has many 6u lanes that read better bare.
       if (definition.width >= 9) this.addRoadMarkings(sampled, definition.width, closed, dashTransforms, definition.width >= 11 ? edgeTransforms : undefined);
@@ -689,21 +750,19 @@ export class City {
       this.addRoadsidePoints(sampled, definition.width, closed);
     }
     // Off-road dirt tracks: narrow unpaved strips — no markings, sidewalks, curbs or nav lanes.
-    for (const track of TRACK_NETWORK) {
-      const sampled = this.samplePath(track.points, false, ROAD_SAMPLE_SPACING);
-      this.roadIndex.addSurface(sampled, track.width, this.roadSurfaces.length);
-      this.roadSurfaces.push({ points: sampled, width: track.width, closed: false });
-      const strip = this.createRoadStrip(sampled, track.width, dirtMat, 0.04, false); strip.receiveShadow = true; this.group.add(strip);
+    for (const { definition, sampled } of tracks) {
+      const strip = this.createRoadStrip(sampled, definition.width, dirtMat, 0.04, false); strip.receiveShadow = true; this.group.add(strip);
     }
     const box = new THREE.BoxGeometry(1, 1, 1);
     this.addInstanced(box, centerMat, dashTransforms, {});
     this.addInstanced(box, edgeMat, edgeTransforms, {});
-    const curbTransforms: THREE.Matrix4[] = [];
+    const curbTransforms: THREE.Matrix4[] = []; const gutterTransforms: THREE.Matrix4[] = [];
     for (let index = 0; index < ROAD_NETWORK.length; index++) {
       const surface = this.roadSurfaces[index]!;
-      if (surface.width >= 9) this.addCurbs(surface.points, surface.width, surface.closed, index, curbTransforms);
+      this.addCurbs(surface.points, surface.width, surface.closed, index, curbTransforms, gutterTransforms);
     }
     this.addInstanced(box, curbMat, curbTransforms, { cast: true, receive: true });
+    this.addInstanced(box, gutterMat, gutterTransforms, { receive: true });
     this.buildJunctionSurfaces(roadMat);
     this.buildStopLines();
     this.buildIntersections();
@@ -846,26 +905,42 @@ export class City {
     }
   }
 
-  private addCurbs(points: RoadPoint[], width: number, closed: boolean, surface: number, transforms: THREE.Matrix4[]): void {
+  private addCurbs(points: RoadPoint[], width: number, closed: boolean, surface: number, transforms: THREE.Matrix4[], gutters: THREE.Matrix4[]): void {
     const segmentCount = closed ? points.length : points.length - 1;
     const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion();
     for (let index = 0; index < segmentCount; index++) {
       const start = points[index]; const end = points[(index + 1) % points.length]; if (!start || !end) continue;
       const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz); if (length < 0.5) continue;
-      const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
-      if (CITY_JUNCTIONS.some((junction) => Math.hypot(midX - junction.x, midZ - junction.z) < junction.widest / 2 + 7)) continue;
       const normalX = -dz / length; const normalZ = dx / length;
       for (const side of [-1, 1]) {
         const offset = side * (width / 2 + 0.22);
-        const crossesRoad = [0, 0.5, 1].some((t) => {
-          const sx = THREE.MathUtils.lerp(start.x, end.x, t) + normalX * offset;
-          const sz = THREE.MathUtils.lerp(start.z, end.z, t) + normalZ * offset;
-          return this.roadIndex.onRoad(sx, sz, 1.2, surface);
+        const intervals = clearPathIntervals(length, (distance) => {
+          const t = distance / length;
+          const x = THREE.MathUtils.lerp(start.x, end.x, t) + normalX * offset;
+          const z = THREE.MathUtils.lerp(start.z, end.z, t) + normalZ * offset;
+          return this.roadClipIndex.onRoad(x, z, 0.12, surface);
         });
-        if (crossesRoad) continue;
-        const x = midX + normalX * offset; const z = midZ + normalZ * offset;
-        quaternion.copy(this.surfaceSegmentQuaternion(start.x + normalX * offset, start.z + normalZ * offset, end.x + normalX * offset, end.z + normalZ * offset, 'road'));
-        matrix.compose(new THREE.Vector3(x, this.roadHeightAt(x, z) + SIDEWALK_RISE / 2, z), quaternion, new THREE.Vector3(0.38, SIDEWALK_RISE, length + 0.35)); transforms.push(matrix.clone());
+        for (const [from, to] of intervals) {
+          const span = to - from; if (span < 0.1) continue;
+          const middle = (from + to) / 2; const t0 = from / length; const t1 = to / length;
+          const x = start.x + dx * middle / length + normalX * offset;
+          const z = start.z + dz * middle / length + normalZ * offset;
+          const ax = THREE.MathUtils.lerp(start.x, end.x, t0) + normalX * offset;
+          const az = THREE.MathUtils.lerp(start.z, end.z, t0) + normalZ * offset;
+          const bx = THREE.MathUtils.lerp(start.x, end.x, t1) + normalX * offset;
+          const bz = THREE.MathUtils.lerp(start.z, end.z, t1) + normalZ * offset;
+          quaternion.copy(this.surfaceSegmentQuaternion(ax, az, bx, bz, 'road'));
+          matrix.compose(new THREE.Vector3(x, this.roadHeightAt(x, z) + SIDEWALK_RISE / 2, z), quaternion, new THREE.Vector3(0.38, SIDEWALK_RISE, span));
+          transforms.push(matrix.clone());
+
+          // A narrow recessed drainage ribbon visually separates pale kerb from tar and makes even
+          // unmarked residential streets read as finished, maintained road edges.
+          const gutterOffset = side * (width / 2 - 0.11);
+          const gx = start.x + dx * middle / length + normalX * gutterOffset;
+          const gz = start.z + dz * middle / length + normalZ * gutterOffset;
+          matrix.compose(new THREE.Vector3(gx, this.roadHeightAt(gx, gz) + 0.012, gz), quaternion, new THREE.Vector3(0.22, 0.018, span));
+          gutters.push(matrix.clone());
+        }
       }
     }
   }
@@ -891,6 +966,52 @@ export class City {
     const tactile = new THREE.MeshStandardMaterial({ color: 0xd0a744, roughness: 0.82 });
     this.addInstanced(new THREE.BoxGeometry(1, 1, 1), tactile, patchTransforms, { receive: true });
     this.addInstanced(new THREE.CylinderGeometry(0.09, 0.11, 0.07, 10), tactile, bumpTransforms, {});
+  }
+
+  /** Raised pavement ribbon with every cross-street interval removed from the actual triangles. */
+  private createClippedSidewalkStrip(points: RoadPoint[], surface: number, material: THREE.Material, closed: boolean): THREE.Mesh {
+    const vertices: number[] = []; const uvs: number[] = []; const indices: number[] = [];
+    const left = this.offsetPath(points, SIDEWALK_WIDTH / 2, closed);
+    const right = this.offsetPath(points, -SIDEWALK_WIDTH / 2, closed);
+    const segmentCount = closed ? points.length : points.length - 1;
+    let travelled = 0;
+    for (let index = 0; index < segmentCount; index++) {
+      const centerA = points[index]; const centerB = points[(index + 1) % points.length];
+      const leftA = left[index]; const leftB = left[(index + 1) % left.length];
+      const rightA = right[index]; const rightB = right[(index + 1) % right.length];
+      if (!centerA || !centerB || !leftA || !leftB || !rightA || !rightB) continue;
+      const length = Math.hypot(centerB.x - centerA.x, centerB.z - centerA.z); if (length < 1e-4) continue;
+      const intervals = clearPathIntervals(length, (distance) => {
+        const t = distance / length;
+        const lx = THREE.MathUtils.lerp(leftA.x, leftB.x, t); const lz = THREE.MathUtils.lerp(leftA.z, leftB.z, t);
+        const rx = THREE.MathUtils.lerp(rightA.x, rightB.x, t); const rz = THREE.MathUtils.lerp(rightA.z, rightB.z, t);
+        for (const across of [0, 0.5, 1]) {
+          const x = THREE.MathUtils.lerp(lx, rx, across); const z = THREE.MathUtils.lerp(lz, rz, across);
+          if (this.roadClipIndex.onRoad(x, z, 0.035, surface)) return true;
+        }
+        return false;
+      });
+      for (const [from, to] of intervals) {
+        const t0 = from / length; const t1 = to / length; const base = vertices.length / 3;
+        const l0x = THREE.MathUtils.lerp(leftA.x, leftB.x, t0); const l0z = THREE.MathUtils.lerp(leftA.z, leftB.z, t0);
+        const r0x = THREE.MathUtils.lerp(rightA.x, rightB.x, t0); const r0z = THREE.MathUtils.lerp(rightA.z, rightB.z, t0);
+        const l1x = THREE.MathUtils.lerp(leftA.x, leftB.x, t1); const l1z = THREE.MathUtils.lerp(leftA.z, leftB.z, t1);
+        const r1x = THREE.MathUtils.lerp(rightA.x, rightB.x, t1); const r1z = THREE.MathUtils.lerp(rightA.z, rightB.z, t1);
+        vertices.push(
+          l0x, this.sidewalkHeightAt(l0x, l0z), l0z,
+          r0x, this.sidewalkHeightAt(r0x, r0z), r0z,
+          l1x, this.sidewalkHeightAt(l1x, l1z), l1z,
+          r1x, this.sidewalkHeightAt(r1x, r1z), r1z,
+        );
+        uvs.push(0, (travelled + from) / SIDEWALK_UV_LENGTH, 1, (travelled + from) / SIDEWALK_UV_LENGTH, 0, (travelled + to) / SIDEWALK_UV_LENGTH, 1, (travelled + to) / SIDEWALK_UV_LENGTH);
+        indices.push(base, base + 2, base + 1, base + 2, base + 3, base + 1);
+      }
+      travelled += length;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); geometry.setIndex(indices); geometry.computeVertexNormals();
+    return new THREE.Mesh(geometry, material);
   }
 
   private createRoadStrip(points: RoadPoint[], width: number, material: THREE.Material, y: number, closed: boolean): THREE.Mesh {

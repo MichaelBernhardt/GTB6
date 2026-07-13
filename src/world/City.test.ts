@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PLAYER } from '../config';
 import { fallDamage, jumpVelocity, stepVertical, type VerticalMotion } from '../core/GameRules';
-import { colliderBase, colliderTop, collidersBlock, districtAt, highestColliderTop, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_RISE, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
+import { clearPathIntervals, colliderBase, colliderTop, collidersBlock, districtAt, highestColliderTop, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
 import { CBD_CENTER, districtCenter, MAP_WORLD_SIZE } from './mapData';
 import { CITY_JUNCTIONS, signalCornerOffset } from './UrbanInfrastructure';
 
@@ -92,6 +92,26 @@ describe('terrain relief from the SRTM heightgrid', () => {
   it('keeps sidewalks stepped above roads above the terrain', () => {
     expect(ROAD_SURFACE_OFFSET).toBeGreaterThan(0);
     expect(SIDEWALK_RISE).toBeCloseTo(0.22);
+    expect(SIDEWALK_INNER_EDGE).toBeGreaterThan(0); // kerb has a real face; paving does not overlap tar
+    expect(SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH).toBeCloseTo(3.5); // mesh and walkable query end together
+  });
+});
+
+describe('sidewalk cross-street clipping', () => {
+  it('keeps long clear runs as single intervals and removes only the crossing', () => {
+    const clear = clearPathIntervals(36, (distance) => distance >= 14 && distance <= 22);
+    expect(clear).toHaveLength(2);
+    expect(clear[0]![0]).toBe(0);
+    expect(clear[0]![1]).toBeCloseTo(14, 1);
+    expect(clear[1]![0]).toBeCloseTo(22, 1);
+    expect(clear[1]![1]).toBe(36);
+  });
+
+  it('handles a clipped endpoint without dropping the rest of the paving slab', () => {
+    const clear = clearPathIntervals(20, (distance) => distance < 4);
+    expect(clear).toHaveLength(1);
+    expect(clear[0]![0]).toBeCloseTo(4, 1);
+    expect(clear[0]![1]).toBe(20);
   });
 });
 

@@ -29,6 +29,7 @@ export class UIManager {
   private lastSettings?: GameSettings;
   private mainSummary: MainMenuSummary = { hasSave: false, money: 0, completedMissions: 0, totalMissions: 0, reputation: 'neutral' };
   onStart?: (fresh: boolean) => void;
+  onOnline?: (name: string) => void;
   onResume?: () => void;
   onRestart?: () => void;
   onResetSave?: () => void;
@@ -85,7 +86,7 @@ export class UIManager {
   hideWeaponWheel(): void { this.wheel.classList.remove('is-visible'); }
 
   notify(title: string, detail = '', success = true, tone?: NotificationTone): void {
-    const resolved = tone ?? (success ? 'success' : 'danger'); this.toast.innerHTML = `<small>${resolved === 'danger' ? 'CITY ALERT' : resolved === 'reputation' ? 'STREET WORD' : resolved === 'radio' ? 'JMPD DISPATCH' : 'UPDATE'}</small><strong>${title}</strong><span>${detail}</span>`;
+    const resolved = tone ?? (success ? 'success' : 'danger'); this.toast.innerHTML = `<small>${resolved === 'danger' ? 'CITY ALERT' : resolved === 'reputation' ? 'STREET WORD' : resolved === 'radio' ? 'JMPD DISPATCH' : resolved === 'music' ? 'NOW TUNED' : 'UPDATE'}</small><strong>${title}</strong><span>${detail}</span>`;
     this.toast.className = `is-visible tone-${resolved}`; this.toastTimer = 4;
   }
   hideMenu(): void { this.menuView.hide(); }
@@ -102,7 +103,7 @@ export class UIManager {
   showLoading(): void { this.menuView.loading(); }
   showMainMenu(summary?: MainMenuSummary): void {
     if (summary) this.mainSummary = summary;
-    this.menuView.main(this.mainSummary, { start: (fresh) => this.onStart?.(fresh), controls: () => this.showControls(true) });
+    this.menuView.main(this.mainSummary, { start: (fresh) => this.onStart?.(fresh), online: (name) => this.onOnline?.(name), controls: () => this.showControls(true) });
   }
   showPause(settings: GameSettings): void {
     this.lastSettings = settings; this.menuView.pause(settings, { resume: () => this.onResume?.(), restart: () => this.onRestart?.(), controls: () => this.showControls(), cheats: () => this.onShowCheats?.(), reset: () => this.onResetSave?.(), settings: (value) => this.onSettings?.(value) });

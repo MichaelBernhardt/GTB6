@@ -12,15 +12,17 @@ export class MenuView {
     this.set('loading', `<section class="menu-card menu-card--loading"><p class="eyebrow">CITY SERVICES</p><h2>Building Jozi</h2><div class="loading-stripe" aria-label="Loading"></div><small>Robots, potholes and all.</small></section>`);
   }
 
-  main(summary: MainMenuSummary, actions: { start: (fresh: boolean) => void; controls: () => void }): void {
+  main(summary: MainMenuSummary, actions: { start: (fresh: boolean) => void; online: (name: string) => void; controls: () => void }): void {
     const progress = summary.hasSave ? `<aside class="save-ticket"><small>LAST SEEN IN JOZI</small><b>${formatMoney(summary.money)}</b><span>${summary.completedMissions}/${summary.totalMissions} jobs · ${reputationLabel(summary.reputation)} CBD</span></aside>` : '<aside class="save-ticket save-ticket--empty"><small>NEW ARRIVAL</small><span>No city history yet. Make the first move.</span></aside>';
     this.set('main', `<section class="main-menu">
       <div class="main-menu__copy"><p class="eyebrow">A JOZI STORY · V2</p><h1><span>GROOT</span><span>THEFT</span><strong>BAKKIE</strong></h1><p class="main-menu__lede">Make a name across five districts where every robot is a suggestion and every action leaves a mark.</p>
-      <div class="menu-actions"><button class="action-primary" data-action="${summary.hasSave ? 'continue' : 'new'}"><span>${summary.hasSave ? 'Continue' : 'Enter Joburg'}</span><kbd>ENTER</kbd></button>${summary.hasSave ? '<button data-action="new">Start fresh</button>' : ''}<button data-action="controls">Field guide</button></div></div>
+      <div class="menu-actions"><button class="action-primary" data-action="${summary.hasSave ? 'continue' : 'new'}"><span>${summary.hasSave ? 'Continue solo' : 'Enter Joburg solo'}</span><kbd>ENTER</kbd></button>${summary.hasSave ? '<button data-action="new">Start fresh</button>' : ''}<div class="online-entry"><input data-online-name maxlength="24" value="${this.savedOnlineName()}" aria-label="Online display name" placeholder="Display name"><button data-action="online">Enter global world</button></div><button data-action="controls">Field guide</button></div></div>
       <div class="main-menu__rail">${progress}<div class="street-note"><b>LOAD SHEDDING</b><span>Included at no extra cost.</span></div></div>
       <footer>ORIGINAL PROCEDURAL OPEN-WORLD GAME <i></i> JOHANNESBURG</footer>
     </section>`);
-    this.bind('[data-action="continue"]', () => actions.start(false)); this.bind('[data-action="new"]', () => actions.start(true)); this.bind('[data-action="controls"]', actions.controls);
+    this.bind('[data-action="continue"]', () => actions.start(false)); this.bind('[data-action="new"]', () => actions.start(true));
+    this.bind('[data-action="online"]', () => { const input = this.root.querySelector<HTMLInputElement>('[data-online-name]'); const name = input?.value.trim() || 'Player'; localStorage.setItem('groot-theft-bakkie-online-name', name); actions.online(name); });
+    this.bind('[data-action="controls"]', actions.controls);
   }
 
   pause(settings: GameSettings, actions: { resume: () => void; restart: () => void; controls: () => void; cheats: () => void; reset: () => void; settings: (value: Partial<GameSettings>) => void }): void {
@@ -38,7 +40,7 @@ export class MenuView {
 
   controls(fromMain: boolean, back: () => void): void {
     const groups = [
-      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['CTRL/RMB', 'Aim / drive-by'], ['SPACE', 'Jump / handbrake / chute'], ['E', 'Interact / vehicle'], ['Q', 'Take cover'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—5', 'Select weapon'], ['R', 'Reload'], ['H', 'Use stim pack'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['G', 'Siren (police car)'], ['PGUP/PGDN', 'Minimap zoom'], ['M', 'City map'], ['ESC', 'Pause'], ['~', 'Console'],
+      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['CTRL/RMB', 'Aim / drive-by'], ['SPACE', 'Jump / handbrake / chute'], ['E', 'Interact / vehicle'], ['Q', 'Take cover'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—6', 'Select weapon'], ['R', 'Reload'], ['H', 'Use stim pack'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['T', 'Taxi duty'], ['Y', 'Sixty-Sekonds shift'], ['N / SHIFT+N', 'Next / previous radio'], ['G', 'Siren (police car)'], ['PGUP/PGDN', 'Minimap zoom'], ['M', 'City map'], ['ESC', 'Pause'], ['~', 'Console'],
     ];
     this.set('controls', `<section class="menu-card menu-card--guide"><header><p class="eyebrow">FIELD GUIDE</p><h2>Know the streets.</h2><span>${fromMain ? 'The essentials before you enter.' : 'Controls for foot and vehicle.'}</span></header><div class="control-grid">${groups.map(([key, label]) => `<div><kbd>${key}</kbd><span>${label}</span></div>`).join('')}</div><button class="action-primary" data-action="back">Back</button></section>`); this.bind('[data-action="back"]', back);
   }
@@ -74,5 +76,6 @@ export class MenuView {
     this.screen = screen; this.root.innerHTML = html; this.root.className = `menu-overlay is-visible screen-${screen}`; this.root.setAttribute('aria-hidden', 'false');
     requestAnimationFrame(() => this.root.querySelector<HTMLElement>('button:not(:disabled), input, select')?.focus());
   }
+  private savedOnlineName(): string { return (localStorage.getItem('groot-theft-bakkie-online-name') ?? 'Player').replace(/["<>]/g, '').slice(0, 24); }
   private bind(selector: string, callback: () => void): void { this.root.querySelector(selector)?.addEventListener('click', callback); }
 }

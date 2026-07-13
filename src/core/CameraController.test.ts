@@ -144,6 +144,59 @@ describe('camera views in the world', () => {
     controller.update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, Math.PI / 2);
     expect(controller.yaw).toBeCloseTo(Math.PI * 1.5);
   });
+
+  it('seats the first-person driver higher in a taller vehicle so the bonnet clears the view', () => {
+    const eyeY = (height: number): number => {
+      const camera = new THREE.PerspectiveCamera(60, 1);
+      new CameraController(camera).update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, 0, true, 0, 0, 0, false, height);
+      return camera.position.y;
+    };
+    expect(eyeY(1.35)).toBeCloseTo(1.25); // a compact keeps the base eye height
+    expect(eyeY(1.15)).toBeCloseTo(1.25); // a low sports car is not dropped below the base
+    expect(eyeY(2.15)).toBeGreaterThan(eyeY(1.35) + 0.7); // a tall bakkie/van seats the driver well up
+    expect(eyeY(2.0)).toBeGreaterThan(eyeY(1.4)); // taller vehicle -> higher eye, monotonic
+  });
+
+  it('mouse-steering (steerLock) tails the third-person camera behind the heading and ignores mouse orbit', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    controller.yaw = 0;
+    const heading = Math.PI / 2; const behind = heading + Math.PI;
+    // steerLock=true (last arg): even with a hard sideways drag, yaw must converge behind the heading, not orbit.
+    for (let i = 0; i < 240; i++) controller.update(1 / 60, input(500, 0), new THREE.Vector3(), city, true, 0.0025, 2, heading, true, 0, 0, 0, true);
+    expect(Math.atan2(Math.sin(behind - controller.yaw), Math.cos(behind - controller.yaw))).toBeCloseTo(0);
+  });
+
+  it('mouse-steering in first person holds the view forward instead of glancing (drag turns the wheel)', () => {
+    const heading = Math.PI / 2; const forward = heading + Math.PI;
+    // First person (view 0) + steerLock: a hard sideways drag must NOT swing the glance; yaw stays locked forward.
+    const steering = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    for (let i = 0; i < 30; i++) steering.update(1 / 60, input(500, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading, true, 0, 0, 0, true);
+    expect(steering.yaw).toBeCloseTo(forward);
+    // Same drag without steerLock still glances off-centre (the existing FP-vehicle behaviour).
+    const glancing = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    glancing.update(1 / 60, input(500, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading);
+    expect(Math.abs(Math.atan2(Math.sin(forward - glancing.yaw), Math.cos(forward - glancing.yaw)))).toBeGreaterThan(0.05);
+  });
+
+  it('first-person driving holds a glance while the mouse moves, easing back to forward only after it idles', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    const heading = 0; const forward = heading + Math.PI;
+    const off = (yaw: number) => Math.abs(Math.atan2(Math.sin(forward - yaw), Math.cos(forward - yaw)));
+    controller.update(1 / 60, input(300, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading); // glance off-centre
+    const glanced = controller.yaw;
+    expect(off(glanced)).toBeGreaterThan(0.5);
+    for (let i = 0; i < 60; i++) controller.update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading); // ~1s idle, under the delay
+    expect(controller.yaw).toBeCloseTo(glanced); // still holding — no tug-of-war
+    for (let i = 0; i < 600; i++) controller.update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading); // several more idle seconds
+    expect(off(controller.yaw)).toBeCloseTo(0); // now eased back to forward
+  });
+
+  it('without steerLock the same drag orbits the third-person vehicle camera as before', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    controller.yaw = 0;
+    controller.update(1 / 60, input(500, 0), new THREE.Vector3(), city, true, 0.0025, 2, Math.PI / 2);
+    expect(controller.yaw).toBeCloseTo(-500 * 0.0025); // free orbit, unchanged behaviour
+  });
 });
 
 describe('sniper scope camera', () => {

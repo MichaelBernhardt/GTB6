@@ -4,12 +4,20 @@ const required = <T extends Element>(root: ParentNode, selector: string): T => {
   const element = root.querySelector<T>(selector); if (!element) throw new Error(`Missing HUD element: ${selector}`); return element;
 };
 
+// Avoid invalidating layout/style for values that did not change. Most HUD data is stable for many
+// frames (clock minute, ammo, health, prompt), but update() runs at render cadence.
+const setText = (element: Element, value: string): void => { if (element.textContent !== value) element.textContent = value; };
+const setHidden = (element: HTMLElement, hidden: boolean): void => { if (element.hidden !== hidden) element.hidden = hidden; };
+const setWidth = (element: HTMLElement, width: string): void => { if (element.style.width !== width) element.style.width = width; };
+const setAttribute = (element: Element, name: string, value: string): void => { if (element.getAttribute(name) !== value) element.setAttribute(name, value); };
+
 export class HudView {
   private district: HTMLElement;
   private clock: HTMLElement;
   private reputation: HTMLElement;
   private health: HTMLElement;
   private healthFill: HTMLElement;
+  private healthBox: HTMLElement;
   private armourBox: HTMLElement;
   private armour: HTMLElement;
   private armourFill: HTMLElement;
@@ -35,6 +43,7 @@ export class HudView {
   private vehicleSpeed: HTMLElement;
   private vehicleHealth: HTMLElement;
   private taxi: HTMLElement;
+  private radio: HTMLElement;
   private fps: HTMLElement;
   private cheats: HTMLElement;
   private crosshair: HTMLElement;
@@ -59,51 +68,53 @@ export class HudView {
         <div><small data-hud="objective-name"></small><span data-hud="objective-meta"></span></div>
         <strong data-hud="objective-text"></strong><div class="hud-objective-track" data-hud="objective-track" role="progressbar" aria-label="Objective progress" aria-valuemin="0" aria-valuemax="100"><i data-hud="objective-fill"></i></div>
       </section>
-      <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em><i class="hud-taxi" data-hud="taxi" role="status"></i></section>
+      <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em><i class="hud-radio" data-hud="radio" role="status"></i><i class="hud-taxi" data-hud="taxi" role="status"></i></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
       <div class="hud-items" data-hud="items" aria-label="Carried items" hidden><i data-hud="stims" hidden></i><i data-hud="chutes" hidden></i></div>
       <div class="hud-fps" data-hud="fps"></div><div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
       <div class="hud-crosshair" data-hud="crosshair" aria-hidden="true" hidden><i></i></div>`;
     this.district = required(root, '[data-hud="district"]'); this.clock = required(root, '[data-hud="clock"]'); this.reputation = required(root, '[data-hud="reputation"]');
     this.health = required(root, '[data-hud="health"]'); this.healthFill = required(root, '[data-hud="health-fill"]'); this.cash = required(root, '[data-hud="cash"]');
+    this.healthBox = required(root, '.hud-health');
     this.armourBox = required(root, '[data-hud="armour-box"]'); this.armour = required(root, '[data-hud="armour"]'); this.armourFill = required(root, '[data-hud="armour-fill"]');
     this.items = required(root, '[data-hud="items"]'); this.stims = required(root, '[data-hud="stims"]'); this.chutes = required(root, '[data-hud="chutes"]');
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i'));
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
-    this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.taxi = required(root, '[data-hud="taxi"]');
+    this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.radio = required(root, '[data-hud="radio"]'); this.taxi = required(root, '[data-hud="taxi"]');
     this.fps = required(root, '[data-hud="fps"]'); this.cheats = required(root, '[data-hud="cheats"]'); this.crosshair = required(root, '[data-hud="crosshair"]');
     this.scope = required(root, '[data-hud="scope"]'); this.scopeZoom = required(root, '[data-hud="scope-zoom"]');
   }
 
   update(state: HudState): void {
-    const health = clampPercent(state.health); this.district.textContent = state.district; this.clock.textContent = state.clock; this.reputation.textContent = state.reputation ? reputationLabel(state.reputation) : '';
-    this.reputation.hidden = !state.reputation; this.health.textContent = `${health}`; this.healthFill.style.width = `${health}%`;
-    const healthBox = this.health.closest<HTMLElement>('[role="progressbar"]'); healthBox?.setAttribute('aria-valuenow', String(health));
-    const armour = clampPercent(state.armour); this.armourBox.hidden = armour <= 0;
-    if (armour > 0) { this.armour.textContent = `${armour}`; this.armourFill.style.width = `${armour}%`; this.armourBox.setAttribute('aria-valuenow', String(armour)); }
-    this.stims.hidden = state.stims <= 0; if (state.stims > 0) this.stims.textContent = `STIM ×${state.stims} · H`;
-    this.chutes.hidden = state.parachutes <= 0; if (state.parachutes > 0) this.chutes.textContent = `CHUTE ×${state.parachutes}`;
-    this.items.hidden = state.stims <= 0 && state.parachutes <= 0;
-    this.cash.textContent = formatMoney(state.money); this.weaponName.textContent = state.weaponName;
-    this.ammo.textContent = state.melee ? '—' : String(state.ammo); this.reserve.textContent = state.melee ? '' : `/ ${state.reserve}`; this.reload.hidden = !state.reloading;
-    this.wanted.forEach((star, index) => star.classList.toggle('is-hot', index < state.wanted)); this.wantedContainer.setAttribute('aria-label', `Wanted level ${state.wanted} of 5`);
-    this.objective.hidden = !state.objective;
+    const health = clampPercent(state.health); setText(this.district, state.district); setText(this.clock, state.clock); setText(this.reputation, state.reputation ? reputationLabel(state.reputation) : '');
+    setHidden(this.reputation, !state.reputation); setText(this.health, `${health}`); setWidth(this.healthFill, `${health}%`);
+    setAttribute(this.healthBox, 'aria-valuenow', String(health));
+    const armour = clampPercent(state.armour); setHidden(this.armourBox, armour <= 0);
+    if (armour > 0) { setText(this.armour, `${armour}`); setWidth(this.armourFill, `${armour}%`); setAttribute(this.armourBox, 'aria-valuenow', String(armour)); }
+    setHidden(this.stims, state.stims <= 0); if (state.stims > 0) setText(this.stims, `STIM ×${state.stims} · H`);
+    setHidden(this.chutes, state.parachutes <= 0); if (state.parachutes > 0) setText(this.chutes, `CHUTE ×${state.parachutes}`);
+    setHidden(this.items, state.stims <= 0 && state.parachutes <= 0);
+    setText(this.cash, formatMoney(state.money)); setText(this.weaponName, state.weaponName);
+    setText(this.ammo, state.melee ? '—' : String(state.ammo)); setText(this.reserve, state.melee ? '' : `/ ${state.reserve}`); setHidden(this.reload, !state.reloading);
+    this.wanted.forEach((star, index) => star.classList.toggle('is-hot', index < state.wanted)); setAttribute(this.wantedContainer, 'aria-label', `Wanted level ${state.wanted} of 5`);
+    setHidden(this.objective, !state.objective);
     if (state.objective) {
-      this.objectiveName.textContent = state.objective.missionName; this.objectiveText.textContent = state.objective.text;
+      setText(this.objectiveName, state.objective.missionName); setText(this.objectiveText, state.objective.text);
       const bits: string[] = [];
       if (state.objective.required && state.objective.progress !== undefined) bits.push(`${state.objective.progress}/${state.objective.required}`);
       if (state.objective.remainingSeconds) bits.push(`${Math.ceil(state.objective.remainingSeconds)} SEC`);
-      this.objectiveMeta.textContent = bits.join(' · '); const progress = objectiveProgress(state.objective); this.objectiveFill.style.width = `${progress ?? 0}%`; this.objectiveTrack.hidden = progress === undefined; this.objectiveTrack.setAttribute('aria-valuenow', String(progress ?? 0));
+      setText(this.objectiveMeta, bits.join(' · ')); const progress = objectiveProgress(state.objective); setWidth(this.objectiveFill, `${progress ?? 0}%`); setHidden(this.objectiveTrack, progress === undefined); setAttribute(this.objectiveTrack, 'aria-valuenow', String(progress ?? 0));
     }
-    this.prompt.textContent = state.prompt; this.prompt.hidden = !state.prompt;
-    this.vehicle.hidden = !state.vehicle;
+    setText(this.prompt, state.prompt); setHidden(this.prompt, !state.prompt);
+    setHidden(this.vehicle, !state.vehicle);
     if (state.vehicle) {
-      this.vehicleName.textContent = state.vehicle.name; this.vehicleSpeed.textContent = String(Math.round(state.vehicle.speedKph)); this.vehicleHealth.textContent = `${Math.ceil(state.vehicle.health)}% VEHICLE`;
-      const taxi = state.vehicle.taxi; this.taxi.hidden = !taxi;
-      if (taxi) { this.taxi.textContent = taxi.text; this.taxi.classList.toggle('is-on', taxi.available); }
+      setText(this.vehicleName, state.vehicle.name); setText(this.vehicleSpeed, String(Math.round(state.vehicle.speedKph))); setText(this.vehicleHealth, `${Math.ceil(state.vehicle.health)}% VEHICLE`);
+      setHidden(this.radio, !state.vehicle.radio); if (state.vehicle.radio) setText(this.radio, state.vehicle.radio);
+      const job = state.vehicle.courier ?? state.vehicle.taxi; setHidden(this.taxi, !job);
+      if (job) { setText(this.taxi, job.text); this.taxi.classList.toggle('is-on', job.available); }
     }
-    this.fps.textContent = `${Math.round(state.fps)} FPS · A* ${state.navCalls}/s ${state.navMs.toFixed(1)}ms`; this.fps.hidden = !state.settings.showFps; this.cheats.hidden = !state.cheatsOn; this.crosshair.hidden = !state.crosshair;
-    this.scope.hidden = !state.scope; if (state.scope) this.scopeZoom.textContent = state.scope.zoom;
+    setText(this.fps, `${Math.round(state.fps)} FPS · A* ${state.navCalls}/s ${state.navMs.toFixed(1)}ms`); setHidden(this.fps, !state.settings.showFps); setHidden(this.cheats, !state.cheatsOn); setHidden(this.crosshair, !state.crosshair);
+    setHidden(this.scope, !state.scope); if (state.scope) setText(this.scopeZoom, state.scope.zoom);
   }
 }

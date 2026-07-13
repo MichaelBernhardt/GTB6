@@ -79,8 +79,11 @@ export class UrbanInfrastructure {
   private group = new THREE.Group();
   private lenses: SignalLens[] = [];
   private lensSlots: InstanceSlot[] = [];
+  private lensLit: boolean[] = [];
   private lensDirty = new Set<THREE.InstancedMesh>();
   private lensColor = new THREE.Color();
+  private lensTick = -1;
+  private lensPowerDirty = true;
   private elapsed = 0;
   private bulbMaterial?: THREE.MeshBasicMaterial;
   private powered = true;
@@ -100,7 +103,7 @@ export class UrbanInfrastructure {
     private surfaceHeight: (x: number, z: number) => number,
   ) {
     this.group.name = 'Urban infrastructure'; parent.add(this.group);
-    onPowerChange((on) => { this.powered = on; });
+    onPowerChange((on) => { this.powered = on; this.lensPowerDirty = true; });
     this.buildVegetation();
     this.buildStreetlights();
     this.buildTrafficSignals();
@@ -128,12 +131,21 @@ export class UrbanInfrastructure {
 
   update(dt: number): void {
     this.elapsed = (this.elapsed + dt) % 30;
+    // Generated signal phases and all three state boundaries land on whole seconds. Recolouring every
+    // lens on every render frame was therefore identical work ~59 frames out of 60, including needless
+    // instance-buffer uploads. Keep the traffic clock continuous, but refresh visuals only when a state
+    // can actually change (or immediately after a power cut/restoration).
+    const tick = Math.floor(this.elapsed);
+    if (tick === this.lensTick && !this.lensPowerDirty) return;
+    this.lensTick = tick; this.lensPowerDirty = false;
     this.lensDirty.clear();
     this.lenses.forEach((lens, index) => {
       const slot = this.lensSlots[index];
       if (!slot) return;
       const state = signalPhaseState(lens.phase, lens.axis, this.elapsed); // culled lens meshes still get colors: the GPU upload only happens when their chunk is rendered again
       const on = this.powered && (lens.channel === 2 ? state === 'green' : lens.channel === 1 ? state === 'amber' : state === 'red');
+      if (this.lensLit[index] === on) return;
+      this.lensLit[index] = on;
       this.lensColor.setHex(on ? SIGNAL_COLORS[lens.channel] : 0x14100e);
       if (on) this.lensColor.multiplyScalar(2.1);
       slot.mesh.setColorAt(slot.index, this.lensColor);
