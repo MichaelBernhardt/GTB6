@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Vehicle } from '../entities/Vehicle';
-import type { GameSettings } from '../types';
+import type { BaseQuality } from '../types';
 import type { City } from './City';
 import type { EnvironmentHandle } from './Environment';
 import { powerOn } from './powerGrid';
@@ -13,8 +13,8 @@ export const DAWN_START = 5.2; export const DAWN_END = 6.9;
 export const DUSK_START = 17.7; export const DUSK_END = 19.5;
 
 /** Real light pools per quality: PointLights under the nearest streetlamps, SpotLights on the nearest vehicles. */
-export const STREETLIGHT_POOL: Record<GameSettings['quality'], number> = { low: 4, medium: 8, high: 12 };
-export const HEADLIGHT_POOL: Record<GameSettings['quality'], number> = { low: 2, medium: 4, high: 6 };
+export const STREETLIGHT_POOL: Record<BaseQuality, number> = { low: 4, medium: 8, high: 12 };
+export const HEADLIGHT_POOL: Record<BaseQuality, number> = { low: 2, medium: 4, high: 6 };
 
 const STREETLIGHT_RADIUS = 18; const STREETLIGHT_INTENSITY = 30; const STREETLIGHT_COLOR = 0xffb45e;
 const HEADLIGHT_RANGE = 36; const HEADLIGHT_INTENSITY = 48; const HEADLIGHT_COLOR = 0xfff3cf;
@@ -120,7 +120,7 @@ export class DayNightSystem {
   private candidateXZ = new Float32Array(64);
   private candidateIndices: number[] = []; private candidateDistances: number[] = [];
 
-  constructor(private scene: THREE.Scene, private environment: EnvironmentHandle, private city: City, quality: GameSettings['quality'], startHour = DEFAULT_HOUR) {
+  constructor(private scene: THREE.Scene, private environment: EnvironmentHandle, private city: City, quality: BaseQuality, startHour = DEFAULT_HOUR) {
     this.hour = wrapHour(startHour);
     this.lampXZ = city.streetlightLampsXZ();
     this.facades = city.facadeMaterials();
@@ -132,9 +132,9 @@ export class DayNightSystem {
 
   get clockText(): string { return formatClock(this.hour); }
 
-  setQuality(quality: GameSettings['quality']): void { this.buildPools(quality); }
+  setQuality(quality: BaseQuality): void { this.buildPools(quality); }
 
-  private buildPools(quality: GameSettings['quality']): void {
+  private buildPools(quality: BaseQuality): void {
     for (const light of this.streetPool) this.scene.remove(light);
     for (const light of this.headPool) { this.scene.remove(light.target); this.scene.remove(light); }
     this.streetPool = Array.from({ length: STREETLIGHT_POOL[quality] }, () => {

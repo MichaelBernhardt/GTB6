@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import type { GameSettings } from '../types';
+import type { BaseQuality } from '../types';
 import { wrapHour } from './DayNight';
 import { createSurfaceTexture } from './ProceduralMaterials';
 
 /** Water render tiers by graphics quality: 'planar' mirrors the real scene on the harbour plane, 'physical'
  *  rides the env-map with the same waves and ripples, 'flat' keeps the cheap scrolling texture. */
 export type WaterTier = 'planar' | 'physical' | 'flat';
-export function waterTier(quality: GameSettings['quality']): WaterTier {
+export function waterTier(quality: BaseQuality): WaterTier {
   return quality === 'high' ? 'planar' : quality === 'medium' ? 'physical' : 'flat';
 }
 
