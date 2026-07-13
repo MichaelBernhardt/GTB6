@@ -288,16 +288,16 @@ export class Vehicle {
     if (sport) { const spoiler = new THREE.Mesh(new RoundedBoxGeometry(width * 0.62, 0.09, 0.2, 2, 0.03), bodyMat); spoiler.position.set(0, 1.02, -length * 0.43); this.group.add(spoiler); }
     if (taxi) {
       const stripe = new THREE.Mesh(new THREE.BoxGeometry(width + 0.04, 0.22, length * 0.82), new THREE.MeshStandardMaterial({ color: 0xf2c521, roughness: 0.5 }));
-      stripe.position.y = 1; this.group.add(stripe);
+      stripe.name = 'taxistripe'; stripe.position.y = 1; this.group.add(stripe); this.cabinParts.push(stripe); // a full-length livery slab at eye height: hide it in first person or the driver just sees solid yellow
       const board = createSignMesh(new THREE.PlaneGeometry(1.7, 0.4), 'QUANTUM EXPRESS', '#f2c521', { doubleSide: true });
-      board.name = 'sign'; board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board);
+      board.name = 'sign'; board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board); this.cabinParts.push(board); // roof sign: hide it from the raised driver's eye in first person, like the police lightbar
     }
     if (this.spec.kind === 'cab') { // meter cab: glowing roof box (the duty light) wearing a TAXI decal on both faces
       const box = new THREE.Mesh(new RoundedBoxGeometry(0.68, 0.26, 0.3, 2, 0.05), new THREE.MeshStandardMaterial({ color: 0xf6df7a, emissive: 0xffd75e, emissiveIntensity: 0.2, roughness: 0.4 }));
       box.name = 'taxilight'; box.position.set(0, roof.position.y + 0.2, roof.position.z);
       const decal = createSignMesh(new THREE.PlaneGeometry(0.6, 0.2), 'TAXI', '#141414', { background: '#f2c521' });
       decal.name = 'sign'; decal.position.z = 0.16; const back = decal.clone(); back.position.z = -0.16; back.rotation.y = Math.PI;
-      box.add(decal, back); this.group.add(box);
+      box.add(decal, back); this.group.add(box); this.cabinParts.push(box); // roof duty-light box: hide it in first person too
     }
     if (this.police) {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;

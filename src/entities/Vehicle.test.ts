@@ -57,6 +57,33 @@ describe('two-wheeler never flips onto its side while turning', () => {
   });
 });
 
+describe('first-person view clears the taxi driver line of sight', () => {
+  it('hides the full-length yellow livery slab in first person (regression: solid-yellow taxi FPV)', () => {
+    const taxi = new Vehicle(new THREE.Scene(), 'taxi', new THREE.Vector3());
+    const stripe = taxi.group.getObjectByName('taxistripe');
+    expect(stripe).toBeDefined();
+    expect(stripe!.visible).toBe(true); // livery shows in third person
+    const sign = taxi.group.getObjectByName('sign');
+    expect(sign).toBeDefined();
+    taxi.setFirstPerson(true);
+    expect(stripe!.visible).toBe(false); // ...and clears out of the driver's eye in first person, like the cabin/roof
+    expect(sign!.visible).toBe(false); // the roof sign bar clears too — not left hanging in the raised driver's view
+    taxi.setFirstPerson(false);
+    expect(stripe!.visible).toBe(true); // and comes back
+    expect(sign!.visible).toBe(true);
+  });
+
+  it('hides the meter cab roof light box in first person', () => {
+    const cab = new Vehicle(new THREE.Scene(), 'cab', new THREE.Vector3());
+    const box = cab.group.getObjectByName('taxilight');
+    expect(box).toBeDefined();
+    cab.setFirstPerson(true);
+    expect(box!.visible).toBe(false);
+    cab.setFirstPerson(false);
+    expect(box!.visible).toBe(true);
+  });
+});
+
 describe('steered front wheels spin cleanly (no wobble)', () => {
   const flat = slopedCity(0, 0);
   const frontWheel = (car: Vehicle) => (car as unknown as { wheels: THREE.Object3D[] }).wheels[0]!;
