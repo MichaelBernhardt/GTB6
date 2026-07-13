@@ -73,7 +73,7 @@ export class PopulationSystem {
     const robotsOut = !powerOn();
     this.hootCooldown = Math.max(0, this.hootCooldown - dt);
     this.traffic.forEach((vehicle, index) => {
-      if (vehicle.playerControlled || vehicle.disabled) return;
+      if (vehicle.playerControlled || vehicle.disabled || !vehicle.occupied) return; // no NPC aboard (e.g. a carjacked car the player has since left): sit still, don't plan routes
       vehicle.routeCooldown = Math.max(0, vehicle.routeCooldown - dt);
       if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0) {
         const wasFrozen = vehicle.frozen;
@@ -120,7 +120,7 @@ export class PopulationSystem {
   private updateTrafficEngineAudio(player: THREE.Vector3): void {
     let nearest: Vehicle | undefined; let best = 60 * 60;
     for (const vehicle of this.traffic) {
-      if (vehicle.playerControlled || vehicle.disabled || vehicle.spec.kind === 'bicycle') continue; // no engine to hum
+      if (vehicle.playerControlled || vehicle.disabled || !vehicle.occupied || vehicle.spec.kind === 'bicycle') continue; // no engine to hum (an abandoned car sits silent)
       const d2 = vehicle.group.position.distanceToSquared(player);
       if (d2 < best) { best = d2; nearest = vehicle; }
     }

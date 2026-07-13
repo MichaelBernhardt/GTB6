@@ -86,7 +86,7 @@ export class Vehicle {
   }
 
   updateAI(dt: number, city: City, target?: THREE.Vector3, aggression = 0.65): void {
-    if (this.playerControlled || this.disabled) return;
+    if (this.playerControlled || this.disabled || !this.occupied) return; // an empty vehicle has no driver to steer it
     const destination = target ?? this.aiTarget;
     const dx = destination.x - this.group.position.x; const dz = destination.z - this.group.position.z;
     const desired = Math.atan2(dx, dz); const delta = Math.atan2(Math.sin(desired - this.heading), Math.cos(desired - this.heading));
