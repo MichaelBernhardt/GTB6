@@ -821,6 +821,7 @@ export class City {
       const surface = this.roadSurfaces[index]!;
       this.addCurbs(surface.points, surface.width, surface.closed, index, curbTransforms, gutterTransforms);
     }
+    this.buildJunctionSidewalks(sidewalkMat, curbTransforms, gutterTransforms); // corner tiles + kerb/gutter wraps join the instanced runs below
     this.addInstanced(box, curbMat, curbTransforms, { cast: true, receive: true });
     this.addInstanced(box, gutterMat, gutterTransforms, { receive: true });
     this.buildJunctionSurfaces(roadMat);
@@ -856,6 +857,83 @@ export class City {
     const merged = parts.length ? mergeGeometries(parts, false) : null;
     if (!merged) return;
     const mesh = new THREE.Mesh(merged, roadMat); mesh.receiveShadow = true; this.group.add(mesh);
+  }
+
+  /** Outer-corner footpath at a two-road bend (degree-2 junction of two different roads). Each road's strip
+   *  stops with a square cut at its road's end, leaving an L-shaped hole on the OUTSIDE of the bend (the
+   *  inside is covered by the strips overlapping). Fill it with three pieces in the strips' own band frame:
+   *  a continuation of each road's band from its strip end to the other band's edge (two side bits, which
+   *  also carry that road's kerb + gutter around the corner), plus the corner square where the two bands
+   *  cross (no gutter). Same tile scale and grain as the strips; terrain-draped a hair above them. */
+  private buildJunctionSidewalks(material: THREE.Material, curbTransforms: THREE.Matrix4[], gutterTransforms: THREE.Matrix4[]): void {
+    const parts: THREE.BufferGeometry[] = [];
+    const quaternion = new THREE.Quaternion(); const matrix = new THREE.Matrix4();
+    const armOf = (arm: { dirX: number; dirZ: number; width: number }): { dx: number; dz: number; w: number; ang: number } =>
+      ({ dx: arm.dirX, dz: arm.dirZ, w: arm.width, ang: Math.atan2(arm.dirZ, arm.dirX) });
+    for (const surface of JUNCTION_SURFACES) {
+      if (surface.degree !== 2 || surface.outwardArms.length !== 2) continue; // bends only: both roads END here
+      let a = armOf(surface.outwardArms[0]!); let b = armOf(surface.outwardArms[1]!);
+      let sector = b.ang - a.ang; if (sector < 0) sector += Math.PI * 2;
+      if (sector >= Math.PI) { const swap = a; a = b; b = swap; sector = Math.PI * 2 - sector; } // a→b CCW spans the bend's INSIDE
+      if (sector < 0.35 || sector > Math.PI - 0.08) continue; // hairpins/straights leave no usable outer corner
+      // Band frame on the OUTER side: nA/nB are each road's sidewalk normals pointing away from the inside.
+      // Coordinates (sA, sB) = signed distance from the node past each road's kerb side; lines of constant
+      // sA/sB run parallel to the respective road, so every edge below is parallel or square to a road.
+      const nax = a.dz; const naz = -a.dx; const nbx = -b.dz; const nbz = b.dx;
+      const det = nax * nbz - naz * nbx; if (Math.abs(det) < 1e-3) continue;
+      const jna = surface.x * nax + surface.z * naz; const jnb = surface.x * nbx + surface.z * nbz;
+      const at = (sa: number, sb: number): [number, number] =>
+        [((jna + sa) * nbz - naz * (jnb + sb)) / det, (nax * (jnb + sb) - (jna + sa) * nbx) / det];
+      const kappa = -Math.cos(sector); // nA·nB: where each strip's square end-cut sits in the other band's coordinate
+      const inA = a.w / 2 + SIDEWALK_INNER_EDGE; const outA = inA + SIDEWALK_WIDTH;
+      const inB = b.w / 2 + SIDEWALK_INNER_EDGE; const outB = inB + SIDEWALK_WIDTH;
+      const positions: number[] = []; const uvs: number[] = []; const indices: number[] = [];
+      /** One flat piece from 4 (sA,sB) corners in cyclic order, UV-mapped in the given road's strip frame. */
+      const piece = (corners: Array<[number, number]>, road: { dx: number; dz: number }, nx: number, nz: number, inner: number): void => {
+        const world = corners.map(([sa, sb]) => at(sa, sb));
+        const [x0, z0] = world[0]!; const [x1, z1] = world[1]!; const [x2, z2] = world[2]!;
+        if ((x1 - x0) * (z2 - z0) - (z1 - z0) * (x2 - x0) > 0) world.reverse(); // wind the face upward
+        const base = positions.length / 3;
+        for (const [x, z] of world) {
+          const along = (x - surface.x) * road.dx + (z - surface.z) * road.dz;
+          const perp = (x - surface.x) * nx + (z - surface.z) * nz;
+          positions.push(x, this.sidewalkHeightAt(x, z) + 0.003, z);
+          uvs.push((perp - inner) / SIDEWALK_WIDTH, along / SIDEWALK_UV_LENGTH); // the road's own strip tiling
+        }
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      };
+      piece([[inA, inB], [outA, inB], [outA, outB], [inA, outB]], a, nax, naz, inA); // corner square (no gutter)
+      // Side bits: each road's band continued from its strip's square end-cut (the line sB = κ·sA for road A)
+      // out to where the corner square starts. Flush with the strip on one side and the square on the other.
+      if (kappa * outA < inB - 0.05) piece([[inA, kappa * inA], [outA, kappa * outA], [outA, inB], [inA, inB]], a, nax, naz, inA);
+      if (kappa * outB < inA - 0.05) piece([[kappa * inB, inB], [inA, inB], [inA, outB], [kappa * outB, outB]], b, nbx, nbz, inB);
+      // Carry each road's kerb + gutter around the outer corner so the road edge reads continuous: from the
+      // square end of its own run to the far face of the other road's kerb (gutter: to the other gutter line).
+      const bar = (from: [number, number], to: [number, number], width: number, height: number, lift: number, out: THREE.Matrix4[]): void => {
+        const [x0, z0] = from; const [x1, z1] = to;
+        const span = Math.hypot(x1 - x0, z1 - z0); if (span < 0.12) return;
+        const mx = (x0 + x1) / 2; const mz = (z0 + z1) / 2;
+        quaternion.copy(this.surfaceSegmentQuaternion(x0, z0, x1, z1, 'road'));
+        matrix.compose(new THREE.Vector3(mx, this.roadHeightAt(mx, mz) + lift, mz), quaternion, new THREE.Vector3(width, height, span));
+        out.push(matrix.clone());
+      };
+      const kerbA = a.w / 2 + 0.22; const kerbB = b.w / 2 + 0.22;
+      if (kappa * kerbA < b.w / 2 + 0.31) bar(at(kerbA, kappa * kerbA), at(kerbA, b.w / 2 + 0.41), 0.38, SIDEWALK_RISE, SIDEWALK_RISE / 2, curbTransforms);
+      if (kappa * kerbB < a.w / 2 + 0.31) bar(at(kappa * kerbB, kerbB), at(a.w / 2 + 0.41, kerbB), 0.38, SIDEWALK_RISE, SIDEWALK_RISE / 2, curbTransforms);
+      const gutA = a.w / 2 - 0.11; const gutB = b.w / 2 - 0.11;
+      // Gutter wraps ride slightly higher than the road-run gutters so they draw on top of the junction paving.
+      if (kappa * gutA < b.w / 2 - 0.1) bar(at(gutA, kappa * gutA), at(gutA, b.w / 2), 0.22, 0.018, 0.03, gutterTransforms);
+      if (kappa * gutB < a.w / 2 - 0.1) bar(at(kappa * gutB, gutB), at(a.w / 2, gutB), 0.22, 0.018, 0.03, gutterTransforms);
+      if (!indices.length) continue;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex(indices); geometry.computeVertexNormals();
+      parts.push(geometry);
+    }
+    const merged = parts.length ? mergeGeometries(parts, false) : null;
+    if (!merged) return;
+    const mesh = new THREE.Mesh(merged, material); mesh.receiveShadow = true; this.group.add(mesh);
   }
 
   /** Push every vertex of an already-XZ-placed geometry onto the terrain (+ lift), so a flat paved shape

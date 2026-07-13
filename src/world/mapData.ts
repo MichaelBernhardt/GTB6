@@ -381,6 +381,10 @@ export function distanceToRoadEdge(x: number, z: number): number {
 interface JunctionAccumulator {
   x: number; z: number; degree: number;
   incident: Array<{ name: string; width: number; dirX: number; dirZ: number }>;
+  /** Every carriageway half that LEAVES the node, direction pointing away from it — one per road segment
+   *  touching the junction (a through-road contributes two). Unlike `incident`/`arms` these carry the real
+   *  outward sign, so the sidewalk-corner builder can tell the inside of a bend from the outside. */
+  outward: Array<{ dirX: number; dirZ: number; width: number }>;
 }
 
 /**
@@ -395,7 +399,7 @@ function junctionAccumulators(): JunctionAccumulator[] {
   if (cachedAccumulators) return cachedAccumulators;
   const map = new Map<string, JunctionAccumulator>();
   for (const junction of MAP.junctions) {
-    map.set(`${junction.x}|${junction.z}`, { x: junction.x, z: junction.z, degree: 0, incident: [] });
+    map.set(`${junction.x}|${junction.z}`, { x: junction.x, z: junction.z, degree: 0, incident: [], outward: [] });
   }
   for (const road of GENERATED_ROADS) {
     for (let index = 0; index < road.points.length; index++) {
@@ -405,6 +409,11 @@ function junctionAccumulators(): JunctionAccumulator[] {
       accumulator.degree += (index > 0 ? 1 : 0) + (index < road.points.length - 1 ? 1 : 0);
       const spot = spotAt(road, index);
       accumulator.incident.push({ name: road.name, width: road.width, dirX: spot.dirX, dirZ: spot.dirZ });
+      for (const neighbour of [road.points[index - 1], road.points[index + 1]]) { // each road segment that leaves the node
+        if (!neighbour) continue;
+        const dx = neighbour.x - point.x; const dz = neighbour.z - point.z; const length = Math.hypot(dx, dz);
+        if (length > 1e-6) accumulator.outward.push({ dirX: dx / length, dirZ: dz / length, width: road.width });
+      }
     }
   }
   cachedAccumulators = [...map.values()];
@@ -562,6 +571,9 @@ export interface JunctionSurface {
    *  signalised junction and every 4-way stops all its approaches; at an uncontrolled T the continuous
    *  through-road is exempt and only the terminating minor(s) get a line. See computeStopLines. */
   stopLines: JunctionArm[];
+  /** Every carriageway half LEAVING the node with its true outward direction (a through-road gives two).
+   *  The sidewalk-corner builder pairs adjacent ones and fills the off-road wedge between them. */
+  outwardArms: JunctionArm[];
 }
 
 /** Collapse arms sharing the SAME outward bearing (not opposed — a through-road's two ends stay separate,
@@ -655,6 +667,7 @@ export function computeJunctionSurfaces(options: JunctionSurfaceOptions = {}): J
       x: accumulator.x, z: accumulator.z, radius: widest / 2 + margin, widest, degree: accumulator.degree,
       arms: distinctArms(accumulator.incident),
       stopLines: corner ? [] : computeStopLines(accumulator.incident, signalised.has(`${accumulator.x}|${accumulator.z}`)),
+      outwardArms: accumulator.outward.map((arm) => ({ dirX: arm.dirX, dirZ: arm.dirZ, width: arm.width })),
     });
   }
   return surfaces;
