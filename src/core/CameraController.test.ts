@@ -144,6 +144,22 @@ describe('camera views in the world', () => {
     controller.update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, Math.PI / 2);
     expect(controller.yaw).toBeCloseTo(Math.PI * 1.5);
   });
+
+  it('mouse-steering (steerLock) tails the third-person camera behind the heading and ignores mouse orbit', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    controller.yaw = 0;
+    const heading = Math.PI / 2; const behind = heading + Math.PI;
+    // steerLock=true (last arg): even with a hard sideways drag, yaw must converge behind the heading, not orbit.
+    for (let i = 0; i < 240; i++) controller.update(1 / 60, input(500, 0), new THREE.Vector3(), city, true, 0.0025, 2, heading, true, 0, 0, 0, true);
+    expect(Math.atan2(Math.sin(behind - controller.yaw), Math.cos(behind - controller.yaw))).toBeCloseTo(0);
+  });
+
+  it('without steerLock the same drag orbits the third-person vehicle camera as before', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    controller.yaw = 0;
+    controller.update(1 / 60, input(500, 0), new THREE.Vector3(), city, true, 0.0025, 2, Math.PI / 2);
+    expect(controller.yaw).toBeCloseTo(-500 * 0.0025); // free orbit, unchanged behaviour
+  });
 });
 
 describe('sniper scope camera', () => {

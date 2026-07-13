@@ -65,10 +65,10 @@ export class Vehicle {
    *  geometries, so disposal is safe and stops the traffic churn leaking meshes over a session. */
   dispose(): void { this.group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); }
 
-  updatePlayer(dt: number, input: InputManager, city: City): number {
+  updatePlayer(dt: number, input: InputManager, city: City, mouseSteer = 0): number {
     if (this.disabled) return 0;
     const throttle = Number(input.down('KeyW')) - Number(input.down('KeyS'));
-    const steer = Number(input.down('KeyA')) - Number(input.down('KeyD'));
+    const steer = THREE.MathUtils.clamp(Number(input.down('KeyA')) - Number(input.down('KeyD')) + mouseSteer, -1, 1); // A/D keys and the LMB-drag mouse wheel share one clamped steer input
     const handbrake = input.down('Space');
     if (throttle !== 0) {
       const sameDirection = this.speed === 0 || Math.sign(this.speed) === Math.sign(throttle);

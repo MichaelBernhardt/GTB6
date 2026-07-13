@@ -59,6 +59,8 @@ import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 
+const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
+
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
 export class Game {
@@ -121,6 +123,9 @@ export class Game {
   private potholeCooldown = 0;
   private etollCooldowns: number[] = ETOLL_GANTRIES.map(() => 0);
   private radioIntroShown = false;
+  private mouseSteerHintShown = false;
+  private driveSteer = 0; // virtual steering-wheel offset [-1,1] wound by LMB-drag mouse steering (only in a vehicle, third person, not aiming)
+  private driveSteerActive = false;
   private footstepTimer = 0;
   private prevDrivenSpeed = 0;
   private wallCrashCooldown = 0;
@@ -493,7 +498,7 @@ export class Game {
     }
     else if (this.mode === 'dead') { this.deathTimer -= frameDt; if (this.deathTimer <= 0) this.respawn(); }
     else if (this.input.consume('Escape')) this.ui.back();
-    this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
+    this.tickMouseSteer(frameDt); this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
     this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position); // staggered chunk culling — runs in every mode so the menu backdrop is culled too
     const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 2; // >2s: the staggered chunk culling needs its first full pass before the number means anything
@@ -865,7 +870,8 @@ export class Game {
 
   private updateDriving(dt: number): void {
     const vehicle = this.activeVehicle; if (!vehicle) return;
-    const speed = vehicle.updatePlayer(dt, this.input, this.city); this.player.group.position.copy(vehicle.group.position);
+    const speed = vehicle.updatePlayer(dt, this.input, this.city, this.driveSteer); this.player.group.position.copy(vehicle.group.position);
+    if (!this.mouseSteerHintShown) { this.mouseSteerHintShown = true; this.ui.notify('Mouse steering', 'Hold Left-Click (when not aiming) to steer with the mouse.', false); }
     const driveBy = canFireFromVehicle(this.input.aiming, this.combat.spec.melee, Boolean(this.combat.spec.projectile), scopeWeapon(this.combat.current));
     if (vehicle.spec.twoWheeler) { // rider stays visible in the saddle — and wears no cocoon: hits land on the player
       const [saddleY, saddleZ] = vehicle.spec.saddle ?? [0.1, -0.2];
@@ -1434,6 +1440,15 @@ export class Game {
     return undefined;
   }
 
+  /** LMB-drag mouse steering: while a non-aiming player holds the fire button in a vehicle (third person),
+   *  the horizontal drag winds a self-centring virtual steering wheel that feeds Vehicle.updatePlayer like the
+   *  A/D keys. Ticked once per frame (mouseDX is a whole-frame delta) — the camera tails the heading meanwhile. */
+  private tickMouseSteer(dt: number): void {
+    this.driveSteerActive = Boolean(this.activeVehicle) && this.settings.cameraViewVehicle !== 0 && this.input.firing && !this.input.aiming;
+    if (this.driveSteerActive) this.driveSteer = THREE.MathUtils.clamp(this.driveSteer - this.input.mouseDX * MOUSE_STEER_GAIN, -1, 1); // drag right -> negative steer -> turn right, matching the D key
+    else this.driveSteer *= Math.exp(-dt * 12); // released: the wheel springs back to centre
+  }
+
   private updateCamera(dt: number): void {
     const target = this.activeVehicle?.group.position ?? this.player.group.position;
     const view = this.activeVehicle ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
@@ -1449,7 +1464,7 @@ export class Game {
     this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
     const sensitivity = scoped ? scopeSensitivity(this.settings.mouseSensitivity, this.scopeLevel) : this.settings.mouseSensitivity;
     const airborneBoost = this.airborne ? (this.airborne.mode === 'freefall' ? 6 : 4) : 0; // skydives read better with the boom pulled back
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost);
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;

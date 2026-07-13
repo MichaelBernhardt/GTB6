@@ -56,3 +56,31 @@ describe('two-wheeler never flips onto its side while turning', () => {
     expect(Math.abs(bike.group.rotation.z)).toBeGreaterThan(1); // ~75deg tip, deliberately on its side
   });
 });
+
+describe('mouse steering (LMB-drag) feeds the same steer input as the keys', () => {
+  const flat = slopedCity(0, 0);
+  const drive = (steer: 'keyA' | 'mouse' | 'both', primed = 20): Vehicle => {
+    const car = new Vehicle(new THREE.Scene(), 'compact', new THREE.Vector3()); car.playerControlled = true; car.speed = primed;
+    const keys = heldInput(new Set(steer === 'mouse' ? [] : ['KeyA']));
+    const mouseSteer = steer === 'keyA' ? 0 : 1;
+    for (let i = 0; i < 30; i++) car.updatePlayer(1 / 60, keys, flat, mouseSteer);
+    return car;
+  };
+
+  it('turns the same direction as the matching key, and does nothing at a standstill', () => {
+    const byKey = drive('keyA');
+    const byMouse = drive('mouse');
+    expect(byMouse.heading).not.toBe(0);
+    expect(Math.sign(byMouse.heading)).toBe(Math.sign(byKey.heading)); // +mouseSteer steers like KeyA
+
+    const parked = new Vehicle(new THREE.Scene(), 'compact', new THREE.Vector3()); parked.playerControlled = true; // speed 0
+    for (let i = 0; i < 30; i++) parked.updatePlayer(1 / 60, heldInput(new Set()), flat, 1);
+    expect(parked.heading).toBeCloseTo(0); // no speed, no steering — same rule as the keys
+  });
+
+  it('clamps key + mouse to the single-input maximum (no double-rate steering)', () => {
+    const keyOnly = drive('keyA');
+    const both = drive('both'); // KeyA (+1) AND mouseSteer +1 -> clamps to +1
+    expect(both.heading).toBeCloseTo(keyOnly.heading);
+  });
+});
