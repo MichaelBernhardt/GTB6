@@ -136,6 +136,7 @@ export class Player {
     this.tumbleTimer = Math.max(0, this.tumbleTimer - dt);
     const progress = 1 - this.tumbleTimer / this.tumbleDuration;
     const roll = Math.min(1, progress * 3.2) * (1 - THREE.MathUtils.smoothstep(progress, 0.72, 1)); // slam down fast, get up late
+    this.group.rotation.x = 0; // the tumble is a pure side-roll about z: never let an inherited pitch survive into an upside-down landing
     this.group.rotation.z = this.tumbleDir * (Math.PI / 2) * roll;
     this.group.position.y = this.tumbleBaseY + 0.36 * roll; // rolled on whatever surface the tumble started on
     this.leftArm.rotation.x = -2.3 * roll; this.rightArm.rotation.x = -2.1 * roll;

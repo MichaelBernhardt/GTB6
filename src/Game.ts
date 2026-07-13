@@ -934,7 +934,10 @@ export class Game {
     vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.speed = 0;
     this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.5);
-    this.player.group.position.copy(vehicle.group.position).add(side); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
+    const target = vehicle.group.position.clone().add(side);
+    const spot = safePlacement(target.x, target.z, (px, pz) => this.city.collides(px, pz, PLAYER.radius)); // a hard crash into a wall can drop the side-offset inside the building; ring out to clear ground so the rider isn't trapped
+    this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
+    this.player.resetAirbornePose(); // the rider's group inherited the bike's full orientation (incl. terrain pitch on rotation.x); wipe it before the tumble or the body lands inverted under the tar
     this.player.tumble();
     this.audio.setEngine(false); this.audio.stopRadio(); this.shake = Math.min(0.7, this.shake + 0.35);
     this.ui.notify('Knocked off', 'Tar 1, rider 0. The bike is right there.', false);
