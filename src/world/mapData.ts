@@ -643,14 +643,18 @@ export function computeJunctionSurfaces(options: JunctionSurfaceOptions = {}): J
   const signalised = new Set(SIGNAL_JUNCTIONS.map((junction) => `${junction.x}|${junction.z}`)); // robots stop every approach
   const surfaces: JunctionSurface[] = [];
   for (const accumulator of junctionAccumulators()) {
-    if (accumulator.degree < minDegree) continue;
+    // Degree-2 nodes where two DIFFERENT named roads meet end-to-end are corners (a bend/name change), not
+    // through-traffic — pave them too so the outer corner of the two ribbons (and its footpath) is filled
+    // in, but with no stop bar (a bend isn't a stop). Everything degree >= minDegree paves as before.
+    const corner = accumulator.degree === 2 && new Set(accumulator.incident.map((entry) => entry.name)).size >= 2;
+    if (accumulator.degree < minDegree && !corner) continue;
     let widest = 0;
     for (const incident of accumulator.incident) if (incident.width > widest) widest = incident.width;
     if (widest <= 0) continue;
     surfaces.push({
       x: accumulator.x, z: accumulator.z, radius: widest / 2 + margin, widest, degree: accumulator.degree,
       arms: distinctArms(accumulator.incident),
-      stopLines: computeStopLines(accumulator.incident, signalised.has(`${accumulator.x}|${accumulator.z}`)),
+      stopLines: corner ? [] : computeStopLines(accumulator.incident, signalised.has(`${accumulator.x}|${accumulator.z}`)),
     });
   }
   return surfaces;

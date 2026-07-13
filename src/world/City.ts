@@ -67,7 +67,7 @@ export interface RoadPose { position: THREE.Vector3; heading: number; }
 export interface RoadDefinition { name: string; width: number; closed?: boolean; points: RoadPoint[]; }
 export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
 
-export const ROAD_SURFACE_OFFSET = 0.09;
+export const ROAD_SURFACE_OFFSET = 0.15;
 export const SIDEWALK_RISE = 0.22;
 /** How far the ground mesh sinks beneath an inland water body's surface, so dams/ponds read as basins
  *  instead of a flat sheet coplanar with the land (the original z-fighting the relief pass set out to kill). */
@@ -977,7 +977,10 @@ export class City {
     }
   }
 
-  private addCurbs(points: RoadPoint[], width: number, closed: boolean, surface: number, transforms: THREE.Matrix4[], gutters: THREE.Matrix4[]): void {
+  private addCurbs(rawPoints: RoadPoint[], width: number, closed: boolean, surface: number, transforms: THREE.Matrix4[], gutters: THREE.Matrix4[]): void {
+    // Re-tessellate to the road-strip pitch so the kerb hugs the road's curve (short chords, not 36u nav
+    // segments cutting the corner) and each kerb box is short enough to follow the relief without jutting.
+    const points = this.densifyPath(rawPoints, ROAD_STRIP_SUBSTEP, closed);
     const segmentCount = closed ? points.length : points.length - 1;
     const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion();
     for (let index = 0; index < segmentCount; index++) {
@@ -1064,19 +1067,30 @@ export class City {
         return false;
       });
       for (const [from, to] of intervals) {
-        const t0 = from / length; const t1 = to / length; const base = vertices.length / 3;
-        const l0x = THREE.MathUtils.lerp(leftA.x, leftB.x, t0); const l0z = THREE.MathUtils.lerp(leftA.z, leftB.z, t0);
-        const r0x = THREE.MathUtils.lerp(rightA.x, rightB.x, t0); const r0z = THREE.MathUtils.lerp(rightA.z, rightB.z, t0);
-        const l1x = THREE.MathUtils.lerp(leftA.x, leftB.x, t1); const l1z = THREE.MathUtils.lerp(leftA.z, leftB.z, t1);
-        const r1x = THREE.MathUtils.lerp(rightA.x, rightB.x, t1); const r1z = THREE.MathUtils.lerp(rightA.z, rightB.z, t1);
-        vertices.push(
-          l0x, this.sidewalkHeightAt(l0x, l0z), l0z,
-          r0x, this.sidewalkHeightAt(r0x, r0z), r0z,
-          l1x, this.sidewalkHeightAt(l1x, l1z), l1z,
-          r1x, this.sidewalkHeightAt(r1x, r1z), r1z,
-        );
-        uvs.push(0, (travelled + from) / SIDEWALK_UV_LENGTH, 1, (travelled + from) / SIDEWALK_UV_LENGTH, 0, (travelled + to) / SIDEWALK_UV_LENGTH, 1, (travelled + to) / SIDEWALK_UV_LENGTH);
-        indices.push(base, base + 2, base + 1, base + 2, base + 3, base + 1);
+        // Subdivide the clear interval so the paving hugs the relief between the coarse (36u) nav samples —
+        // a flat quad over a steep crease lets the ground poke up through the walk despite its 0.31 lift.
+        const span = to - from; const steps = Math.max(1, Math.ceil(span / ROAD_STRIP_SUBSTEP));
+        const crossAt = (dist: number): { lx: number; lz: number; rx: number; rz: number } => {
+          const t = dist / length;
+          return {
+            lx: THREE.MathUtils.lerp(leftA.x, leftB.x, t), lz: THREE.MathUtils.lerp(leftA.z, leftB.z, t),
+            rx: THREE.MathUtils.lerp(rightA.x, rightB.x, t), rz: THREE.MathUtils.lerp(rightA.z, rightB.z, t),
+          };
+        };
+        let prev = crossAt(from);
+        for (let s = 1; s <= steps; s++) {
+          const dist = from + span * (s / steps); const cur = crossAt(dist); const base = vertices.length / 3;
+          vertices.push(
+            prev.lx, this.sidewalkHeightAt(prev.lx, prev.lz), prev.lz,
+            prev.rx, this.sidewalkHeightAt(prev.rx, prev.rz), prev.rz,
+            cur.lx, this.sidewalkHeightAt(cur.lx, cur.lz), cur.lz,
+            cur.rx, this.sidewalkHeightAt(cur.rx, cur.rz), cur.rz,
+          );
+          const vFrom = (travelled + dist - span * (1 / steps)) / SIDEWALK_UV_LENGTH; const vTo = (travelled + dist) / SIDEWALK_UV_LENGTH;
+          uvs.push(0, vFrom, 1, vFrom, 0, vTo, 1, vTo);
+          indices.push(base, base + 2, base + 1, base + 2, base + 3, base + 1);
+          prev = cur;
+        }
       }
       travelled += length;
     }

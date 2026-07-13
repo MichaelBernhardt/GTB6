@@ -3,11 +3,13 @@ import { computeJunctionSurfaces, computeStopLines, JUNCTION_SURFACES, junctionP
 import { signalHoldsDriver, signalPhaseState, SIGNAL_STOP_APPROACH, type JunctionDefinition } from './UrbanInfrastructure';
 
 describe('intersection surfaces (BUG B: unify overlapping road ribbons)', () => {
-  it('paves a sane number of real crossings, every one degree >= 3', () => {
-    // Degree < 3 is a single ribbon passing through or two roads meeting end-to-end: no overlap to fix.
+  it('paves a sane number of real crossings plus two-named-road corners', () => {
+    // Degree >= 3 is a real crossing; a degree-2 node of two DIFFERENT named roads is a corner (a bend /
+    // name change) — paved too so its outer corner + footpath fill in. Only same-road pass-throughs skip.
     expect(JUNCTION_SURFACES.length).toBeGreaterThan(1000);
     expect(JUNCTION_SURFACES.length).toBeLessThan(2500);
-    expect(JUNCTION_SURFACES.every((surface) => surface.degree >= 3)).toBe(true);
+    expect(JUNCTION_SURFACES.every((surface) => surface.degree >= 2)).toBe(true);
+    expect(JUNCTION_SURFACES.some((surface) => surface.degree === 2)).toBe(true); // corners are in the set
   });
 
   it('sizes each disc to span the widest meeting carriageway (covers the overlap, floods no verge)', () => {
@@ -115,7 +117,8 @@ describe('intersection surfaces (BUG B: unify overlapping road ribbons)', () => 
     expect(JSON.stringify(computeJunctionSurfaces())).toBe(JSON.stringify(computeJunctionSurfaces()));
     const crossOnly = computeJunctionSurfaces({ minDegree: 4 });
     expect(crossOnly.length).toBeLessThan(JUNCTION_SURFACES.length);
-    expect(crossOnly.every((surface) => surface.degree >= 4)).toBe(true);
+    // minDegree gates the real crossings; two-named-road corners (degree 2) are always paved regardless.
+    expect(crossOnly.every((surface) => surface.degree >= 4 || surface.degree === 2)).toBe(true);
     // margin is tunable and flows straight into the radius
     expect(computeJunctionSurfaces({ margin: 3 }).every((surface) => surface.radius === surface.widest / 2 + 3)).toBe(true);
   });
