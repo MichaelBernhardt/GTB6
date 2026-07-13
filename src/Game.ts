@@ -106,6 +106,7 @@ export class Game {
   private shops: ShopSystem;
   private safehouses: SafehouseSystem;
   private activeSafehouse?: SafehousePlace;
+  private activeBottleStore = ''; // name of the bottle store currently being browsed (for the menu header)
   private garageVehicle?: Vehicle;
   private ui = new UIManager();
   private multiplayerOverlay = new MultiplayerOverlay();
@@ -780,7 +781,7 @@ export class Game {
       const cruiser = this.police.stealableNear(this.player.group.position);
       const shop = this.shops.shopNear(this.player.group.position);
       if (shop?.kind === 'weapons') { this.openWeaponShop(); return; }
-      if (shop?.kind === 'bottle') { this.openBottleStore(); return; }
+      if (shop?.kind === 'bottle') { this.openBottleStore(shop.name); return; }
       if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
       const safehouse = this.safehouses.near(this.player.group.position);
       if (safehouse) { this.enterSafehouse(safehouse); return; }
@@ -1402,7 +1403,8 @@ export class Game {
     this.persist(); this.renderShop();
   }
 
-  private openBottleStore(): void {
+  private openBottleStore(name: string): void {
+    this.activeBottleStore = name;
     this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
     this.renderBottleStore();
   }
@@ -1412,7 +1414,7 @@ export class Game {
       id: drink.id, name: drink.name, note: drink.note, price: drink.price, potency: drink.potency,
       canBuy: resolveDrinkPurchase(drink, this.economy.balance, this.player.inebriation).ok,
     }));
-    this.ui.showBottleStore(entries, this.economy.balance, this.player.inebriation);
+    this.ui.showBottleStore(this.activeBottleStore, entries, this.economy.balance, this.player.inebriation);
   }
 
   private buyDrink(id: DrinkId): void {
@@ -1648,7 +1650,7 @@ export class Game {
       else if (this.missions.objective?.kind === 'choice') prompt = 'E  Decide the fate of Jozi Arms';
       else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && Math.hypot(mission.start.position.x - focus.x, mission.start.position.z - focus.z) < 7)) prompt = 'E  Speak to contact';
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
-      else if (shop?.kind === 'bottle') prompt = 'E  Browse Tops-ish Bottle Store';
+      else if (shop?.kind === 'bottle') prompt = `E  Browse ${shop.name}`;
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';

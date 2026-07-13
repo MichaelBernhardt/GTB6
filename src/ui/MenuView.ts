@@ -55,7 +55,7 @@ export class MenuView {
     for (const entry of entries) { this.bind(`[data-buy="${entry.id}"]`, () => actions.buy(entry.id)); this.bind(`[data-ammo="${entry.id}"]`, () => actions.ammo(entry.id)); } this.bind('[data-action="armour"]', actions.armour); this.bind('[data-action="leave"]', actions.leave);
   }
 
-  bottle(entries: DrinkCatalogEntry[], balance: number, inebriation: number, actions: { buy: (id: DrinkCatalogEntry['id']) => void; leave: () => void }): void {
+  bottle(storeName: string, entries: DrinkCatalogEntry[], balance: number, inebriation: number, actions: { buy: (id: DrinkCatalogEntry['id']) => void; leave: () => void }): void {
     const rows = entries.map((entry) => {
       const potency = entry.potency < 0 ? `SOBER-UP ${entry.potency}` : `+${entry.potency} DOP`;
       const reason = entry.canBuy ? entry.note : entry.potency < 0 ? 'Stone-cold sober already' : 'Not enough cash';
@@ -64,7 +64,7 @@ export class MenuView {
     const meter = Math.round((Math.max(0, Math.min(INEBRIATION_MAX, inebriation)) / INEBRIATION_MAX) * 100);
     const tag = inebriationLabel(inebriation);
     const gauge = `<div class="drunk-gauge${tag?.warn ? ' is-babalas' : ''}"><span>DOP LEVEL</span><div class="drunk-gauge__track"><i style="width:${meter}%"></i></div><b>${tag ? tag.text : 'STONE SOBER'}</b></div>`;
-    this.set('bottle', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">TOPS-ISH BOTTLE STORE · CBD</p><h2>Wet your whistle.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header>${gauge}<div class="shop-list">${rows}</div><button data-action="leave">Cap it off &amp; leave</button></section>`);
+    this.set('bottle', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">${storeName.toUpperCase()} · LIQUOR</p><h2>Wet your whistle.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header>${gauge}<div class="shop-list">${rows}</div><button data-action="leave">Cap it off &amp; leave</button></section>`);
     for (const entry of entries) this.bind(`[data-drink="${entry.id}"]`, () => actions.buy(entry.id));
     this.bind('[data-action="leave"]', actions.leave);
   }

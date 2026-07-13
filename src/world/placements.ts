@@ -201,8 +201,23 @@ export const SPRAY_SITE = shopSite('Kruis Street', { x: CBD_CENTER.x + 114 * P, 
 export const GARAGE_SITE = shopSite('Albertina Sisulu Road', { x: CBD_CENTER.x - 41 * P, z: CBD_CENTER.z - 102 * P }, 8, 3.4, 7.5, 3.5);
 /** Boerie Stand: Anderson Street, near the central plaza a block off spawn. */
 export const HOTDOG_SITE = shopSite('Anderson Street', { x: CBD_CENTER.x + 5 * P, z: CBD_CENTER.z + 22 * P }, 3, 1.9, 3, 0.8);
-/** Tops-ish Bottle Store: Commissioner Street, an easy stagger east of spawn. */
-export const BOTTLE_SITE = shopSite('Commissioner Street', { x: CBD_CENTER.x + 58 * P, z: CBD_CENTER.z + 14 * P }, 8, 3.6, 7.5, 3);
+/** Bottle stores are dotted across the whole map — a couple around the CBD, a few in the outlying towns, and
+ *  two along the coast promenade. Each is a kerbside storefront with its own tacky sign (kept short so it fits
+ *  the board). Adding an entry here auto-registers it with the shop system, the map blips, the teleport list,
+ *  and the reserved-pad carve-outs below — so a procedural building can never squat on the plot. */
+export interface BottleStore { name: string; sign: string; site: ShopSite; }
+export const BOTTLE_STORES: BottleStore[] = [
+  // CBD & inner ring
+  { name: 'Tops-ish Bottle Store', sign: 'TOPS-ISH', site: shopSite('Commissioner Street', { x: CBD_CENTER.x + 58 * P, z: CBD_CENTER.z + 14 * P }, 8, 3.6, 7.5, 3) },
+  { name: 'Maboneng Dop Shop', sign: 'DOP SHOP', site: shopSite('Maritzburg Street', { x: 4838, z: 5010 }, 8, 3.6, 7.5, 3) },
+  { name: 'Melville Bottle Bar', sign: 'DRANK', site: shopSite('Main Road', { x: -1150, z: 1870 }, 8, 3.6, 7.5, 3) },
+  // Outlying towns
+  { name: 'Rivonia Cellars', sign: 'CELLARS', site: shopSite('South Road', { x: 5444, z: -7670 }, 8, 3.6, 7.5, 3) },
+  { name: 'Randburg Drankwinkel', sign: 'LIQUORS', site: shopSite('Republic Road', { x: -2650, z: -6920 }, 8, 3.6, 7.5, 3) },
+  // Coast promenade (inland side of the beachfront road so they sit on land, not sand)
+  { name: 'Sea Point Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Victoria Road', { x: -6850, z: -2689 }, 8, 3.6, 7.5, 3) },
+  { name: 'Green Point Grog', sign: 'GROG', site: shopSite('Madiba Meander', { x: -5100, z: -2560 }, 8, 3.6, 7.5, 3) },
+];
 
 /** Stored vehicle pose inside the garage, nose pointing out the door. */
 export const GARAGE_PARK: PlacedSite = {
@@ -397,8 +412,10 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: GARAGE_SITE.building.x, z: GARAGE_SITE.building.z, radius: 11 },
   { x: GARAGE_SITE.pad.x, z: GARAGE_SITE.pad.z, radius: 6 },
   { x: HOTDOG_SITE.building.x, z: HOTDOG_SITE.building.z, radius: 6 },
-  { x: BOTTLE_SITE.building.x, z: BOTTLE_SITE.building.z, radius: 12 },
-  { x: BOTTLE_SITE.pad.x, z: BOTTLE_SITE.pad.z, radius: 5 },
+  ...BOTTLE_STORES.flatMap((store) => [
+    { x: store.site.building.x, z: store.site.building.z, radius: 12 },
+    { x: store.site.pad.x, z: store.site.pad.z, radius: 5 },
+  ]),
   { x: SAFEHOUSE_SITE.building.x, z: SAFEHOUSE_SITE.building.z, radius: 12 },
   { x: SAFEHOUSE_SITE.pad.x, z: SAFEHOUSE_SITE.pad.z, radius: 5 },
   { x: COURIER_DEPOT.x, z: COURIER_DEPOT.z, radius: 7 },

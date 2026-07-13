@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createSignMesh } from '../world/ProceduralMaterials';
-import { ARMS_SITE, BOTTLE_SITE, GARAGE_EXIT, GARAGE_PARK as GARAGE_PARK_SITE, GARAGE_SITE, HOTDOG_SITE, SPRAY_SITE, type PlacedSite } from '../world/placements';
+import { ARMS_SITE, BOTTLE_STORES, GARAGE_EXIT, GARAGE_PARK as GARAGE_PARK_SITE, GARAGE_SITE, HOTDOG_SITE, SPRAY_SITE, type PlacedSite } from '../world/placements';
 import type { City, Collider } from '../world/City';
 
 export type ShopKind = 'weapons' | 'spray' | 'garage' | 'hotdog' | 'bottle';
@@ -13,7 +13,7 @@ export const SHOPS: ShopPlace[] = [
   { kind: 'spray', name: 'Pik-’n’-Spray', pad: new THREE.Vector3(SPRAY_SITE.pad.x, 0, SPRAY_SITE.pad.z), radius: 5, driveIn: true },
   { kind: 'garage', name: 'Sisulu Garage', pad: new THREE.Vector3(GARAGE_SITE.pad.x, 0, GARAGE_SITE.pad.z), radius: 5, driveIn: true },
   { kind: 'hotdog', name: 'Boerie Stand', pad: new THREE.Vector3(HOTDOG_SITE.pad.x, 0, HOTDOG_SITE.pad.z), radius: 3.2, driveIn: false },
-  { kind: 'bottle', name: 'Tops-ish Bottle Store', pad: new THREE.Vector3(BOTTLE_SITE.pad.x, 0, BOTTLE_SITE.pad.z), radius: 3.6, driveIn: false },
+  ...BOTTLE_STORES.map((store) => ({ kind: 'bottle' as const, name: store.name, pad: new THREE.Vector3(store.site.pad.x, 0, store.site.pad.z), radius: 3.6, driveIn: false })),
 ];
 /** Where a stored vehicle sits inside the garage, nose pointing out the door. */
 export const GARAGE_PARK = { x: GARAGE_PARK_SITE.x, z: GARAGE_PARK_SITE.z, heading: GARAGE_PARK_SITE.heading };
@@ -43,7 +43,8 @@ export class ShopSystem {
 
   constructor(scene: THREE.Scene, city: City) {
     this.group.name = 'Shops'; scene.add(this.group);
-    this.buildWeaponsShop(city); this.buildSpray(city); this.buildGarage(city); this.buildHotdogStand(city); this.buildBottleStore(city);
+    this.buildWeaponsShop(city); this.buildSpray(city); this.buildGarage(city); this.buildHotdogStand(city);
+    for (const store of BOTTLE_STORES) this.buildBottleStore(city, store.site.building, store.sign);
     for (const object of this.group.children) object.position.y += city.terrainHeightAt(object.position.x, object.position.z);
     for (const shop of SHOPS) { shop.pad.y = city.surfaceHeightAt(shop.pad.x, shop.pad.z); this.addPadMarker(shop); }
   }
@@ -149,8 +150,7 @@ export class ShopSystem {
     city.colliders.push(placedCollider(site, -1.2, 1.2, -0.9, 0.9, 1.6));
   }
 
-  private buildBottleStore(city: City): void {
-    const site = BOTTLE_SITE.building;
+  private buildBottleStore(city: City, site: PlacedSite, signText: string): void {
     const shop = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(12, 4.6, 7), new THREE.MeshStandardMaterial({ color: 0x6a2530, roughness: 0.72, metalness: 0.08 }));
     body.position.set(0, 2.3, 0); body.castShadow = true; body.receiveShadow = true;
@@ -167,7 +167,7 @@ export class ShopSystem {
     canopy.position.set(0, 2.9, 4.1); canopy.castShadow = true;
     const board = new THREE.Mesh(new THREE.BoxGeometry(9.6, 2.1, 0.24), new THREE.MeshStandardMaterial({ color: 0x1a120c, roughness: 0.55 }));
     board.position.set(0, 5.5, 3.42);
-    const sign = createSignMesh(new THREE.PlaneGeometry(9.2, 1.8), 'TOPS-ISH', '#f2c14e'); sign.position.set(0, 5.5, 3.56);
+    const sign = createSignMesh(new THREE.PlaneGeometry(9.2, 1.8), signText, '#f2c14e'); sign.position.set(0, 5.5, 3.56);
     shop.add(body, glass, fridge, canopy, board, sign);
     this.place(site, shop);
     city.colliders.push(placedCollider(site, -6, 6, -3.5, 3.5, 4.6));
