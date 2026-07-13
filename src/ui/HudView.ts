@@ -1,3 +1,4 @@
+import { inebriationLabel, INEBRIATION_MAX } from '../core/DrinkRules';
 import { clampPercent, formatMoney, objectiveProgress, reputationLabel, type HudState } from './UIModels';
 
 const required = <T extends Element>(root: ParentNode, selector: string): T => {
@@ -49,6 +50,9 @@ export class HudView {
   private crosshair: HTMLElement;
   private scope: HTMLElement;
   private scopeZoom: HTMLElement;
+  private drunkBox: HTMLElement;
+  private drunkLabel: HTMLElement;
+  private drunkFill: HTMLElement;
 
   constructor(root: HTMLElement) {
     root.innerHTML = `
@@ -63,6 +67,7 @@ export class HudView {
         <div class="hud-cash"><small>ON HAND</small><b data-hud="cash"></b></div>
         <div class="hud-armour" data-hud="armour-box" role="progressbar" aria-label="Armour" aria-valuemin="0" aria-valuemax="100" hidden><span data-hud="armour-fill"></span><b data-hud="armour"></b></div>
         <div class="hud-weapon"><small data-hud="weapon-name"></small><b data-hud="ammo"></b><span data-hud="reserve"></span><em data-hud="reload">RELOADING</em></div>
+        <div class="hud-drunk" data-hud="drunk" role="status" aria-label="Inebriation" hidden><i aria-hidden="true">🍺</i><b data-hud="drunk-label"></b><span class="hud-drunk__track"><em data-hud="drunk-fill"></em></span></div>
       </section>
       <section class="hud-objective" data-hud="objective" aria-label="Current objective">
         <div><small data-hud="objective-name"></small><span data-hud="objective-meta"></span></div>
@@ -84,6 +89,7 @@ export class HudView {
     this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.radio = required(root, '[data-hud="radio"]'); this.taxi = required(root, '[data-hud="taxi"]');
     this.fps = required(root, '[data-hud="fps"]'); this.cheats = required(root, '[data-hud="cheats"]'); this.crosshair = required(root, '[data-hud="crosshair"]');
     this.scope = required(root, '[data-hud="scope"]'); this.scopeZoom = required(root, '[data-hud="scope-zoom"]');
+    this.drunkBox = required(root, '[data-hud="drunk"]'); this.drunkLabel = required(root, '[data-hud="drunk-label"]'); this.drunkFill = required(root, '[data-hud="drunk-fill"]');
   }
 
   update(state: HudState): void {
@@ -92,6 +98,11 @@ export class HudView {
     setAttribute(this.healthBox, 'aria-valuenow', String(health));
     const armour = clampPercent(state.armour); setHidden(this.armourBox, armour <= 0);
     if (armour > 0) { setText(this.armour, `${armour}`); setWidth(this.armourFill, `${armour}%`); setAttribute(this.armourBox, 'aria-valuenow', String(armour)); }
+    const tag = inebriationLabel(state.inebriation); setHidden(this.drunkBox, !tag);
+    if (tag) {
+      setText(this.drunkLabel, tag.text); setWidth(this.drunkFill, `${clampPercent((state.inebriation / INEBRIATION_MAX) * 100)}%`);
+      this.drunkBox.classList.toggle('is-babalas', tag.warn);
+    }
     setHidden(this.stims, state.stims <= 0); if (state.stims > 0) setText(this.stims, `STIM ×${state.stims} · H`);
     setHidden(this.chutes, state.parachutes <= 0); if (state.parachutes > 0) setText(this.chutes, `CHUTE ×${state.parachutes}`);
     setHidden(this.items, state.stims <= 0 && state.parachutes <= 0);

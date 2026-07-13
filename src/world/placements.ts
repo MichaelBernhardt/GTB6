@@ -201,6 +201,8 @@ export const SPRAY_SITE = shopSite('Kruis Street', { x: CBD_CENTER.x + 114 * P, 
 export const GARAGE_SITE = shopSite('Albertina Sisulu Road', { x: CBD_CENTER.x - 41 * P, z: CBD_CENTER.z - 102 * P }, 8, 3.4, 7.5, 3.5);
 /** Boerie Stand: Anderson Street, near the central plaza a block off spawn. */
 export const HOTDOG_SITE = shopSite('Anderson Street', { x: CBD_CENTER.x + 5 * P, z: CBD_CENTER.z + 22 * P }, 3, 1.9, 3, 0.8);
+/** Tops-ish Bottle Store: Commissioner Street, an easy stagger east of spawn. */
+export const BOTTLE_SITE = shopSite('Commissioner Street', { x: CBD_CENTER.x + 58 * P, z: CBD_CENTER.z + 14 * P }, 8, 3.6, 7.5, 3);
 
 /** Stored vehicle pose inside the garage, nose pointing out the door. */
 export const GARAGE_PARK: PlacedSite = {
@@ -395,6 +397,8 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: GARAGE_SITE.building.x, z: GARAGE_SITE.building.z, radius: 11 },
   { x: GARAGE_SITE.pad.x, z: GARAGE_SITE.pad.z, radius: 6 },
   { x: HOTDOG_SITE.building.x, z: HOTDOG_SITE.building.z, radius: 6 },
+  { x: BOTTLE_SITE.building.x, z: BOTTLE_SITE.building.z, radius: 12 },
+  { x: BOTTLE_SITE.pad.x, z: BOTTLE_SITE.pad.z, radius: 5 },
   { x: SAFEHOUSE_SITE.building.x, z: SAFEHOUSE_SITE.building.z, radius: 12 },
   { x: SAFEHOUSE_SITE.pad.x, z: SAFEHOUSE_SITE.pad.z, radius: 5 },
   { x: COURIER_DEPOT.x, z: COURIER_DEPOT.z, radius: 7 },

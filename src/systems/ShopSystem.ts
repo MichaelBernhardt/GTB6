@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { createSignMesh } from '../world/ProceduralMaterials';
-import { ARMS_SITE, GARAGE_EXIT, GARAGE_PARK as GARAGE_PARK_SITE, GARAGE_SITE, HOTDOG_SITE, SPRAY_SITE, type PlacedSite } from '../world/placements';
+import { ARMS_SITE, BOTTLE_SITE, GARAGE_EXIT, GARAGE_PARK as GARAGE_PARK_SITE, GARAGE_SITE, HOTDOG_SITE, SPRAY_SITE, type PlacedSite } from '../world/placements';
 import type { City, Collider } from '../world/City';
 
-export type ShopKind = 'weapons' | 'spray' | 'garage' | 'hotdog';
+export type ShopKind = 'weapons' | 'spray' | 'garage' | 'hotdog' | 'bottle';
 export interface ShopPlace { kind: ShopKind; name: string; pad: THREE.Vector3; radius: number; driveIn: boolean; }
 
 export const SHOP_ICON_COLOR = '#3fd1c4'; // teal diamonds — distinct from gold mission blips even for colour-blind players
@@ -13,6 +13,7 @@ export const SHOPS: ShopPlace[] = [
   { kind: 'spray', name: 'Pik-’n’-Spray', pad: new THREE.Vector3(SPRAY_SITE.pad.x, 0, SPRAY_SITE.pad.z), radius: 5, driveIn: true },
   { kind: 'garage', name: 'Sisulu Garage', pad: new THREE.Vector3(GARAGE_SITE.pad.x, 0, GARAGE_SITE.pad.z), radius: 5, driveIn: true },
   { kind: 'hotdog', name: 'Boerie Stand', pad: new THREE.Vector3(HOTDOG_SITE.pad.x, 0, HOTDOG_SITE.pad.z), radius: 3.2, driveIn: false },
+  { kind: 'bottle', name: 'Tops-ish Bottle Store', pad: new THREE.Vector3(BOTTLE_SITE.pad.x, 0, BOTTLE_SITE.pad.z), radius: 3.6, driveIn: false },
 ];
 /** Where a stored vehicle sits inside the garage, nose pointing out the door. */
 export const GARAGE_PARK = { x: GARAGE_PARK_SITE.x, z: GARAGE_PARK_SITE.z, heading: GARAGE_PARK_SITE.heading };
@@ -42,7 +43,7 @@ export class ShopSystem {
 
   constructor(scene: THREE.Scene, city: City) {
     this.group.name = 'Shops'; scene.add(this.group);
-    this.buildWeaponsShop(city); this.buildSpray(city); this.buildGarage(city); this.buildHotdogStand(city);
+    this.buildWeaponsShop(city); this.buildSpray(city); this.buildGarage(city); this.buildHotdogStand(city); this.buildBottleStore(city);
     for (const object of this.group.children) object.position.y += city.terrainHeightAt(object.position.x, object.position.z);
     for (const shop of SHOPS) { shop.pad.y = city.surfaceHeightAt(shop.pad.x, shop.pad.z); this.addPadMarker(shop); }
   }
@@ -146,5 +147,29 @@ export class ShopSystem {
     stand.add(cart, counter, pole, umbrella, sign);
     this.place(site, stand);
     city.colliders.push(placedCollider(site, -1.2, 1.2, -0.9, 0.9, 1.6));
+  }
+
+  private buildBottleStore(city: City): void {
+    const site = BOTTLE_SITE.building;
+    const shop = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(12, 4.6, 7), new THREE.MeshStandardMaterial({ color: 0x6a2530, roughness: 0.72, metalness: 0.08 }));
+    body.position.set(0, 2.3, 0); body.castShadow = true; body.receiveShadow = true;
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(7.6, 2, 0.12), new THREE.MeshPhysicalMaterial({ color: 0x243a2c, roughness: 0.16, metalness: 0.2, clearcoat: 0.65 }));
+    glass.position.set(0, 1.5, 3.56);
+    // Fridge glow behind the glass, plus a couple of bottle silhouettes on the sill.
+    const fridge = new THREE.Mesh(new THREE.BoxGeometry(7.4, 1.9, 0.06), new THREE.MeshStandardMaterial({ color: 0x2f6f4a, emissive: 0x2f6f4a, emissiveIntensity: 0.55, roughness: 0.4 }));
+    fridge.position.set(0, 1.5, 3.48);
+    for (let i = -3; i <= 3; i++) {
+      const bottle = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.62, 10), new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? 0x3a5a2a : 0x8a6a2a, roughness: 0.35, metalness: 0.3 }));
+      bottle.position.set(i * 0.95, 0.95, 3.5); shop.add(bottle);
+    }
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.16, 1.3), new THREE.MeshStandardMaterial({ color: 0xd9a021, roughness: 0.55 }));
+    canopy.position.set(0, 2.9, 4.1); canopy.castShadow = true;
+    const board = new THREE.Mesh(new THREE.BoxGeometry(9.6, 2.1, 0.24), new THREE.MeshStandardMaterial({ color: 0x1a120c, roughness: 0.55 }));
+    board.position.set(0, 5.5, 3.42);
+    const sign = createSignMesh(new THREE.PlaneGeometry(9.2, 1.8), 'TOPS-ISH', '#f2c14e'); sign.position.set(0, 5.5, 3.56);
+    shop.add(body, glass, fridge, canopy, board, sign);
+    this.place(site, shop);
+    city.colliders.push(placedCollider(site, -6, 6, -3.5, 3.5, 4.6));
   }
 }

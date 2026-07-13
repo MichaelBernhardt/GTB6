@@ -18,6 +18,7 @@ import { onlineCorrectionFactor } from './multiplayer/latency';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
+import { applyDrink, decayInebriation, DRINK_BY_ID, DRINKS, drunkHealthDelta, inebriationFraction, INEBRIATION_MAX, resolveDrinkPurchase, type DrinkId } from './core/DrinkRules';
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
@@ -129,6 +130,8 @@ export class Game {
   private mouseSteerHintShown = false;
   private driveSteer = 0; // virtual steering-wheel offset [-1,1] wound by LMB-drag mouse steering (only in a vehicle, third person, not aiming)
   private driveSteerActive = false;
+  private driveWander = 0; // mean-reverting random walk that drifts the wheel when driving drunk
+  private driveWanderPhase = 0;
   private footstepTimer = 0;
   private prevDrivenSpeed = 0;
   private wallCrashCooldown = 0;
@@ -253,6 +256,7 @@ export class Game {
     this.ui.onBuyWeapon = (id) => this.purchase('weapon', id);
     this.ui.onBuyAmmo = (id) => this.purchase('ammo', id);
     this.ui.onBuyArmour = () => this.purchaseArmour();
+    this.ui.onBuyDrink = (id) => this.buyDrink(id);
     this.ui.onSafehouseSave = () => {
       const place = this.activeSafehouse; if (!place) return;
       this.save.spawn = safehouseSpawn(place); this.persist(); this.audio.ui(true);
@@ -382,6 +386,10 @@ export class Game {
       if (item === 'stim') { this.inventory.stims = Math.min(STIM_MAX, this.inventory.stims + count); this.persist(); return `Stim packs: ${this.inventory.stims}/${STIM_MAX}. Press H to use one.`; }
       this.inventory.parachutes = Math.min(PARACHUTE_MAX, this.inventory.parachutes + count); this.persist();
       return `Parachutes: ${this.inventory.parachutes}/${PARACHUTE_MAX}. SPACE deploys one mid-air.`;
+    },
+    setInebriation: (level) => {
+      this.player.inebriation = Math.max(0, Math.min(INEBRIATION_MAX, level ?? INEBRIATION_MAX));
+      return this.player.inebriation <= 0 ? 'Sobered up. Straight as an arrow.' : `Inebriation set to ${Math.round(this.player.inebriation)}/100. Mind the lampposts.`;
     },
   };
 
@@ -629,6 +637,7 @@ export class Game {
     this.updateVehicleFires(dt, focus);
     for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition && !this.airborne)) this.applyPickup(item);
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
+    this.updateInebriation(dt);
     this.saveTimer += dt; if (this.saveTimer > 8) { this.persist(); this.saveTimer = 0; }
     if (this.player.health <= 0) this.die();
   }
@@ -771,6 +780,7 @@ export class Game {
       const cruiser = this.police.stealableNear(this.player.group.position);
       const shop = this.shops.shopNear(this.player.group.position);
       if (shop?.kind === 'weapons') { this.openWeaponShop(); return; }
+      if (shop?.kind === 'bottle') { this.openBottleStore(); return; }
       if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
       const safehouse = this.safehouses.near(this.player.group.position);
       if (safehouse) { this.enterSafehouse(safehouse); return; }
@@ -909,9 +919,22 @@ export class Game {
 
   private closeWeaponWheel(): void { this.weaponWheelOpen = false; this.ui.hideWeaponWheel(); }
 
+  /** A drunk driver can't hold the wheel steady: a mean-reverting random walk plus a slow lurch, scaled by how
+   *  legless the player is, drifts the steer input so the car waves across the lane. Zero while sober; smoother
+   *  and slower than the on-foot stagger. Steering only bites at speed, so a parked car sits still. */
+  private drunkDriveSteer(dt: number): number {
+    const drunk = inebriationFraction(this.player.inebriation);
+    this.driveWander += (Math.random() - 0.5) * dt * 4;
+    this.driveWander -= this.driveWander * dt * 1.6;
+    this.driveWander = THREE.MathUtils.clamp(this.driveWander, -1, 1);
+    this.driveWanderPhase += dt * (0.6 + drunk * 1.1);
+    if (drunk <= 0) return 0;
+    return (this.driveWander + Math.sin(this.driveWanderPhase) * 0.45) * drunk * 0.3;
+  }
+
   private updateDriving(dt: number): void {
     const vehicle = this.activeVehicle; if (!vehicle) return;
-    const speed = vehicle.updatePlayer(dt, this.input, this.city, this.driveSteer); this.player.group.position.copy(vehicle.group.position);
+    const speed = vehicle.updatePlayer(dt, this.input, this.city, this.driveSteer + this.drunkDriveSteer(dt)); this.player.group.position.copy(vehicle.group.position);
     if (!this.mouseSteerHintShown) { this.mouseSteerHintShown = true; this.ui.notify('Mouse steering', 'Hold Left-Click (when not aiming) to steer with the mouse.', false); }
     const driveBy = canFireFromVehicle(this.input.aiming, this.combat.spec.melee, Boolean(this.combat.spec.projectile), scopeWeapon(this.combat.current));
     if (vehicle.spec.twoWheeler) { // rider stays visible in the saddle — and wears no cocoon: hits land on the player
@@ -1379,6 +1402,40 @@ export class Game {
     this.persist(); this.renderShop();
   }
 
+  private openBottleStore(): void {
+    this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
+    this.renderBottleStore();
+  }
+
+  private renderBottleStore(): void {
+    const entries = DRINKS.map((drink) => ({
+      id: drink.id, name: drink.name, note: drink.note, price: drink.price, potency: drink.potency,
+      canBuy: resolveDrinkPurchase(drink, this.economy.balance, this.player.inebriation).ok,
+    }));
+    this.ui.showBottleStore(entries, this.economy.balance, this.player.inebriation);
+  }
+
+  private buyDrink(id: DrinkId): void {
+    const drink = DRINK_BY_ID[id];
+    const result = resolveDrinkPurchase(drink, this.economy.balance, this.player.inebriation);
+    if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); this.renderBottleStore(); return; }
+    this.player.inebriation = applyDrink(this.player.inebriation, drink);
+    this.livingCity.apply({ kind: 'shop-purchase', district: CBD }); this.audio.pickup();
+    if (drink.potency < 0) this.ui.notify(drink.name, `Aaah, that clears the head. -R${result.price}`);
+    else this.ui.notify(drink.name, `${this.player.inebriation >= INEBRIATION_MAX ? 'Totaal gedrink. Careful now.' : 'Down the hatch. Lekker.'} -R${result.price}`);
+    this.persist(); this.renderBottleStore();
+  }
+
+  /** Per-frame dop tick: sober up with elapsed time, then apply the drunk health advantage (a slow heal through
+   *  the merry band) or its blackout penalty (a mild drain, floored so booze alone can't put you down). */
+  private updateInebriation(dt: number): void {
+    if (this.player.inebriation <= 0) return;
+    this.player.inebriation = decayInebriation(this.player.inebriation, dt);
+    const delta = drunkHealthDelta(this.player.inebriation, this.player.health, dt);
+    if (delta > 0) this.player.health = Math.min(this.player.maxHealth, this.player.health + delta);
+    else if (delta < 0 && !this.cheats.invulnerable) this.player.health = Math.max(0, this.player.health + delta);
+  }
+
   private buyHotdog(): void {
     if (this.player.health >= this.player.maxHealth) { this.ui.notify('Sizzlin’ Dogs', 'You are stuffed already. Come back hungry.', false); return; }
     if (!this.economy.spend(HOTDOG_PRICE)) { this.ui.notify('Boerie Stand', `No cash, no boerie. It costs R${HOTDOG_PRICE}.`, false); return; }
@@ -1591,6 +1648,7 @@ export class Game {
       else if (this.missions.objective?.kind === 'choice') prompt = 'E  Decide the fate of Jozi Arms';
       else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && Math.hypot(mission.start.position.x - focus.x, mission.start.position.z - focus.z) < 7)) prompt = 'E  Speak to contact';
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
+      else if (shop?.kind === 'bottle') prompt = 'E  Browse Tops-ish Bottle Store';
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
@@ -1612,7 +1670,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable) });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

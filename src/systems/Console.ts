@@ -32,6 +32,7 @@ export type ConsoleCommand =
   | { kind: 'give-ammo' }
   | { kind: 'give-armour' }
   | { kind: 'give-item'; item: 'parachute' | 'stim'; count: number }
+  | { kind: 'drunk'; level?: number }
   | { kind: 'error'; message: string };
 
 /** Game wires these in; the console never imports Game. Each handler returns its console feedback line. */
@@ -62,6 +63,7 @@ export interface ConsoleHost {
   giveAmmo(): string;
   giveArmour(): string;
   giveItem(item: 'parachute' | 'stim', count: number): string;
+  setInebriation(level?: number): string;
 }
 
 const KINDS = Object.keys(VEHICLE_SPECS) as VehicleKind[];
@@ -86,6 +88,7 @@ export const HELP_LINES = [
   'give ammo — fully stock every owned weapon',
   'give armour — strap on full body armour',
   'give parachute [n] · give stim [n] — stock inventory items',
+  'drunk [0-100] — set inebriation (no number = fully legless) to test the stagger',
   'set time <HHMM> — jump the clock (e.g. set time 1200)',
   'set timerate <n> — day/night speed (1 = normal, 0 freezes time)',
   'set busy <10-1000> — crowd level in percent (100 = normal; scales every nearby zone; clears peds/cars pins)',
@@ -179,6 +182,12 @@ export function parseCommand(input: string): ConsoleCommand {
     if (rest.length === 1 && x !== undefined) return { kind: 'error', message: 'Teleport needs both coordinates: tp <x> <z>.' };
     return { kind: 'tp-name', name: rest.join(' ') };
   }
+  if (head === 'drunk') {
+    if (rest.length === 0) return { kind: 'drunk' };
+    if (rest.length > 1) return { kind: 'error', message: 'Usage: drunk [0-100] — a level, or nothing for fully legless.' };
+    const level = parseCount(rest[0]!);
+    return level === undefined || level > 100 ? { kind: 'error', message: `Invalid level "${rest[0]}" — use a whole number 0-100.` } : { kind: 'drunk', level };
+  }
   if (head === 'skyfall') return { kind: 'skyfall', name: rest.length > 0 ? rest.join(' ') : undefined };
   if (head === 'give') {
     const usage = `Usage: give <${GIVE_WEAPON_IDS.join('|')}> · give ammo · give armour · give parachute [n] · give stim [n]`;
@@ -228,5 +237,6 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'give-ammo': return [host.giveAmmo()];
     case 'give-armour': return [host.giveArmour()];
     case 'give-item': return [host.giveItem(command.item, command.count)];
+    case 'drunk': return [host.setInebriation(command.level)];
   }
 }

@@ -3,6 +3,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { PLAYER, type VehicleKind, type WeaponId } from '../config';
 import type { InputManager } from '../core/InputManager';
 import { fallDamage, jumpVelocity, moveSpeed, stepVertical } from '../core/GameRules';
+import { inebriationFraction } from '../core/DrinkRules';
 import type { CheatSettings } from '../types';
 import type { City } from '../world/City';
 import { buildWeaponModel } from './WeaponModels';
@@ -33,7 +34,12 @@ export class Player {
   heading = 0;
   moving = false;
   sprinting = false;
+  /** 0..100 skinful. Game folds in drinks and sobers it up over time; the walk reads it here for the wobble. */
+  inebriation = 0;
   cheats: Pick<CheatSettings, 'fastRun' | 'bigJump'> = { fastRun: false, bigJump: false };
+  /** Mean-reverting random walk that veers the drunk stagger; kept small and smoothed so it reads as sway, not teleporting. */
+  private staggerWander = 0;
+  private swayPhase = 0;
   private model = new THREE.Group();
   private torso = new THREE.Group();
   private head = new THREE.Group();
@@ -79,17 +85,21 @@ export class Player {
     const moving = move.lengthSq() > 0;
     const sprinting = moving && input.down('ShiftLeft');
     this.moving = moving; this.sprinting = sprinting;
+    const drunk = inebriationFraction(this.inebriation);
+    const stagger = this.updateStagger(dt, drunk); // heading error (radians) from the ever-evolving random walk
     if (moving) {
       move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
-      const speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld);
+      if (stagger) move.applyAxisAngle(new THREE.Vector3(0, 1, 0), stagger); // drunk veer: you can't hold a straight line
+      const speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld) * (1 - 0.28 * drunk); // stumbling is slower than striding
       const desired = this.group.position.clone().addScaledVector(move, speed * dt);
       this.group.position.copy(city.clampMoveAt(this.group.position, desired, PLAYER.radius)); // y-aware: walls above the head or below the feet don't block
       this.turnToward(aimHeld ? cameraYaw + Math.PI : Math.atan2(move.x, move.z), dt, aimHeld ? 13 : sprinting ? 15 : 11);
       this.walkPhase += dt * speed * 1.05;
-      this.animateLocomotion(dt, sprinting, aiming);
+      this.animateLocomotion(dt, sprinting, aiming, drunk);
     } else {
       if (input.firing || aimHeld) this.turnToward(cameraYaw + Math.PI, dt, 13);
-      this.animateIdle(dt, aiming);
+      else if (stagger && drunk > 0) this.turnToward(this.heading + stagger, dt, 4); // even standing, a drunk sways off his facing
+      this.animateIdle(dt, aiming, drunk);
     }
     this.leftLeg.rotation.z *= Math.exp(-dt * 8); this.rightLeg.rotation.z *= Math.exp(-dt * 8); // legs close after riding astride
     this.group.rotation.z *= Math.exp(-dt * 12); // shed any leftover bike lean
@@ -152,7 +162,7 @@ export class Player {
   }
 
   takeDamage(amount: number): void { this.health = Math.max(0, this.health - Math.max(0, amount)); }
-  heal(): void { this.health = this.maxHealth; }
+  heal(): void { this.health = this.maxHealth; this.inebriation = 0; } // waking up in hospital / a night's sleep also sobers you up
   setVisible(visible: boolean): void { this.group.visible = visible; }
 
   setWeapon(id: WeaponId): void {
@@ -304,7 +314,19 @@ export class Player {
     this.heading += delta * Math.min(1, dt * rate); this.group.rotation.y = this.heading;
   }
 
-  private animateLocomotion(dt: number, sprinting: boolean, aiming: boolean): void {
+  /** Evolve the mean-reverting stagger every frame and return the heading error it currently imposes (radians).
+   *  A random impulse (pulled back toward centre so it wanders instead of drifting away) plus a slow lurch,
+   *  the whole thing scaled by how legless the player is. Zero while sober. */
+  private updateStagger(dt: number, drunk: number): number {
+    this.staggerWander += (Math.random() - 0.5) * dt * 7;
+    this.staggerWander -= this.staggerWander * dt * 2.4;
+    this.staggerWander = THREE.MathUtils.clamp(this.staggerWander, -1, 1);
+    this.swayPhase += dt * (1.4 + drunk * 2.2);
+    if (drunk <= 0) return 0;
+    return (this.staggerWander + Math.sin(this.swayPhase) * 0.35) * drunk * 0.62; // ~35 deg of veer at full tilt
+  }
+
+  private animateLocomotion(dt: number, sprinting: boolean, aiming: boolean, drunk = 0): void {
     const cycle = Math.sin(this.walkPhase); const stride = sprinting ? 0.82 : 0.58;
     this.leftLeg.rotation.x = THREE.MathUtils.lerp(this.leftLeg.rotation.x, cycle * stride, dt * 14);
     this.rightLeg.rotation.x = THREE.MathUtils.lerp(this.rightLeg.rotation.x, -cycle * stride, dt * 14);
@@ -320,12 +342,14 @@ export class Player {
     }
     this.model.position.y = Math.abs(Math.sin(this.walkPhase * 2)) * (sprinting ? 0.035 : 0.018);
     this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, sprinting ? 0.08 : 0.018, dt * 8);
-    this.torso.rotation.z = Math.sin(this.walkPhase) * (sprinting ? 0.045 : 0.022);
+    this.model.rotation.z = Math.sin(this.swayPhase) * 0.16 * drunk; // whole body lists to one side
+    this.torso.rotation.z = Math.sin(this.walkPhase) * (sprinting ? 0.045 : 0.022) + Math.sin(this.swayPhase * 0.9) * 0.2 * drunk;
     this.torso.scale.y = THREE.MathUtils.lerp(this.torso.scale.y, 1, dt * 8);
-    this.head.rotation.y = Math.sin(this.walkPhase * 0.5) * 0.035;
+    this.head.rotation.y = Math.sin(this.walkPhase * 0.5) * 0.035 + Math.sin(this.swayPhase * 0.6) * 0.3 * drunk;
+    this.head.rotation.z = Math.sin(this.swayPhase * 1.3) * 0.28 * drunk; // head lolls
   }
 
-  private animateIdle(dt: number, aiming: boolean): void {
+  private animateIdle(dt: number, aiming: boolean, drunk = 0): void {
     const breathe = Math.sin(performance.now() * 0.0018);
     this.leftLeg.rotation.x *= Math.exp(-dt * 9); this.rightLeg.rotation.x *= Math.exp(-dt * 9);
     this.leftShin.rotation.x *= Math.exp(-dt * 10); this.rightShin.rotation.x *= Math.exp(-dt * 10);
@@ -337,7 +361,11 @@ export class Player {
       this.leftForearm.rotation.x = THREE.MathUtils.lerp(this.leftForearm.rotation.x, -0.12, dt * 8);
       this.rightForearm.rotation.x = THREE.MathUtils.lerp(this.rightForearm.rotation.x, -0.12, dt * 8);
     }
-    this.model.position.y = breathe * 0.004; this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, 0, dt * 8); this.torso.rotation.z *= Math.exp(-dt * 8); this.head.rotation.y = Math.sin(performance.now() * 0.00055) * 0.045;
+    this.model.position.y = breathe * 0.004; this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, 0, dt * 8);
+    this.model.rotation.z = Math.sin(this.swayPhase) * 0.13 * drunk; // swaying on the spot
+    this.torso.rotation.z = this.torso.rotation.z * Math.exp(-dt * 8) + Math.sin(this.swayPhase * 0.9) * 0.16 * drunk;
+    this.head.rotation.y = Math.sin(performance.now() * 0.00055) * 0.045 + Math.sin(this.swayPhase * 0.6) * 0.28 * drunk;
+    this.head.rotation.z = Math.sin(this.swayPhase * 1.3) * 0.24 * drunk;
     this.torso.scale.y = 1 + breathe * 0.004;
   }
 

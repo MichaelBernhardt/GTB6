@@ -1,4 +1,5 @@
 import type { WeaponId } from '../config';
+import type { DrinkId } from '../core/DrinkRules';
 import type { MissionChoice } from '../systems/MissionSystem';
 import type { CheatSettings, GameSettings } from '../types';
 import type { RoadPoint } from '../world/City';
@@ -7,7 +8,7 @@ import { HudView } from './HudView';
 import { MapView, type MapViewFrame } from './MapView';
 import { MenuView } from './MenuView';
 import { MinimapView, type MapMarker, type MapPoint } from './MinimapView';
-import type { CheatWeaponEntry, HudState, MainMenuSummary, NotificationTone, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
+import type { CheatWeaponEntry, DrinkCatalogEntry, HudState, MainMenuSummary, NotificationTone, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
 
 export type { CheatWeaponEntry, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
 
@@ -41,6 +42,7 @@ export class UIManager {
   onBuyWeapon?: (id: WeaponId) => void;
   onBuyAmmo?: (id: WeaponId) => void;
   onBuyArmour?: () => void;
+  onBuyDrink?: (id: DrinkId) => void;
   onMissionChoice?: (id: MissionChoice['id']) => void;
   onSafehouseSave?: () => void;
   onSafehouseSleep?: () => void;
@@ -92,7 +94,7 @@ export class UIManager {
   hideMenu(): void { this.menuView.hide(); }
 
   back(): boolean {
-    if (this.menuView.screen === 'shop' || this.menuView.screen === 'safehouse') { this.onResume?.(); return true; }
+    if (this.menuView.screen === 'shop' || this.menuView.screen === 'bottle' || this.menuView.screen === 'safehouse') { this.onResume?.(); return true; }
     if (this.menuView.screen === 'choice') return true;
     if (this.menuView.screen === 'controls') { if (this.controlsFromMain || !this.lastSettings) this.showMainMenu(); else this.showPause(this.lastSettings); return true; }
     if (this.menuView.screen === 'cheats') { if (this.lastSettings) this.showPause(this.lastSettings); else this.showMainMenu(); return true; }
@@ -110,6 +112,7 @@ export class UIManager {
   }
   showControls(fromMain = false): void { this.controlsFromMain = fromMain; this.menuView.controls(fromMain, () => this.back()); }
   showShop(entries: ShopCatalogEntry[], balance: number, armour?: ShopArmourEntry): void { this.menuView.shop(entries, balance, { buy: (id) => this.onBuyWeapon?.(id), ammo: (id) => this.onBuyAmmo?.(id), armour: () => this.onBuyArmour?.(), leave: () => this.back() }, armour); }
+  showBottleStore(entries: DrinkCatalogEntry[], balance: number, inebriation: number): void { this.menuView.bottle(entries, balance, inebriation, { buy: (id) => this.onBuyDrink?.(id), leave: () => this.back() }); }
   showMissionChoice(title: string, choices: MissionChoice[]): void { this.menuView.choice(title, choices, (id) => this.onMissionChoice?.(id)); }
   showSafehouse(name: string, sleepHours: number): void { this.menuView.safehouse(name, sleepHours, { save: () => this.onSafehouseSave?.(), sleep: () => this.onSafehouseSleep?.(), leave: () => this.back() }); }
   showCheats(weapons: CheatWeaponEntry[], cheats: CheatSettings): void {

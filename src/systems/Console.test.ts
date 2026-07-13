@@ -98,6 +98,13 @@ describe('console parser', () => {
     for (const bad of ['give', 'give fists', 'give stim 0', 'give stim lots', 'give pistol 2', 'give ammo 5', 'give spaceship']) expect(parseCommand(bad).kind, bad).toBe('error');
   });
 
+  it('parses the drunk command with an optional 0-100 level', () => {
+    expect(parseCommand('drunk')).toEqual({ kind: 'drunk' });
+    expect(parseCommand('drunk 60')).toEqual({ kind: 'drunk', level: 60 });
+    expect(parseCommand('drunk 0')).toEqual({ kind: 'drunk', level: 0 });
+    for (const bad of ['drunk 101', 'drunk -5', 'drunk plastered', 'drunk 50 60']) expect(parseCommand(bad).kind, bad).toBe('error');
+  });
+
   it('rejects unknown input with an eish and a help hint', () => {
     const result = parseCommand('gimme money');
     expect(result.kind).toBe('error');
@@ -168,6 +175,7 @@ describe('runConsoleCommand', () => {
     giveAmmo: () => 'ammo-max',
     giveArmour: () => 'armoured',
     giveItem: (item, count) => `item:${item}:${count}`,
+    setInebriation: (level) => `drunk:${level ?? 'max'}`,
   };
 
   it('routes parsed commands to host handlers and echoes their feedback', () => {
@@ -216,5 +224,7 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('give armour', host)).toEqual(['armoured']);
     expect(runConsoleCommand('give parachute 2', host)).toEqual(['item:parachute:2']);
     expect(runConsoleCommand('give stim', host)).toEqual(['item:stim:1']);
+    expect(runConsoleCommand('drunk 70', host)).toEqual(['drunk:70']);
+    expect(runConsoleCommand('drunk', host)).toEqual(['drunk:max']);
   });
 });
