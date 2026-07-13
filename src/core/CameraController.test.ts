@@ -145,6 +145,18 @@ describe('camera views in the world', () => {
     expect(controller.yaw).toBeCloseTo(Math.PI * 1.5);
   });
 
+  it('seats the first-person driver higher in a taller vehicle so the bonnet clears the view', () => {
+    const eyeY = (height: number): number => {
+      const camera = new THREE.PerspectiveCamera(60, 1);
+      new CameraController(camera).update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, 0, true, 0, 0, 0, false, height);
+      return camera.position.y;
+    };
+    expect(eyeY(1.35)).toBeCloseTo(1.25); // a compact keeps the base eye height
+    expect(eyeY(1.15)).toBeCloseTo(1.25); // a low sports car is not dropped below the base
+    expect(eyeY(2.15)).toBeGreaterThan(eyeY(1.35) + 0.7); // a tall bakkie/van seats the driver well up
+    expect(eyeY(2.0)).toBeGreaterThan(eyeY(1.4)); // taller vehicle -> higher eye, monotonic
+  });
+
   it('mouse-steering (steerLock) tails the third-person camera behind the heading and ignores mouse orbit', () => {
     const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
     controller.yaw = 0;

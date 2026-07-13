@@ -8,7 +8,9 @@ export const FOOT_VIEW_DISTANCES = [0, 4.2, 6.35, 9.5] as const;
 export const VEHICLE_VIEW_DISTANCES = [0, 7.5, 10.5, 15] as const;
 export const VEHICLE_VIEW_HEIGHTS = [0, 2.1, 2.6, 3.4] as const;
 const FP_EYE_FOOT = 1.62;
-const FP_EYE_VEHICLE = 1.25;
+const FP_EYE_VEHICLE = 1.25; // driver eye above the vehicle origin in a normal-height car
+const VEHICLE_EYE_REF_HEIGHT = 1.35; // spec height at/below which the base eye is used (a compact)
+const VEHICLE_EYE_RISE = 1.2; // extra eye height per metre of vehicle height above the reference — taller cabs/vans seat the driver higher so the hood doesn't fill the view
 const FP_PITCH_LIMIT = 1.2;
 const FP_AIM_ZOOM = 8; // degrees of FOV tightening at full aim (60 -> 52)
 const FP_VEHICLE_RECENTER_DELAY = 1.5; // seconds the mouse must sit still before a first-person driving glance eases back to forward (GTA-ish; tune by feel)
@@ -47,7 +49,7 @@ export class CameraController {
     this.camera.position.set(target.x + Math.sin(this.yaw) * horizontal, target.y + 1.45 + Math.sin(this.pitch) * distance, target.z + Math.cos(this.yaw) * horizontal);
   }
 
-  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0, extraDistance = 0, steerLock = false): void {
+  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0, extraDistance = 0, steerLock = false, vehicleHeight = 0): void {
     const scoped = scopeFov > 0 && !vehicle; // sniper scope: first-person eye regardless of the chosen view
     const firstPerson = sanitizeView(view) === 0 || scoped;
     if (firstPerson && vehicle) {
@@ -65,7 +67,7 @@ export class CameraController {
     this.pitch = THREE.MathUtils.clamp(this.pitch + input.mouseDY * sensitivity, firstPerson ? -FP_PITCH_LIMIT : -0.1, firstPerson ? FP_PITCH_LIMIT : 0.9);
     this.aiming = input.aiming && aimAllowed; // aim mode needs a ranged weapon in hand
     this.aimBlend += ((this.aiming ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 10));
-    if (firstPerson) { this.updateFirstPerson(target, vehicle, vehicleHeading, scoped ? scopeFov : 0); return; }
+    if (firstPerson) { this.updateFirstPerson(target, vehicle, vehicleHeading, scoped ? scopeFov : 0, vehicleHeight); return; }
     this.setFov(this.baseFov);
     const distance = aimedViewDistance(view, vehicle, this.aimBlend) + extraDistance; // skydives pull the boom further back
     const baseHeight = VEHICLE_VIEW_HEIGHTS[sanitizeView(view)];
@@ -95,8 +97,9 @@ export class CameraController {
     this.camera.lookAt(this.focus);
   }
 
-  private updateFirstPerson(target: THREE.Vector3, vehicle: boolean, vehicleHeading: number, scopeFov = 0): void {
-    this.focus.set(target.x, target.y + (vehicle ? FP_EYE_VEHICLE : FP_EYE_FOOT), target.z);
+  private updateFirstPerson(target: THREE.Vector3, vehicle: boolean, vehicleHeading: number, scopeFov = 0, vehicleHeight = 0): void {
+    const vehicleEye = FP_EYE_VEHICLE + Math.max(0, vehicleHeight - VEHICLE_EYE_REF_HEIGHT) * VEHICLE_EYE_RISE; // sit higher in a taller vehicle so the bonnet clears the view
+    this.focus.set(target.x, target.y + (vehicle ? vehicleEye : FP_EYE_FOOT), target.z);
     if (vehicle) { this.focus.x += Math.sin(vehicleHeading) * 0.25 + Math.cos(vehicleHeading) * 0.33; this.focus.z += Math.cos(vehicleHeading) * 0.25 - Math.sin(vehicleHeading) * 0.33; } // driver seat: forward + door side
     this.camera.position.copy(this.focus);
     const cosPitch = Math.cos(this.pitch);
