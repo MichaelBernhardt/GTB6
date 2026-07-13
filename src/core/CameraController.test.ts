@@ -154,6 +154,18 @@ describe('camera views in the world', () => {
     expect(Math.atan2(Math.sin(behind - controller.yaw), Math.cos(behind - controller.yaw))).toBeCloseTo(0);
   });
 
+  it('mouse-steering in first person holds the view forward instead of glancing (drag turns the wheel)', () => {
+    const heading = Math.PI / 2; const forward = heading + Math.PI;
+    // First person (view 0) + steerLock: a hard sideways drag must NOT swing the glance; yaw stays locked forward.
+    const steering = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    for (let i = 0; i < 30; i++) steering.update(1 / 60, input(500, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading, true, 0, 0, 0, true);
+    expect(steering.yaw).toBeCloseTo(forward);
+    // Same drag without steerLock still glances off-centre (the existing FP-vehicle behaviour).
+    const glancing = new CameraController(new THREE.PerspectiveCamera(60, 1));
+    glancing.update(1 / 60, input(500, 0), new THREE.Vector3(), city, true, 0.0025, 0, heading);
+    expect(Math.abs(Math.atan2(Math.sin(forward - glancing.yaw), Math.cos(forward - glancing.yaw)))).toBeGreaterThan(0.05);
+  });
+
   it('without steerLock the same drag orbits the third-person vehicle camera as before', () => {
     const controller = new CameraController(new THREE.PerspectiveCamera(60, 1));
     controller.yaw = 0;

@@ -1444,7 +1444,7 @@ export class Game {
    *  the horizontal drag winds a self-centring virtual steering wheel that feeds Vehicle.updatePlayer like the
    *  A/D keys. Ticked once per frame (mouseDX is a whole-frame delta) — the camera tails the heading meanwhile. */
   private tickMouseSteer(dt: number): void {
-    this.driveSteerActive = Boolean(this.activeVehicle) && this.settings.cameraViewVehicle !== 0 && this.input.firing && !this.input.aiming;
+    this.driveSteerActive = Boolean(this.activeVehicle) && this.input.firing && !this.input.aiming;
     if (this.driveSteerActive) this.driveSteer = THREE.MathUtils.clamp(this.driveSteer - this.input.mouseDX * MOUSE_STEER_GAIN, -1, 1); // drag right -> negative steer -> turn right, matching the D key
     else this.driveSteer *= Math.exp(-dt * 12); // released: the wheel springs back to centre
   }

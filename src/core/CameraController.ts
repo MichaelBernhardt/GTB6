@@ -48,7 +48,7 @@ export class CameraController {
   update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0, extraDistance = 0, steerLock = false): void {
     const scoped = scopeFov > 0 && !vehicle; // sniper scope: first-person eye regardless of the chosen view
     const firstPerson = sanitizeView(view) === 0 || scoped;
-    if (firstPerson && vehicle) { this.lookOffset = (this.lookOffset - input.mouseDX * sensitivity) * Math.exp(-dt * 1.4); this.yaw = vehicleHeading + Math.PI + this.lookOffset; }
+    if (firstPerson && vehicle) { const glance = steerLock ? 0 : input.mouseDX * sensitivity; this.lookOffset = (this.lookOffset - glance) * Math.exp(-dt * 1.4); this.yaw = vehicleHeading + Math.PI + this.lookOffset; } // mouse-steering holds the view forward (glance suppressed) so the drag turns the wheel, not the head
     else if (steerLock && vehicle) { this.lookOffset = 0; const behind = vehicleHeading + Math.PI; this.yaw += Math.atan2(Math.sin(behind - this.yaw), Math.cos(behind - this.yaw)) * (1 - Math.exp(-dt * 6)); } // mouse-steering: the drag turns the vehicle, so tail behind the heading instead of letting mouseDX orbit
     else { this.lookOffset = 0; this.yaw -= input.mouseDX * sensitivity; }
     if (this.recoilReturn > 0) { const back = this.recoilReturn * (1 - Math.exp(-dt * 5)); this.pitch += back; this.recoilReturn -= back; }
