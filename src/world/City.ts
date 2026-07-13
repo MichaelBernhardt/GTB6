@@ -67,7 +67,7 @@ export interface RoadPose { position: THREE.Vector3; heading: number; }
 export interface RoadDefinition { name: string; width: number; closed?: boolean; points: RoadPoint[]; }
 export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
 
-export const ROAD_SURFACE_OFFSET = 0.055;
+export const ROAD_SURFACE_OFFSET = 0.09;
 export const SIDEWALK_RISE = 0.22;
 /** How far the ground mesh sinks beneath an inland water body's surface, so dams/ponds read as basins
  *  instead of a flat sheet coplanar with the land (the original z-fighting the relief pass set out to kill). */
@@ -188,9 +188,12 @@ function sampleTerrainGrid(x: number, z: number): number {
   const c0 = Math.floor(c); const r0 = Math.floor(r);
   const c1 = c0 + 1 < n ? c0 + 1 : c0; const r1 = r0 + 1 < n ? r0 + 1 : r0;
   const fc = c - c0; const fr = r - r0;
-  const top = g[r0 * n + c0]! + (g[r0 * n + c1]! - g[r0 * n + c0]!) * fc;
-  const bot = g[r1 * n + c0]! + (g[r1 * n + c1]! - g[r1 * n + c0]!) * fc;
-  return top + (bot - top) * fr;
+  const h00 = g[r0 * n + c0]!; const h10 = g[r0 * n + c1]!; const h01 = g[r1 * n + c0]!; const h11 = g[r1 * n + c1]!;
+  // TRIANGLE interpolation matching the PlaneGeometry ground mesh (diagonal (col+1,row)-(col,row+1)), not
+  // bilinear — so this returns the EXACT drawn surface. Bilinear diverged from the faceted mesh by the
+  // cell twist, which exceeds the road's 0.055 lift and let the ground poke up through the tar.
+  if (fc + fr <= 1) return h00 + (h10 - h00) * fc + (h01 - h00) * fr;
+  return h11 + (h01 - h11) * (1 - fc) + (h10 - h11) * (1 - fr);
 }
 
 /** The one terrain height everything shares. Once the ground mesh is built this returns the exact DRAWN
@@ -221,6 +224,10 @@ const seeded = (x: number, z: number, salt = 0): number => {
  */
 const LAYOUT_SCALE = 2.94 / METRES_PER_UNIT;
 export const ROAD_SAMPLE_SPACING = Math.round(12 * LAYOUT_SCALE);
+/** Sub-step (world units) the road/track SURFACE mesh is re-tessellated to, independent of the coarser nav
+ *  sampling — small enough (vs the ~70u ground-mesh cells) that the tar hugs the relief and the faceted
+ *  ground can't crease up through it between samples. Only the visual strip densifies; nav is untouched. */
+export const ROAD_STRIP_SUBSTEP = 8;
 /** Streetlamp pitch: a lamp every ~36u of road, alternating kerbs — the classic staggered layout that
  *  lines the whole map like the old hand-authored city. Scaled with the footprint so the real-world
  *  pitch (~35m) holds at any TARGET_SIZE, exactly like ROAD_SAMPLE_SPACING and the nav joins. */
@@ -1054,7 +1061,22 @@ export class City {
     return new THREE.Mesh(geometry, material);
   }
 
-  private createRoadStrip(points: RoadPoint[], width: number, material: THREE.Material, y: number, closed: boolean): THREE.Mesh {
+  /** Linearly re-sample a polyline to at most `spacing` between points, so a surface built from it hugs the
+   *  faceted ground instead of spanning cell creases. Keeps the original vertices; only inserts between them. */
+  private densifyPath(points: RoadPoint[], spacing: number, closed: boolean): RoadPoint[] {
+    const n = points.length; if (n < 2) return points;
+    const out: RoadPoint[] = []; const segments = closed ? n : n - 1;
+    for (let i = 0; i < segments; i++) {
+      const a = points[i]!; const b = points[(i + 1) % n]!;
+      const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / spacing));
+      for (let s = 0; s < steps; s++) { const t = s / steps; out.push({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t }); }
+    }
+    if (!closed) out.push(points[n - 1]!);
+    return out;
+  }
+
+  private createRoadStrip(input: RoadPoint[], width: number, material: THREE.Material, y: number, closed: boolean): THREE.Mesh {
+    const points = this.densifyPath(input, ROAD_STRIP_SUBSTEP, closed); // hug the relief between the coarse nav samples
     const vertices: number[] = []; const uvs: number[] = []; const indices: number[] = []; let distance = 0;
     const sides = this.offsetPath(points, width / 2, closed); const opposite = this.offsetPath(points, -width / 2, closed);
     for (let index = 0; index < points.length; index++) {
