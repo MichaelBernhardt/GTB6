@@ -62,8 +62,11 @@ export const CULL_RADIUS = 130;
 export const DESPAWN_CELL = 90;
 /** Departing-car backstop: once heat is off, a cruiser is culled this many seconds after it starts leaving
  *  even if it never formally clears the block — otherwise a unit that can't route away (player off-road, the
- *  road loops back past them) loiters forever. It despawns sooner the moment it slips out of sight. */
-export const LEAVE_TIMEOUT = 10;
+ *  road loops back past them) loiters forever. This is only the absolute last-resort cap: the normal disposal
+ *  is far quicker (it despawns the moment it clears the block into a neighbour cell, or 2s after it slips out
+ *  of sight), so a car only rides this timeout out if it stays wedged in view — hence a few minutes, not
+ *  seconds, so it keeps trying to drive off naturally instead of vanishing under the player's nose. */
+export const LEAVE_TIMEOUT = 180;
 
 /** Which despawn-grid cell a world point falls in. */
 export function policeCell(x: number, z: number): { cx: number; cz: number } { return { cx: Math.floor(x / DESPAWN_CELL), cz: Math.floor(z / DESPAWN_CELL) }; }
