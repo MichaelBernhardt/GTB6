@@ -60,6 +60,7 @@ import { DayNightSystem } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
+import { loadTreeLibrary } from './world/FoliageAssets';
 
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
 const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and downsamples — real supersampling AA. The floor bites hardest on LOW-dpi screens (a 1× monitor jumps to 2×, where aliasing shows most); HiDPI already renders dense, so it just stays at native.
@@ -114,8 +115,8 @@ export class Game {
   private online?: OnlineSession;
   private onlineWasDead = false;
   private mode: GameMode = 'loading';
-  private characterReady = false;
-  private characterLoadAttempt = 0;
+  private requiredAssetsReady = false;
+  private assetLoadAttempt = 0;
   private activeVehicle?: Vehicle;
   private transition?: Transition;
   private marker = new THREE.Group();
@@ -202,20 +203,20 @@ export class Game {
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
     this.restoreGarageVehicle();
-    this.buildMarker(); this.bindUI(); this.animate(); void this.prepareCharacter();
+    this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
     if (import.meta.env.DEV) Object.assign(window, { __game: this });
   }
 
-  private async prepareCharacter(retry = false): Promise<void> {
-    const attempt = ++this.characterLoadAttempt; this.characterReady = false; this.mode = 'loading'; this.ui.showLoading();
+  private async prepareAssets(retry = false): Promise<void> {
+    const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading'; this.ui.showLoading();
     try {
-      if (retry) await this.player.retryCharacter(); else await this.player.loadCharacter();
-      if (attempt !== this.characterLoadAttempt) return;
-      this.characterReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
+      await Promise.all([retry ? this.player.retryCharacter() : this.player.loadCharacter(), loadTreeLibrary()]);
+      if (attempt !== this.assetLoadAttempt) return;
+      this.requiredAssetsReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
     } catch (error) {
-      if (attempt !== this.characterLoadAttempt) return;
-      console.error('[player] Character failed to load.', error);
-      this.ui.showCharacterFailure(() => { void this.prepareCharacter(true); });
+      if (attempt !== this.assetLoadAttempt) return;
+      console.error('[assets] A required 3D asset failed to load.', error);
+      this.ui.showAssetFailure(() => { void this.prepareAssets(true); });
     }
   }
 
@@ -522,7 +523,7 @@ export class Game {
   }
 
   private startGame(fresh: boolean): void {
-    if (!this.characterReady || this.player.characterStatus !== 'ready') return;
+    if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.player.setDead(false); this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
@@ -530,7 +531,7 @@ export class Game {
   }
 
   private startOnline(name: string): void {
-    if (!this.characterReady || this.player.characterStatus !== 'ready') return;
+    if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.endTaxiShift(); this.endCourierShift(); this.online?.close();
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
     this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose();
@@ -575,7 +576,7 @@ export class Game {
     this.tickMouseSteer(frameDt); this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
     this.profiler.mark('culling');
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
-    this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position); // staggered chunk culling — runs in every mode so the menu backdrop is culled too
+    this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position, this.requiredAssetsReady); // cull the menu backdrop immediately; stream required-asset models only after their load gate
     const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 2; // >2s: the staggered chunk culling needs its first full pass before the number means anything
     if (measure) { this.renderer.info.autoReset = false; this.renderer.info.reset(); }
     this.profiler.mark('render');

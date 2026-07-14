@@ -10,12 +10,12 @@ export class MenuView {
   hide(): void { this.root.classList.remove('is-visible'); this.root.setAttribute('aria-hidden', 'true'); this.screen = 'none'; }
 
   loading(): void {
-    this.set('loading', `<section class="menu-card menu-card--loading"><p class="eyebrow">PLAYER SERVICES</p><h2>Getting the player ready</h2><div class="loading-stripe" aria-label="Loading character"></div><small>Checking the rig, outfit and moves.</small></section>`);
+    this.set('loading', `<section class="menu-card menu-card--loading"><p class="eyebrow">CITY SERVICES</p><h2>Getting Joburg ready</h2><div class="loading-stripe" aria-label="Loading required 3D assets"></div><small>Checking the player, trees and moves.</small></section>`);
   }
 
-  characterFailed(retry: () => void): void {
-    this.set('character-failed', `<section class="menu-card menu-card--loading menu-card--character-failed"><p class="eyebrow">PLAYER SERVICES</p><h2>Character failed to load</h2><p>The city stays closed until the full player model is ready.</p><button class="action-primary" data-action="retry-character">Retry</button></section>`);
-    this.bind('[data-action="retry-character"]', retry);
+  assetFailed(retry: () => void): void {
+    this.set('asset-failed', `<section class="menu-card menu-card--loading menu-card--asset-failed"><p class="eyebrow">CITY SERVICES</p><h2>Required model failed to load</h2><p>The city stays closed until the player and Blender tree library are ready.</p><button class="action-primary" data-action="retry-assets">Retry</button></section>`);
+    this.bind('[data-action="retry-assets"]', retry);
   }
 
   main(summary: MainMenuSummary, actions: { start: (fresh: boolean) => void; online: (name: string) => void; controls: () => void }): void {

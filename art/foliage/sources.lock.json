@@ -1,0 +1,11 @@
+{
+  "license": "Original project-authored procedural Blender geometry; no external source assets.",
+  "generator": "tools/foliage/create-source.py",
+  "recipe": "art/foliage/recipe.json",
+  "committedArtifacts": [
+    {
+      "path": "public/models/foliage/joburg-trees.glb",
+      "sha256": "e6efcdb7057e59d76ee10b009c42e23898ea642a35fd8056b6cd84334b5e50d7"
+    }
+  ]
+}

@@ -9,6 +9,8 @@ GTA ThreeJS/
 tools/mapgen/cache/
 /build/character/
 /art/character/work/
+/build/foliage/
+/art/foliage/work/
 *.blend
 *.fbx
 .claude/worktrees/

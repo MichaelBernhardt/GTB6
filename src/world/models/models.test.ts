@@ -3,13 +3,23 @@
  * produce real geometry with valid materials, stay inside its declared footprint bounds, keep its
  * collider tiers inside the footprint, and rebuild identically from the same seed.
  */
-import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { installTreeLibrary, resetTreeLibraryForTests } from '../FoliageAssets';
 import { MODEL_CATALOG, MODEL_INDEX, buildModel } from './catalog';
-import { paint } from './kit';
 
 const SEEDS = [1, 7, 42, 1337];
 const MAX_MESHES = 130;
+
+beforeAll(async () => {
+  const file = await readFile(resolve('public/models/foliage/joburg-trees.glb'));
+  const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+  installTreeLibrary(await new GLTFLoader().parseAsync(buffer, '/models/foliage/'));
+});
+afterAll(() => resetTreeLibraryForTests());
 
 function meshStats(group: THREE.Group): { count: number; signature: string } {
   let count = 0; const parts: string[] = [];
@@ -49,7 +59,7 @@ describe('structure model catalog', () => {
           for (let variant = 0; variant < def.variants; variant++) {
             const built = def.build(seed, { variant });
             const { count } = meshStats(built.group);
-            expect(count).toBeGreaterThanOrEqual(3);
+            expect(count).toBeGreaterThanOrEqual(built.group.userData.assetSource === 'blender' ? 1 : 3);
             expect(count).toBeLessThanOrEqual(MAX_MESHES);
 
             const bounds = new THREE.Box3().setFromObject(built.group);
@@ -111,8 +121,8 @@ const TRUNK_COLLIDERS = FOLIAGE.filter((name) => name !== 'veld-grass');
 const SLIM_TRUNKS = ['jacaranda', 'shade-tree', 'gum', 'pine', 'acacia', 'palm', 'landmark-tree'];
 /** Instancing budget: worst-case triangles per build (foliage scatters in the thousands). */
 const TRI_BUDGET: Record<string, number> = {
-  'jacaranda': 300, 'shade-tree': 320, 'gum': 260, 'pine': 160, 'acacia': 240, 'palm': 260,
-  'aloe': 420, 'agave': 240, 'bougainvillea': 200, 'veld-grass': 130, 'hedge-unit': 200, 'landmark-tree': 900,
+  'jacaranda': 300, 'shade-tree': 340, 'gum': 300, 'pine': 240, 'acacia': 300, 'palm': 260,
+  'aloe': 420, 'agave': 240, 'bougainvillea': 200, 'veld-grass': 130, 'hedge-unit': 200, 'landmark-tree': 500,
 };
 
 function triangleCount(group: THREE.Group): number {
@@ -169,63 +179,33 @@ describe('foliage set', () => {
     }
   });
 
-  it('adds shared silhouette leaf sprays to broadleaf tree crowns', () => {
-    const cases = [
-      { name: 'jacaranda', variant: 0, count: 5 },
-      { name: 'shade-tree', variant: 0, count: 6 },
-      { name: 'gum', variant: 0, count: 6 },
-      { name: 'pine', variant: 1, count: 4 },
-      { name: 'acacia', variant: 0, count: 5 },
-      { name: 'landmark-tree', variant: 0, count: 6 },
-    ] as const;
-    const geometries = new Set<THREE.BufferGeometry>();
-    for (const spec of cases) {
-      const sprays: THREE.Mesh[] = [];
-      buildModel(spec.name, 11, { variant: spec.variant }).group.traverse((object) => {
-        if (object instanceof THREE.Mesh && object.userData.foliagePart === 'leaf-spray') sprays.push(object);
-      });
-      expect(sprays, spec.name).toHaveLength(spec.count);
-      for (const spray of sprays) {
-        geometries.add(spray.geometry);
-        expect(spray.geometry.name).toBe('foliage-leaf-spray');
-        expect(spray.geometry.getAttribute('normal').count).toBeGreaterThan(0);
-        expect(spray.geometry.getAttribute('uv').count).toBeGreaterThan(0);
-      }
-    }
-    expect(geometries.size).toBe(1); // one module-level geometry survives thousands of source trees
-  });
-
-  it('builds palms with shared tapered, curved fronds instead of box planks', () => {
-    const fronds: THREE.Mesh[] = [];
-    buildModel('palm', 11, { variant: 1 }).group.traverse((object) => {
-      if (object instanceof THREE.Mesh && object.userData.foliagePart === 'palm-frond') fronds.push(object);
-    });
-    expect(fronds).toHaveLength(7);
-    expect(new Set(fronds.map((frond) => frond.geometry)).size).toBe(1);
-    for (const frond of fronds) {
-      expect(frond.geometry.name).toBe('foliage-palm-frond');
-      expect(frond.geometry.type).toBe('BufferGeometry');
-      const positions = frond.geometry.getAttribute('position');
-      let minY = Infinity; let maxWidth = 0;
-      for (let vertex = 0; vertex < positions.count; vertex++) {
-        minY = Math.min(minY, positions.getY(vertex));
-        maxWidth = Math.max(maxWidth, Math.abs(positions.getX(vertex)));
-      }
-      expect(minY).toBeLessThan(-0.3); // the arc is baked in, not a rotated rigid board
-      expect(maxWidth).toBeGreaterThan(0.3);
+  it('builds every tree exclusively from disposable Blender asset geometry', () => {
+    for (const name of SLIM_TRUNKS) {
+      const first = buildModel(name, 11, { variant: 0 }); const second = buildModel(name, 11, { variant: 0 });
+      expect(first.group.userData.assetSource, name).toBe('blender');
+      const firstGeometry: THREE.BufferGeometry[] = []; const secondGeometry: THREE.BufferGeometry[] = [];
+      first.group.traverse((object) => { if (object instanceof THREE.Mesh) firstGeometry.push(object.geometry); });
+      second.group.traverse((object) => { if (object instanceof THREE.Mesh) secondGeometry.push(object.geometry); });
+      expect(firstGeometry.length).toBeGreaterThan(0);
+      expect(secondGeometry).toHaveLength(firstGeometry.length);
+      for (let index = 0; index < firstGeometry.length; index++) expect(secondGeometry[index]).not.toBe(firstGeometry[index]);
     }
   });
 
-  it('jacaranda toggles the purple bloom canopy by variant', () => {
-    const bloom = paint(0x8f74c8, 0.9); // paint() caches per colour — same instance the builder uses
-    const usesBloom = (variant: number): boolean => {
-      let found = false;
-      buildModel('jacaranda', 11, { variant }).group.traverse((object) => {
-        if (object instanceof THREE.Mesh && object.material === bloom) found = true;
+  it('keeps Blender-authored palm fronds and jacaranda bloom materials variant-specific', () => {
+    const materialNames = (name: string, variant: number): Set<string> => {
+      const names = new Set<string>();
+      buildModel(name, 11, { variant }).group.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        for (const material of Array.isArray(object.material) ? object.material : [object.material]) names.add(material.name);
       });
-      return found;
+      return names;
     };
-    expect(usesBloom(1)).toBe(true);
-    expect(usesBloom(0)).toBe(false);
+    expect(materialNames('palm', 0)).toContain('PalmFrond');
+    expect(materialNames('palm', 1)).toContain('PalmDry');
+    expect(materialNames('jacaranda', 1)).toContain('JacarandaBloom');
+    expect(materialNames('jacaranda', 0)).not.toContain('JacarandaBloom');
+    expect(materialNames('landmark-tree', 1)).toContain('CoralBloom');
+    expect(materialNames('landmark-tree', 0)).not.toContain('CoralBloom');
   });
 });
