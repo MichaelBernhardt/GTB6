@@ -13,9 +13,11 @@ export const BURN_DPS = 10;
 export const BURNOUT_RADIUS = 4;
 export const BURNOUT_PED_DAMAGE = 85;
 export const BURNOUT_VEHICLE_DAMAGE = 48;
-/** Reach of the blast for catching neighbouring cars — wider than the ped/player radius, since a car is a
- *  big target and a fuel tank going up should visibly take out the vehicles packed around it. */
-export const BURNOUT_VEHICLE_RADIUS = 6;
+/** Reach of the blast for catching neighbouring cars — wider than the ped/player radius since a car is a big
+ *  target and a fuel tank going up should take out the vehicles packed right around it. Sized against the
+ *  world's traffic spacing (cars spawn ~30u apart): at 6u a blast only caught bumper-touching cars so chains
+ *  never fired; this ignites tightly queued and parked cars without cascading across the whole street. */
+export const BURNOUT_VEHICLE_RADIUS = 8;
 export const BURNOUT_PLAYER_DAMAGE = 45;
 export const OCCUPANT_BURNOUT_DAMAGE = 70;
 export const POLICE_WRECK_HEAT = 30;
