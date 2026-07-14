@@ -165,11 +165,15 @@ export interface RiggedPlayerVisualOptions {
 }
 
 const WEAPON_SOCKET: Partial<Record<WeaponId, { position: [number, number, number]; rotation: [number, number, number]; scale?: number }>> = {
-  pistol: { position: [0, -0.045, 0.035], rotation: [-Math.PI / 2, 0, Math.PI] },
-  smg: { position: [0, -0.04, 0.045], rotation: [-Math.PI / 2, 0, Math.PI] },
-  shotgun: { position: [0, -0.03, 0.055], rotation: [-Math.PI / 2, 0, Math.PI] },
-  sniper: { position: [0, -0.03, 0.06], rotation: [-Math.PI / 2, 0, Math.PI] },
+  pistol: { position: [0, 0, 0.018], rotation: [-Math.PI / 2, 0, Math.PI] },
+  smg: { position: [0, 0, 0.025], rotation: [-Math.PI / 2, 0, Math.PI] },
+  shotgun: { position: [0, 0, 0.03], rotation: [-Math.PI / 2, 0, Math.PI] },
+  sniper: { position: [0, 0, 0.035], rotation: [-Math.PI / 2, 0, Math.PI] },
   rpg: { position: [-0.28, 0.12, -0.2], rotation: [-Math.PI / 2, 0.12, -0.18], scale: 0.94 },
+};
+
+const WEAPON_GRIP_OFFSET: Partial<Record<WeaponId, number>> = {
+  pistol: 0.40, smg: 0.40, shotgun: 0.34, sniper: 0.30,
 };
 
 export class RiggedPlayerVisual {
@@ -304,6 +308,8 @@ export class RiggedPlayerVisual {
     const bones = this.bones; if (!bones) return;
     for (const id of ['pistol', 'smg', 'shotgun', 'sniper', 'rpg'] as const) {
       const mesh = buildWeaponModel(id); const socket = WEAPON_SOCKET[id]; if (!mesh || !socket) continue;
+      const gripOffset = WEAPON_GRIP_OFFSET[id] ?? 0;
+      for (const part of mesh.children) part.position.y += gripOffset;
       mesh.name = `RiggedWeapon:${id}`; mesh.position.set(...socket.position); mesh.rotation.set(...socket.rotation); if (socket.scale) mesh.scale.setScalar(socket.scale);
       (id === 'rpg' ? bones.chest : bones.rightHand).add(mesh); this.weaponMeshes.set(id, mesh);
     }

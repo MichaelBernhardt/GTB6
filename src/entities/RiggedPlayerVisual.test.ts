@@ -75,6 +75,12 @@ describe('protagonist GLB contract', () => {
     expect(valid.group.getObjectByName('RiggedWeapon:shotgun')?.visible).toBe(true);
     expect(valid.group.getObjectByName('RiggedWeapon:pistol')?.visible).toBe(false);
 
+    valid.setWeapon('pistol'); valid.group.updateMatrixWorld(true);
+    const hand = valid.group.getObjectByName('Hand_R')!; const pistol = valid.group.getObjectByName('RiggedWeapon:pistol')!;
+    const handPosition = hand.getWorldPosition(new THREE.Vector3());
+    const pistolCenter = new THREE.Box3().setFromObject(pistol).getCenter(new THREE.Vector3());
+    expect(pistolCenter.distanceTo(handPosition)).toBeLessThan(0.2);
+
     const invalid = new RiggedPlayerVisual(new THREE.Group(), { load: async () => ({ scene: new THREE.Group(), animations: [] }) as unknown as GLTF });
     await expect(invalid.load()).rejects.toThrow(/metadata/i); expect(invalid.status).toBe('failed'); expect(invalid.group.visible).toBe(false);
   });
