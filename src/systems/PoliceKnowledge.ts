@@ -6,8 +6,14 @@ export const REPORT_DELAY = 30;
 export const SIGHT_RADIUS = 55;
 /** Default earshot for civilian witnesses when a crime has no fear broadcast to borrow a radius from. */
 export const WITNESS_RADIUS = 40;
-/** Roam destinations are picked within this range of the last known position once the trail runs cold. */
-export const ROAM_RADIUS = 60;
+/** Patrol range for a searching unit: once the trail runs cold it heads for a fresh destination within this
+ *  range OF ITS OWN CURRENT POSITION (not the cold scene), so consecutive legs walk the search outward and it
+ *  gradually widens the net instead of orbiting the last-known point. */
+export const ROAM_RADIUS = 200;
+/** Minimum length of a fresh roam leg: the next search destination must be at least this far from where the
+ *  unit is now, so a patrol commits to driving a real block or two rather than nibbling at a node on its
+ *  doorstep. */
+export const ROAM_MIN_LEG = 110;
 /** A unit this close to the last known position without a sighting has arrived on scene. */
 export const ARRIVE_RADIUS = 15;
 /** Seconds a unit lingers at a cold last-known position before switching to roam. */
@@ -43,17 +49,24 @@ export function determineReporter<T>(crimeX: number, crimeZ: number, candidates:
 }
 
 /** Random nav node within radius of the last known position; falls back to the nearest node so a sparse
- *  graph still yields a roam destination. Returns -1 only on an empty graph. */
-export function pickRoamGoal(nodes: readonly NavPoint[], center: { x: number; z: number }, radius = ROAM_RADIUS, random: () => number = Math.random): number {
-  const candidates: number[] = []; let nearest = -1; let nearestSq = Infinity;
-  const radiusSq = radius * radius;
+ *  graph still yields a roam destination. Returns -1 only on an empty graph. Pass `avoid` + `minSpread` to
+ *  bias the pick away from a point (the roaming car's own position), so a patrol genuinely moves on to a
+ *  fresh spot instead of re-picking the node it is already sitting on; falls back to the unfiltered set when
+ *  every in-radius node sits inside the spread ring. */
+export function pickRoamGoal(nodes: readonly NavPoint[], center: { x: number; z: number }, radius = ROAM_RADIUS, random: () => number = Math.random, avoid?: { x: number; z: number }, minSpread = 0): number {
+  const within: number[] = []; const spread: number[] = []; let nearest = -1; let nearestSq = Infinity;
+  const radiusSq = radius * radius; const spreadSq = minSpread * minSpread;
   for (let index = 0; index < nodes.length; index++) {
     const node = nodes[index]; if (!node) continue;
     const distanceSq = (node.x - center.x) ** 2 + (node.z - center.z) ** 2;
-    if (distanceSq <= radiusSq) candidates.push(index);
+    if (distanceSq <= radiusSq) {
+      within.push(index);
+      if (!avoid || (node.x - avoid.x) ** 2 + (node.z - avoid.z) ** 2 >= spreadSq) spread.push(index);
+    }
     if (distanceSq < nearestSq) { nearestSq = distanceSq; nearest = index; }
   }
-  return candidates.length ? candidates[Math.floor(random() * candidates.length)] ?? nearest : nearest;
+  const pool = spread.length ? spread : within;
+  return pool.length ? pool[Math.floor(random() * pool.length)] ?? nearest : nearest;
 }
 
 /** What JMPD actually knows: the last place any officer saw the player, plus 911 reports still in the

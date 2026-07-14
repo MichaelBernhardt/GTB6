@@ -156,11 +156,11 @@ describe('ai intentions simulation', () => {
     expect(police.vehicles.filter((vehicle) => !vehicle.wrecked).length).toBeLessThanOrEqual(maxInterceptors(1));
   });
 
-  it('never finds a hidden player: units work the last known scene until the heat decays away', () => {
+  it('never finds a hidden player: the search fans outward from the scene without cheating, until the heat decays', () => {
     const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
-    const wanted = new WantedSystem(); wanted.addCrime(40); // two stars
+    const wanted = new WantedSystem(); wanted.addCrime(60); // three stars: a few units to spread the search
     const knowledge = new PoliceKnowledge(); knowledge.copWitness(0, 0);
-    const player = new THREE.Vector3(400, 0, 400); // hiding far outside SIGHT_RADIUS
+    const player = new THREE.Vector3(900, 0, 900); // hiding far away — well beyond any drift before the heat clears
     const scene = new THREE.Vector3(0, 0, 0);
     let closestToPlayer = Infinity; let farthestWhileHot = 0;
     for (let frame = 0; frame < 2400; frame++) {
@@ -171,10 +171,9 @@ describe('ai intentions simulation', () => {
         if (wanted.isWanted) farthestWhileHot = Math.max(farthestWhileHot, vehicle.group.position.distanceTo(scene));
       }
     }
-    expect(closestToPlayer).toBeGreaterThan(SIGHT_RADIUS); // nobody ever sighted the player
-    expect(knowledge.lastKnown).toMatchObject({ x: 0, z: 0 }); // knowledge never advanced past the scene
-    expect(farthestWhileHot).toBeLessThan(200); // roaming stayed near the last known position, spawn distance included
+    expect(closestToPlayer).toBeGreaterThan(SIGHT_RADIUS); // nobody ever stumbled onto the hidden player
+    expect(knowledge.lastKnown).toMatchObject({ x: 0, z: 0 }); // knowledge never advanced past the scene — no cheating onto the live position
+    expect(farthestWhileHot).toBeGreaterThan(ROAM_RADIUS); // the search drifts outward from the scene, not orbiting it
     expect(wanted.isWanted).toBe(false); // unseen decay ended the alert
-    expect(ROAM_RADIUS).toBeLessThan(200);
   });
 });

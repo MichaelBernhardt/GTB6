@@ -35,7 +35,7 @@ import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSy
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
-import { PoliceSystem, separationPush, toggleSiren } from './systems/PoliceSystem';
+import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
@@ -54,7 +54,7 @@ import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
-import { COURIER_DEPOT, DELIVERY_STOPS, GTI_SPOT, PORTIA_CAR_SPOT } from './world/placements';
+import { COURIER_DEPOT, DELIVERY_STOPS, GTI_SPOT, POLICE_STATION, PORTIA_CAR_SPOT } from './world/placements';
 import { DayNightSystem } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
@@ -123,6 +123,8 @@ export class Game {
   private hostileDefeated = 0;
   private deliveryIndex = 0;
   private deathTimer = 0;
+  private bustTimer = 0;
+  private bustMeter = 0; // 0→1 arrest progress while JMPD foot officers crowd the on-foot player
   private saveTimer = 0;
   private potholeCooldown = 0;
   private etollCooldowns: number[] = ETOLL_GANTRIES.map(() => 0);
@@ -546,6 +548,7 @@ export class Game {
       }
     }
     else if (this.mode === 'dead') { this.deathTimer -= frameDt; if (this.deathTimer <= 0) this.respawn(); }
+    else if (this.mode === 'busted') { this.bustTimer -= frameDt; if (this.bustTimer <= 0) this.respawn(true); }
     else if (this.input.consume('Escape')) this.ui.back();
     this.tickMouseSteer(frameDt); this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
@@ -614,6 +617,11 @@ export class Game {
       else if (event.kind === 'reboard') for (const officer of event.officers) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
       else this.population.vehicles.push(event.vehicle); // abandoned cruiser joins the civilian pool — enterable like any parked car
     }
+    // Arrest: foot officers crowding an on-foot suspect fill the bust meter (faster the more of them), and once
+    // it tops out JMPD gets the cuffs on. Sitting in a car makes it a vehicle pursuit, not a collar.
+    const contacting = this.activeVehicle || this.transition ? 0 : this.police.countContacting(this.player.group.position);
+    this.bustMeter = nextBustMeter(this.bustMeter, contacting, dt);
+    if (this.bustMeter >= 1) this.getBusted();
     if (this.activeVehicle?.spec.twoWheeler) { // genuine interceptor contact is exactly the kind of hit that unseats a rider
       const bike = this.activeVehicle;
       const rammer = this.police.vehicles.find((unit) => !unit.wrecked && Math.abs(unit.speed) > 8 && unit.group.position.distanceTo(focus) < 5);
@@ -883,7 +891,11 @@ export class Game {
    *  Bullet weapons land here after time of flight, so the firing weapon rides along rather than reading `combat.current`. */
   private handleGunshot(shot: ShotResult, position: THREE.Vector3, weapon: WeaponId = this.combat.current): void {
     const fear = scopeWeapon(weapon) ? FEAR_EVENTS.sniperShot : FEAR_EVENTS.gunshot; // the rifle crack carries further than a pistol pop
-    this.reportCrime(position, 7, { victims: shot.victim ? [shot.victim] : [], radius: fear.radius, cityEvent: shot.victim && !shot.victim.hostile && !shot.victim.police ? (shot.killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: shot.killed ? 'murder' : 'gunfire' }); this.population.broadcastFear(position, fear);
+    this.population.broadcastFear(position, fear); // the crack still scatters the street
+    // This is Jozi: a shot that hits nobody is just noise to the public — no 911 call. But a cop who sees the shot
+    // reacts on the spot (copOnly), so firing in front of JMPD is an instant wanted; hitting someone always reports.
+    if (shot.victim) this.reportCrime(position, 7, { victims: [shot.victim], radius: fear.radius, cityEvent: !shot.victim.hostile && !shot.victim.police ? (shot.killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: shot.killed ? 'murder' : 'gunfire' });
+    else this.reportCrime(position, 7, { copOnly: true, label: 'gunfire' });
     if (shot.victim && shot.hitPoint) {
       this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
       this.audio.splat(shot.killed ? 0.9 : 0.5, shot.hitPoint.x, shot.hitPoint.z);
@@ -1293,13 +1305,14 @@ export class Game {
   /** Files a crime with JMPD using only what the world could actually see: a cop nearby means immediate heat
    *  and a sighting; otherwise a surviving victim or a living bystander within radius phones it in after
    *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
-  private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
+  private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
     if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the cab spooks the passenger
     const copSaw = options.copWitnessed
       || this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(position) < SIGHT_RADIUS)
       || this.population.pedestrians.some((ped) => ped.police && ped.state !== 'down' && ped.group.position.distanceTo(position) < SIGHT_RADIUS);
     if (copSaw) { this.wanted.addCrime(heat); this.wanted.reportSeen(); this.knowledge.copWitness(position.x, position.z); this.radioDispatch(options.label, position.x, position.z, true); return; }
+    if (options.copOnly) return; // only a cop who saw it counts (e.g. a shot that hit no one): civilians don't phone it in
     const victims = options.victims ?? [];
     const candidates: WitnessCandidate<Pedestrian>[] = this.population.pedestrians.map((ped) => ({ ref: ped, x: ped.group.position.x, z: ped.group.position.z, alive: ped.state !== 'down', victim: victims.includes(ped) }));
     const reporter = determineReporter(position.x, position.z, candidates, options.radius);
@@ -1658,6 +1671,8 @@ export class Game {
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus) || this.police.stealableNear(focus)) prompt = 'E  Enter vehicle';
     }
+    // Being collared: this warning trumps any contextual hint while foot officers are on you.
+    if (this.mode === 'playing' && this.bustMeter > 0 && !this.activeVehicle && !this.transition) prompt = 'JMPD ON YOU — break away or get nicked!';
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
     const objective = !this.online && this.missions.objective ? {
@@ -1734,11 +1749,35 @@ export class Game {
     return `Reloaded checkpoint — ${this.dayNight.clockText}, R${this.economy.balance.toLocaleString()}.`;
   }
 
-  private respawn(): void {
+  /** Nicked: JMPD have the cuffs on. Short "BUSTED" beat, then release at the station lighter a few things.
+   *  Mirrors die(), but the collar is survivable — you keep your progress, just not your hardware or bail money. */
+  private getBusted(): void {
+    if (this.mode === 'dead' || this.mode === 'busted') return;
+    if (this.missions.state === 'active') this.missions.fail('JMPD nicked you');
+    this.endCourierShift();
+    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false);
+    this.mode = 'busted'; this.bustTimer = 3; this.bustMeter = 0;
+    this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio();
+    this.closeWeaponWheel(); this.closeConsole(); this.closeMap();
+    this.ui.notify('BUSTED', 'JMPD got the cuffs on you. Processed and kicked out the station — lighter a few things.', false);
+    document.exitPointerLock();
+  }
+
+  private respawn(busted = false): void {
     this.endTaxiShift(this.activeVehicle);
     this.endCourierShift(this.activeVehicle);
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
-    this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose(); this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.mode = 'playing';
+    this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose(); this.player.inVehicle = false; this.player.setVisible(true); this.player.heal();
+    const at = busted ? POLICE_STATION : this.save.spawn;
+    this.player.group.position.set(...at); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
+    this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice(); this.bustMeter = 0;
+    if (busted) { // confiscate every weapon (bare fists) and take bail: 10% of cash, minimum R100, never more than you hold
+      this.combat.disarm(); this.player.setWeapon(this.combat.current);
+      const bail = Math.min(this.economy.balance, Math.max(100, Math.round(this.economy.balance * 0.1)));
+      this.economy.spend(bail); this.persist();
+      this.ui.notify('Released', `Bail: R${bail.toLocaleString()}. Weapons confiscated. Wanted level cleared.`, false);
+    }
+    this.mode = 'playing';
   }
   /** Tears down the JMPD response and drops its foot officers from the population roster. */
   private clearPolice(): void {

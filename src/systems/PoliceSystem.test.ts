@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ARREST_DEPLOY_RANGE, ARREST_STOP_SPEED, copHitChance, maxInterceptors, nextUnitMode, POLICE_UNITS_BY_WANTED, policeCarStealable, PURSUIT_RANGE, separationPush, SHOOT_MIN_WANTED, sightLineClear, STANDOFF_RANGE, standoffSlotOffset, standoffThrottle, toggleSiren, type UnitSituation } from './PoliceSystem';
+import { ARREST_DEPLOY_RANGE, ARREST_STOP_SPEED, bustSeconds, copHitChance, CULL_RADIUS, departTarget, DESPAWN_CELL, inSameCell, maxInterceptors, nextBustMeter, nextUnitMode, POLICE_UNITS_BY_WANTED, policeCarDeparted, policeCarStealable, policeCell, PURSUIT_RANGE, separationPush, shouldRemovePoliceCar, SHOOT_MIN_WANTED, sightLineClear, STANDOFF_RANGE, standoffSlotOffset, standoffThrottle, toggleSiren, type UnitSituation } from './PoliceSystem';
 import { replanInterval } from './NavGraph';
+import { pickRoamGoal, ROAM_RADIUS } from './PoliceKnowledge';
 
 const onFoot = (overrides: Partial<UnitSituation> = {}): UnitSituation => ({ sighted: true, playerInVehicle: false, distance: 20, speed: 12, crewOut: false, ...overrides });
 
@@ -153,6 +154,96 @@ describe('unit spacing', () => {
     expect(separationPush(0, 0, 1)).toEqual({ x: 0.5, z: 0 }); // same-point stack still resolves
     expect(separationPush(4, 0, 3)).toBeNull();
     expect(separationPush(0, 3, 3)).toBeNull(); // boundary counts as clear
+  });
+});
+
+describe('bust meter', () => {
+  it('sets the collar time by how many officers are in contact', () => {
+    expect(bustSeconds(0)).toBe(Infinity);
+    expect(bustSeconds(1)).toBe(10);
+    expect(bustSeconds(2)).toBe(5);
+    expect(bustSeconds(3)).toBe(3);
+    expect(bustSeconds(6)).toBe(3); // 3+ all collar in three seconds
+  });
+
+  it('fills in the threshold time for each contact count', () => {
+    const dt = 0.02;
+    const fill = (contacts: number) => { let m = 0; let t = 0; while (m < 1 && t < 60) { m = nextBustMeter(m, contacts, dt); t += dt; } return t; };
+    expect(fill(1)).toBeCloseTo(10, 1); // within a frame of the threshold
+    expect(fill(2)).toBeCloseTo(5, 1);
+    expect(fill(3)).toBeCloseTo(3, 1);
+  });
+
+  it('never fills with nobody in contact, and drains once you break away', () => {
+    expect(nextBustMeter(0, 0, 1)).toBe(0);
+    const half = nextBustMeter(0.5, 0, 0.5); // draining
+    expect(half).toBeLessThan(0.5);
+    let m = 0.9; for (let i = 0; i < 10; i++) m = nextBustMeter(m, 0, 0.5);
+    expect(m).toBe(0); // fully drained after breaking contact
+  });
+
+  it('clamps to [0,1]', () => {
+    expect(nextBustMeter(0.99, 3, 10)).toBe(1); // overshoot capped so the caller's >=1 check is exact
+    expect(nextBustMeter(0.01, 0, 10)).toBe(0);
+  });
+});
+
+describe('departure and despawn', () => {
+  it('puts the same-cell test on the despawn grid', () => {
+    expect(inSameCell(5, 5, DESPAWN_CELL - 5, 5)).toBe(true); // both in cell (0,0)
+    expect(inSameCell(5, 5, DESPAWN_CELL + 5, 5)).toBe(false); // neighbour cell in x
+    expect(inSameCell(-5, -5, 5, -5)).toBe(false); // straddles the 0 boundary: cell (-1,-1) vs (0,-1)
+  });
+
+  it('aims a departing car at a player-ringing cell, away from the player', () => {
+    const target = departTarget(0, 0, 40, 10); // car to the +x/+z side of the player
+    expect(policeCell(target.x, target.z)).toEqual({ cx: 1, cz: 1 });
+    const behind = departTarget(0, 0, -50, 0); // car to the -x side, dead level in z
+    expect(policeCell(behind.x, behind.z).cx).toBe(-1);
+  });
+
+  it('never targets the player\'s own cell', () => {
+    for (const [cx, cz] of [[8, -3], [-4, 4], [0, 0]]) {
+      const player = { x: cx! * DESPAWN_CELL + 20, z: cz! * DESPAWN_CELL + 20 };
+      for (const car of [{ x: player.x + 30, z: player.z + 5 }, { x: player.x - 30, z: player.z - 40 }, { x: player.x, z: player.z }]) {
+        const target = departTarget(player.x, player.z, car.x, car.z);
+        expect(inSameCell(player.x, player.z, target.x, target.z)).toBe(false);
+      }
+    }
+  });
+
+  it('counts a car as departed only once it is a clear cell and a cell-width away', () => {
+    expect(policeCarDeparted(0, 0, DESPAWN_CELL + 10, 0)).toBe(true); // different cell, past a cell width
+    // Player near the far edge of their cell, car just over the boundary: different cell but physically close — not yet gone.
+    expect(policeCarDeparted(DESPAWN_CELL - 5, 5, DESPAWN_CELL + 5, 5)).toBe(false);
+    expect(policeCarDeparted(0, 0, 10, 10)).toBe(false); // same cell
+    expect(policeCarDeparted(0, 0, CULL_RADIUS + 5, 0)).toBe(true); // hard cull regardless of cell
+  });
+
+  it('keeps live units while wanted, culls wrecks when far, departs cars once heat clears', () => {
+    const far = DESPAWN_CELL + 20;
+    expect(shouldRemovePoliceCar(0, 0, far, 0, true, false)).toBe(false); // live + wanted: stays
+    expect(shouldRemovePoliceCar(0, 0, 10, 10, false, false)).toBe(false); // heat off but still in the block
+    expect(shouldRemovePoliceCar(0, 0, far, 0, false, false)).toBe(true); // heat off and clear: gone
+    expect(shouldRemovePoliceCar(0, 0, CULL_RADIUS + 5, 0, true, true)).toBe(true); // wreck, far: cleaned up even while wanted
+    expect(shouldRemovePoliceCar(0, 0, 30, 0, true, true)).toBe(false); // wreck but near: lingers as scenery
+  });
+});
+
+describe('patrol destination spread', () => {
+  const nodes = [{ x: 0, z: 0 }, { x: 8, z: 0 }, { x: 40, z: 0 }, { x: 0, z: 45 }];
+
+  it('avoids re-picking the node the car is already on when a fresh one is in range', () => {
+    // Car sits on node 0; avoid ring rules it (and its close neighbour) out, leaving the farther nodes.
+    for (const roll of [0, 0.34, 0.67, 0.99]) {
+      const goal = pickRoamGoal(nodes, { x: 0, z: 0 }, ROAM_RADIUS, () => roll, { x: 0, z: 0 }, 15);
+      expect([2, 3]).toContain(goal);
+    }
+  });
+
+  it('falls back to any in-range node when every candidate sits inside the spread ring', () => {
+    const goal = pickRoamGoal([{ x: 2, z: 0 }, { x: 3, z: 0 }], { x: 0, z: 0 }, ROAM_RADIUS, () => 0, { x: 0, z: 0 }, 15);
+    expect([0, 1]).toContain(goal); // no node clears the ring, so it still returns one rather than stalling
   });
 });
 

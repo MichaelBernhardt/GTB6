@@ -4,7 +4,7 @@ import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import type { City } from '../world/City';
 import { ProgressWatchdog, replanInterval, RoutePlanner, type NavPoint } from './NavGraph';
-import { ARRIVE_DWELL, ARRIVE_RADIUS, pickRoamGoal, ROAM_RADIUS, SIGHT_RADIUS, type KnownPosition, type PoliceKnowledge } from './PoliceKnowledge';
+import { ARRIVE_RADIUS, pickRoamGoal, ROAM_MIN_LEG, ROAM_RADIUS, SIGHT_RADIUS, type KnownPosition, type PoliceKnowledge } from './PoliceKnowledge';
 import type { WantedSystem } from './WantedSystem';
 
 /** Max active interceptors per wanted level: 1-2 stars field two, escalating to eight at five stars. */
@@ -27,6 +27,74 @@ export const FOOT_CHASE_RANGE = 16;
 export const REBOARD_RANGE = 46;
 /** Below two stars JMPD only follows and shouts; live fire starts at two. */
 export const SHOOT_MIN_WANTED = 2;
+
+/** An on-foot officer within this range of the suspect counts as "contacting" — crowding them for the collar. */
+export const ARREST_CONTACT_RANGE = 3;
+/** Break away from every officer and the bust meter empties this fast (fully drained in this many seconds). */
+export const BUST_RESET_SECONDS = 1.5;
+/** Seconds of sustained contact needed to make the collar, by how many officers are crowding you: the more
+ *  hands on you, the faster the cuffs go on. Infinite when nobody's in contact. */
+export function bustSeconds(contacts: number): number {
+  if (contacts >= 3) return 3;
+  if (contacts === 2) return 5;
+  if (contacts === 1) return 10;
+  return Infinity;
+}
+/** One tick of the 0→1 bust meter: fills at 1/bustSeconds while officers are in contact, drains otherwise.
+ *  Clamped to [0, 1]; the caller busts the player when it reaches 1. */
+export function nextBustMeter(meter: number, contacts: number, dt: number): number {
+  const next = contacts > 0 ? meter + dt / bustSeconds(contacts) : meter - dt / BUST_RESET_SECONDS;
+  return Math.max(0, Math.min(1, next));
+}
+
+/** Fresh intel scatters the response: each unit aims at the reported spot plus a random offset up to this
+ *  radius, so a whole dispatch fans across the scene instead of stacking onto one node. */
+export const DISPATCH_JITTER = 7;
+/** How far the known position must jump to count as a genuine relocation (fresh sighting/report elsewhere).
+ *  A continuously-sighted player refreshes the knowledge timestamp every frame but barely moves — that must
+ *  NOT trigger a re-nav each frame, or the shared A* budget starves and the whole response grinds to a crawl.
+ *  Between relocations, the ordinary replan cadence tracks the drifting position. */
+export const KNOWN_MOVE = 25;
+/** Hard cull radius — a straggler this far from the player is removed whatever cell it is in. */
+export const CULL_RADIUS = 130;
+/** Side of the GTA-style despawn grid. Heat off, a cruiser drives into one of the eight cells ringing the
+ *  player's cell and is culled once it is a clear cell away — sized so that target is a natural block cruise. */
+export const DESPAWN_CELL = 90;
+/** Departing-car backstop: once heat is off, a cruiser is culled this many seconds after it starts leaving
+ *  even if it never formally clears the block — otherwise a unit that can't route away (player off-road, the
+ *  road loops back past them) loiters forever. It despawns sooner the moment it slips out of sight. */
+export const LEAVE_TIMEOUT = 10;
+
+/** Which despawn-grid cell a world point falls in. */
+export function policeCell(x: number, z: number): { cx: number; cz: number } { return { cx: Math.floor(x / DESPAWN_CELL), cz: Math.floor(z / DESPAWN_CELL) }; }
+/** Are two points in the same despawn cell (the player and a fleeing cruiser share the block)? */
+export function inSameCell(ax: number, az: number, bx: number, bz: number): boolean { const a = policeCell(ax, az); const b = policeCell(bx, bz); return a.cx === b.cx && a.cz === b.cz; }
+
+/** Centre of the player-ringing cell a departing cruiser should head for: the neighbour cell in the car's
+ *  current bearing from the player, so it drives away rather than back across the player. A car sitting dead
+ *  on the player picks an arbitrary neighbour. Recomputed from the player's live cell, so a moving player
+ *  keeps pushing the target ahead of the car until the two are a clear cell apart. */
+export function departTarget(playerX: number, playerZ: number, carX: number, carZ: number): { x: number; z: number } {
+  const { cx, cz } = policeCell(playerX, playerZ);
+  let sx = Math.sign(carX - playerX); const sz = Math.sign(carZ - playerZ);
+  if (sx === 0 && sz === 0) sx = 1;
+  return { x: (cx + sx + 0.5) * DESPAWN_CELL, z: (cz + sz + 0.5) * DESPAWN_CELL };
+}
+
+/** A departing cruiser is done once it has cleared the player's cell by a whole cell, or simply driven past
+ *  the hard cull radius (so a wedged straggler still despawns). */
+export function policeCarDeparted(playerX: number, playerZ: number, carX: number, carZ: number): boolean {
+  const distance = Math.hypot(carX - playerX, carZ - playerZ);
+  return (!inSameCell(playerX, playerZ, carX, carZ) && distance > DESPAWN_CELL) || distance > CULL_RADIUS;
+}
+
+/** Despawn decision for one cruiser: wrecks are cleaned up once far; live units stay while there is heat,
+ *  and are removed once they have departed the player's block after the heat clears. */
+export function shouldRemovePoliceCar(playerX: number, playerZ: number, carX: number, carZ: number, wanted: boolean, wrecked: boolean): boolean {
+  if (wrecked) return Math.hypot(carX - playerX, carZ - playerZ) > CULL_RADIUS;
+  if (wanted) return false;
+  return policeCarDeparted(playerX, playerZ, carX, carZ);
+}
 
 /** Officer eye and suspect chest heights for the 3D sight line. */
 export const EYE_HEIGHT = 1.5;
@@ -97,7 +165,7 @@ export type PoliceEvent =
   | { kind: 'reboard'; officers: Pedestrian[] }
   | { kind: 'abandoned'; vehicle: Vehicle };
 
-interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; mode: UnitMode; shootIn: number; contactIn: number; bumpIn: number; watchdog: ProgressWatchdog; backoff: number; }
+interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; baseX: number; baseZ: number; offX: number; offZ: number; aimX: number; aimZ: number; leaving: number; mode: UnitMode; shootIn: number; contactIn: number; bumpIn: number; watchdog: ProgressWatchdog; backoff: number; }
 interface Officer { ped: Pedestrian; car?: Vehicle; role: 'cover' | 'chase'; side: 1 | -1; shootIn: number; }
 
 export class PoliceSystem {
@@ -116,6 +184,17 @@ export class PoliceSystem {
 
   /** Deploy shouts, spawned/retiring officer peds and abandoned cruisers, for the caller to route into the world. */
   consumeEvents(): PoliceEvent[] { return this.events.splice(0); }
+
+  /** Deployed foot officers currently crowding the suspect (within arrest-contact range and still on their feet)
+   *  — the caller fills its bust meter from this count. */
+  countContacting(playerPosition: THREE.Vector3): number {
+    let count = 0;
+    for (const officer of this.officers) {
+      if (officer.ped.state === 'down') continue;
+      if (officer.ped.group.position.distanceTo(playerPosition) <= ARREST_CONTACT_RANGE) count++;
+    }
+    return count;
+  }
 
   update(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, knowledge: PoliceKnowledge<unknown>, damagePlayer: (amount: number) => void, reinforcementModifier = 0, damageVehicle?: (amount: number) => void, playerSirenOn = false): void {
     const damageCar = damageVehicle ?? damagePlayer;
@@ -145,7 +224,8 @@ export class PoliceSystem {
         if (throttle === 0) this.brake(vehicle, dt);
         else vehicle.updateAI(dt, this.city, this.standoffPoint(vehicle, brain, playerPosition), (0.82 + wanted.level * 0.035) * throttle);
       } else if (target) this.pursue(vehicle, brain, dt, target, seen, playerPosition, wanted);
-      else this.patrol(vehicle, brain, dt);
+      else if (!wanted.isWanted) this.depart(vehicle, brain, dt, playerPosition);
+      else this.patrol(vehicle, brain, dt); // wanted but zero intel (e.g. a star cheat): cruise until a sighting or report lands
       // Genuine contact with an on-foot player: speed-derived impact through the damage path, never scripted proximity harm.
       if (!playerInVehicle && brain.contactIn <= 0 && distance < 3 && Math.abs(vehicle.speed) > 6) {
         damagePlayer(Math.min(30, Math.abs(vehicle.speed) * 0.9)); this.audio.collision(Math.abs(vehicle.speed));
@@ -163,7 +243,7 @@ export class PoliceSystem {
     const alive = this.vehicles.filter((vehicle) => !vehicle.wrecked);
     const nearest = alive.reduce<Vehicle | undefined>((best, vehicle) => !best || vehicle.group.position.distanceToSquared(playerPosition) < best.group.position.distanceToSquared(playerPosition) ? vehicle : best, undefined);
     this.audio.setSiren(playerSirenOn || Boolean(wanted.isWanted && nearest), playerSirenOn ? playerPosition.x : nearest?.group.position.x, playerSirenOn ? playerPosition.z : nearest?.group.position.z);
-    if (this.vehicles.length > 0) this.despawnFar(playerPosition, wanted.isWanted);
+    if (this.vehicles.length > 0) this.despawnCleared(playerPosition, wanted.isWanted);
   }
 
   /** Removes everything and hands back the tracked officer peds so the caller can drop them from the population. */
@@ -191,23 +271,39 @@ export class PoliceSystem {
    *  live player. Direct engagement only while an active sighting exists; a driving player is chased with an
    *  avoidance offset (no intentional ramming), and a cold scene turns to roam. */
   private pursue(vehicle: Vehicle, brain: PoliceBrain, dt: number, known: KnownPosition, seen: boolean, playerPosition: THREE.Vector3, wanted: WantedSystem): void {
-    if (brain.knownTime !== known.time) { brain.knownTime = known.time; brain.roaming = false; brain.dwell = 0; }
+    brain.leaving = 0; // actively engaged, not leaving
+    if (brain.knownTime !== known.time) {
+      brain.knownTime = known.time;
+      // Only a genuine relocation (a fresh sighting/report somewhere new) forces an immediate re-nav — re-rolling
+      // this unit's fan-out offset so the squad spreads across the scene. A continuously-sighted player only
+      // nudges the timestamp each frame while barely moving; wiping the path every frame there starves the
+      // shared A* budget and the whole response stalls (cars end up orbiting a stale waypoint). Small drift is
+      // picked up by the ordinary replan cadence below, which always targets the live jittered position.
+      if (Math.hypot(known.x - brain.baseX, known.z - brain.baseZ) > KNOWN_MOVE) {
+        brain.baseX = known.x; brain.baseZ = known.z;
+        const angle = Math.random() * Math.PI * 2; const radius = Math.random() * DISPATCH_JITTER;
+        brain.offX = Math.cos(angle) * radius; brain.offZ = Math.sin(angle) * radius;
+        brain.roaming = false; brain.dwell = 0; brain.path = []; brain.index = 0; brain.replanIn = 0; brain.chasing = false;
+      }
+    }
+    brain.aimX = known.x + brain.offX; brain.aimZ = known.z + brain.offZ;
     const distance = vehicle.group.position.distanceTo(playerPosition);
     const aggression = 0.82 + wanted.level * 0.035;
     if (seen && distance < PURSUIT_RANGE) { // only reachable with the player in a vehicle: on-foot sightings become standoffs
       brain.chasing = true; brain.path = []; brain.index = 0; brain.replanIn = 0; brain.watchdog.reset(); // live target: the chase is its own progress
       this.chaseVehicle(vehicle, brain, dt, playerPosition, distance, aggression);
     } else if (brain.roaming) {
-      this.roam(vehicle, brain, dt, known);
+      this.roam(vehicle, brain, dt);
+    } else if (Math.hypot(vehicle.group.position.x - brain.aimX, vehicle.group.position.z - brain.aimZ) < ARRIVE_RADIUS) {
+      // Arrived on the reported spot with no eyes on the player: don't stop — start patrolling the area,
+      // cruising slowly between nearby nodes and looking, ready to snap back to a chase on the next sighting.
+      brain.roaming = true; brain.chasing = false; brain.path = []; brain.index = 0;
+      this.roam(vehicle, brain, dt);
     } else {
-      if (Math.hypot(vehicle.group.position.x - known.x, vehicle.group.position.z - known.z) < ARRIVE_RADIUS) {
-        brain.dwell += dt;
-        if (brain.dwell >= ARRIVE_DWELL) { brain.roaming = true; brain.chasing = false; brain.path = []; brain.index = 0; return; }
-      }
       brain.replanIn -= dt;
       if (brain.replanIn <= 0 || !brain.chasing || brain.index >= brain.path.length || vehicle.aiStuck > 5) {
         // Roads as far as they go, then offroad to the scene itself — otherwise an off-road lastKnown (park, parcel) never trips ARRIVE_RADIUS and units sit at the curb.
-        const path = this.planner.tryPlanTo(vehicle.group.position.x, vehicle.group.position.z, known.x, known.z);
+        const path = this.planner.tryPlanTo(vehicle.group.position.x, vehicle.group.position.z, brain.aimX, brain.aimZ);
         if (path) { brain.path = path; brain.index = 0; brain.chasing = true; brain.replanIn = replanInterval(brain.serial); vehicle.aiStuck = 0; }
       }
       this.followPath(vehicle, brain, dt, aggression);
@@ -352,20 +448,43 @@ export class PoliceSystem {
       }
     }
     // Officers never share a tile: pairwise half-overlap separation, wall-clamped like any other ped move.
+    // Carry each ped's own height through the move and re-settle onto the terrain afterwards — a hardcoded y=0
+    // here leaves officers floating wherever the ground isn't at sea level (relief slopes, valleys).
     for (let i = 0; i < this.officers.length; i++) for (let j = i + 1; j < this.officers.length; j++) {
       const a = this.officers[i]!.ped; const b = this.officers[j]!.ped;
       const push = separationPush(b.group.position.x - a.group.position.x, b.group.position.z - a.group.position.z, 0.95);
       if (!push) continue;
-      a.group.position.copy(this.city.clampMove(a.group.position, this.scratch.set(a.group.position.x - push.x, 0, a.group.position.z - push.z), 0.42));
-      b.group.position.copy(this.city.clampMove(b.group.position, this.scratch.set(b.group.position.x + push.x, 0, b.group.position.z + push.z), 0.42));
+      a.group.position.copy(this.city.clampMove(a.group.position, this.scratch.set(a.group.position.x - push.x, a.group.position.y, a.group.position.z - push.z), 0.42));
+      a.group.position.y = this.city.surfaceHeightAt(a.group.position.x, a.group.position.z);
+      b.group.position.copy(this.city.clampMove(b.group.position, this.scratch.set(b.group.position.x + push.x, b.group.position.y, b.group.position.z + push.z), 0.42));
+      b.group.position.y = this.city.surfaceHeightAt(b.group.position.x, b.group.position.z);
     }
   }
 
-  /** Trail ran cold: cruise random nav nodes near the last known position until decay or fresh intel. */
-  private roam(vehicle: Vehicle, brain: PoliceBrain, dt: number, known: KnownPosition): void {
+  /** Trail ran cold: patrol outward from wherever the unit currently is. Each fresh leg is a nav node within
+   *  patrol range of the car's OWN position (min-leg away, so it commits to a real drive), which walks the
+   *  search steadily away from the cold scene and widens the net over time instead of orbiting the last-known.
+   *  Snaps straight back to a chase the moment pursue() gets fresh intel or a sighting. */
+  private roam(vehicle: Vehicle, brain: PoliceBrain, dt: number): void {
     if (brain.index >= brain.path.length) {
-      const goal = pickRoamGoal(this.planner.nodes, known, ROAM_RADIUS);
-      const path = goal >= 0 ? this.planner.tryPlan(vehicle.group.position.x, vehicle.group.position.z, goal) : undefined;
+      const pos = vehicle.group.position;
+      const goal = pickRoamGoal(this.planner.nodes, pos, ROAM_RADIUS, Math.random, pos, ROAM_MIN_LEG);
+      const path = goal >= 0 ? this.planner.tryPlan(pos.x, pos.z, goal) : undefined;
+      if (path) { brain.path = path; brain.index = 0; }
+    }
+    this.followPath(vehicle, brain, dt, 0.7); // a searching cruise, quick enough to actually cover the blocks
+  }
+
+  /** Heat's off: cut the siren and peel out of the player's block. Drive at a normal cruise to a cell ringing
+   *  the player; if the player drifts into that same cell before the car clears it, re-pick another ring cell
+   *  next arrival. despawnCleared removes the car once it is a clear cell away. */
+  private depart(vehicle: Vehicle, brain: PoliceBrain, dt: number, playerPosition: THREE.Vector3): void {
+    vehicle.sirenOn = false;
+    brain.leaving += dt;
+    if (brain.chasing || brain.roaming) { brain.chasing = false; brain.roaming = false; brain.dwell = 0; brain.knownTime = -1; brain.path = []; brain.index = 0; }
+    if (brain.index >= brain.path.length) {
+      const goal = departTarget(playerPosition.x, playerPosition.z, vehicle.group.position.x, vehicle.group.position.z);
+      const path = this.planner.tryPlanTo(vehicle.group.position.x, vehicle.group.position.z, goal.x, goal.z);
       if (path) { brain.path = path; brain.index = 0; }
     }
     this.followPath(vehicle, brain, dt, 0.55);
@@ -373,6 +492,7 @@ export class PoliceSystem {
 
   /** No heat: cruise the lane graph toward random destinations, replanning on arrival. */
   private patrol(vehicle: Vehicle, brain: PoliceBrain, dt: number): void {
+    brain.leaving = 0;
     if (brain.chasing || brain.roaming) { brain.chasing = false; brain.roaming = false; brain.dwell = 0; brain.knownTime = -1; brain.path = []; brain.index = 0; }
     if (brain.index >= brain.path.length) {
       const path = this.planner.tryPlan(vehicle.group.position.x, vehicle.group.position.z);
@@ -382,23 +502,29 @@ export class PoliceSystem {
   }
 
   /** Drives the current path with the progress watchdog: 10s without closing on the waypoint backs the
-   *  unit out for a second and clears the path, so pursue/roam/patrol all replan instead of grinding a wall. */
+   *  unit out for a second and clears the path, so pursue/roam/patrol all replan instead of grinding a wall.
+   *  Waypoint advance uses a speed-scaled look-ahead of about a turning radius: a car cannot corner tighter
+   *  than v/steering, so a node counts as reached once it is inside that radius — otherwise a fast cruiser
+   *  just orbits the node it can't quite park on (the intersection-circling bug). Because the look-ahead is
+   *  strictly larger than the turning radius, the tightest circle the car can hold still sits inside it, so it
+   *  always advances rather than looping; the A* start node (which sits right by the car) is consumed at once. */
   private followPath(vehicle: Vehicle, brain: PoliceBrain, dt: number, aggression: number): void {
     if (brain.backoff > 0) {
       brain.backoff -= dt; vehicle.reverse(dt, this.city);
       if (brain.backoff <= 0) { brain.path = []; brain.index = 0; brain.chasing = false; brain.replanIn = 0; }
       return;
     }
-    const point = brain.path[brain.index];
-    if (!point) { vehicle.speed *= Math.exp(-dt); brain.watchdog.reset(); return; } // waiting on the planner budget
-    vehicle.aiTarget.set(point.x, 0, point.z);
-    if (vehicle.group.position.distanceToSquared(vehicle.aiTarget) < 85) {
-      brain.index += 1; brain.watchdog.reset();
-      const next = brain.path[brain.index];
-      if (next) vehicle.aiTarget.set(next.x, 0, next.z);
-    } else if (brain.watchdog.update(Math.hypot(point.x - vehicle.group.position.x, point.z - vehicle.group.position.z), dt)) {
-      brain.watchdog.reset(); brain.backoff = 1.1; return;
+    const pos = vehicle.group.position;
+    const turnRadius = Math.abs(vehicle.speed) / Math.max(0.5, vehicle.spec.steering);
+    const reachSq = Math.max(ARRIVE_RADIUS, turnRadius * 1.15) ** 2;
+    while (brain.index < brain.path.length) {
+      const cur = brain.path[brain.index]!;
+      if ((cur.x - pos.x) ** 2 + (cur.z - pos.z) ** 2 < reachSq) { brain.index += 1; brain.watchdog.reset(); } else break;
     }
+    const point = brain.path[brain.index];
+    if (!point) { vehicle.speed *= Math.exp(-dt); brain.watchdog.reset(); return; } // arrived, or waiting on the planner budget
+    vehicle.aiTarget.set(point.x, 0, point.z);
+    if (brain.watchdog.update(Math.hypot(point.x - pos.x, point.z - pos.z), dt)) { brain.watchdog.reset(); brain.backoff = 1.1; return; }
     vehicle.updateAI(dt, this.city, undefined, aggression);
   }
 
@@ -408,7 +534,7 @@ export class PoliceSystem {
 
   private brainOf(vehicle: Vehicle): PoliceBrain {
     let brain = this.brains.get(vehicle);
-    if (!brain) { brain = { serial: this.serials++, path: [], index: 0, replanIn: 0, chasing: false, roaming: false, dwell: 0, knownTime: -1, mode: 'drive', shootIn: 0, contactIn: 0, bumpIn: 0, watchdog: new ProgressWatchdog(), backoff: 0 }; this.brains.set(vehicle, brain); }
+    if (!brain) { brain = { serial: this.serials++, path: [], index: 0, replanIn: 0, chasing: false, roaming: false, dwell: 0, knownTime: -1, baseX: Infinity, baseZ: Infinity, offX: 0, offZ: 0, aimX: 0, aimZ: 0, leaving: 0, mode: 'drive', shootIn: 0, contactIn: 0, bumpIn: 0, watchdog: new ProgressWatchdog(), backoff: 0 }; this.brains.set(vehicle, brain); }
     return brain;
   }
 
@@ -418,8 +544,22 @@ export class PoliceSystem {
     const vehicle = new Vehicle(this.scene, 'police', pose.position); vehicle.occupied = true; vehicle.sirenOn = true; vehicle.heading = pose.heading; vehicle.group.rotation.y = pose.heading; this.vehicles.push(vehicle);
   }
 
-  private despawnFar(player: THREE.Vector3, wreckedOnly: boolean): void {
-    const index = this.vehicles.findIndex((vehicle) => (!wreckedOnly || vehicle.wrecked) && vehicle.group.position.distanceTo(player) > 130);
-    if (index >= 0) { const [vehicle] = this.vehicles.splice(index, 1); if (vehicle) this.scene.remove(vehicle.group); }
+  /** Cull wrecks that have fallen far behind, and — once the heat is off — every cruiser that has departed
+   *  the player's block. Sweeps the whole list each frame, not one per frame, so a cleared response clears out. */
+  private despawnCleared(player: THREE.Vector3, wanted: boolean): void {
+    for (let index = this.vehicles.length - 1; index >= 0; index--) {
+      const vehicle = this.vehicles[index]; if (!vehicle) continue;
+      const position = vehicle.group.position;
+      let remove = shouldRemovePoliceCar(player.x, player.z, position.x, position.z, wanted, vehicle.wrecked);
+      if (!remove && !wanted && !vehicle.wrecked) {
+        // Backstop for a departing unit that can't clear the block (wedged, or the road loops back past an
+        // off-road player): gone the moment it slips out of sight, and on a hard timeout regardless.
+        const leaving = this.brainOf(vehicle).leaving;
+        const distance = position.distanceTo(player);
+        const outOfSight = distance > SIGHT_RADIUS && !this.hasLineOfSight(position, player);
+        if (leaving > LEAVE_TIMEOUT || (leaving > 2 && outOfSight)) remove = true;
+      }
+      if (remove) { this.vehicles.splice(index, 1); this.scene.remove(vehicle.group); }
+    }
   }
 }

@@ -41,6 +41,12 @@ export class CombatSystem {
     return 'ammo';
   }
 
+  /** Full confiscation (a JMPD bust): strip every weapon but bare fists and switch to them. */
+  disarm(): void {
+    for (const spec of WEAPONS) { if (spec.id === 'fists') continue; const state = this.loadout[spec.id]; state.owned = false; state.ammo = 0; state.reserve = 0; }
+    this.current = 'fists';
+  }
+
   maxAmmo(): number {
     let filled = 0;
     for (const spec of WEAPONS) {

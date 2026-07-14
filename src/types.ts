@@ -3,7 +3,7 @@ import type { VehicleKind, WeaponId } from './config';
 import type { LivingCityState } from './systems/LivingCitySystem';
 import type { SafehouseId } from './systems/SafehouseSystem';
 
-export type GameMode = 'loading' | 'menu' | 'playing' | 'paused' | 'dead';
+export type GameMode = 'loading' | 'menu' | 'playing' | 'paused' | 'dead' | 'busted';
 /** District names come from the generated OSM map (place nodes, plus names-overrides renames). */
 export type District = string;
 export interface Damageable { health: number; maxHealth: number; takeDamage(amount: number): void; }

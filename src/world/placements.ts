@@ -189,6 +189,16 @@ const spawnPoint = (() => {
 export const PLAYER_SPAWN: [number, number, number] = [spawnPoint.x, 1, spawnPoint.z];
 export const SPAWN_POINT: MapPt = spawnPoint;
 
+// ---- JMPD lock-up (bust release point) ---------------------------------------
+
+/** Where JMPD dumps you on the kerb after a bust — a fixed CBD spot on Commissioner Street (the John-Vorster
+ *  Square of Joburg lore), a couple of blocks off spawn so you're not released right where you started. */
+const policeStationSpot = (() => {
+  const spot = bestKerbSpot({ name: 'Commissioner Street', near: { x: CBD_CENTER.x - 24 * P, z: CBD_CENTER.z + 66 * P }, clearance: 2.6, ownRadius: 6, minEdge: 0.8, searchRadius: 140 });
+  return { x: spot.x, z: spot.z };
+})();
+export const POLICE_STATION: [number, number, number] = [policeStationSpot.x, 1, policeStationSpot.z];
+
 // ---- Shops --------------------------------------------------------------------
 
 // The story anchors used to be forced into one tight cluster by the old small map; on the 1:1 CBD (1u ≈ 1m)
