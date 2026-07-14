@@ -53,8 +53,10 @@ export function signalPhaseState(phase: number, axis: 0 | 1, elapsed: number): S
   return 'red';
 }
 
-/** Hold line sits this far beyond the junction box edge; a driver inside this ring is "at the robot". */
-export const SIGNAL_STOP_APPROACH = 8;
+/** Hold line sits this far beyond the junction box edge; a driver inside this ring is "at the robot". Wide
+ *  enough that a car braking from cruise (see Vehicle.updateAI's brake-firm decel) actually halts before the
+ *  box instead of coasting through — an 8u ring left too little room and cars rolled reds. */
+export const SIGNAL_STOP_APPROACH = 14;
 /** Once a driver is this far past the box edge (into the crossing) it commits through, never freezing mid-junction. */
 export const SIGNAL_STOP_CLEAR = 1.5;
 

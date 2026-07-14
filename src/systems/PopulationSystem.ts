@@ -105,7 +105,7 @@ export class PopulationSystem {
       const throttle = playerHold ? 0 // held: a full stop with hysteresis, no 0.05 creep — this is what arms the honk clock
         : dodge ? DODGE_THROTTLE
         : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked)
-        : blocked || playerBlocked ? 0.05 : signalStop ? 0 : junctionPanic ? 0.03 : TRAFFIC_SPEED_FACTOR;
+        : blocked || playerBlocked ? 0.05 : signalStop ? 0 : junctionPanic ? TRAFFIC_SPEED_FACTOR * 0.75 : TRAFFIC_SPEED_FACTOR; // dead robot (load shedding): a cautious ~75%-speed roll-through, not a crawl
       vehicle.updateAI(dt, this.city, dodge, throttle);
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
       if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);
