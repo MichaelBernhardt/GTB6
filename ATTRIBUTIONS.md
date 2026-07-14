@@ -17,7 +17,8 @@
 
 San Cordova does not ship third-party art or audio assets.
 
-- City, road, building, prop, vegetation, vehicle, marker, particle, and water geometry is generated at runtime from Three.js primitives.
+- City, road, building, prop, non-tree vegetation, vehicle, marker, particle, and water geometry is generated at runtime from Three.js primitives.
+- The tree library (`public/models/foliage/joburg-trees.glb`) is wholly original project-authored Blender geometry generated from the committed recipe and Python source under `art/foliage/` and `tools/foliage/`; it uses no downloaded meshes, textures, or plant-generator assets.
 - The protagonist (`public/models/characters/protagonist.glb`) is a wholly original project character with no real-person or protected game-character likeness. Its deterministic asset contract, recipe and source lock live under `art/character/`.
 - UI artwork is HTML, CSS, and canvas code authored for this project.
 - Engine, firearm, reload, collision, UI, and siren sounds are original runtime synthesis using the Web Audio API.

@@ -103,7 +103,7 @@ export class UIManager {
   }
 
   showLoading(): void { this.menuView.loading(); }
-  showCharacterFailure(retry: () => void): void { this.menuView.characterFailed(retry); }
+  showAssetFailure(retry: () => void): void { this.menuView.assetFailed(retry); }
   showMainMenu(summary?: MainMenuSummary): void {
     if (summary) this.mainSummary = summary;
     this.menuView.main(this.mainSummary, { start: (fresh) => this.onStart?.(fresh), online: (name) => this.onOnline?.(name), controls: () => this.showControls(true) });
