@@ -6,6 +6,7 @@ import { fallDamage, jumpVelocity, moveSpeed, stepVertical } from '../core/GameR
 import { inebriationFraction } from '../core/DrinkRules';
 import type { CheatSettings } from '../types';
 import type { City } from '../world/City';
+import { initialPlayerVisualState, RiggedPlayerVisual, type PlayerVisualState } from './RiggedPlayerVisual';
 import { buildWeaponModel } from './WeaponModels';
 
 /** Game-computed cover pose: Game owns the cover position; the player only acts it out. */
@@ -63,21 +64,30 @@ export class Player {
   private weaponMeshes = new Map<WeaponId, THREE.Group>();
   private punchTimer = 0;
   private punchLeft = false;
+  private landingTimer = 0;
   private canopy?: THREE.Group;
   private canopyPhase = 0;
+  private visualState: PlayerVisualState = initialPlayerVisualState();
+  private riggedVisual?: RiggedPlayerVisual;
 
   constructor(scene: THREE.Scene, position = new THREE.Vector3(0, 0, 260)) {
     this.group.position.copy(position); this.heading = Math.PI; this.group.rotation.y = this.heading; this.group.name = 'Player'; scene.add(this.group); this.buildModel();
+    this.riggedVisual = new RiggedPlayerVisual(this.group, this.model, {
+      model: this.model, torso: this.torso, head: this.head,
+      leftArm: this.leftArm, rightArm: this.rightArm, leftForearm: this.leftForearm, rightForearm: this.rightForearm,
+      leftLeg: this.leftLeg, rightLeg: this.rightLeg, leftShin: this.leftShin, rightShin: this.rightShin,
+    });
   }
 
   update(dt: number, input: InputManager, cameraYaw: number, city: City, cover?: CoverPose): void {
     this.moving = false; this.sprinting = false;
     if (this.inVehicle || this.health <= 0) return;
+    this.landingTimer = Math.max(0, this.landingTimer - dt);
     if (this.ghost) { this.updateGhost(dt, input, cameraYaw); return; }
-    if (this.tumbleTimer > 0) { this.applyTumble(dt); return; }
+    if (this.tumbleTimer > 0) { this.applyTumble(dt); this.setVisualState({ tumbling: true, onGround: true }); return; }
     const aimHeld = input.aiming && this.weapon !== 'fists'; // Ctrl: aim mode — raised gun, half speed, camera-facing
     const aiming = aimHeld || (input.firing && this.weapon !== 'fists'); // hip fire still raises the gun while the trigger is down
-    if (cover) { this.updateCover(dt, cover, aiming, city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y)); return; }
+    if (cover) { this.updateCover(dt, cover, aiming, input.firing, city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y)); return; }
     this.torso.rotation.y *= Math.exp(-dt * 8); // unwind any leftover cover twist
     const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
     const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
@@ -115,8 +125,13 @@ export class Player {
     }
     if (landing.landed) {
       const damage = fallDamage(landing.drop);
+      this.landingTimer = 0.18;
       if (damage > 0) { this.pendingFallDamage += damage; this.tumble(); } // hard landing: eat tar, Game settles the bill
     }
+    this.setVisualState({
+      moving, sprinting, aiming, firing: input.firing, moveSide: side, moveForward: forward,
+      onGround: this.onGround, velocityY: this.velocityY, landing: this.landingTimer > 0,
+    });
   }
 
   /** Free-fly: WASD glides horizontally (relative to the camera) with no collision, the mouse wheel raises
@@ -137,6 +152,7 @@ export class Player {
     this.group.position.y += this.ghostRise; this.ghostRise = 0; // wheel-driven altitude
     this.velocityY = 0; this.onGround = false;
     this.group.rotation.z *= Math.exp(-dt * 12);
+    this.setVisualState({ moving: this.moving, sprinting, aiming: false, firing: false, onGround: true, velocityY: 0 });
   }
 
   /** Toggle free-fly; returns the new state. Resets vertical motion so exiting drops cleanly to the ground. */
@@ -150,7 +166,7 @@ export class Player {
 
   /** Back against the wall: Game moves the group; this leans the body, twists the torso for the peek and keeps
    *  feet planted on whatever surface holds the cover — street or podium roof alike. */
-  private updateCover(dt: number, cover: CoverPose, aiming: boolean, ground: number): void {
+  private updateCover(dt: number, cover: CoverPose, aiming: boolean, firing: boolean, ground: number): void {
     this.turnToward(cover.heading, dt, 12);
     this.leftLeg.rotation.z *= Math.exp(-dt * 8); this.rightLeg.rotation.z *= Math.exp(-dt * 8); // legs close after riding astride
     if (cover.moving) { this.walkPhase += dt * 5.5; this.animateLocomotion(dt, false, aiming); }
@@ -159,19 +175,29 @@ export class Player {
     this.model.rotation.x = THREE.MathUtils.lerp(this.model.rotation.x, -0.085 * (1 - cover.peek), dt * 8); // shoulder-blades-to-brick lean, straightening as the peek comes out
     this.applyPunch(dt);
     this.group.position.y = ground; this.velocityY = 0; this.onGround = true;
+    this.setVisualState({ moving: cover.moving, aiming, firing, cover: true, onGround: true, velocityY: 0 });
   }
 
   takeDamage(amount: number): void { this.health = Math.max(0, this.health - Math.max(0, amount)); }
-  heal(): void { this.health = this.maxHealth; this.inebriation = 0; } // waking up in hospital / a night's sleep also sobers you up
+  heal(): void { this.health = this.maxHealth; this.inebriation = 0; this.setDead(false); } // waking up in hospital / a night's sleep also sobers you up
   setVisible(visible: boolean): void { this.group.visible = visible; }
 
   setWeapon(id: WeaponId): void {
     if (id === this.weapon) return;
     this.weapon = id;
     for (const [meshId, mesh] of this.weaponMeshes) mesh.visible = meshId === id;
+    this.riggedVisual?.setWeapon(id);
   }
 
-  punch(): void { this.punchTimer = 0.3; this.punchLeft = !this.punchLeft; }
+  punch(): void { this.punchTimer = 0.3; this.punchLeft = !this.punchLeft; this.visualState.attack = this.punchLeft ? 'punch_left' : 'punch_right'; }
+
+  setDead(dead: boolean): void {
+    this.visualState.dead = dead; this.visualState.attack = undefined;
+    if (dead) Object.assign(this.visualState, { cover: false, riding: false, airborne: false, tumbling: false, firing: false });
+  }
+
+  /** Advances only the authored mixer/safe swap. Called once per rendered frame, including the death pause. */
+  updateVisual(dt: number): void { this.riggedVisual?.setState(this.visualState); this.riggedVisual?.update(dt); }
 
   /** Snap the player to face a heading (used when a save/checkpoint restores the last-faced direction). */
   setHeading(heading: number): void { this.heading = heading; this.group.rotation.y = heading; }
@@ -211,6 +237,7 @@ export class Player {
     this.model.rotation.y *= Math.exp(-dt * 10); this.model.position.y = 0;
     this.torso.rotation.z *= Math.exp(-dt * 8); this.torso.scale.y = THREE.MathUtils.lerp(this.torso.scale.y, 1, blend);
     this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0, blend);
+    this.setVisualState({ moving: Math.abs(speed) > 0.2, sprinting: false, aiming, firing: false, riding: true, onGround: true, velocityY: 0 });
   }
 
   /** GTA-style canopy over the shoulders: a squashed half-dome on simple suspension lines, built lazily. */
@@ -250,6 +277,7 @@ export class Player {
     this.group.rotation.x = 0; this.group.rotation.z = 0;
     this.model.rotation.set(FREEFALL_TIP, 0, 0); this.model.position.y = 0;
     this.torso.rotation.set(0, 0, 0);
+    this.setVisualState({ airborne: true, onGround: false, velocityY: -1 });
   }
 
   /** Touchdown / bail-out: wipe every airborne rotation so the grounded player is upright and controllable.
@@ -260,6 +288,7 @@ export class Player {
     this.model.rotation.set(0, 0, 0); this.model.position.y = 0;
     this.torso.rotation.set(0, 0, 0);
     if (this.canopy) { this.canopy.rotation.set(0, 0, 0); }
+    this.setVisualState({ airborne: false, onGround: true, velocityY: 0 });
   }
 
   /** World-space "up" of the body, composed through both the group (heading/bank) and the model (dive tip).
@@ -296,10 +325,11 @@ export class Player {
     this.group.rotation.z = THREE.MathUtils.lerp(this.group.rotation.z, -bank * 0.55, blend);
     this.torso.rotation.y *= Math.exp(-dt * 8); this.torso.rotation.z *= Math.exp(-dt * 8);
     this.model.position.y = 0; this.head.rotation.y = THREE.MathUtils.lerp(this.head.rotation.y, 0, blend);
+    this.setVisualState({ airborne: true, onGround: false, velocityY: mode === 'freefall' ? -1 : -0.25 });
   }
 
   private applyPunch(dt: number): void {
-    if (this.punchTimer <= 0) { this.model.rotation.y *= Math.exp(-dt * 10); return; }
+    if (this.punchTimer <= 0) { this.visualState.attack = undefined; this.model.rotation.y *= Math.exp(-dt * 10); return; }
     this.punchTimer = Math.max(0, this.punchTimer - dt);
     const phase = 1 - this.punchTimer / 0.3; const thrust = Math.sin(Math.min(1, phase) * Math.PI);
     const arm = this.punchLeft ? this.leftArm : this.rightArm;
@@ -456,5 +486,14 @@ export class Player {
 
   private loadTexture(url: string, repeat: number): THREE.Texture {
     const texture = new THREE.TextureLoader().load(url); texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.repeat.set(repeat, repeat); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8; return texture;
+  }
+
+  private setVisualState(next: Partial<PlayerVisualState>): void {
+    const dead = this.visualState.dead;
+    Object.assign(this.visualState, {
+      cover: false, riding: false, airborne: false, tumbling: false,
+      moveSide: 0, moveForward: 0, landing: this.landingTimer > 0,
+    }, next);
+    this.visualState.dead = dead;
   }
 }

@@ -16,6 +16,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "character:build": "node tools/character/build-placeholder.mjs",
     "map:build": "tsx tools/mapgen/index.ts"
   },
   "dependencies": {
