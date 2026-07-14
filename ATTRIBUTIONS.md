@@ -17,7 +17,8 @@
 
 San Cordova does not ship third-party art or audio assets.
 
-- City, road, building, prop, vegetation, character, vehicle, marker, particle, and water geometry is generated at runtime from Three.js primitives.
+- City, road, building, prop, vegetation, vehicle, marker, particle, and water geometry is generated at runtime from Three.js primitives.
+- The rigged player placeholder (`public/models/characters/player-placeholder.glb`) is original project geometry and animation generated from Three.js primitives by `tools/character/build-placeholder.mjs`.
 - UI artwork is HTML, CSS, and canvas code authored for this project.
 - Engine, firearm, reload, collision, UI, and siren sounds are original runtime synthesis using the Web Audio API.
 - Names, setting, mission text, vehicle designs, characters, and game rules are original to this project.
