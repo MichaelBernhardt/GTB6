@@ -7,7 +7,7 @@ const MAX_BYTES = 10 * 1024 * 1024;
 const REQUIRED_BONES = ['Hips', 'Spine', 'Chest', 'Head', 'UpperArm_L', 'LowerArm_L', 'Hand_L', 'UpperArm_R', 'LowerArm_R', 'Hand_R', 'UpperLeg_L', 'LowerLeg_L', 'Foot_L', 'UpperLeg_R', 'LowerLeg_R', 'Foot_R'];
 const REQUIRED_CLIPS = ['idle', 'walk', 'sprint', 'aim', 'aim_forward', 'aim_back', 'aim_left', 'aim_right', 'fire', 'punch_left', 'punch_right', 'jump', 'fall', 'land', 'tumble', 'death', 'cover_idle', 'cover_move', 'cover_aim', 'ride_bicycle', 'ride_motorbike', 'ride_superbike', 'freefall', 'parachute'];
 const MATERIALS = ['SkinEyes', 'TealTechnicalJacket', 'CharcoalJeans', 'HairShoes'];
-const BASE_TEXTURES = ['protagonist-skin-basecolor.png', 'protagonist-jacket-basecolor.jpg', 'protagonist-denim-basecolor.jpg', 'protagonist-hair-shoes-basecolor.png'];
+const BASE_TEXTURES = ['protagonist-skin-basecolor.jpg', 'protagonist-jacket-basecolor.jpg', 'protagonist-denim-basecolor.jpg', 'protagonist-hair-shoes-basecolor.jpg'];
 const PACKED_TEXTURES = ['skin-normal-roughness.png', 'jacket-normal-roughness.png', 'denim-normal-roughness.png', 'hair-shoes-normal-roughness.png'];
 
 function invariant(value, message) { if (!value) throw new Error(message); }

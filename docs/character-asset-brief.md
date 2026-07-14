@@ -13,13 +13,15 @@ bitmap inputs—not animation, a UV layout, or a protected likeness.
 
 1. Author the working character in Blender 4.2+ with MPFB 2.0.16 and only license-verified CC0 body, skin, hair, shirt,
    pants and shoe inputs. Approved upstream sources and committed checksums are recorded in `art/character/sources.lock.json`.
-2. Retarget the CC0 Quaternius Universal Animation Library, then clean the game clips against the exact names in
-   `public/models/characters/README.md`. Bake at 30 fps and delete all root/object translation curves.
+2. Use the CC0 Quaternius Universal Animation Library as motion reference, then author and clean the exact game clips
+   directly on the MPFB game rig in `tools/character/create-source.py`. Bake rotations at 30 fps and never key
+   root/object translation.
 3. Keep the `.blend` under `art/character/work/` and generated FBX under `build/character/`; both paths are ignored.
    `art/character/recipe.json` records dimensions, materials, clips, source locations and weapon sockets.
 4. Bake four opaque PBR groups. The 2K base-colour maps ship under `public/textures/character/`; packed normal-X,
    roughness and normal-Z sources live under `art/character/materials/` for the editable material pass.
-5. Run `npm run character:build` for the Blender FBX/GLB round trip, then `npm run character:validate` before commit.
+5. Run `npm run character:build` to recreate the editable Blend, intermediate FBX and final GLB, then run
+   `npm run character:validate` before commit.
 
 ## Runtime acceptance
 

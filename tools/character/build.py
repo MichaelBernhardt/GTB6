@@ -1,9 +1,8 @@
 """Blender 4.2+ headless character round-trip.
 
-The preferred CHARACTER_SOURCE is the artist-owned .blend created with MPFB 2.0.16 and the locked
-CC0 packs in sources.lock.json. A source FBX is also accepted. The committed GLB is accepted as a
-bootstrap input so a checked-out project can reproduce the FBX interchange file without committing
-working binaries. All animation is baked to 30 fps and all object/root translation curves are removed.
+The preferred CHARACTER_SOURCE is the artist-owned .blend generated with MPFB 2.0.16 and the locked
+CC0 system pack in sources.lock.json. A source FBX or GLB is also accepted for artist overrides.
+All animation is baked to 30 fps and all object/root translation curves are removed.
 """
 
 import argparse
@@ -60,16 +59,32 @@ def validate_and_clean(recipe):
         raise RuntimeError(f"Animation contract mismatch; missing={sorted(missing_clips)}, extra={sorted(extras)}")
     for action in bpy.data.actions:
         action.use_fake_user = True
-        for curve in list(action.fcurves):
-            if curve.data_path.endswith("location"):
-                action.fcurves.remove(curve)
+        # Blender 5 stores curves in layered channel bags rather than exposing
+        # Action.fcurves, so clean both APIs when an artist supplies a source.
+        if hasattr(action, "fcurves"):
+            for curve in list(action.fcurves):
+                if curve.data_path.endswith("location"):
+                    action.fcurves.remove(curve)
+        else:
+            for slot in action.slots:
+                for layer in action.layers:
+                    for strip in layer.strips:
+                        channel_bag = strip.channelbag(slot, ensure=False)
+                        if channel_bag:
+                            for curve in list(channel_bag.fcurves):
+                                if curve.data_path.endswith("location"):
+                                    channel_bag.fcurves.remove(curve)
     for obj in bpy.data.objects:
         if obj.type != "MESH":
             continue
         for vertex in obj.data.vertices:
-            weighted = sorted((element for element in vertex.groups if element.weight > 0), key=lambda item: item.weight, reverse=True)
-            for element in weighted[4:]:
-                obj.vertex_groups[element.group].remove([vertex.index])
+            weighted = sorted(
+                ((element.group, element.weight) for element in vertex.groups if element.weight > 0),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            for group_index, _weight in weighted[4:]:
+                obj.vertex_groups[group_index].remove([vertex.index])
     root = bpy.data.objects.get("JohannesburgProtagonist")
     if root:
         root["characterContract"] = {"version": 1, "heightMetres": recipe["heightMetres"], "forwardAxis": "+Z", "feetAtOrigin": True, "fps": 30}
@@ -83,7 +98,7 @@ def export_files(args):
     )
     bpy.ops.export_scene.gltf(
         filepath=args.glb, export_format="GLB", export_animations=True, export_frame_range=False,
-        export_force_sampling=True, export_sampling_interpolation_fallback="LINEAR", export_skins=True,
+        export_force_sampling=False, export_sampling_interpolation_fallback="LINEAR", export_skins=True,
         export_all_influences=False, export_image_format="AUTO", export_yup=True, export_extras=True,
     )
 

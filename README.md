@@ -103,6 +103,8 @@ npm run character:build    # Blender 4.2+ FBX/GLB rebuild (working files stay ig
 
 `npm run map:build` uses the map-generation pipeline under `tools/mapgen/`. The generated map data is checked in, so ordinary development does not need to call Overpass or regenerate Johannesburg before breakfast.
 
+`npm run character:build` requires Blender 4.2+, MPFB 2.0.16, and the locked CC0 MakeHuman system asset pack. It recreates the ignored editable Blend and FBX before installing and validating the web GLB.
+
 ## Project structure
 
 ```text

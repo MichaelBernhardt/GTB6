@@ -13,7 +13,7 @@
   "source": {
     "preferred": "art/character/work/protagonist-source.blend",
     "interchange": "build/character/protagonist.fbx",
-    "bootstrap": "public/models/characters/protagonist.glb",
+    "generator": "tools/character/create-source.py",
     "tool": "Blender 4.2+",
     "mpfb": "2.0.16"
   },
@@ -26,8 +26,10 @@
     "chestBack": ["rpg"]
   },
   "textureSources": {
+    "skinAndEyes": "MakeHuman young_african_male skin and brown eye atlas (CC0)",
     "jacket": "art/character/materials/protagonist-jacket-source.png",
     "denim": "art/character/materials/protagonist-denim-source.png",
+    "hairAndShoes": "MakeHuman afro01 and shoes02 atlas (CC0)",
     "packedNormalRoughness": "art/character/materials/*-normal-roughness.png"
   }
 }
