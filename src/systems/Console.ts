@@ -7,6 +7,7 @@ export type ConsoleCommand =
   | { kind: 'noop' }
   | { kind: 'help' }
   | { kind: 'fps' }
+  | { kind: 'perfchart' }
   | { kind: 'set-time'; hour: number }
   | { kind: 'set-timerate'; rate: number }
   | { kind: 'set-busy'; percent: number }
@@ -40,6 +41,7 @@ export interface ConsoleHost {
   setTime(hour: number): string;
   setTimerate(rate: number): string;
   toggleFps(): string;
+  togglePerfChart(): string;
   spawn(kind: VehicleKind): string;
   giveCash(amount: number): string;
   dropStar(): string;
@@ -102,6 +104,7 @@ export const HELP_LINES = [
   'reload — jump back to your last `save` checkpoint (position, facing, time, money, kit)',
   'ghost — free-fly test mode: wheel = altitude, gravity off, clip through everything',
   'fps — toggle the performance display (shows X/Y/Z position)',
+  'perfchart — toggle the scrolling game-loop timing graph (stacked % of the 60fps budget per phase)',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
   'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens',
 ];
@@ -131,6 +134,7 @@ export function parseCommand(input: string): ConsoleCommand {
   if (cheat && rest.length === 0) return cheat;
   if (head === 'help' && rest.length === 0) return { kind: 'help' };
   if (head === 'fps' && rest.length === 0) return { kind: 'fps' };
+  if (head === 'perfchart' && rest.length === 0) return { kind: 'perfchart' };
   if (head === 'busy' && rest.length === 0) return { kind: 'busy' };
   if (head === 'map' && rest.length === 0) return { kind: 'map' };
   if (head === 'mapnpcs' && rest.length === 0) return { kind: 'mapnpcs' };
@@ -212,6 +216,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'help': return HELP_LINES;
     case 'error': return [command.message];
     case 'fps': return [host.toggleFps()];
+    case 'perfchart': return [host.togglePerfChart()];
     case 'save': return [host.save()];
     case 'reload': return [host.reload()];
     case 'set-time': return [host.setTime(command.hour)];

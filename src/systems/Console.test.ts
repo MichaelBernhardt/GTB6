@@ -153,6 +153,7 @@ describe('runConsoleCommand', () => {
     setTime: (hour) => `time:${hour}`,
     setTimerate: (rate) => `timerate:${rate}`,
     toggleFps: () => 'fps',
+    togglePerfChart: () => 'perfchart',
     spawn: (kind) => `spawn:${kind}`,
     giveCash: (amount) => `cash:${amount}`,
     dropStar: () => 'star',

@@ -17,6 +17,7 @@ import { OnlineSession } from './multiplayer/OnlineSession';
 import { onlineCorrectionFactor } from './multiplayer/latency';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
+import { FrameProfiler } from './core/FrameProfiler';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
 import { applyDrink, decayInebriation, DRINK_BY_ID, DRINKS, drunkHealthDelta, inebriationFraction, INEBRIATION_MAX, resolveDrinkPurchase, type DrinkId } from './core/DrinkRules';
 import type { Pedestrian } from './entities/Pedestrian';
@@ -142,6 +143,7 @@ export class Game {
   private simStepCostMs = 0; // EMA of one update()'s wall time; sizes the per-frame catch-up budget (see maxCatchupSteps)
   private navHudCalls = 0; private navHudMs = 0; // A* solves/sec and ms/sec, shown beside the FPS counter
   private navHudTimer = 0; private navHudLastSolves = 0; private navHudLastMs = 0; // rolling 1s sampler state
+  private readonly profiler = new FrameProfiler(); // per-frame CPU breakdown as a % of the 60fps budget (perf display only)
   private weaponWheelOpen = false;
   private wheelVector = new THREE.Vector2();
   private wheelHighlight: WeaponId = 'pistol';
@@ -339,6 +341,7 @@ export class Game {
     setTime: (hour) => { this.dayNight.hour = hour; this.persist(); return `Clock set to ${this.dayNight.clockText}.`; },
     setTimerate: (rate) => { this.dayNight.timeRate = Math.min(120, Math.max(0, rate)); return this.dayNight.timeRate === 0 ? 'Time frozen.' : `Time runs at ${this.dayNight.timeRate}× normal.`; },
     toggleFps: () => { this.settings.showFps = !this.settings.showFps; this.persist(); return `Performance display ${this.settings.showFps ? 'on' : 'off'}.`; },
+    togglePerfChart: () => { this.settings.showPerfChart = !this.settings.showPerfChart; this.persist(); return `Game-loop timing chart ${this.settings.showPerfChart ? 'on' : 'off'}.`; },
     spawn: (kind) => this.spawnConsoleVehicle(kind),
     giveCash: (amount) => {
       this.economy.earn(amount); this.persist();
@@ -524,6 +527,7 @@ export class Game {
 
   private animate = (): void => {
     requestAnimationFrame(this.animate);
+    this.profiler.enabled = this.settings.showFps || this.settings.showPerfChart; this.profiler.frameStart(); // off = zero overhead
     const raw = this.clock.getDelta(); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
     this.navHudTimer += raw; // once a real second, convert the A* solve/ms totals into per-second rates for the HUD
     if (this.navHudTimer >= 1) {
@@ -550,17 +554,22 @@ export class Game {
     else if (this.mode === 'dead') { this.deathTimer -= frameDt; if (this.deathTimer <= 0) this.respawn(); }
     else if (this.mode === 'busted') { this.bustTimer -= frameDt; if (this.bustTimer <= 0) this.respawn(true); }
     else if (this.input.consume('Escape')) this.ui.back();
+    this.profiler.mark('camera');
     this.tickMouseSteer(frameDt); this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
+    this.profiler.mark('culling');
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
     this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position); // staggered chunk culling — runs in every mode so the menu backdrop is culled too
     const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 2; // >2s: the staggered chunk culling needs its first full pass before the number means anything
     if (measure) { this.renderer.info.autoReset = false; this.renderer.info.reset(); }
+    this.profiler.mark('render');
     if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
     if (measure) { this.loggedDrawCalls = true; console.info(`[render] calls=${this.renderer.info.render.calls} tris=${this.renderer.info.render.triangles}`); this.renderer.info.autoReset = true; }
+    this.profiler.frameEnd();
     this.input.endFrame();
   };
 
   private update(dt: number): void {
+    this.profiler.mark('player');
     if (this.input.consume('Escape')) { this.pause(); return; }
     if (this.input.consume('Backquote')) this.openConsole(); // input suspends, world keeps running
     if (this.input.consume('KeyM')) this.openMap(); // Esc/M closes it (handled by the overlay while open)
@@ -583,13 +592,16 @@ export class Game {
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     this.brandishCooldown = Math.max(0, this.brandishCooldown - dt);
     if (this.input.aiming && !this.combat.spec.melee && !this.transition && !this.airborne && this.brandishCooldown === 0) { this.population.broadcastBrandish(focus); this.brandishCooldown = 1.5; } // a raised gun scares witnesses; no police heat for merely aiming
+    this.profiler.mark('world');
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
+    this.profiler.mark('traffic');
     this.population.update(dt, focus, (amount) => this.damagePlayer(amount), !this.activeVehicle && !this.transition && !this.airborne);
     for (const hit of this.population.consumePlayerVehicleHits()) { // civilian traffic vs the on-foot player: the driver is AI, the player the victim — no heat, just physics
       if (hit.damage > 0) this.damagePlayer(hit.damage);
       if (hit.knockdown && !this.player.tumbling) { this.player.tumble(); this.shake = Math.min(0.7, this.shake + 0.3); }
     }
+    this.profiler.mark('world');
     const forward = this.camera.getWorldDirection(this.cameraForward);
     const guarded = new Set<Vehicle>();
     for (const vehicle of [this.activeVehicle, this.transition?.vehicle, this.garageVehicle]) if (vehicle) guarded.add(vehicle);
@@ -604,6 +616,7 @@ export class Game {
       if (impact.vehicle === this.activeVehicle) this.reportCrime(impact.position, impact.killed ? 24 : 12, { victims: [impact.ped], radius: (impact.killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius, cityEvent: impact.killed ? 'civilian-murder' : 'civilian-assault', label: impact.killed ? 'murder' : 'hit-and-run' });
       if (impact.killed) this.spawnDropsAt(impact.position, 'civilian');
     }
+    this.profiler.mark('police');
     const districtState = this.livingCity.district(this.city.districtAt(focus.x, focus.z));
     const reinforcementModifier = policeReinforcementModifier(districtState);
     this.population.setPolicePatrolCount(reinforcementModifier, focus);
@@ -633,6 +646,7 @@ export class Game {
     if (this.previousWanted && !this.wanted.isWanted) this.recordCityEvent('police-evaded', focus);
     this.previousWanted = this.wanted.isWanted; this.shops.update(dt); this.safehouses.update(dt);
     // Rounds in flight land here: the resolution carries the exact hitscan-era ShotResult, delayed by time of flight.
+    this.profiler.mark('combat');
     for (const landed of this.bullets.update(dt, this.city, this.population, this.police.vehicles)) this.handleGunshot(landed.result, landed.position, landed.weapon);
     for (const boom of this.projectiles.update(dt, this.city, this.population, this.police.vehicles, this.player.group.position)) {
       this.audio.explosion(boom.position.x, boom.position.z); this.reportCrime(boom.position, 30, { victims: boom.victims.map((victim) => victim.ped), radius: FEAR_EVENTS.kill.radius, label: 'explosion' }); this.population.broadcastFear(boom.position, FEAR_EVENTS.kill); this.shake = Math.min(0.7, this.shake + 0.5);
@@ -652,6 +666,7 @@ export class Game {
   }
 
   private updateOnline(dt: number): void {
+    this.profiler.mark('online');
     const online = this.online; if (!online) return;
     if (this.input.consume('Escape')) { this.pause(); return; }
     const stateBefore = online.localState;
@@ -1687,7 +1702,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

@@ -97,7 +97,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .scope-lens .scope-dot { position: absolute; left: calc(50% - 1.5px); top: calc(50% - 1.5px); width: 3px; height: 3px; background: var(--yellow); }
 .hud-scope b { position: absolute; left: 50%; top: calc(50% + min(36vh, 36vw)); transform: translateX(-50%); font: 900 15px "Arial Narrow", "Helvetica Neue", Arial, sans-serif; letter-spacing: 2.4px; color: var(--paper); text-shadow: 0 1px 3px #000; }
 .hud-fps, .hud-cheats { position: absolute; padding: 5px 8px; background: rgba(17, 24, 23, .86); font: 900 9px Inter, sans-serif; letter-spacing: 1.2px; }
-.hud-fps { left: 28px; bottom: 284px; color: var(--green); }.hud-cheats { right: 28px; top: 176px; color: var(--yellow); border: 1px solid var(--yellow); }
+.hud-fps { left: 28px; bottom: 284px; color: var(--green); }
+.hud-cheats { right: 28px; top: 176px; color: var(--yellow); border: 1px solid var(--yellow); }
+.hud-perf { position: absolute; left: 28px; bottom: 304px; display: flex; flex-direction: column; gap: 3px; }
+.hud-perf__graph { display: block; width: 200px; height: 60px; border: 1px solid rgba(255, 255, 255, .12); image-rendering: pixelated; }
+.hud-perf__legend { display: flex; flex-wrap: wrap; gap: 6px; max-width: 200px; padding: 3px 4px; background: rgba(17, 24, 23, .86); font: 900 8px Inter, sans-serif; letter-spacing: .6px; text-transform: uppercase; }
 
 /* Game console */
 #console { position: absolute; left: 0; right: 0; bottom: 0; z-index: 80; display: none; flex-direction: column; gap: 4px; padding: 12px 18px 14px; background: rgba(10, 15, 14, .88); border-top: 3px solid var(--green); font: 13px/1.55 "Cascadia Code", Consolas, Menlo, monospace; color: #cfe0d8; backdrop-filter: blur(2px); }
@@ -196,7 +200,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .hud-objective { top: 99px; width: calc(100vw - 24px); padding: 8px 10px 10px; }.hud-objective strong { font-size: 15px; }
   #minimap { left: 12px; bottom: 12px; width: 142px; height: 142px; border-width: 4px; }
   .hud-items { left: 12px; bottom: 142px; }
-  .hud-fps { left: 12px; bottom: 164px; }.hud-vehicle { right: 12px; bottom: 12px; width: 138px; }.hud-vehicle b { font-size: 40px; }.hud-prompt { bottom: 12px; max-width: 68vw; padding: 8px 10px; font-size: 10px; }
+  .hud-fps { left: 12px; bottom: 164px; }.hud-perf { left: 12px; bottom: 184px; }.hud-vehicle { right: 12px; bottom: 12px; width: 138px; }.hud-vehicle b { font-size: 40px; }.hud-prompt { bottom: 12px; max-width: 68vw; padding: 8px 10px; font-size: 10px; }
   #toast { top: 166px; min-width: 0; width: calc(100vw - 28px); max-width: none; }#toast strong { font-size: 18px; }
   .menu-overlay { padding: 18px 16px 56px; background: rgba(13, 19, 18, .96); }.menu-overlay::before { display: none; }.main-menu { width: 100%; }.main-menu h1 { font-size: clamp(65px, 21vw, 92px); letter-spacing: -4px; }.main-menu__lede { font-size: 14px; }.main-menu__rail { grid-template-columns: 1fr; }.main-menu footer { position: static; margin-top: 10px; }
   .menu-card { width: 100%; padding: 20px; }.pause-grid, .choice-grid { grid-template-columns: 1fr; }.control-grid { grid-template-columns: 1fr; }.choice-grid button { min-height: 175px; }.tools-list { grid-template-columns: 1fr; }

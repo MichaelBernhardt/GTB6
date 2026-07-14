@@ -1,5 +1,6 @@
 import { inebriationLabel, INEBRIATION_MAX } from '../core/DrinkRules';
 import { clampPercent, formatMoney, objectiveProgress, reputationLabel, type HudState } from './UIModels';
+import { PHASE_COLORS, ProfileGraph } from './ProfileGraph';
 
 const required = <T extends Element>(root: ParentNode, selector: string): T => {
   const element = root.querySelector<T>(selector); if (!element) throw new Error(`Missing HUD element: ${selector}`); return element;
@@ -46,6 +47,11 @@ export class HudView {
   private taxi: HTMLElement;
   private radio: HTMLElement;
   private fps: HTMLElement;
+  private perf: HTMLElement;
+  private perfLegend: HTMLElement;
+  private readonly perfGraph: ProfileGraph;
+  private perfWasVisible = false;
+  private perfLegendKey = '';
   private cheats: HTMLElement;
   private crosshair: HTMLElement;
   private scope: HTMLElement;
@@ -76,7 +82,9 @@ export class HudView {
       <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em><i class="hud-radio" data-hud="radio" role="status"></i><i class="hud-taxi" data-hud="taxi" role="status"></i></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
       <div class="hud-items" data-hud="items" aria-label="Carried items" hidden><i data-hud="stims" hidden></i><i data-hud="chutes" hidden></i></div>
-      <div class="hud-fps" data-hud="fps"></div><div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
+      <div class="hud-fps" data-hud="fps"></div>
+      <div class="hud-perf" data-hud="perf" hidden><canvas class="hud-perf__graph" data-hud="perf-graph" width="200" height="60"></canvas><div class="hud-perf__legend" data-hud="perf-legend"></div></div>
+      <div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
       <div class="hud-crosshair" data-hud="crosshair" aria-hidden="true" hidden><i></i></div>`;
     this.district = required(root, '[data-hud="district"]'); this.clock = required(root, '[data-hud="clock"]'); this.reputation = required(root, '[data-hud="reputation"]');
     this.health = required(root, '[data-hud="health"]'); this.healthFill = required(root, '[data-hud="health-fill"]'); this.cash = required(root, '[data-hud="cash"]');
@@ -87,7 +95,9 @@ export class HudView {
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i'));
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
     this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.radio = required(root, '[data-hud="radio"]'); this.taxi = required(root, '[data-hud="taxi"]');
-    this.fps = required(root, '[data-hud="fps"]'); this.cheats = required(root, '[data-hud="cheats"]'); this.crosshair = required(root, '[data-hud="crosshair"]');
+    this.fps = required(root, '[data-hud="fps"]'); this.perf = required(root, '[data-hud="perf"]'); this.perfLegend = required(root, '[data-hud="perf-legend"]');
+    this.perfGraph = new ProfileGraph(required<HTMLCanvasElement>(root, '[data-hud="perf-graph"]'));
+    this.cheats = required(root, '[data-hud="cheats"]'); this.crosshair = required(root, '[data-hud="crosshair"]');
     this.scope = required(root, '[data-hud="scope"]'); this.scopeZoom = required(root, '[data-hud="scope-zoom"]');
     this.drunkBox = required(root, '[data-hud="drunk"]'); this.drunkLabel = required(root, '[data-hud="drunk-label"]'); this.drunkFill = required(root, '[data-hud="drunk-fill"]');
   }
@@ -125,7 +135,28 @@ export class HudView {
       const job = state.vehicle.courier ?? state.vehicle.taxi; setHidden(this.taxi, !job);
       if (job) { setText(this.taxi, job.text); this.taxi.classList.toggle('is-on', job.available); }
     }
-    setText(this.fps, `${Math.round(state.fps)} FPS · A* ${state.navCalls}/s ${state.navMs.toFixed(1)}ms · X ${state.position.x.toFixed(1)} Y ${state.position.y.toFixed(1)} Z ${state.position.z.toFixed(1)}`); setHidden(this.fps, !state.settings.showFps); setHidden(this.cheats, !state.cheatsOn); setHidden(this.crosshair, !state.crosshair);
+    setText(this.fps, `${Math.round(state.fps)} FPS · loop ${Math.round(state.loopTotalPct)}% · A* ${state.navCalls}/s ${state.navMs.toFixed(1)}ms · X ${state.position.x.toFixed(1)} Y ${state.position.y.toFixed(1)} Z ${state.position.z.toFixed(1)}`); setHidden(this.fps, !state.settings.showFps);
+    this.renderPerfChart(state);
+    setHidden(this.cheats, !state.cheatsOn); setHidden(this.crosshair, !state.crosshair);
     setHidden(this.scope, !state.scope); if (state.scope) setText(this.scopeZoom, state.scope.zoom);
+  }
+
+  /** Feed the scrolling game-loop chart one column per frame and keep its colour legend in step. Gated by the
+   *  `perfchart` toggle, independent of the FPS readout. */
+  private renderPerfChart(state: HudState): void {
+    const show = state.settings.showPerfChart;
+    setHidden(this.perf, !show);
+    if (!show) { this.perfWasVisible = false; return; }
+    if (!this.perfWasVisible) this.perfGraph.reset(); // clear any frozen trace from while it was hidden
+    this.perfWasVisible = true;
+    this.perfGraph.push(state.loopSample);
+    // The legend only touches the DOM when the set of phases changes (rare), not every frame.
+    const key = state.loopSample.map((b) => b.name).join(',');
+    if (key !== this.perfLegendKey) {
+      this.perfLegendKey = key;
+      this.perfLegend.innerHTML = state.loopSample
+        .map((b) => `<span style="color:${PHASE_COLORS[b.name] ?? '#e5e7eb'}">${b.name}</span>`)
+        .join('');
+    }
   }
 }

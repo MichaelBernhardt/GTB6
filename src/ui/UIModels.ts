@@ -31,6 +31,8 @@ export interface HudState {
   vehicle?: VehicleTelemetry;
   objective?: ObjectiveView;
   fps: number;
+  loopTotalPct: number; // whole game-loop CPU cost as a % of the 60fps frame budget (100% = one 60fps frame)
+  loopSample: { name: string; pct: number }[]; // this frame's raw per-phase split in stable order — one column of the scrolling chart
   navCalls: number; // A* solves per second (both planners), shown beside FPS when the perf display is on
   navMs: number; // wall-time per second spent in A* (ms)
   position: { x: number; y: number; z: number }; // player world position, shown on the perf line

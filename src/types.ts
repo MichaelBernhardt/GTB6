@@ -38,6 +38,7 @@ export interface GameSettings {
   masterVolume: number;
   quality: BaseQuality | 'ultra';
   showFps: boolean;
+  showPerfChart: boolean; // scrolling stacked-area graph of the per-frame loop cost; toggled by the `perfchart` console command
   mouseSensitivity: number;
   cameraViewFoot: number;
   cameraViewVehicle: number;
