@@ -33,7 +33,7 @@ import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/man
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
-import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath } from '../systems/NavGraph';
+import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
 import { CITY_JUNCTIONS, type JunctionDefinition, signalHoldsDriver, SIGNAL_STOP_APPROACH, UrbanInfrastructure } from './UrbanInfrastructure';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -407,6 +407,72 @@ class RoadIndex {
   }
 }
 
+/** Directed-lane junction-turn tuning (see buildVehicleNav). A candidate cross-link A→B survives only if
+ *  B is comfortably ahead of A and of B's own flow (VEHICLE_TURN_AHEAD_MIN), the two lanes aren't near
+ *  head-to-head (VEHICLE_TURN_DOT_MIN, allows up to ~100° turns), and the straight A→B segment stays on
+ *  the tar at every interior sample (VEHICLE_TURN_ONROAD_MARGIN inside the kerb). The on-road test is what
+ *  kills the diagonal that chords across a junction corner over the sidewalk/poles. */
+export const VEHICLE_TURN_AHEAD_MIN = 0.35;
+export const VEHICLE_TURN_DOT_MIN = -0.2;
+export const VEHICLE_TURN_ONROAD_MARGIN = -0.5;
+export const VEHICLE_TURN_SAMPLES = 3;
+
+/** Gate for one directed junction turn A→B, given the node table, per-node forward tangents and a road
+ *  index to test the connecting segment against the carriageway. */
+function vehicleTurnAllowed(from: number, to: number, nodes: NavPoint[], tangents: NavPoint[], roadIndex: RoadIndex): boolean {
+  const a = nodes[from]; const b = nodes[to]; const ta = tangents[from]; const tb = tangents[to];
+  if (!a || !b || !ta || !tb) return false;
+  const dx = b.x - a.x; const dz = b.z - a.z; const length = Math.hypot(dx, dz); if (length < 1e-6) return false;
+  const ux = dx / length; const uz = dz / length;
+  if (ta.x * ux + ta.z * uz < VEHICLE_TURN_AHEAD_MIN) return false; // B must sit ahead of A's flow (no reach-back diagonal)
+  if (tb.x * ux + tb.z * uz < VEHICLE_TURN_AHEAD_MIN) return false; // and the move must enter B going roughly B's way
+  if (ta.x * tb.x + ta.z * tb.z < VEHICLE_TURN_DOT_MIN) return false; // reject near-U-turn junction links
+  for (let sample = 1; sample <= VEHICLE_TURN_SAMPLES; sample++) { // every interior point must stay on the carriageway
+    const t = sample / (VEHICLE_TURN_SAMPLES + 1);
+    if (!roadIndex.onRoad(a.x + dx * t, a.z + dz * t, VEHICLE_TURN_ONROAD_MARGIN)) return false;
+  }
+  return true;
+}
+
+/** Adds a directed edge a→b to a graph's adjacency (no duplicates), skipping self-loops. */
+function addDirectedEdge(edges: number[][], a: number, b: number): void {
+  const neighbors = edges[a]; if (a === b || !neighbors || neighbors.includes(b)) return;
+  neighbors.push(b);
+}
+
+/** Builds the DIRECTED vehicle nav graph: one-way lanes (so cars keep South-African left, never drive the
+ *  wrong way up a lane) with junction cross-links gated by vehicleTurnAllowed (legal, on-tar turns only —
+ *  no diagonal chords over poles). Self-contained (builds its own carriageway index from the road network)
+ *  so it runs at field-init time before buildRoads and is unit-testable without constructing a City.
+ *  Adds an explicit U-turn at every non-closed road terminus so a directed lane is never a dead-end sink. */
+export function buildVehicleNav(network: RoadDefinition[] = ROAD_NETWORK): NavGraph {
+  const roadIndex = new RoadIndex();
+  for (const definition of network) {
+    const sampled = sampleRoadPath(definition.points, definition.closed ?? false, ROAD_SAMPLE_SPACING);
+    roadIndex.addSurface(sampled, definition.width, 0);
+  }
+  const { lanes } = buildCityNavPaths(network);
+  const graph = buildNavGraph(lanes, VEHICLE_NAV_JOIN, {
+    directed: true,
+    crossLink: (from, to, nodes, tangents) => vehicleTurnAllowed(from, to, nodes, tangents, roadIndex),
+  });
+  // buildCityNavPaths emits lanes in pairs — index 2k = lane A (forward), 2k+1 = lane B (reversed) of road k.
+  // At each end of an open road, lane A and lane B sit ~one carriageway apart, so end→opposite-start is a clean
+  // physical U-turn. These are the only links out of a cul-de-sac tip (the ~180° turn is rejected as a normal
+  // cross-link), and they guarantee every node keeps an out-edge.
+  const nodeBase: number[] = []; let accumulated = 0;
+  for (const lane of lanes) { nodeBase.push(accumulated); accumulated += lane.points.length; }
+  for (let pair = 0; pair * 2 + 1 < lanes.length; pair++) {
+    const laneA = lanes[pair * 2]!; const laneB = lanes[pair * 2 + 1]!;
+    if (laneA.closed || laneB.closed) continue; // closed loops have no terminus
+    const baseA = nodeBase[pair * 2]!; const baseB = nodeBase[pair * 2 + 1]!;
+    const endA = baseA + laneA.points.length - 1; const endB = baseB + laneB.points.length - 1;
+    addDirectedEdge(graph.edges, endA, baseB); // far end: arrive on A, U-turn onto B heading back
+    addDirectedEdge(graph.edges, endB, baseA); // near end: arrive on B, U-turn onto A heading out
+  }
+  return bridgeIslands(graph);
+}
+
 /** Cell size for the signalised-junction spatial index (see City.signalStops). Comfortably larger than any
  *  junction's influence radius (widest/2 + SIGNAL_STOP_APPROACH), so buckets stay small. */
 const SIGNAL_CELL = 48;
@@ -461,7 +527,7 @@ export class City {
   roadPaths: RoadPoint[][] = [];
   trafficRoutes: RoadPoint[][] = [];
   private navPaths = buildCityNavPaths(ROAD_NETWORK);
-  vehicleNav: NavGraph = bridgeIslands(buildNavGraph(this.navPaths.lanes, VEHICLE_NAV_JOIN));
+  vehicleNav: NavGraph = buildVehicleNav(ROAD_NETWORK); // directed one-way lanes (left-hand); pedNav stays undirected
   pedNav: NavGraph = bridgeIslands(buildNavGraph(this.navPaths.walks, PED_NAV_JOIN));
   private roadSurfaces: Array<{ points: RoadPoint[]; width: number; closed: boolean }> = [];
   private roadIndex = new RoadIndex();
