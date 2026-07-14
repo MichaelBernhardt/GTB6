@@ -44,8 +44,8 @@ function withExternalTextures(arrayBuffer) {
   const data = Buffer.from(arrayBuffer); const jsonLength = data.readUInt32LE(12);
   const json = JSON.parse(data.subarray(20, 20 + jsonLength).toString('utf8').trim());
   const textureByMaterial = {
-    SkinEyes: 'protagonist-skin-basecolor.png', TealTechnicalJacket: 'protagonist-jacket-basecolor.jpg',
-    CharcoalJeans: 'protagonist-denim-basecolor.jpg', HairShoes: 'protagonist-hair-shoes-basecolor.png',
+    SkinEyes: 'protagonist-skin-basecolor.jpg', TealTechnicalJacket: 'protagonist-jacket-basecolor.jpg',
+    CharcoalJeans: 'protagonist-denim-basecolor.jpg', HairShoes: 'protagonist-hair-shoes-basecolor.jpg',
   };
   const files = Object.values(textureByMaterial); json.samplers = [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }];
   json.images = files.map((file) => ({ uri: `../../textures/character/${file}` }));

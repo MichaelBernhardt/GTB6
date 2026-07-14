@@ -12,13 +12,15 @@
       "name": "MakeHuman system assets",
       "url": "https://files2.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip",
       "license": "CC0-1.0",
-      "vendored": false
-    },
-    {
-      "name": "MakeHuman CC0 character asset packs",
-      "url": "https://static.makehumancommunity.org/assets/assetpacks.html",
-      "packs": ["skins01", "hair01", "shirts01", "pants01", "shoes01"],
-      "license": "CC0-1.0 packs only",
+      "sha256": "b542127a8e25547c7c29c19f2d1d2adb9a664c80396ecd694095dbc8028a0107",
+      "selectedAssets": [
+        "young_african_male skin",
+        "high-poly eyes",
+        "afro01 hair",
+        "male_casualsuit05 jacket and jeans",
+        "shoes02 trainers",
+        "game_engine rig"
+      ],
       "vendored": false
     },
     {
@@ -30,18 +32,57 @@
     }
   ],
   "committedArtifacts": [
-    { "path": "public/models/characters/protagonist.glb", "sha256": "2eb3b5c691b9db481de2ba9786a76152c48cf7321bed84282781620569228653" },
-    { "path": "art/character/references/protagonist-face.jpg", "sha256": "a324ee2aae53a434cfaac3276235e552d0d1a96276bbf1b0d34235f52db03af6" },
-    { "path": "art/character/references/protagonist-turnaround.jpg", "sha256": "319091f32893ea3896ba6435ff97c135d75c01cbae6af42e96656fc2c64de477" },
-    { "path": "art/character/materials/protagonist-denim-source.png", "sha256": "135e1a7febe4d41d257547087336c0ff3817a91dfb21a17afc55d549a0245b09" },
-    { "path": "art/character/materials/protagonist-jacket-source.png", "sha256": "e761bd8eadbae2146f7716017ac81b8aadec9bcff84285eb79dd5a572d2df0b1" },
-    { "path": "public/textures/character/protagonist-jacket-basecolor.jpg", "sha256": "02bb07c66a96c7d7e7fe439cc9a4ce8ac30f9df8127f855f8947138c208fa4b6" },
-    { "path": "public/textures/character/protagonist-denim-basecolor.jpg", "sha256": "6181b4438a2bb2f97503b2d26af965f71a57925c8a2fa95e4ef812645d5bd6bc" },
-    { "path": "public/textures/character/protagonist-skin-basecolor.png", "sha256": "48968f830dbdf506714f930125ac070d94db1df97e9a65565e922a6375b8c484" },
-    { "path": "public/textures/character/protagonist-hair-shoes-basecolor.png", "sha256": "48968f830dbdf506714f930125ac070d94db1df97e9a65565e922a6375b8c484" },
-    { "path": "art/character/materials/skin-normal-roughness.png", "sha256": "faaeba7bb216939503d86cec245f832a9fcc110ecafde0174dbc01ba9b99bd18" },
-    { "path": "art/character/materials/jacket-normal-roughness.png", "sha256": "2277369616867f67ff3ea7c83a4eb016f1d13b1bf69ab165dc2ac862bd237ae1" },
-    { "path": "art/character/materials/denim-normal-roughness.png", "sha256": "e16167486a0144ef26ff18cfaa192f855236016907fbb30289cce4ff14577914" },
-    { "path": "art/character/materials/hair-shoes-normal-roughness.png", "sha256": "3c34bb66e841cd47dfc191ab1ae312a260ed239924ef5a659f40dfe28c43aee9" }
+    {
+      "path": "public/models/characters/protagonist.glb",
+      "sha256": "3af8e1b175808cd1816c6da39ccc0f6c1b869faea093a77db09d6566fd6e0b99"
+    },
+    {
+      "path": "art/character/references/protagonist-face.jpg",
+      "sha256": "a324ee2aae53a434cfaac3276235e552d0d1a96276bbf1b0d34235f52db03af6"
+    },
+    {
+      "path": "art/character/references/protagonist-turnaround.jpg",
+      "sha256": "319091f32893ea3896ba6435ff97c135d75c01cbae6af42e96656fc2c64de477"
+    },
+    {
+      "path": "art/character/materials/protagonist-denim-source.png",
+      "sha256": "135e1a7febe4d41d257547087336c0ff3817a91dfb21a17afc55d549a0245b09"
+    },
+    {
+      "path": "art/character/materials/protagonist-jacket-source.png",
+      "sha256": "e761bd8eadbae2146f7716017ac81b8aadec9bcff84285eb79dd5a572d2df0b1"
+    },
+    {
+      "path": "public/textures/character/protagonist-jacket-basecolor.jpg",
+      "sha256": "96749d7b58b2e8ba227e4dc3175399988e44150d6410d4f290643d8d45cca370"
+    },
+    {
+      "path": "public/textures/character/protagonist-denim-basecolor.jpg",
+      "sha256": "59d0185462f2442e2cb22107f4dede11437ca07451a6ce5a23174ad4005c1a50"
+    },
+    {
+      "path": "public/textures/character/protagonist-skin-basecolor.jpg",
+      "sha256": "9efacc8ae939e558cd74150a9913fac30f6ab1cbf148c42c0a45d9973bbb0626"
+    },
+    {
+      "path": "public/textures/character/protagonist-hair-shoes-basecolor.jpg",
+      "sha256": "3a6a386a1a9dd70c4003d3ca485a765bdd3d7e9150dca457256d2060e922e61b"
+    },
+    {
+      "path": "art/character/materials/skin-normal-roughness.png",
+      "sha256": "faaeba7bb216939503d86cec245f832a9fcc110ecafde0174dbc01ba9b99bd18"
+    },
+    {
+      "path": "art/character/materials/jacket-normal-roughness.png",
+      "sha256": "2277369616867f67ff3ea7c83a4eb016f1d13b1bf69ab165dc2ac862bd237ae1"
+    },
+    {
+      "path": "art/character/materials/denim-normal-roughness.png",
+      "sha256": "e16167486a0144ef26ff18cfaa192f855236016907fbb30289cce4ff14577914"
+    },
+    {
+      "path": "art/character/materials/hair-shoes-normal-roughness.png",
+      "sha256": "3c34bb66e841cd47dfc191ab1ae312a260ed239924ef5a659f40dfe28c43aee9"
+    }
   ]
 }
