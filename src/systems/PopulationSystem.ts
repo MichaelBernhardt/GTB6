@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
@@ -47,6 +47,7 @@ export class PopulationSystem {
   private ambientSerial = 200; // seeds variety (colours, wallets, bravery) for lifecycle-spawned agents
   private frame = 0;
   private forward = new THREE.Vector3();
+  private playerPos = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z); // last known player position; biases new traffic goals player-ward
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.vehiclePlanner = new RoutePlanner(city.vehicleNav, 2);
@@ -55,6 +56,7 @@ export class PopulationSystem {
   }
 
   update(dt: number, player: THREE.Vector3, damagePlayer?: (amount: number) => void, playerOnFoot = false): void {
+    this.playerPos.copy(player);
     this.vehiclePlanner.beginFrame(); this.pedPlanner.beginFrame(); this.frame += 1;
     this.hostileAttackCooldown = Math.max(0, this.hostileAttackCooldown - dt);
     this.playerHitCooldown = Math.max(0, this.playerHitCooldown - dt);
@@ -77,7 +79,7 @@ export class PopulationSystem {
       vehicle.routeCooldown = Math.max(0, vehicle.routeCooldown - dt);
       if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0) {
         const wasFrozen = vehicle.frozen;
-        vehicle.frozen = resolveFrozen(vehicle.frozen, vehicle.group.position.distanceToSquared(player));
+        vehicle.frozen = resolveFrozen(vehicle.frozen, vehicle.group.position.distanceToSquared(player), AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE);
         if (vehicle.frozen !== wasFrozen) this.trafficPlans.get(vehicle)?.watchdog.reset();
         if (vehicle.frozen && !wasFrozen) vehicle.speed = 0; // park in place: a stale speed would fire impact checks and jerk on thaw
       }
@@ -460,7 +462,7 @@ export class PopulationSystem {
 
   private assignVehicleRoute(vehicle: Vehicle, free: boolean): boolean {
     const position = vehicle.group.position;
-    const goal = this.vehiclePlanner.goalNear(position.x, position.z); // a nearby lane node, not a citywide one: short, reachable route
+    const goal = this.vehiclePlanner.goalNear(position.x, position.z, this.playerPos); // nearby lane node, biased player-ward so traffic trends toward the visible streets
     const points = free ? this.vehiclePlanner.plan(position.x, position.z, goal) : this.vehiclePlanner.tryPlan(position.x, position.z, goal);
     if (!points?.length) return false; // budget spent or destination unreachable: caller backs off before retrying
     this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });

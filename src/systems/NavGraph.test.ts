@@ -266,6 +266,17 @@ describe('RoutePlanner.goalNear (local goals)', () => {
     const planner = new RoutePlanner(graph, 2, () => 0);
     expect(planner.goalNear(50_000, 50_000)).toBeGreaterThanOrEqual(0); // miles away → still yields a valid goal
   });
+
+  it('biases the goal into a cone toward a supplied point (player-ward traffic)', () => {
+    const graph: NavGraph = { nodes: [{ x: 300, z: 0 }, { x: -300, z: 0 }, { x: 0, z: 300 }, { x: 0, z: -300 }], edges: [[], [], [], []] };
+    const planner = new RoutePlanner(graph, 2, () => 0);
+    // player far along +x: only the +x node is inside the ~70° cone, so it must be chosen despite the others being equally near
+    expect(planner.goalNear(0, 0, { x: 5000, z: 0 })).toBe(0);
+    // no bias: any local node is fair game (first gathered candidate under random()=0)
+    expect([0, 1, 2, 3]).toContain(planner.goalNear(0, 0));
+    // player essentially on top of the car (< GOAL_BIAS_MIN): bias is skipped, no convergence on him
+    expect([0, 1, 2, 3]).toContain(planner.goalNear(0, 0, { x: 40, z: 0 }));
+  });
 });
 
 describe('RoutePlanner.planTo (road-preferring offroad targets)', () => {

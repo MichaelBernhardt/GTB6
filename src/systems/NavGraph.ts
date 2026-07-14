@@ -263,6 +263,12 @@ export class ProgressWatchdog {
  *  car's destination stays local so each solve is cheap and reachable; the census bubble handles distribution. */
 const GOAL_CELL = 150;
 const GOAL_REACH_CELLS = 4;
+/** Goal-bias cone: with a bias point (the player), prefer candidates whose bearing from the car is within
+ *  this half-angle of the bias direction, so traffic trends toward the player rather than dispersing. Wide
+ *  enough (~70°) to keep spread. Skipped when the player is nearer than GOAL_BIAS_MIN so cars mill around
+ *  his area instead of all converging on him. */
+const GOAL_BIAS_CONE_COS = Math.cos((70 * Math.PI) / 180);
+const GOAL_BIAS_MIN = 220;
 
 /** Budgeted A* front-end shared by the agents of one system: at most perFrame solves per beginFrame(). */
 export class RoutePlanner {
@@ -282,16 +288,28 @@ export class RoutePlanner {
 
   /** A random graph node within ~GOAL_REACH cells of (x, z): a nearby, near-certainly-reachable goal so a car's
    *  route is a short local A* rather than a citywide solve. Widens the search if the area is sparse, and only
-   *  falls back to a fully-random citywide node when nothing sits nearby. */
-  goalNear(x: number, z: number): number {
+   *  falls back to a fully-random citywide node when nothing sits nearby. When `toward` is given (the player),
+   *  the pick is biased into a cone pointing that way so traffic heads toward the player instead of wandering
+   *  off — this is what keeps the visible streets populated rather than draining away from a stationary viewer. */
+  goalNear(x: number, z: number, toward?: { x: number; z: number }): number {
     const grid = (this.nodeGrid ??= this.buildNodeGrid());
     const cx = Math.floor(x / GOAL_CELL); const cz = Math.floor(z / GOAL_CELL);
+    let bx = 0; let bz = 0; let biased = false;
+    if (toward) { const dx = toward.x - x; const dz = toward.z - z; const len = Math.hypot(dx, dz); if (len > GOAL_BIAS_MIN) { bx = dx / len; bz = dz / len; biased = true; } }
     for (let reach = GOAL_REACH_CELLS; reach <= GOAL_REACH_CELLS + 6; reach++) {
       const candidates: number[] = [];
       for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
         const bucket = grid.get(`${cx + dx},${cz + dz}`); if (bucket) candidates.push(...bucket);
       }
-      if (candidates.length) return candidates[Math.floor(this.random() * candidates.length)]!;
+      if (!candidates.length) continue;
+      if (!biased) return candidates[Math.floor(this.random() * candidates.length)]!;
+      const cone = candidates.filter((index) => { // keep only goals roughly player-ward
+        const node = this.graph.nodes[index]; if (!node) return false;
+        const nx = node.x - x; const nz = node.z - z; const nl = Math.hypot(nx, nz);
+        return nl > 1 && (nx * bx + nz * bz) / nl >= GOAL_BIAS_CONE_COS;
+      });
+      const pool = cone.length ? cone : candidates; // no player-ward node nearby: fall back to any local goal
+      return pool[Math.floor(this.random() * pool.length)]!;
     }
     return this.randomGoal();
   }

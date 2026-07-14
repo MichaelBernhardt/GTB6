@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AI_FREEZE_RADIUS, AI_THAW_RADIUS, PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
+import { AI_FREEZE_RADIUS, AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
+import { REFRESH_RADIUS } from './systems/LifecycleSystem';
 import { calculateDamage } from './core/GameRules';
 
 describe('distance freeze hysteresis', () => {
@@ -16,6 +17,12 @@ describe('distance freeze hysteresis', () => {
     const band = sq((AI_FREEZE_RADIUS + AI_THAW_RADIUS) / 2);
     expect(resolveFrozen(true, band)).toBe(true); // frozen stays frozen
     expect(resolveFrozen(false, band)).toBe(false); // active stays active
+  });
+
+  it('freezes vehicles only BEYOND the lifecycle keep-alive boundary, so no car sits comatose', () => {
+    expect(AI_THAW_RADIUS_VEHICLE).toBeLessThan(AI_FREEZE_RADIUS_VEHICLE);
+    expect(AI_FREEZE_RADIUS_VEHICLE).toBeGreaterThan(REFRESH_RADIUS); // a live car is navigating; past the bubble it is recycled, never frozen-and-kept
+    expect(resolveFrozen(false, sq(REFRESH_RADIUS), AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE)).toBe(false); // still navigating out to the recycle bubble
   });
 });
 
