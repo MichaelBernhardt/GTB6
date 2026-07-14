@@ -6,7 +6,7 @@ import type { Pedestrian } from '../entities/Pedestrian';
 import type { City } from '../world/City';
 import { Vehicle } from '../entities/Vehicle';
 import {
-  BURN_DURATION_MAX, BURN_DURATION_MIN, BURNOUT_PED_DAMAGE, BURNOUT_RADIUS, CHAIN_CAP,
+  BURN_DURATION_MAX, BURN_DURATION_MIN, BURNOUT_PED_DAMAGE, BURNOUT_RADIUS, BURNOUT_VEHICLE_RADIUS, CHAIN_CAP,
   fireStage, POLICE_WRECK_HEAT, rollBurnDuration, VehicleFireSystem,
 } from './VehicleFireSystem';
 import { WantedSystem } from './WantedSystem';
@@ -122,6 +122,42 @@ describe('burnout splash damage', () => {
     expect(boom.victims.some((victim) => victim.ped === edge && !victim.killed)).toBe(true);
     expect(boom.victims.some((victim) => victim.ped === outside)).toBe(false);
     expect(boom.playerDamage).toBeGreaterThan(0);
+  });
+
+  it('ignites a FULL-HEALTH neighbour caught in the blast (reliable chain, not just weakened cars)', () => {
+    const scene = new THREE.Scene();
+    const system = new VehicleFireSystem(scene);
+    const bomb = new Vehicle(scene, 'compact', new THREE.Vector3());
+    const neighbour = new Vehicle(scene, 'compact', new THREE.Vector3(BURNOUT_VEHICLE_RADIUS - 1.5, 0, 0));
+    expect(neighbour.health).toBe(neighbour.maxHealth); // untouched — the old chain never reached it
+    bomb.ignite(() => 0);
+    burnOut(system, bomb, [bomb, neighbour]);
+    expect(neighbour.onFire).toBe(true);
+  });
+
+  it('leaves a car just outside the blast radius alone', () => {
+    const scene = new THREE.Scene();
+    const system = new VehicleFireSystem(scene);
+    const bomb = new Vehicle(scene, 'compact', new THREE.Vector3());
+    const far = new Vehicle(scene, 'compact', new THREE.Vector3(BURNOUT_VEHICLE_RADIUS + 1, 0, 0));
+    const farHealth = far.health;
+    bomb.ignite(() => 0);
+    burnOut(system, bomb, [bomb, far]);
+    expect(far.onFire).toBe(false);
+    expect(far.health).toBe(farHealth);
+  });
+
+  it("spares the player's own car a forced ignition but still scorches it", () => {
+    const scene = new THREE.Scene();
+    const system = new VehicleFireSystem(scene);
+    const bomb = new Vehicle(scene, 'compact', new THREE.Vector3());
+    const mine = new Vehicle(scene, 'compact', new THREE.Vector3(2, 0, 0));
+    mine.playerControlled = true;
+    const before = mine.health;
+    bomb.ignite(() => 0);
+    burnOut(system, bomb, [bomb, mine]);
+    expect(mine.onFire).toBe(false);
+    expect(mine.health).toBeLessThan(before);
   });
 
   it('chains to an adjacent weakened vehicle but respects the chain cap', () => {

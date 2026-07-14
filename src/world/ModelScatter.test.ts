@@ -37,11 +37,12 @@ describe('citywide model scatter', () => {
     expect(all.every((m) => Math.abs(m.x) < HALF && Math.abs(m.z) < HALF)).toBe(true);
   });
 
-  it('quarter-snaps every heading (so model AABB colliders stay axis-aligned)', () => {
-    for (const m of all) {
-      const turns = m.heading / QUARTER;
-      expect(Math.abs(turns - Math.round(turns)), `heading ${m.heading}`).toBeLessThan(1e-6);
-    }
+  it('gives models free headings (road structures align to the street, fields rotate naturally — no compass snap)', () => {
+    // Oriented-box colliders follow any heading now, so models are no longer forced to N/S/E/W. Road-facing
+    // structures take the true kerb angle and area fill takes a continuous random yaw, so the overwhelming
+    // majority of headings are non-quarter-turns.
+    const snapped = all.filter((m) => { const t = m.heading / QUARTER; return Math.abs(t - Math.round(t)) < 1e-3; });
+    expect(snapped.length / all.length).toBeLessThan(0.5);
   });
 
   it('represents every model category (structures + foliage across all zones)', () => {
