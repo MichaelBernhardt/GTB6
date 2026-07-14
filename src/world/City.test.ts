@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PLAYER } from '../config';
 import { fallDamage, jumpVelocity, stepVertical, type VerticalMotion } from '../core/GameRules';
-import { clearPathIntervals, colliderBase, colliderTop, collidersBlock, districtAt, highestColliderTop, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
+import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
 import { CBD_CENTER, districtCenter, MAP_WORLD_SIZE } from './mapData';
 import { CITY_JUNCTIONS, signalCornerOffset } from './UrbanInfrastructure';
 
@@ -204,5 +204,27 @@ describe('headless player on a 3u wall', () => {
     expect(landing.landed).toBe(true);
     expect(landing.drop).toBeCloseTo(18);
     expect(fallDamage(landing.drop)).toBe(30);
+  });
+});
+
+describe('oriented-box colliders (buildings aligned to diagonal streets)', () => {
+  // A 10×10 box rotated 45°: its vertices point along the world axes (±5√2, 0)/(0, ±5√2) and its walls
+  // face the diagonals. The enclosing AABB is the full [-5√2, 5√2] square — 1.4× oversized.
+  const R2 = Math.SQRT2 * 5;
+  const box: Collider = { minX: -R2, maxX: R2, minZ: -R2, maxZ: R2, y0: 0, height: 20, heading: Math.PI / 4, hw: 5, hd: 5 };
+
+  it('blocks the true rotated footprint, never the empty AABB corners', () => {
+    expect(colliderOverlapsXZ(box, 0, 0, 0.35)).toBe(true);      // dead centre
+    expect(colliderOverlapsXZ(box, 3.4, 3.4, 0.35)).toBe(true);  // just inside a flat wall
+    expect(colliderOverlapsXZ(box, 7, 0, 0.35)).toBe(true);      // near a vertex (points along world x)
+    // The AABB corner (6, 6) is open ground beyond the diagonal wall — the whole reason for oriented boxes.
+    expect(colliderOverlapsXZ(box, 6, 6, 0.35)).toBe(false);
+    expect(colliderOverlapsXZ(box, 6.9, 6.9, 0.35)).toBe(false); // hard against the AABB corner: still empty
+  });
+
+  it('matches the plain AABB test when no heading is set', () => {
+    const aabb: Collider = { minX: -5, maxX: 5, minZ: -5, maxZ: 5, y0: 0, height: 20 };
+    expect(colliderOverlapsXZ(aabb, 4.9, 4.9, 0.05)).toBe(true);
+    expect(colliderOverlapsXZ(aabb, 6, 0, 0.05)).toBe(false);
   });
 });

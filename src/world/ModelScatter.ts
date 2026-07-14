@@ -56,8 +56,6 @@ export interface ScatteredModel {
 }
 
 const HALF_WORLD = MAP_WORLD_SIZE / 2;
-const QUARTER = Math.PI / 2;
-const snapQuarter = (yaw: number): number => Math.round(yaw / QUARTER) * QUARTER;
 
 /** Deterministic positional hash in [0,1) — same (x, z, salt) always yields the same value. */
 function seeded(x: number, z: number, salt = 0): number {
@@ -363,8 +361,9 @@ function frontageSide(road: GeneratedRoad, ri: number, side: 1 | -1, occ: Scatte
       const zone = classifyZone(frontX, frontZ, road.width);
       const profile = coast ? COAST_FRONTAGE : FRONTAGE[zone];
       if (!profile) continue;
-      // Face the street: local +z (entrance) points back toward the road, quarter-snapped.
-      const heading = snapQuarter(Math.atan2(-nX, -nZ));
+      // Face the street: local +z (entrance) points back toward the road, aligned to the actual road
+      // segment (oriented-box colliders follow it — diagonal streets get diagonally-set structures).
+      const heading = Math.atan2(-nX, -nZ);
 
       const structRoll = seeded(frontX, frontZ, 20);
       if (structRoll < profile.structAccept) {
@@ -381,7 +380,7 @@ function frontageSide(road: GeneratedRoad, ri: number, side: 1 | -1, occ: Scatte
       // Un-built slot: try a street/verge tree right on the verge line (small road clearance).
       if (seeded(frontX, frontZ, 22) < profile.treeAccept) {
         const name = pickWeighted(profile.trees, seeded(frontX, frontZ, 23));
-        if (name) tryPlace(name, frontX + nX * 0.6, frontZ + nZ * 0.6, snapQuarter(seeded(frontX, frontZ, 24) * Math.PI * 2), FOLIAGE_ROAD_CLEARANCE, occ, buildings, out);
+        if (name) tryPlace(name, frontX + nX * 0.6, frontZ + nZ * 0.6, seeded(frontX, frontZ, 24) * Math.PI * 2, FOLIAGE_ROAD_CLEARANCE, occ, buildings, out);
       }
     }
   }
@@ -397,7 +396,7 @@ function areaPass(polygons: readonly MapPolygon[], profile: AreaProfile, occ: Sc
         const z = gz + (seeded(gx, gz, 62) - 0.5) * profile.step * 0.9;
         if (!pointInPolygon(poly, x, z)) continue;
         if (pointInAnyPolygon(WATER_POLYGONS, x, z)) continue;
-        const heading = snapQuarter(seeded(x, z, 63) * Math.PI * 2);
+        const heading = seeded(x, z, 63) * Math.PI * 2; // free rotation — fields/parks/beaches read natural, not 4-valued
         const roll = seeded(x, z, 64);
         if (roll < profile.structAccept) {
           const name = pickWeighted(profile.structures, seeded(x, z, 65));

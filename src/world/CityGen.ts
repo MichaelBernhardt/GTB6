@@ -77,13 +77,10 @@ function seeded(x: number, z: number, salt = 0): number {
   return value - Math.floor(value);
 }
 
-const QUARTER = Math.PI / 2;
-function snapQuarter(yaw: number): number { return Math.round(yaw / QUARTER) * QUARTER; }
-
 /**
  * Minimum distance from a building footprint to the nearest road edge (negative when the footprint
- * sits on a carriageway). The footprint is the quarter-snapped W×D rectangle centred at (cx, cz) and
- * rotated by `heading` — sampled on a grid so the interior and every edge are covered, not just the
+ * sits on a carriageway). The footprint is the W×D rectangle centred at (cx, cz) and rotated by
+ * `heading` (any angle — aligned to the street) — sampled on a grid so the interior and every edge are covered, not just the
  * centre. Uses the shared road-edge grid, so it is pure, deterministic and cheap. Exported so tests
  * can assert the citywide guarantee (no footprint intersects a road corridor).
  */
@@ -97,7 +94,7 @@ export function footprintRoadClearance(cx: number, cz: number, width: number, de
     const lx = -hx + (2 * hx) * (i / nx);
     for (let j = 0; j <= nz; j++) {
       const lz = -hz + (2 * hz) * (j / nz);
-      // Same quarter-turn transform City uses to place the collider, so the sampled rectangle IS the collider.
+      // Same rotation City uses to place the collider, so the sampled rectangle IS the collider footprint.
       const wx = cx + lx * c + lz * s;
       const wz = cz - lx * s + lz * c;
       const d = distanceToRoadEdge(wx, wz);
@@ -234,8 +231,9 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
 
     if (seeded(frontX, frontZ, 20) > acceptance(zone, district.density)) continue;
 
-    // Face the street: local +z (the entrance face) points back toward the road, quarter-snapped.
-    const heading = snapQuarter(Math.atan2(-nX, -nZ));
+    // Face the street: local +z (the entrance face) points back toward the road, aligned to the actual road
+    // segment (no quarter snap — colliders are oriented boxes now, so diagonal streets get diagonal buildings).
+    const heading = Math.atan2(-nX, -nZ);
     // Front face line: `yard` beyond the sidewalk apron. Anchored — the building grows from here into
     // the block, so shrinking never pulls the face onto the road it fronts.
     const faceX = frontX + nX * (shape.yard * LAYOUT_SCALE);

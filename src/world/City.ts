@@ -42,20 +42,43 @@ import { registerPowered } from './powerGrid';
 
 /** XZ AABB with a real vertical span: `height` above `y0`. `y0` is world-space; when omitted the collider is
  *  grounded on the terrain under its centre (the flat-world registrations keep working untouched). */
-export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; y0?: number; }
+/** A world collider footprint. minX/maxX/minZ/maxZ are always the ENCLOSING axis-aligned box — used for the
+ *  spatial-hash broad phase and cheap rejects. When `heading` is set the true footprint is an ORIENTED
+ *  rectangle centred on the AABB centre, rotated by `heading`, with local half-extents (hw, hd); the narrow
+ *  phase tests against that so a building rotated to a diagonal street stops you at its wall, never at the
+ *  corner of an oversized AABB. Axis-aligned (or quarter-snapped) colliders leave `heading` undefined so the
+ *  fast AABB path stays exact. */
+export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; y0?: number; heading?: number; hw?: number; hd?: number; }
 export const colliderBase = (box: Collider): number => box.y0 ?? terrainHeightAt((box.minX + box.maxX) / 2, (box.minZ + box.maxZ) / 2);
 export const colliderTop = (box: Collider): number => colliderBase(box) + box.height;
 
-/** Pure y-aware AABB occupancy: a collider blocks the band (y0, y1) only when its own span crosses it. */
+/** Circle (x, z, radius) vs a collider's XZ footprint. Exact for both axis-aligned boxes and, via the
+ *  oriented-rectangle narrow phase, buildings/models rotated to any heading. */
+export function colliderOverlapsXZ(box: Collider, x: number, z: number, radius: number): boolean {
+  // Broad phase: the stored min/max encloses the footprint either way, so this rejects distant queries cheaply.
+  if (x + radius <= box.minX || x - radius >= box.maxX || z + radius <= box.minZ || z - radius >= box.maxZ) return false;
+  if (box.heading === undefined) return true; // axis-aligned: the AABB overlap is already exact
+  // Narrow phase: bring the circle centre into the box's local frame (inverse of the placement rotation
+  // wx = cx + lx·c + lz·s; wz = cz − lx·s + lz·c), then measure to the local rectangle [-hw,hw]×[-hd,hd].
+  const cx = (box.minX + box.maxX) / 2; const cz = (box.minZ + box.maxZ) / 2;
+  const c = Math.cos(box.heading); const s = Math.sin(box.heading);
+  const dx = x - cx; const dz = z - cz;
+  const lx = dx * c - dz * s; const lz = dx * s + dz * c;
+  const ex = lx - Math.max(-box.hw!, Math.min(box.hw!, lx));
+  const ez = lz - Math.max(-box.hd!, Math.min(box.hd!, lz));
+  return ex * ex + ez * ez < radius * radius;
+}
+
+/** Pure y-aware occupancy: a collider blocks the band (y0, y1) only when its own span crosses it. */
 export function collidersBlock(colliders: readonly Collider[], x: number, z: number, radius: number, y0: number, y1: number): boolean {
-  return colliders.some((box) => x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ && colliderBase(box) < y1 && colliderTop(box) > y0);
+  return colliders.some((box) => colliderBase(box) < y1 && colliderTop(box) > y0 && colliderOverlapsXZ(box, x, z, radius));
 }
 
 /** Highest collider top at or below feetY + stepUp under the query circle; undefined when nothing is underfoot. */
 export function highestColliderTop(colliders: readonly Collider[], x: number, z: number, feetY: number, radius = 0.35): number | undefined {
   const limit = feetY + PLAYER.stepUp; let best: number | undefined;
   for (const box of colliders) {
-    if (x + radius <= box.minX || x - radius >= box.maxX || z + radius <= box.minZ || z - radius >= box.maxZ) continue;
+    if (!colliderOverlapsXZ(box, x, z, radius)) continue;
     const top = colliderTop(box);
     if (top <= limit && (best === undefined || top > best)) best = top;
   }
@@ -586,7 +609,7 @@ export class City {
     const bucket = this.colliderCells.get(`${Math.floor(x / this.colliderCellSize)},${Math.floor(z / this.colliderCellSize)}`);
     if (bucket) for (const index of bucket) {
       const box = this.colliders[index]!;
-      if (x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ && colliderBase(box) < y1 && colliderTop(box) > y0) return true;
+      if (colliderBase(box) < y1 && colliderTop(box) > y0 && colliderOverlapsXZ(box, x, z, radius)) return true;
     }
     return false;
   }
@@ -629,7 +652,7 @@ export class City {
     const key = `${Math.floor(x / this.colliderCellSize)},${Math.floor(z / this.colliderCellSize)}`;
     for (const index of this.colliderCells.get(key) ?? []) {
       const box = this.colliders[index]!;
-      if (x + radius > box.minX && x - radius < box.maxX && z + radius > box.minZ && z - radius < box.maxZ && colliderBase(box) < ground + 2 && colliderTop(box) > ground) return true;
+      if (colliderBase(box) < ground + 2 && colliderTop(box) > ground && colliderOverlapsXZ(box, x, z, radius)) return true;
     }
     return false;
   }
@@ -661,7 +684,7 @@ export class City {
     const bucket = this.colliderCells.get(`${Math.floor(x / this.colliderCellSize)},${Math.floor(z / this.colliderCellSize)}`);
     if (bucket) for (const index of bucket) {
       const box = this.colliders[index]!;
-      if (x + radius <= box.minX || x - radius >= box.maxX || z + radius <= box.minZ || z - radius >= box.maxZ) continue;
+      if (!colliderOverlapsXZ(box, x, z, radius)) continue;
       const top = colliderTop(box);
       if (top <= limit && top > best) best = top;
     }
@@ -1656,16 +1679,21 @@ export class City {
     return { group: built.group, colliders };
   }
 
-  /** Transform a local massing tier (axis-aligned) by a quarter-snapped heading into a world-space
-   *  AABB collider. Quarter turns keep the box axis-aligned (width/depth may swap). Shared by the
-   *  procedural buildings and the scattered catalog models — both carry the same MassingTier shape. */
+  /** Transform a local massing tier (axis-aligned) by an arbitrary heading into a world collider. The
+   *  min/max is always the enclosing AABB (broad phase); when the heading isn't a quarter turn the collider
+   *  also carries the true oriented rectangle (centre wx/wz, half-extents hw/hd, heading) so the narrow phase
+   *  hugs a diagonally-aligned building's actual walls. Quarter turns keep the AABB exact, so they stay pure
+   *  AABBs. Shared by the procedural buildings and the scattered catalog models. */
   private tierToWorldCollider(tier: { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number }, x: number, z: number, heading: number, baseY = 0): Collider {
     const c = Math.cos(heading); const s = Math.sin(heading);
     const lx = (tier.minX + tier.maxX) / 2; const lz = (tier.minZ + tier.maxZ) / 2;
     const hw = (tier.maxX - tier.minX) / 2; const hd = (tier.maxZ - tier.minZ) / 2;
     const wx = x + lx * c + lz * s; const wz = z - lx * s + lz * c;
     const nx = Math.abs(hw * c) + Math.abs(hd * s); const nz = Math.abs(hw * s) + Math.abs(hd * c);
-    return { minX: wx - nx, maxX: wx + nx, minZ: wz - nz, maxZ: wz + nz, y0: tier.y0 + baseY, height: tier.y1 - tier.y0 };
+    const box: Collider = { minX: wx - nx, maxX: wx + nx, minZ: wz - nz, maxZ: wz + nz, y0: tier.y0 + baseY, height: tier.y1 - tier.y0 };
+    // Quarter turn (c≈0 or s≈0)? Enclosing AABB == oriented box, so keep the cheap exact AABB path.
+    if (Math.abs(c) > 1e-4 && Math.abs(s) > 1e-4) { box.heading = heading; box.hw = hw; box.hd = hd; }
+    return box;
   }
 
   private addLedge(x: number, z: number, w: number, d: number, y: number): void {

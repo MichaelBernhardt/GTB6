@@ -20,20 +20,19 @@ export const GARAGE_PARK = { x: GARAGE_PARK_SITE.x, z: GARAGE_PARK_SITE.z, headi
 /** Where the player steps out after storing a vehicle. */
 export const GARAGE_STEP_OUT = { x: GARAGE_EXIT.x, z: GARAGE_EXIT.z };
 
-/** Rotates a local-space AABB collider by a quarter-snapped heading and offsets it into world space. */
+/** Transform a local-space AABB collider by the site's heading into world space. min/max is the enclosing
+ *  AABB (broad phase); a non-quarter heading also carries the true oriented rectangle (heading + local
+ *  half-extents hw/hd) so a shop/safehouse aligned to a diagonal street hugs its real walls, not the
+ *  corners of an oversized box. Mirrors City.tierToWorldCollider (same rotation convention). */
 export function placedCollider(site: PlacedSite, minX: number, maxX: number, minZ: number, maxZ: number, height: number): Collider {
-  const cos = Math.round(Math.cos(site.heading)); const sin = Math.round(Math.sin(site.heading));
-  const corners = [
-    { x: minX * cos + minZ * sin, z: -minX * sin + minZ * cos },
-    { x: maxX * cos + maxZ * sin, z: -maxX * sin + maxZ * cos },
-  ];
-  return {
-    minX: site.x + Math.min(corners[0]!.x, corners[1]!.x),
-    maxX: site.x + Math.max(corners[0]!.x, corners[1]!.x),
-    minZ: site.z + Math.min(corners[0]!.z, corners[1]!.z),
-    maxZ: site.z + Math.max(corners[0]!.z, corners[1]!.z),
-    height,
-  };
+  const c = Math.cos(site.heading); const s = Math.sin(site.heading);
+  const lx = (minX + maxX) / 2; const lz = (minZ + maxZ) / 2;
+  const hw = (maxX - minX) / 2; const hd = (maxZ - minZ) / 2;
+  const wx = site.x + lx * c + lz * s; const wz = site.z - lx * s + lz * c;
+  const nx = Math.abs(hw * c) + Math.abs(hd * s); const nz = Math.abs(hw * s) + Math.abs(hd * c);
+  const box: Collider = { minX: wx - nx, maxX: wx + nx, minZ: wz - nz, maxZ: wz + nz, height };
+  if (Math.abs(c) > 1e-4 && Math.abs(s) > 1e-4) { box.heading = site.heading; box.hw = hw; box.hd = hd; }
+  return box;
 }
 
 export class ShopSystem {

@@ -1,13 +1,13 @@
 import { PLAYER } from '../config';
 import { colliderBase, colliderTop, type Collider } from '../world/City';
 
-/** Pure GTA-V-style cover math against the city's AABB building colliders: nearest-face snap,
- *  slide clamping along the face, corner detection and peek eligibility. No three.js, no Game. */
+/** Pure GTA-V-style cover math against the city's building colliders (axis-aligned OR heading-rotated):
+ *  nearest-face snap, slide clamping along the face, corner detection and peek eligibility. No three.js, no Game. */
 
 export interface Vec2 { x: number; z: number; }
 export interface CoverSpot {
   collider: Collider;
-  normal: Vec2;        // outward from the wall face (unit, axis-aligned)
+  normal: Vec2;        // outward from the wall face (unit; axis-aligned box → cardinal, rotated box → the face's true normal)
   tangent: Vec2;       // along the face, 90° left of the normal (unit)
   plane: number;       // face coordinate along the normal axis (dot(faceRef, normal))
   span: [number, number]; // face extent in tangent-axis coordinates, span[0] < span[1]
@@ -24,12 +24,32 @@ export const SLIDE_SPEED = 4.5;       // A/D crawl along the face, slower than a
 
 interface Face { normal: Vec2; plane: number; span: [number, number]; }
 
+/** The four wall faces as (outward normal, plane, tangential span). All the cover math below is written in
+ *  generic normal/tangent dot products, so this is the ONE spot that has to know a collider's orientation:
+ *  an axis-aligned box yields the literal N/S/E/W faces, and a heading'd box yields its true rotated faces
+ *  (each derived from the box centre, local half-extents and rotated local axes). */
 function faces(box: Collider): Face[] {
-  return [
+  if (box.heading === undefined) return [
     { normal: { x: 1, z: 0 }, plane: box.maxX, span: [box.minZ, box.maxZ] },   // t = z
     { normal: { x: -1, z: 0 }, plane: -box.minX, span: [-box.maxZ, -box.minZ] }, // t = -z
     { normal: { x: 0, z: 1 }, plane: box.maxZ, span: [-box.maxX, -box.minX] },   // t = -x
     { normal: { x: 0, z: -1 }, plane: -box.minZ, span: [box.minX, box.maxX] },   // t = x
+  ];
+  const cx = (box.minX + box.maxX) / 2; const cz = (box.minZ + box.maxZ) / 2;
+  const c = Math.cos(box.heading); const s = Math.sin(box.heading);
+  const eX: Vec2 = { x: c, z: -s }; const eZ: Vec2 = { x: s, z: c }; // world directions of the box's local +x / +z axes
+  const hw = box.hw!; const hd = box.hd!;
+  // For an outward normal n with half-depth halfN and tangential half-width hT: plane = C·n + halfN, and the
+  // face spans C·τ ± hT along τ = tangentOf(n). (Verified to reduce exactly to the axis-aligned literals above.)
+  const face = (n: Vec2, halfN: number, hT: number): Face => {
+    const t = tangentOf(n); const ct = cx * t.x + cz * t.z;
+    return { normal: n, plane: cx * n.x + cz * n.z + halfN, span: [ct - hT, ct + hT] };
+  };
+  return [
+    face(eX, hw, hd),
+    face({ x: -eX.x, z: -eX.z }, hw, hd),
+    face(eZ, hd, hw),
+    face({ x: -eZ.x, z: -eZ.z }, hd, hw),
   ];
 }
 

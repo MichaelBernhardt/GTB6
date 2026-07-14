@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintRoadClearance, generateCell, type GeneratedBuilding } from './CityGen';
-import { MAP_WORLD_SIZE } from './mapData';
+import { MAP_WORLD_SIZE, nearestRoadSpot } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 
 const HALF = MAP_WORLD_SIZE / 2;
@@ -21,11 +21,26 @@ describe('citywide parcel layout', () => {
     expect(all.every((b) => Math.abs(b.x) < HALF && Math.abs(b.z) < HALF)).toBe(true);
   });
 
-  it('orients every building to its street (quarter-snapped heading, so AABB colliders stay valid)', () => {
+  it('aligns buildings to their actual street, not the compass (diagonal roads → diagonal buildings)', () => {
+    // Colliders are oriented boxes now, so buildings follow the true road angle instead of snapping to
+    // N/S/E/W. Most of the map's roads run off-axis, so the majority of headings must be non-quarter-turns.
+    const snapped = all.filter((b) => { const t = b.heading / QUARTER; return Math.abs(t - Math.round(t)) < 1e-3; });
+    expect(snapped.length / all.length).toBeLessThan(0.5);
+  });
+
+  it('faces each building square to the nearest road segment', () => {
+    // The frontage (local +z) points at the road, so the facing vector must be perpendicular to the road
+    // tangent: |facing · roadTangent| ≈ 0. Nearest-vertex lookup can pick a cross street at corners, so
+    // require the overwhelming majority to square up rather than every single one.
+    let aligned = 0; let total = 0;
     for (const b of all) {
-      const turns = b.heading / QUARTER;
-      expect(Math.abs(turns - Math.round(turns)), `heading ${b.heading}`).toBeLessThan(1e-6);
+      const spot = nearestRoadSpot(b.x, b.z);
+      if (!spot) continue;
+      total++;
+      const dot = Math.abs(Math.sin(b.heading) * spot.dirX + Math.cos(b.heading) * spot.dirZ);
+      if (dot < 0.35) aligned++;
     }
+    expect(aligned / total).toBeGreaterThan(0.75);
   });
 
   it('sizes buildings by zone (highrise towers dwarf houses; estates and industry present)', () => {

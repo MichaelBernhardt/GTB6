@@ -27,7 +27,7 @@ import {
 export interface PlacedSite {
   x: number;
   z: number;
-  /** Yaw for buildings is snapped to a quarter turn so AABB colliders remain valid. */
+  /** Yaw facing the street — the true kerb angle (oriented-box colliders follow it, no quarter snap). */
   heading: number;
 }
 
@@ -47,12 +47,6 @@ export interface ReservedPad { x: number; z: number; radius: number; }
  * Small kerb clearances (clearance/ownRadius/minEdge) are real geometry and stay unscaled.
  */
 const P = 2.94 / METRES_PER_UNIT;
-
-const QUARTER = Math.PI / 2;
-/** Snap a yaw to the nearest quarter turn so box colliders stay axis-aligned. */
-export function snapHeading(yaw: number): number {
-  return Math.round(yaw / QUARTER) * QUARTER;
-}
 
 // ---- Claims-aware kerbside search ------------------------------------------------
 
@@ -158,7 +152,8 @@ function shopSite(roadName: string, near: MapPt, buildingClearance: number, padC
     x: spot.roadX - (toRoadX / toRoadLength) * (spot.road.width / 2 + padClearance),
     z: spot.roadZ - (toRoadZ / toRoadLength) * (spot.road.width / 2 + padClearance),
   };
-  const heading = snapHeading(Math.atan2(toRoadX, toRoadZ));
+  // Face the street at the true kerb angle (oriented-box colliders now follow it — no quarter snap).
+  const heading = Math.atan2(toRoadX, toRoadZ);
   return { pad, building: { x: spot.x, z: spot.z, heading } };
 }
 
