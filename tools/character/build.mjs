@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -16,14 +17,19 @@ if (!blender) {
 
 const buildDir = resolve('build/character');
 const source = resolve(process.env.CHARACTER_SOURCE ?? 'art/character/work/protagonist-source.blend');
+const animations = resolve(process.env.QUATERNIUS_ANIMATIONS ?? `${homedir()}/Library/Application Support/GTATHREEJS/character/UAL1_Standard.glb`);
 const fbx = resolve(buildDir, 'protagonist.fbx'); const glb = resolve(buildDir, 'protagonist.glb');
 await mkdir(buildDir, { recursive: true });
 if (!process.env.CHARACTER_SOURCE) {
+  if (!existsSync(animations)) {
+    console.error(`Quaternius Standard animation GLB not found: ${animations}. Set QUATERNIUS_ANIMATIONS=/path/to/UAL1_Standard.glb.`);
+    process.exit(1);
+  }
   await mkdir(resolve('art/character/work'), { recursive: true });
   await rm(source, { force: true });
   const sourceBuild = spawnSync(blender, [
     '--background', '--python', resolve('tools/character/create-source.py'), '--',
-    '--output', source,
+    '--output', source, '--animation-source', animations,
   ], { stdio: 'inherit' });
   if (sourceBuild.status !== 0 || !existsSync(source)) {
     console.error('Blender did not produce the editable character source.');

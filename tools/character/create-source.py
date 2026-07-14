@@ -13,7 +13,7 @@ import os
 import sys
 
 import bpy
-from mathutils import Euler, Vector
+from mathutils import Euler, Quaternion, Vector
 
 from bl_ext.blender_org.mpfb.services import HumanService, LocationService
 
@@ -23,7 +23,7 @@ def arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--preview")
-    parser.add_argument("--animation-source")
+    parser.add_argument("--animation-source", required=True)
     return parser.parse_args(raw)
 
 
@@ -440,6 +440,123 @@ def create_animation_contract(rig):
         raise RuntimeError("Generated animation set does not match the 24-clip contract")
 
 
+def retarget_quaternius_locomotion(rig, animation_source):
+    """Bake Quaternius' CC0 walk/sprint legs onto the shaped MPFB game rig.
+
+    Both rigs share the MakeHuman game-rig bone names, but their rest-pose arm
+    rolls differ. Lower-body rotations transfer cleanly; the upper body is
+    authored against this character's own rest pose to avoid crossed arms.
+    Root and pelvis translation are intentionally excluded so both cycles stay
+    in place for gameplay movement.
+    """
+    if not os.path.isfile(animation_source):
+        raise RuntimeError(f"Quaternius animation source is not installed: {animation_source}")
+    before_objects = set(bpy.data.objects)
+    before_actions = set(bpy.data.actions)
+    bpy.ops.import_scene.gltf(filepath=animation_source)
+    imported_objects = [obj for obj in bpy.data.objects if obj not in before_objects]
+    imported_actions = [action for action in bpy.data.actions if action not in before_actions]
+    source_rigs = [obj for obj in imported_objects if obj.type == "ARMATURE"]
+    if len(source_rigs) != 1:
+        raise RuntimeError("Quaternius Standard GLB must contain exactly one armature")
+    source_rig = source_rigs[0]
+    source_rig.animation_data_create()
+    source_actions = {action.name: action for action in imported_actions}
+    required = {"Walk_Loop", "Sprint_Loop"}
+    if not required.issubset(source_actions):
+        raise RuntimeError(f"Quaternius Standard GLB is missing {sorted(required - set(source_actions))}")
+
+    lower_body = {
+        "Hips": "pelvis",
+        "UpperLeg_L": "thigh_l", "LowerLeg_L": "calf_l", "Foot_L": "foot_l",
+        "UpperLeg_R": "thigh_r", "LowerLeg_R": "calf_r", "Foot_R": "foot_r",
+    }
+    rest_orientations = {}
+    for target_name, source_name in lower_body.items():
+        target_rest = rig.data.bones[target_name].matrix_local.to_quaternion()
+        source_rest = source_rig.data.bones[source_name].matrix_local.to_quaternion()
+        rest_orientations[target_name] = (target_rest, source_rest)
+    settings = {
+        "walk": (source_actions["Walk_Loop"], 0.16, -0.045),
+        "sprint": (source_actions["Sprint_Loop"], 0.36, -0.18),
+    }
+    rig.animation_data_create()
+    for target_name, (source_action, arm_swing, lean) in settings.items():
+        old_action = bpy.data.actions.get(target_name)
+        if old_action:
+            bpy.data.actions.remove(old_action)
+        target_action = bpy.data.actions.new(target_name)
+        target_action.use_fake_user = True
+        source_rig.animation_data.action = source_action
+        rig.animation_data.action = target_action
+        last_frame = int(round(source_action.frame_range[1]))
+        for frame in range(last_frame + 1):
+            bpy.context.scene.frame_set(frame)
+            # The source cycle reaches foot contact at frames 0 and halfway
+            # through the clip. Arm opposition must peak at those contacts,
+            # not at the intervening passing poses.
+            phase = math.cos(frame / last_frame * math.tau)
+            authored = {
+                "Spine": (lean * 0.42, 0.0, phase * 0.018),
+                "Chest": (lean * 0.58, 0.0, -phase * 0.035),
+                "Head": (-lean * 0.12, 0.0, phase * 0.012),
+                "UpperArm_L": (-phase * arm_swing, 0.0, -0.72),
+                "UpperArm_R": (phase * arm_swing, 0.0, 0.72),
+                "LowerArm_L": (-0.08 if target_name == "sprint" else 0.0, 0.0, 0.0),
+                "LowerArm_R": (-0.08 if target_name == "sprint" else 0.0, 0.0, 0.0),
+            }
+            for bone_name in ANIMATED_BONES:
+                bone = rig.pose.bones[bone_name]
+                bone.rotation_mode = "QUATERNION"
+                source_name = lower_body.get(bone_name)
+                if source_name:
+                    # Retain the source knee/ankle timing while shortening its
+                    # stylised stride for this character's gameplay velocity.
+                    if bone_name == "Hips":
+                        stride_scale = 0.30 if target_name == "walk" else 0.35
+                    else:
+                        stride_scale = 0.55 if target_name == "walk" else 0.42
+                    target_rest, source_rest = rest_orientations[bone_name]
+                    source_rotation = source_rig.pose.bones[source_name].rotation_quaternion
+                    armature_delta = source_rest @ source_rotation @ source_rest.inverted()
+                    if bone_name != "Hips":
+                        # Locomotion is in the sagittal plane. The source's
+                        # stylised hip roll is amplified by this mesh's longer
+                        # game-rig legs, so retain only a small amount of
+                        # lateral roll/twist and keep the forward knee arc.
+                        sagittal = armature_delta.to_euler("XYZ")
+                        sagittal.y *= 0.25
+                        sagittal.z *= 0.25
+                        armature_delta = sagittal.to_quaternion()
+                    retargeted = target_rest.inverted() @ armature_delta @ target_rest
+                    bone.rotation_quaternion = Quaternion().slerp(retargeted, stride_scale)
+                else:
+                    bone.rotation_quaternion = Euler(authored.get(bone_name, (0.0, 0.0, 0.0)), "XYZ").to_quaternion()
+                bone.keyframe_insert(data_path="rotation_quaternion", frame=frame, group=bone_name)
+
+        foot_samples = {"Foot_L": [], "Foot_R": []}
+        for frame in range(last_frame + 1):
+            bpy.context.scene.frame_set(frame)
+            for foot_name in foot_samples:
+                foot_samples[foot_name].append(rig.pose.bones[foot_name].head.copy())
+        for foot_name, samples in foot_samples.items():
+            forward_travel = max(point.y for point in samples) - min(point.y for point in samples)
+            lateral_drift = max(point.x for point in samples) - min(point.x for point in samples)
+            lift = max(point.z for point in samples) - min(point.z for point in samples)
+            if forward_travel < 0.25 or forward_travel < lateral_drift * 3 or lift < 0.04:
+                raise RuntimeError(
+                    f"{target_name} {foot_name} is not a forward locomotion arc "
+                    f"(forward={forward_travel:.3f}, lateral={lateral_drift:.3f}, lift={lift:.3f})"
+                )
+
+    for obj in imported_objects:
+        bpy.data.objects.remove(obj, do_unlink=True)
+    for action in imported_actions:
+        bpy.data.actions.remove(action)
+    rig.animation_data.action = bpy.data.actions["idle"]
+    bpy.context.scene.frame_set(0)
+
+
 def visible_bounds(objects):
     points = []
     depsgraph = bpy.context.evaluated_depsgraph_get()
@@ -553,6 +670,7 @@ def main():
         "fps": 30,
     }
     create_animation_contract(rig)
+    retarget_quaternius_locomotion(rig, args.animation_source)
     minimum, maximum = visible_bounds(meshes)
     for obj in meshes:
         obj.data.calc_loop_triangles()

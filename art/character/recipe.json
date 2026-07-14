@@ -15,7 +15,8 @@
     "interchange": "build/character/protagonist.fbx",
     "generator": "tools/character/create-source.py",
     "tool": "Blender 4.2+",
-    "mpfb": "2.0.16"
+    "mpfb": "2.0.16",
+    "locomotionSource": "Quaternius Universal Animation Library 2.1 Standard / Unreal-Godot/UAL1_Standard.glb"
   },
   "clips": {
     "loop": ["idle", "walk", "sprint", "aim", "aim_forward", "aim_back", "aim_left", "aim_right", "fall", "cover_idle", "cover_move", "cover_aim", "ride_bicycle", "ride_motorbike", "ride_superbike", "freefall", "parachute"],

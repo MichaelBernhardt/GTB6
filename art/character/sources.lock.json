@@ -25,16 +25,20 @@
     },
     {
       "name": "Quaternius Universal Animation Library",
-      "version": "March 2025",
+      "version": "2.1 Standard (June 2026)",
       "url": "https://quaternius.com/packs/universalanimationlibrary.html",
       "license": "CC0-1.0",
+      "archiveSha256": "cc73fc4e495b82958207316596317a3f40b9fa38065bde1027937452da537724",
+      "selectedFile": "Unreal-Godot/UAL1_Standard.glb",
+      "selectedFileSha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
+      "use": "Walk_Loop and Sprint_Loop lower-body retarget",
       "vendored": false
     }
   ],
   "committedArtifacts": [
     {
       "path": "public/models/characters/protagonist.glb",
-      "sha256": "3af8e1b175808cd1816c6da39ccc0f6c1b869faea093a77db09d6566fd6e0b99"
+      "sha256": "ca0c82b169d9ff96e2464c0c1d7c3c6d8af57f4da784acea9920f955fbbf8f6f"
     },
     {
       "path": "art/character/references/protagonist-face.jpg",
