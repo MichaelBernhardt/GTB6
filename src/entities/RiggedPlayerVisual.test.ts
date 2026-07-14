@@ -1,84 +1,88 @@
 import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  canActivateRiggedVisual, findHumanoidBones, initialPlayerVisualState, RiggedPlayerVisual,
-  selectPlayerAnimation, type ProceduralHumanoidPose,
+  findHumanoidBones, initialPlayerVisualState, PLAYER_ANIMATIONS, RiggedPlayerVisual,
+  selectPlayerAnimation, validatePlayerGltf,
 } from './RiggedPlayerVisual';
 
-const pose = (): ProceduralHumanoidPose => {
-  const part = (): THREE.Object3D => new THREE.Object3D();
-  return {
-    model: part(), torso: part(), head: part(), leftArm: part(), rightArm: part(),
-    leftForearm: part(), rightForearm: part(), leftLeg: part(), rightLeg: part(), leftShin: part(), rightShin: part(),
-  };
-};
+class FakeImage {
+  width = 2048;
+  height = 2048;
+  private listeners = new Map<string, () => void>();
+  addEventListener(name: string, callback: () => void): void { this.listeners.set(name, callback); }
+  removeEventListener(): void { /* loader cleanup */ }
+  set src(_value: string) { queueMicrotask(() => this.listeners.get('load')?.call(this)); }
+}
 
-const loadPlaceholder = async (): Promise<GLTF> => {
-  const file = await readFile('public/models/characters/player-placeholder.glb');
+beforeAll(() => {
+  Object.defineProperty(globalThis, 'self', { value: globalThis, configurable: true });
+  Object.defineProperty(globalThis, 'document', { value: { createElementNS: () => new FakeImage() }, configurable: true });
+});
+
+const loadProtagonist = async (): Promise<GLTF> => {
+  THREE.Cache.clear();
+  const file = await readFile('public/models/characters/protagonist.glb');
   const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
-  return new GLTFLoader().parseAsync(buffer, '');
+  return new GLTFLoader().parseAsync(buffer, '/models/characters/');
 };
-
-afterEach(() => { Reflect.deleteProperty(globalThis, 'window'); });
 
 describe('rigged player animation selection', () => {
-  it('prioritises death, attacks and airborne motion over locomotion', () => {
-    const state = { ...initialPlayerVisualState(), moving: true, sprinting: true };
+  it('uses explicit speed and pose modes with deterministic priority', () => {
+    const state = { ...initialPlayerVisualState(), locomotionSpeed: 8 };
     expect(selectPlayerAnimation(state)).toBe('sprint');
     state.onGround = false; state.velocityY = 2; expect(selectPlayerAnimation(state)).toBe('jump');
     state.velocityY = -2; expect(selectPlayerAnimation(state)).toBe('fall');
-    state.attack = 'punch_left'; expect(selectPlayerAnimation(state)).toBe('punch_left');
+    state.onGround = true; state.airMode = 'freefall'; expect(selectPlayerAnimation(state)).toBe('freefall');
+    state.airMode = 'none'; state.rideMode = 'superbike'; expect(selectPlayerAnimation(state)).toBe('ride_superbike');
+    state.rideMode = 'none'; state.coverMode = 'aim'; expect(selectPlayerAnimation(state)).toBe('cover_aim');
+    state.tumbleProgress = 0.3; expect(selectPlayerAnimation(state)).toBe('tumble');
     state.dead = true; expect(selectPlayerAnimation(state)).toBe('death');
   });
 
   it('selects camera-facing aim locomotion by dominant input axis', () => {
-    const state = { ...initialPlayerVisualState(), moving: true, aiming: true, moveSide: -1 };
+    const state = { ...initialPlayerVisualState(), locomotionSpeed: 2, aiming: true, moveSide: -1 };
     expect(selectPlayerAnimation(state)).toBe('aim_left');
     state.moveSide = 1; expect(selectPlayerAnimation(state)).toBe('aim_right');
     state.moveSide = 0; state.moveForward = 1; expect(selectPlayerAnimation(state)).toBe('aim_forward');
     state.moveForward = -1; expect(selectPlayerAnimation(state)).toBe('aim_back');
   });
-
-  it('only allows the first visual swap from a neutral grounded pose', () => {
-    const state = initialPlayerVisualState(); expect(canActivateRiggedVisual(state)).toBe(true);
-    for (const key of ['moving', 'aiming', 'cover', 'riding', 'airborne', 'tumbling', 'dead'] as const) {
-      const blocked = { ...state, [key]: true }; expect(canActivateRiggedVisual(blocked)).toBe(false);
-    }
-    expect(canActivateRiggedVisual({ ...state, onGround: false })).toBe(false);
-  });
 });
 
-describe('player placeholder GLB contract', () => {
-  it('contains the required humanoid bones and canonical core clips', async () => {
-    const file = await readFile('public/models/characters/player-placeholder.glb');
-    const gltf = await loadPlaceholder(); let triangles = 0; const materials = new Set<THREE.Material>();
+describe('protagonist GLB contract', () => {
+  it('contains the exact rig, clips, geometry, materials, textures, scale and in-place animation set', async () => {
+    const file = await readFile('public/models/characters/protagonist.glb'); const gltf = await loadProtagonist();
+    const validated = validatePlayerGltf(gltf); let triangles = 0; const materials = new Set<THREE.Material>(); let skinned = 0;
     gltf.scene.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
-      triangles += (object.geometry.index?.count ?? object.geometry.attributes.position?.count ?? 0) / 3;
-      const meshMaterials = Array.isArray(object.material) ? object.material : [object.material]; meshMaterials.forEach((material) => materials.add(material));
+      triangles += (object.geometry.index?.count ?? object.geometry.attributes.position.count) / 3;
+      materials.add(object.material as THREE.Material); if (object instanceof THREE.SkinnedMesh) skinned++;
     });
-    expect(findHumanoidBones(gltf.scene)).toBeDefined();
-    const names = new Set(gltf.animations.map((clip) => clip.name));
-    for (const name of ['idle', 'walk', 'sprint', 'aim', 'fire', 'punch_left', 'punch_right', 'jump', 'fall', 'land', 'death', 'ride']) expect(names.has(name)).toBe(true);
-    expect(file.byteLength).toBeLessThan(10 * 1024 * 1024); expect(triangles).toBeLessThan(60_000); expect(materials.size).toBeLessThanOrEqual(4);
+    expect(findHumanoidBones(gltf.scene)).toBeDefined(); expect(validated.clips.size).toBe(PLAYER_ANIMATIONS.length);
+    expect(gltf.animations.map((clip) => clip.name).sort()).toEqual([...PLAYER_ANIMATIONS].sort());
+    expect(file.byteLength).toBeLessThan(10 * 1024 * 1024); expect(triangles).toBeGreaterThanOrEqual(45_000); expect(triangles).toBeLessThanOrEqual(60_000);
+    expect(materials.size).toBe(4); expect(skinned).toBe(4);
+    const box = new THREE.Box3().setFromObject(gltf.scene); expect(box.max.y - box.min.y).toBeCloseTo(1.8, 2); expect(box.min.y).toBeCloseTo(0, 1);
+    for (const clip of gltf.animations) expect(clip.tracks.some((track) => track.name.endsWith('.position'))).toBe(false);
   });
 
-  it('activates a valid model and preserves the procedural fallback for load failure', async () => {
-    Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
-    const parent = new THREE.Group(); const procedural = new THREE.Group(); parent.add(procedural);
-    const gltf = await loadPlaceholder();
-    const valid = new RiggedPlayerVisual(parent, procedural, pose(), { load: async () => gltf });
-    const failed = new RiggedPlayerVisual(parent, new THREE.Group(), pose(), { load: async () => { throw new Error('missing'); }, onError: () => undefined });
-    const invalid = new RiggedPlayerVisual(parent, new THREE.Group(), pose(), { load: async () => ({ scene: new THREE.Group(), animations: [] }) as unknown as GLTF });
-    await Promise.resolve(); await Promise.resolve();
-    valid.setState(initialPlayerVisualState()); valid.update(1 / 60);
-    expect(valid.ready).toBe(true); expect(valid.active).toBe(true); expect(procedural.visible).toBe(false);
-    valid.setWeapon('shotgun');
+  it('loads only through the explicit lifecycle and fails closed on invalid data', async () => {
+    const parent = new THREE.Group(); const valid = new RiggedPlayerVisual(parent, { load: async () => loadProtagonist() });
+    expect(valid.status).toBe('idle'); expect(valid.group.visible).toBe(false); expect(parent.children).toEqual([valid.group]);
+    await valid.load(); expect(valid.status).toBe('ready'); expect(valid.group.visible).toBe(true);
+    valid.setState(initialPlayerVisualState()); valid.update(1 / 60); valid.setWeapon('shotgun');
     expect(valid.group.getObjectByName('RiggedWeapon:shotgun')?.visible).toBe(true);
     expect(valid.group.getObjectByName('RiggedWeapon:pistol')?.visible).toBe(false);
-    expect(failed.failed).toBe(true); expect(failed.active).toBe(false);
-    expect(invalid.failed).toBe(true); expect(invalid.active).toBe(false);
+
+    const invalid = new RiggedPlayerVisual(new THREE.Group(), { load: async () => ({ scene: new THREE.Group(), animations: [] }) as unknown as GLTF });
+    await expect(invalid.load()).rejects.toThrow(/metadata/i); expect(invalid.status).toBe('failed'); expect(invalid.group.visible).toBe(false);
+  });
+
+  it('keeps gameplay blocked after a network failure and allows retry to install the real rig', async () => {
+    let calls = 0;
+    const visual = new RiggedPlayerVisual(new THREE.Group(), { load: async () => { calls++; if (calls === 1) throw new Error('offline'); return loadProtagonist(); } });
+    await expect(visual.load()).rejects.toThrow(/unable to load/i); expect(visual.failed).toBe(true); expect(visual.ready).toBe(false);
+    await visual.retry(); expect(calls).toBe(2); expect(visual.ready).toBe(true); expect(visual.group.visible).toBe(true);
   });
 });

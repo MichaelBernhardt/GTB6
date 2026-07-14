@@ -10,7 +10,12 @@ export class MenuView {
   hide(): void { this.root.classList.remove('is-visible'); this.root.setAttribute('aria-hidden', 'true'); this.screen = 'none'; }
 
   loading(): void {
-    this.set('loading', `<section class="menu-card menu-card--loading"><p class="eyebrow">CITY SERVICES</p><h2>Building Jozi</h2><div class="loading-stripe" aria-label="Loading"></div><small>Robots, potholes and all.</small></section>`);
+    this.set('loading', `<section class="menu-card menu-card--loading"><p class="eyebrow">PLAYER SERVICES</p><h2>Getting the player ready</h2><div class="loading-stripe" aria-label="Loading character"></div><small>Checking the rig, outfit and moves.</small></section>`);
+  }
+
+  characterFailed(retry: () => void): void {
+    this.set('character-failed', `<section class="menu-card menu-card--loading menu-card--character-failed"><p class="eyebrow">PLAYER SERVICES</p><h2>Character failed to load</h2><p>The city stays closed until the full player model is ready.</p><button class="action-primary" data-action="retry-character">Retry</button></section>`);
+    this.bind('[data-action="retry-character"]', retry);
   }
 
   main(summary: MainMenuSummary, actions: { start: (fresh: boolean) => void; online: (name: string) => void; controls: () => void }): void {
