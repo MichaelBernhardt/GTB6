@@ -13,6 +13,9 @@ export const BURN_DPS = 10;
 export const BURNOUT_RADIUS = 4;
 export const BURNOUT_PED_DAMAGE = 85;
 export const BURNOUT_VEHICLE_DAMAGE = 48;
+/** Reach of the blast for catching neighbouring cars — wider than the ped/player radius, since a car is a
+ *  big target and a fuel tank going up should visibly take out the vehicles packed around it. */
+export const BURNOUT_VEHICLE_RADIUS = 6;
 export const BURNOUT_PLAYER_DAMAGE = 45;
 export const OCCUPANT_BURNOUT_DAMAGE = 70;
 export const POLICE_WRECK_HEAT = 30;
@@ -146,10 +149,20 @@ export class VehicleFireSystem {
       const killed = ped.takeDamage(damage);
       victims.push({ ped, killed, position: ped.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)) });
     }
-    if (burningCount < CHAIN_CAP) for (const other of vehicles) {
-      if (other === vehicle || other.wrecked) continue;
-      const damage = splashDamage(BURNOUT_VEHICLE_DAMAGE, other.group.position.distanceTo(position), BURNOUT_RADIUS + 1.5);
-      if (damage > 0) other.takeDamage(damage);
+    // Chain reaction: a car caught in the blast catches fire outright — even at full health — and
+    // explodes in its turn, so a packed street cascades. Bounded by CHAIN_CAP simultaneous fires (a
+    // per-blast budget on top of the frame's guard) so a dense car park can't runaway-detonate the map.
+    // The player's own car is spared the forced ignition (it still takes blast damage) so a nearby wreck
+    // doesn't instantly torch them out of the driver's seat; cars past the ignition budget just get hurt.
+    if (burningCount < CHAIN_CAP) {
+      let chainBudget = CHAIN_CAP - burningCount;
+      for (const other of vehicles) {
+        if (other === vehicle || other.wrecked || other.onFire) continue;
+        const distance = other.group.position.distanceTo(position);
+        if (distance >= BURNOUT_VEHICLE_RADIUS) continue;
+        if (chainBudget > 0 && !other.playerControlled) { other.ignite(); chainBudget--; }
+        else other.takeDamage(splashDamage(BURNOUT_VEHICLE_DAMAGE, distance, BURNOUT_VEHICLE_RADIUS));
+      }
     }
     const playerDamage = splashDamage(BURNOUT_PLAYER_DAMAGE, playerPosition.clone().add(new THREE.Vector3(0, 1, 0)).distanceTo(position), BURNOUT_RADIUS);
     return { vehicle, position, victims, playerDamage };
