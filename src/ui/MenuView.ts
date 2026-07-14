@@ -19,7 +19,7 @@ export class MenuView {
       <div class="main-menu__copy"><p class="eyebrow">A JOZI STORY · V2</p><h1><span>GROOT</span><span>THEFT</span><strong>BAKKIE</strong></h1><p class="main-menu__lede">Make a name across five districts where every robot is a suggestion and every action leaves a mark.</p>
       <div class="menu-actions"><button class="action-primary" data-action="${summary.hasSave ? 'continue' : 'new'}"><span>${summary.hasSave ? 'Continue solo' : 'Enter Joburg solo'}</span><kbd>ENTER</kbd></button>${summary.hasSave ? '<button data-action="new">Start fresh</button>' : ''}<div class="online-entry"><input data-online-name maxlength="24" value="${this.savedOnlineName()}" aria-label="Online display name" placeholder="Display name"><button data-action="online">Enter global world</button></div><button data-action="controls">Field guide</button></div></div>
       <div class="main-menu__rail">${progress}<div class="street-note"><b>LOAD SHEDDING</b><span>Included at no extra cost.</span></div></div>
-      <footer>ORIGINAL PROCEDURAL OPEN-WORLD GAME <i></i> JOHANNESBURG</footer>
+      <footer>ORIGINAL PROCEDURAL OPEN-WORLD GAME <i></i> JOHANNESBURG<span class="main-menu__build"> · ${__BUILD_HASH__}</span></footer>
     </section>`);
     this.bind('[data-action="continue"]', () => actions.start(false)); this.bind('[data-action="new"]', () => actions.start(true));
     this.bind('[data-action="online"]', () => { const input = this.root.querySelector<HTMLInputElement>('[data-online-name]'); const name = input?.value.trim() || 'Player'; localStorage.setItem('groot-theft-bakkie-online-name', name); actions.online(name); });
