@@ -1,9 +1,9 @@
 /**
- * Foliage set: SA trees and plants built for heavy instancing — icosahedron canopy blobs
- * (20 tris each at detail 0), low-segment cones, and shared paint() materials so the per-material
- * GeometryBaker merge collapses thousands of plants into a handful of draw calls. Trunks register
- * slim collider tiers where a plant is solid; canopies never collide, so the player brushes
- * through leaves but not through wood.
+ * Foliage set: recognisable SA trees and plants built for heavy instancing — low-poly canopy
+ * masses, silhouette-breaking leaf sprays, curved palm fronds, and shared paint() materials so
+ * the per-material GeometryBaker merge collapses thousands of plants into a handful of draw calls.
+ * Trunks register slim collider tiers where a plant is solid; canopies never collide, so the
+ * player brushes through leaves but not through wood.
  */
 import * as THREE from 'three';
 import { Kit, M, paint, type BuildOptions, type BuiltModel } from './kit';
@@ -34,6 +34,88 @@ const F = {
   hedge: paint(0x3f6136, 0.95),
   coral: paint(0xc4472e, 0.9),
 };
+
+type Point = readonly [number, number, number];
+type Triangle = readonly [Point, Point, Point];
+
+/** Build a tiny card mesh with back faces included in the geometry. Keeping the regular shared
+ *  paint materials avoids creating a second set of double-sided material buckets in every cell. */
+function doubleSidedGeometry(name: string, frontFaces: readonly Triangle[]): THREE.BufferGeometry {
+  const positions: number[] = []; const uvs: number[] = [];
+  for (const face of frontFaces) {
+    const back = [face[2], face[1], face[0]] as const;
+    for (const side of [face, back]) {
+      for (const point of side) positions.push(point[0], point[1], point[2]);
+      uvs.push(0, 0, 1, 0, 0.5, 1);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.name = name;
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/** Four angular leaflets arranged around a short central spray (8 tris including back faces). */
+const LEAF_SPRAY_GEOMETRY = doubleSidedGeometry('foliage-leaf-spray', [
+  [[0, 0, -0.5], [-0.38, 0.03, 0.08], [0, 0.08, 0.52]],
+  [[0, 0, -0.5], [0, 0.08, 0.52], [0.38, -0.03, 0.08]],
+  [[-0.04, 0.02, -0.08], [-0.55, 0.07, 0.24], [-0.12, 0.05, 0.46]],
+  [[0.04, -0.02, -0.08], [0.12, 0.04, 0.46], [0.55, -0.07, 0.24]],
+]);
+
+/** A tapered five-station ribbon whose baked-in arc produces a proper drooping palm silhouette. */
+function palmFrondGeometry(): THREE.BufferGeometry {
+  const stations = [
+    { z: 0, y: 0, halfWidth: 0.08 },
+    { z: 0.22, y: 0.03, halfWidth: 0.30 },
+    { z: 0.48, y: -0.03, halfWidth: 0.38 },
+    { z: 0.73, y: -0.17, halfWidth: 0.27 },
+    { z: 1, y: -0.38, halfWidth: 0.015 },
+  ] as const;
+  const faces: Triangle[] = [];
+  for (let segment = 0; segment < stations.length - 1; segment++) {
+    const from = stations[segment]!; const to = stations[segment + 1]!;
+    const fromLeft: Point = [-from.halfWidth, from.y, from.z];
+    const fromRight: Point = [from.halfWidth, from.y, from.z];
+    const toLeft: Point = [-to.halfWidth, to.y, to.z];
+    const toRight: Point = [to.halfWidth, to.y, to.z];
+    faces.push([fromLeft, fromRight, toLeft], [fromRight, toRight, toLeft]);
+  }
+  return doubleSidedGeometry('foliage-palm-frond', faces);
+}
+
+const PALM_FROND_GEOMETRY = palmFrondGeometry();
+
+function leafSpray(kit: Kit, material: THREE.Material, x: number, y: number, z: number, yaw: number, width: number, length: number, pitch: number, roll: number): void {
+  const mesh = new THREE.Mesh(LEAF_SPRAY_GEOMETRY, material);
+  mesh.name = 'leaf-spray'; mesh.userData.foliagePart = 'leaf-spray';
+  mesh.position.set(x, y, z); mesh.scale.set(width, width, length);
+  mesh.rotation.set(pitch, yaw, roll, 'YXZ');
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  kit.add(mesh);
+}
+
+/** Seeded leaf cards around a canopy rim: large enough to break up the blob silhouette while
+ *  staying close enough to the crown that the tree remains dense at gameplay camera distance. */
+function canopySprays(kit: Kit, material: THREE.Material, count: number, radius: number, y: number, width: number, length: number, salt: number, droop = 0.08): void {
+  for (let spray = 0; spray < count; spray++) {
+    const a = (spray / count) * TAU + (kit.rnd(salt + spray) - 0.5) * 0.7;
+    const r = radius * (0.9 + kit.rnd(salt + 10 + spray) * 0.16);
+    leafSpray(
+      kit, material,
+      Math.sin(a) * r,
+      y + (kit.rnd(salt + 20 + spray) - 0.5) * width * 0.65,
+      Math.cos(a) * r,
+      a,
+      width * (0.84 + kit.rnd(salt + 30 + spray) * 0.28),
+      length * (0.84 + kit.rnd(salt + 40 + spray) * 0.28),
+      droop + (kit.rnd(salt + 50 + spray) - 0.5) * 0.18,
+      (kit.rnd(salt + 60 + spray) - 0.5) * 0.24,
+    );
+  }
+}
 
 /** Low-poly canopy blob: an icosahedron squashed vertically to taste. Never collides. */
 function blob(kit: Kit, material: THREE.Material, r: number, x: number, y: number, z: number, squash = 0.8, detail = 0): THREE.Mesh {
@@ -75,7 +157,9 @@ export function buildJacaranda(seed: number, options: BuildOptions = {}): BuiltM
   for (let limb = 0; limb < 3; limb++) {
     lean(kit, F.barkDark, 0.05, 0.13, trunkH * 0.75, limb * 2.1 + kit.rnd(4 + limb) * 0.9, 0.55, 0, trunkH * 0.85, 0);
   }
-  crown(kit, variant === 1 ? F.jacBloom : F.leaf, 4, canopyR * 0.55, canopyR * 0.55, trunkH + canopyR * 0.5, 0.72, 30);
+  const canopy = variant === 1 ? F.jacBloom : F.leaf;
+  crown(kit, canopy, 4, canopyR * 0.55, canopyR * 0.55, trunkH + canopyR * 0.5, 0.72, 30);
+  canopySprays(kit, canopy, 5, canopyR * 0.92, trunkH + canopyR * 0.72, 0.72 + size * 0.12, 1 + size * 0.2, 80);
   if (variant === 1) kit.cyl(F.jacCarpet, canopyR * 0.8, canopyR * 0.8, 0.04, 0, 0, 0, { seg: 12, cast: false });
   return kit.done();
 }
@@ -94,6 +178,7 @@ export function buildShadeTree(seed: number, options: BuildOptions = {}): BuiltM
     const a = kit.rnd(50 + tuck) * TAU;
     blob(kit, F.leafDark, canopyR * 0.3, Math.sin(a) * canopyR * 0.45, trunkH + canopyR * (0.35 + kit.rnd(55 + tuck) * 0.3), Math.cos(a) * canopyR * 0.45, 0.85);
   }
+  canopySprays(kit, F.leaf, 6, canopyR * 0.95, trunkH + canopyR * 0.8, 0.78 + size * 0.15, 1.05 + size * 0.22, 80);
   return kit.done();
 }
 
@@ -111,6 +196,7 @@ export function buildGum(seed: number, options: BuildOptions = {}): BuiltModel {
     const a = (tuft / 4) * TAU + kit.rnd(20 + tuft) * 1.2;
     blob(kit, F.leafDusty, 1.0 + kit.rnd(30 + tuft) * 0.6, Math.sin(a) * 1.4, trunkH - 1 + tuft * 0.8, Math.cos(a) * 1.4, 0.75);
   }
+  canopySprays(kit, F.leafDusty, 6, 2.05, trunkH + 0.4, 0.55 + size * 0.12, 0.9 + size * 0.25, 70, 0.45);
   return kit.done();
 }
 
@@ -131,6 +217,7 @@ export function buildPine(seed: number, options: BuildOptions = {}): BuiltModel 
     lean(kit, F.bark, 0.07, 0.14, trunkH * 0.5, kit.rnd(5) * TAU, 0.7, 0, trunkH * 0.78, 0);
     blob(kit, F.pine, canopyR, 0, trunkH + canopyR * 0.1, 0, 0.45);
     blob(kit, F.leafDark, canopyR * 0.55, kit.rnd(7) * 1.4 - 0.7, trunkH - 0.4, kit.rnd(8) * 1.4 - 0.7, 0.5);
+    canopySprays(kit, F.pine, 4, canopyR * 0.8, trunkH + canopyR * 0.25, 0.7 + size * 0.1, 0.9 + size * 0.2, 40, 0.16);
   }
   return kit.done();
 }
@@ -149,6 +236,7 @@ export function buildAcacia(seed: number, options: BuildOptions = {}): BuiltMode
     const a = kit.rnd(20 + pad) * TAU;
     blob(kit, F.leafOlive, padR * 0.55, Math.sin(a) * padR * 0.55, padY - 0.5 + kit.rnd(25 + pad) * 0.9, Math.cos(a) * padR * 0.55, 0.3);
   }
+  canopySprays(kit, F.leafOlive, 5, padR * 0.88, padY + 0.12, 0.68 + size * 0.12, 1.05 + size * 0.22, 60, 0.03);
   return kit.done();
 }
 
@@ -172,11 +260,12 @@ export function buildPalm(seed: number, options: BuildOptions = {}): BuiltModel 
   blob(kit, F.leafDark, 0.42, topX, topY - 0.1, topZ, 0.8); // crown boss the fronds hang off
   for (let f = 0; f < 7; f++) {
     const a = (f / 7) * TAU + kit.rnd(20 + f) * 0.6;
-    const droop = 0.3 + kit.rnd(30 + f) * 0.45;
-    const len = 2 + size * 0.6;
-    const frond = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, len), F.frond);
-    frond.position.set(topX + Math.sin(a) * len * 0.42, topY + 0.3 - Math.sin(droop) * len * 0.25, topZ + Math.cos(a) * len * 0.42);
-    frond.rotateY(a); frond.rotateX(droop);
+    const len = 1.9 + size * 0.5;
+    const frond = new THREE.Mesh(PALM_FROND_GEOMETRY, f % 3 === 0 ? F.leafOlive : F.frond);
+    frond.name = 'palm-frond'; frond.userData.foliagePart = 'palm-frond';
+    frond.position.set(topX, topY + 0.25 + kit.rnd(30 + f) * 0.12, topZ);
+    frond.scale.set(0.78 + size * 0.1, len, len);
+    frond.rotation.set((kit.rnd(40 + f) - 0.5) * 0.14, a, (kit.rnd(50 + f) - 0.5) * 0.12, 'YXZ');
     frond.castShadow = true; frond.receiveShadow = true;
     kit.add(frond);
   }
@@ -294,6 +383,7 @@ export function buildLandmarkTree(seed: number, options: BuildOptions = {}): Bui
     const a = (lobe / 5) * TAU + kit.rnd(20 + lobe) * 0.9;
     blob(kit, F.leaf, canopyR * (0.3 + kit.rnd(30 + lobe) * 0.12), Math.sin(a) * canopyR * 0.55, trunkH + canopyR * (0.3 + kit.rnd(40 + lobe) * 0.25), Math.cos(a) * canopyR * 0.55, 0.7, 1);
   }
+  canopySprays(kit, F.leaf, 6, canopyR * 0.82, trunkH + canopyR * 0.68, 1.1 + size * 0.18, 1.45 + size * 0.28, 90, 0.12);
   if (variant === 1) {
     for (let bloomIdx = 0; bloomIdx < 3; bloomIdx++) {
       const a = kit.rnd(50 + bloomIdx) * TAU;

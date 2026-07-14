@@ -169,6 +169,53 @@ describe('foliage set', () => {
     }
   });
 
+  it('adds shared silhouette leaf sprays to broadleaf tree crowns', () => {
+    const cases = [
+      { name: 'jacaranda', variant: 0, count: 5 },
+      { name: 'shade-tree', variant: 0, count: 6 },
+      { name: 'gum', variant: 0, count: 6 },
+      { name: 'pine', variant: 1, count: 4 },
+      { name: 'acacia', variant: 0, count: 5 },
+      { name: 'landmark-tree', variant: 0, count: 6 },
+    ] as const;
+    const geometries = new Set<THREE.BufferGeometry>();
+    for (const spec of cases) {
+      const sprays: THREE.Mesh[] = [];
+      buildModel(spec.name, 11, { variant: spec.variant }).group.traverse((object) => {
+        if (object instanceof THREE.Mesh && object.userData.foliagePart === 'leaf-spray') sprays.push(object);
+      });
+      expect(sprays, spec.name).toHaveLength(spec.count);
+      for (const spray of sprays) {
+        geometries.add(spray.geometry);
+        expect(spray.geometry.name).toBe('foliage-leaf-spray');
+        expect(spray.geometry.getAttribute('normal').count).toBeGreaterThan(0);
+        expect(spray.geometry.getAttribute('uv').count).toBeGreaterThan(0);
+      }
+    }
+    expect(geometries.size).toBe(1); // one module-level geometry survives thousands of source trees
+  });
+
+  it('builds palms with shared tapered, curved fronds instead of box planks', () => {
+    const fronds: THREE.Mesh[] = [];
+    buildModel('palm', 11, { variant: 1 }).group.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.userData.foliagePart === 'palm-frond') fronds.push(object);
+    });
+    expect(fronds).toHaveLength(7);
+    expect(new Set(fronds.map((frond) => frond.geometry)).size).toBe(1);
+    for (const frond of fronds) {
+      expect(frond.geometry.name).toBe('foliage-palm-frond');
+      expect(frond.geometry.type).toBe('BufferGeometry');
+      const positions = frond.geometry.getAttribute('position');
+      let minY = Infinity; let maxWidth = 0;
+      for (let vertex = 0; vertex < positions.count; vertex++) {
+        minY = Math.min(minY, positions.getY(vertex));
+        maxWidth = Math.max(maxWidth, Math.abs(positions.getX(vertex)));
+      }
+      expect(minY).toBeLessThan(-0.3); // the arc is baked in, not a rotated rigid board
+      expect(maxWidth).toBeGreaterThan(0.3);
+    }
+  });
+
   it('jacaranda toggles the purple bloom canopy by variant', () => {
     const bloom = paint(0x8f74c8, 0.9); // paint() caches per colour — same instance the builder uses
     const usesBloom = (variant: number): boolean => {
