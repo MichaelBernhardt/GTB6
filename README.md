@@ -10,6 +10,7 @@ The city combines OpenStreetMap-derived Johannesburg roads with procedural build
 
 - A large Jozi map with 3,939 roads, 117 named districts, roughly 775 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
 - On-foot movement, third- and first-person cameras, cover, melee combat, firearms, armour, stim packs, parachutes, pickups, and a weapon wheel.
+- An original 1.8 m skinned Johannesburg protagonist with a teal technical jacket, 24 authored gameplay clips, directional aim, vehicle and airborne poses, and strict retryable startup validation.
 - Cars, bakkies, taxis, bicycles, delivery bikes, superbikes, vehicle damage, drive-bys, police sirens, and four synthesised radio stations.
 - Traffic that follows lanes and robots. “Robot” means traffic light here; no metal oke is coming to steal your job.
 - A five-star wanted system with witnesses, dispatch callouts, foot patrols, road pursuits, arrests, and persistent police pressure.
@@ -96,6 +97,8 @@ npm test           # Vitest gameplay and world tests
 npm run build      # TypeScript project build + production Vite bundle
 npm run test:watch # Vitest in watch mode
 npm run map:build  # Regenerate the checked-in map data
+npm run character:validate # Validate the committed rigged GLB contract
+npm run character:build    # Blender 4.2+ FBX/GLB rebuild (working files stay ignored)
 ```
 
 `npm run map:build` uses the map-generation pipeline under `tools/mapgen/`. The generated map data is checked in, so ordinary development does not need to call Overpass or regenerate Johannesburg before breakfast.
@@ -111,6 +114,8 @@ src/
   world/       generated map data, city building, environment, and streaming
   Game.ts      composition root and runtime orchestration
 tools/mapgen/  OpenStreetMap processing and deterministic map generation
+tools/character/ Blender build and strict GLB validation
+art/character/ original concept, material sources, recipe, and source lock
 server.mjs     production static server
 ```
 

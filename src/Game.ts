@@ -113,7 +113,9 @@ export class Game {
   private multiplayerOverlay = new MultiplayerOverlay();
   private online?: OnlineSession;
   private onlineWasDead = false;
-  private mode: GameMode = 'menu';
+  private mode: GameMode = 'loading';
+  private characterReady = false;
+  private characterLoadAttempt = 0;
   private activeVehicle?: Vehicle;
   private transition?: Transition;
   private marker = new THREE.Group();
@@ -200,9 +202,21 @@ export class Game {
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
     this.restoreGarageVehicle();
-    this.buildMarker(); this.bindUI(); this.animate();
+    this.buildMarker(); this.bindUI(); this.animate(); void this.prepareCharacter();
     if (import.meta.env.DEV) Object.assign(window, { __game: this });
-    setTimeout(() => this.ui.showMainMenu(this.mainMenuSummary()), 50);
+  }
+
+  private async prepareCharacter(retry = false): Promise<void> {
+    const attempt = ++this.characterLoadAttempt; this.characterReady = false; this.mode = 'loading'; this.ui.showLoading();
+    try {
+      if (retry) await this.player.retryCharacter(); else await this.player.loadCharacter();
+      if (attempt !== this.characterLoadAttempt) return;
+      this.characterReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
+    } catch (error) {
+      if (attempt !== this.characterLoadAttempt) return;
+      console.error('[player] Character failed to load.', error);
+      this.ui.showCharacterFailure(() => { void this.prepareCharacter(true); });
+    }
   }
 
   private setupRenderer(): void {
@@ -508,6 +522,7 @@ export class Game {
   }
 
   private startGame(fresh: boolean): void {
+    if (!this.characterReady || this.player.characterStatus !== 'ready') return;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.player.setDead(false); this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
@@ -515,6 +530,7 @@ export class Game {
   }
 
   private startOnline(name: string): void {
+    if (!this.characterReady || this.player.characterStatus !== 'ready') return;
     this.endTaxiShift(); this.endCourierShift(); this.online?.close();
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
     this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose();
@@ -970,7 +986,7 @@ export class Game {
       const [saddleY, saddleZ] = vehicle.spec.saddle ?? [0.1, -0.2];
       this.player.group.position.add(new THREE.Vector3(Math.sin(vehicle.heading) * saddleZ, saddleY, Math.cos(vehicle.heading) * saddleZ));
       this.player.group.rotation.copy(vehicle.group.rotation);
-      this.player.animateRiding(dt, vehicle.spec.kind, speed, driveBy);
+      this.player.animateRiding(dt, vehicle.spec.kind, speed, driveBy, driveBy && this.input.firing);
       const hit = vehicle.consumeRiderHit();
       if (hit.damage > 0) this.damagePlayer(hit.damage);
       if (shouldKnockOff(hit.impact)) { this.knockOff(vehicle); return; }

@@ -7,4 +7,8 @@ coverage/
 *.log
 GTA ThreeJS/
 tools/mapgen/cache/
+/build/character/
+/art/character/work/
+*.blend
+*.fbx
 .claude/worktrees/

@@ -4,17 +4,25 @@ import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import type { WeaponId } from '../config';
 import { buildWeaponModel } from './WeaponModels';
 
-export const PLAYER_MODEL_URL = '/models/characters/player-placeholder.glb';
+export const PLAYER_MODEL_URL = '/models/characters/protagonist.glb';
 
-export type PlayerAnimationName =
-  | 'idle' | 'walk' | 'sprint'
-  | 'aim' | 'aim_forward' | 'aim_back' | 'aim_left' | 'aim_right' | 'fire'
-  | 'punch_left' | 'punch_right'
-  | 'jump' | 'fall' | 'land' | 'death' | 'ride';
+export const PLAYER_ANIMATIONS = [
+  'idle', 'walk', 'sprint',
+  'aim', 'aim_forward', 'aim_back', 'aim_left', 'aim_right', 'fire',
+  'punch_left', 'punch_right',
+  'jump', 'fall', 'land', 'tumble', 'death',
+  'cover_idle', 'cover_move', 'cover_aim',
+  'ride_bicycle', 'ride_motorbike', 'ride_superbike',
+  'freefall', 'parachute',
+] as const;
+export type PlayerAnimationName = typeof PLAYER_ANIMATIONS[number];
+export type CoverMode = 'none' | 'idle' | 'move' | 'aim';
+export type RideMode = 'none' | 'bicycle' | 'motorbike' | 'superbike';
+export type AirMode = 'none' | 'freefall' | 'parachute';
+export type CharacterLoadStatus = 'idle' | 'loading' | 'ready' | 'failed';
 
 export interface PlayerVisualState {
-  moving: boolean;
-  sprinting: boolean;
+  locomotionSpeed: number;
   aiming: boolean;
   firing: boolean;
   moveSide: number;
@@ -23,30 +31,22 @@ export interface PlayerVisualState {
   velocityY: number;
   landing: boolean;
   attack?: 'punch_left' | 'punch_right';
-  cover: boolean;
-  riding: boolean;
-  airborne: boolean;
-  tumbling: boolean;
+  coverMode: CoverMode;
+  coverTwist: number;
+  rideMode: RideMode;
+  rideSpeed: number;
+  driveBy: boolean;
+  airMode: AirMode;
+  airPitch: number;
+  airBank: number;
+  inebriation: number;
+  tumbleProgress: number;
+  tumbleDirection: -1 | 1;
   dead: boolean;
 }
 
-export interface ProceduralHumanoidPose {
-  model: THREE.Object3D;
-  torso: THREE.Object3D;
-  head: THREE.Object3D;
-  leftArm: THREE.Object3D;
-  rightArm: THREE.Object3D;
-  leftForearm: THREE.Object3D;
-  rightForearm: THREE.Object3D;
-  leftLeg: THREE.Object3D;
-  rightLeg: THREE.Object3D;
-  leftShin: THREE.Object3D;
-  rightShin: THREE.Object3D;
-}
-
 const DEFAULT_STATE: PlayerVisualState = {
-  moving: false,
-  sprinting: false,
+  locomotionSpeed: 0,
   aiming: false,
   firing: false,
   moveSide: 0,
@@ -54,197 +54,258 @@ const DEFAULT_STATE: PlayerVisualState = {
   onGround: true,
   velocityY: 0,
   landing: false,
-  cover: false,
-  riding: false,
-  airborne: false,
-  tumbling: false,
+  coverMode: 'none',
+  coverTwist: 0,
+  rideMode: 'none',
+  rideSpeed: 0,
+  driveBy: false,
+  airMode: 'none',
+  airPitch: 0,
+  airBank: 0,
+  inebriation: 0,
+  tumbleProgress: 0,
+  tumbleDirection: 1,
   dead: false,
 };
 
 export const initialPlayerVisualState = (): PlayerVisualState => ({ ...DEFAULT_STATE });
 
-/** The GLB swaps in only from a visually neutral pose. Once active, procedural bone overrides cover rare poses. */
-export function canActivateRiggedVisual(state: PlayerVisualState): boolean {
-  return state.onGround && !state.moving && !state.aiming && !state.firing && !state.cover && !state.riding
-    && !state.airborne && !state.tumbling && !state.dead;
-}
-
 export function selectPlayerAnimation(state: PlayerVisualState): PlayerAnimationName {
   if (state.dead) return 'death';
+  if (state.tumbleProgress > 0) return 'tumble';
   if (state.attack) return state.attack;
-  if (state.airborne || !state.onGround) return state.velocityY > 0.25 ? 'jump' : 'fall';
+  if (state.airMode !== 'none') return state.airMode;
+  if (!state.onGround) return state.velocityY > 0.25 ? 'jump' : 'fall';
   if (state.landing) return 'land';
-  if (state.riding) return 'ride';
+  if (state.coverMode !== 'none') return `cover_${state.coverMode}` as 'cover_idle' | 'cover_move' | 'cover_aim';
+  if (state.rideMode !== 'none') return `ride_${state.rideMode}`;
   if (state.firing) return 'fire';
   if (state.aiming) {
-    if (!state.moving) return 'aim';
+    if (state.locomotionSpeed <= 0.05) return 'aim';
     if (Math.abs(state.moveSide) > Math.abs(state.moveForward)) return state.moveSide < 0 ? 'aim_left' : 'aim_right';
     return state.moveForward < 0 ? 'aim_back' : 'aim_forward';
   }
-  if (state.sprinting) return 'sprint';
-  if (state.moving) return 'walk';
+  if (state.locomotionSpeed >= 6.5) return 'sprint';
+  if (state.locomotionSpeed > 0.05) return 'walk';
   return 'idle';
 }
 
-type HumanoidBone = 'hips' | 'spine' | 'chest' | 'head' | 'leftUpperArm' | 'leftLowerArm' | 'leftHand'
+export type HumanoidBone = 'hips' | 'spine' | 'chest' | 'head' | 'leftUpperArm' | 'leftLowerArm' | 'leftHand'
   | 'rightUpperArm' | 'rightLowerArm' | 'rightHand' | 'leftUpperLeg' | 'leftLowerLeg' | 'leftFoot'
   | 'rightUpperLeg' | 'rightLowerLeg' | 'rightFoot';
+export type HumanoidBones = Record<HumanoidBone, THREE.Bone>;
 
-type HumanoidBones = Record<HumanoidBone, THREE.Object3D>;
-
-const BONE_ALIASES: Record<HumanoidBone, readonly string[]> = {
-  hips: ['Hips', 'hips', 'mixamorigHips', 'DEF-pelvis'],
-  spine: ['Spine', 'spine', 'mixamorigSpine', 'DEF-spine'],
-  chest: ['Chest', 'chest', 'Spine1', 'mixamorigSpine1', 'DEF-spine.001'],
-  head: ['Head', 'head', 'mixamorigHead', 'DEF-head'],
-  leftUpperArm: ['UpperArm_L', 'LeftArm', 'mixamorigLeftArm', 'DEF-upper_arm.L'],
-  leftLowerArm: ['LowerArm_L', 'LeftForeArm', 'mixamorigLeftForeArm', 'DEF-forearm.L'],
-  leftHand: ['Hand_L', 'LeftHand', 'mixamorigLeftHand', 'DEF-hand.L'],
-  rightUpperArm: ['UpperArm_R', 'RightArm', 'mixamorigRightArm', 'DEF-upper_arm.R'],
-  rightLowerArm: ['LowerArm_R', 'RightForeArm', 'mixamorigRightForeArm', 'DEF-forearm.R'],
-  rightHand: ['Hand_R', 'RightHand', 'mixamorigRightHand', 'DEF-hand.R'],
-  leftUpperLeg: ['UpperLeg_L', 'LeftUpLeg', 'mixamorigLeftUpLeg', 'DEF-thigh.L'],
-  leftLowerLeg: ['LowerLeg_L', 'LeftLeg', 'mixamorigLeftLeg', 'DEF-shin.L'],
-  leftFoot: ['Foot_L', 'LeftFoot', 'mixamorigLeftFoot', 'DEF-foot.L'],
-  rightUpperLeg: ['UpperLeg_R', 'RightUpLeg', 'mixamorigRightUpLeg', 'DEF-thigh.R'],
-  rightLowerLeg: ['LowerLeg_R', 'RightLeg', 'mixamorigRightLeg', 'DEF-shin.R'],
-  rightFoot: ['Foot_R', 'RightFoot', 'mixamorigRightFoot', 'DEF-foot.R'],
+export const BONE_NAMES: Record<HumanoidBone, string> = {
+  hips: 'Hips', spine: 'Spine', chest: 'Chest', head: 'Head',
+  leftUpperArm: 'UpperArm_L', leftLowerArm: 'LowerArm_L', leftHand: 'Hand_L',
+  rightUpperArm: 'UpperArm_R', rightLowerArm: 'LowerArm_R', rightHand: 'Hand_R',
+  leftUpperLeg: 'UpperLeg_L', leftLowerLeg: 'LowerLeg_L', leftFoot: 'Foot_L',
+  rightUpperLeg: 'UpperLeg_R', rightLowerLeg: 'LowerLeg_R', rightFoot: 'Foot_R',
 };
 
 export function findHumanoidBones(root: THREE.Object3D): HumanoidBones | undefined {
   const found = {} as Partial<HumanoidBones>;
-  for (const [key, aliases] of Object.entries(BONE_ALIASES) as [HumanoidBone, readonly string[]][]) {
-    const bone = aliases.map((name) => root.getObjectByName(name)).find(Boolean);
-    if (!bone) return undefined;
-    found[key] = bone;
+  for (const [key, name] of Object.entries(BONE_NAMES) as [HumanoidBone, string][]) {
+    const bone = root.getObjectByName(name); if (!(bone instanceof THREE.Bone)) return undefined; found[key] = bone;
   }
   return found as HumanoidBones;
 }
 
-const CLIP_ALIASES: Record<PlayerAnimationName, readonly string[]> = {
-  idle: ['idle', 'Idle'], walk: ['walk', 'Walk'], sprint: ['sprint', 'Sprint', 'Run'],
-  aim: ['aim', 'Aim', 'GunIdle'], aim_forward: ['aim_forward', 'AimForward', 'GunWalk'],
-  aim_back: ['aim_back', 'AimBack'], aim_left: ['aim_left', 'AimLeft'], aim_right: ['aim_right', 'AimRight'],
-  fire: ['fire', 'Fire', 'Shoot'], punch_left: ['punch_left', 'PunchLeft', 'Punch'], punch_right: ['punch_right', 'PunchRight', 'Punch'],
-  jump: ['jump', 'Jump'], fall: ['fall', 'Fall'], land: ['land', 'Land'], death: ['death', 'Death'], ride: ['ride', 'Ride', 'Sit'],
-};
+const ONE_SHOT_ANIMATIONS = new Set<PlayerAnimationName>(['fire', 'punch_left', 'punch_right', 'jump', 'land', 'tumble', 'death']);
+const MATERIAL_NAMES = ['SkinEyes', 'TealTechnicalJacket', 'CharcoalJeans', 'HairShoes'];
 
-const FALLBACK_ACTION: Partial<Record<PlayerAnimationName, PlayerAnimationName>> = {
-  aim_forward: 'aim', aim_back: 'aim', aim_left: 'aim', aim_right: 'aim', fire: 'aim',
-  punch_left: 'idle', punch_right: 'idle', jump: 'fall', land: 'idle', death: 'fall', ride: 'idle',
-};
+export class PlayerCharacterError extends Error {
+  constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'PlayerCharacterError'; }
+}
 
-function clipFor(clips: readonly THREE.AnimationClip[], name: PlayerAnimationName): THREE.AnimationClip | undefined {
-  return clips.find((clip) => CLIP_ALIASES[name].includes(clip.name));
+export interface ValidatedPlayerGltf { bones: HumanoidBones; clips: Map<PlayerAnimationName, THREE.AnimationClip>; }
+
+export function validatePlayerGltf(gltf: GLTF): ValidatedPlayerGltf {
+  const contract = gltf.scene.getObjectByName('JohannesburgProtagonist')?.userData.characterContract as Record<string, unknown> | undefined;
+  if (contract?.version !== 1 || contract.forwardAxis !== '+Z' || contract.feetAtOrigin !== true || contract.fps !== 30) throw new PlayerCharacterError('Character metadata is missing or invalid.');
+  const bones = findHumanoidBones(gltf.scene); if (!bones) throw new PlayerCharacterError('Character is missing one or more required humanoid bones.');
+  const clipNames = gltf.animations.map((clip) => clip.name);
+  if (new Set(clipNames).size !== PLAYER_ANIMATIONS.length || clipNames.length !== PLAYER_ANIMATIONS.length || PLAYER_ANIMATIONS.some((name) => !clipNames.includes(name))) {
+    throw new PlayerCharacterError('Character animation set does not exactly match the required 24 clips.');
+  }
+  const clips = new Map(PLAYER_ANIMATIONS.map((name) => [name, gltf.animations.find((clip) => clip.name === name)!]));
+  let triangles = 0; const materials = new Set<THREE.Material>(); let skinnedMeshes = 0;
+  gltf.scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    triangles += (object.geometry.index?.count ?? object.geometry.attributes.position?.count ?? 0) / 3;
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
+    if (!(object instanceof THREE.SkinnedMesh)) throw new PlayerCharacterError(`Unskinned character mesh: ${object.name || '(unnamed)'}.`);
+    skinnedMeshes++;
+    const joints = object.geometry.getAttribute('skinIndex'); const weights = object.geometry.getAttribute('skinWeight');
+    if (!joints || !weights || joints.itemSize !== 4 || weights.itemSize !== 4) throw new PlayerCharacterError(`${object.name} does not use four-influence skin attributes.`);
+    for (let vertex = 0; vertex < weights.count; vertex++) {
+      const sum = weights.getX(vertex) + weights.getY(vertex) + weights.getZ(vertex) + weights.getW(vertex);
+      if (Math.abs(sum - 1) > 0.001) throw new PlayerCharacterError(`${object.name} has unnormalised bone weights.`);
+    }
+  });
+  if (triangles < 45_000 || triangles > 60_000) throw new PlayerCharacterError(`Character has ${triangles} triangles; expected 45–60k.`);
+  if (skinnedMeshes !== 4 || materials.size !== 4) throw new PlayerCharacterError('Character must contain exactly four skinned material meshes.');
+  const names = [...materials].map((material) => material.name).sort();
+  if (JSON.stringify(names) !== JSON.stringify([...MATERIAL_NAMES].sort())) throw new PlayerCharacterError('Character material names are invalid.');
+  for (const material of materials) {
+    if (material.transparent || material.alphaTest > 0) throw new PlayerCharacterError(`${material.name} must be opaque.`);
+    const map = (material as THREE.MeshStandardMaterial).map; const image = map?.image as { width?: number; height?: number } | undefined;
+    if (!image || image.width !== 2048 || image.height !== 2048) throw new PlayerCharacterError(`${material.name} must use a 2048×2048 base-colour map.`);
+  }
+  const box = new THREE.Box3().setFromObject(gltf.scene); const height = box.max.y - box.min.y;
+  if (Math.abs(height - 1.8) > 0.01 || Math.abs(box.min.y) > 0.015) throw new PlayerCharacterError(`Character scale/origin is invalid (${height.toFixed(3)} m high, feet y=${box.min.y.toFixed(3)}).`);
+  for (const clip of gltf.animations) if (clip.tracks.some((track) => track.name.endsWith('.position'))) throw new PlayerCharacterError(`${clip.name} contains root translation.`);
+  return { bones, clips };
 }
 
 export interface RiggedPlayerVisualOptions {
   url?: string;
   load?: (url: string) => Promise<GLTF>;
-  onError?: (error: unknown) => void;
+  onStatus?: (status: CharacterLoadStatus, error?: PlayerCharacterError) => void;
 }
 
-/** Authored animation layer with a fail-closed procedural fallback. Gameplay never depends on this class loading. */
+const WEAPON_SOCKET: Partial<Record<WeaponId, { position: [number, number, number]; rotation: [number, number, number]; scale?: number }>> = {
+  pistol: { position: [0, -0.045, 0.035], rotation: [-Math.PI / 2, 0, Math.PI] },
+  smg: { position: [0, -0.04, 0.045], rotation: [-Math.PI / 2, 0, Math.PI] },
+  shotgun: { position: [0, -0.03, 0.055], rotation: [-Math.PI / 2, 0, Math.PI] },
+  sniper: { position: [0, -0.03, 0.06], rotation: [-Math.PI / 2, 0, Math.PI] },
+  rpg: { position: [-0.28, 0.12, -0.2], rotation: [-Math.PI / 2, 0.12, -0.18], scale: 0.94 },
+};
+
 export class RiggedPlayerVisual {
   readonly group = new THREE.Group();
-  ready = false;
-  active = false;
-  failed = false;
+  status: CharacterLoadStatus = 'idle';
+  error?: PlayerCharacterError;
+  private readonly url: string;
+  private readonly loader: (url: string) => Promise<GLTF>;
+  private readonly onStatus?: RiggedPlayerVisualOptions['onStatus'];
   private state = initialPlayerVisualState();
+  private loading?: Promise<void>;
   private mixer?: THREE.AnimationMixer;
   private bones?: HumanoidBones;
   private actions = new Map<PlayerAnimationName, THREE.AnimationAction>();
+  private restRotations = new Map<THREE.Bone, THREE.Quaternion>();
   private current?: THREE.AnimationAction;
   private currentName?: PlayerAnimationName;
   private weapon: WeaponId = 'pistol';
   private weaponMeshes = new Map<WeaponId, THREE.Group>();
+  private elapsed = 0;
+  private pedalPhase = 0;
 
-  constructor(
-    private parent: THREE.Object3D,
-    private proceduralModel: THREE.Object3D,
-    private pose: ProceduralHumanoidPose,
-    options: RiggedPlayerVisualOptions = {},
-  ) {
+  constructor(private parent: THREE.Object3D, options: RiggedPlayerVisualOptions = {}) {
+    this.url = options.url ?? PLAYER_MODEL_URL; this.loader = options.load ?? ((url) => new GLTFLoader().loadAsync(url)); this.onStatus = options.onStatus;
     this.group.name = 'RiggedPlayerVisual'; this.group.visible = false; this.parent.add(this.group);
-    if (typeof window !== 'undefined') {
-      const load = options.load ?? ((url: string) => new GLTFLoader().loadAsync(url));
-      void load(options.url ?? PLAYER_MODEL_URL).then((gltf) => this.install(gltf)).catch((error: unknown) => {
-        this.failed = true; options.onError?.(error);
-        if (!options.onError) console.warn('[player] Rigged character unavailable; using procedural fallback.', error);
-      });
-    }
+  }
+
+  get ready(): boolean { return this.status === 'ready'; }
+  get failed(): boolean { return this.status === 'failed'; }
+
+  load(): Promise<void> {
+    if (this.status === 'ready') return Promise.resolve();
+    if (this.loading) return this.loading;
+    this.setStatus('loading');
+    this.loading = this.loader(this.url).then((gltf) => this.install(gltf)).catch((reason: unknown) => {
+      const error = reason instanceof PlayerCharacterError ? reason : new PlayerCharacterError('Unable to load the player character.', { cause: reason });
+      this.group.visible = false; this.setStatus('failed', error); throw error;
+    }).finally(() => { this.loading = undefined; });
+    return this.loading;
+  }
+
+  retry(): Promise<void> {
+    if (this.status === 'loading') return this.loading ?? Promise.resolve();
+    this.resetInstalledModel(); return this.load();
   }
 
   setState(state: PlayerVisualState): void { this.state = { ...state }; }
-
   setWeapon(id: WeaponId): void {
     this.weapon = id;
     for (const [weaponId, mesh] of this.weaponMeshes) mesh.visible = weaponId === id;
   }
 
   update(dt: number): void {
-    if (!this.ready || !this.mixer) return;
-    if (!this.active && canActivateRiggedVisual(this.state)) {
-      this.active = true; this.group.visible = true; this.proceduralModel.visible = false;
-    }
-    if (!this.active) return;
-    const requested = selectPlayerAnimation(this.state);
-    this.transitionTo(requested);
-    this.mixer.update(Math.max(0, dt));
-    if (this.usesProceduralPose()) this.applyProceduralPose(); else this.group.rotation.set(0, 0, 0);
+    if (!this.ready || !this.mixer || !this.bones) return;
+    const step = Math.max(0, dt); this.elapsed += step;
+    this.restoreRestPose();
+    const requested = selectPlayerAnimation(this.state); this.transitionTo(requested); this.setPlaybackRate(requested);
+    this.mixer.update(step); this.applyAdditivePose(step);
   }
 
   private install(gltf: GLTF): void {
-    const bones = findHumanoidBones(gltf.scene);
-    if (!bones || !clipFor(gltf.animations, 'idle') || !clipFor(gltf.animations, 'walk') || !clipFor(gltf.animations, 'sprint')) {
-      this.failed = true; return;
-    }
-    const box = new THREE.Box3().setFromObject(gltf.scene); const height = box.max.y - box.min.y;
-    if (!Number.isFinite(height) || height <= 0.1) { this.failed = true; return; }
-    gltf.scene.scale.setScalar(1.8 / height); gltf.scene.position.y = -box.min.y * (1.8 / height);
+    const { bones, clips } = validatePlayerGltf(gltf); this.resetInstalledModel();
     gltf.scene.name = 'RiggedPlayerModel';
-    gltf.scene.traverse((object) => {
-      if (object instanceof THREE.Mesh) { object.castShadow = true; object.receiveShadow = true; object.frustumCulled = false; }
-    });
-    this.group.add(gltf.scene); this.bones = bones; this.mixer = new THREE.AnimationMixer(gltf.scene);
-    for (const name of Object.keys(CLIP_ALIASES) as PlayerAnimationName[]) {
-      const clip = clipFor(gltf.animations, name); if (!clip) continue;
-      const action = this.mixer.clipAction(clip); if (['punch_left', 'punch_right', 'jump', 'land', 'death'].includes(name)) { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
+    gltf.scene.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.receiveShadow = true; object.frustumCulled = false; } });
+    this.bones = bones; this.mixer = new THREE.AnimationMixer(gltf.scene);
+    for (const [name, clip] of clips) {
+      const action = this.mixer.clipAction(clip);
+      if (ONE_SHOT_ANIMATIONS.has(name)) { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
       this.actions.set(name, action);
     }
-    this.buildWeapons(); this.setWeapon(this.weapon); this.ready = true;
+    for (const bone of Object.values(bones)) this.restRotations.set(bone, bone.quaternion.clone());
+    this.buildWeapons(); this.setWeapon(this.weapon);
+    this.transitionTo('idle', 0); this.mixer.update(0);
+    this.group.add(gltf.scene); this.group.visible = true; this.setStatus('ready');
   }
 
-  private transitionTo(requested: PlayerAnimationName): void {
-    let name = requested; let next = this.actions.get(name);
-    while (!next && FALLBACK_ACTION[name]) { name = FALLBACK_ACTION[name]!; next = this.actions.get(name); }
-    if (!next || (this.current === next && this.currentName === requested)) return;
-    this.current?.fadeOut(0.16);
-    next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.16).play();
-    this.current = next; this.currentName = requested;
+  private setStatus(status: CharacterLoadStatus, error?: PlayerCharacterError): void {
+    this.status = status; this.error = error; this.onStatus?.(status, error);
   }
 
-  private usesProceduralPose(): boolean {
-    return this.state.cover || this.state.riding || this.state.airborne || this.state.tumbling;
+  private resetInstalledModel(): void {
+    this.mixer?.stopAllAction(); this.group.clear(); this.group.visible = false; this.mixer = undefined; this.bones = undefined;
+    this.actions.clear(); this.restRotations.clear(); this.weaponMeshes.clear(); this.current = undefined; this.currentName = undefined;
+    if (this.status !== 'loading') { this.status = 'idle'; this.error = undefined; }
   }
 
-  private applyProceduralPose(): void {
+  private transitionTo(name: PlayerAnimationName, fade = 0.16): void {
+    const next = this.actions.get(name); if (!next || (this.current === next && this.currentName === name)) return;
+    if (fade > 0) this.current?.fadeOut(fade); else this.current?.stop();
+    next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1);
+    if (fade > 0) next.fadeIn(fade); next.play(); this.current = next; this.currentName = name;
+  }
+
+  private setPlaybackRate(name: PlayerAnimationName): void {
+    if (!this.current) return;
+    if (name === 'walk') this.current.setEffectiveTimeScale(THREE.MathUtils.clamp(this.state.locomotionSpeed / 4.6, 0.45, 1.8));
+    else if (name === 'sprint') this.current.setEffectiveTimeScale(THREE.MathUtils.clamp(this.state.locomotionSpeed / 8.2, 0.65, 1.6));
+    else if (name === 'ride_bicycle') this.current.setEffectiveTimeScale(THREE.MathUtils.clamp(Math.abs(this.state.rideSpeed) / 6, 0.2, 2.5));
+    else this.current.setEffectiveTimeScale(1);
+  }
+
+  private restoreRestPose(): void {
+    for (const [bone, rotation] of this.restRotations) bone.quaternion.copy(rotation);
+    this.group.position.set(0, 0, 0); this.group.rotation.set(0, 0, 0);
+  }
+
+  private applyAdditivePose(dt: number): void {
     const bones = this.bones; if (!bones) return;
-    this.group.rotation.copy(this.pose.model.rotation);
-    bones.chest.rotation.copy(this.pose.torso.rotation); bones.head.rotation.copy(this.pose.head.rotation);
-    bones.leftUpperArm.rotation.copy(this.pose.leftArm.rotation); bones.rightUpperArm.rotation.copy(this.pose.rightArm.rotation);
-    bones.leftLowerArm.rotation.copy(this.pose.leftForearm.rotation); bones.rightLowerArm.rotation.copy(this.pose.rightForearm.rotation);
-    bones.leftUpperLeg.rotation.copy(this.pose.leftLeg.rotation); bones.rightUpperLeg.rotation.copy(this.pose.rightLeg.rotation);
-    bones.leftLowerLeg.rotation.copy(this.pose.leftShin.rotation); bones.rightLowerLeg.rotation.copy(this.pose.rightShin.rotation);
+    bones.chest.rotation.y += this.state.coverTwist;
+    if (this.state.driveBy) { bones.rightUpperArm.rotation.x -= 0.32; bones.rightUpperArm.rotation.z += 0.12; bones.head.rotation.y -= 0.12; }
+    if (this.state.firing) { bones.rightUpperArm.rotation.x += 0.08; bones.chest.rotation.x -= 0.035; }
+    if (this.state.airMode !== 'none') {
+      this.group.rotation.x = this.state.airMode === 'freefall' ? THREE.MathUtils.clamp(1.22 + this.state.airPitch * 0.28, 0.5, Math.PI / 2 - 0.06) : 0.08 + this.state.airPitch * 0.14;
+      this.group.rotation.z = -this.state.airBank * 0.55;
+    }
+    if (this.state.rideMode === 'bicycle') {
+      this.pedalPhase += dt * Math.abs(this.state.rideSpeed) * 0.62; const pedal = Math.sin(this.pedalPhase);
+      bones.leftUpperLeg.rotation.x += pedal * 0.42; bones.rightUpperLeg.rotation.x -= pedal * 0.42;
+      bones.leftLowerLeg.rotation.x -= pedal * 0.38; bones.rightLowerLeg.rotation.x += pedal * 0.38;
+    }
+    if (this.state.tumbleProgress > 0) {
+      const progress = this.state.tumbleProgress; const roll = Math.min(1, progress * 3.2) * (1 - THREE.MathUtils.smoothstep(progress, 0.72, 1));
+      this.group.rotation.z += this.state.tumbleDirection * Math.PI / 2 * roll;
+    }
+    if (this.state.inebriation > 0) {
+      const sway = Math.sin(this.elapsed * 2.1) * this.state.inebriation;
+      this.group.rotation.z += sway * 0.13; bones.chest.rotation.z += sway * 0.16; bones.head.rotation.z += Math.sin(this.elapsed * 2.7) * this.state.inebriation * 0.2;
+    }
   }
 
   private buildWeapons(): void {
     const bones = this.bones; if (!bones) return;
-    for (const id of ['pistol', 'smg', 'shotgun', 'sniper'] as const) {
-      const mesh = buildWeaponModel(id); if (!mesh) continue;
-      mesh.name = `RiggedWeapon:${id}`; mesh.position.set(0, 0.02, 0); bones.rightHand.add(mesh); this.weaponMeshes.set(id, mesh);
+    for (const id of ['pistol', 'smg', 'shotgun', 'sniper', 'rpg'] as const) {
+      const mesh = buildWeaponModel(id); const socket = WEAPON_SOCKET[id]; if (!mesh || !socket) continue;
+      mesh.name = `RiggedWeapon:${id}`; mesh.position.set(...socket.position); mesh.rotation.set(...socket.rotation); if (socket.scale) mesh.scale.setScalar(socket.scale);
+      (id === 'rpg' ? bones.chest : bones.rightHand).add(mesh); this.weaponMeshes.set(id, mesh);
     }
-    const rpg = buildWeaponModel('rpg');
-    if (rpg) { rpg.name = 'RiggedWeapon:rpg'; rpg.rotation.x = -Math.PI / 2; rpg.position.set(-0.3, 0.15, -0.28); bones.chest.add(rpg); this.weaponMeshes.set('rpg', rpg); }
   }
 }
