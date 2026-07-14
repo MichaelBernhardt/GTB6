@@ -1,24 +1,27 @@
 /** Skydive physics for the `skyfall` console command. Pure state stepping — Game owns the player, the city
  *  queries and the visuals; this module owns the numbers so headless tests can fly the whole descent. */
 
-export const SKYFALL_ALTITUDE = 600; // drop height above the target ground
+export const SKYFALL_ALTITUDE = 2500; // drop height above the target ground — high enough for a long freefall
 
-/** Freefall: belly-down terminal velocity, W tips head-down (faster everything), S arches flat (slow + track). */
+/** Freefall: belly-down terminal velocity, W tips head-down (faster everything), S arches flat (slow + track).
+ *  Forward speeds are tuned for big ground coverage — flat tracking (S) out-glides the sink (>1:1) so you can
+ *  aim for a distant landing zone and really move across the map, not just drift. */
 export const FREEFALL_DESCENT = 55;
 export const FREEFALL_DIVE_DESCENT = 78;
 export const FREEFALL_FLAT_DESCENT = 38;
-export const FREEFALL_FORWARD = 10;
-export const FREEFALL_FORWARD_DIVE = 34;
-export const FREEFALL_FORWARD_TRACK = 20;
+export const FREEFALL_FORWARD = 30;
+export const FREEFALL_FORWARD_DIVE = 70;
+export const FREEFALL_FORWARD_TRACK = 60;
 export const FREEFALL_TURN_RATE = 1.7; // rad/s
 export const FREEFALL_RESPONSE = 1.4; // 1/s convergence toward the target sink rate
 
-/** Canopy: gentle sink, strong glide authority, W dives for speed and S rides the brakes. */
-export const CHUTE_DESCENT = 8;
+/** Canopy: gentle sink, strong glide authority, W dives for speed and S rides the brakes. The flat sink + high
+ *  forward gives a long glide (~2.7:1 neutral) so a deployed chute covers a lot of ground toward a chosen target. */
+export const CHUTE_DESCENT = 7;
 export const CHUTE_DIVE_DESCENT = 13;
 export const CHUTE_BRAKE_DESCENT = 5.5;
-export const CHUTE_FORWARD = 11;
-export const CHUTE_FORWARD_DIVE = 17;
+export const CHUTE_FORWARD = 19;
+export const CHUTE_FORWARD_DIVE = 27;
 export const CHUTE_FORWARD_BRAKE = 5;
 export const CHUTE_TURN_RATE = 1.15;
 export const CHUTE_RESPONSE = 6; // the canopy bites fast: deploying sheds ~50 u/s of sink in about a second
