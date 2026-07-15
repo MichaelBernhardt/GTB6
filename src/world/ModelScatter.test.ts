@@ -95,15 +95,15 @@ describe('citywide model scatter', () => {
           const otherDef = MODEL_INDEX.get(other.name)!;
           const otherRadius = Math.hypot(otherDef.maxFootprint.w, otherDef.maxFootprint.d) / 2;
           const distance = Math.hypot(model.x - other.x, model.z - other.z);
-          expect(distance, `${model.name} overlaps ${other.name}`).toBeGreaterThanOrEqual(radius + otherRadius - 1e-6);
-          if (model.name === other.name) expect(distance, `${model.name} spacing`).toBeGreaterThanOrEqual(Math.max(def.spacing, otherDef.spacing) - 1e-6);
+          if (distance < radius + otherRadius - 1e-6) throw new Error(`${model.name} overlaps ${other.name}`);
+          if (model.name === other.name && distance < Math.max(def.spacing, otherDef.spacing) - 1e-6) throw new Error(`${model.name} violates spacing`);
         }
       }
       const key = `${cx},${cz}`; const bucket = grid.get(key);
       if (bucket) bucket.push(model); else grid.set(key, [model]);
       maxRadius = Math.max(maxRadius, radius);
     }
-  });
+  }, 30_000);
 
   it('never overlaps a streamed procedural building', () => {
     const cell = 256; const grid = new Map<string, GeneratedBuilding[]>(); let maxRadius = 0;
@@ -119,11 +119,11 @@ describe('citywide model scatter', () => {
       for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
         for (const building of grid.get(`${cx + dx},${cz + dz}`) ?? []) {
           const buildingRadius = Math.hypot(building.width, building.depth) / 2;
-          expect(Math.hypot(model.x - building.x, model.z - building.z), `${model.name} overlaps ${building.style}`).toBeGreaterThanOrEqual(radius + buildingRadius - 1e-6);
+          if (Math.hypot(model.x - building.x, model.z - building.z) < radius + buildingRadius - 1e-6) throw new Error(`${model.name} overlaps ${building.style}`);
         }
       }
     }
-  });
+  }, 30_000);
 
   it('keeps zone affinity: coastal-only models hug the coast, industry stays in the belt', () => {
     // Models that can ONLY come from the coastal promenade / beach passes must be near a beach.

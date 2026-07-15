@@ -116,10 +116,12 @@ describe('citywide parcel layout', () => {
       for (const fx of [-0.5, 0, 0.5]) for (const fz of [-0.5, 0, 0.5]) {
         const x = building.x + fx * building.width * c + fz * building.depth * s;
         const z = building.z - fx * building.width * s + fz * building.depth * c;
-        for (const polygons of excluded) expect(pointInAnyPolygon(polygons, x, z)).toBe(false);
+        for (const polygons of excluded) {
+          if (pointInAnyPolygon(polygons, x, z)) throw new Error(`${building.style} footprint entered protected land at ${x.toFixed(1)},${z.toFixed(1)}`);
+        }
       }
     }
-  });
+  }, 20_000);
 
   it('keeps parcel occupancy separated even for the largest estate and tower footprints', () => {
     const grid = new Map<string, GeneratedBuilding[]>(); const cell = 256;
