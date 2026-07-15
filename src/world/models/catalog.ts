@@ -8,11 +8,11 @@
  * models test sweeps seeds and fails the catalog if any build ever exceeds it.
  */
 import type { BuildOptions, BuiltModel, ModelDef } from './kit';
-import { buildBarn, buildFarmhouse, buildKraal, buildPadstal, buildSilo, buildTractorShed, buildWaterTower, buildWindpomp } from './rural';
-import { buildBigBox, buildFillingStation, buildOfficeBlock, buildSpazaShop, buildStripMall } from './commercial';
-import { buildContainerStack, buildFactory, buildScrapyard, buildSubstation, buildTankFarm, buildWarehouse } from './industrial';
+import { buildBarn, buildFarmhouse, buildFarmWorkerCottages, buildKraal, buildPadstal, buildSilo, buildTractorShed, buildWaterTower, buildWindpomp } from './rural';
+import { buildBigBox, buildFillingStation, buildMixedUseCorner, buildOfficeBlock, buildParkingGarage, buildSpazaShop, buildStripMall } from './commercial';
+import { buildContainerStack, buildFactory, buildLogisticsDepot, buildScrapyard, buildSubstation, buildTankFarm, buildWarehouse, buildWorkshopRow } from './industrial';
 import { buildAblutions, buildBeachCafe, buildBeachLoungers, buildIceCreamKiosk, buildLifeguardTower, buildPavilion, buildPierKiosk, buildSurfShack } from './coastal';
-import { buildApartmentBlock, buildFaceBrickHouse, buildSandtonVilla, buildTinRoofHouse, buildTownhouseRow } from './residentialSA';
+import { buildApartmentBlock, buildFaceBrickHouse, buildRdpRow, buildSandtonVilla, buildSemiDetachedHouse, buildTinRoofHouse, buildTownhouseRow, buildWalkUpFlats } from './residentialSA';
 import { buildBillboard, buildCellTower, buildChurch, buildCommunityHall, buildMosque, buildReservoir, buildSchool, buildSportsGround, buildTaxiRank } from './civic';
 import { buildAcacia, buildAgave, buildAloe, buildBougainvillea, buildGum, buildHedgeUnit, buildJacaranda, buildLandmarkTree, buildPalm, buildPine, buildShadeTree, buildVeldGrass } from './foliage';
 
@@ -28,12 +28,15 @@ export const MODEL_CATALOG: ModelDef[] = [
   { name: 'tractor-shed', category: 'rural', zones: ['rural', 'farm'], variants: 2, maxFootprint: { w: 15, d: 11 }, standable: false, spacing: 24, build: buildTractorShed },
   { name: 'kraal', category: 'rural', zones: ['rural', 'farm', 'veld'], variants: 2, maxFootprint: { w: 22, d: 13 }, standable: false, spacing: 30, build: buildKraal },
   { name: 'padstal', category: 'rural', zones: ['rural', 'roadside'], variants: 3, maxFootprint: { w: 12, d: 10 }, standable: false, spacing: 200, build: buildPadstal },
+  { name: 'farm-worker-cottages', category: 'rural', zones: ['rural', 'farm'], variants: 3, maxFootprint: { w: 27, d: 13 }, standable: false, spacing: 30, build: buildFarmWorkerCottages },
   // ---- Commercial ----
   { name: 'strip-mall', category: 'commercial', zones: ['commercial', 'highstreet', 'suburb'], variants: 3, maxFootprint: { w: 36, d: 17 }, standable: true, spacing: 44, build: buildStripMall },
   { name: 'spaza-shop', category: 'commercial', zones: ['township', 'suburb', 'roadside'], variants: 3, maxFootprint: { w: 9, d: 8 }, standable: false, spacing: 26, build: buildSpazaShop },
   { name: 'filling-station', category: 'commercial', zones: ['roadside', 'commercial', 'highstreet'], variants: 3, maxFootprint: { w: 27, d: 24 }, standable: true, landmark: true, spacing: 260, build: buildFillingStation },
   { name: 'office-block', category: 'commercial', zones: ['commercial', 'highstreet'], variants: 3, maxFootprint: { w: 18, d: 15 }, standable: true, spacing: 26, build: buildOfficeBlock },
   { name: 'big-box', category: 'commercial', zones: ['commercial', 'industrial'], variants: 2, maxFootprint: { w: 44, d: 36 }, standable: true, landmark: true, spacing: 160, build: buildBigBox },
+  { name: 'mixed-use-corner', category: 'commercial', zones: ['commercial', 'highstreet'], variants: 3, maxFootprint: { w: 21, d: 16 }, standable: true, spacing: 28, build: buildMixedUseCorner },
+  { name: 'parking-garage', category: 'commercial', zones: ['commercial', 'highstreet'], variants: 2, maxFootprint: { w: 29, d: 20 }, standable: true, spacing: 90, build: buildParkingGarage },
   // ---- Industrial ----
   { name: 'warehouse', category: 'industrial', zones: ['industrial'], variants: 3, maxFootprint: { w: 25, d: 24 }, standable: false, spacing: 32, build: buildWarehouse },
   { name: 'factory-sawtooth', category: 'industrial', zones: ['industrial'], variants: 2, maxFootprint: { w: 30, d: 19 }, standable: true, landmark: true, spacing: 44, build: buildFactory },
@@ -41,6 +44,8 @@ export const MODEL_CATALOG: ModelDef[] = [
   { name: 'container-stack', category: 'industrial', zones: ['industrial', 'harbour'], variants: 3, maxFootprint: { w: 13, d: 8 }, standable: true, spacing: 14, build: buildContainerStack },
   { name: 'scrapyard', category: 'industrial', zones: ['industrial', 'township'], variants: 2, maxFootprint: { w: 23, d: 20 }, standable: true, spacing: 50, build: buildScrapyard },
   { name: 'substation', category: 'industrial', zones: ['industrial', 'roadside', 'suburb'], variants: 2, maxFootprint: { w: 16, d: 13 }, standable: false, spacing: 300, build: buildSubstation },
+  { name: 'workshop-row', category: 'industrial', zones: ['industrial', 'township'], variants: 3, maxFootprint: { w: 29, d: 16 }, standable: true, spacing: 32, build: buildWorkshopRow },
+  { name: 'logistics-depot', category: 'industrial', zones: ['industrial'], variants: 2, maxFootprint: { w: 37, d: 27 }, standable: true, spacing: 76, build: buildLogisticsDepot },
   // ---- Coastal ----
   { name: 'beach-cafe', category: 'coastal', zones: ['beach', 'promenade'], variants: 3, maxFootprint: { w: 19, d: 16 }, standable: true, spacing: 60, build: buildBeachCafe },
   { name: 'ice-cream-kiosk', category: 'coastal', zones: ['beach', 'promenade', 'park'], variants: 3, maxFootprint: { w: 8, d: 6 }, standable: false, spacing: 40, build: buildIceCreamKiosk },
@@ -56,6 +61,9 @@ export const MODEL_CATALOG: ModelDef[] = [
   { name: 'apartment-block', category: 'residential', zones: ['suburb', 'highstreet'], variants: 2, maxFootprint: { w: 23, d: 15 }, standable: true, spacing: 30, build: buildApartmentBlock },
   { name: 'tin-roof-house', category: 'residential', zones: ['township', 'rural'], variants: 3, maxFootprint: { w: 14, d: 14 }, standable: false, spacing: 16, build: buildTinRoofHouse },
   { name: 'sandton-villa', category: 'residential', zones: ['suburb', 'estate'], variants: 2, maxFootprint: { w: 26, d: 23 }, standable: true, spacing: 32, build: buildSandtonVilla },
+  { name: 'semi-detached-house', category: 'residential', zones: ['suburb', 'township'], variants: 3, maxFootprint: { w: 24, d: 20 }, standable: false, spacing: 25, build: buildSemiDetachedHouse },
+  { name: 'walk-up-flats', category: 'residential', zones: ['township', 'highstreet'], variants: 3, maxFootprint: { w: 24, d: 14 }, standable: true, spacing: 32, build: buildWalkUpFlats },
+  { name: 'rdp-row', category: 'residential', zones: ['township'], variants: 3, maxFootprint: { w: 27, d: 12 }, standable: false, spacing: 22, build: buildRdpRow },
   // ---- Civic / extras ----
   { name: 'church', category: 'civic', zones: ['suburb', 'rural', 'township'], variants: 2, maxFootprint: { w: 14, d: 23 }, standable: false, landmark: true, spacing: 320, build: buildChurch },
   { name: 'mosque', category: 'civic', zones: ['suburb', 'township'], variants: 2, maxFootprint: { w: 18, d: 19 }, standable: false, landmark: true, spacing: 380, build: buildMosque },

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { BuildingArchitecture, type BuildingSpec } from './BuildingArchitecture';
+import { ARCHITECTURE_VARIANTS, BuildingArchitecture, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
 import { GeometryBaker } from './StaticGeometry';
 
 const facade = new THREE.MeshStandardMaterial({ color: 0x99a4a9, roughness: 0.72 });
@@ -62,8 +62,8 @@ describe('cylindrical downtown architecture', () => {
   });
 
   it('does not attach rectangular bands or a fire escape to the cylindrical massing', () => {
-    // Variant 9 selects cylindrical massing and would trigger the old fire-escape condition.
-    const fireEscapeVariant = { ...spec, variant: 9 }; const group = build(fireEscapeVariant);
+    // Variant 11 selects cylindrical massing and would trigger the old fire-escape condition.
+    const fireEscapeVariant = { ...spec, variant: 11 }; const group = build(fireEscapeVariant);
     const vertex = new THREE.Vector3(); let maxX = -Infinity; let maxZ = -Infinity;
     group.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
@@ -81,5 +81,29 @@ describe('cylindrical downtown architecture', () => {
     const first = bakedPositions(); const regenerated = bakedPositions();
     expect(first.length).toBeGreaterThan(0);
     expect(regenerated).toEqual(first);
+  });
+});
+
+describe('district architecture families', () => {
+  it('builds all 36 silhouettes with finite tiers and deterministic massing ids', () => {
+    let silhouettes = 0;
+    for (const [style, count] of Object.entries(ARCHITECTURE_VARIANTS) as Array<[BuildingStyle, number]>) {
+      for (let massing = 0; massing < count; massing++) {
+        const group = new THREE.Group(); const architecture = new BuildingArchitecture(group);
+        const profile = architecture.build({
+          ...spec, style, variant: massing,
+          height: style === 'downtown' ? 64 : style === 'dense-residential' ? 22 : 12,
+        });
+        expect(profile.massing, `${style} ${massing}`).toBe(massing);
+        expect(profile.roofY).toBeGreaterThan(0);
+        expect(profile.tiers.length).toBeGreaterThan(0);
+        for (const tier of profile.tiers) {
+          expect([tier.minX, tier.maxX, tier.minZ, tier.maxZ, tier.y0, tier.y1].every(Number.isFinite)).toBe(true);
+          expect(tier.maxX).toBeGreaterThan(tier.minX); expect(tier.maxZ).toBeGreaterThan(tier.minZ); expect(tier.y1).toBeGreaterThan(tier.y0);
+        }
+        silhouettes++;
+      }
+    }
+    expect(silhouettes).toBe(36);
   });
 });

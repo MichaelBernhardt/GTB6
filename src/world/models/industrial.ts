@@ -167,3 +167,39 @@ export function buildSubstation(seed: number, options: BuildOptions = {}): Built
   kit.sign('GEVAAR - DANGER', '#e8c832', 2.6, 0.8, 0, 1.55, d / 2 + 0.08, { background: '#28303a' });
   return kit.done();
 }
+
+/** A row of small repair workshops with roller shutters, awnings and a cluttered service apron. */
+export function buildWorkshopRow(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 2)) % 3; const size = options.size ?? kit.rnd(2);
+  const bays = 3 + variant; const bayW = 4.6 + size; const w = bays * bayW; const d = 9 + size * 2; const h = 4.3;
+  kit.box(kit.pick(3, [M.faceBrick, M.concrete, M.tan]), w, h, d, 0, 0, 0, { collide: true });
+  for (let bay = 0; bay < bays; bay++) {
+    const x = -w / 2 + bayW * (bay + 0.5);
+    kit.box(M.corrCharcoal, bayW * 0.68, 3.1, 0.12, x, 0, d / 2 + 0.07, { cast: false });
+    kit.box(bay % 2 ? M.corrRed : M.corrBlue, bayW * 0.8, 0.14, 1.35, x, 3.45, d / 2 + 0.62, { rx: -0.08 });
+    kit.sign(kit.pick(20 + bay, ['TYRE & BRAAI', 'BOETIE MOTORS', 'PANEL BEAT-ISH', 'DIESEL DOCTOR']), '#e5c45d', bayW * 0.75, 0.55, x, 4.05, d / 2 + 0.1);
+  }
+  kit.box(M.paving, w, 0.12, 4.5, 0, 0, d / 2 + 2.2, { cast: false });
+  for (let drum = 0; drum < 3; drum++) kit.cyl(M.corrRust, 0.4, 0.4, 0.85, -w / 2 + 1 + drum * 0.9, 0.12, d / 2 + 1.1, { seg: 12 });
+  return kit.done();
+}
+
+/** Large distribution depot: long loading hall, office head, dock shelters and roof monitors. */
+export function buildLogisticsDepot(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 1)) % 2; const size = options.size ?? kit.rnd(2);
+  const w = 27 + size * 8; const d = 19 + size * 6; const h = 7 + variant * 1.2;
+  kit.box(kit.pick(3, [M.corrCharcoal, M.corrBlue, M.concrete]), w, h, d, 0, 0, 0, { collide: true });
+  kit.gable(M.galv, w + 0.6, d + 0.7, 2.4, 0, h, 0);
+  const officeW = w * 0.28;
+  kit.box(M.plaster, officeW, h * 0.72, d * 0.42, -w * 0.31, 0, d * 0.3, { collide: true });
+  kit.box(M.glassDark, officeW * 0.72, 1.6, 0.12, -w * 0.31, 2.2, d * 0.51, { cast: false });
+  const docks = 3 + variant;
+  for (let dock = 0; dock < docks; dock++) {
+    const x = -w * 0.2 + dock * (w * 0.65 / Math.max(1, docks - 1));
+    kit.box(M.darkMetal, w / docks * 0.52, 3.8, 0.18, x, 0.8, d / 2 + 0.1, { cast: false });
+    kit.box(M.steel, w / docks * 0.64, 0.25, 2.1, x, 0.55, d / 2 + 1, { collide: true });
+  }
+  for (let monitor = 0; monitor < 3; monitor++) kit.box(M.glassDark, w * 0.18, 1.1, d * 0.18, -w * 0.24 + monitor * w * 0.24, h + 0.25, -d * 0.12, { collide: true });
+  kit.sign(variant ? 'VRRR PHAA LOGISTICS' : 'TRANS-VAAL DEPOT', '#e7bf4d', 7, 1, -w * 0.24, h * 0.52, d / 2 + 0.11, { background: '#343c3f' });
+  return kit.done();
+}
