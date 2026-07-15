@@ -1,4 +1,4 @@
-"""Create one editable female pedestrian source from the locked MPFB assets."""
+"""Create one editable pedestrian source from the locked MPFB assets."""
 
 import argparse
 from array import array
@@ -45,7 +45,7 @@ def load_manifest(path, character_id):
 
 def create_character(config):
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    phenotype = {"gender": 0.0, **config["phenotype"]}
+    phenotype = {"gender": 1.0 if config.get("sex") == "male" else 0.0, **config["phenotype"]}
     body = HumanService.create_human(
         mask_helpers=True,
         detailed_helpers=True,
@@ -132,7 +132,8 @@ def make_outfit_texture(config, output):
 
 
 def make_hair_shoes_atlas(config, output):
-    hair = load_pixels(asset("hair", config["hair"], f'{config["hair"]}_diffuse.png'), 512, 1024)
+    hair_file = config.get("hairDiffuse", f'{config["hair"]}_diffuse.png')
+    hair = load_pixels(asset("hair", config["hair"], hair_file), 512, 1024)
     shoe_file = config.get("shoeDiffuse", f'{config["shoes"]}_diffuse.png')
     shoes = load_pixels(asset("clothes", config["shoes"], shoe_file), 512, 1024)
     for pixels, tint in ((hair, config["hairTint"]), (shoes, config["shoeTint"])):

@@ -1,7 +1,16 @@
 import * as THREE from 'three';
 import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
-import { NPC_CHARACTER_IDS, type NpcCharacterId } from '../entities/NpcCatalog';
+import {
+  AMBIENT_NPC_CHARACTER_IDS,
+  CAR_GUARD_NPC_ID,
+  DRIVER_NPC_ID,
+  JMPD_PATROL_NPC_ID,
+  MISSION_CONTACT_NPC_IDS,
+  NPC_CATALOG,
+  RANK_ENFORCER_NPC_ID,
+  type NpcCharacterId,
+} from '../entities/NpcCatalog';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separationPush } from './BumpSystem';
@@ -23,7 +32,8 @@ export interface PlayerVehicleHit { speed: number; damage: number; knockdown: bo
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
 export const RIGGED_PEDESTRIAN_CADENCE = 4;
-export const MAX_RIGGED_PEDESTRIANS = 20;
+export const MAX_AMBIENT_RIGGED_PEDESTRIANS = 8;
+export const MAX_RIGGED_PEDESTRIANS = 24;
 
 /** Car-following corridor half-width²: the leader must sit within this of the driver's forward ray. Now that
  *  lanes are one-way, oncoming traffic rides a separate lane outside this corridor, so we brake for anything
@@ -352,7 +362,7 @@ export class PopulationSystem {
         return distance > 25 && distance < 75 && this.city.districtAt(point.x, point.z) === 'Joburg CBD';
       });
       const point = candidates[(this.policePatrols.length * 17 + 5) % candidates.length]; if (!point) break;
-      const officer = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), 90 + this.policePatrols.length, false, true);
+      const officer = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), 90 + this.policePatrols.length, false, true, this.nextSpecialNpcVariant(JMPD_PATROL_NPC_ID));
       officer.pickDestination(this.localChoice(officer.group.position.x, officer.group.position.z)); this.policePatrols.push(officer); this.pedestrians.push(officer);
     }
   }
@@ -370,7 +380,7 @@ export class PopulationSystem {
   ejectDriver(vehicle: Vehicle, threat: THREE.Vector3, police = false): Pedestrian {
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading));
     const exit = vehicle.group.position.clone().addScaledVector(side, -2.1);
-    const driver = new Pedestrian(this.scene, this.clearSpawn(exit.x, exit.z), 120 + this.pedestrians.length, false, police);
+    const driver = new Pedestrian(this.scene, this.clearSpawn(exit.x, exit.z), 120 + this.pedestrians.length, false, police, this.nextSpecialNpcVariant(police ? JMPD_PATROL_NPC_ID : DRIVER_NPC_ID));
     const away = driver.group.position.clone().sub(threat); if (away.lengthSq() < 0.01) away.set(1, 0, 0);
     driver.state = 'flee'; driver.fear = FEAR_MAX; driver.threat.copy(threat); driver.destination.copy(driver.group.position).add(away.normalize().multiplyScalar(55));
     this.pedestrians.push(driver); this.audio.scream('panic', driver.group.position.x, driver.group.position.z); this.broadcastFear(threat, FEAR_EVENTS.assault); return driver;
@@ -378,7 +388,7 @@ export class PopulationSystem {
 
   spawnHostiles(): void {
     if (this.hostiles.some((ped) => ped.state !== 'down')) return;
-    HOSTILE_SPOTS.forEach(({ x, z }, index) => { const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), index + 30, true); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
+    HOSTILE_SPOTS.forEach(({ x, z }, index) => { const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), index + 30, true, false, this.nextSpecialNpcVariant(RANK_ENFORCER_NPC_ID)); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
   }
 
   nearestEnterable(position: THREE.Vector3, maxDistance = 4.2): Vehicle | undefined {
@@ -397,14 +407,24 @@ export class PopulationSystem {
     ped.pickDestination(this.localChoice(ped.group.position.x, ped.group.position.z)); this.pedestrians.push(ped); return ped;
   }
 
-  /** Live rigged ambient count; special roles never receive a visual variant. */
+  /** Live rigged count across ambient and role-specific pedestrians. */
   riggedPedestrianCount(): number { return this.pedestrians.filter((ped) => ped.visualVariant !== undefined).length; }
+
+  ambientRiggedPedestrianCount(): number {
+    return this.pedestrians.filter((ped) => ped.visualVariant !== undefined && NPC_CATALOG[ped.visualVariant].role === 'ambient').length;
+  }
 
   private nextAmbientNpcVariant(): NpcCharacterId | undefined {
     this.eligibleAmbientSpawns += 1;
-    if (this.eligibleAmbientSpawns % RIGGED_PEDESTRIAN_CADENCE !== 0 || this.riggedPedestrianCount() >= MAX_RIGGED_PEDESTRIANS) return undefined;
-    const variant = NPC_CHARACTER_IDS[this.npcVariantCursor % NPC_CHARACTER_IDS.length];
+    if (this.eligibleAmbientSpawns % RIGGED_PEDESTRIAN_CADENCE !== 0
+      || this.ambientRiggedPedestrianCount() >= MAX_AMBIENT_RIGGED_PEDESTRIANS
+      || this.riggedPedestrianCount() >= MAX_RIGGED_PEDESTRIANS) return undefined;
+    const variant = AMBIENT_NPC_CHARACTER_IDS[this.npcVariantCursor % AMBIENT_NPC_CHARACTER_IDS.length];
     this.npcVariantCursor += 1; return variant;
+  }
+
+  private nextSpecialNpcVariant(variant: NpcCharacterId): NpcCharacterId | undefined {
+    return this.riggedPedestrianCount() < MAX_RIGGED_PEDESTRIANS ? variant : undefined;
   }
 
   /** A one-element choice list at a nearby sidewalk point, so a spawning ped's FIRST route is short and
@@ -486,14 +506,14 @@ export class PopulationSystem {
     }
     MISSIONS.forEach((mission, index) => {
       const contactPosition = mission.start.position.clone(); contactPosition.y = this.city.surfaceHeightAt(contactPosition.x, contactPosition.z);
-      const contact = new Pedestrian(this.scene, contactPosition, index + 70);
+      const contact = new Pedestrian(this.scene, contactPosition, index + 70, false, false, this.nextSpecialNpcVariant(MISSION_CONTACT_NPC_IDS[mission.id]!));
       contact.state = 'idle'; contact.idleTime = 999999; contact.contact = true; contact.group.name = mission.contact; this.pedestrians.push(contact);
     });
     this.parkedSpots.slice(0, 4).forEach(([x, z], index) => {
       let best: { x: number; z: number } | undefined; let bestDistance = Infinity;
       for (const point of this.city.sidewalkPoints) { const distance = (point.x - x) ** 2 + (point.z - z) ** 2; if (distance < bestDistance) { bestDistance = distance; best = point; } }
       if (!best) return;
-      const guard = new Pedestrian(this.scene, this.clearSpawn(best.x, best.z), index + 50);
+      const guard = new Pedestrian(this.scene, this.clearSpawn(best.x, best.z), index + 50, false, false, this.nextSpecialNpcVariant(CAR_GUARD_NPC_ID));
       guard.state = 'idle'; guard.idleTime = 999999; guard.makeCarGuard(); this.pedestrians.push(guard);
     });
   }

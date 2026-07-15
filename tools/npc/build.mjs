@@ -51,6 +51,21 @@ for (const character of selected) {
 const lockPath = resolve('art/npcs/sources.lock.json');
 if (existsSync(lockPath)) {
   const lock = JSON.parse(await readFile(lockPath, 'utf8'));
+  const artifactPaths = ['art/npcs/manifest.json'];
+  for (const character of manifest.characters) {
+    artifactPaths.push(
+      character.materialSource,
+      character.turnaround,
+      `art/npcs/previews/${character.id}-animations.jpg`,
+      `art/npcs/previews/${character.id}-turnaround.jpg`,
+      `public/models/npcs/${character.id}.glb`,
+      `public/textures/npcs/${character.id}-eyes-basecolor.jpg`,
+      `public/textures/npcs/${character.id}-hair-shoes-basecolor.jpg`,
+      `public/textures/npcs/${character.id}-outfit-basecolor.jpg`,
+      `public/textures/npcs/${character.id}-skin-basecolor.jpg`,
+    );
+  }
+  lock.committedArtifacts = [...new Set(artifactPaths)].sort().map((path) => ({ path, sha256: '' }));
   for (const artifact of lock.committedArtifacts) artifact.sha256 = createHash('sha256').update(await readFile(resolve(artifact.path))).digest('hex');
   await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
 }

@@ -40,6 +40,7 @@ export class Pedestrian {
   private punchTimer = 0;
   private downTimer = 0;
   private stumbleTimer = 0;
+  private covering = false;
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
@@ -139,10 +140,12 @@ export class Pedestrian {
       state: this.state,
       punching: this.punchTimer > 0,
       hailing: this.hailing,
+      covering: this.covering,
       stumbling: this.stumbleTimer > 0,
       stumbleAmount: THREE.MathUtils.clamp(this.stumbleTimer / STUMBLE_DURATION, 0, 1),
     });
     visual.update(dt);
+    this.covering = false;
   }
 
   applyFear(amount: number, origin: THREE.Vector3): void {
@@ -263,7 +266,10 @@ export class Pedestrian {
   punch(): void { this.punchTimer = 0.28; }
 
   /** Crouch behind cover (arrest officers). Reapplied every frame by the police system, after update() resets the pose. */
-  takeCover(): void { this.setPanicPose(false, true); }
+  takeCover(): void {
+    this.covering = true;
+    if (!this.riggedVisual?.ready) this.setPanicPose(false, true);
+  }
 
   private setPanicPose(armsUp: boolean, crouch: boolean): void {
     for (const arm of this.arms) arm.rotation.x = armsUp ? Math.PI * 0.92 : 0;

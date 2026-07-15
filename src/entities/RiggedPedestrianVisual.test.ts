@@ -28,11 +28,11 @@ const loadNpc = async (id = 'braamfontein-creative'): Promise<GLTF> => {
   return new GLTFLoader().parseAsync(buffer, '/models/npcs/');
 };
 const state = (overrides: Partial<RiggedPedestrianState> = {}): RiggedPedestrianState => ({
-  state: 'idle', punching: false, hailing: false, stumbling: false, stumbleAmount: 0, ...overrides,
+  state: 'idle', punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0, ...overrides,
 });
 
-describe('female NPC asset contract', () => {
-  it('validates all four unique rigs, clips, materials, textures, scale and geometry budgets', async () => {
+describe('NPC cast asset contract', () => {
+  it('validates every unique rig, clip set, material, texture, scale and geometry budget', async () => {
     for (const id of NPC_CHARACTER_IDS) {
       const file = await readFile(`public/models/npcs/${id}.glb`); const gltf = await loadNpc(id);
       const validated = validateNpcGltf(gltf, id); let triangles = 0; const materials = new Set<THREE.Material>();
@@ -73,6 +73,7 @@ describe('cached rigged pedestrian instances', () => {
     for (const [change, animation] of transitions) { visual.setState(state(change)); visual.update(1 / 30); expect(visual.activeAnimation).toBe(animation); }
     expect(selectNpcAnimation(state({ state: 'walk' }))).toBe('walk');
     visual.setState(state({ state: 'cower' })); visual.update(1 / 30); expect(visual.group.position.y).toBeLessThan(0);
+    visual.setState(state({ state: 'idle', covering: true })); visual.update(1 / 30); expect(visual.group.position.y).toBeLessThan(0);
     visual.setState(state({ state: 'idle', hailing: true })); visual.update(1 / 30);
     expect(visual.group.getObjectByName('UpperArm_R')!.rotation.z).not.toBe(0);
     visual.setState(state({ state: 'walk', stumbling: true, stumbleAmount: 0.5 })); visual.update(1 / 30); expect(visual.group.rotation.x).toBeCloseTo(-0.16);
