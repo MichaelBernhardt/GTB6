@@ -623,7 +623,13 @@ export class Game {
     const forward = this.camera.getWorldDirection(this.cameraForward);
     const guarded = new Set<Vehicle>();
     for (const vehicle of [this.activeVehicle, this.transition?.vehicle, this.garageVehicle]) if (vehicle) guarded.add(vehicle);
-    this.lifecycle.update(dt, this.dayNight.hour, { x: focus.x, z: focus.z, dirX: forward.x, dirZ: forward.z }, guarded);
+    // Visibility apex is the CAMERA (the actual eye), not the player. The camera sits behind and above the
+    // character, so a patch beside/behind the player is still on-screen; testing from the player's feet
+    // mis-classified it as hidden and spawned/culled agents in view — most obvious walking backward, when the
+    // character pivots to face the camera and you're looking straight at that patch. The camera is the eye for
+    // the sight-line/occlusion ray too, so origin the whole ViewPoint there.
+    const eye = this.camera.position;
+    this.lifecycle.update(dt, this.dayNight.hour, { x: eye.x, z: eye.z, dirX: forward.x, dirZ: forward.z }, guarded);
     this.city.update(dt);
     this.applyEskom(this.loadShedding.update(dt));
     this.dayNight.update(dt, focus, this.population.vehicles, this.police.vehicles, this.activeVehicle ?? this.transition?.vehicle);
