@@ -19,7 +19,13 @@ import {
   GENERATED_ROADS,
   METRES_PER_UNIT,
   MAP_WORLD_SIZE,
+  AERODROME_POLYGONS,
+  DIRT_POLYGONS,
+  FARM_POLYGONS,
+  GREEN_POLYGONS,
+  WATER_POLYGONS,
   nearestDistrict,
+  pointInAnyPolygon,
   type GeneratedRoad,
 } from './mapData';
 import { classifyZone, type Zone } from './data/zoning';
@@ -55,8 +61,9 @@ const SHRINK_ATTEMPTS = 6;
 /** Never shrink a footprint below this on either axis — reject instead (keeps the street clear). */
 const MIN_FOOTPRINT = 5;
 /** Per-cell hard cap on buildings — bounds both draw calls and per-cell generation cost. */
-export const CELL_BUILDING_CAP = 46;
+export const CELL_BUILDING_CAP = 64;
 const HALF_WORLD = MAP_WORLD_SIZE / 2;
+const UNBUILT_POLYGON_GROUPS = [WATER_POLYGONS, GREEN_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, AERODROME_POLYGONS];
 
 export interface GeneratedBuilding {
   x: number;
@@ -114,32 +121,41 @@ interface ZoneShape {
 
 /** Per-zone parcel geometry. Sizes are in game units at the authored 2.94 m/unit scale (× LAYOUT_SCALE). */
 const ZONE_SHAPE: Record<Exclude<Zone, 'none'>, ZoneShape> = {
-  'commercial-highrise': { style: 'downtown', lot: [26, 44], depth: [22, 38], yard: 1.5, accept: 0.85 },
-  'commercial-strip': { style: 'downtown', lot: [12, 22], depth: [14, 22], yard: 2.2, accept: 0.7 },
-  residential: { style: 'residential', lot: [15, 25], depth: [9, 14], yard: 4, accept: 0.42 },
-  industrial: { style: 'industrial', lot: [26, 46], depth: [22, 40], yard: 3, accept: 0.5 },
-  estate: { style: 'estate', lot: [60, 110], depth: [30, 52], yard: 10, accept: 0.72 },
-  rural: { style: 'residential', lot: [40, 80], depth: [8, 14], yard: 12, accept: 0.28 },
+  'commercial-highrise': { style: 'downtown', lot: [26, 44], depth: [22, 38], yard: 1.5, accept: 0.95 },
+  'commercial-strip': { style: 'mixed-use', lot: [12, 22], depth: [14, 22], yard: 2.2, accept: 0.9 },
+  residential: { style: 'suburban', lot: [15, 25], depth: [9, 14], yard: 4, accept: 0.82 },
+  industrial: { style: 'industrial', lot: [26, 46], depth: [22, 40], yard: 3, accept: 0.72 },
+  estate: { style: 'estate', lot: [60, 110], depth: [30, 52], yard: 10, accept: 0.78 },
+  rural: { style: 'rural', lot: [40, 80], depth: [8, 14], yard: 12, accept: 0.28 },
 };
 
 /** Placement probability for a zone at a point, scaled by the local OSM building density. */
 function acceptance(zone: Exclude<Zone, 'none'>, density: number): number {
   const base = ZONE_SHAPE[zone].accept;
-  if (zone === 'residential') return Math.min(0.6, 0.12 + density / 500);
-  if (zone === 'commercial-strip') return Math.min(0.8, 0.3 + density / 900);
+  if (zone === 'residential') return Math.min(base, 0.3 + density / 400);
+  if (zone === 'commercial-strip') return Math.min(base, 0.5 + density / 800);
   return base;
+}
+
+/** Residential blocks keep one coherent local character instead of shuffling house types lot by lot. */
+function buildingStyle(zone: Exclude<Zone, 'none'>, density: number, x: number, z: number): BuildingStyle {
+  if (zone !== 'residential') return ZONE_SHAPE[zone].style;
+  const denseChance = Math.min(0.85, Math.max(0.1, (density - 40) / 260));
+  // Quantise the seed to a neighbourhood-sized tile so adjoining parcels read as one district.
+  const blockX = Math.floor(x / 180); const blockZ = Math.floor(z / 180);
+  return seeded(blockX, blockZ, 61) < denseChance ? 'dense-residential' : 'suburban';
 }
 
 /** Building height for a placed parcel — highrise cores get a full skyline range, suburbs stay low.
  *  (Height does NOT use the OSM count-density: that peaks in low-rise suburbs, not the tower cores.) */
-function buildingHeight(zone: Exclude<Zone, 'none'>, _density: number, s: number): number {
+function buildingHeight(zone: Exclude<Zone, 'none'>, _density: number, s: number, style: BuildingStyle): number {
   switch (zone) {
     case 'commercial-highrise': return 40 + s * s * 72; // s² skews toward a few very tall towers
     case 'commercial-strip': return 10 + s * 16;
     case 'industrial': return 8 + s * 9;
     case 'estate': return 7 + s * 5.5;
     case 'rural': return 5 + s * 3;
-    default: return 6 + s * 5; // residential
+    default: return style === 'dense-residential' ? 11 + s * 17 : 6 + s * 5;
   }
 }
 
@@ -155,11 +171,13 @@ function isBlocked(x: number, z: number, radius: number): boolean {
 /** Coarse occupancy grid so parcels from different roads don't stack at intersections. */
 class Occupancy {
   private cells = new Map<string, Array<{ x: number; z: number; r: number }>>();
-  constructor(private cell = 24) {}
+  private maxRadius = 0;
+  constructor(private cell = 64) {}
   private key(x: number, z: number): string { return `${Math.floor(x / this.cell)},${Math.floor(z / this.cell)}`; }
   free(x: number, z: number, r: number): boolean {
     const cx = Math.floor(x / this.cell); const cz = Math.floor(z / this.cell);
-    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const reach = Math.max(1, Math.ceil(((r + this.maxRadius) * 0.62 + 1.5) / this.cell) + 1);
+    for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
       for (const other of this.cells.get(`${cx + dx},${cz + dz}`) ?? []) {
         const min = (other.r + r) * 0.62 + 1.5;
         if ((other.x - x) ** 2 + (other.z - z) ** 2 < min * min) return false;
@@ -171,6 +189,7 @@ class Occupancy {
     const key = this.key(x, z);
     const bucket = this.cells.get(key);
     if (bucket) bucket.push({ x, z, r }); else this.cells.set(key, [{ x, z, r }]);
+    this.maxRadius = Math.max(this.maxRadius, r);
   }
 }
 
@@ -202,6 +221,55 @@ function walkRoad(road: GeneratedRoad): WalkPoint[] {
 let allParcels: GeneratedBuilding[] | undefined;
 let parcelCells: Map<string, GeneratedBuilding[]> | undefined;
 
+interface FittedFootprint { x: number; z: number; width: number; depth: number; }
+
+/** Fit a mass behind an anchored front face without ever pulling that face back toward the street. */
+function fitFootprint(
+  faceX: number, faceZ: number, nX: number, nZ: number,
+  width0: number, depth0: number, heading: number,
+): FittedFootprint | undefined {
+  let width = width0; let depth = depth0;
+  for (let attempt = 0; attempt <= SHRINK_ATTEMPTS; attempt++) {
+    const x = faceX + nX * (depth / 2); const z = faceZ + nZ * (depth / 2);
+    if (footprintRoadClearance(x, z, width, depth, heading) >= ROAD_CLEARANCE) return { x, z, width, depth };
+    if (Math.min(width, depth) * SHRINK_FACTOR < MIN_FOOTPRINT) break;
+    width *= SHRINK_FACTOR; depth *= SHRINK_FACTOR;
+  }
+  return undefined;
+}
+
+function commitBuilding(
+  fit: FittedFootprint, heading: number, zone: Exclude<Zone, 'none'>, density: number,
+  style: BuildingStyle, seedX: number, seedZ: number, salt: number,
+  occ: Occupancy, out: GeneratedBuilding[],
+): boolean {
+  const { x, z, width, depth } = fit;
+  if (Math.abs(x) > HALF_WORLD - 20 || Math.abs(z) > HALF_WORLD - 20) return false;
+  const c = Math.cos(heading); const s = Math.sin(heading);
+  for (const fx of [-0.5, 0, 0.5]) for (const fz of [-0.5, 0, 0.5]) {
+    const sampleX = x + fx * width * c + fz * depth * s;
+    const sampleZ = z - fx * width * s + fz * depth * c;
+    if (UNBUILT_POLYGON_GROUPS.some((polygons) => pointInAnyPolygon(polygons, sampleX, sampleZ))) return false;
+  }
+  const radius = Math.hypot(width, depth) / 2;
+  if (isBlocked(x, z, radius * 0.6) || !occ.free(x, z, radius)) return false;
+  occ.add(x, z, radius);
+  out.push({
+    x, z, heading, width, depth,
+    height: buildingHeight(zone, density, seeded(seedX, seedZ, 30 + salt), style),
+    style, zone,
+    variant: Math.floor(seeded(seedX, seedZ, 40 + salt) * 997),
+  });
+  return true;
+}
+
+const INFILL_ACCEPT: Partial<Record<Exclude<Zone, 'none'>, number>> = {
+  'commercial-highrise': 0.55,
+  'commercial-strip': 0.45,
+  residential: 0.35,
+  industrial: 0.3,
+};
+
 function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, walk: WalkPoint[], occ: Occupancy, out: GeneratedBuilding[]): void {
   const half = road.width / 2;
   let acc = seeded(roadIndex, side, 7) * 20; // phase offset so lots don't align across parallel roads
@@ -227,7 +295,8 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
     const depth0 = lerp(shape.depth[0], shape.depth[1], seeded(frontX, frontZ, 12)) * LAYOUT_SCALE;
     const width0 = lot * (0.72 + seeded(frontX, frontZ, 13) * 0.2); // building narrower than the lot (side gaps)
     const gap = lot * (0.12 + seeded(frontX, frontZ, 14) * 0.16);
-    target = lot + gap; // spacing to the next lot on this frontage (nominal lot, not the shrunk footprint)
+    const pitchScale = zone === 'rural' ? 1 : zone === 'estate' ? 0.95 : 0.85;
+    target = (lot + gap) * pitchScale; // denser frontage in built districts; rural spacing stays open
 
     if (seeded(frontX, frontZ, 20) > acceptance(zone, district.density)) continue;
 
@@ -243,29 +312,25 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
     // neighbouring, cross or rear street. Shrink w&d until the whole footprint clears every road
     // corridor; if even a minimal footprint still overhangs, reject the lot. Correctness (no road
     // overlap) over density — but shrink first so we keep the building wherever it can be made to fit.
-    let width = width0; let depth = depth0; let cx = 0; let cz = 0; let fits = false;
-    for (let attempt = 0; attempt <= SHRINK_ATTEMPTS; attempt++) {
-      cx = faceX + nX * (depth / 2);
-      cz = faceZ + nZ * (depth / 2);
-      if (footprintRoadClearance(cx, cz, width, depth, heading) >= ROAD_CLEARANCE) { fits = true; break; }
-      if (Math.min(width, depth) * SHRINK_FACTOR < MIN_FOOTPRINT) break;
-      width *= SHRINK_FACTOR; depth *= SHRINK_FACTOR;
+    const fit = fitFootprint(faceX, faceZ, nX, nZ, width0, depth0, heading);
+    if (!fit) continue;
+    const style = buildingStyle(zone, district.density, frontX, frontZ);
+    if (!commitBuilding(fit, heading, zone, district.density, style, frontX, frontZ, 0, occ, out)) continue;
+
+    // Eligible urban lots can carry a second, smaller mass behind the street building. It stays
+    // deterministic and must still be in the same zone and pass every normal clearance/blocker rule.
+    const infillAccept = INFILL_ACCEPT[zone] ?? 0;
+    if (infillAccept > 0 && seeded(frontX, frontZ, 70) < infillAccept) {
+      const infillDepth = depth0 * (0.65 + seeded(frontX, frontZ, 71) * 0.18);
+      const infillWidth = width0 * (0.7 + seeded(frontX, frontZ, 72) * 0.18);
+      const infillGap = (2.5 + seeded(frontX, frontZ, 73) * 3) * LAYOUT_SCALE;
+      const infillFaceX = faceX + nX * (fit.depth + infillGap);
+      const infillFaceZ = faceZ + nZ * (fit.depth + infillGap);
+      const infill = fitFootprint(infillFaceX, infillFaceZ, nX, nZ, infillWidth, infillDepth, heading);
+      if (infill && classifyZone(infill.x, infill.z, road.width) === zone) {
+        commitBuilding(infill, heading, zone, district.density, style, frontX, frontZ, 100, occ, out);
+      }
     }
-    if (!fits) continue;
-
-    if (Math.abs(cx) > HALF_WORLD - 20 || Math.abs(cz) > HALF_WORLD - 20) continue;
-    const radius = Math.hypot(width, depth) / 2;
-    if (isBlocked(cx, cz, radius * 0.6)) continue;
-    if (!occ.free(cx, cz, radius)) continue;
-    occ.add(cx, cz, radius);
-
-    const s = seeded(frontX, frontZ, 30);
-    out.push({
-      x: cx, z: cz, heading, width, depth,
-      height: buildingHeight(zone, district.density, s),
-      style: shape.style, zone,
-      variant: Math.floor(seeded(frontX, frontZ, 40) * 997),
-    });
   }
 }
 
@@ -281,13 +346,15 @@ function buildAllParcels(): void {
     layoutRoadSide(road, ri, -1, walk, occ, out);
   }
   const cells = new Map<string, GeneratedBuilding[]>();
+  const canonical: GeneratedBuilding[] = [];
   for (const building of out) {
     const key = `${Math.floor(building.x / CELL_SIZE)},${Math.floor(building.z / CELL_SIZE)}`;
     const bucket = cells.get(key);
-    if (bucket) { if (bucket.length < CELL_BUILDING_CAP) bucket.push(building); }
-    else cells.set(key, [building]);
+    if (bucket) {
+      if (bucket.length < CELL_BUILDING_CAP) { bucket.push(building); canonical.push(building); }
+    } else { cells.set(key, [building]); canonical.push(building); }
   }
-  allParcels = out;
+  allParcels = canonical;
   parcelCells = cells;
 }
 

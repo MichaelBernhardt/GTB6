@@ -166,3 +166,57 @@ export function buildSandtonVilla(seed: number, options: BuildOptions = {}): Bui
   kit.sign('CAVEO ARMED RESPONSE', '#c8d6dd', 1.4, 0.55, plotW / 2 - 1.6, 1.6, plotD / 2 + 0.05, { background: '#2c3440' });
   return kit.done();
 }
+
+/** Mirrored semi-detached homes sharing one party wall and a pair of compact front gardens. */
+export function buildSemiDetachedHouse(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 2)) % 3; const size = options.size ?? kit.rnd(2);
+  const unitW = 7 + size * 1.8; const w = unitW * 2; const d = 8 + size * 1.5; const h = variant === 2 ? 5.8 : 3.2;
+  const wall = kit.pick(3, [M.faceBrick, M.plaster, M.tan]); const roof = variant % 2 ? M.tileCharcoal : M.tileTerracotta;
+  kit.box(M.grassDry, w + 4, 0.07, d + 7, 0, 0, 1.2, { cast: false });
+  for (const side of [-1, 1]) {
+    const x = side * unitW / 2;
+    kit.box(wall, unitW - 0.12, h, d, x, 0, -1.1 + side * 0.25, { collide: true });
+    kit.gable(roof, unitW + 0.35, d + 0.8, 1.8, x, h, -1.1 + side * 0.25);
+    kit.box(M.glassDark, 1.4, 1.15, 0.1, x - side * 1.4, 1.2, d / 2 - 1.05 + side * 0.25, { cast: false });
+    kit.box(M.darkTimber, 0.95, 2.05, 0.09, x + side * 1.35, 0, d / 2 - 1.03 + side * 0.25, { cast: false });
+    kit.box(M.paving, 2.2, 0.1, 3.4, x + side * 1.35, 0, d / 2 + 0.65, { cast: false });
+  }
+  gardenWall(kit, w + 4, d + 7, 1.45 + variant * 0.2, 2.2, variant === 1 ? M.faceBrick : M.plaster);
+  return kit.done();
+}
+
+/** Dense walk-up flats arranged around a small shared court, with external stairs and balconies. */
+export function buildWalkUpFlats(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 2)) % 3; const size = options.size ?? kit.rnd(2);
+  const w = 16 + size * 5; const d = 10 + size * 3; const floors = 3 + variant; const floorH = 2.8; const h = floors * floorH;
+  const skin = kit.pick(3, [M.faceBrick, M.tan, M.plaster, paint(0xb99a7e, 0.9)]);
+  kit.box(skin, w, h, d * 0.44, 0, 0, -d * 0.28, { collide: true });
+  for (const side of [-1, 1]) kit.box(skin, w * 0.25, h * 0.82, d * 0.6, side * w * 0.37, 0, d * 0.2, { collide: true });
+  for (let floor = 1; floor <= floors; floor++) {
+    const y = floor * floorH - 0.4;
+    kit.box(M.concrete, w * 0.58, 0.14, 1.15, 0, y, d * 0.02, { collide: true, cast: false });
+    kit.box(M.darkMetal, w * 0.58, 0.65, 0.06, 0, y + 0.15, d * 0.58, { cast: false });
+  }
+  kit.box(M.concrete, 2.6, h + 1.8, 2.8, -w * 0.34, 0, -d * 0.02, { collide: true });
+  kit.sign(kit.pick(6, ['THUTHUKA COURT', 'MADIBA MANSIONS', 'JACARANDA WALK']), '#e5d5a5', 4.2, 0.7, 0, 3.6, d * 0.04, { background: '#38433f' });
+  return kit.done();
+}
+
+/** Repeated modest RDP-style homes with colourful doors, corrugated roofs and shared yards. */
+export function buildRdpRow(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 2)) % 3; const size = options.size ?? kit.rnd(2);
+  const units = 4 + variant; const unitW = 3.7 + size * 0.5; const w = units * unitW; const d = 5.2 + size; const h = 2.55;
+  kit.box(M.dirt, w + 2, 0.06, d + 5, 0, 0, 1, { cast: false });
+  const walls = [M.plaster, M.tan, paint(0xa7b7ad, 0.9), paint(0xc79b86, 0.9)];
+  const doors = [M.corrBlue, M.corrGreen, M.corrRed, M.darkTimber];
+  for (let unit = 0; unit < units; unit++) {
+    const x = -w / 2 + unitW * (unit + 0.5); const stagger = (unit % 2) * 0.45;
+    kit.box(kit.pick(10 + unit, walls), unitW - 0.25, h, d, x, 0, -0.8 + stagger, { collide: true });
+    kit.gable(unit % 3 === 0 ? M.corrRust : M.galv, unitW + 0.15, d + 0.6, 0.9, x, h, -0.8 + stagger);
+    kit.box(kit.pick(30 + unit, doors), 0.82, 1.95, 0.08, x - unitW * 0.16, 0, d / 2 - 0.76 + stagger, { cast: false });
+    kit.box(M.glassDark, 0.8, 0.75, 0.08, x + unitW * 0.18, 1.05, d / 2 - 0.76 + stagger, { cast: false });
+  }
+  for (const side of [-1, 1]) kit.box(M.timber, 0.1, 1.2, 0.1, side * (w / 2 + 0.7), 0, d / 2 + 2.1);
+  kit.box(M.darkMetal, w + 1.4, 0.025, 0.025, 0, 0.8, d / 2 + 2.1, { cast: false });
+  return kit.done();
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintRoadClearance, generateCell, type GeneratedBuilding } from './CityGen';
-import { MAP_WORLD_SIZE, nearestRoadSpot } from './mapData';
+import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
+import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_WORLD_SIZE, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 
 const HALF = MAP_WORLD_SIZE / 2;
@@ -11,10 +12,25 @@ describe('citywide parcel layout', () => {
   const all = allBuildings();
 
   it('populates the whole map, not just the CBD test patch', () => {
-    expect(all.length).toBeGreaterThan(1500);
+    // Before the density pass only 5,158 capped parcels could stream. Keep the promised 60–80%
+    // increase explicit while retaining an upper bound for streaming/collider memory.
+    expect(all.length).toBeGreaterThanOrEqual(Math.ceil(5158 * 1.6));
+    expect(all.length).toBeLessThanOrEqual(9000);
     // buildings must reach well beyond the CBD in every quadrant (inhabited citywide)
     const quadrants = new Set(all.map((b) => `${Math.sign(b.x)},${Math.sign(b.z)}`));
     expect(quadrants.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it('uses six live district characters and every massing assigned to each one', () => {
+    const liveStyles = ['downtown', 'mixed-use', 'dense-residential', 'suburban', 'industrial', 'estate'] as const;
+    for (const style of liveStyles) {
+      const buildings = all.filter((building) => building.style === style);
+      expect(buildings.length, style).toBeGreaterThan(0);
+      const counts = Array.from({ length: ARCHITECTURE_VARIANTS[style] }, () => 0);
+      for (const building of buildings) counts[building.variant % counts.length]++;
+      expect(counts.every((count) => count > 0), `${style}: ${counts.join(',')}`).toBe(true);
+      expect(Math.max(...counts) / buildings.length, style).toBeLessThan(0.4);
+    }
   });
 
   it('keeps every building inside the world bounds', () => {
@@ -91,6 +107,46 @@ describe('citywide parcel layout', () => {
       const nearest = Math.min(...all.map((b) => Math.hypot(b.x - site.x, b.z - site.z)));
       expect(nearest, site.id).toBeGreaterThan(site.radius * 0.5);
     }
+  });
+
+  it('keeps complete footprints out of parks, farms, water, dirt land, and the aerodrome', () => {
+    const excluded = [WATER_POLYGONS, GREEN_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, AERODROME_POLYGONS];
+    for (const building of all) {
+      const c = Math.cos(building.heading); const s = Math.sin(building.heading);
+      for (const fx of [-0.5, 0, 0.5]) for (const fz of [-0.5, 0, 0.5]) {
+        const x = building.x + fx * building.width * c + fz * building.depth * s;
+        const z = building.z - fx * building.width * s + fz * building.depth * c;
+        for (const polygons of excluded) {
+          if (pointInAnyPolygon(polygons, x, z)) throw new Error(`${building.style} footprint entered protected land at ${x.toFixed(1)},${z.toFixed(1)}`);
+        }
+      }
+    }
+  }, 20_000);
+
+  it('keeps parcel occupancy separated even for the largest estate and tower footprints', () => {
+    const grid = new Map<string, GeneratedBuilding[]>(); const cell = 256;
+    for (const building of all) {
+      const cx = Math.floor(building.x / cell); const cz = Math.floor(building.z / cell);
+      const radius = Math.hypot(building.width, building.depth) / 2;
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+        for (const other of grid.get(`${cx + dx},${cz + dz}`) ?? []) {
+          const otherRadius = Math.hypot(other.width, other.depth) / 2;
+          expect(Math.hypot(building.x - other.x, building.z - other.z)).toBeGreaterThanOrEqual((radius + otherRadius) * 0.62 + 1.5 - 1e-6);
+        }
+      }
+      const key = `${cx},${cz}`; const bucket = grid.get(key);
+      if (bucket) bucket.push(building); else grid.set(key, [building]);
+    }
+  });
+
+  it('reports exactly the capped set returned by all generated cells', () => {
+    const cells = new Set(all.map((building) => cellOf(building).join(',')));
+    const streamedTotal = [...cells].reduce((total, key) => {
+      const [cellX, cellZ] = key.split(',').map(Number) as [number, number];
+      return total + generateCell(cellX, cellZ).length;
+    }, 0);
+    expect(streamedTotal).toBe(all.length);
+    expect(buildingStats().total).toBe(all.length);
   });
 });
 

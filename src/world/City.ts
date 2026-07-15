@@ -484,12 +484,23 @@ const SIDEWALK_BAND = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH;
 const WANDER_CELL = 120;
 const WANDER_REACH_CELLS = 4;
 
-const FACADE_RANGES: Record<BuildingStyle, [number, number]> = { downtown: [0, 6], residential: [6, 4], industrial: [10, 2], estate: [6, 4] };
+const FACADE_RANGES: Record<BuildingStyle, [number, number]> = {
+  downtown: [0, 6],
+  'mixed-use': [1, 5],
+  'dense-residential': [4, 6],
+  suburban: [6, 4],
+  industrial: [10, 2],
+  estate: [6, 4],
+  rural: [6, 4],
+};
 const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
   downtown: [0x9db1ba, 0xa3563f, 0xd0c4a4, 0x99a4a9, 0x93a9b0],
-  residential: [0xdfb094, 0x8f4f3a, 0xe6d1a2, 0xa8bcc4, 0xa3563f],
+  'mixed-use': [0xc8b083, 0xa3563f, 0xd7c8a5, 0x7f9799, 0xb98a58, 0x8f6a55],
+  'dense-residential': [0xb58a6c, 0xc6b899, 0xa66c54, 0xd4c6a9, 0x8d9a96, 0x9f785d],
+  suburban: [0xdfb094, 0x8f4f3a, 0xe6d1a2, 0xa8bcc4, 0xa3563f],
   industrial: [0xa2a6a2, 0xb5924c, 0xb5a28c],
   estate: [0xe3d7bf, 0xd8cdb6, 0xcbbfa0, 0xe6d1a2, 0xdcc9a6],
+  rural: [0xc7aa7b, 0x9d6b4e, 0xd0bd91, 0x8e9a87, 0xb8895f],
 };
 
 const GENERIC_AREA_NAMES = new Set(['park', 'grass', 'forest', 'wood', 'scrub', 'golf_course', 'nature_reserve', 'green', 'water', 'brownfield', 'mine_dump']);
@@ -1717,14 +1728,14 @@ export class City {
     const palette = BUILDING_PALETTES[style];
     const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
     const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);
-    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: 0, roughness: 0.72, metalness: style === 'downtown' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
+    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: 0, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
     const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
-    const detailed = style === 'downtown' || variant % 2 === 0;
+    const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
     this.addLedge(0, 0, w * 1.025, d * 1.025, Math.min(h - 0.5, 3.6));
     if (detailed) this.addEntrance(0, 0, w, d, style);
-    if (detailed && style === 'residential') this.addBalconies(0, 0, w, d, h);
+    if (detailed && style === 'dense-residential') this.addBalconies(0, 0, w, d, h);
     if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, profile.roofY, variant);
-    if (detailed && (style === 'downtown' || style === 'residential')) this.addStreetLevelDetail(0, 0, w, d, style, variant);
+    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, 0, w, d, style, variant);
     this.addRoofEquipment(0, 0, w, d, h, profile.roofY, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.roofY, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
@@ -1825,10 +1836,11 @@ export class City {
     for (let bay = 0; bay < bays; bay++) {
       const px = x - w * 0.39 + bay * (w * 0.78 / Math.max(1, bays - 1));
       if (Math.abs(px - x) < Math.min(3, w * 0.18)) continue;
-      const window = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.2, w / bays * 0.62), style === 'downtown' ? 2.35 : 1.65, 0.09), glass); window.position.set(px, style === 'downtown' ? 1.55 : 1.65, z + d / 2 + 0.075); this.target.add(window);
+      const commercial = style === 'downtown' || style === 'mixed-use';
+      const window = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.2, w / bays * 0.62), commercial ? 2.35 : 1.65, 0.09), glass); window.position.set(px, commercial ? 1.55 : 1.65, z + d / 2 + 0.075); this.target.add(window);
       const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, z + d / 2 + 0.13); this.target.add(sill);
     }
-    if (style === 'downtown' || variant % 3 === 0) {
+    if (style === 'downtown' || style === 'mixed-use' || variant % 3 === 0) {
       const colors = [0xc8503f, 0x2f7774, 0xd4a438, 0x586f91];
       const awning = new THREE.Mesh(new THREE.BoxGeometry(w * 0.46, 0.15, 1.25), new THREE.MeshStandardMaterial({ color: colors[variant % colors.length], roughness: 0.7 }));
       awning.position.set(x + w * 0.22, 3.1, z + d / 2 + 0.58); awning.rotation.x = -0.12; awning.castShadow = true; this.target.add(awning);
@@ -1837,7 +1849,7 @@ export class City {
 
   private addRoofEquipment(x: number, z: number, w: number, d: number, h: number, roofY: number, style: BuildingStyle, variant: number): void {
     const metal = new THREE.MeshStandardMaterial({ color: 0x596467, metalness: 0.62, roughness: 0.46 });
-    const units = style === 'downtown' ? 2 : style === 'industrial' ? 1 : 0;
+    const units = style === 'downtown' ? 2 : style === 'mixed-use' || style === 'industrial' ? 1 : 0;
     for (let index = 0; index < units; index++) {
       const unit = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.05, 1.35), metal); unit.position.set(x - w * 0.18 + index * 2.4, roofY + 0.52, z - d * 0.2); unit.castShadow = true; this.target.add(unit);
       const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.06, 16), new THREE.MeshStandardMaterial({ color: 0x263033, metalness: 0.75, roughness: 0.35 })); fan.rotation.x = Math.PI / 2; fan.position.set(unit.position.x, roofY + 0.54, unit.position.z - 0.7); this.target.add(fan);

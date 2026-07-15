@@ -44,9 +44,15 @@ describe('generated Joburg road topology', () => {
   });
 
   it('provides multiple structural building families in every district', () => {
-    expect(ARCHITECTURE_VARIANTS.downtown).toBeGreaterThanOrEqual(5);
-    expect(ARCHITECTURE_VARIANTS.residential).toBeGreaterThanOrEqual(4);
-    expect(ARCHITECTURE_VARIANTS.industrial).toBeGreaterThanOrEqual(4);
+    expect(Object.keys(ARCHITECTURE_VARIANTS)).toHaveLength(7);
+    expect(Object.values(ARCHITECTURE_VARIANTS).reduce((sum, count) => sum + count, 0)).toBe(36);
+    expect(ARCHITECTURE_VARIANTS.downtown).toBe(7);
+    expect(ARCHITECTURE_VARIANTS['mixed-use']).toBe(5);
+    expect(ARCHITECTURE_VARIANTS['dense-residential']).toBe(5);
+    expect(ARCHITECTURE_VARIANTS.suburban).toBe(6);
+    expect(ARCHITECTURE_VARIANTS.industrial).toBe(5);
+    expect(ARCHITECTURE_VARIANTS.estate).toBe(4);
+    expect(ARCHITECTURE_VARIANTS.rural).toBe(4);
   });
 });
 
