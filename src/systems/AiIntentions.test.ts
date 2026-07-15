@@ -27,6 +27,7 @@ const makeCity = (): City => ({
   collidesAt: () => false,
   isOnRoad: () => true,
   signalStops: () => false, // no robots in this nav-only harness: traffic obedience is covered in JunctionsSignals.test.ts
+  signalSlowFactor: () => 1, // no robots: never slow for a signal here
   surfaceHeightAt: () => 0,
   sidewalkHeightAt: () => 0,
   roadHeightAt: () => 0,

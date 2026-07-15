@@ -56,9 +56,26 @@ export function signalPhaseState(phase: number, axis: 0 | 1, elapsed: number): S
 /** Hold line sits this far beyond the junction box edge; a driver inside this ring is "at the robot". Wide
  *  enough that a car braking from cruise (see Vehicle.updateAI's brake-firm decel) actually halts before the
  *  box instead of coasting through — an 8u ring left too little room and cars rolled reds. */
-export const SIGNAL_STOP_APPROACH = 14;
+export const SIGNAL_STOP_APPROACH = 17;
 /** Once a driver is this far past the box edge (into the crossing) it commits through, never freezing mid-junction. */
 export const SIGNAL_STOP_CLEAR = 1.5;
+
+/** Graded companion to signalHoldsDriver: 1 = cruise (green, moving away, committed through, or out of range),
+ *  easing linearly to 0 at the hold line so a driver lifts off and brakes SOONER across the whole approach ring
+ *  instead of cruising to the box then slamming to a stop. Same approach/commit geometry as signalHoldsDriver. */
+export function signalSlowFactor(junction: JunctionDefinition, x: number, z: number, heading: number, elapsed: number): number {
+  const toX = junction.x - x; const toZ = junction.z - z;
+  const dirX = Math.sin(heading); const dirZ = Math.cos(heading);
+  if (toX * dirX + toZ * dirZ <= 0) return 1; // moving away / already past
+  const half = junction.widest / 2;
+  const distance = Math.hypot(toX, toZ);
+  if (distance > half + SIGNAL_STOP_APPROACH) return 1; // too far out to matter yet
+  if (distance < half - SIGNAL_STOP_CLEAR) return 1; // inside the box: commit through, don't crawl
+  const align = Math.abs(dirX * Math.sin(junction.angle) + dirZ * Math.cos(junction.angle));
+  const axis: 0 | 1 = align >= 0.5 ? 0 : 1;
+  if (signalPhaseState(junction.phase, axis, elapsed) === 'green') return 1; // clear axis: full speed through
+  return Math.max(0, Math.min(1, (distance - half) / SIGNAL_STOP_APPROACH)); // ease from cruise (ring edge) to stop (box edge)
+}
 
 /** True when an AI driver at (x, z) heading `heading` should hold for a non-green robot on the axis it
  *  is travelling: it must be approaching, within the hold ring, and not already committed into the box. */

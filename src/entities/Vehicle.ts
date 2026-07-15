@@ -37,6 +37,7 @@ export class Vehicle {
   burnTimer = 0;
   aiTarget = new THREE.Vector3();
   aiStuck = 0;
+  collided = false; // set on a solid (wall/prop) impact in move(); PopulationSystem reads it to reroute an NPC out of a jam
   routeCooldown = 0; // seconds until this car may ask the planner again — set when a plan request comes back empty, so an unplanned car can't re-solve A* every frame
   frozen = false; // set by PopulationSystem distance culling: frozen traffic gets no plan/AI/visual updates
   bounce = 0;
@@ -199,7 +200,7 @@ export class Vehicle {
     if (felled > 0) { this.impactHurt(knockoverDamage(this.speed) * felled, knockoverDamage(this.speed) * felled * 0.5, 0); this.speed *= KNOCKOVER_SPEED_KEEP ** felled; } // fast enough: props tip, car ploughs on
     const resolved = city.clampMove(old, next, radius);
     if (resolved.distanceToSquared(next) > 0.01) {
-      const impact = Math.abs(this.speed); this.speed *= -0.16;
+      const impact = Math.abs(this.speed); this.speed *= -0.16; this.collided = true;
       this.impactHurt(props?.solidBlocked(next.x, next.z, radius) ? solidImpactDamage(impact) : Math.max(0, impact - 8) * 0.35, riderImpactDamage(impact), impact); // trees hit back harder than walls
     }
     this.groundY = city.roadHeightAt(resolved.x, resolved.z) + 0.02;

@@ -22,15 +22,29 @@ export interface PlayerVehicleHit { speed: number; damage: number; knockdown: bo
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
 
-/** Car-following: how far ahead (forward units) a driver watches for a leader, and the half-width² of the
- *  lane corridor that leader must sit within. Now that lanes are one-way, oncoming traffic rides a separate
- *  lane outside this corridor, so we brake for anything ahead in it — no head-on-crawl exemption needed. */
-const FOLLOW_RANGE = 10;
+/** Car-following corridor half-width²: the leader must sit within this of the driver's forward ray. Now that
+ *  lanes are one-way, oncoming traffic rides a separate lane outside this corridor, so we brake for anything
+ *  ahead in it — no head-on-crawl exemption needed. */
 const FOLLOW_CORRIDOR_SQ = 6.25; // 2.5u to each side
-/** Bumper-to-bumper gap a follower holds at a standstill, and the closing distance over which it eases from
- *  full speed down to that stop — a smooth follow instead of the old creep-into-the-leader-then-pin. */
-const FOLLOW_STOP_GAP = 1.2;
-const FOLLOW_SLOW_ZONE = 5;
+/** Speed-scaled car-following ("time headway"): the clear bumper gap held at a standstill, plus a slow zone
+ *  that GROWS with speed so a fast car lifts off far sooner. A driver doing v u/s eases across
+ *  FOLLOW_SLOW_ZONE_MIN + v·FOLLOW_HEADWAY units, and watches that far ahead (plus a margin) for a leader —
+ *  the old fixed 14u look-ahead couldn't shed cruise speed before rear-ending a car stopped at a light. */
+const FOLLOW_STOP_GAP = 2.4;
+const FOLLOW_HEADWAY = 1.15; // seconds of gap per unit of speed
+const FOLLOW_SLOW_ZONE_MIN = 6; // floor so even a crawl still eases smoothly instead of snapping on/off
+const FOLLOW_RANGE_MARGIN = 4; // look this much past the ease distance, so the leader is in view before easing must start
+
+/** NPC-vs-NPC contact resolution. Below NPC_CRASH_MIN_SPEED (relative) a touch just bleeds speed and separates;
+ *  above it deals a much gentler knock than a player/police hit (NPC_CRASH_DAMAGE per unit over the threshold)
+ *  so ordinary fender-benders don't turn the street into a row of husks. */
+const NPC_CRASH_MIN_SPEED = 6;
+const NPC_CRASH_DAMAGE = 0.12;
+const NPC_CRASH_COOLDOWN = 0.9; // one damage tick per pair per this long
+const TRAFFIC_MAX_PUSH = 0.3; // per-frame positional separation cap, so a nudge never shoves a car through a wall
+/** After any collision (car, wall, or pedestrian) a driver waits this long before it may reroute again — one
+ *  fresh path out of the jam, not an A* storm. */
+const COLLISION_REPLAN_COOLDOWN = 2.5;
 
 export class PopulationSystem {
   pedestrians: Pedestrian[] = [];
@@ -42,6 +56,8 @@ export class PopulationSystem {
   private pedestrianImpactCooldown = new WeakMap<Pedestrian, number>();
   private trafficPlans = new WeakMap<Vehicle, DrivePlan>();
   private trafficRecoveries = new WeakMap<Vehicle, number>();
+  private vehicleCrashCooldown = new WeakMap<Vehicle, number>(); // gates NPC-NPC collision damage per vehicle
+  private replanCooldown = new WeakMap<Vehicle, number>(); // gates post-collision reroutes so one prang isn't an A* storm
   private vehiclePlanner: RoutePlanner;
   private pedPlanner: RoutePlanner;
   private taxiState = new WeakMap<Vehicle, TaxiState>();
@@ -87,6 +103,7 @@ export class PopulationSystem {
     this.traffic.forEach((vehicle, index) => {
       if (vehicle.playerControlled || vehicle.disabled || !vehicle.occupied) return; // no NPC aboard (e.g. a carjacked car the player has since left): sit still, don't plan routes
       vehicle.routeCooldown = Math.max(0, vehicle.routeCooldown - dt);
+      this.replanCooldown.set(vehicle, Math.max(0, (this.replanCooldown.get(vehicle) ?? 0) - dt));
       if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0) {
         const wasFrozen = vehicle.frozen;
         vehicle.frozen = resolveFrozen(vehicle.frozen, vehicle.group.position.distanceToSquared(player), AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE);
@@ -94,42 +111,48 @@ export class PopulationSystem {
         if (vehicle.frozen && !wasFrozen) vehicle.speed = 0; // park in place: a stale speed would fire impact checks and jerk on thaw
       }
       if (vehicle.frozen) return;
-      // Obey robots (powered only): a car approaching a signalised junction on a red/amber axis holds.
+      // Obey robots (powered only): a car approaching a signalised junction on a red/amber axis eases off and
+      // holds. Graded (1 = cruise, 0 = stop at the box) so it brakes SOONER across the whole approach ring.
       const taxiKind = vehicle.spec.kind === 'taxi';
-      const signalStop = !robotsOut && !taxiKind && this.city.signalStops(vehicle.group.position, vehicle.heading);
-      if (signalStop) this.trafficPlans.get(vehicle)?.watchdog.reset(); // a legal red-light wait (up to ~16s) is not a stall
+      const signalScale = robotsOut || taxiKind ? 1 : this.city.signalSlowFactor(vehicle.group.position, vehicle.heading);
+      if (signalScale < 1) this.trafficPlans.get(vehicle)?.watchdog.reset(); // a legal easing/red-light wait (up to ~16s) is not a stall
       if (!this.followDrivePlan(vehicle, dt)) return; // reversing out of a watchdog stall this frame
       const forward = this.forward.set(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
-      // Nearest leader in my lane corridor: keep the bumper-to-bumper gap and ease speed down as it closes,
-      // so followers hold station instead of creeping into a heap the separation pass then pins at ~zero.
+      // Nearest leader in my lane corridor: keep the bumper-to-bumper gap and ease speed down as it closes.
+      // The ease distance (and how far ahead we look) scales with speed, so a fast car starts braking well
+      // before a car stopped at a light instead of arriving hot and rear-ending it.
+      const speedNow = Math.max(0, vehicle.speed);
+      const slowZone = FOLLOW_SLOW_ZONE_MIN + speedNow * FOLLOW_HEADWAY;
+      const scanRange = FOLLOW_STOP_GAP + slowZone + FOLLOW_RANGE_MARGIN;
       let leadGap = Infinity;
       for (const other of this.vehicles) {
         if (other === vehicle) continue;
         const dx = other.group.position.x - vehicle.group.position.x; const dz = other.group.position.z - vehicle.group.position.z;
         const ahead = dx * forward.x + dz * forward.z;
-        if (ahead <= 0 || ahead >= FOLLOW_RANGE || dx * dx + dz * dz - ahead * ahead >= FOLLOW_CORRIDOR_SQ) continue;
+        if (ahead <= 0 || ahead >= scanRange || dx * dx + dz * dz - ahead * ahead >= FOLLOW_CORRIDOR_SQ) continue;
         leadGap = Math.min(leadGap, ahead - (vehicle.spec.size[2] + other.spec.size[2]) / 2);
       }
-      const followScale = leadGap === Infinity ? 1 : THREE.MathUtils.clamp((leadGap - FOLLOW_STOP_GAP) / FOLLOW_SLOW_ZONE, 0, 1); // 1 = clear road, 0 = hold at the stop gap
+      const followScale = leadGap === Infinity ? 1 : THREE.MathUtils.clamp((leadGap - FOLLOW_STOP_GAP) / slowZone, 0, 1); // 1 = clear road, 0 = hold at the stop gap
       const blocked = followScale < 0.5; // still "blocked" for the taxi/honk bookkeeping when closing in on a leader
       let playerBlocked = false; let playerHold = false; let dodge: THREE.Vector3 | undefined;
       if (playerOnFoot && !vehicle.police && vehicle.group.position.distanceToSquared(player) < AVOID_RANGE * AVOID_RANGE) ({ blocked: playerBlocked, hold: playerHold, dodge } = this.avoidPlayer(vehicle, forward, player, dt));
       else this.holdups.delete(vehicle);
       const taxi = taxiKind;
       const junctionPanic = robotsOut && !taxi && CITY_JUNCTIONS.some((junction) => (junction.x - vehicle.group.position.x) ** 2 + (junction.z - vehicle.group.position.z) ** 2 < 576);
+      const speedScale = Math.min(followScale, signalScale); // whichever wants us slower: the leader ahead or the robot
       const throttle = playerHold ? 0 // held: a full stop with hysteresis, no 0.05 creep — this is what arms the honk clock
         : dodge ? DODGE_THROTTLE
-        : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked) * followScale // taxis still ease off a leader
+        : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked) * followScale // taxis still ease off a leader (and skip robots)
         : playerBlocked ? 0.05
-        : signalStop ? 0
-        : junctionPanic ? TRAFFIC_SPEED_FACTOR * 0.75 * followScale // dead robot (load shedding): a cautious ~75%-speed roll-through, not a crawl
-        : TRAFFIC_SPEED_FACTOR * followScale; // normal cruise, eased down when following a leader
+        : junctionPanic ? TRAFFIC_SPEED_FACTOR * 0.75 * speedScale // dead robot (load shedding): a cautious ~75%-speed roll-through, not a crawl
+        : TRAFFIC_SPEED_FACTOR * speedScale; // normal cruise, eased down for a leader ahead or a robot
       vehicle.updateAI(dt, this.city, dodge, throttle);
+      if (vehicle.collided) { vehicle.collided = false; this.requestCollisionReplan(vehicle); } // hit a wall/prop: reroute out of the jam
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
       if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);
     });
     this.handleVehiclePedestrianImpacts();
-    this.handleTrafficSeparation();
+    this.handleTrafficSeparation(dt);
     this.updateTrafficEngineAudio(player);
     if (damagePlayer && this.hostileAttackCooldown <= 0) {
       const attacker = this.pedestrians.find((ped) => ped.state === 'hostile' && ped.group.position.distanceTo(player) < 2.3);
@@ -517,15 +540,50 @@ export class PopulationSystem {
           const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
           this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
           this.pedestrianImpactCooldown.set(ped, 1);
+          if (!vehicle.playerControlled) this.requestCollisionReplan(vehicle); // NPC that just hit someone: try a fresh way through
         } else if (distanceSq < 22 && Math.abs(vehicle.speed) > 16 && !ped.contact && !ped.hostile && !ped.police && Math.random() < 0.01) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
       }
     }
   }
 
-  private handleTrafficSeparation(): void {
+  private handleTrafficSeparation(dt: number): void {
+    for (const vehicle of this.traffic) this.vehicleCrashCooldown.set(vehicle, Math.max(0, (this.vehicleCrashCooldown.get(vehicle) ?? 0) - dt));
     for (let i = 0; i < this.traffic.length; i++) for (let j = i + 1; j < this.traffic.length; j++) {
-      const first = this.traffic[i]; const second = this.traffic[j]; if (!first || !second || first.group.position.distanceToSquared(second.group.position) > 7.8) continue;
-      first.speed *= 0.65; second.speed *= 0.65;
+      const first = this.traffic[i]; const second = this.traffic[j]; if (!first || !second) continue;
+      const dx = second.group.position.x - first.group.position.x; const dz = second.group.position.z - first.group.position.z;
+      const distSq = dx * dx + dz * dz;
+      // Length-aware contact radius: a quarter of both lengths + widths ≈ a bounding circle per car, so a taxi or
+      // van excludes at a bigger radius than a compact, without a bare half-length falsely catching adjacent lanes.
+      const reach = (first.spec.size[2] + second.spec.size[2] + first.spec.size[0] + second.spec.size[0]) / 4;
+      if (distSq > reach * reach) continue;
+      const dist = Math.sqrt(distSq) || 1e-4;
+      const impact = Math.abs(first.speed - second.speed); // relative closing speed: a same-speed convoy reads ~0
+      first.speed *= 0.65; second.speed *= 0.65; // bleed speed (unchanged from the old soft separation)
+      const nx = dx / dist; const nz = dz / dist; const push = Math.min(reach - dist, TRAFFIC_MAX_PUSH) / 2; // shove apart so they don't sit pinned in a heap
+      first.group.position.x -= nx * push; first.group.position.z -= nz * push;
+      second.group.position.x += nx * push; second.group.position.z += nz * push;
+      if (impact > NPC_CRASH_MIN_SPEED && (this.vehicleCrashCooldown.get(first) ?? 0) <= 0 && (this.vehicleCrashCooldown.get(second) ?? 0) <= 0) {
+        const damage = (impact - NPC_CRASH_MIN_SPEED) * NPC_CRASH_DAMAGE; // gentler than player/police hits (0.25-0.35): no road of husks
+        first.takeDamage(damage); second.takeDamage(damage);
+        this.vehicleCrashCooldown.set(first, NPC_CRASH_COOLDOWN); this.vehicleCrashCooldown.set(second, NPC_CRASH_COOLDOWN);
+        if (impact > 9 && this.playerPos.distanceToSquared(first.group.position) < 55 * 55) this.audio.collision(impact); // only a real prang near the player is worth a sound
+        this.requestCollisionReplan(first); this.requestCollisionReplan(second); // a prang is a jam: reroute both out of it
+      }
     }
+  }
+
+  /** After a collision, reroute a driver to the SAME destination from where it now sits, so it works its way
+   *  out of the jam instead of grinding on the old path. Rate-limited per vehicle so one prang isn't an A* storm. */
+  private requestCollisionReplan(vehicle: Vehicle): void {
+    if (vehicle.playerControlled || vehicle.disabled || (this.replanCooldown.get(vehicle) ?? 0) > 0) return;
+    this.replanCooldown.set(vehicle, COLLISION_REPLAN_COOLDOWN);
+    const plan = this.trafficPlans.get(vehicle);
+    const dest = plan?.points[plan.points.length - 1];
+    if (!dest) { this.assignVehicleRoute(vehicle, false); return; } // no known destination yet: just take a fresh goal
+    const pos = vehicle.group.position;
+    const points = this.vehiclePlanner.tryPlanTo(pos.x, pos.z, dest.x, dest.z);
+    if (!points?.length) return; // A* budget spent this frame: the watchdog stays the backstop
+    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });
+    const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);
   }
 }
