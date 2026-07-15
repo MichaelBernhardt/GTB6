@@ -36,6 +36,8 @@ export interface MapPolygon {
   minX: number; maxX: number; minZ: number; maxZ: number;
   cx: number; cz: number;
   area: number;
+  /** Green polygons only: tended lawn (park/grass/golf) vs wild veld (scrub/reserve/woodland) — drives lush vs dry turf. */
+  manicured?: boolean;
 }
 
 export interface MapLandmark { name: string; x: number; z: number; kind: string; }
@@ -205,6 +207,7 @@ function buildPolygon(name: string, kind: MapPolygon['kind'], rawPoints: [number
 }
 
 const GREEN_KINDS = new Set(['park', 'grass', 'golf_course', 'nature_reserve', 'forest', 'wood', 'scrub']);
+const MANICURED_KINDS = new Set(['park', 'grass', 'golf_course']); // tended lawns get lush turf; the rest read as dry veld
 const DIRT_KINDS = new Set(['mine_dump', 'brownfield']);
 const FARM_KINDS = new Set(['farmland']);
 const AERODROME_KINDS = new Set(['aerodrome']);
@@ -216,7 +219,11 @@ export const WATER_POLYGONS: MapPolygon[] = MAP.water
 /** Green/open landuse, largest first, capped so the runtime mesh and prop budgets stay sane. */
 export const GREEN_POLYGONS: MapPolygon[] = MAP.landuse
   .filter((area) => GREEN_KINDS.has(area.kind))
-  .map((area) => buildPolygon(area.name, 'green', area.points))
+  .map((area) => {
+    const polygon = buildPolygon(area.name, 'green', area.points);
+    if (polygon) polygon.manicured = MANICURED_KINDS.has(area.kind);
+    return polygon;
+  })
   .filter((polygon): polygon is MapPolygon => polygon !== undefined)
   .sort((a, b) => b.area - a.area)
   .slice(0, 64);
