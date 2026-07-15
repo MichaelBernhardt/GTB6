@@ -6,6 +6,7 @@ import {
   findHumanoidBones, initialPlayerVisualState, PLAYER_ANIMATIONS, RiggedPlayerVisual,
   selectPlayerAnimation, validatePlayerGltf,
 } from './RiggedPlayerVisual';
+import { Player } from './Player';
 
 class FakeImage {
   width = 2048;
@@ -28,6 +29,21 @@ const loadProtagonist = async (): Promise<GLTF> => {
   return new GLTFLoader().parseAsync(buffer, '/models/characters/');
 };
 
+const loadVisual = async (): Promise<RiggedPlayerVisual> => {
+  const visual = new RiggedPlayerVisual(new THREE.Group(), { load: async () => loadProtagonist() });
+  await visual.load(); return visual;
+};
+
+const stepVisual = (visual: RiggedPlayerVisual, seconds: number, dt = 1 / 60): void => {
+  for (let remaining = seconds; remaining > 0.000001; remaining -= dt) visual.update(Math.min(dt, remaining));
+};
+
+interface VisualInternals {
+  currentName?: string;
+  actions: Map<string, THREE.AnimationAction>;
+  recoilAge: number;
+}
+
 describe('rigged player animation selection', () => {
   it('uses explicit speed and pose modes with deterministic priority', () => {
     const state = { ...initialPlayerVisualState(), locomotionSpeed: 8 };
@@ -48,6 +64,12 @@ describe('rigged player animation selection', () => {
     state.moveSide = 0; state.moveForward = 1; expect(selectPlayerAnimation(state)).toBe('aim_forward');
     state.moveForward = -1; expect(selectPlayerAnimation(state)).toBe('aim_back');
   });
+
+  it('raises the weapon for a held trigger without treating the trigger as the fire clip', () => {
+    const state = { ...initialPlayerVisualState(), firing: true };
+    expect(selectPlayerAnimation(state)).toBe('aim');
+    state.locomotionSpeed = 2; state.moveSide = 1; expect(selectPlayerAnimation(state)).toBe('aim_right');
+  });
 });
 
 describe('protagonist GLB contract', () => {
@@ -65,6 +87,20 @@ describe('protagonist GLB contract', () => {
     expect(materials.size).toBe(4); expect(skinned).toBe(4);
     const box = new THREE.Box3().setFromObject(gltf.scene); expect(box.max.y - box.min.y).toBeCloseTo(1.8, 2); expect(box.min.y).toBeCloseTo(0, 1);
     for (const clip of gltf.animations) expect(clip.tracks.some((track) => track.name.endsWith('.position'))).toBe(false);
+
+    const sample = (clipName: string, time: number, boneName: string): THREE.Vector3 => {
+      const mixer = new THREE.AnimationMixer(gltf.scene); const clip = THREE.AnimationClip.findByName(gltf.animations, clipName)!;
+      mixer.clipAction(clip).play(); mixer.setTime(time); gltf.scene.updateMatrixWorld(true);
+      const point = gltf.scene.getObjectByName(boneName)!.getWorldPosition(new THREE.Vector3()); mixer.stopAllAction(); return point;
+    };
+    expect(sample('idle', 0, 'Hand_R').distanceTo(sample('idle', 1, 'Hand_R'))).toBeLessThan(0.01);
+    const chest = sample('aim', 0, 'Chest'); const firingHand = sample('aim', 0, 'Hand_R');
+    expect(firingHand.z - chest.z).toBeGreaterThan(0.42); expect(firingHand.y - chest.y).toBeGreaterThan(0.18);
+    expect(sample('fire', 0, 'Hand_R').distanceTo(firingHand)).toBeLessThan(0.005);
+    expect(sample('fire', THREE.AnimationClip.findByName(gltf.animations, 'fire')!.duration, 'Hand_R').distanceTo(firingHand)).toBeLessThan(0.005);
+    const walk = THREE.AnimationClip.findByName(gltf.animations, 'walk')!;
+    expect(Math.abs(sample('walk', 0, 'Foot_L').z - sample('walk', walk.duration / 2, 'Foot_L').z)).toBeGreaterThan(0.4);
+    expect(sample('walk', walk.duration / 4, 'Foot_R').y - sample('walk', 0, 'Foot_R').y).toBeGreaterThan(0.14);
   });
 
   it('loads only through the explicit lifecycle and fails closed on invalid data', async () => {
@@ -90,5 +126,71 @@ describe('protagonist GLB contract', () => {
     const visual = new RiggedPlayerVisual(new THREE.Group(), { load: async () => { calls++; if (calls === 1) throw new Error('offline'); return loadProtagonist(); } });
     await expect(visual.load()).rejects.toThrow(/unable to load/i); expect(visual.failed).toBe(true); expect(visual.ready).toBe(false);
     await visual.retry(); expect(calls).toBe(2); expect(visual.ready).toBe(true); expect(visual.group.visible).toBe(true);
+  });
+});
+
+describe('rigged player runtime transitions and firearm poses', () => {
+  it('keeps long-duration idle stable and cleans the walk action after returning to idle', async () => {
+    const visual = await loadVisual(); const state = initialPlayerVisualState(); visual.setState(state);
+    stepVisual(visual, 0.4); visual.group.updateMatrixWorld(true);
+    const initialHand = visual.group.getObjectByName('Hand_R')!.getWorldPosition(new THREE.Vector3());
+    stepVisual(visual, 30); visual.group.updateMatrixWorld(true);
+    const internals = visual as unknown as VisualInternals;
+    expect(internals.currentName).toBe('idle');
+    expect(internals.actions.get('idle')!.time).toBeGreaterThan(0.3);
+    expect(visual.group.getObjectByName('Hand_R')!.getWorldPosition(new THREE.Vector3()).distanceTo(initialHand)).toBeLessThan(0.01);
+
+    visual.setState({ ...state, locomotionSpeed: 4.6 }); stepVisual(visual, 0.4); expect(internals.currentName).toBe('walk');
+    visual.setState(state); stepVisual(visual, 0.4); expect(internals.currentName).toBe('idle');
+    expect(internals.actions.get('walk')!.isRunning()).toBe(false);
+    expect(internals.actions.get('walk')!.getEffectiveWeight()).toBe(0);
+  });
+
+  it('raises every ranged weapon on unaimed fire and supports long guns with the off-hand', async () => {
+    const visual = await loadVisual();
+    for (const weapon of ['pistol', 'smg', 'shotgun', 'sniper', 'rpg'] as const) {
+      visual.setWeapon(weapon); visual.setState({ ...initialPlayerVisualState(), firing: true }); stepVisual(visual, 0.4);
+      visual.group.updateMatrixWorld(true);
+      const right = visual.group.getObjectByName('Hand_R')!.getWorldPosition(new THREE.Vector3());
+      const left = visual.group.getObjectByName('Hand_L')!.getWorldPosition(new THREE.Vector3());
+      const weaponBox = new THREE.Box3().setFromObject(visual.group.getObjectByName(`RiggedWeapon:${weapon}`)!);
+      expect(right.y, weapon).toBeGreaterThan(1.2); expect(right.z, weapon).toBeGreaterThan(0.35);
+      expect(left.y, weapon).toBeGreaterThan(1.2); expect(weaponBox.distanceToPoint(left), weapon).toBeLessThan(0.28);
+    }
+    expect((visual as unknown as VisualInternals).currentName).toBe('aim');
+  });
+
+  it('holds aim between shots and restarts recoil for semi-automatic and automatic weapons', async () => {
+    const visual = await loadVisual(); const internals = visual as unknown as VisualInternals; let shotSequence = 0;
+    for (const [weapon, duration] of [['pistol', 0.18], ['smg', 0.11]] as const) {
+      visual.setWeapon(weapon); let state = { ...initialPlayerVisualState(), aiming: true, shotSequence };
+      visual.setState(state); stepVisual(visual, 0.4); expect(internals.currentName).toBe('aim');
+      visual.group.updateMatrixWorld(true);
+      const rest = visual.group.getObjectByName('Hand_R')!.getWorldPosition(new THREE.Vector3());
+      state = { ...state, shotSequence: ++shotSequence }; visual.setState(state); visual.update(duration / 2);
+      expect(internals.recoilAge).toBeCloseTo(duration / 2, 5);
+      visual.group.updateMatrixWorld(true);
+      expect(visual.group.getObjectByName('Hand_R')!.getWorldPosition(new THREE.Vector3()).distanceTo(rest)).toBeGreaterThan(0.005);
+      if (weapon === 'smg') {
+        state = { ...state, shotSequence: ++shotSequence }; visual.setState(state); visual.update(0.01);
+        expect(internals.recoilAge).toBeCloseTo(0.01, 5); // an automatic follow-up restarts the active pulse
+        visual.update(duration / 2 - 0.01); visual.group.updateMatrixWorld(true);
+        expect(visual.group.getObjectByName('Hand_R')!.getWorldPosition(new THREE.Vector3()).distanceTo(rest)).toBeGreaterThan(0.005);
+      }
+      visual.setState(state); stepVisual(visual, duration); expect(internals.currentName).toBe('aim'); visual.group.updateMatrixWorld(true);
+      const settled = visual.group.getObjectByName('Hand_R')!.getWorldPosition(new THREE.Vector3());
+      state = { ...state, shotSequence: ++shotSequence }; visual.setState(state); visual.update(duration / 2);
+      expect(internals.recoilAge).toBeCloseTo(duration / 2, 5);
+      visual.group.updateMatrixWorld(true);
+      expect(visual.group.getObjectByName('Hand_R')!.getWorldPosition(new THREE.Vector3()).distanceTo(settled)).toBeGreaterThan(0.005);
+      expect(internals.currentName).toBe('aim');
+    }
+  });
+
+  it('increments the visual shot sequence only through the ranged-shot API', () => {
+    const player = new Player(new THREE.Scene());
+    const state = (player as unknown as { visualState: ReturnType<typeof initialPlayerVisualState> }).visualState;
+    player.registerShot(); player.registerShot(); expect(state.shotSequence).toBe(2);
+    player.setWeapon('fists'); player.registerShot(); expect(state.shotSequence).toBe(2);
   });
 });

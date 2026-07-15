@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
+import { Matrix4, Quaternion, Vector3 } from 'three';
 
 const MODEL = resolve(process.argv[2] ?? 'public/models/characters/protagonist.glb');
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -44,6 +45,51 @@ function dimensions(data) {
     }
   }
   throw new Error('Unsupported texture format');
+}
+
+function quaternionSamples(json, bin, animation, nodeIndex) {
+  const channel = animation.channels.find((entry) => entry.target.node === nodeIndex && entry.target.path === 'rotation');
+  invariant(channel, `${animation.name} has no rotation track for ${json.nodes[nodeIndex]?.name}`);
+  const sampler = animation.samplers[channel.sampler]; const values = accessorValues(json, bin, sampler.output); const samples = [];
+  const stride = sampler.interpolation === 'CUBICSPLINE' ? 12 : 4; const valueOffset = sampler.interpolation === 'CUBICSPLINE' ? 4 : 0;
+  for (let index = valueOffset; index < values.length; index += stride) samples.push(new Quaternion(values[index], values[index + 1], values[index + 2], values[index + 3]).normalize());
+  return samples;
+}
+
+function angularExcursion(samples) {
+  let result = 0;
+  for (const left of samples) for (const right of samples) result = Math.max(result, left.angleTo(right));
+  return result;
+}
+
+function poseSampler(json, bin, animation, parentByNode) {
+  const rotations = new Map(); let sampleCount = 0;
+  for (const channel of animation.channels) {
+    if (channel.target.path !== 'rotation') continue;
+    const sampler = animation.samplers[channel.sampler]; const values = accessorValues(json, bin, sampler.output); const samples = [];
+    const stride = sampler.interpolation === 'CUBICSPLINE' ? 12 : 4; const valueOffset = sampler.interpolation === 'CUBICSPLINE' ? 4 : 0;
+    for (let index = valueOffset; index < values.length; index += stride) samples.push(new Quaternion(values[index], values[index + 1], values[index + 2], values[index + 3]).normalize());
+    rotations.set(channel.target.node, samples); sampleCount = Math.max(sampleCount, samples.length);
+  }
+  return {
+    sampleCount,
+    point(nodeIndex, sampleIndex) {
+      const worldMatrices = new Map();
+      const worldMatrix = (index) => {
+        const cached = worldMatrices.get(index); if (cached) return cached;
+        const node = json.nodes[index]; const rotationSamples = rotations.get(index);
+        const rotation = rotationSamples?.[Math.min(sampleIndex, rotationSamples.length - 1)]
+          ?? new Quaternion(...(node.rotation ?? [0, 0, 0, 1]));
+        const local = new Matrix4().compose(
+          new Vector3(...(node.translation ?? [0, 0, 0])), rotation,
+          new Vector3(...(node.scale ?? [1, 1, 1])),
+        );
+        const parent = parentByNode.get(index); const world = parent === undefined ? local : local.premultiply(worldMatrix(parent));
+        worldMatrices.set(index, world); return world;
+      };
+      return new Vector3().setFromMatrixPosition(worldMatrix(nodeIndex));
+    },
+  };
 }
 
 const file = await readFile(MODEL); invariant(file.byteLength < MAX_BYTES, `GLB is ${(file.byteLength / 1024 / 1024).toFixed(2)} MiB; limit is 10 MiB`);
@@ -99,6 +145,57 @@ for (const animation of json.animations) for (const [channelIndex, channel] of a
   const times = accessorValues(json, bin, animation.samplers[channel.sampler].input);
   for (let i = 1; i < times.length; i++) invariant(Math.abs((times[i] - times[i - 1]) - 1 / 30) < 0.00001, `${animation.name} track ${channelIndex} is not baked at 30 fps`);
 }
+
+const animationByName = new Map(json.animations.map((animation) => [animation.name, animation]));
+const parentByNode = new Map();
+for (const [parent, node] of json.nodes.entries()) for (const child of node.children ?? []) parentByNode.set(child, parent);
+const idle = animationByName.get('idle'); const walk = animationByName.get('walk'); const aim = animationByName.get('aim'); const fire = animationByName.get('fire');
+
+// Idle breathes through the torso and head; the local arm pose must not drift.
+for (const name of ['UpperArm_L', 'LowerArm_L', 'Hand_L', 'UpperArm_R', 'LowerArm_R', 'Hand_R']) {
+  invariant(angularExcursion(quaternionSamples(json, bin, idle, nodeByName.get(name))) < 0.001, `idle ${name} is not stable`);
+}
+const idlePose = poseSampler(json, bin, idle, parentByNode);
+for (const name of ['Hand_L', 'Hand_R']) {
+  const points = Array.from({ length: idlePose.sampleCount }, (_, index) => idlePose.point(nodeByName.get(name), index));
+  const origin = points[0]; const excursion = Math.max(...points.map((point) => point.distanceTo(origin)));
+  invariant(excursion < 0.01, `idle ${name} excursion is ${excursion.toFixed(4)} m`);
+}
+
+// Contact loops must close exactly enough to crossfade without a visible pop.
+for (const animation of [idle, walk]) for (const channel of animation.channels) {
+  if (channel.target.path !== 'rotation') continue;
+  const samples = quaternionSamples(json, bin, animation, channel.target.node);
+  invariant(samples[0].angleTo(samples.at(-1)) < 0.001, `${animation.name} does not close on ${json.nodes[channel.target.node].name}`);
+}
+
+const aimPose = poseSampler(json, bin, aim, parentByNode); const aimRight = aimPose.point(nodeByName.get('Hand_R'), 0); const aimLeft = aimPose.point(nodeByName.get('Hand_L'), 0); const aimChest = aimPose.point(nodeByName.get('Chest'), 0);
+invariant(aimRight.z - aimChest.z > 0.42 && aimRight.y - aimChest.y > 0.18 && Math.abs(aimRight.x) < 0.2, `aim firing hand is not forward at chest height (${aimRight.toArray().map((value) => value.toFixed(3)).join(', ')})`);
+invariant(aimLeft.z - aimChest.z > 0.40 && aimLeft.distanceTo(aimRight) < 0.28, 'aim off-hand does not support the raised weapon');
+const firePose = poseSampler(json, bin, fire, parentByNode); const fireLast = firePose.sampleCount - 1;
+for (const name of ['Hand_L', 'Hand_R']) {
+  const node = nodeByName.get(name); const aimed = aimPose.point(node, 0);
+  invariant(firePose.point(node, 0).distanceTo(aimed) < 0.005, `fire does not start from aim on ${name}`);
+  invariant(firePose.point(node, fireLast).distanceTo(aimed) < 0.005, `fire does not return to aim on ${name}`);
+}
+const fireReach = Array.from({ length: firePose.sampleCount }, (_, index) => firePose.point(nodeByName.get('Hand_R'), index).distanceTo(aimRight));
+invariant(Math.max(...fireReach) > 0.02, 'fire recoil is not visible in the firing hand');
+
+const walkPose = poseSampler(json, bin, walk, parentByNode);
+for (const name of ['Foot_L', 'Foot_R']) {
+  const points = Array.from({ length: walkPose.sampleCount }, (_, index) => walkPose.point(nodeByName.get(name), index));
+  const extent = (axis) => Math.max(...points.map((point) => point[axis])) - Math.min(...points.map((point) => point[axis]));
+  const travel = extent('z'); const lift = extent('y'); const lateral = extent('x');
+  invariant(travel > 0.40, `walk ${name} stride travel is only ${travel.toFixed(3)} m`);
+  invariant(lift > 0.14, `walk ${name} foot lift is only ${lift.toFixed(3)} m`);
+  invariant(lateral < 0.13, `walk ${name} lateral drift is ${lateral.toFixed(3)} m`);
+}
+for (const name of ['LowerLeg_L', 'LowerLeg_R']) invariant(angularExcursion(quaternionSamples(json, bin, walk, nodeByName.get(name))) > 0.80, `walk ${name} has insufficient knee flexion`);
+for (const name of ['Foot_L', 'Foot_R']) invariant(angularExcursion(quaternionSamples(json, bin, walk, nodeByName.get(name))) > 0.40, `walk ${name} has no heel-to-toe roll`);
+const hipMotion = angularExcursion(quaternionSamples(json, bin, walk, nodeByName.get('Hips')));
+const chestMotion = angularExcursion(quaternionSamples(json, bin, walk, nodeByName.get('Chest')));
+invariant(hipMotion > 0.05 && hipMotion < 0.18, `walk pelvis motion ${hipMotion.toFixed(3)} is not controlled`);
+invariant(chestMotion > 0.05 && chestMotion < 0.18, `walk torso counter-motion ${chestMotion.toFixed(3)} is not controlled`);
 await stat(MODEL);
 if (MODEL === resolve('public/models/characters/protagonist.glb')) {
   const lock = JSON.parse(await readFile(resolve('art/character/sources.lock.json'), 'utf8'));

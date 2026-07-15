@@ -23,8 +23,7 @@
     "oneShot": ["fire", "punch_left", "punch_right", "jump", "land", "tumble", "death"]
   },
   "weaponSockets": {
-    "rightHand": ["pistol", "smg", "shotgun", "sniper"],
-    "chestBack": ["rpg"]
+    "rightHand": ["pistol", "smg", "shotgun", "sniper", "rpg"]
   },
   "textureSources": {
     "skinAndEyes": "MakeHuman young_african_male skin and brown eye atlas (CC0)",
