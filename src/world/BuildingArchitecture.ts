@@ -226,22 +226,69 @@ export class BuildingArchitecture {
 
   private addDowntownDetail(spec: BuildingSpec, massing: number, roofY: number): void {
     const { x, z, width: w, depth: d, height: h, variant } = spec;
-    if (variant % 2 === 0) {
-      const finCount = Math.max(3, Math.min(7, Math.floor(w / 4)));
-      for (let index = 0; index < finCount; index++) {
-        const px = x - w * 0.38 + index * (w * 0.76 / Math.max(1, finCount - 1));
-        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.16, h * 0.72, 0.52), this.stone); fin.position.set(px, h * 0.51, z + d / 2 + 0.23); fin.castShadow = true; this.parent.add(fin);
+    if (massing === 4) {
+      this.addCylindricalDowntownDetail(spec);
+    } else {
+      if (variant % 2 === 0) {
+        const finCount = Math.max(3, Math.min(7, Math.floor(w / 4)));
+        for (let index = 0; index < finCount; index++) {
+          const px = x - w * 0.38 + index * (w * 0.76 / Math.max(1, finCount - 1));
+          const fin = new THREE.Mesh(new THREE.BoxGeometry(0.16, h * 0.72, 0.52), this.stone); fin.position.set(px, h * 0.51, z + d / 2 + 0.23); fin.castShadow = true; this.parent.add(fin);
+        }
       }
+      for (let y = 11; y < h - 5; y += Math.max(10, h / 5)) {
+        const band = new THREE.Mesh(new THREE.BoxGeometry(w * 0.82, 0.18, 0.28), this.darkMetal); band.position.set(x, y, z + d / 2 + 0.15); this.parent.add(band);
+      }
+      if (variant % 3 === 0 && h > 30) this.addFireEscape(x, z, w, d, h);
     }
-    for (let y = 11; y < h - 5; y += Math.max(10, h / 5)) {
-      const band = new THREE.Mesh(new THREE.BoxGeometry(w * 0.82, 0.18, 0.28), this.darkMetal); band.position.set(x, y, z + d / 2 + 0.15); this.parent.add(band);
-    }
-    if (variant % 3 === 0 && h > 30) this.addFireEscape(x, z, w, d, h);
     if (massing === 2 || massing === 4) {
       const crown = new THREE.Group(); crown.position.set(x, roofY, z);
       for (const px of [-w * 0.2, w * 0.2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 3.5, 0.16), this.darkMetal); post.position.set(px, 1.75, 0); crown.add(post); }
       const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.52, 0.18, 0.18), this.darkMetal); beam.position.y = 3.45; crown.add(beam); this.parent.add(crown);
     }
+  }
+
+  /** Trim for the tapered elliptical downtown tower. The old shared downtown pass placed a flat
+   *  grid at the rectangular parcel edge, leaving its ends visibly detached from this narrower
+   *  massing. Rings and mullions instead use the cylinder's exact 4% bottom-to-top taper. */
+  private addCylindricalDowntownDetail(spec: BuildingSpec): void {
+    const { x, z, width: w, height: h, variant } = spec;
+    const podiumH = Math.min(9, h * 0.2); const towerBottom = podiumH + 0.2; const towerTop = h + 0.2;
+    const ringHeights: number[] = [];
+    for (let y = Math.max(11, towerBottom + 2.5); y < h - 5; y += Math.max(10, h / 5)) {
+      ringHeights.push(y);
+      const { rx, rz } = this.cylindricalTowerRadii(spec, y);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(rz - 0.07, 0.09, 6, 32), this.darkMetal);
+      ring.position.set(x, y, z); ring.rotation.x = Math.PI / 2; ring.scale.x = rx / rz;
+      ring.castShadow = true; ring.name = 'cylindrical-facade-ring'; ring.userData.curvedFacadeDetail = 'ring'; this.parent.add(ring);
+    }
+
+    if (variant % 2 !== 0) return;
+    const finCount = Math.max(3, Math.min(7, Math.floor(w / 4)));
+    const segmentEdges = [towerBottom + 0.8, ...ringHeights, towerTop - 4.7];
+    for (let segment = 0; segment < segmentEdges.length - 1; segment++) {
+      const y0 = segmentEdges[segment]! + (segment === 0 ? 0 : 0.25);
+      const y1 = segmentEdges[segment + 1]! - (segment === segmentEdges.length - 2 ? 0 : 0.25);
+      if (y1 - y0 < 0.6) continue;
+      const cy = (y0 + y1) / 2; const { rx, rz } = this.cylindricalTowerRadii(spec, cy);
+      for (let index = 0; index < finCount; index++) {
+        // Keep the original street-facing spread, but solve each point and its normal on the ellipse.
+        const u = finCount === 1 ? 0 : -0.92 + index * (1.84 / (finCount - 1));
+        const px = u * rx; const pz = Math.sqrt(1 - u * u) * rz;
+        const normal = new THREE.Vector2(px / (rx * rx), pz / (rz * rz)).normalize();
+        const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.18, y1 - y0, 0.28), this.stone);
+        mullion.position.set(x + px - normal.x * 0.1, cy, z + pz - normal.y * 0.1);
+        mullion.rotation.y = Math.atan2(normal.x, normal.y); mullion.castShadow = true;
+        mullion.name = 'cylindrical-facade-mullion'; mullion.userData.curvedFacadeDetail = 'mullion'; this.parent.add(mullion);
+      }
+    }
+  }
+
+  private cylindricalTowerRadii(spec: BuildingSpec, y: number): { rx: number; rz: number } {
+    const podiumH = Math.min(9, spec.height * 0.2); const towerH = spec.height - podiumH;
+    const t = THREE.MathUtils.clamp((y - podiumH - 0.2) / towerH, 0, 1);
+    const taper = THREE.MathUtils.lerp(1.04, 1, t); const rz = spec.depth * 0.39 * taper;
+    return { rx: rz * spec.width / Math.max(spec.depth, 1), rz };
   }
 
   private addFireEscape(x: number, z: number, w: number, d: number, h: number): void {
