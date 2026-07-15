@@ -75,7 +75,7 @@ const WATER_COLOR = '#2e6f9e';
 const WATER_PREMIUM_COLOR = '#3d89bd';
 const OCEAN_COLOR = '#173e63';
 const BEACH_COLOR = '#d9c184';
-const FARMLAND_COLOR = '#6d7a3a';
+const FARMLAND_COLOR = '#5a4630'; // tilled soil brown, matching the 3D farmland fill (createGrassTexture 'soil')
 const DISTRICT_COLOR = '#b9c7d6';
 /** Water bodies at least this large (game units^2) get the premium tier styling. */
 const PREMIUM_WATER_AREA = 3200;
@@ -294,7 +294,7 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
     ctx.stroke(); ctx.setLineDash([]); ctx.restore();
     if (g.farmlandPath) {
       ctx.fillStyle = FARMLAND_COLOR; ctx.globalAlpha = 0.55; ctx.fill(g.farmlandPath); ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#8a934f'; ctx.lineWidth = Math.max(1.5, 1 / zoom); ctx.stroke(g.farmlandPath);
+      ctx.strokeStyle = '#7a6244'; ctx.lineWidth = Math.max(1.5, 1 / zoom); ctx.stroke(g.farmlandPath);
     }
     if (map.rural) {
       for (const farm of map.rural.farms) {

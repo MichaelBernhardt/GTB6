@@ -13,6 +13,7 @@ import {
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
+  FARM_POLYGONS,
   HARBOUR_POINT,
   JUNCTION_SURFACES,
   junctionPaves,
@@ -549,7 +550,7 @@ export class City {
   // Park/lawn turf tiles in WORLD space (draped park UVs are raw x,z), so repeat = 1/metres-per-tile — one tile
   // ~6u regardless of polygon size, giving consistent blade density everywhere. See buildParks.
   private grassLush = createGrassTexture('lush', 1 / 6);
-  private grassDry = createGrassTexture('dry', 1 / 6);
+  private farmSoil = createGrassTexture('soil', 1 / 6); // tilled-field earth for farmland polygons
   private grassWind?: { advance(dt: number): void };
   private sand = createSurfaceTexture('sand', 14);
   private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
@@ -1526,17 +1527,19 @@ export class City {
 
   private buildParks(): void {
     // Grass colour is baked into the map (see createGrassTexture), so the material tint stays neutral white.
+    // Every green landuse the map paints green renders as lush grass — including wild types (reserve/scrub/wood)
+    // for now — so the world matches the map. (`polygon.manicured` is still carried for a future custom pass.)
     const parkMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.grassLush, roughness: 0.95 });
-    const dryMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.grassDry, roughness: 0.95 });
     this.grassWind = applyGrassShader(parkMaterial, { wind: true }); // lush lawns: macro detile + wind ripple
-    applyGrassShader(dryMaterial); // dry veld: macro detile only, no wind
     const dirtMaterial = new THREE.MeshStandardMaterial({ color: 0xb59d5a, map: this.sand, roughness: 0.97 });
     for (const polygon of GREEN_POLYGONS) {
-      this.addGroundCover(polygon, polygon.manicured ? parkMaterial : dryMaterial, 0.05); // tended lawns lush, wild veld dry; drapes onto the relief
+      this.addGroundCover(polygon, parkMaterial, 0.05); // drapes onto the relief
       this.plantParkTrees(polygon);
       if (!GENERIC_AREA_NAMES.has(polygon.name.toLowerCase()) && polygon.area > 4000) this.addParkSign(polygon);
     }
     for (const polygon of DIRT_POLYGONS) this.addGroundCover(polygon, dirtMaterial, 0.04); // mine dumps: Joburg's pale gold heaps, now draped on the terrain
+    const farmMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.farmSoil, roughness: 0.97 }); // tilled dark-soil fields; plain like the default ground (no wind)
+    for (const polygon of FARM_POLYGONS) this.addGroundCover(polygon, farmMaterial, 0.04);
   }
 
   private plantParkTrees(polygon: MapPolygon): void {
