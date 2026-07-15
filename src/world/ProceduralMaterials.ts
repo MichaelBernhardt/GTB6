@@ -66,12 +66,14 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
   return finish(canvas, repeat, repeat);
 }
 
-export type GrassVariant = 'lush' | 'dry';
+export type GrassVariant = 'lush' | 'dry' | 'soil';
 interface GrassPalette { base: string; patches: [string, string]; blades: string[]; dry: string[]; dryChance: number; soil: string; soilChance: number; }
 const GRASS_PALETTES: Record<GrassVariant, GrassPalette> = {
   // Colours are BAKED to final (materials use color: white), so blades read true regardless of the surface tint.
   lush: { base: '#41651f', patches: ['#4f7a2b', '#325217'], blades: ['#4f7d26', '#63933a', '#3d661d', '#7aa848', '#548a2c'], dry: ['#8a9a4e', '#9aa85c'], dryChance: 0.05, soil: '#3c3a1e', soilChance: 0.04 },
   dry: { base: '#8a7c44', patches: ['#9a8d51', '#6d6035'], blades: ['#9a8b4b', '#b0a05c', '#847a44', '#8f9a54', '#a8985a'], dry: ['#b6a860', '#8a7c42'], dryChance: 0.55, soil: '#5a4a2e', soilChance: 0.16 },
+  // Tilled field: deep soil brown with mostly exposed earth and low-contrast dark stubble (reads as soil, not grass).
+  soil: { base: '#3a2b1a', patches: ['#473723', '#2b1f12'], blades: ['#43331f', '#4e3c25', '#38291a', '#554027', '#3f2f1d'], dry: ['#6b5836', '#5a4a2c'], dryChance: 0.08, soil: '#241a0f', soilChance: 0.34 },
 };
 
 /**

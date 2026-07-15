@@ -216,7 +216,8 @@ export const WATER_POLYGONS: MapPolygon[] = MAP.water
   .map((water) => buildPolygon(water.name, 'water', water.points))
   .filter((polygon): polygon is MapPolygon => polygon !== undefined);
 
-/** Green/open landuse, largest first, capped so the runtime mesh and prop budgets stay sane. */
+/** Every green/open landuse polygon — uncapped, so the 3D grass matches exactly what the map paints green
+ *  (the old top-64 cap left smaller parks green on the map but bare dry ground in the world). */
 export const GREEN_POLYGONS: MapPolygon[] = MAP.landuse
   .filter((area) => GREEN_KINDS.has(area.kind))
   .map((area) => {
@@ -224,9 +225,7 @@ export const GREEN_POLYGONS: MapPolygon[] = MAP.landuse
     if (polygon) polygon.manicured = MANICURED_KINDS.has(area.kind);
     return polygon;
   })
-  .filter((polygon): polygon is MapPolygon => polygon !== undefined)
-  .sort((a, b) => b.area - a.area)
-  .slice(0, 64);
+  .filter((polygon): polygon is MapPolygon => polygon !== undefined);
 
 export const DIRT_POLYGONS: MapPolygon[] = MAP.landuse
   .filter((area) => DIRT_KINDS.has(area.kind))
