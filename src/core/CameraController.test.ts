@@ -27,6 +27,32 @@ describe('CameraController mouse look', () => {
   });
 });
 
+describe('CameraController on-foot auto-trail', () => {
+  const angleTo = (yaw: number, target: number): number => Math.abs(Math.atan2(Math.sin(target - yaw), Math.cos(target - yaw)));
+  // update(dt, input, target, city, vehicle, sensitivity, view, vehicleHeading, aimAllowed, coverLean, scopeFov, extraDistance, steerLock, vehicleHeight, footTrailHeading, footTrail)
+  const step = (c: CameraController, mouseDX: number, heading: number, trail: boolean): void =>
+    c.update(1 / 60, input(mouseDX, 0), new THREE.Vector3(), city, false, 0.0025, 2, 0, true, 0, 0, 0, false, 0, heading, trail);
+
+  it('eases the camera behind the direction of travel when the player is not looking', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera());
+    for (let i = 0; i < 480; i++) step(controller, 0, 0, true); // walking with heading 0 -> camera should sit behind, yaw -> PI (plenty of settle time so the assert is independent of the exact trail rate)
+    expect(angleTo(controller.yaw, Math.PI)).toBeLessThan(0.02);
+  });
+
+  it('does not trail while the player is actively looking (mouse moving)', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera());
+    const before = controller.yaw;
+    step(controller, 40, 0, true); // any mouse motion this frame suppresses the trail; only the look delta applies
+    expect(controller.yaw).toBeCloseTo(before - 40 * 0.0025);
+  });
+
+  it('leaves yaw untouched when trailing is disabled', () => {
+    const controller = new CameraController(new THREE.PerspectiveCamera());
+    for (let i = 0; i < 60; i++) step(controller, 0, 0, false);
+    expect(controller.yaw).toBe(0);
+  });
+});
+
 describe('CameraController over-the-shoulder aim', () => {
   const settle = (controller: CameraController, camera: THREE.PerspectiveCamera, target: THREE.Vector3, aiming: boolean): THREE.Vector3 => {
     for (let i = 0; i < 240; i++) controller.update(1 / 60, input(0, 0, aiming), target, city);
