@@ -34,6 +34,11 @@ const FOLLOW_STOP_GAP = 2.4;
 const FOLLOW_HEADWAY = 1.15; // seconds of gap per unit of speed
 const FOLLOW_SLOW_ZONE_MIN = 6; // floor so even a crawl still eases smoothly instead of snapping on/off
 const FOLLOW_RANGE_MARGIN = 4; // look this much past the ease distance, so the leader is in view before easing must start
+/** Cars ease for pedestrians in their path too, not just cars ahead. A NARROWER corridor than the vehicle one
+ *  so a driver brakes for someone actually crossing in front, not everyone strolling the pavement; the
+ *  pedestrian's body radius folds into the gap so the car holds off a person's front, not their centre. */
+const FOLLOW_PED_CORRIDOR_SQ = 2.25; // ~1.5u to each side of the car's path
+const FOLLOW_PED_RADIUS = 0.5;
 
 /** NPC-vs-NPC contact resolution. Below NPC_CRASH_MIN_SPEED (relative) a touch just bleeds speed and separates;
  *  above it deals a much gentler knock than a player/police hit (NPC_CRASH_DAMAGE per unit over the threshold)
@@ -131,6 +136,15 @@ export class PopulationSystem {
         const ahead = dx * forward.x + dz * forward.z;
         if (ahead <= 0 || ahead >= scanRange || dx * dx + dz * dz - ahead * ahead >= FOLLOW_CORRIDOR_SQ) continue;
         leadGap = Math.min(leadGap, ahead - (vehicle.spec.size[2] + other.spec.size[2]) / 2);
+      }
+      // Also brake for a pedestrian crossing/standing in the car's path (skip corpses and far frozen peds). The
+      // narrower corridor keeps this to people actually in front, and folds into the same gap-follow easing.
+      for (const ped of this.pedestrians) {
+        if (ped.state === 'down' || ped.frozen) continue;
+        const dx = ped.group.position.x - vehicle.group.position.x; const dz = ped.group.position.z - vehicle.group.position.z;
+        const ahead = dx * forward.x + dz * forward.z;
+        if (ahead <= 0 || ahead >= scanRange || dx * dx + dz * dz - ahead * ahead >= FOLLOW_PED_CORRIDOR_SQ) continue;
+        leadGap = Math.min(leadGap, ahead - vehicle.spec.size[2] / 2 - FOLLOW_PED_RADIUS);
       }
       const followScale = leadGap === Infinity ? 1 : THREE.MathUtils.clamp((leadGap - FOLLOW_STOP_GAP) / slowZone, 0, 1); // 1 = clear road, 0 = hold at the stop gap
       const blocked = followScale < 0.5; // still "blocked" for the taxi/honk bookkeeping when closing in on a leader
