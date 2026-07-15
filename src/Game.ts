@@ -651,7 +651,7 @@ export class Game {
     for (const event of this.police.consumeEvents()) {
       if (event.kind === 'freeze') this.ui.notify('JMPD', '"FREEZE! Hands where I can see them!"', false);
       else if (event.kind === 'officers') this.population.pedestrians.push(...event.officers);
-      else if (event.kind === 'reboard') for (const officer of event.officers) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
+      else if (event.kind === 'reboard') for (const officer of event.officers) this.population.removePedestrian(officer);
       else this.population.vehicles.push(event.vehicle); // abandoned cruiser joins the civilian pool — enterable like any parked car
     }
     // Arrest: foot officers crowding an on-foot suspect fill the bust meter (faster the more of them), and once
@@ -1820,7 +1820,7 @@ export class Game {
   }
   /** Tears down the JMPD response and drops its foot officers from the population roster. */
   private clearPolice(): void {
-    for (const officer of this.police.reset()) { const index = this.population.pedestrians.indexOf(officer); if (index >= 0) this.population.pedestrians.splice(index, 1); }
+    for (const officer of this.police.reset()) this.population.removePedestrian(officer);
   }
   private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
   private persist(): void {
