@@ -368,9 +368,12 @@ def create_animation_contract(rig):
 
     relaxed = {"UpperArm_L": (0.0, 0.0, -0.72), "UpperArm_R": (0.0, 0.0, 0.72)}
     aim = {
-        "Chest": (-0.08, 0.0, 0.04),
-        "UpperArm_L": (-0.72, 0.1, 0.42), "LowerArm_L": (-0.62, 0.0, -0.12),
-        "UpperArm_R": (-0.92, -0.12, -0.24), "LowerArm_R": (-0.72, 0.0, 0.18),
+        "Spine": (-0.04, 0.0, 0.0), "Chest": (-0.05, 0.0, 0.02),
+        # The MPFB rig faces -Y in Blender (exported as +Z). Positive arm-X
+        # reaches forward; the old negative values folded both hands behind
+        # the torso. Keep the hands close enough for a supported pistol grip.
+        "UpperArm_L": (1.10, 0.0, -0.80), "LowerArm_L": (-0.35, 0.0, -0.40),
+        "UpperArm_R": (1.10, 0.0, 0.80), "LowerArm_R": (-0.35, 0.0, 0.40),
     }
     bicycle = {
         "Spine": (-0.28, 0.0, 0.0), "Chest": (-0.18, 0.0, 0.0),
@@ -380,15 +383,15 @@ def create_animation_contract(rig):
         "UpperLeg_R": (-0.28, 0.0, 0.0), "LowerLeg_R": (0.72, 0.0, 0.0),
     }
     specs = {
-        "idle": [(0, combined_pose(relaxed, {"Chest": (0.015, 0, 0)})), (30, combined_pose(relaxed, {"Chest": (-0.015, 0, 0), "Head": (0.012, 0, 0)})), (60, combined_pose(relaxed, {"Chest": (0.015, 0, 0)}))],
+        "idle": [(0, combined_pose(relaxed, {"Chest": (0.006, 0, 0)})), (30, combined_pose(relaxed, {"Chest": (-0.006, 0, 0), "Head": (0.004, 0, 0)})), (60, combined_pose(relaxed, {"Chest": (0.006, 0, 0)}))],
         "walk": [(0, mirrored_stride(0.42, -0.04)), (15, mirrored_stride(-0.42, -0.04)), (30, mirrored_stride(0.42, -0.04))],
         "sprint": [(0, mirrored_stride(0.78, -0.20)), (10, mirrored_stride(-0.78, -0.20)), (20, mirrored_stride(0.78, -0.20))],
-        "aim": [(0, aim), (30, combined_pose(aim, {"Chest": (0.015, 0, 0)}))],
+        "aim": [(0, aim), (30, combined_pose(aim, {"Chest": (0.006, 0, 0)}))],
         "aim_forward": [(0, aim), (30, aim)],
         "aim_back": [(0, combined_pose(aim, {"Chest": (0, 0, 0.78), "Head": (0, 0, 0.34)})), (30, combined_pose(aim, {"Chest": (0, 0, 0.78), "Head": (0, 0, 0.34)}))],
         "aim_left": [(0, combined_pose(aim, {"Chest": (0, 0, 0.40), "Head": (0, 0, 0.16)})), (30, combined_pose(aim, {"Chest": (0, 0, 0.40), "Head": (0, 0, 0.16)}))],
         "aim_right": [(0, combined_pose(aim, {"Chest": (0, 0, -0.40), "Head": (0, 0, -0.16)})), (30, combined_pose(aim, {"Chest": (0, 0, -0.40), "Head": (0, 0, -0.16)}))],
-        "fire": [(0, aim), (3, combined_pose(aim, {"Chest": (0.10, 0, 0), "UpperArm_R": (0.14, 0, 0)})), (8, aim)],
+        "fire": [(0, aim), (3, combined_pose(aim, {"Chest": (-0.06, 0, 0), "UpperArm_R": (-0.16, 0, 0), "LowerArm_R": (0.10, 0, 0)})), (8, aim)],
         "punch_left": [(0, relaxed), (8, {"Chest": (-0.16, 0, -0.20), "UpperArm_L": (-1.18, 0, 0.06), "LowerArm_L": (-0.22, 0, 0)}), (18, relaxed)],
         "punch_right": [(0, relaxed), (8, {"Chest": (-0.16, 0, 0.20), "UpperArm_R": (-1.18, 0, -0.06), "LowerArm_R": (-0.22, 0, 0)}), (18, relaxed)],
         "jump": [(0, combined_pose(relaxed, {"Spine": (-0.10, 0, 0), "UpperLeg_L": (-0.28, 0, 0), "UpperLeg_R": (-0.28, 0, 0), "LowerLeg_L": (0.52, 0, 0), "LowerLeg_R": (0.52, 0, 0)})), (16, {"UpperArm_L": (-0.35, 0, 0.92), "UpperArm_R": (-0.35, 0, -0.92), "UpperLeg_L": (0.10, 0, 0), "UpperLeg_R": (-0.12, 0, 0)}), (28, relaxed)],
@@ -477,8 +480,8 @@ def retarget_quaternius_locomotion(rig, animation_source):
         source_rest = source_rig.data.bones[source_name].matrix_local.to_quaternion()
         rest_orientations[target_name] = (target_rest, source_rest)
     settings = {
-        "walk": (source_actions["Walk_Loop"], 0.16, -0.045),
-        "sprint": (source_actions["Sprint_Loop"], 0.36, -0.18),
+        "walk": (source_actions["Walk_Loop"], 0.14, -0.045),
+        "sprint": (source_actions["Sprint_Loop"], 0.34, -0.18),
     }
     rig.animation_data_create()
     for target_name, (source_action, arm_swing, lean) in settings.items():
@@ -495,15 +498,29 @@ def retarget_quaternius_locomotion(rig, animation_source):
             # The source cycle reaches foot contact at frames 0 and halfway
             # through the clip. Arm opposition must peak at those contacts,
             # not at the intervening passing poses.
-            phase = math.cos(frame / last_frame * math.tau)
+            cycle = frame / last_frame * math.tau
+            phase = math.cos(cycle)
+            passing = math.sin(cycle)
+            step_bob = math.cos(cycle * 2.0)
+            walk = target_name == "walk"
             authored = {
-                "Spine": (lean * 0.42, 0.0, phase * 0.018),
-                "Chest": (lean * 0.58, 0.0, -phase * 0.035),
+                # No translation is introduced: alternating hip roll plus a
+                # small double-step pitch produces readable pelvis bob while
+                # preserving the in-place/root-motion contract.
+                "Hips": (step_bob * (0.018 if walk else 0.028), passing * 0.018, phase * (0.045 if walk else 0.065)),
+                "Spine": (lean * 0.42 - step_bob * 0.010, 0.0, -phase * (0.020 if walk else 0.030)),
+                "Chest": (lean * 0.58, 0.0, -phase * (0.042 if walk else 0.060)),
                 "Head": (-lean * 0.12, 0.0, phase * 0.012),
                 "UpperArm_L": (-phase * arm_swing, 0.0, -0.72),
                 "UpperArm_R": (phase * arm_swing, 0.0, 0.72),
-                "LowerArm_L": (-0.08 if target_name == "sprint" else 0.0, 0.0, 0.0),
-                "LowerArm_R": (-0.08 if target_name == "sprint" else 0.0, 0.0, 0.0),
+                "LowerArm_L": (-0.16 if walk else -0.28, 0.0, 0.0),
+                "LowerArm_R": (-0.16 if walk else -0.28, 0.0, 0.0),
+                # The passing leg flexes at the knee and the contacting foot
+                # rolls heel-to-toe instead of sliding flat through the arc.
+                "LowerLeg_L": (max(0.0, -passing) * (0.16 if walk else 0.22), 0.0, 0.0),
+                "LowerLeg_R": (max(0.0, passing) * (0.16 if walk else 0.22), 0.0, 0.0),
+                "Foot_L": (-phase * (0.10 if walk else 0.14), 0.0, 0.0),
+                "Foot_R": (phase * (0.10 if walk else 0.14), 0.0, 0.0),
             }
             for bone_name in ANIMATED_BONES:
                 bone = rig.pose.bones[bone_name]
@@ -513,9 +530,11 @@ def retarget_quaternius_locomotion(rig, animation_source):
                     # Retain the source knee/ankle timing while shortening its
                     # stylised stride for this character's gameplay velocity.
                     if bone_name == "Hips":
-                        stride_scale = 0.30 if target_name == "walk" else 0.35
+                        stride_scale = 0.44 if walk else 0.38
+                    elif bone_name.startswith("Foot"):
+                        stride_scale = 0.68 if walk else 0.48
                     else:
-                        stride_scale = 0.55 if target_name == "walk" else 0.42
+                        stride_scale = 0.70 if walk else 0.46
                     target_rest, source_rest = rest_orientations[bone_name]
                     source_rotation = source_rig.pose.bones[source_name].rotation_quaternion
                     armature_delta = source_rest @ source_rotation @ source_rest.inverted()
@@ -530,6 +549,7 @@ def retarget_quaternius_locomotion(rig, animation_source):
                         armature_delta = sagittal.to_quaternion()
                     retargeted = target_rest.inverted() @ armature_delta @ target_rest
                     bone.rotation_quaternion = Quaternion().slerp(retargeted, stride_scale)
+                    bone.rotation_quaternion @= Euler(authored.get(bone_name, (0.0, 0.0, 0.0)), "XYZ").to_quaternion()
                 else:
                     bone.rotation_quaternion = Euler(authored.get(bone_name, (0.0, 0.0, 0.0)), "XYZ").to_quaternion()
                 bone.keyframe_insert(data_path="rotation_quaternion", frame=frame, group=bone_name)

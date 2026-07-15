@@ -24,7 +24,10 @@ export type CharacterLoadStatus = 'idle' | 'loading' | 'ready' | 'failed';
 export interface PlayerVisualState {
   locomotionSpeed: number;
   aiming: boolean;
+  /** Raw trigger state. A held trigger raises the weapon but is not itself a recoil event. */
   firing: boolean;
+  /** Monotonic pulse incremented only after CombatSystem accepts a ranged shot. */
+  shotSequence: number;
   moveSide: number;
   moveForward: number;
   onGround: boolean;
@@ -49,6 +52,7 @@ const DEFAULT_STATE: PlayerVisualState = {
   locomotionSpeed: 0,
   aiming: false,
   firing: false,
+  shotSequence: 0,
   moveSide: 0,
   moveForward: 0,
   onGround: true,
@@ -79,8 +83,7 @@ export function selectPlayerAnimation(state: PlayerVisualState): PlayerAnimation
   if (state.landing) return 'land';
   if (state.coverMode !== 'none') return `cover_${state.coverMode}` as 'cover_idle' | 'cover_move' | 'cover_aim';
   if (state.rideMode !== 'none') return `ride_${state.rideMode}`;
-  if (state.firing) return 'fire';
-  if (state.aiming) {
+  if (state.aiming || state.firing) {
     if (state.locomotionSpeed <= 0.05) return 'aim';
     if (Math.abs(state.moveSide) > Math.abs(state.moveForward)) return state.moveSide < 0 ? 'aim_left' : 'aim_right';
     return state.moveForward < 0 ? 'aim_back' : 'aim_forward';
@@ -169,11 +172,40 @@ const WEAPON_SOCKET: Partial<Record<WeaponId, { position: [number, number, numbe
   smg: { position: [0, 0, 0.025], rotation: [-Math.PI / 2, 0, Math.PI] },
   shotgun: { position: [0, 0, 0.03], rotation: [-Math.PI / 2, 0, Math.PI] },
   sniper: { position: [0, 0, 0.035], rotation: [-Math.PI / 2, 0, Math.PI] },
-  rpg: { position: [-0.28, 0.12, -0.2], rotation: [-Math.PI / 2, 0.12, -0.18], scale: 0.94 },
+  rpg: { position: [0, 0, 0.035], rotation: [-Math.PI / 2, 0, Math.PI], scale: 0.94 },
 };
 
 const WEAPON_GRIP_OFFSET: Partial<Record<WeaponId, number>> = {
-  pistol: 0.40, smg: 0.40, shotgun: 0.34, sniper: 0.30,
+  pistol: 0.40, smg: 0.40, shotgun: 0.34, sniper: 0.30, rpg: 0.86,
+};
+
+type UpperBodyPose = Partial<Record<'chest' | 'leftUpperArm' | 'leftLowerArm' | 'leftHand' | 'rightUpperArm' | 'rightLowerArm' | 'rightHand', [number, number, number]>>;
+
+/** Small post-mix corrections around the authored two-hand aim pose. */
+const WEAPON_POSES: Partial<Record<WeaponId, UpperBodyPose>> = {
+  pistol: { leftUpperArm: [0.06, -0.10, -0.12], leftLowerArm: [-0.12, 0, -0.10] },
+  smg: {
+    chest: [-0.025, 0, 0.025], leftUpperArm: [0.04, -0.08, -0.12], leftLowerArm: [-0.10, 0, -0.10],
+    rightUpperArm: [0.02, 0.06, 0.06], rightLowerArm: [-0.18, 0, 0.04],
+  },
+  shotgun: {
+    chest: [-0.045, 0, 0.035], leftUpperArm: [0.06, -0.10, -0.12], leftLowerArm: [-0.12, 0, -0.10],
+    rightUpperArm: [0.04, 0.08, 0.08], rightLowerArm: [-0.24, 0, 0.06],
+  },
+  sniper: {
+    chest: [-0.06, 0, 0.045], leftUpperArm: [0.04, -0.12, -0.14], leftLowerArm: [-0.14, 0, -0.12],
+    rightUpperArm: [0.02, 0.10, 0.10], rightLowerArm: [-0.28, 0, 0.08], rightHand: [0, 0.02, 0],
+  },
+  rpg: {
+    chest: [-0.075, 0, 0.055], leftUpperArm: [0.08, -0.14, -0.16], leftLowerArm: [-0.16, 0, -0.10],
+    rightUpperArm: [0.08, 0.12, 0.12], rightLowerArm: [-0.30, 0, 0.10], rightHand: [0, 0.04, 0],
+  },
+};
+
+const RECOIL: Partial<Record<WeaponId, { duration: number; strength: number }>> = {
+  pistol: { duration: 0.18, strength: 0.10 }, smg: { duration: 0.11, strength: 0.075 },
+  shotgun: { duration: 0.28, strength: 0.18 }, sniper: { duration: 0.34, strength: 0.21 },
+  rpg: { duration: 0.32, strength: 0.20 },
 };
 
 export class RiggedPlayerVisual {
@@ -188,13 +220,16 @@ export class RiggedPlayerVisual {
   private mixer?: THREE.AnimationMixer;
   private bones?: HumanoidBones;
   private actions = new Map<PlayerAnimationName, THREE.AnimationAction>();
-  private restRotations = new Map<THREE.Bone, THREE.Quaternion>();
+  private fadingActions = new Set<THREE.AnimationAction>();
+  private mixedRotations = new Map<THREE.Bone, THREE.Quaternion>();
   private current?: THREE.AnimationAction;
   private currentName?: PlayerAnimationName;
   private weapon: WeaponId = 'pistol';
   private weaponMeshes = new Map<WeaponId, THREE.Group>();
   private elapsed = 0;
   private pedalPhase = 0;
+  private handledShotSequence = 0;
+  private recoilAge = Number.POSITIVE_INFINITY;
 
   constructor(private parent: THREE.Object3D, options: RiggedPlayerVisualOptions = {}) {
     this.url = options.url ?? PLAYER_MODEL_URL; this.loader = options.load ?? ((url) => new GLTFLoader().loadAsync(url)); this.onStatus = options.onStatus;
@@ -229,9 +264,16 @@ export class RiggedPlayerVisual {
   update(dt: number): void {
     if (!this.ready || !this.mixer || !this.bones) return;
     const step = Math.max(0, dt); this.elapsed += step;
-    this.restoreRestPose();
-    const requested = selectPlayerAnimation(this.state); this.transitionTo(requested); this.setPlaybackRate(requested);
-    this.mixer.update(step); this.applyAdditivePose(step);
+    if (this.state.shotSequence !== this.handledShotSequence) {
+      this.handledShotSequence = this.state.shotSequence; this.recoilAge = 0;
+    }
+    this.restoreMixedPose();
+    const recoil = RECOIL[this.weapon]; const shotPoseActive = Boolean(recoil && this.recoilAge < recoil.duration);
+    const requested = selectPlayerAnimation(shotPoseActive ? { ...this.state, aiming: true } : this.state);
+    this.transitionTo(requested); this.setPlaybackRate(requested);
+    this.mixer.update(step); this.captureMixedPose(); this.cleanupFadedActions(); this.restoreMixedPose();
+    if (shotPoseActive) this.recoilAge = Math.min(recoil!.duration, this.recoilAge + step);
+    this.applyAdditivePose(step);
   }
 
   private install(gltf: GLTF): void {
@@ -244,9 +286,9 @@ export class RiggedPlayerVisual {
       if (ONE_SHOT_ANIMATIONS.has(name)) { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
       this.actions.set(name, action);
     }
-    for (const bone of Object.values(bones)) this.restRotations.set(bone, bone.quaternion.clone());
+    this.handledShotSequence = this.state.shotSequence; this.recoilAge = Number.POSITIVE_INFINITY;
     this.buildWeapons(); this.setWeapon(this.weapon);
-    this.transitionTo('idle', 0); this.mixer.update(0);
+    this.transitionTo('idle', 0); this.mixer.update(0); this.captureMixedPose();
     this.group.add(gltf.scene); this.group.visible = true; this.setStatus('ready');
   }
 
@@ -256,15 +298,29 @@ export class RiggedPlayerVisual {
 
   private resetInstalledModel(): void {
     this.mixer?.stopAllAction(); this.group.clear(); this.group.visible = false; this.mixer = undefined; this.bones = undefined;
-    this.actions.clear(); this.restRotations.clear(); this.weaponMeshes.clear(); this.current = undefined; this.currentName = undefined;
+    this.actions.clear(); this.fadingActions.clear(); this.mixedRotations.clear(); this.weaponMeshes.clear(); this.current = undefined; this.currentName = undefined;
     if (this.status !== 'loading') { this.status = 'idle'; this.error = undefined; }
   }
 
   private transitionTo(name: PlayerAnimationName, fade = 0.16): void {
     const next = this.actions.get(name); if (!next || (this.current === next && this.currentName === name)) return;
-    if (fade > 0) this.current?.fadeOut(fade); else this.current?.stop();
+    const previous = this.current;
+    if (previous) {
+      previous.stopFading();
+      if (fade > 0) { previous.fadeOut(fade); this.fadingActions.add(previous); }
+      else previous.stop();
+    }
+    next.stopFading(); this.fadingActions.delete(next); next.stop();
     next.reset().setEffectiveTimeScale(1).setEffectiveWeight(1);
     if (fade > 0) next.fadeIn(fade); next.play(); this.current = next; this.currentName = name;
+  }
+
+  private cleanupFadedActions(): void {
+    for (const action of this.fadingActions) {
+      if (action === this.current) { this.fadingActions.delete(action); continue; }
+      if (action.getEffectiveWeight() > 0.001) continue;
+      action.stop(); this.fadingActions.delete(action);
+    }
   }
 
   private setPlaybackRate(name: PlayerAnimationName): void {
@@ -275,16 +331,33 @@ export class RiggedPlayerVisual {
     else this.current.setEffectiveTimeScale(1);
   }
 
-  private restoreRestPose(): void {
-    for (const [bone, rotation] of this.restRotations) bone.quaternion.copy(rotation);
+  private restoreMixedPose(): void {
+    // Remove only last frame's post-mix offsets. Resetting to bind pose here
+    // corrupts Three's PropertyMixer accumulation; restoring its own previous
+    // output lets the authored action advance without additive drift.
+    for (const [bone, rotation] of this.mixedRotations) bone.quaternion.copy(rotation);
     this.group.position.set(0, 0, 0); this.group.rotation.set(0, 0, 0);
+  }
+
+  private captureMixedPose(): void {
+    if (!this.bones) return;
+    for (const bone of Object.values(this.bones)) {
+      const rotation = this.mixedRotations.get(bone);
+      if (rotation) rotation.copy(bone.quaternion); else this.mixedRotations.set(bone, bone.quaternion.clone());
+    }
   }
 
   private applyAdditivePose(dt: number): void {
     const bones = this.bones; if (!bones) return;
     bones.chest.rotation.y += this.state.coverTwist;
     if (this.state.driveBy) { bones.rightUpperArm.rotation.x -= 0.32; bones.rightUpperArm.rotation.z += 0.12; bones.head.rotation.y -= 0.12; }
-    if (this.state.firing) { bones.rightUpperArm.rotation.x += 0.08; bones.chest.rotation.x -= 0.035; }
+    const recoil = RECOIL[this.weapon];
+    const weaponRaised = this.weapon !== 'fists' && (this.state.aiming || this.state.firing || Boolean(recoil && this.recoilAge < recoil.duration));
+    if (weaponRaised) this.applyWeaponPose(WEAPON_POSES[this.weapon]);
+    if (recoil && this.recoilAge < recoil.duration) {
+      const pulse = Math.sin(Math.PI * this.recoilAge / recoil.duration) * recoil.strength;
+      bones.rightUpperArm.rotation.x += pulse; bones.rightLowerArm.rotation.x -= pulse * 0.34; bones.chest.rotation.x -= pulse * 0.42;
+    }
     if (this.state.airMode !== 'none') {
       this.group.rotation.x = this.state.airMode === 'freefall' ? THREE.MathUtils.clamp(1.22 + this.state.airPitch * 0.28, 0.5, Math.PI / 2 - 0.06) : 0.08 + this.state.airPitch * 0.14;
       this.group.rotation.z = -this.state.airBank * 0.55;
@@ -304,6 +377,13 @@ export class RiggedPlayerVisual {
     }
   }
 
+  private applyWeaponPose(pose: UpperBodyPose | undefined): void {
+    const bones = this.bones; if (!bones || !pose) return;
+    for (const [name, rotation] of Object.entries(pose) as [keyof UpperBodyPose, [number, number, number]][]) {
+      const bone = bones[name]; bone.rotation.x += rotation[0]; bone.rotation.y += rotation[1]; bone.rotation.z += rotation[2];
+    }
+  }
+
   private buildWeapons(): void {
     const bones = this.bones; if (!bones) return;
     for (const id of ['pistol', 'smg', 'shotgun', 'sniper', 'rpg'] as const) {
@@ -311,7 +391,7 @@ export class RiggedPlayerVisual {
       const gripOffset = WEAPON_GRIP_OFFSET[id] ?? 0;
       for (const part of mesh.children) part.position.y += gripOffset;
       mesh.name = `RiggedWeapon:${id}`; mesh.position.set(...socket.position); mesh.rotation.set(...socket.rotation); if (socket.scale) mesh.scale.setScalar(socket.scale);
-      (id === 'rpg' ? bones.chest : bones.rightHand).add(mesh); this.weaponMeshes.set(id, mesh);
+      bones.rightHand.add(mesh); this.weaponMeshes.set(id, mesh);
     }
   }
 }

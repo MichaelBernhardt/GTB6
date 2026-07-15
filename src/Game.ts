@@ -700,7 +700,7 @@ export class Game {
       this.player.setVisible(true); this.player.update(dt, this.input, this.cameraController.yaw, this.city);
       this.combat.tryReload(this.input); this.combat.update(dt);
       const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
-      if (shot.fired && !shot.melee) online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize());
+      if (shot.fired && !shot.melee) { this.player.registerShot(); online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize()); }
     }
     const state = online.update(dt, {
       forward: Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')),
@@ -816,6 +816,7 @@ export class Game {
         if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
       }
     } else if (shot.fired) {
+      this.player.registerShot();
       if (!shot.deferred) this.handleGunshot(shot, this.player.group.position); // rockets report at launch; bullets report when they land
       if (scopeWeapon(this.combat.current)) this.cameraController.recoil(SNIPER_RECOIL); // .303 shoulder thump
     }
@@ -1026,6 +1027,7 @@ export class Game {
     if (driveBy) { // drive-by (car window or bike saddle): Ctrl to aim, LMB fires along the camera ray; no aim, no shooting
       this.combat.tryReload(this.input);
       const shot = this.combat.fire(this.input, this.camera, vehicle.group.position, this.population, { exclude: vehicle, cooldownScale: DRIVEBY_COOLDOWN_SCALE });
+      if (shot.fired) this.player.registerShot();
       if (shot.fired && !shot.deferred) this.handleGunshot(shot, vehicle.group.position);
     }
     if (this.input.consume('KeyE')) {
