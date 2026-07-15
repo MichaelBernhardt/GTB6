@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN } from '../world/City';
+import { buildCityNavPaths, buildVehicleNav, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN } from '../world/City';
 import { MAP_WORLD_SIZE } from '../world/mapData';
-import { bridgeIslands, buildNavGraph, components, findPath, nearestNode, ProgressWatchdog, replanInterval, RoutePlanner, STUCK_EPSILON, STUCK_TIMEOUT, type NavGraph } from './NavGraph';
+import { bridgeIslands, buildNavGraph, components, findPath, nearestNode, ProgressWatchdog, replanInterval, RoutePlanner, STUCK_EPSILON, STUCK_TIMEOUT, stronglyConnectedComponents, weakComponents, type NavGraph } from './NavGraph';
 
 const line = (count: number, spacing: number, x0 = 0, z0 = 0): { x: number; z: number }[] =>
   Array.from({ length: count }, (_, index) => ({ x: x0 + index * spacing, z: z0 }));
@@ -27,6 +27,51 @@ describe('buildNavGraph', () => {
   it('does not shortcut across non-consecutive points of the same path', () => {
     const hairpin = buildNavGraph([{ points: [{ x: 0, z: 0 }, { x: 20, z: 0 }, { x: 20, z: 4 }, { x: 0, z: 4 }] }], 6);
     expect(hairpin.edges[0]).toEqual([1]);
+  });
+
+  it('exposes a forward tangent per node in the polyline travel direction', () => {
+    const g = buildNavGraph([{ points: line(3, 10) }], 5); // along +x
+    expect(g.tangents[0]).toEqual({ x: 1, z: 0 });
+    expect(g.tangents[2]).toEqual({ x: 1, z: 0 });
+  });
+
+  it('directed mode makes along-lane links one-way', () => {
+    const g = buildNavGraph([{ points: line(4, 10) }], 5, { directed: true });
+    expect(g.edges[0]).toEqual([1]); // forward only
+    expect(g.edges[1]).toEqual([2]); // NOT [0, 2] — no back-edge to 0
+    expect(g.edges[3]).toEqual([]); // terminus is a sink until a cross/U-turn link is added
+  });
+
+  it('directed cross-links are gated per direction by the crossLink predicate', () => {
+    // Lane A (nodes 0,1) runs +x at z=0; lane B (nodes 2,3) runs +x at z=2, offset ahead. A's tip (node 1)
+    // and B's head (node 2) are 2.83u apart — within radius. The gate accepts a link only when the target
+    // sits ahead of the source's own flow, so 1→2 (ahead) is added but 2→1 (behind B's flow) is not.
+    const ahead = (from: number, to: number, nodes: { x: number; z: number }[], tangents: { x: number; z: number }[]): boolean => {
+      const a = nodes[from]!; const b = nodes[to]!; const t = tangents[from]!;
+      const dx = b.x - a.x; const dz = b.z - a.z; const len = Math.hypot(dx, dz) || 1;
+      return t.x * dx / len + t.z * dz / len > 0.3;
+    };
+    const g = buildNavGraph([{ points: [{ x: 0, z: 0 }, { x: 10, z: 0 }] }, { points: [{ x: 12, z: 2 }, { x: 22, z: 2 }] }], 5, { directed: true, crossLink: ahead });
+    expect(g.edges[1]).toContain(2); // A→B accepted (B is ahead of A's flow)
+    expect(g.edges[2] ?? []).not.toContain(1); // B→A rejected (A is behind B's flow)
+  });
+});
+
+describe('weakComponents / stronglyConnectedComponents', () => {
+  it('weakComponents fuses nodes joined by a one-way edge that an out-edge flood would split', () => {
+    // Node 1 → 0 only. Following out-edges, 0 (a sink) and 1 never merge, so components() sees three
+    // islands; weakComponents treats the 1→0 edge as bidirectional and fuses {0,1}.
+    const graph: NavGraph = { nodes: [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 5, z: 0 }], edges: [[], [0], []] };
+    expect(weakComponents(graph)).toHaveLength(2); // {0,1}, {2}
+    expect(components(graph)).toHaveLength(3); // {0}, {1}, {2}
+  });
+
+  it('SCC separates a source lane from a sink lane', () => {
+    // 0→1→0 is a cycle (one SCC); 2 only receives, never returns → its own SCC.
+    const graph: NavGraph = { nodes: [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 2, z: 0 }], edges: [[1], [0, 2], []] };
+    const scc = stronglyConnectedComponents(graph);
+    expect(scc[0]).toHaveLength(2); // {0,1}
+    expect(scc).toHaveLength(2);
   });
 });
 
@@ -96,6 +141,41 @@ describe('city nav graphs', () => {
     expect(path!.length).toBeGreaterThan(20);
     expect(path![0]).toBe(start);
     expect(path![path!.length - 1]).toBe(goal);
+  });
+});
+
+describe('directed vehicle nav (buildVehicleNav)', () => {
+  const vehicleNav = buildVehicleNav(ROAD_NETWORK);
+
+  it('leaves no dead-end sink (every node keeps an out-edge via lane flow or terminus U-turn)', () => {
+    expect(vehicleNav.nodes.length).toBeGreaterThan(300);
+    expect(vehicleNav.edges.every((neighbors) => neighbors.length > 0)).toBe(true);
+  });
+
+  it('is one weakly-connected island and almost entirely one strongly-connected drivable component', () => {
+    expect(weakComponents(vehicleNav)).toHaveLength(1); // every lane reachable after bridging
+    const scc = stronglyConnectedComponents(vehicleNav);
+    expect(scc[0]!.length / vehicleNav.nodes.length).toBeGreaterThan(0.99); // ~all nodes mutually reachable; strays are watchdog-rehomed
+  });
+
+  it('routes across the whole city on one-way lanes', () => {
+    const s = MAP_WORLD_SIZE / 6000;
+    const start = nearestNode(vehicleNav, -330 * s, 240 * s);
+    const goal = nearestNode(vehicleNav, 300 * s, -260 * s);
+    const path = findPath(vehicleNav, start, goal);
+    expect(path).toBeDefined();
+    expect(path![0]).toBe(start);
+    expect(path![path!.length - 1]).toBe(goal);
+  });
+
+  it('keeps to the left of travel (South-African handedness invariant)', () => {
+    // A straight road heading +Z. With +Y up, the left of +Z travel is +X (left = up × forward). Lane A is
+    // authored at offset -0.23W, which must land on that +X side and advance +Z — pins the sign so a future
+    // offsetRoadPath flip is caught here rather than in-game.
+    const { lanes } = buildCityNavPaths([{ name: 'probe', width: 10, points: [{ x: 0, z: 0 }, { x: 0, z: 200 }] }]);
+    const laneA = lanes[0]!;
+    expect(laneA.points[0]!.x).toBeGreaterThan(0); // +X = left of +Z travel
+    expect(laneA.points[1]!.z).toBeGreaterThan(laneA.points[0]!.z); // travels forward, +Z
   });
 });
 
@@ -185,6 +265,17 @@ describe('RoutePlanner.goalNear (local goals)', () => {
     const graph = buildNavGraph([{ points: line(5, 20) }], 5); // a tiny cluster near the origin
     const planner = new RoutePlanner(graph, 2, () => 0);
     expect(planner.goalNear(50_000, 50_000)).toBeGreaterThanOrEqual(0); // miles away → still yields a valid goal
+  });
+
+  it('biases the goal into a cone toward a supplied point (player-ward traffic)', () => {
+    const graph: NavGraph = { nodes: [{ x: 300, z: 0 }, { x: -300, z: 0 }, { x: 0, z: 300 }, { x: 0, z: -300 }], edges: [[], [], [], []] };
+    const planner = new RoutePlanner(graph, 2, () => 0);
+    // player far along +x: only the +x node is inside the ~70° cone, so it must be chosen despite the others being equally near
+    expect(planner.goalNear(0, 0, { x: 5000, z: 0 })).toBe(0);
+    // no bias: any local node is fair game (first gathered candidate under random()=0)
+    expect([0, 1, 2, 3]).toContain(planner.goalNear(0, 0));
+    // player essentially on top of the car (< GOAL_BIAS_MIN): bias is skipped, no convergence on him
+    expect([0, 1, 2, 3]).toContain(planner.goalNear(0, 0, { x: 40, z: 0 }));
   });
 });
 

@@ -93,7 +93,8 @@ export class Vehicle {
     this.heading += THREE.MathUtils.clamp(delta, -this.spec.steering * dt, this.spec.steering * dt);
     const turnFactor = THREE.MathUtils.clamp(1 - Math.abs(delta) * 0.58, 0.34, 1);
     const targetSpeed = this.spec.maxSpeed * aggression * turnFactor;
-    this.speed = THREE.MathUtils.lerp(this.speed, targetSpeed, dt * this.spec.acceleration / 15);
+    const responsiveness = targetSpeed < this.speed ? this.spec.brake : this.spec.acceleration; // brake firmly for reds/corners instead of coasting down — a gentle roll-off can't stop before the box
+    this.speed = THREE.MathUtils.lerp(this.speed, targetSpeed, dt * responsiveness / 15);
     const old = this.group.position.clone(); this.move(dt, city);
     const intended = Math.abs(this.speed) * dt; // stuck = blocked, not merely slow: actual travel far below intended travel
     if (intended > 0.02 && old.distanceToSquared(this.group.position) < intended * intended * 0.09) { this.aiStuck += dt; this.speed = -4; this.heading += dt * 1.4; }

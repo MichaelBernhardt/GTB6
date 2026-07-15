@@ -5,13 +5,21 @@ export const WORLD_SIZE = MAP_WORLD_SIZE;
 export const ROAD_WIDTH = 14; // widest common surface street (primary) in the generated map
 export const BLOCK_SIZE = 76;
 export const TRAFFIC_SPEED_FACTOR = 0.42;
-/** Agents beyond this range from the player freeze entirely: no motion, routing, or animation. */
+/** Agents beyond this range from the player freeze entirely: no motion, routing, or animation. Pedestrians
+ *  wander locally, so this modest radius keeps far crowds cheap without stranding anyone visible. */
 export const AI_FREEZE_RADIUS = 500;
 /** Frozen agents wake only once the player is back inside this range (hysteresis avoids boundary flicker). */
 export const AI_THAW_RADIUS = 450;
-/** Pure freeze/thaw hysteresis: takes the current frozen state and squared distance to the player. */
-export function resolveFrozen(frozen: boolean, distanceSq: number): boolean {
-  return distanceSq > (frozen ? AI_THAW_RADIUS * AI_THAW_RADIUS : AI_FREEZE_RADIUS * AI_FREEZE_RADIUS);
+/** Vehicles freeze FARTHER out than pedestrians: traffic drives long routes and quickly leaves the ped
+ *  radius, and the lifecycle census keeps cars alive out to REFRESH_RADIUS (1150u) before recycling them.
+ *  A freeze radius below that keep-alive boundary strands live-but-frozen cars in a comatose ring around a
+ *  stationary player, so this sits just beyond it: a car is either navigating or recycled, never comatose. */
+export const AI_FREEZE_RADIUS_VEHICLE = 1250;
+export const AI_THAW_RADIUS_VEHICLE = 1150;
+/** Pure freeze/thaw hysteresis: takes the current frozen state, squared distance to the player, and the
+ *  freeze/thaw radii (defaulting to the pedestrian pair). */
+export function resolveFrozen(frozen: boolean, distanceSq: number, freeze = AI_FREEZE_RADIUS, thaw = AI_THAW_RADIUS): boolean {
+  return distanceSq > (frozen ? thaw * thaw : freeze * freeze);
 }
 export const PLAYER = {
   walkSpeed: 8,

@@ -2,21 +2,46 @@ export interface NavPoint { x: number; z: number; }
 export interface NavPath { points: NavPoint[]; closed?: boolean; }
 export interface NavGraph { nodes: NavPoint[]; edges: number[][]; }
 
+/** Per-direction gate for a junction cross-link A→B. Given the two node indices, the node table and the
+ *  per-node forward tangents (unit travel direction along each node's own polyline), return whether the
+ *  directed edge A→B should exist. Used by the vehicle graph to keep only legal, on-tar turns. */
+export type CrossLinkGate = (from: number, to: number, nodes: NavPoint[], tangents: NavPoint[]) => boolean;
+export interface NavBuildOptions {
+  /** One-way lanes: consecutive polyline points link forward only (both physical directions are still
+   *  covered because each road contributes a forward lane and a reversed one). Default false → symmetric. */
+  directed?: boolean;
+  /** When present, each within-radius cross-path pair is offered to the gate in BOTH directions and only
+   *  accepted directions are added (one-way turn links). Absent → today's symmetric cross-link (ped graph). */
+  crossLink?: CrossLinkGate;
+}
+
 const GOLDEN = 0.618034;
 
-/** Builds an undirected nav graph from polylines: consecutive points become edges, and nodes on
- *  different polylines within joinRadius are linked so crossing roads form junction connections. */
-export function buildNavGraph(paths: NavPath[], joinRadius: number): NavGraph {
-  const nodes: NavPoint[] = []; const edges: number[][] = []; const pathOf: number[] = [];
-  const link = (a: number, b: number): void => {
+/** Builds a nav graph from polylines: consecutive points become edges, and nodes on different polylines
+ *  within joinRadius are linked so crossing roads form junction connections. Undirected by default; in
+ *  `directed` mode along-lane edges are one-way and junction cross-links are gated per-direction by
+ *  `crossLink` (see NavBuildOptions). Also returns each node's forward tangent for gate use. */
+export function buildNavGraph(paths: NavPath[], joinRadius: number, opts: NavBuildOptions = {}): NavGraph & { tangents: NavPoint[] } {
+  const { directed = false, crossLink } = opts;
+  const nodes: NavPoint[] = []; const edges: number[][] = []; const pathOf: number[] = []; const tangents: NavPoint[] = [];
+  const linkForward = (a: number, b: number): void => {
     const neighbors = edges[a]; if (a === b || !neighbors || neighbors.includes(b)) return;
-    neighbors.push(b); edges[b]?.push(a);
+    neighbors.push(b);
   };
+  const linkBoth = (a: number, b: number): void => { linkForward(a, b); linkForward(b, a); };
+  const linkAlong = directed ? linkForward : linkBoth;
   paths.forEach((path, pathIndex) => {
-    const base = nodes.length;
-    for (const point of path.points) { nodes.push({ x: point.x, z: point.z }); edges.push([]); pathOf.push(pathIndex); }
-    for (let index = 1; index < path.points.length; index++) link(base + index - 1, base + index);
-    if (path.closed && path.points.length > 2) link(base + path.points.length - 1, base);
+    const base = nodes.length; const pts = path.points; const count = pts.length;
+    for (const point of pts) { nodes.push({ x: point.x, z: point.z }); edges.push([]); pathOf.push(pathIndex); }
+    for (let index = 1; index < count; index++) linkAlong(base + index - 1, base + index);
+    if (path.closed && count > 2) linkAlong(base + count - 1, base);
+    for (let index = 0; index < count; index++) { // forward tangent in the polyline's own order (the node's travel direction)
+      const prev = pts[index - 1] ?? (path.closed ? pts[count - 1] : undefined);
+      const next = pts[index + 1] ?? (path.closed ? pts[0] : undefined);
+      const from = prev ?? pts[index]!; const to = next ?? pts[index]!;
+      const dx = to.x - from.x; const dz = to.z - from.z; const length = Math.hypot(dx, dz) || 1;
+      tangents[base + index] = { x: dx / length, z: dz / length };
+    }
   });
   const cell = Math.max(1, joinRadius); const grid = new Map<string, number[]>();
   nodes.forEach((node, index) => {
@@ -28,13 +53,16 @@ export function buildNavGraph(paths: NavPath[], joinRadius: number): NavGraph {
     const cellX = Math.floor(node.x / cell); const cellZ = Math.floor(node.z / cell);
     for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
       for (const other of grid.get(`${cellX + dx},${cellZ + dz}`) ?? []) {
-        if (other <= index || pathOf[other] === pathOf[index]) continue;
+        if (other <= index || pathOf[other] === pathOf[index]) continue; // each unordered pair once
         const candidate = nodes[other]; if (!candidate) continue;
-        if ((candidate.x - node.x) ** 2 + (candidate.z - node.z) ** 2 <= radiusSq) link(index, other);
+        if ((candidate.x - node.x) ** 2 + (candidate.z - node.z) ** 2 > radiusSq) continue;
+        if (!crossLink) { linkBoth(index, other); continue; } // ped graph: symmetric junction link
+        if (crossLink(index, other, nodes, tangents)) linkForward(index, other);
+        if (crossLink(other, index, nodes, tangents)) linkForward(other, index);
       }
     }
   });
-  return { nodes, edges };
+  return { nodes, edges, tangents };
 }
 
 export function nearestNode(graph: NavGraph, x: number, z: number): number {
@@ -113,7 +141,9 @@ export function findPath(graph: NavGraph, start: number, goal: number): number[]
   return undefined;
 }
 
-/** Connected components (each an array of node indices), largest first. Used to verify/document graph islands. */
+/** Connected components (each an array of node indices), largest first. Floods OUT-edges only, so on an
+ *  undirected graph this is the connected components; on a directed graph it yields reachable sets (use
+ *  weakComponents for island detection there). */
 export function components(graph: NavGraph): number[][] {
   const seen = new Uint8Array(graph.nodes.length); const result: number[][] = [];
   for (let index = 0; index < graph.nodes.length; index++) {
@@ -129,10 +159,64 @@ export function components(graph: NavGraph): number[][] {
   return result.sort((a, b) => b.length - a.length);
 }
 
+/** Weakly-connected components: treats every edge as bidirectional, so an edge A→B links A and B into
+ *  one island regardless of direction. On a directed graph this is the correct notion of "islands"
+ *  (bridgeIslands needs it to guarantee reachability); on an undirected graph it equals components(). */
+export function weakComponents(graph: NavGraph): number[][] {
+  const count = graph.nodes.length;
+  const back: number[][] = Array.from({ length: count }, () => []); // reverse adjacency so the flood walks both ways
+  for (let node = 0; node < count; node++) for (const neighbor of graph.edges[node] ?? []) back[neighbor]?.push(node);
+  const seen = new Uint8Array(count); const result: number[][] = [];
+  for (let index = 0; index < count; index++) {
+    if (seen[index]) continue;
+    const component: number[] = []; const stack = [index]; seen[index] = 1;
+    while (stack.length) {
+      const node = stack.pop(); if (node === undefined) break;
+      component.push(node);
+      for (const neighbor of graph.edges[node] ?? []) if (!seen[neighbor]) { seen[neighbor] = 1; stack.push(neighbor); }
+      for (const neighbor of back[node] ?? []) if (!seen[neighbor]) { seen[neighbor] = 1; stack.push(neighbor); }
+    }
+    result.push(component);
+  }
+  return result.sort((a, b) => b.length - a.length);
+}
+
+/** Strongly-connected components (Kosaraju, iterative), largest first: nodes mutually reachable following
+ *  edge direction. A car can only reach goals inside its own SCC, so a healthy directed traffic graph is
+ *  ~one giant SCC; a small stray SCC is a source/sink lane that would strand a car. Test-facing. */
+export function stronglyConnectedComponents(graph: NavGraph): number[][] {
+  const count = graph.nodes.length; const edges = graph.edges;
+  const back: number[][] = Array.from({ length: count }, () => []);
+  for (let node = 0; node < count; node++) for (const neighbor of edges[node] ?? []) back[neighbor]?.push(node);
+  const order: number[] = []; const seen = new Uint8Array(count);
+  for (let start = 0; start < count; start++) { // pass 1: push nodes in order of finish time (iterative DFS)
+    if (seen[start]) continue;
+    const stack: Array<[number, number]> = [[start, 0]]; seen[start] = 1;
+    while (stack.length) {
+      const frame = stack[stack.length - 1]!; const [node, next] = frame;
+      const outs = edges[node] ?? [];
+      let advanced = false;
+      for (let i = next; i < outs.length; i++) { const neighbor = outs[i]!; if (!seen[neighbor]) { seen[neighbor] = 1; frame[1] = i + 1; stack.push([neighbor, 0]); advanced = true; break; } }
+      if (!advanced) { order.push(node); stack.pop(); }
+    }
+  }
+  const assigned = new Uint8Array(count); const result: number[][] = [];
+  for (let i = order.length - 1; i >= 0; i--) { // pass 2: DFS the transpose in reverse finish order
+    const root = order[i]!; if (assigned[root]) continue;
+    const component: number[] = []; const stack = [root]; assigned[root] = 1;
+    while (stack.length) {
+      const node = stack.pop()!; component.push(node);
+      for (const neighbor of back[node] ?? []) if (!assigned[neighbor]) { assigned[neighbor] = 1; stack.push(neighbor); }
+    }
+    result.push(component);
+  }
+  return result.sort((a, b) => b.length - a.length);
+}
+
 /** Links every island to the largest component through its closest node pair, so the whole graph is
  *  reachable (the hand-authored network leaves Palmera Crescent floating ~25u from Mercado Way). */
 export function bridgeIslands(graph: NavGraph): NavGraph {
-  const parts = components(graph); const main = parts[0];
+  const parts = weakComponents(graph); const main = parts[0]; // weak: a one-way link still fuses two nodes into one island
   if (!main) return graph;
   for (const island of parts.slice(1)) {
     let bestMain = -1; let bestIsland = -1; let bestDistance = Infinity;
@@ -179,6 +263,12 @@ export class ProgressWatchdog {
  *  car's destination stays local so each solve is cheap and reachable; the census bubble handles distribution. */
 const GOAL_CELL = 150;
 const GOAL_REACH_CELLS = 4;
+/** Goal-bias cone: with a bias point (the player), prefer candidates whose bearing from the car is within
+ *  this half-angle of the bias direction, so traffic trends toward the player rather than dispersing. Wide
+ *  enough (~70°) to keep spread. Skipped when the player is nearer than GOAL_BIAS_MIN so cars mill around
+ *  his area instead of all converging on him. */
+const GOAL_BIAS_CONE_COS = Math.cos((70 * Math.PI) / 180);
+const GOAL_BIAS_MIN = 220;
 
 /** Budgeted A* front-end shared by the agents of one system: at most perFrame solves per beginFrame(). */
 export class RoutePlanner {
@@ -198,16 +288,28 @@ export class RoutePlanner {
 
   /** A random graph node within ~GOAL_REACH cells of (x, z): a nearby, near-certainly-reachable goal so a car's
    *  route is a short local A* rather than a citywide solve. Widens the search if the area is sparse, and only
-   *  falls back to a fully-random citywide node when nothing sits nearby. */
-  goalNear(x: number, z: number): number {
+   *  falls back to a fully-random citywide node when nothing sits nearby. When `toward` is given (the player),
+   *  the pick is biased into a cone pointing that way so traffic heads toward the player instead of wandering
+   *  off — this is what keeps the visible streets populated rather than draining away from a stationary viewer. */
+  goalNear(x: number, z: number, toward?: { x: number; z: number }): number {
     const grid = (this.nodeGrid ??= this.buildNodeGrid());
     const cx = Math.floor(x / GOAL_CELL); const cz = Math.floor(z / GOAL_CELL);
+    let bx = 0; let bz = 0; let biased = false;
+    if (toward) { const dx = toward.x - x; const dz = toward.z - z; const len = Math.hypot(dx, dz); if (len > GOAL_BIAS_MIN) { bx = dx / len; bz = dz / len; biased = true; } }
     for (let reach = GOAL_REACH_CELLS; reach <= GOAL_REACH_CELLS + 6; reach++) {
       const candidates: number[] = [];
       for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
         const bucket = grid.get(`${cx + dx},${cz + dz}`); if (bucket) candidates.push(...bucket);
       }
-      if (candidates.length) return candidates[Math.floor(this.random() * candidates.length)]!;
+      if (!candidates.length) continue;
+      if (!biased) return candidates[Math.floor(this.random() * candidates.length)]!;
+      const cone = candidates.filter((index) => { // keep only goals roughly player-ward
+        const node = this.graph.nodes[index]; if (!node) return false;
+        const nx = node.x - x; const nz = node.z - z; const nl = Math.hypot(nx, nz);
+        return nl > 1 && (nx * bx + nz * bz) / nl >= GOAL_BIAS_CONE_COS;
+      });
+      const pool = cone.length ? cone : candidates; // no player-ward node nearby: fall back to any local goal
+      return pool[Math.floor(this.random() * pool.length)]!;
     }
     return this.randomGoal();
   }
