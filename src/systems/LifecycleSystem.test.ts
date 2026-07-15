@@ -199,6 +199,7 @@ const makeCity = (): City => ({
   sightBlocked: () => false, // no buildings in the harness: nothing occludes the sight line
   isOnRoad: () => true,
   signalStops: () => false, // no robots in this lifecycle harness
+  signalSlowFactor: () => 1, // no robots: never slow for a signal here
   surfaceHeightAt: () => 0,
   roadHeightAt: () => 0,
   surfaceNormalAt: () => new THREE.Vector3(0, 1, 0),

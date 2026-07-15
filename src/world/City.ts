@@ -35,7 +35,7 @@ import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTex
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
-import { CITY_JUNCTIONS, type JunctionDefinition, signalHoldsDriver, SIGNAL_STOP_APPROACH, UrbanInfrastructure } from './UrbanInfrastructure';
+import { CITY_JUNCTIONS, type JunctionDefinition, signalHoldsDriver, signalSlowFactor, SIGNAL_STOP_APPROACH, UrbanInfrastructure } from './UrbanInfrastructure';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
@@ -594,6 +594,18 @@ export class City {
       if (signalHoldsDriver(junction, position.x, position.z, heading, clock)) return true;
     }
     return false;
+  }
+
+  /** Graded version of signalStops for smooth deceleration: 1 = cruise, easing to 0 as the nearest robot on
+   *  the driver's axis approaches its hold line (so drivers slow sooner instead of stopping dead at the box). */
+  signalSlowFactor(position: THREE.Vector3, heading: number): number {
+    const clock = this.infrastructure.signalClock;
+    const cells = (this.signalCells ??= this.buildSignalIndex());
+    const bucket = cells.get(`${Math.floor(position.x / SIGNAL_CELL)},${Math.floor(position.z / SIGNAL_CELL)}`);
+    if (!bucket) return 1;
+    let factor = 1;
+    for (const junction of bucket) factor = Math.min(factor, signalSlowFactor(junction, position.x, position.z, heading, clock));
+    return factor;
   }
 
   /** Buckets every signalised junction into the SIGNAL_CELL grid, padded by its influence radius
