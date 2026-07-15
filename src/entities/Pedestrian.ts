@@ -4,6 +4,8 @@ import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems
 import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, FEAR_MAX } from '../systems/FearSystem';
 import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
+import type { NpcCharacterId } from './NpcCatalog';
+import { RiggedPedestrianVisual } from './RiggedPedestrianVisual';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
 const skinColors = [0x613e30, 0x8b5b43, 0xb77a58, 0xd2a078];
@@ -41,21 +43,35 @@ export class Pedestrian {
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
+  private proceduralModel = new THREE.Group();
+  readonly riggedVisual?: RiggedPedestrianVisual;
   private direction = new THREE.Vector3();
   private desired = new THREE.Vector3();
 
-  constructor(scene: THREE.Scene, position: THREE.Vector3, index: number, hostile = false, police = false) {
+  constructor(scene: THREE.Scene, position: THREE.Vector3, index: number, hostile = false, police = false, readonly visualVariant?: NpcCharacterId) {
     this.group.position.copy(position); this.groundY = position.y; this.hostile = hostile; this.police = police; this.state = hostile ? 'hostile' : 'walk';
     this.group.name = police ? 'JMPD Officer' : hostile ? 'Rank Enforcer' : 'Citizen'; this.group.userData.pedestrian = this;
     this.aggressive = !hostile && !police && index % 9 === 0; this.wallet = 25 + (index * 47) % 180; this.bravery = ((index * 37 + 11) % 100) / 100;
+    this.proceduralModel.name = 'ProceduralPedestrianFallback'; this.group.add(this.proceduralModel);
     scene.add(this.group); this.buildModel(index);
+    if (visualVariant) {
+      this.riggedVisual = new RiggedPedestrianVisual(this.group, visualVariant, { onReady: () => { this.proceduralModel.visible = false; } });
+      void this.riggedVisual.load().catch(() => { /* fail open: the procedural pedestrian remains visible */ });
+    }
   }
 
   /** Free this ped's GPU geometry when it despawns — otherwise every culled/replaced ped leaks its meshes
    *  and the session slowly degrades. Geometries are built per-ped (unique), so disposing them is safe. */
-  dispose(): void { this.group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); }
+  dispose(): void {
+    this.riggedVisual?.dispose();
+    this.proceduralModel.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+  }
 
   update(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
+    try { this.updateMotion(dt, city, choices, player); } finally { this.updateRiggedVisual(dt); }
+  }
+
+  private updateMotion(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
     if (this.state === 'down') {
       this.groundY = city.surfaceHeightAt(this.group.position.x, this.group.position.z); this.group.position.y = this.groundY + 0.36;
       if (this.downTimer <= 0) return; // health depleted: stays down
@@ -109,6 +125,24 @@ export class Pedestrian {
     }
     this.group.rotation.y = Math.atan2(direction.x, direction.z); this.phase += dt * pace * 2.4;
     this.legs[0].rotation.x = Math.sin(this.phase) * 0.55; this.legs[1].rotation.x = -Math.sin(this.phase) * 0.55;
+  }
+
+  private updateRiggedVisual(dt: number): void {
+    const visual = this.riggedVisual; if (!visual) return;
+    if (visual.ready) {
+      // Procedural reactions squash/tilt the whole group. The rig layers those
+      // reactions on bones instead, so preserve only the gameplay heading.
+      this.group.scale.set(1, 1, 1); this.group.rotation.x = 0; this.group.rotation.z = 0;
+      if (this.state === 'down') this.group.position.y = this.groundY;
+    }
+    visual.setState({
+      state: this.state,
+      punching: this.punchTimer > 0,
+      hailing: this.hailing,
+      stumbling: this.stumbleTimer > 0,
+      stumbleAmount: THREE.MathUtils.clamp(this.stumbleTimer / STUMBLE_DURATION, 0, 1),
+    });
+    visual.update(dt);
   }
 
   applyFear(amount: number, origin: THREE.Vector3): void {
@@ -253,13 +287,13 @@ export class Pedestrian {
     const torso = new THREE.Mesh(new RoundedBoxGeometry(0.48, 0.68, 0.3, 4, 0.09), cloth); torso.position.y = 1.05;
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 16, 12), skin); head.position.y = 1.55; head.scale.y = 1.08;
     const hair = new THREE.Mesh(new THREE.SphereGeometry(0.2, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), new THREE.MeshStandardMaterial({ color: index % 3 === 0 ? 0x2a1c17 : 0x191918, roughness: 0.95 })); hair.position.y = 1.62;
-    this.group.add(torso, head, hair);
+    this.proceduralModel.add(torso, head, hair);
     for (const x of [-0.14, 0.14]) {
-      const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.51, 4, 8), new THREE.MeshStandardMaterial({ color: 0x242832, roughness: 0.84 })); leg.position.set(x, 0.47, 0); this.group.add(leg); this.legs.push(leg);
-      const shoe = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.11, 0.3, 2, 0.04), new THREE.MeshStandardMaterial({ color: 0x111516, roughness: 0.68 })); shoe.position.set(x, 0.1, 0.06); this.group.add(shoe);
+      const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.51, 4, 8), new THREE.MeshStandardMaterial({ color: 0x242832, roughness: 0.84 })); leg.position.set(x, 0.47, 0); this.proceduralModel.add(leg); this.legs.push(leg);
+      const shoe = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.11, 0.3, 2, 0.04), new THREE.MeshStandardMaterial({ color: 0x111516, roughness: 0.68 })); shoe.position.set(x, 0.1, 0.06); this.proceduralModel.add(shoe);
     }
-    for (const x of [-0.32, 0.32]) { const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.48, 4, 8), x < 0 ? cloth : skin); arm.position.set(x, 1.03, 0); arm.geometry.translate(0, -0.24, 0); arm.position.y = 1.27; this.group.add(arm); this.arms.push(arm); }
-    if (this.police) { const badge = new THREE.Mesh(new THREE.CircleGeometry(0.055, 10), new THREE.MeshStandardMaterial({ color: 0xd6bd63, metalness: 0.75, roughness: 0.25 })); badge.position.set(0.12, 1.14, 0.157); this.group.add(badge); }
-    this.group.traverse((child: THREE.Object3D) => { if (child instanceof THREE.Mesh) child.castShadow = true; });
+    for (const x of [-0.32, 0.32]) { const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.065, 0.48, 4, 8), x < 0 ? cloth : skin); arm.position.set(x, 1.03, 0); arm.geometry.translate(0, -0.24, 0); arm.position.y = 1.27; this.proceduralModel.add(arm); this.arms.push(arm); }
+    if (this.police) { const badge = new THREE.Mesh(new THREE.CircleGeometry(0.055, 10), new THREE.MeshStandardMaterial({ color: 0xd6bd63, metalness: 0.75, roughness: 0.25 })); badge.position.set(0.12, 1.14, 0.157); this.proceduralModel.add(badge); }
+    this.proceduralModel.traverse((child: THREE.Object3D) => { if (child instanceof THREE.Mesh) child.castShadow = true; });
   }
 }

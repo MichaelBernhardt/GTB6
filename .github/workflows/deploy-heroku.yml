@@ -3,17 +3,19 @@ name: Verify and deploy to Heroku
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: heroku-production
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  deploy:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Check out main
@@ -34,7 +36,20 @@ jobs:
         run: |
           npm run lint
           npm test
+          npm run npc:validate
+          npm run character:validate
+          npm run foliage:validate
           npm run build
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Deploy verified commit
         env:

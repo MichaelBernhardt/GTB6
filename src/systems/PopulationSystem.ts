@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
+import { NPC_CHARACTER_IDS, type NpcCharacterId } from '../entities/NpcCatalog';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separationPush } from './BumpSystem';
@@ -21,6 +22,8 @@ export interface PlayerVehicleHit { speed: number; damage: number; knockdown: bo
 
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
+export const RIGGED_PEDESTRIAN_CADENCE = 4;
+export const MAX_RIGGED_PEDESTRIANS = 20;
 
 /** Car-following corridor half-width²: the leader must sit within this of the driver's forward ray. Now that
  *  lanes are one-way, oncoming traffic rides a separate lane outside this corridor, so we brake for anything
@@ -76,6 +79,8 @@ export class PopulationSystem {
   private parkedSpots: Array<[number, number]> = [];
   private policePatrols: Pedestrian[] = [];
   private ambientSerial = 200; // seeds variety (colours, wallets, bravery) for lifecycle-spawned agents
+  private eligibleAmbientSpawns = 0;
+  private npcVariantCursor = 0;
   private frame = 0;
   private forward = new THREE.Vector3();
   private playerPos = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z); // last known player position; biases new traffic goals player-ward
@@ -339,7 +344,7 @@ export class PopulationSystem {
     const desired = Math.max(0, Math.min(2, Math.floor(count)));
     while (this.policePatrols.length > desired) {
       const officer = this.policePatrols.pop(); if (!officer) break;
-      this.scene.remove(officer.group); const index = this.pedestrians.indexOf(officer); if (index >= 0) this.pedestrians.splice(index, 1);
+      this.scene.remove(officer.group); officer.dispose(); const index = this.pedestrians.indexOf(officer); if (index >= 0) this.pedestrians.splice(index, 1);
     }
     while (this.policePatrols.length < desired) {
       const candidates = this.city.sidewalkPoints.filter((point) => {
@@ -388,8 +393,18 @@ export class PopulationSystem {
 
   /** Lifecycle spawn: one ambient citizen placed on a sidewalk point the lifecycle system already vetted as hidden. */
   spawnAmbientPedestrian(x: number, z: number): Pedestrian {
-    const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++);
+    const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++, false, false, this.nextAmbientNpcVariant());
     ped.pickDestination(this.localChoice(ped.group.position.x, ped.group.position.z)); this.pedestrians.push(ped); return ped;
+  }
+
+  /** Live rigged ambient count; special roles never receive a visual variant. */
+  riggedPedestrianCount(): number { return this.pedestrians.filter((ped) => ped.visualVariant !== undefined).length; }
+
+  private nextAmbientNpcVariant(): NpcCharacterId | undefined {
+    this.eligibleAmbientSpawns += 1;
+    if (this.eligibleAmbientSpawns % RIGGED_PEDESTRIAN_CADENCE !== 0 || this.riggedPedestrianCount() >= MAX_RIGGED_PEDESTRIANS) return undefined;
+    const variant = NPC_CHARACTER_IDS[this.npcVariantCursor % NPC_CHARACTER_IDS.length];
+    this.npcVariantCursor += 1; return variant;
   }
 
   /** A one-element choice list at a nearby sidewalk point, so a spawning ped's FIRST route is short and
@@ -467,7 +482,7 @@ export class PopulationSystem {
     const pool = nearby.length >= 40 ? nearby : this.city.sidewalkPoints;
     for (let i = 0; i < 28; i++) {
       const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
-      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
+      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant()); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
     }
     MISSIONS.forEach((mission, index) => {
       const contactPosition = mission.start.position.clone(); contactPosition.y = this.city.surfaceHeightAt(contactPosition.x, contactPosition.z);
