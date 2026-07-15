@@ -328,18 +328,25 @@ export class UrbanInfrastructure {
   }
 
   private buildTrafficSignals(): void {
-    const lensTransforms: THREE.Matrix4[] = [];
+    const lensTransforms: Array<{ matrix: THREE.Matrix4; baseX: number; baseZ: number }> = [];
     for (const junction of CITY_JUNCTIONS) {
       const forward = new THREE.Vector3(Math.sin(junction.angle), 0, Math.cos(junction.angle));
       const right = new THREE.Vector3(forward.z, 0, -forward.x);
       const offset = signalCornerOffset(junction.widest);
       for (const forwardSide of [-1, 1] as const) for (const rightSide of [-1, 1] as const) {
-        const axis: 0 | 1 = forwardSide === rightSide ? 0 : 1;
-        const inward = (axis === 0 ? forward.clone().multiplyScalar(-forwardSide) : right.clone().multiplyScalar(-rightSide));
+        // South-African left-hand driving: each corner hosts the signal for the approach it is the near-LEFT
+        // of, and the head faces that oncoming driver. axis 0 = the junction's forward road (fS≠rS corners),
+        // axis 1 = the cross road (fS===rS corners). travel = that approach's direction of travel.
+        const axis: 0 | 1 = forwardSide === rightSide ? 1 : 0;
+        const travel = (axis === 0 ? forward : right).clone().multiplyScalar(-forwardSide);
         const position = new THREE.Vector3(junction.x, 0, junction.z).addScaledVector(forward, forwardSide * offset).addScaledVector(right, rightSide * offset);
         if (!this.clearOfRoad(position, junction)) continue; // corner diagonal ran down a road: no pole beats a pole in a lane
-        const heading = Math.atan2(inward.z, -inward.x);
-        this.addSignalPole(position, heading, axis, junction.phase, lensTransforms);
+        const heading = Math.atan2(-travel.x, -travel.z); // lens normal = -travel, i.e. the head faces the oncoming driver
+        // The mast arm (the head's local -X) must reach OVER the carriageway, not the verge — mirror the head
+        // model on corners where, at this heading, -X would point away from the junction centre.
+        const armWorldX = -Math.cos(heading); const armWorldZ = Math.sin(heading);
+        const mirror = armWorldX * (junction.x - position.x) + armWorldZ * (junction.z - position.z) < 0;
+        this.addSignalPole(position, heading, axis, junction.phase, lensTransforms, mirror);
       }
       this.addStreetSigns(junction, forward, right);
     }
@@ -349,7 +356,10 @@ export class UrbanInfrastructure {
       const right = new THREE.Vector3(forward.z, 0, -forward.x);
       this.addStreetSigns(junction, forward, right);
     }
-    const lensItems: InstanceItem[] = lensTransforms.map((matrix) => ({ x: matrix.elements[12]!, z: matrix.elements[14]!, matrix, color: new THREE.Color(0x14100e) }));
+    // Ground each lens by its POLE-BASE height (not the lens's own x,z out over the road) so it shares the
+    // exact offset groundInfrastructure() gives the pole/hood assembly — otherwise terrain slope between the
+    // corner and the head floats the lights off their hoods, differently per pole.
+    const lensItems: InstanceItem[] = lensTransforms.map(({ matrix, baseX, baseZ }) => ({ x: baseX, z: baseZ, matrix, color: new THREE.Color(0x14100e) }));
     this.lensSlots = addInstancedChunks(this.detail, new THREE.CircleGeometry(0.19, 20), new THREE.MeshBasicMaterial(), this.groundItems(lensItems));
   }
 
@@ -369,21 +379,22 @@ export class UrbanInfrastructure {
     }
   }
 
-  private addSignalPole(position: THREE.Vector3, heading: number, axis: 0 | 1, phase: number, lensTransforms: THREE.Matrix4[]): void {
+  private addSignalPole(position: THREE.Vector3, heading: number, axis: 0 | 1, phase: number, lensTransforms: Array<{ matrix: THREE.Matrix4; baseX: number; baseZ: number }>, mirror = false): void {
     this.props.register('signal', position.x, position.z, 0.24, 5.7); // robots are heavy municipal steel — they stop a bakkie
     const assembly = new THREE.Group(); assembly.position.copy(position); assembly.rotation.y = heading;
     const metal = new THREE.MeshStandardMaterial({ color: 0x273135, metalness: 0.78, roughness: 0.34 });
     const yellow = new THREE.MeshStandardMaterial({ color: 0xe0aa29, metalness: 0.32, roughness: 0.48 });
+    const s = mirror ? -1 : 1; // flip the mast arm + head to the pole's other side (keeps the arm over the road) while the lens face (local +Z) is unchanged
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.2, 5.7, 12), metal); pole.position.y = 2.85;
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.13, 0.13), metal); arm.position.set(-2.05, 5.4, 0);
-    const head = new THREE.Mesh(new RoundedBoxGeometry(0.72, 2.2, 0.58, 3, 0.09), yellow); head.position.set(-3.95, 4.65, 0);
-    const hoodGeometry = new THREE.CylinderGeometry(0.25, 0.25, 0.22, 16, 1, false, 0, Math.PI);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.13, 0.13), metal); arm.position.set(-2.05 * s, 5.4, 0);
+    const head = new THREE.Mesh(new RoundedBoxGeometry(0.72, 2.2, 0.58, 3, 0.09), yellow); head.position.set(-3.95 * s, 4.65, 0);
+    const hoodGeometry = new THREE.CylinderGeometry(0.25, 0.25, 0.22, 16, 1, false, Math.PI / 2, Math.PI); // rain hood: the half-arc caps the TOP of the lens (thetaStart 0 put it on the side), projecting forward along +Z
     const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), heading);
     const matrix = new THREE.Matrix4(); const one = new THREE.Vector3(1, 1, 1);
     for (const channel of [0, 1, 2] as const) {
-      matrix.compose(new THREE.Vector3(-3.95, 5.28 - channel * 0.64, 0.301).applyQuaternion(rotation).add(position), rotation, one);
-      lensTransforms.push(matrix.clone()); this.lenses.push({ axis, phase, channel });
-      const hood = new THREE.Mesh(hoodGeometry, yellow); hood.rotation.set(Math.PI / 2, 0, 0); hood.position.set(-3.95, 5.38 - channel * 0.64, 0.34); assembly.add(hood);
+      matrix.compose(new THREE.Vector3(-3.95 * s, 5.28 - channel * 0.64, 0.301).applyQuaternion(rotation).add(position), rotation, one);
+      lensTransforms.push({ matrix: matrix.clone(), baseX: position.x, baseZ: position.z }); this.lenses.push({ axis, phase, channel });
+      const hood = new THREE.Mesh(hoodGeometry, yellow); hood.rotation.set(Math.PI / 2, 0, 0); hood.position.set(-3.95 * s, 5.38 - channel * 0.64, 0.34); assembly.add(hood);
     }
     assembly.add(pole, arm, head); assembly.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; }); this.group.add(assembly);
   }
