@@ -11,6 +11,9 @@ tools/mapgen/cache/
 /art/character/work/
 /build/foliage/
 /art/foliage/work/
+/build/npcs/
+/art/npcs/work/
+__pycache__/
 *.blend
 *.fbx
 .claude/worktrees/

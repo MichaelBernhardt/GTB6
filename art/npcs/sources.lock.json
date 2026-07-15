@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "generatedArt": {
+    "tool": "OpenAI built-in image generation",
+    "generatedAt": "2026-07-14/15",
+    "license": "Project-owned generated output to the extent permitted by the applicable OpenAI terms",
+    "inputImages": [],
+    "prompts": "art/npcs/README.md"
+  },
+  "upstream": [
+    {
+      "name": "MPFB",
+      "version": "2.0.16",
+      "url": "https://static.makehumancommunity.org/mpfb/releases/release_2016.html",
+      "license": "GPL-3.0-or-later (tool only; not redistributed)",
+      "vendored": false
+    },
+    {
+      "name": "MakeHuman system assets",
+      "url": "https://files2.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip",
+      "license": "CC0-1.0",
+      "sha256": "b542127a8e25547c7c29c19f2d1d2adb9a664c80396ecd694095dbc8028a0107",
+      "selectedAssets": [
+        "young African, Asian and Caucasian female skins",
+        "high-poly eyes",
+        "braid01, long01, ponytail01 and bob01 hair",
+        "female_casualsuit01, female_elegantsuit01, female_sportsuit01 and female_casualsuit02",
+        "shoes02, shoes03 and toigo_ankle_boots_female",
+        "game_engine rig"
+      ],
+      "vendored": false
+    },
+    {
+      "name": "Quaternius Universal Animation Library",
+      "version": "2.1 Standard (June 2026)",
+      "url": "https://quaternius.com/packs/universalanimationlibrary.html",
+      "license": "CC0-1.0",
+      "archiveSha256": "cc73fc4e495b82958207316596317a3f40b9fa38065bde1027937452da537724",
+      "selectedFile": "Unreal-Godot/UAL1_Standard.glb",
+      "selectedFileSha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
+      "use": "Walk_Loop and Sprint_Loop lower-body retarget",
+      "vendored": false
+    }
+  ],
+  "committedArtifacts": [
+    { "path": "art/npcs/manifest.json", "sha256": "15adac028e4a9566c9d6f66c2f88237378ca6a24fe529a88219f8fcdc6acd01b" },
+    { "path": "art/npcs/materials/braamfontein-rust-canvas-source.png", "sha256": "765eddb64ee95a22405dfd4dd424b5cb8e5e77b7943e0302202a11d8b936bea8" },
+    { "path": "art/npcs/materials/melville-ochre-knit-source.png", "sha256": "f72e62401cd66b33867af06112b33ca2f593d9614fce87efda417eb807e097d0" },
+    { "path": "art/npcs/materials/rosebank-coral-knit-source.png", "sha256": "009c1435283e3536b45d7a3ac54d6fafe893f92b2ecf7e5194d4c036ae8fccd0" },
+    { "path": "art/npcs/materials/sandton-plum-suiting-source.png", "sha256": "212e808f87eeb369fec835c07332955538269e039c31cbfa58eca8a50ffdb87d" },
+    { "path": "art/npcs/previews/braamfontein-creative-animations.jpg", "sha256": "7cf67aa0027bdf8efbcfe719c4370d34164457dca2dd337b3412c9fcba397617" },
+    { "path": "art/npcs/previews/braamfontein-creative-turnaround.jpg", "sha256": "28cb3e77690bf443d8895e3d8a19b1d2b55200904aa69e19a45970b02142817a" },
+    { "path": "art/npcs/previews/melville-creative-animations.jpg", "sha256": "01a0d4550cd8fbd96eb22bedf58be84e75044fecbf1217d1100dd4fc144bc77f" },
+    { "path": "art/npcs/previews/melville-creative-turnaround.jpg", "sha256": "50992dd2ba01921d47727ac5fcecd327f309e46718d3ab23ea17e9e90ec3a5b6" },
+    { "path": "art/npcs/previews/rosebank-athlete-animations.jpg", "sha256": "003d4a6ee40ff26527727181a556635f02a2afdc75d00e88f0ba5c40e31e6db2" },
+    { "path": "art/npcs/previews/rosebank-athlete-turnaround.jpg", "sha256": "3c23d34402b3aed073c5b7114e2bc1a285cf330a8640aa660f25fcb2a1bde439" },
+    { "path": "art/npcs/previews/sandton-professional-animations.jpg", "sha256": "f8dcf5113af3eb8a8e4d086644bdfef15ab011eb5200220934d80d8f812d38db" },
+    { "path": "art/npcs/previews/sandton-professional-turnaround.jpg", "sha256": "993889807dead25a46e6f65e171094018baa78b0daea4ed118825bf975efed17" },
+    { "path": "art/npcs/references/braamfontein-creative-turnaround.png", "sha256": "2b3a5492f67e621f37b5e19b3dcfefaf2f7d6bd98e2e2ea35685462ff22764f7" },
+    { "path": "art/npcs/references/melville-creative-turnaround.png", "sha256": "400181df4c81e723e973ad55c82056b13bc873527a9c3237176967699403e18e" },
+    { "path": "art/npcs/references/rosebank-athlete-turnaround.png", "sha256": "f3eb332f21b455cf5b57f57eed33beeee3f06d8ad8904eeadac8f26e91241a86" },
+    { "path": "art/npcs/references/sandton-professional-turnaround.png", "sha256": "1131ecad380c42dda52168a31f3f9c71579729ad2cc7f48def8d7a703e4d0e0b" },
+    { "path": "public/models/npcs/braamfontein-creative.glb", "sha256": "a6e76e05fdbee9c03bb7784b4590a6bc6e323fa6dcb5bfd61e1418534a8cc947" },
+    { "path": "public/models/npcs/melville-creative.glb", "sha256": "c30414ae32423f3199e28a57d2b29efc42a64403f53ef13f287c5758dbd4b59a" },
+    { "path": "public/models/npcs/rosebank-athlete.glb", "sha256": "b83995033607be11a46a689a43397fd9485a989e5260fb650c6e0e067ad436f6" },
+    { "path": "public/models/npcs/sandton-professional.glb", "sha256": "79ccbabc2787fadae65890f745542528247c614b879aedef2d3739e144116fbd" },
+    { "path": "public/textures/npcs/braamfontein-creative-eyes-basecolor.jpg", "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4" },
+    { "path": "public/textures/npcs/braamfontein-creative-hair-shoes-basecolor.jpg", "sha256": "265b7c414cb95691325762e1f14c4499db6da48d5fdedf4bed3f46ce585bc0e3" },
+    { "path": "public/textures/npcs/braamfontein-creative-outfit-basecolor.jpg", "sha256": "0f338a6dc0fb7ca93f639928978c22d340c2d36162221037b968d4999fe383f0" },
+    { "path": "public/textures/npcs/braamfontein-creative-skin-basecolor.jpg", "sha256": "990b5fad5276474936902eaa4e981d97d3b31c790aaaf91bd48b22a75c6ac534" },
+    { "path": "public/textures/npcs/melville-creative-eyes-basecolor.jpg", "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4" },
+    { "path": "public/textures/npcs/melville-creative-hair-shoes-basecolor.jpg", "sha256": "e27a80af03e83fcb4468a8d8495d79074e9503c4ee675e8413e17fc86821f87c" },
+    { "path": "public/textures/npcs/melville-creative-outfit-basecolor.jpg", "sha256": "eb56c74b4ddbf138046b86089658081c8f38d4390a9d39dbe9d74802e11c66c1" },
+    { "path": "public/textures/npcs/melville-creative-skin-basecolor.jpg", "sha256": "65d30c17495e5411f52eba8a98a358ab3423c32490659bf8a4d38a6d72fba085" },
+    { "path": "public/textures/npcs/rosebank-athlete-eyes-basecolor.jpg", "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4" },
+    { "path": "public/textures/npcs/rosebank-athlete-hair-shoes-basecolor.jpg", "sha256": "7c00b3368ffc9137b2af30dee86c893f41e114b44aeba73e04272a2ffc2aabcc" },
+    { "path": "public/textures/npcs/rosebank-athlete-outfit-basecolor.jpg", "sha256": "50e07ec48d65532b39ec679f77b3a5998bb6e324d00564f2d521880a2f8be0a5" },
+    { "path": "public/textures/npcs/rosebank-athlete-skin-basecolor.jpg", "sha256": "79eeec4f62003d07da7549d7d644a6af8e60fc9b6740b6c4640d4c1dc852e4ea" },
+    { "path": "public/textures/npcs/sandton-professional-eyes-basecolor.jpg", "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4" },
+    { "path": "public/textures/npcs/sandton-professional-hair-shoes-basecolor.jpg", "sha256": "a6b820dc2daedec99f8d893ab7603701eaeffe4665788deba9d7d1be2abc8a2c" },
+    { "path": "public/textures/npcs/sandton-professional-outfit-basecolor.jpg", "sha256": "e45d014b85ab5742d32dd35869d051340078d354dd9bfa955e3d7244d96bc8ae" },
+    { "path": "public/textures/npcs/sandton-professional-skin-basecolor.jpg", "sha256": "dfb7dc055ce0c0c1929f08dc9357c702bb92bb94d1b23cc207af66fceb276fef" }
+  ]
+}

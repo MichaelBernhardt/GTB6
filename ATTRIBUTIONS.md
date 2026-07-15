@@ -19,7 +19,7 @@ San Cordova does not ship third-party art or audio assets.
 
 - City, road, building, prop, non-tree vegetation, vehicle, marker, particle, and water geometry is generated at runtime from Three.js primitives.
 - The tree library (`public/models/foliage/joburg-trees.glb`) is wholly original project-authored Blender geometry generated from the committed recipe and Python source under `art/foliage/` and `tools/foliage/`; it uses no downloaded meshes, textures, or plant-generator assets.
-- The protagonist (`public/models/characters/protagonist.glb`) is a wholly original project character with no real-person or protected game-character likeness. Its deterministic asset contract, recipe and source lock live under `art/character/`.
+- The protagonist (`public/models/characters/protagonist.glb`) and four female ambient pedestrians (`public/models/npcs/`) are wholly original project characters with no real-person or protected game-character likeness. Their deterministic asset contracts, recipes and source locks live under `art/character/` and `art/npcs/`.
 - UI artwork is HTML, CSS, and canvas code authored for this project.
 - Engine, firearm, reload, collision, UI, and siren sounds are original runtime synthesis using the Web Audio API.
 - Names, setting, mission text, vehicle designs, characters, and game rules are original to this project.
@@ -30,11 +30,13 @@ San Cordova does not ship third-party art or audio assets.
 - `public/textures/concrete-gpt.jpg` - seamless weathered concrete pavement generated for this project with OpenAI GPT Image, then resized and JPEG-optimized locally.
 - `art/character/references/protagonist-turnaround.jpg` and `protagonist-face.jpg` - original character modeling references generated with OpenAI's built-in image-generation tool.
 - `art/character/materials/protagonist-jacket-source.png` and `protagonist-denim-source.png` - seamless material sources generated with OpenAI's built-in image-generation tool, then converted into the protagonist's 2K runtime base-colour maps.
+- `art/npcs/references/*-turnaround.png` - four original adult Johannesburg pedestrian modeling references generated with OpenAI's built-in image-generation tool.
+- `art/npcs/materials/*-source.png` - four seamless textile sources generated with OpenAI's built-in image-generation tool, then blended into the garments' real UV base-colour textures.
 
 ## Optional authoring sources
 
 The reproducible Blender workflow is configured for MPFB 2.0.16, CC0-only MakeHuman asset packs, and the Quaternius
 Universal Animation Library (CC0). These upstream authoring packages are not redistributed in this repository; their
-URLs, versions and license constraints are recorded in `art/character/sources.lock.json`.
+URLs, versions and license constraints are recorded in `art/character/sources.lock.json` and `art/npcs/sources.lock.json`.
 
 No Grand Theft Auto maps, logos, characters, dialogue, music, sound effects, or other copyrighted assets are included.
