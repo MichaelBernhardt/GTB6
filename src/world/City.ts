@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COLORS, PLAYER, WORLD_SIZE } from '../config';
+import { PLAYER, WORLD_SIZE } from '../config';
 import type { BaseQuality, District } from '../types';
 import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
 import {
@@ -31,7 +31,7 @@ import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter'
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
+import { applyGrassShader, createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
@@ -543,7 +543,14 @@ export class City {
   private asphalt = createGeneratedSurfaceTexture('/textures/asphalt-gpt.jpg', 'asphalt', 1);
   private concrete = createGeneratedSurfaceTexture('/textures/concrete-gpt.jpg', 'concrete', 10);
   private sidewalk = createSidewalkTexture();
-  private grass = createSurfaceTexture('grass', 22);
+  // Default veld ground: the same dry turf as wild parks. Ground uses 0..1 plane UVs, so repeat = WORLD_SIZE/6
+  // gives the same ~6u tile as the world-space park lawns. Macro-detiled in the shader, no wind on the open ground.
+  private groundGrass = createGrassTexture('dry', WORLD_SIZE / 6);
+  // Park/lawn turf tiles in WORLD space (draped park UVs are raw x,z), so repeat = 1/metres-per-tile — one tile
+  // ~6u regardless of polygon size, giving consistent blade density everywhere. See buildParks.
+  private grassLush = createGrassTexture('lush', 1 / 6);
+  private grassDry = createGrassTexture('dry', 1 / 6);
+  private grassWind?: { advance(dt: number): void };
   private sand = createSurfaceTexture('sand', 14);
   private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
   private facadeGlows = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeGlowTexture(style));
@@ -578,6 +585,7 @@ export class City {
   update(dt: number): void {
     this.waterHandle?.update(dt);
     this.infrastructure.update(dt);
+    this.grassWind?.advance(dt);
   }
 
   /** True when an AI driver at (position, heading) should hold for a non-green robot at the signalised
@@ -852,7 +860,7 @@ export class City {
     pos.needsUpdate = true;
     geometry.computeVertexNormals(); // real normals so slopes catch the light instead of reading flat
     setTerrainGrid(grid, n, step); // from here, terrainHeightAt returns this exact drawn surface
-    const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: COLORS.grass, map: this.grass, roughness: 0.96 }));
+    const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.groundGrass, roughness: 0.96 }));
     ground.receiveShadow = true;
     ground.userData.far = true;
     this.group.add(ground);
@@ -1517,11 +1525,14 @@ export class City {
   // ---- Parks & green space (generated landuse polygons) ----------------------
 
   private buildParks(): void {
-    const parkMaterial = new THREE.MeshStandardMaterial({ color: 0x5f7a44, map: this.grass, roughness: 0.96 });
-    const dryMaterial = new THREE.MeshStandardMaterial({ color: 0x8a8149, map: this.grass, roughness: 0.96 });
+    // Grass colour is baked into the map (see createGrassTexture), so the material tint stays neutral white.
+    const parkMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.grassLush, roughness: 0.95 });
+    const dryMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.grassDry, roughness: 0.95 });
+    this.grassWind = applyGrassShader(parkMaterial, { wind: true }); // lush lawns: macro detile + wind ripple
+    applyGrassShader(dryMaterial); // dry veld: macro detile only, no wind
     const dirtMaterial = new THREE.MeshStandardMaterial({ color: 0xb59d5a, map: this.sand, roughness: 0.97 });
     for (const polygon of GREEN_POLYGONS) {
-      this.addGroundCover(polygon, seeded(polygon.cx, polygon.cz, 12) < 0.5 ? parkMaterial : dryMaterial, 0.05); // drapes onto the relief
+      this.addGroundCover(polygon, polygon.manicured ? parkMaterial : dryMaterial, 0.05); // tended lawns lush, wild veld dry; drapes onto the relief
       this.plantParkTrees(polygon);
       if (!GENERIC_AREA_NAMES.has(polygon.name.toLowerCase()) && polygon.area > 4000) this.addParkSign(polygon);
     }

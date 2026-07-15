@@ -66,6 +66,125 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
   return finish(canvas, repeat, repeat);
 }
 
+export type GrassVariant = 'lush' | 'dry';
+interface GrassPalette { base: string; patches: [string, string]; blades: string[]; dry: string[]; dryChance: number; soil: string; soilChance: number; }
+const GRASS_PALETTES: Record<GrassVariant, GrassPalette> = {
+  // Colours are BAKED to final (materials use color: white), so blades read true regardless of the surface tint.
+  lush: { base: '#41651f', patches: ['#4f7a2b', '#325217'], blades: ['#4f7d26', '#63933a', '#3d661d', '#7aa848', '#548a2c'], dry: ['#8a9a4e', '#9aa85c'], dryChance: 0.05, soil: '#3c3a1e', soilChance: 0.04 },
+  dry: { base: '#8a7c44', patches: ['#9a8d51', '#6d6035'], blades: ['#9a8b4b', '#b0a05c', '#847a44', '#8f9a54', '#a8985a'], dry: ['#b6a860', '#8a7c42'], dryChance: 0.55, soil: '#5a4a2e', soilChance: 0.16 },
+};
+
+/**
+ * Seamlessly-tileable procedural turf for parks and lawns. Unlike the generic `grass` surface (a flat 256px
+ * fleck sheet stretched ~800u per tile on the ground plane), this bakes real grass at 512px meant to tile every
+ * few metres: broad tonal patches for lawn unevenness, dense fine blades in a green ramp with occasional dry
+ * strands, and a scatter of soil flecks. Every element is drawn with edge-wrap so no seam shows at the tile join.
+ */
+export function createGrassTexture(variant: GrassVariant, repeat: number, size = 512): THREE.CanvasTexture {
+  const palette = GRASS_PALETTES[variant];
+  const { canvas, context } = canvasTexture(size);
+  const S = size;
+  context.fillStyle = palette.base; context.fillRect(0, 0, S, S);
+
+  // Draw an element at every wrapped position it straddles, so anything crossing an edge reappears on the far side.
+  const stamp = (x: number, y: number, extent: number, draw: (px: number, py: number) => void): void => {
+    const xs = [x]; if (x - extent < 0) xs.push(x + S); if (x + extent > S) xs.push(x - S);
+    const ys = [y]; if (y - extent < 0) ys.push(y + S); if (y + extent > S) ys.push(y - S);
+    for (const px of xs) for (const py of ys) draw(px, py);
+  };
+
+  // 1) Fine tonal flecks only — small and faint. Big/strong patches are LOW-frequency and would repeat visibly
+  //    every tile; large-scale unevenness is instead supplied per-frame by the non-tiling shader macro.
+  for (let i = 0; i < 70; i++) {
+    const x = seeded(i, 201) * S; const y = seeded(i, 202) * S; const r = 16 + seeded(i, 203) * 42;
+    const tone = seeded(i, 204) > 0.5 ? palette.patches[0] : palette.patches[1];
+    const alpha = 0.03 + seeded(i, 205) * 0.05;
+    stamp(x, y, r, (px, py) => {
+      const g = context.createRadialGradient(px, py, 0, px, py, r); g.addColorStop(0, tone); g.addColorStop(1, 'rgba(0,0,0,0)');
+      context.globalAlpha = alpha; context.fillStyle = g; context.beginPath(); context.arc(px, py, r, 0, Math.PI * 2); context.fill();
+    });
+  }
+  context.globalAlpha = 1;
+
+  // 2) Fine blades — short near-vertical strokes; a green ramp plus a fraction of dry strands.
+  const blades = Math.round(S * S * 0.11);
+  for (let i = 0; i < blades; i++) {
+    const x = seeded(i, 210) * S; const y = seeded(i, 211) * S;
+    const ramp = seeded(i, 212) < palette.dryChance ? palette.dry : palette.blades;
+    const len = 1.0 + seeded(i, 214) * 1.8; const lean = (seeded(i, 215) - 0.5) * 1.5;
+    context.strokeStyle = ramp[Math.floor(seeded(i, 213) * ramp.length)] ?? palette.base;
+    context.globalAlpha = 0.5 + seeded(i, 216) * 0.5; context.lineWidth = 0.5 + seeded(i, 217) * 0.35;
+    stamp(x, y, len + 3, (px, py) => { context.beginPath(); context.moveTo(px, py); context.lineTo(px + lean, py - len); context.stroke(); });
+  }
+  context.globalAlpha = 1;
+
+  // 3) Soil / bare flecks poking through the turf.
+  for (let i = 0; i < S * 3; i++) {
+    const x = seeded(i, 220) * S; const y = seeded(i, 221) * S; const sz = 0.6 + seeded(i, 222) * 1.6;
+    context.globalAlpha = 0.1 + seeded(i, 223) * 0.18;
+    context.fillStyle = seeded(i, 224) < palette.soilChance ? palette.soil : palette.patches[1];
+    stamp(x, y, sz, (px, py) => context.fillRect(px, py, sz, sz));
+  }
+  context.globalAlpha = 1;
+
+  return finish(canvas, repeat, repeat);
+}
+
+/**
+ * Shader dressing for lawn materials, injected via onBeforeCompile (no geometry; survives the static merge
+ * because the material object is reused). Always adds MACRO VARIATION — large-scale world-space noise that
+ * lightens/darkens the grass so the small (~6m) tile stops reading as an obvious repeat when viewed from far
+ * away or high up. With `{ wind: true }` it also adds a gentle wind sway + drifting light gusts (manicured
+ * lawns only). The returned handle's `.advance(dt)` ticks the wind clock; it's a no-op without wind.
+ */
+export function applyGrassShader(material: THREE.MeshStandardMaterial, options: { wind?: boolean } = {}): { advance(dt: number): void } {
+  const wind = options.wind ?? false;
+  const uniforms = { uTime: { value: 0 } };
+  material.onBeforeCompile = (shader) => {
+    if (wind) shader.uniforms.uTime = uniforms.uTime;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vWindXZ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWindXZ = (modelMatrix * vec4(position, 1.0)).xz;');
+    // Wind branch adds an animated sway offset; the still branch contributes none.
+    const windOffBlock = wind ? `
+          float wx = dot(vWindXZ, vec2(0.90, 0.42));
+          float wz = dot(vWindXZ, vec2(-0.42, 0.90));
+          // Irregular gusts: a slow drifting noise field swells/fades the amplitude, and a per-place noise phase
+          // jitter breaks up the clean sine so the flutter reads as wind rather than a mechanical pulse.
+          float env = 0.3 + 0.7 * gNoise(vWindXZ * 0.12 + vec2(uTime * 0.5, uTime * 0.35));
+          float jx = gNoise(vWindXZ * 1.7) * 6.2831;
+          float jz = gNoise(vWindXZ * 1.9 + 3.1) * 6.2831;
+          vec2 windOff = vec2(sin(wx * 28.0 + uTime * 32.0 + jx), sin(wz * 25.0 + uTime * 25.0 + jz)) * 0.0015 * env;`
+      : `
+          vec2 windOff = vec2(0.0);`;
+    const gustLight = wind ? `
+          float gust = sin(dot(vWindXZ, vec2(0.90, 0.42)) * 0.22 + uTime * 1.4) * 0.5 + sin(dot(vWindXZ, vec2(-0.42, 0.90)) * 0.16 - uTime * 0.95) * 0.5;
+          gust = mix(gust, gNoise(vWindXZ * 0.2 + vec2(uTime * 0.3, -uTime * 0.2)) * 2.0 - 1.0, 0.6); // noise-broken so bands aren't a clean sine
+          diffuseColor.rgb *= 1.0 + gust * 0.06;`
+      : '';
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        ${wind ? 'uniform float uTime;' : ''}
+        varying vec2 vWindXZ;
+        float gHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float gNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(gHash(i), gHash(i + vec2(1.0, 0.0)), u.x), mix(gHash(i + vec2(0.0, 1.0)), gHash(i + vec2(1.0, 1.0)), u.x), u.y); }`)
+      .replace('#include <map_fragment>', `
+        #ifdef USE_MAP
+          ${windOffBlock}
+          vec4 sampledDiffuseColor = texture2D( map, vMapUv + windOff );
+          diffuseColor *= sampledDiffuseColor;
+          // Macro variation (the texture itself is near-homogeneous so it tiles invisibly): two world-space
+          // octaves (~22m and ~9m) supply all the large-scale tonal drift, and being world-space they never repeat.
+          float macro = 0.6 * gNoise(vWindXZ * 0.045) + 0.4 * gNoise(vWindXZ * 0.11);
+          diffuseColor.rgb *= 0.72 + 0.56 * macro;
+          ${gustLight}
+        #endif`);
+  };
+  const speed = 0.25; // overall wind-clock rate: scales every gust/flutter/drift together
+  return { advance: (dt: number) => { if (wind) uniforms.uTime.value = (uniforms.uTime.value + dt * speed) % 10000; } };
+}
+
 export function createGeneratedSurfaceTexture(url: string, fallback: SurfaceKind, repeat: number): THREE.Texture {
   const fallbackTexture = createSurfaceTexture(fallback, repeat);
   const texture = new THREE.TextureLoader().load(url, undefined, undefined, () => {
