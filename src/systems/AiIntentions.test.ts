@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { JMPD_PATROL_NPC_ID } from '../entities/NpcCatalog';
 import type { AudioManager } from '../core/AudioManager';
 import { Pedestrian } from '../entities/Pedestrian';
 import { WORLD_SIZE } from '../config';
@@ -143,7 +144,9 @@ describe('ai intentions simulation', () => {
     }
     const events = police.consumeEvents();
     expect(events.some((event) => event.kind === 'freeze')).toBe(true); // the crew got out and shouted
-    expect(events.flatMap((event) => event.kind === 'officers' ? event.officers : []).length).toBeGreaterThanOrEqual(2);
+    const officers = events.flatMap((event) => event.kind === 'officers' ? event.officers : []);
+    expect(officers.length).toBeGreaterThanOrEqual(2);
+    expect(officers.every((officer) => officer.visualVariant === JMPD_PATROL_NPC_ID)).toBe(true);
     expect(damage).toBeGreaterThan(0); // arrest pressure comes from officer fire, not bumpers
     expect(closestAtSpeed).toBeGreaterThan(5); // nobody drove through the suspect at speed
   });

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { AudioManager } from '../core/AudioManager';
+import { JMPD_PATROL_NPC_ID } from '../entities/NpcCatalog';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import type { City } from '../world/City';
@@ -377,7 +378,7 @@ export class PoliceSystem {
     const spawned: Pedestrian[] = [];
     for (const side of [1, -1] as const) {
       const door = vehicle.group.position.clone().add(new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(side * 1.6));
-      const ped = new Pedestrian(this.scene, door, 91 + this.serials++, false, true);
+      const ped = new Pedestrian(this.scene, door, 91 + this.serials++, false, true, JMPD_PATROL_NPC_ID);
       ped.state = 'hostile'; ped.destination.copy(door);
       this.officers.push({ ped, car: vehicle, role: 'cover', side, shootIn: 0.8 + Math.random() * 0.6 });
       spawned.push(ped);

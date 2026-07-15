@@ -11,12 +11,7 @@ import {
 } from '../entities/NpcCatalog';
 import type { City } from '../world/City';
 import { SPAWN_POINT } from '../world/placements';
-import {
-  MAX_AMBIENT_RIGGED_PEDESTRIANS,
-  MAX_RIGGED_PEDESTRIANS,
-  PopulationSystem,
-  RIGGED_PEDESTRIAN_CADENCE,
-} from './PopulationSystem';
+import { PopulationSystem } from './PopulationSystem';
 
 const points = Array.from({ length: 120 }, (_, index) => ({
   x: SPAWN_POINT.x + 30 + (index % 12) * 12,
@@ -35,30 +30,29 @@ const city = {
 } as unknown as City;
 const audio = { scream: () => {}, broadcastFear: () => {}, setTrafficEngine: () => {} } as unknown as AudioManager;
 
-describe('rigged NPC population policy', () => {
-  it('assigns exactly every fourth eligible ambient pedestrian and rotates the full ambient cast', () => {
+describe('all-Blender NPC population policy', () => {
+  it('assigns a rig to every opening ambient pedestrian and rotates the full ambient cast evenly', () => {
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const ambient = population.pedestrians.filter((ped) => !ped.contact && !ped.carGuard && !ped.hostile && !ped.police);
     expect(ambient).toHaveLength(28);
-    expect(population.ambientRiggedPedestrianCount()).toBe(28 / RIGGED_PEDESTRIAN_CADENCE);
-    expect(ambient.map((ped) => ped.visualVariant).filter(Boolean)).toEqual(AMBIENT_NPC_CHARACTER_IDS.slice(0, 7));
+    expect(ambient.every((ped) => ped.visualVariant !== undefined)).toBe(true);
+    expect(ambient.map((ped) => ped.visualVariant)).toEqual(Array.from({ length: 28 }, (_, index) => AMBIENT_NPC_CHARACTER_IDS[index % AMBIENT_NPC_CHARACTER_IDS.length]));
   });
 
-  it('caps ambient rigs at eight, rotates evenly, and replaces a despawned identity on cadence', () => {
+  it('keeps assigning rotating Blender identities through lifecycle growth and replacement', () => {
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
-    for (let index = 0; index < RIGGED_PEDESTRIAN_CADENCE; index++) population.spawnAmbientPedestrian(points[index]!.x, points[index]!.z);
-    expect(population.ambientRiggedPedestrianCount()).toBe(MAX_AMBIENT_RIGGED_PEDESTRIANS);
-    expect(AMBIENT_NPC_CHARACTER_IDS.map((id) => population.pedestrians.filter((ped) => ped.visualVariant === id).length)).toEqual(Array(8).fill(1));
+    const spawned = Array.from({ length: 132 }, (_, index) => population.spawnAmbientPedestrian(points[index % points.length]!.x, points[index % points.length]!.z));
+    expect(spawned.every((ped) => ped.visualVariant !== undefined)).toBe(true);
+    expect(population.ambientRiggedPedestrianCount()).toBe(160);
+    expect(AMBIENT_NPC_CHARACTER_IDS.map((id) => population.pedestrians.filter((ped) => ped.visualVariant === id).length)).toEqual(Array(8).fill(20));
 
     const removed = population.pedestrians.find((ped) => ped.visualVariant === AMBIENT_NPC_CHARACTER_IDS[0])!;
     population.removePedestrian(removed);
-    expect(population.ambientRiggedPedestrianCount()).toBe(MAX_AMBIENT_RIGGED_PEDESTRIANS - 1);
-    for (let index = 0; index < RIGGED_PEDESTRIAN_CADENCE; index++) population.spawnAmbientPedestrian(points[index]!.x, points[index]!.z);
-    expect(population.ambientRiggedPedestrianCount()).toBe(MAX_AMBIENT_RIGGED_PEDESTRIANS);
-    expect(AMBIENT_NPC_CHARACTER_IDS.map((id) => population.pedestrians.filter((ped) => ped.visualVariant === id).length)).toEqual(Array(8).fill(1));
+    const replacement = population.spawnAmbientPedestrian(points[0]!.x, points[0]!.z);
+    expect(replacement.visualVariant).toBe(AMBIENT_NPC_CHARACTER_IDS[0]);
   });
 
-  it('assigns distinct rigged identities to mission contacts, guards, hostiles, patrols, and drivers', () => {
+  it('assigns dedicated Blender identities to contacts, guards, hostiles, patrols, and drivers', () => {
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const contacts = population.pedestrians.filter((ped) => ped.contact && !ped.carGuard);
     expect(contacts.map((ped) => ped.visualVariant)).toEqual(Object.values(MISSION_CONTACT_NPC_IDS));
@@ -70,15 +64,9 @@ describe('rigged NPC population policy', () => {
     expect(population.pedestrians.filter((ped) => ped.police).every((ped) => ped.visualVariant === JMPD_PATROL_NPC_ID)).toBe(true);
 
     const vehicle = population.vehicles[0]!;
-    expect(population.ejectDriver(vehicle, new THREE.Vector3()).visualVariant).toBe(DRIVER_NPC_ID);
+    const drivers = Array.from({ length: 40 }, () => population.ejectDriver(vehicle, new THREE.Vector3()));
+    expect(drivers.every((ped) => ped.visualVariant === DRIVER_NPC_ID)).toBe(true);
     expect(population.ejectDriver(vehicle, new THREE.Vector3(), true).visualVariant).toBe(JMPD_PATROL_NPC_ID);
-  });
-
-  it('never exceeds the total live rig cap and falls back procedurally beyond it', () => {
-    const population = new PopulationSystem(new THREE.Scene(), city, audio);
-    const vehicle = population.vehicles[0]!;
-    const drivers = Array.from({ length: MAX_RIGGED_PEDESTRIANS + 4 }, () => population.ejectDriver(vehicle, new THREE.Vector3()));
-    expect(population.riggedPedestrianCount()).toBe(MAX_RIGGED_PEDESTRIANS);
-    expect(drivers.at(-1)?.visualVariant).toBeUndefined();
+    expect(population.riggedPedestrianCount()).toBe(population.pedestrians.length);
   });
 });

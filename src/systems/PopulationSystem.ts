@@ -31,9 +31,6 @@ export interface PlayerVehicleHit { speed: number; damage: number; knockdown: bo
 
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
-export const RIGGED_PEDESTRIAN_CADENCE = 4;
-export const MAX_AMBIENT_RIGGED_PEDESTRIANS = 8;
-export const MAX_RIGGED_PEDESTRIANS = 24;
 
 /** Car-following corridor half-width²: the leader must sit within this of the driver's forward ray. Now that
  *  lanes are one-way, oncoming traffic rides a separate lane outside this corridor, so we brake for anything
@@ -89,7 +86,6 @@ export class PopulationSystem {
   private parkedSpots: Array<[number, number]> = [];
   private policePatrols: Pedestrian[] = [];
   private ambientSerial = 200; // seeds variety (colours, wallets, bravery) for lifecycle-spawned agents
-  private eligibleAmbientSpawns = 0;
   private npcVariantCursor = 0;
   private frame = 0;
   private forward = new THREE.Vector3();
@@ -414,18 +410,12 @@ export class PopulationSystem {
     return this.pedestrians.filter((ped) => ped.visualVariant !== undefined && NPC_CATALOG[ped.visualVariant].role === 'ambient').length;
   }
 
-  private nextAmbientNpcVariant(): NpcCharacterId | undefined {
-    this.eligibleAmbientSpawns += 1;
-    if (this.eligibleAmbientSpawns % RIGGED_PEDESTRIAN_CADENCE !== 0
-      || this.ambientRiggedPedestrianCount() >= MAX_AMBIENT_RIGGED_PEDESTRIANS
-      || this.riggedPedestrianCount() >= MAX_RIGGED_PEDESTRIANS) return undefined;
+  private nextAmbientNpcVariant(): NpcCharacterId {
     const variant = AMBIENT_NPC_CHARACTER_IDS[this.npcVariantCursor % AMBIENT_NPC_CHARACTER_IDS.length];
-    this.npcVariantCursor += 1; return variant;
+    this.npcVariantCursor += 1; return variant!;
   }
 
-  private nextSpecialNpcVariant(variant: NpcCharacterId): NpcCharacterId | undefined {
-    return this.riggedPedestrianCount() < MAX_RIGGED_PEDESTRIANS ? variant : undefined;
-  }
+  private nextSpecialNpcVariant(variant: NpcCharacterId): NpcCharacterId { return variant; }
 
   /** A one-element choice list at a nearby sidewalk point, so a spawning ped's FIRST route is short and
    *  reachable rather than a citywide solve that blows the A* budget. Falls back to the full set only if the

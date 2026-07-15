@@ -13,6 +13,7 @@ At runtime the procedural pedestrian remains visible until a rig validates and i
 instances share immutable render resources but receive independent skeletons and animation mixers. Load failure never
 blocks startup, and despawn stops/detaches the instance without disposing shared GPU resources.
 
-The ordinary crowd retains its one-in-four rig cadence and rotates evenly through eight ambient identities, capped at
-eight ambient rigs. Named mission contacts, car guards, hostiles, JMPD patrols, and ejected drivers use dedicated
-identities while the combined live rig count remains capped at 24.
+Every ordinary pedestrian receives a Blender identity, rotating evenly through the eight-character ambient cast.
+Named mission contacts, car guards, hostiles, JMPD patrol and arrest officers, and ejected drivers use their dedicated
+identities. The procedural pedestrian exists only as an asynchronous/error fallback while a rig loads or if an asset
+cannot be fetched.
