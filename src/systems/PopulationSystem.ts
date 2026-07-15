@@ -22,6 +22,16 @@ export interface PlayerVehicleHit { speed: number; damage: number; knockdown: bo
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
 
+/** Car-following: how far ahead (forward units) a driver watches for a leader, and the half-width² of the
+ *  lane corridor that leader must sit within. Now that lanes are one-way, oncoming traffic rides a separate
+ *  lane outside this corridor, so we brake for anything ahead in it — no head-on-crawl exemption needed. */
+const FOLLOW_RANGE = 10;
+const FOLLOW_CORRIDOR_SQ = 6.25; // 2.5u to each side
+/** Bumper-to-bumper gap a follower holds at a standstill, and the closing distance over which it eases from
+ *  full speed down to that stop — a smooth follow instead of the old creep-into-the-leader-then-pin. */
+const FOLLOW_STOP_GAP = 1.2;
+const FOLLOW_SLOW_ZONE = 5;
+
 export class PopulationSystem {
   pedestrians: Pedestrian[] = [];
   vehicles: Vehicle[] = [];
@@ -90,13 +100,18 @@ export class PopulationSystem {
       if (signalStop) this.trafficPlans.get(vehicle)?.watchdog.reset(); // a legal red-light wait (up to ~16s) is not a stall
       if (!this.followDrivePlan(vehicle, dt)) return; // reversing out of a watchdog stall this frame
       const forward = this.forward.set(Math.sin(vehicle.heading), 0, Math.cos(vehicle.heading));
-      const blocked = this.vehicles.some((other) => { // same-lane car just ahead; a wide dot>0 sweep used to gridlock oncoming lanes on narrow roads
-        if (other === vehicle) return false;
+      // Nearest leader in my lane corridor: keep the bumper-to-bumper gap and ease speed down as it closes,
+      // so followers hold station instead of creeping into a heap the separation pass then pins at ~zero.
+      let leadGap = Infinity;
+      for (const other of this.vehicles) {
+        if (other === vehicle) continue;
         const dx = other.group.position.x - vehicle.group.position.x; const dz = other.group.position.z - vehicle.group.position.z;
         const ahead = dx * forward.x + dz * forward.z;
-        if (ahead <= 1 || ahead >= 9 || dx * dx + dz * dz - ahead * ahead >= 6.25) return false;
-        return Math.cos(other.heading - vehicle.heading) > -0.35 || Math.abs(other.speed) < 2; // brake for the queue and for parked obstructions, not for oncoming movers: the undirected graph puts them on this lane and mutual braking is a head-on crawl deadlock
-      });
+        if (ahead <= 0 || ahead >= FOLLOW_RANGE || dx * dx + dz * dz - ahead * ahead >= FOLLOW_CORRIDOR_SQ) continue;
+        leadGap = Math.min(leadGap, ahead - (vehicle.spec.size[2] + other.spec.size[2]) / 2);
+      }
+      const followScale = leadGap === Infinity ? 1 : THREE.MathUtils.clamp((leadGap - FOLLOW_STOP_GAP) / FOLLOW_SLOW_ZONE, 0, 1); // 1 = clear road, 0 = hold at the stop gap
+      const blocked = followScale < 0.5; // still "blocked" for the taxi/honk bookkeeping when closing in on a leader
       let playerBlocked = false; let playerHold = false; let dodge: THREE.Vector3 | undefined;
       if (playerOnFoot && !vehicle.police && vehicle.group.position.distanceToSquared(player) < AVOID_RANGE * AVOID_RANGE) ({ blocked: playerBlocked, hold: playerHold, dodge } = this.avoidPlayer(vehicle, forward, player, dt));
       else this.holdups.delete(vehicle);
@@ -104,8 +119,11 @@ export class PopulationSystem {
       const junctionPanic = robotsOut && !taxi && CITY_JUNCTIONS.some((junction) => (junction.x - vehicle.group.position.x) ** 2 + (junction.z - vehicle.group.position.z) ** 2 < 576);
       const throttle = playerHold ? 0 // held: a full stop with hysteresis, no 0.05 creep — this is what arms the honk clock
         : dodge ? DODGE_THROTTLE
-        : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked)
-        : blocked || playerBlocked ? 0.05 : signalStop ? 0 : junctionPanic ? TRAFFIC_SPEED_FACTOR * 0.75 : TRAFFIC_SPEED_FACTOR; // dead robot (load shedding): a cautious ~75%-speed roll-through, not a crawl
+        : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked) * followScale // taxis still ease off a leader
+        : playerBlocked ? 0.05
+        : signalStop ? 0
+        : junctionPanic ? TRAFFIC_SPEED_FACTOR * 0.75 * followScale // dead robot (load shedding): a cautious ~75%-speed roll-through, not a crawl
+        : TRAFFIC_SPEED_FACTOR * followScale; // normal cruise, eased down when following a leader
       vehicle.updateAI(dt, this.city, dodge, throttle);
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
       if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);
