@@ -8,6 +8,7 @@ export class InputManager {
   firing = false;
   firePressed = false;
   private rmbHeld = false;
+  private ignoreNextMove = false; // swallow the first delta after a (re)lock: browsers report a huge movementX/Y jump from the drifted cursor to the lock point, which would snap the camera
 
   constructor(private element: HTMLElement) {
     window.addEventListener('keydown', (event) => {
@@ -20,10 +21,12 @@ export class InputManager {
     window.addEventListener('blur', () => { this.held.clear(); this.firing = false; });
     window.addEventListener('mousemove', (event) => {
       if (!this.suspended && document.pointerLockElement === this.element) {
+        if (this.ignoreNextMove) { this.ignoreNextMove = false; return; } // drop the post-relock spike, not the whole frame
         this.mouseDX += event.movementX;
         this.mouseDY += event.movementY;
       }
     });
+    document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement === this.element) this.ignoreNextMove = true; }); // fresh lock: arm the one-shot spike guard
     window.addEventListener('mousedown', (event) => {
       if (this.suspended) return;
       if (event.button === 0) { this.firing = true; this.firePressed = true; }
