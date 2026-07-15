@@ -14,6 +14,7 @@ export interface RiggedPedestrianState {
   state: PedState;
   punching: boolean;
   hailing: boolean;
+  covering: boolean;
   stumbling: boolean;
   stumbleAmount: number;
 }
@@ -105,7 +106,7 @@ export class RiggedPedestrianVisual {
   private actions = new Map<NpcAnimationName, THREE.AnimationAction>();
   private current?: THREE.AnimationAction;
   private currentName?: NpcAnimationName;
-  private state: RiggedPedestrianState = { state: 'idle', punching: false, hailing: false, stumbling: false, stumbleAmount: 0 };
+  private state: RiggedPedestrianState = { state: 'idle', punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
   private disposed = false;
 
   constructor(private parent: THREE.Object3D, readonly characterId: NpcCharacterId, private options: RiggedPedestrianVisualOptions = {}) {
@@ -180,10 +181,12 @@ export class RiggedPedestrianVisual {
 
   private applyAdditivePose(): void {
     const bones = this.bones; if (!bones) return;
-    if (this.state.state === 'cower') {
+    if (this.state.state === 'cower' || this.state.covering) {
       bones.spine.rotation.x += 0.42; bones.chest.rotation.x += 0.26;
-      bones.leftUpperArm.rotation.x -= 0.72; bones.rightUpperArm.rotation.x -= 0.72;
-      bones.leftUpperArm.rotation.z += 0.42; bones.rightUpperArm.rotation.z -= 0.42;
+      if (this.state.state === 'cower') {
+        bones.leftUpperArm.rotation.x -= 0.72; bones.rightUpperArm.rotation.x -= 0.72;
+        bones.leftUpperArm.rotation.z += 0.42; bones.rightUpperArm.rotation.z -= 0.42;
+      }
       bones.leftUpperLeg.rotation.x -= 0.22; bones.rightUpperLeg.rotation.x -= 0.22;
       bones.leftLowerLeg.rotation.x += 0.38; bones.rightLowerLeg.rotation.x += 0.38;
       this.group.position.y -= 0.18;

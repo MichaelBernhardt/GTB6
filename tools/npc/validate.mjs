@@ -5,6 +5,10 @@ import { dirname, resolve } from 'node:path';
 
 const manifestPath = resolve(process.argv[2] ?? 'art/npcs/manifest.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+const selectedCharacters = process.env.NPC_ID
+  ? manifest.characters.filter((character) => character.id === process.env.NPC_ID)
+  : manifest.characters;
+if (!selectedCharacters.length) throw new Error(`Unknown NPC_ID: ${process.env.NPC_ID}`);
 const requiredBones = ['Hips', 'Spine', 'Chest', 'Head', 'UpperArm_L', 'LowerArm_L', 'Hand_L', 'UpperArm_R', 'LowerArm_R', 'Hand_R', 'UpperLeg_L', 'LowerLeg_L', 'Foot_L', 'UpperLeg_R', 'LowerLeg_R', 'Foot_R'];
 const requiredClips = manifest.contract.clips;
 const requiredMaterials = ['Skin', 'Eyes', 'Outfit', 'HairShoes'];
@@ -46,8 +50,8 @@ function dimensions(data) {
   throw new Error('Unsupported texture format');
 }
 
-let quartetTransfer = 0; const reports = [];
-for (const character of manifest.characters) {
+let castTransfer = 0; const reports = [];
+for (const character of selectedCharacters) {
   const model = resolve(`public/models/npcs/${character.id}.glb`); const file = await readFile(model);
   const { json, bin } = parseGlb(file); const root = json.nodes.find((node) => node.name === `Npc_${character.id}`);
   invariant(root, `${character.id}: missing NPC root`); const contract = root.extras?.npcContract;
@@ -84,7 +88,7 @@ for (const character of manifest.characters) {
     const [width, heightPx] = dimensions(imageData);
     invariant(width === manifest.contract.textureSize && heightPx === manifest.contract.textureSize, `${character.id}: ${image.uri} must be ${manifest.contract.textureSize}×${manifest.contract.textureSize}`);
   }
-  const transfer = file.byteLength + externalTextureBytes; quartetTransfer += transfer;
+  const transfer = file.byteLength + externalTextureBytes; castTransfer += transfer;
   invariant(transfer <= manifest.contract.perCharacterTransferBytes, `${character.id}: transfer is ${(transfer / 1024 / 1024).toFixed(2)} MiB`);
 
   const clipNames = (json.animations ?? []).map((clip) => clip.name).sort();
@@ -96,7 +100,7 @@ for (const character of manifest.characters) {
   }
   reports.push(`${character.id}: ${(transfer / 1024 / 1024).toFixed(2)} MiB, ${triangles} triangles`);
 }
-invariant(quartetTransfer <= manifest.contract.quartetTransferBytes, `Quartet transfer is ${(quartetTransfer / 1024 / 1024).toFixed(2)} MiB`);
+invariant(castTransfer <= manifest.contract.castTransferBytes, `NPC cast transfer is ${(castTransfer / 1024 / 1024).toFixed(2)} MiB`);
 
 const lockPath = resolve('art/npcs/sources.lock.json');
 if (existsSync(lockPath)) {
@@ -106,4 +110,4 @@ if (existsSync(lockPath)) {
     invariant(digest === artifact.sha256, `Checksum mismatch: ${artifact.path}`);
   }
 }
-console.log(`NPC quartet valid (${(quartetTransfer / 1024 / 1024).toFixed(2)} MiB transfer):\n- ${reports.join('\n- ')}`);
+console.log(`NPC cast valid (${(castTransfer / 1024 / 1024).toFixed(2)} MiB transfer):\n- ${reports.join('\n- ')}`);
