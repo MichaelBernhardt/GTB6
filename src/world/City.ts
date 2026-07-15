@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, type BuildingStyle } from './BuildingArchitecture';
+import { BuildingArchitecture, foundationTiers, type BuildingStyle } from './BuildingArchitecture';
 import {
   COASTLINE,
   COAST_CORRIDOR,
@@ -554,6 +554,7 @@ export class City {
   private buildingMaterial = new Map<string, THREE.MeshStandardMaterial>();
   private asphalt = createGeneratedSurfaceTexture('/textures/asphalt-gpt.jpg', 'asphalt', 1);
   private concrete = createGeneratedSurfaceTexture('/textures/concrete-gpt.jpg', 'concrete', 10);
+  private foundationMaterial = new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 });
   private sidewalk = createSidewalkTexture();
   // Default veld ground: the same dry turf as wild parks. Ground uses 0..1 plane UVs, so repeat = WORLD_SIZE/6
   // gives the same ~6u tile as the world-space park lawns. Macro-detiled in the shader, no wind on the open ground.
@@ -1721,8 +1722,6 @@ export class City {
     }
     const baseY = hMax;
     const plinthDrop = baseY - hMin + 1.8; // from the building base down past the lowest corner, buried
-    const plinthH = plinthDrop + 0.2;
-    const parcel = new THREE.Mesh(new THREE.BoxGeometry(w + 6, plinthH, d + 6), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 })); parcel.position.set(0, 0.2 - plinthH / 2, 0); parcel.receiveShadow = true; group.add(parcel);
     const [rangeBase, rangeCount] = FACADE_RANGES[style];
     const facadeIndex = rangeBase + variant % rangeCount;
     const palette = BUILDING_PALETTES[style];
@@ -1730,6 +1729,13 @@ export class City {
     const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);
     if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: 0, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
     const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
+    const foundations = foundationTiers(profile.tiers, -plinthDrop);
+    for (const foundation of foundations) {
+      const foundationW = foundation.maxX - foundation.minX; const foundationH = foundation.y1 - foundation.y0; const foundationD = foundation.maxZ - foundation.minZ;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(foundationW, foundationH, foundationD), this.foundationMaterial);
+      mesh.position.set((foundation.minX + foundation.maxX) / 2, (foundation.y0 + foundation.y1) / 2, (foundation.minZ + foundation.maxZ) / 2);
+      mesh.receiveShadow = true; group.add(mesh);
+    }
     const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
     this.addLedge(0, 0, w * 1.025, d * 1.025, Math.min(h - 0.5, 3.6));
     if (detailed) this.addEntrance(0, 0, w, d, style);
@@ -1743,7 +1749,7 @@ export class City {
     // On a real slope the base is raised above the downhill ground; give the plinth a collider so you can't
     // walk into the gap under the building. Skip on near-flat ground (no gap) to keep the collider count down.
     if (hMax - hMin > PLAYER.stepUp) {
-      colliders.push(this.tierToWorldCollider({ minX: -(w + 6) / 2, maxX: (w + 6) / 2, minZ: -(d + 6) / 2, maxZ: (d + 6) / 2, y0: -plinthDrop, y1: 0 }, spec.x, spec.z, spec.heading, baseY));
+      colliders.push(...foundations.map((foundation) => this.tierToWorldCollider(foundation, spec.x, spec.z, spec.heading, baseY)));
     }
     this.target = previousTarget; this.architecture.retarget(this.group);
     return { group, colliders };

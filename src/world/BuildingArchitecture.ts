@@ -43,6 +43,17 @@ export interface BuildingProfile {
   tiers: MassingTier[];
 }
 
+/** Extend only the building volumes that actually meet the ground down to a common foundation base.
+ *  Keeping each footprint separate prevents the levelling foundation from becoming a parcel-sized box
+ *  around stepped, winged, or otherwise irregular buildings on sloped terrain. */
+export function foundationTiers(tiers: readonly MassingTier[], bottomY: number): MassingTier[] {
+  if (tiers.length === 0) return [];
+  const groundY = Math.min(...tiers.map((tier) => tier.y0));
+  return tiers
+    .filter((tier) => Math.abs(tier.y0 - groundY) < 1e-4)
+    .map((tier) => ({ ...tier, y0: bottomY, y1: tier.y0 }));
+}
+
 const boxMaterials = (facade: THREE.Material, roof: THREE.Material): THREE.Material[] => [facade, facade, roof, roof, facade, facade];
 
 const createGableGeometry = (width: number, depth: number, rise: number): THREE.BufferGeometry => {
