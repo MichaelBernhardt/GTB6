@@ -1616,7 +1616,8 @@ export class Game {
     this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
     const sensitivity = scoped ? scopeSensitivity(this.settings.mouseSensitivity, this.scopeLevel) : this.settings.mouseSensitivity;
     const airborneBoost = this.airborne ? (this.airborne.mode === 'freefall' ? 6 : 4) : 0; // skydives read better with the boom pulled back
-    const footTrail = !this.activeVehicle && this.player.moving && !this.input.aiming && !this.cover; // lazy camera follow on foot: keeps keyboard/gamepad-only players oriented; off while aiming or in cover so the shoulder/peek framing holds
+    const backpedal = this.input.down('KeyS') && !this.input.down('KeyW'); // reversing is a clean straight backpedal — no auto-follow slew, or the camera whips 180° to get behind the rearward heading
+    const footTrail = !this.activeVehicle && this.player.moving && !this.input.aiming && !this.cover && !backpedal; // lazy camera follow on foot: keeps keyboard/gamepad-only players oriented; off while aiming or in cover so the shoulder/peek framing holds
     this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, this.activeVehicle?.spec.size[1] ?? 0, this.player.heading, footTrail);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
