@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "generatedBy": "Blender 5.1.2",
+  "generatedAt": "2026-07-15",
+  "generatedRibbonProvider": "ChatGPT built-in image generator",
+  "committedArtifacts": [
+    {
+      "path": "art/vehicles/materials/quantum-express-ribbon-source.png",
+      "sha256": "189a6dac04000763003bb735da5b58ae3d9fcd64760624b2c7084d03831b0207",
+      "bytes": 657963
+    },
+    {
+      "path": "art/vehicles/livery-prompt.md",
+      "sha256": "053613506f034b6fbf6bb1f5e33cf1a7dbd47c263ddc4fb6b30fb4afe183de56",
+      "bytes": 1546
+    },
+    {
+      "path": "art/vehicles/recipe.json",
+      "sha256": "15242e677764b7158c0ebed4fce6b408d70541482f1e16125abbf935d3d35992",
+      "bytes": 904
+    },
+    {
+      "path": "art/vehicles/ATTRIBUTION.md",
+      "sha256": "e10b1957bf63ae62344cc4dd4888f7856d690873f7a9e2b49540f88d55d37884",
+      "bytes": 961
+    },
+    {
+      "path": "art/vehicles/work/quantum-express-source.blend",
+      "sha256": "aaf00cbf45947b366eafb07c3c50ae833f86431e12ea94c79ce6a2d20fc1589c",
+      "bytes": 396551
+    },
+    {
+      "path": "art/vehicles/previews/quantum-express-turnaround.jpg",
+      "sha256": "19c1a8de204b4847475f92e83f51a5975fcc164344a3977d4af237a31ed8b65f",
+      "bytes": 169555
+    },
+    {
+      "path": "public/textures/vehicles/quantum-express-basecolor.jpg",
+      "sha256": "a135d4f23f2178216b055ccd3501e5bdaf25b3e71992fad591cfec7774883c3c",
+      "bytes": 260515
+    },
+    {
+      "path": "public/models/vehicles/quantum-express.glb",
+      "sha256": "5eb15b7562e9a04ceceff2c74ea61f9ae75e94f476fa349beae57184b00bd3f9",
+      "bytes": 1066992
+    }
+  ]
+}

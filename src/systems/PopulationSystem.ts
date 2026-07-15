@@ -458,7 +458,7 @@ export class PopulationSystem {
       vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([spot.x, spot.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'cab', 'sport', 'motorbike', 'courier', 'van']; // the odd commuter and delivery bikes weave through traffic
+    const kinds: VehicleKind[] = ['compact', 'taxi', 'taxi', 'sport', 'motorbike', 'courier', 'van']; // the uniform Quantum fleet fills both former taxi slots
     // Seed the opening traffic on lanes around the player spawn (the map is far bigger than the
     // AI wake radius; the lifecycle system keeps density right as the player moves).
     const nearbyRoutes = this.city.trafficRoutes.filter((route) => {
@@ -469,7 +469,7 @@ export class PopulationSystem {
     for (let i = 0; i < 15; i++) {
       const routeIndex = (i * 5 + 3) % routePool.length; const route = routePool[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
       const kind = kinds[i % kinds.length] ?? 'compact';
-      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, this.city.roadHeightAt(point.x, point.z), point.z), kind === 'taxi' || kind === 'cab' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
+      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, this.city.roadHeightAt(point.x, point.z), point.z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
       vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     }
   }

@@ -74,6 +74,8 @@ describe('data-driven anchors', () => {
   });
 
   it('parks every kerbside vehicle just off a road', () => {
+    expect(PARKED_VEHICLES.some((spot) => spot.kind === 'cab')).toBe(false);
+    expect(PARKED_VEHICLES.filter((spot) => spot.kind === 'taxi')).toHaveLength(2);
     for (const spot of PARKED_VEHICLES) {
       expect(inBounds(spot), `${spot.kind} in bounds`).toBe(true);
       const edge = distanceToRoadEdge(spot.x, spot.z);

@@ -7,6 +7,7 @@ import { KNOCKOVER_SPEED_KEEP, knockoverDamage, solidImpactDamage, type PropRegi
 import { rollBurnDuration } from '../systems/VehicleFireSystem';
 import type { City } from '../world/City';
 import { createSignMesh } from '../world/ProceduralMaterials';
+import { instantiateTaxiModel, onTaxiLibraryReady, type TaxiModelInstance } from './TaxiAsset';
 
 type VehicleMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial | THREE.MeshBasicMaterial;
 
@@ -54,6 +55,14 @@ export class Vehicle {
   private rider?: THREE.Group;
   private groundY = 0.02;
   private bikeLean = 0; // smoothed two-wheeler roll, applied as a clean forward-axis bank in alignToRoad (never poked into Euler.z)
+  private taxiPlaceholder?: THREE.Group;
+  private taxiReadyUnsubscribe?: () => void;
+  private taxiSharedGeometries = new Set<THREE.BufferGeometry>();
+  private taxiOwnedMaterials = new Set<THREE.Material>();
+  private firstPerson = false;
+  private headlightFactor = 0;
+  private braking = false;
+  private disposed = false;
 
   constructor(scene: THREE.Scene, kind: VehicleKind, position: THREE.Vector3, color?: number) {
     this.spec = { ...VEHICLE_SPECS[kind], color: color ?? VEHICLE_SPECS[kind].color };
@@ -62,9 +71,17 @@ export class Vehicle {
     scene.add(this.group); this.buildModel();
   }
 
-  /** Free this vehicle's GPU geometry when it despawns (fire FX included via the group) — per-vehicle
-   *  geometries, so disposal is safe and stops the traffic churn leaking meshes over a session. */
-  dispose(): void { this.group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); }
+  /** Free only per-vehicle resources. Taxi geometry/textures belong to the session cache and survive traffic churn. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true; this.taxiReadyUnsubscribe?.();
+    const disposedMaterials = new Set<THREE.Material>();
+    this.group.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      if (!this.taxiSharedGeometries.has(object.geometry)) object.geometry.dispose();
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) if (this.taxiOwnedMaterials.has(material) && !disposedMaterials.has(material)) { disposedMaterials.add(material); material.dispose(); }
+    });
+  }
 
   updatePlayer(dt: number, input: InputManager, city: City, mouseSteer = 0): number {
     if (this.disabled) return 0;
@@ -138,6 +155,10 @@ export class Vehicle {
     this.wrecked = true; this.onFire = false; this.disabled = true; this.health = 0; this.speed = 0; this.occupied = false; this.burnTimer = 0;
     if (this.spec.twoWheeler) { this.group.rotation.z = Math.PI * 0.42; if (this.rider) this.rider.visible = false; } // a dead bike falls over
     const lightbar = this.group.getObjectByName('lightbar'); if (lightbar) lightbar.visible = false;
+    this.applyWreckAppearance();
+  }
+
+  private applyWreckAppearance(): void {
     this.forEachMaterial((material) => {
       if (material.userData.originalColor === undefined) {
         material.userData.originalColor = material.color.getHex();
@@ -156,6 +177,7 @@ export class Vehicle {
       if (material.userData.originalColor !== undefined) material.color.setHex(material.userData.originalColor as number);
       if ('emissiveIntensity' in material && material.userData.originalEmissive !== undefined) material.emissiveIntensity = material.userData.originalEmissive as number;
     });
+    this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
   }
 
   private forEachMaterial(apply: (material: VehicleMaterial) => void): void {
@@ -168,17 +190,14 @@ export class Vehicle {
     });
   }
 
-  setFirstPerson(firstPerson: boolean): void { for (const part of this.cabinParts) part.visible = !firstPerson; } // hide cabin glass/roof so the driver view is unobstructed
+  setFirstPerson(firstPerson: boolean): void { this.firstPerson = firstPerson; for (const part of this.cabinParts) part.visible = !firstPerson; } // hide cabin glass/roof so the driver view is unobstructed
 
-  /** Cab roof sign brightness: HDR-bright when the driver is AVAILABLE so it blooms, dim when occupied. */
-  setTaxiLight(available: boolean): void {
-    if (this.wrecked) return;
-    const sign = this.group.getObjectByName('taxilight');
-    if (sign instanceof THREE.Mesh) (sign.material as THREE.MeshStandardMaterial).emissiveIntensity = available ? 3.4 : 0.2;
-  }
+  /** Kept for the public driving API; the uniform minibus fleet has no roof-mounted duty light. */
+  setTaxiLight(available: boolean): void { void available; /* taxi duty remains visible in the HUD */ }
 
   /** 0 = day (subtle lens glow), 1 = night: headlight lenses go HDR-bright so they bloom. Brake lights are untouched. */
   setHeadlightGlow(factor: number): void {
+    this.headlightFactor = factor;
     if (this.wrecked) return;
     const intensity = 1.15 + factor * 4.6;
     for (const light of this.headLights) (light.material as THREE.MeshStandardMaterial).emissiveIntensity = intensity;
@@ -219,6 +238,7 @@ export class Vehicle {
   }
 
   private updateVisuals(dt: number, braking: boolean): void {
+    this.braking = braking;
     const spin = this.speed * dt / 0.36;
     if (this.spec.twoWheeler) {
       for (const wheel of this.wheels) wheel.rotation.x += spin;
@@ -235,7 +255,7 @@ export class Vehicle {
       this.bounce *= Math.exp(-7 * dt);
       if (this.bounce <= 0.001) { this.bounce = 0; this.group.position.y = this.groundY; }
     }
-    this.brakeLights.forEach((light) => (light.material as THREE.MeshBasicMaterial).color.setHex(braking ? 0xff2018 : 0x5b0808));
+    this.applyBrakeLights();
     if (this.police) {
       const lights = this.group.getObjectByName('lightbar')?.children ?? [];
       if (this.sirenOn) { this.lightPhase += dt * 11; lights.forEach((light: THREE.Object3D, i: number) => { light.visible = Math.sin(this.lightPhase + i * Math.PI) > 0; }); }
@@ -243,10 +263,69 @@ export class Vehicle {
     }
   }
 
+  private applyBrakeLights(): void {
+    this.brakeLights.forEach((light) => (light.material as THREE.MeshStandardMaterial).color.setHex(this.braking ? 0xff2018 : 0x5b0808));
+  }
+
+  /** Loading-menu fallback only; the required startup gate prevents this neutral shell reaching gameplay. */
+  private buildTaxiPlaceholder(): void {
+    const placeholder = new THREE.Group(); placeholder.name = 'taxi-loading-placeholder'; this.taxiPlaceholder = placeholder;
+    const body = new THREE.MeshStandardMaterial({ color: 0xe8e9e4, roughness: 0.62 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x20282b, roughness: 0.7 });
+    const lower = new THREE.Mesh(new RoundedBoxGeometry(2.04, 0.82, 5.04, 2, 0.09), body); lower.position.y = 0.82;
+    const cabin = new THREE.Mesh(new RoundedBoxGeometry(1.96, 1.32, 4.42, 2, 0.1), body); cabin.position.set(0, 1.52, -0.02); cabin.name = 'taxi-loading-cabin';
+    placeholder.add(lower, cabin); this.cabinParts.push(cabin);
+    const wheelGeometry = new THREE.CylinderGeometry(0.405, 0.405, 0.24, 16); wheelGeometry.rotateZ(Math.PI / 2);
+    for (const z of [1.6, -1.6]) for (const x of [-0.9, 0.9]) {
+      const pivot = new THREE.Group(); pivot.position.set(x, 0.405, z); if (z > 0) pivot.rotation.order = 'YXZ';
+      const wheel = new THREE.Mesh(wheelGeometry, dark); pivot.add(wheel); placeholder.add(pivot); this.wheels.push(pivot);
+    }
+    const lightGeometry = new THREE.BoxGeometry(0.4, 0.18, 0.05);
+    for (const x of [-0.55, 0.55]) {
+      const front = new THREE.Mesh(lightGeometry, new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15 })); front.position.set(x, 0.82, 2.55);
+      const rear = new THREE.Mesh(lightGeometry, new THREE.MeshStandardMaterial({ color: 0x5b0808, emissive: 0x390000, emissiveIntensity: 1.8 })); rear.position.set(x, 0.82, -2.55);
+      placeholder.add(front, rear); this.headLights.push(front); this.brakeLights.push(rear);
+    }
+    placeholder.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
+    this.group.add(placeholder);
+  }
+
+  private releaseTaxiPlaceholder(): void {
+    const placeholder = this.taxiPlaceholder; if (!placeholder) return;
+    placeholder.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      object.geometry.dispose();
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose();
+    });
+    placeholder.removeFromParent(); this.taxiPlaceholder = undefined;
+  }
+
+  private mountTaxiModel(instance: TaxiModelInstance): void {
+    if (this.disposed) return;
+    this.releaseTaxiPlaceholder();
+    this.wheels = [...instance.wheels]; this.headLights = [...instance.headLights]; this.brakeLights = [...instance.brakeLights]; this.cabinParts = [...instance.cabinParts];
+    this.wheels[0]!.rotation.order = 'YXZ'; this.wheels[1]!.rotation.order = 'YXZ';
+    this.taxiSharedGeometries = new Set(instance.sharedGeometries); this.taxiOwnedMaterials = new Set(instance.ownedMaterials);
+    this.group.add(instance.root); instance.root.userData.vehicleVisual = 'quantum-express';
+    this.setFirstPerson(this.firstPerson); this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
+    if (this.wrecked) this.applyWreckAppearance();
+  }
+
+  private buildTaxiModel(): void {
+    const instance = instantiateTaxiModel();
+    if (instance) { this.mountTaxiModel(instance); return; }
+    this.buildTaxiPlaceholder();
+    this.taxiReadyUnsubscribe = onTaxiLibraryReady(() => {
+      const loaded = instantiateTaxiModel(); if (loaded) this.mountTaxiModel(loaded);
+      this.taxiReadyUnsubscribe = undefined;
+    });
+  }
+
   private buildModel(): void {
     if (this.spec.twoWheeler) { this.buildTwoWheeler(); return; }
+    if (this.spec.kind === 'taxi') { this.buildTaxiModel(); return; }
     const [width, height, length] = this.spec.size;
-    const sport = this.spec.kind === 'sport'; const taxi = this.spec.kind === 'taxi'; const van = this.spec.kind === 'van' || taxi;
+    const sport = this.spec.kind === 'sport'; const van = this.spec.kind === 'van';
     const bodyMat = new THREE.MeshPhysicalMaterial({ color: this.spec.color, metalness: 0.32, roughness: 0.24, clearcoat: 1, clearcoatRoughness: 0.13 });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x151a1c, metalness: 0.52, roughness: 0.32 });
     const chrome = new THREE.MeshStandardMaterial({ color: 0xa9b0b0, metalness: 0.9, roughness: 0.18 });
@@ -288,19 +367,6 @@ export class Vehicle {
     const frontPlate = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.18, 0.035), plateMaterial); frontPlate.position.set(0, 0.39, length / 2 + 0.18);
     const rearPlate = frontPlate.clone(); rearPlate.position.z = -length / 2 - 0.18; this.group.add(frontPlate, rearPlate);
     if (sport) { const spoiler = new THREE.Mesh(new RoundedBoxGeometry(width * 0.62, 0.09, 0.2, 2, 0.03), bodyMat); spoiler.position.set(0, 1.02, -length * 0.43); this.group.add(spoiler); }
-    if (taxi) {
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(width + 0.04, 0.22, length * 0.82), new THREE.MeshStandardMaterial({ color: 0xf2c521, roughness: 0.5 }));
-      stripe.name = 'taxistripe'; stripe.position.y = 1; this.group.add(stripe); this.cabinParts.push(stripe); // a full-length livery slab at eye height: hide it in first person or the driver just sees solid yellow
-      const board = createSignMesh(new THREE.PlaneGeometry(1.7, 0.4), 'QUANTUM EXPRESS', '#f2c521', { doubleSide: true });
-      board.name = 'sign'; board.position.set(0, roof.position.y + 0.3, roof.position.z); this.group.add(board); this.cabinParts.push(board); // roof sign: hide it from the raised driver's eye in first person, like the police lightbar
-    }
-    if (this.spec.kind === 'cab') { // meter cab: glowing roof box (the duty light) wearing a TAXI decal on both faces
-      const box = new THREE.Mesh(new RoundedBoxGeometry(0.68, 0.26, 0.3, 2, 0.05), new THREE.MeshStandardMaterial({ color: 0xf6df7a, emissive: 0xffd75e, emissiveIntensity: 0.2, roughness: 0.4 }));
-      box.name = 'taxilight'; box.position.set(0, roof.position.y + 0.2, roof.position.z);
-      const decal = createSignMesh(new THREE.PlaneGeometry(0.6, 0.2), 'TAXI', '#141414', { background: '#f2c521' });
-      decal.name = 'sign'; decal.position.z = 0.16; const back = decal.clone(); back.position.z = -0.16; back.rotation.y = Math.PI;
-      box.add(decal, back); this.group.add(box); this.cabinParts.push(box); // roof duty-light box: hide it in first person too
-    }
     if (this.police) {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;
       const mount = new THREE.Mesh(new RoundedBoxGeometry(0.98, 0.07, 0.17, 2, 0.02), trimMat); bar.add(mount);

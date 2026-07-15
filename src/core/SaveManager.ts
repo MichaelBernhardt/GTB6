@@ -45,11 +45,12 @@ export function sanitizeTimeOfDay(raw: unknown): number {
 
 export function sanitizeGarage(raw: unknown): SavedVehicle | null {
   if (!raw || typeof raw !== 'object') return null;
-  const value = raw as Partial<SavedVehicle>;
-  if (typeof value.kind !== 'string' || !(value.kind in VEHICLE_SPECS)) return null;
-  const spec = VEHICLE_SPECS[value.kind as VehicleKind];
-  const color = Number.isFinite(value.color) ? Math.min(0xffffff, Math.max(0, Math.round(value.color as number))) : spec.color;
-  const health = Number.isFinite(value.health) ? Math.min(spec.health, Math.max(1, Math.round(value.health as number))) : spec.health;
+  const value = raw as { kind?: unknown; color?: unknown; health?: unknown };
+  const migratedKind = value.kind === 'cab' ? 'taxi' : value.kind;
+  if (typeof migratedKind !== 'string' || !(migratedKind in VEHICLE_SPECS)) return null;
+  const spec = VEHICLE_SPECS[migratedKind as VehicleKind];
+  const color = spec.kind === 'taxi' ? spec.color : typeof value.color === 'number' && Number.isFinite(value.color) ? Math.min(0xffffff, Math.max(0, Math.round(value.color))) : spec.color;
+  const health = typeof value.health === 'number' && Number.isFinite(value.health) ? Math.min(spec.health, Math.max(1, Math.round(value.health))) : spec.health;
   return { kind: spec.kind, color, health };
 }
 
