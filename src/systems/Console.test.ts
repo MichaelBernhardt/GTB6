@@ -35,6 +35,7 @@ describe('console parser', () => {
     expect(parseCommand('spawn superbike')).toEqual({ kind: 'spawn', vehicle: 'superbike' });
     expect(parseCommand('spawn bakkie')).toEqual({ kind: 'spawn', vehicle: 'van' });
     expect(parseCommand('spawn taxi')).toEqual({ kind: 'spawn', vehicle: 'taxi' });
+    expect(parseCommand('spawn cab').kind).toBe('error');
     expect(parseCommand('spawn spaceship').kind).toBe('error');
     expect(parseCommand('spawn').kind).toBe('error');
   });

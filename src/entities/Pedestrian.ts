@@ -102,7 +102,7 @@ export class Pedestrian {
     this.punchTimer = Math.max(0, this.punchTimer - dt);
     this.replanCooldown = Math.max(0, this.replanCooldown - dt);
     if (this.state === 'hostile') this.setGuardPose(distance); else { this.group.rotation.x = 0; this.setPanicPose(this.state === 'flee', false); }
-    if (this.hailing && this.state === 'idle') { const arm = this.arms[1]; if (arm) { arm.rotation.x = Math.PI * 0.95; arm.rotation.z = -0.22; } } // curbside hail: one arm out for the cab
+    if (this.hailing && this.state === 'idle') { const arm = this.arms[1]; if (arm) { arm.rotation.x = Math.PI * 0.95; arm.rotation.z = -0.22; } } // curbside hail: one arm out for the taxi
     if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(this.localTarget(city, choices)); return; }
     if ((this.destination.x - this.group.position.x) ** 2 + (this.destination.z - this.group.position.z) ** 2 < 5) {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }

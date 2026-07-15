@@ -178,6 +178,11 @@ describe('SaveManager', () => {
     expect(sanitizeGarage({ kind: 'compact', color: Number.NaN, health: 0 } as SavedVehicle)).toEqual({ kind: 'compact', color: 0xe7b23b, health: 1 });
   });
 
+  it('migrates legacy meter-taxi saves to the uniform Quantum fleet without losing valid health', () => {
+    expect(sanitizeGarage({ kind: 'cab', color: 0xf2c521, health: 64 })).toEqual({ kind: 'taxi', color: 0xf0f1ea, health: 64 });
+    expect(sanitizeGarage({ kind: 'taxi', color: 0x123456, health: 110 })).toEqual({ kind: 'taxi', color: 0xf0f1ea, health: 110 });
+  });
+
   it('round trips the time of day and defaults it on old saves', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     manager.save({ ...DEFAULT_SAVE, timeOfDay: 19.75 });

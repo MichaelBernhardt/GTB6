@@ -71,17 +71,17 @@ describe('hail eligibility', () => {
     expect(canHail(walker({ fear: FLEE_THRESHOLD - 1 }), 5)).toBe(true);
   });
 
-  it('marks both the sedan cab and the Quantum as taxi kinds', () => {
-    expect(isTaxiKind('cab')).toBe(true);
-    expect(isTaxiKind('taxi')).toBe(true);
+  it('marks only the uniform Quantum fleet as the taxi kind', () => {
     expect(isTaxiKind('compact')).toBe(false);
+    expect(isTaxiKind('cab')).toBe(false);
+    expect(isTaxiKind('taxi')).toBe(true);
   });
 });
 
 describe('ride state transitions', () => {
   it('walks idle -> hailed -> boarding -> riding and refuses out-of-order jumps', () => {
     const ride = new TaxiRide();
-    expect(ride.hail()).toBe(false); // fresh cab starts OCCUPIED: no hails until the driver goes available
+    expect(ride.hail()).toBe(false); // fresh taxi starts OCCUPIED: no hails until the driver goes available
     ride.toggleDuty();
     expect(ride.beginBoarding()).toBe(false);
     expect(ride.board(200)).toBe(0);
@@ -117,7 +117,7 @@ describe('ride state transitions', () => {
     expect(ride.toggleDuty()).toBe('occupied');
   });
 
-  it('auto-occupies while collecting or carrying a fare: the roof light follows the ride', () => {
+  it('auto-occupies while collecting or carrying a fare: the duty state follows the ride', () => {
     const ride = new TaxiRide();
     expect(ride.available).toBe(false); // occupied sign
     ride.toggleDuty();

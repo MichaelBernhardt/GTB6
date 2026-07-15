@@ -67,7 +67,7 @@ Solo missions, money, wanted level, shops, jobs, saves, cheats, and reputation s
 | `R` | Reload |
 | `H` | Use a stim pack |
 | `V` | Change camera view |
-| `T` | Start or stop taxi duty in a meter cab |
+| `T` | Start or stop taxi duty in a Quantum Express minibus |
 | `Y` | Start or stop a Sixty-Sekonds shift on its delivery bike |
 | `N` / `Shift+N` | Next / previous radio station |
 | `G` | Toggle the siren in a police car you definitely acquired legally |
@@ -89,7 +89,7 @@ Gold markers identify contacts and current objectives. Walk up and press `E`.
 
 Civilian crime lowers community standing and increases long-term police attention. Helpful behaviour improves prices, witness delays, and local support. Temporary wanted heat can disappear; your reputation has a memory like a tannie who saw you skip the queue in 2009.
 
-For honest-ish money, take a meter cab and press `T`, or grab a lime delivery bike and press `Y`. Sixty-Sekonds rewards speed, careful riding, and clean streaks. Potholes convert groceries into a smoothie, and the algorithm does not accept affidavits.
+For honest-ish money, take a Quantum Express minibus and press `T`, or grab a lime delivery bike and press `Y`. Sixty-Sekonds rewards speed, careful riding, and clean streaks. Potholes convert groceries into a smoothie, and the algorithm does not accept affidavits.
 
 Progress is saved periodically and after important events. Money, completed jobs, weapons, inventory, garage storage, safehouse spawn, reputation, time of day, settings, and cheats use browser `localStorage`. You can also save at Main Main Mansions or with the `save` console command. The pause menu can reset everything.
 
