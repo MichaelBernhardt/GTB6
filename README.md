@@ -2,6 +2,8 @@
 
 An original open-world Jozi misadventure built with Three.js and TypeScript. Walk, drive, take questionable freelance work, annoy the JMPD, and try to keep the bakkie facing mostly forwards.
 
+**Play the production build:** [groot-theft-bakkie-6-18059d9a06b8.herokuapp.com](https://groot-theft-bakkie-6-18059d9a06b8.herokuapp.com/)
+
 The city combines OpenStreetMap-derived Johannesburg roads with procedural buildings, vegetation, traffic, pedestrians, shops, missions, a day/night cycle, and a deliberately impossible strip of coast. Cape Town kept the mountain, so Jozi borrowed the sea.
 
 ![Groot Theft Bakkie gameplay in Johannesburg](screenshots/san-cordova-rich.png)
@@ -11,6 +13,7 @@ The city combines OpenStreetMap-derived Johannesburg roads with procedural build
 - A large Jozi map with 3,939 roads, 117 named districts, roughly 775 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
 - On-foot movement, third- and first-person cameras, cover, melee combat, firearms, armour, stim packs, parachutes, pickups, and a weapon wheel.
 - An original 1.8 m skinned Johannesburg protagonist with a teal technical jacket, 24 authored gameplay clips, directional aim, vehicle and airborne poses, and strict retryable startup validation.
+- A 16-character Blender-authored Johannesburg NPC cast. Every pedestrian uses a rigged character with independent animation, including ambient crowds, mission contacts, car guards, enforcers, drivers, and JMPD officers.
 - A required Blender-authored library of jacarandas, shade trees, gums, pines, acacias, palms, and landmark trees, with two distinct silhouettes per species and deterministic size variation.
 - Cars, bakkies, taxis, bicycles, delivery bikes, superbikes, vehicle damage, drive-bys, police sirens, and four synthesised radio stations.
 - Traffic that follows lanes and robots. “Robot” means traffic light here; no metal oke is coming to steal your job.
@@ -100,6 +103,8 @@ npm run test:watch # Vitest in watch mode
 npm run map:build  # Regenerate the checked-in map data
 npm run character:validate # Validate the committed rigged GLB contract
 npm run character:build    # Blender 4.2+ FBX/GLB rebuild (working files stay ignored)
+npm run npc:validate       # Validate all 16 committed NPC rigs and transfer budgets
+npm run npc:build          # Rebuild NPC GLBs, textures, and inspection sheets with Blender
 npm run foliage:validate   # Validate the committed Blender tree library
 npm run foliage:build      # Rebuild and install all 14 tree assets with Blender 4.2+
 ```
@@ -124,8 +129,10 @@ src/
   Game.ts      composition root and runtime orchestration
 tools/mapgen/  OpenStreetMap processing and deterministic map generation
 tools/character/ Blender build and strict GLB validation
+tools/npc/     Blender NPC cast build, optimization, previews, and validation
 tools/foliage/ Blender tree generation, export, and strict GLB validation
 art/character/ original concept, material sources, recipe, and source lock
+art/npcs/     original NPC turnarounds, textile sources, previews, recipes, and source lock
 art/foliage/ original tree recipe, workflow notes, and source lock
 server.mjs     production static server
 ```
@@ -133,6 +140,8 @@ server.mjs     production static server
 See [ARCHITECTURE.md](ARCHITECTURE.md) for runtime ownership and data flow, and [GAME_DESIGN.md](GAME_DESIGN.md) for rules and tuning intent.
 
 ## Production and Heroku
+
+The live production game is available at [https://groot-theft-bakkie-6-18059d9a06b8.herokuapp.com/](https://groot-theft-bakkie-6-18059d9a06b8.herokuapp.com/).
 
 The production command serves the Vite bundle from a small Node HTTP server with compression, asset caching, SPA fallback, and a `/healthz` endpoint.
 
@@ -143,7 +152,10 @@ PORT=4173 npm start
 
 The same web process owns the global multiplayer shard. Attach Heroku Postgres and expose its standard `DATABASE_URL` to persist guest names and kill/death statistics. Without a database the server falls back to in-memory profiles, which reset on restart. Keep the app at one web dyno because live world state is process-local.
 
-Pushes to `main` run the `.github/workflows/deploy-heroku.yml` workflow. It installs dependencies, runs lint, tests, and the production build, then deploys to the `groot-theft-bakkie-6` Heroku app. Add a `HEROKU_API_KEY` repository secret before expecting the robot—traffic or otherwise—to deploy anything.
+Pull requests into protected `main` must pass the production verification check. A merged push installs dependencies,
+runs lint, tests, character/NPC/foliage asset validation, and the production build before deploying the verified commit
+to the `groot-theft-bakkie-6` Heroku app. Add a `HEROKU_API_KEY` repository secret before expecting the robot—traffic
+or otherwise—to deploy anything.
 
 Do not also enable Heroku dashboard auto-deploy for `main`; that creates duplicate releases and twice the suspense.
 
