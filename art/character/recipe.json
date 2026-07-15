@@ -1,0 +1,36 @@
+{
+  "id": "johannesburg-protagonist-v1",
+  "originalDesign": true,
+  "description": "Black South African man, late 20s, athletic-average build, short coiled hair, teal technical jacket, charcoal jeans and worn trainers.",
+  "heightMetres": 1.8,
+  "forwardAxis": "+Z",
+  "feetAtOrigin": true,
+  "triangleRange": [45000, 60000],
+  "materialSlots": ["SkinEyes", "TealTechnicalJacket", "CharcoalJeans", "HairShoes"],
+  "maxBoneInfluences": 4,
+  "fps": 30,
+  "rootMotion": false,
+  "source": {
+    "preferred": "art/character/work/protagonist-source.blend",
+    "interchange": "build/character/protagonist.fbx",
+    "generator": "tools/character/create-source.py",
+    "tool": "Blender 4.2+",
+    "mpfb": "2.0.16",
+    "locomotionSource": "Quaternius Universal Animation Library 2.1 Standard / Unreal-Godot/UAL1_Standard.glb"
+  },
+  "clips": {
+    "loop": ["idle", "walk", "sprint", "aim", "aim_forward", "aim_back", "aim_left", "aim_right", "fall", "cover_idle", "cover_move", "cover_aim", "ride_bicycle", "ride_motorbike", "ride_superbike", "freefall", "parachute"],
+    "oneShot": ["fire", "punch_left", "punch_right", "jump", "land", "tumble", "death"]
+  },
+  "weaponSockets": {
+    "rightHand": ["pistol", "smg", "shotgun", "sniper"],
+    "chestBack": ["rpg"]
+  },
+  "textureSources": {
+    "skinAndEyes": "MakeHuman young_african_male skin and brown eye atlas (CC0)",
+    "jacket": "art/character/materials/protagonist-jacket-source.png",
+    "denim": "art/character/materials/protagonist-denim-source.png",
+    "hairAndShoes": "MakeHuman afro01 and shoes02 atlas (CC0)",
+    "packedNormalRoughness": "art/character/materials/*-normal-roughness.png"
+  }
+}

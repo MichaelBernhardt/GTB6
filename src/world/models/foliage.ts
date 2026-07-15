@@ -1,12 +1,13 @@
 /**
- * Foliage set: SA trees and plants built for heavy instancing — icosahedron canopy blobs
- * (20 tris each at detail 0), low-segment cones, and shared paint() materials so the per-material
- * GeometryBaker merge collapses thousands of plants into a handful of draw calls. Trunks register
- * slim collider tiers where a plant is solid; canopies never collide, so the player brushes
- * through leaves but not through wood.
+ * Foliage set: recognisable SA plants built for heavy instancing. The seven trees come from the
+ * required Blender library; smaller plants stay procedural and share paint() materials so the
+ * per-material GeometryBaker merge collapses thousands of plants into a handful of draw calls.
+ * Trunks register slim collider tiers where a plant is solid; canopies never collide, so the
+ * player brushes through leaves but not through wood.
  */
 import * as THREE from 'three';
 import { Kit, M, paint, type BuildOptions, type BuiltModel } from './kit';
+import { buildTreeAsset } from '../FoliageAssets';
 
 const TAU = Math.PI * 2;
 
@@ -14,25 +15,17 @@ const TAU = Math.PI * 2;
 const F = {
   bark: paint(0x6a5136, 0.95),
   barkDark: paint(0x4b3b2b, 0.95),
-  barkPale: paint(0xc8bda6, 0.9),
-  leaf: paint(0x55793c, 0.95),
   leafDark: paint(0x3d5c31, 0.95),
   leafOlive: paint(0x74804a, 0.95),
-  leafDusty: paint(0x88946f, 0.95),
-  pine: paint(0x33523a, 0.95),
-  jacBloom: paint(0x8f74c8, 0.9),
-  jacCarpet: paint(0x7e66b5, 0.95),
   bougMagenta: paint(0xc03f78, 0.9),
   bougPurple: paint(0x8e4a9e, 0.9),
   aloe: paint(0x5f7f52, 0.85),
   aloeFlower: paint(0xd2652a, 0.85),
   agave: paint(0x7fa08c, 0.85),
   mastBloom: paint(0xd9c86b, 0.85),
-  frond: paint(0x4d7a3d, 0.9),
   grassDry: paint(0xa39050, 0.98),
   grassGreen: paint(0x7d8a4e, 0.98),
   hedge: paint(0x3f6136, 0.95),
-  coral: paint(0xc4472e, 0.9),
 };
 
 /** Low-poly canopy blob: an icosahedron squashed vertically to taste. Never collides. */
@@ -53,135 +46,35 @@ function lean(kit: Kit, material: THREE.Material, rTop: number, rBottom: number,
   });
 }
 
-/** Canopy crown: one core blob plus `count` satellites ringed at `ring` with seeded jitter.
- *  Horizontal extent is bounded by ring + 1.1 * blobR (core: 1.25 * blobR). */
-function crown(kit: Kit, material: THREE.Material, count: number, ring: number, blobR: number, y: number, squash: number, salt: number): void {
-  blob(kit, material, blobR * 1.25, 0, y + blobR * 0.15, 0, squash);
-  for (let sat = 0; sat < count; sat++) {
-    const a = (sat / count) * TAU + kit.rnd(salt + sat) * 1.1;
-    const r = blobR * (0.75 + kit.rnd(salt + 10 + sat) * 0.35);
-    blob(kit, material, r, Math.sin(a) * ring, y + (kit.rnd(salt + 20 + sat) - 0.5) * blobR * 0.7, Math.cos(a) * ring, squash);
-  }
-}
-
-/** Jacaranda: Joburg's street tree — forked limbs under a wide dome; the bloom variant turns the
- *  canopy purple and drops a petal carpet under the tree. */
+/** Required Blender-authored Joburg tree assets. They deliberately have no procedural fallback. */
 export function buildJacaranda(seed: number, options: BuildOptions = {}): BuiltModel {
-  const kit = new Kit(seed);
-  const variant = (options.variant ?? kit.int(1, 0, 1)) % 2;
-  const size = options.size ?? kit.rnd(2);
-  const trunkH = 2.4 + size * 1.2; const canopyR = 2.8 + size * 1.2;
-  kit.cyl(F.barkDark, 0.16 + size * 0.06, 0.26 + size * 0.1, trunkH, 0, 0, 0, { seg: 6, collide: true });
-  for (let limb = 0; limb < 3; limb++) {
-    lean(kit, F.barkDark, 0.05, 0.13, trunkH * 0.75, limb * 2.1 + kit.rnd(4 + limb) * 0.9, 0.55, 0, trunkH * 0.85, 0);
-  }
-  crown(kit, variant === 1 ? F.jacBloom : F.leaf, 4, canopyR * 0.55, canopyR * 0.55, trunkH + canopyR * 0.5, 0.72, 30);
-  if (variant === 1) kit.cyl(F.jacCarpet, canopyR * 0.8, canopyR * 0.8, 0.04, 0, 0, 0, { seg: 12, cast: false });
-  return kit.done();
+  return buildTreeAsset('jacaranda', seed, options);
 }
 
 /** Broad shade tree (oak / plane): stout trunk, deep rounded crown over a whole yard. */
 export function buildShadeTree(seed: number, options: BuildOptions = {}): BuiltModel {
-  const kit = new Kit(seed);
-  const variant = (options.variant ?? kit.int(1, 0, 1)) % 2;
-  const size = options.size ?? kit.rnd(2);
-  const trunkH = 2.2 + size; const canopyR = 3.0 + size * 1.4;
-  const bark = variant === 1 ? F.barkPale : F.bark; // plane trees shed to a pale mottled trunk
-  kit.cyl(bark, 0.24 + size * 0.08, 0.36 + size * 0.12, trunkH, 0, 0, 0, { seg: 6, collide: true });
-  for (let limb = 0; limb < 3; limb++) lean(kit, bark, 0.06, 0.16, trunkH * 0.8, limb * 2.2 + kit.rnd(4 + limb) * 0.7, 0.6, 0, trunkH * 0.8, 0);
-  crown(kit, F.leaf, 5, canopyR * 0.6, canopyR * 0.6, trunkH + canopyR * 0.6, 0.85, 30);
-  for (let tuck = 0; tuck < 2; tuck++) { // darker under-canopy masses for depth
-    const a = kit.rnd(50 + tuck) * TAU;
-    blob(kit, F.leafDark, canopyR * 0.3, Math.sin(a) * canopyR * 0.45, trunkH + canopyR * (0.35 + kit.rnd(55 + tuck) * 0.3), Math.cos(a) * canopyR * 0.45, 0.85);
-  }
-  return kit.done();
+  return buildTreeAsset('shade-tree', seed, options);
 }
 
 /** Gum (eucalyptus): tall pale trunk shedding a bark sock, sparse dusty crown way up high. */
 export function buildGum(seed: number, options: BuildOptions = {}): BuiltModel {
-  const kit = new Kit(seed);
-  const variant = (options.variant ?? kit.int(1, 0, 1)) % 2;
-  const size = options.size ?? kit.rnd(2);
-  const trunkH = 8 + size * 4;
-  kit.cyl(F.barkPale, 0.14, 0.24 + size * 0.06, trunkH, 0, 0, 0, { seg: 6, collide: true });
-  kit.cyl(F.bark, 0.27 + size * 0.06, 0.3 + size * 0.06, 1.8 + size, 0, 0, 0, { seg: 6 }); // shed-bark sock
-  if (variant === 1) lean(kit, F.barkPale, 0.09, 0.17, trunkH * 0.62, kit.rnd(3) * TAU, 0.16, 0, 0.2, 0, 6); // twin leader
-  for (let limb = 0; limb < 2; limb++) lean(kit, F.barkPale, 0.04, 0.1, 2, limb * 2.8 + kit.rnd(6 + limb), 0.75, 0, trunkH * 0.82, 0);
-  for (let tuft = 0; tuft < 4; tuft++) {
-    const a = (tuft / 4) * TAU + kit.rnd(20 + tuft) * 1.2;
-    blob(kit, F.leafDusty, 1.0 + kit.rnd(30 + tuft) * 0.6, Math.sin(a) * 1.4, trunkH - 1 + tuft * 0.8, Math.cos(a) * 1.4, 0.75);
-  }
-  return kit.done();
+  return buildTreeAsset('gum', seed, options);
 }
 
 /** Pine: plantation conifer (stacked cones) or a Cape stone-pine umbrella on a bare trunk. */
 export function buildPine(seed: number, options: BuildOptions = {}): BuiltModel {
-  const kit = new Kit(seed);
-  const variant = (options.variant ?? kit.int(1, 0, 1)) % 2;
-  const size = options.size ?? kit.rnd(2);
-  if (variant === 0) {
-    const trunkH = 1.6 + size * 0.8; const baseR = 1.9 + size * 0.8;
-    kit.cyl(F.bark, 0.18, 0.26 + size * 0.08, trunkH + 1, 0, 0, 0, { seg: 6, collide: true });
-    for (let tier = 0; tier < 3; tier++) {
-      kit.cyl(F.pine, 0.03, baseR * (1 - tier * 0.28), 2.1 + size * 0.5, 0, trunkH + tier * (1.5 + size * 0.5), 0, { seg: 7 });
-    }
-  } else {
-    const trunkH = 4 + size * 1.6; const canopyR = 2.2 + size * 0.9;
-    kit.cyl(F.bark, 0.2, 0.3 + size * 0.08, trunkH, 0, 0, 0, { seg: 6, collide: true });
-    lean(kit, F.bark, 0.07, 0.14, trunkH * 0.5, kit.rnd(5) * TAU, 0.7, 0, trunkH * 0.78, 0);
-    blob(kit, F.pine, canopyR, 0, trunkH + canopyR * 0.1, 0, 0.45);
-    blob(kit, F.leafDark, canopyR * 0.55, kit.rnd(7) * 1.4 - 0.7, trunkH - 0.4, kit.rnd(8) * 1.4 - 0.7, 0.5);
-  }
-  return kit.done();
+  return buildTreeAsset('pine', seed, options);
 }
 
 /** Acacia thorn tree: short forked trunk under the flat bushveld canopy pads. */
 export function buildAcacia(seed: number, options: BuildOptions = {}): BuiltModel {
-  const kit = new Kit(seed);
-  const variant = (options.variant ?? kit.int(1, 0, 1)) % 2;
-  const size = options.size ?? kit.rnd(2);
-  const trunkH = 1.7 + size * 0.6; const padR = 2.4 + size * 0.9; const padY = trunkH + 2.1;
-  kit.cyl(F.barkDark, 0.13, 0.2 + size * 0.06, trunkH, 0, 0, 0, { seg: 5, collide: true });
-  if (variant === 1) lean(kit, F.barkDark, 0.1, 0.16, trunkH + 1.4, kit.rnd(3) * TAU, 0.5, 0, 0, 0);
-  for (let limb = 0; limb < 4; limb++) lean(kit, F.barkDark, 0.04, 0.11, 2.4, limb * 1.6 + kit.rnd(6 + limb) * 0.8, 0.85, 0, trunkH * 0.9, 0, 4);
-  blob(kit, F.leafOlive, padR, 0, padY, 0, 0.26);
-  for (let pad = 0; pad < 2; pad++) {
-    const a = kit.rnd(20 + pad) * TAU;
-    blob(kit, F.leafOlive, padR * 0.55, Math.sin(a) * padR * 0.55, padY - 0.5 + kit.rnd(25 + pad) * 0.9, Math.cos(a) * padR * 0.55, 0.3);
-  }
-  return kit.done();
+  return buildTreeAsset('acacia', seed, options);
 }
 
 /** Coastal palm: curved segmented trunk under a crown of drooping fronds; only the vertical base
  *  segment collides. Variant 1 leans hard into the sea breeze and carries coconuts. */
 export function buildPalm(seed: number, options: BuildOptions = {}): BuiltModel {
-  const kit = new Kit(seed);
-  const variant = (options.variant ?? kit.int(1, 0, 1)) % 2;
-  const size = options.size ?? kit.rnd(2);
-  const segH = 1.8 + size * 0.7; const dir = kit.rnd(3) * TAU;
-  const tilt = variant === 1 ? 0.16 : 0.06;
-  kit.cyl(F.bark, 0.15, 0.22, segH, 0, 0, 0, { seg: 5, collide: true });
-  let disp = 0;
-  for (let s = 1; s < 3; s++) {
-    const tiltS = tilt * (s + 0.5);
-    const reach = disp + Math.sin(tiltS) * segH * 0.5;
-    kit.cyl(F.bark, 0.12, 0.16, segH, Math.sin(dir) * reach, segH * s * 0.96, Math.cos(dir) * reach, { seg: 5, rx: Math.cos(dir) * tiltS, rz: -Math.sin(dir) * tiltS });
-    disp += Math.sin(tiltS) * segH;
-  }
-  const topX = Math.sin(dir) * disp; const topZ = Math.cos(dir) * disp; const topY = segH * 2.85;
-  blob(kit, F.leafDark, 0.42, topX, topY - 0.1, topZ, 0.8); // crown boss the fronds hang off
-  for (let f = 0; f < 7; f++) {
-    const a = (f / 7) * TAU + kit.rnd(20 + f) * 0.6;
-    const droop = 0.3 + kit.rnd(30 + f) * 0.45;
-    const len = 2 + size * 0.6;
-    const frond = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, len), F.frond);
-    frond.position.set(topX + Math.sin(a) * len * 0.42, topY + 0.3 - Math.sin(droop) * len * 0.25, topZ + Math.cos(a) * len * 0.42);
-    frond.rotateY(a); frond.rotateX(droop);
-    frond.castShadow = true; frond.receiveShadow = true;
-    kit.add(frond);
-  }
-  if (variant === 1) for (const side of [-1, 1]) blob(kit, F.leafOlive, 0.16, topX + side * 0.25, topY - 0.35, topZ, 1);
-  return kit.done();
+  return buildTreeAsset('palm', seed, options);
 }
 
 /** Aloe (ferox-style): stubby trunk, succulent rosette, orange candle flowers; variant clumps. */
@@ -282,23 +175,5 @@ export function buildHedgeUnit(seed: number, options: BuildOptions = {}): BuiltM
 /** Landmark tree: a giant wild fig — buttress roots, huge limbs, a canopy that reads from blocks
  *  away. Variant 1 is a flowering coral tree with red blooms through the crown. */
 export function buildLandmarkTree(seed: number, options: BuildOptions = {}): BuiltModel {
-  const kit = new Kit(seed);
-  const variant = (options.variant ?? kit.int(1, 0, 1)) % 2;
-  const size = options.size ?? kit.rnd(2);
-  const trunkH = 3.2 + size * 1.2; const trunkR = 0.8 + size * 0.3; const canopyR = 6.2 + size * 2;
-  kit.cyl(F.bark, trunkR * 0.7, trunkR, trunkH, 0, 0, 0, { seg: 8, collide: true });
-  for (let root = 0; root < 4; root++) lean(kit, F.bark, 0.09, 0.4, 1.9, root * 1.65 + kit.rnd(4 + root) * 0.7, 1.02, 0, 0, 0);
-  for (let limb = 0; limb < 4; limb++) lean(kit, F.bark, 0.14, trunkR * 0.42, canopyR * 0.55, limb * 1.5 + kit.rnd(10 + limb) * 0.9, 0.8, 0, trunkH * 0.8, 0, 6);
-  blob(kit, F.leafDark, canopyR * 0.62, 0, trunkH + canopyR * 0.42, 0, 0.7, 1);
-  for (let lobe = 0; lobe < 5; lobe++) {
-    const a = (lobe / 5) * TAU + kit.rnd(20 + lobe) * 0.9;
-    blob(kit, F.leaf, canopyR * (0.3 + kit.rnd(30 + lobe) * 0.12), Math.sin(a) * canopyR * 0.55, trunkH + canopyR * (0.3 + kit.rnd(40 + lobe) * 0.25), Math.cos(a) * canopyR * 0.55, 0.7, 1);
-  }
-  if (variant === 1) {
-    for (let bloomIdx = 0; bloomIdx < 3; bloomIdx++) {
-      const a = kit.rnd(50 + bloomIdx) * TAU;
-      blob(kit, F.coral, canopyR * 0.18, Math.sin(a) * canopyR * 0.5, trunkH + canopyR * 0.55, Math.cos(a) * canopyR * 0.5, 0.8);
-    }
-  }
-  return kit.done();
+  return buildTreeAsset('landmark-tree', seed, options);
 }

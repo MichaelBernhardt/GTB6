@@ -60,6 +60,7 @@ import { DayNightSystem } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
+import { loadTreeLibrary } from './world/FoliageAssets';
 
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
 const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and downsamples — real supersampling AA. The floor bites hardest on LOW-dpi screens (a 1× monitor jumps to 2×, where aliasing shows most); HiDPI already renders dense, so it just stays at native.
@@ -113,7 +114,9 @@ export class Game {
   private multiplayerOverlay = new MultiplayerOverlay();
   private online?: OnlineSession;
   private onlineWasDead = false;
-  private mode: GameMode = 'menu';
+  private mode: GameMode = 'loading';
+  private requiredAssetsReady = false;
+  private assetLoadAttempt = 0;
   private activeVehicle?: Vehicle;
   private transition?: Transition;
   private marker = new THREE.Group();
@@ -200,9 +203,21 @@ export class Game {
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
     this.restoreGarageVehicle();
-    this.buildMarker(); this.bindUI(); this.animate();
+    this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
     if (import.meta.env.DEV) Object.assign(window, { __game: this });
-    setTimeout(() => this.ui.showMainMenu(this.mainMenuSummary()), 50);
+  }
+
+  private async prepareAssets(retry = false): Promise<void> {
+    const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading'; this.ui.showLoading();
+    try {
+      await Promise.all([retry ? this.player.retryCharacter() : this.player.loadCharacter(), loadTreeLibrary()]);
+      if (attempt !== this.assetLoadAttempt) return;
+      this.requiredAssetsReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
+    } catch (error) {
+      if (attempt !== this.assetLoadAttempt) return;
+      console.error('[assets] A required 3D asset failed to load.', error);
+      this.ui.showAssetFailure(() => { void this.prepareAssets(true); });
+    }
   }
 
   private setupRenderer(): void {
@@ -508,18 +523,20 @@ export class Game {
   }
 
   private startGame(fresh: boolean): void {
+    if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
-    this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+    this.player.setDead(false); this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
 
   private startOnline(name: string): void {
+    if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.endTaxiShift(); this.endCourierShift(); this.online?.close();
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
     this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose();
     this.player.group.position.set(2050, 0, 3850); this.player.group.position.y = this.city.surfaceHeightAt(2050, 3850);
-    this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
+    this.player.setDead(false); this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
     void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Global world', 'Open PvP is active. Press Enter to chat.');
@@ -554,11 +571,12 @@ export class Game {
     else if (this.mode === 'dead') { this.deathTimer -= frameDt; if (this.deathTimer <= 0) this.respawn(); }
     else if (this.mode === 'busted') { this.bustTimer -= frameDt; if (this.bustTimer <= 0) this.respawn(true); }
     else if (this.input.consume('Escape')) this.ui.back();
+    this.player.updateVisual(frameDt);
     this.profiler.mark('camera');
     this.tickMouseSteer(frameDt); this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
     this.profiler.mark('culling');
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);
-    this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position); // staggered chunk culling — runs in every mode so the menu backdrop is culled too
+    this.city.updateVisibility(this.activeVehicle?.group.position ?? this.player.group.position, this.requiredAssetsReady); // cull the menu backdrop immediately; stream required-asset models only after their load gate
     const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 2; // >2s: the staggered chunk culling needs its first full pass before the number means anything
     if (measure) { this.renderer.info.autoReset = false; this.renderer.info.reset(); }
     this.profiler.mark('render');
@@ -969,7 +987,7 @@ export class Game {
       const [saddleY, saddleZ] = vehicle.spec.saddle ?? [0.1, -0.2];
       this.player.group.position.add(new THREE.Vector3(Math.sin(vehicle.heading) * saddleZ, saddleY, Math.cos(vehicle.heading) * saddleZ));
       this.player.group.rotation.copy(vehicle.group.rotation);
-      this.player.animateRiding(dt, vehicle.spec.kind, speed, driveBy);
+      this.player.animateRiding(dt, vehicle.spec.kind, speed, driveBy, driveBy && this.input.firing);
       const hit = vehicle.consumeRiderHit();
       if (hit.damage > 0) this.damagePlayer(hit.damage);
       if (shouldKnockOff(hit.impact)) { this.knockOff(vehicle); return; }
@@ -1726,7 +1744,7 @@ export class Game {
     if (this.mode === 'dead') return;
     if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
     this.endCourierShift();
-    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.setDead(true); this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   /** `reload` console command: restore the manual checkpoint live (no page refresh) — money, time, kit, cheats,
    *  living-city and mission progress, wanted cleared, and the player set back at the checkpoint position/facing.

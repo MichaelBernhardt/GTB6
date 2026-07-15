@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "upstream": [
+    {
+      "name": "MPFB",
+      "version": "2.0.16",
+      "url": "https://static.makehumancommunity.org/mpfb/releases/release_2016.html",
+      "license": "GPL-3.0-or-later (tool only; not redistributed)",
+      "vendored": false
+    },
+    {
+      "name": "MakeHuman system assets",
+      "url": "https://files2.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip",
+      "license": "CC0-1.0",
+      "sha256": "b542127a8e25547c7c29c19f2d1d2adb9a664c80396ecd694095dbc8028a0107",
+      "selectedAssets": [
+        "young_african_male skin",
+        "high-poly eyes",
+        "afro01 hair",
+        "male_casualsuit05 jacket and jeans",
+        "shoes02 trainers",
+        "game_engine rig"
+      ],
+      "vendored": false
+    },
+    {
+      "name": "Quaternius Universal Animation Library",
+      "version": "2.1 Standard (June 2026)",
+      "url": "https://quaternius.com/packs/universalanimationlibrary.html",
+      "license": "CC0-1.0",
+      "archiveSha256": "cc73fc4e495b82958207316596317a3f40b9fa38065bde1027937452da537724",
+      "selectedFile": "Unreal-Godot/UAL1_Standard.glb",
+      "selectedFileSha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
+      "use": "Walk_Loop and Sprint_Loop lower-body retarget",
+      "vendored": false
+    }
+  ],
+  "committedArtifacts": [
+    {
+      "path": "public/models/characters/protagonist.glb",
+      "sha256": "ca0c82b169d9ff96e2464c0c1d7c3c6d8af57f4da784acea9920f955fbbf8f6f"
+    },
+    {
+      "path": "art/character/references/protagonist-face.jpg",
+      "sha256": "a324ee2aae53a434cfaac3276235e552d0d1a96276bbf1b0d34235f52db03af6"
+    },
+    {
+      "path": "art/character/references/protagonist-turnaround.jpg",
+      "sha256": "319091f32893ea3896ba6435ff97c135d75c01cbae6af42e96656fc2c64de477"
+    },
+    {
+      "path": "art/character/materials/protagonist-denim-source.png",
+      "sha256": "135e1a7febe4d41d257547087336c0ff3817a91dfb21a17afc55d549a0245b09"
+    },
+    {
+      "path": "art/character/materials/protagonist-jacket-source.png",
+      "sha256": "e761bd8eadbae2146f7716017ac81b8aadec9bcff84285eb79dd5a572d2df0b1"
+    },
+    {
+      "path": "public/textures/character/protagonist-jacket-basecolor.jpg",
+      "sha256": "96749d7b58b2e8ba227e4dc3175399988e44150d6410d4f290643d8d45cca370"
+    },
+    {
+      "path": "public/textures/character/protagonist-denim-basecolor.jpg",
+      "sha256": "59d0185462f2442e2cb22107f4dede11437ca07451a6ce5a23174ad4005c1a50"
+    },
+    {
+      "path": "public/textures/character/protagonist-skin-basecolor.jpg",
+      "sha256": "9efacc8ae939e558cd74150a9913fac30f6ab1cbf148c42c0a45d9973bbb0626"
+    },
+    {
+      "path": "public/textures/character/protagonist-hair-shoes-basecolor.jpg",
+      "sha256": "3a6a386a1a9dd70c4003d3ca485a765bdd3d7e9150dca457256d2060e922e61b"
+    },
+    {
+      "path": "art/character/materials/skin-normal-roughness.png",
+      "sha256": "faaeba7bb216939503d86cec245f832a9fcc110ecafde0174dbc01ba9b99bd18"
+    },
+    {
+      "path": "art/character/materials/jacket-normal-roughness.png",
+      "sha256": "2277369616867f67ff3ea7c83a4eb016f1d13b1bf69ab165dc2ac862bd237ae1"
+    },
+    {
+      "path": "art/character/materials/denim-normal-roughness.png",
+      "sha256": "e16167486a0144ef26ff18cfaa192f855236016907fbb30289cce4ff14577914"
+    },
+    {
+      "path": "art/character/materials/hair-shoes-normal-roughness.png",
+      "sha256": "3c34bb66e841cd47dfc191ab1ae312a260ed239924ef5a659f40dfe28c43aee9"
+    }
+  ]
+}

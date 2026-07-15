@@ -616,11 +616,12 @@ export class City {
    *  hysteresis). Geometry is kept in memory, so re-entering a chunk costs nothing. Colliders, nav
    *  graphs, the minimap and the map overlay are data, not scene geometry — culling never touches
    *  them. Water stays global: each surface is a bounded per-site mesh that frustum culling already
-   *  handles, and the premium dams double as the always-visible distant-water representation. */
-  updateVisibility(focus: THREE.Vector3): void {
+   *  handles, and the premium dams double as the always-visible distant-water representation.
+   *  Model streaming can be held behind the required-asset loading gate while static chunks cull. */
+  updateVisibility(focus: THREE.Vector3, streamModels = true): void {
     this.chunkCulling.update(focus.x, focus.z);
     this.detailCulling.update(focus.x, focus.z);
-    this.updateBuildingChunks(focus.x, focus.z);
+    if (streamModels) this.updateBuildingChunks(focus.x, focus.z);
   }
 
   /** (Re)builds every water surface for the given quality tier; safe to call live from the pause menu.

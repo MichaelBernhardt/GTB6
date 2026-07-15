@@ -1,0 +1,20 @@
+{
+  "contractVersion": 1,
+  "library": "JohannesburgTreeLibrary",
+  "variants": [
+    { "species": "jacaranda", "variant": 0, "maxFootprint": [10.5, 10.5], "trunkCollider": [0.72, 0.72, 3.7] },
+    { "species": "jacaranda", "variant": 1, "maxFootprint": [10.5, 10.5], "trunkCollider": [0.78, 0.78, 3.9] },
+    { "species": "shade-tree", "variant": 0, "maxFootprint": [12.5, 12.5], "trunkCollider": [0.9, 0.9, 3.9] },
+    { "species": "shade-tree", "variant": 1, "maxFootprint": [12.5, 12.5], "trunkCollider": [0.84, 0.84, 4.2] },
+    { "species": "gum", "variant": 0, "maxFootprint": [7, 7], "trunkCollider": [0.58, 0.58, 10.4] },
+    { "species": "gum", "variant": 1, "maxFootprint": [7, 7], "trunkCollider": [0.64, 0.64, 11.2] },
+    { "species": "pine", "variant": 0, "maxFootprint": [7, 7], "trunkCollider": [0.62, 0.62, 5.5] },
+    { "species": "pine", "variant": 1, "maxFootprint": [7, 7], "trunkCollider": [0.7, 0.7, 6.4] },
+    { "species": "acacia", "variant": 0, "maxFootprint": [8.5, 8.5], "trunkCollider": [0.62, 0.62, 3.2] },
+    { "species": "acacia", "variant": 1, "maxFootprint": [8.5, 8.5], "trunkCollider": [0.72, 0.72, 3.5] },
+    { "species": "palm", "variant": 0, "maxFootprint": [6, 6], "trunkCollider": [0.52, 0.52, 5.4] },
+    { "species": "palm", "variant": 1, "maxFootprint": [6, 6], "trunkCollider": [0.56, 0.56, 5.7] },
+    { "species": "landmark-tree", "variant": 0, "maxFootprint": [17.5, 17.5], "trunkCollider": [1.55, 1.55, 6.2] },
+    { "species": "landmark-tree", "variant": 1, "maxFootprint": [17.5, 17.5], "trunkCollider": [1.7, 1.7, 6.5] }
+  ]
+}

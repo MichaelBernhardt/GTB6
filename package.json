@@ -16,6 +16,10 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "character:build": "node tools/character/build.mjs",
+    "character:validate": "node tools/character/validate.mjs",
+    "foliage:build": "node tools/foliage/build.mjs",
+    "foliage:validate": "node tools/foliage/validate.mjs",
     "map:build": "tsx tools/mapgen/index.ts"
   },
   "dependencies": {
