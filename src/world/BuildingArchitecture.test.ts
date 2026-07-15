@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { ARCHITECTURE_VARIANTS, BuildingArchitecture, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
+import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
 import { GeometryBaker } from './StaticGeometry';
 
 const facade = new THREE.MeshStandardMaterial({ color: 0x99a4a9, roughness: 0.72 });
@@ -100,6 +100,16 @@ describe('district architecture families', () => {
         for (const tier of profile.tiers) {
           expect([tier.minX, tier.maxX, tier.minZ, tier.maxZ, tier.y0, tier.y1].every(Number.isFinite)).toBe(true);
           expect(tier.maxX).toBeGreaterThan(tier.minX); expect(tier.maxZ).toBeGreaterThan(tier.minZ); expect(tier.y1).toBeGreaterThan(tier.y0);
+        }
+        const foundations = foundationTiers(profile.tiers, -8);
+        expect(foundations.length, `${style} ${massing}`).toBeGreaterThan(0);
+        for (const foundation of foundations) {
+          expect(foundation.y0).toBe(-8);
+          expect(profile.tiers.some((tier) =>
+            tier.minX === foundation.minX && tier.maxX === foundation.maxX
+            && tier.minZ === foundation.minZ && tier.maxZ === foundation.maxZ
+            && tier.y0 === foundation.y1
+          ), `${style} ${massing} foundation exceeds its ground massing`).toBe(true);
         }
         silhouettes++;
       }
