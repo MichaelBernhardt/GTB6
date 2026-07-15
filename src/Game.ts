@@ -1731,7 +1731,9 @@ export class Game {
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles
     const heading = this.activeVehicle?.heading ?? this.player.heading;
-    this.ui.drawMap(focus.x, focus.z, heading, this.city.roadPaths, markers, police, hostiles, this.settings.minimapZoom);
+    // Corner minimap tracks the live view so it spins as you mouse-look on foot (player.heading only catches up when you actually move). In a vehicle the camera tails the car, so keep the true heading. `yaw + PI` is the parked camera-behind relationship (see spawn: yaw = heading + PI).
+    const minimapHeading = this.activeVehicle ? heading : this.cameraController.yaw + Math.PI;
+    this.ui.drawMap(focus.x, focus.z, minimapHeading, this.city.roadPaths, markers, police, hostiles, this.settings.minimapZoom);
     if (this.ui.mapOpen) this.ui.updateMap({ x: focus.x, z: focus.z, heading, markers, police, hostiles, cars: this.mapCars(), peds: this.mapPeds() });
   }
 
