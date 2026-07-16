@@ -67,7 +67,7 @@ describe('citywide model scatter', () => {
       // Nothing, ever, sits on the carriageway itself.
       expect(clr, `${m.name} on the tar`).toBeGreaterThanOrEqual(FOLIAGE_ROAD_CLEARANCE - 1e-6);
     }
-  });
+  }, 30_000); // full-city scan across ~41k scattered models (post-density-increase) needs more than the 5 s default
 
   it('respects the crafted-first contract: nothing overlaps a manicured site claim', () => {
     for (const site of MANICURED_FOOTPRINTS) {
