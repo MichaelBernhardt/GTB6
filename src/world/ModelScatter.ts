@@ -117,6 +117,7 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
     structures: [
       { name: 'face-brick-house', weight: 30 }, { name: 'tin-roof-house', weight: 10 },
       { name: 'townhouse-row', weight: 12 }, { name: 'apartment-block', weight: 8 },
+      { name: 'semi-detached-house', weight: 14 }, { name: 'walk-up-flats', weight: 8 }, { name: 'rdp-row', weight: 10 },
       { name: 'spaza-shop', weight: 10 }, { name: 'church', weight: 3 }, { name: 'mosque', weight: 2 },
       { name: 'school', weight: 2 }, { name: 'community-hall', weight: 2 }, { name: 'strip-mall', weight: 4 },
     ],
@@ -141,6 +142,7 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
     yard: 3, structAccept: 0.65,
     structures: [
       { name: 'strip-mall', weight: 26 }, { name: 'spaza-shop', weight: 16 }, { name: 'office-block', weight: 14 },
+      { name: 'mixed-use-corner', weight: 18 }, { name: 'parking-garage', weight: 5 },
       { name: 'filling-station', weight: 8 }, { name: 'taxi-rank', weight: 6 }, { name: 'big-box', weight: 4 },
     ],
     treeAccept: 0.4,
@@ -149,7 +151,8 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
   'commercial-highrise': {
     yard: 2.5, structAccept: 0.55,
     structures: [
-      { name: 'office-block', weight: 30 }, { name: 'strip-mall', weight: 12 }, { name: 'taxi-rank', weight: 8 }, { name: 'spaza-shop', weight: 6 },
+      { name: 'office-block', weight: 30 }, { name: 'mixed-use-corner', weight: 18 }, { name: 'parking-garage', weight: 7 },
+      { name: 'walk-up-flats', weight: 7 }, { name: 'strip-mall', weight: 12 }, { name: 'taxi-rank', weight: 8 }, { name: 'spaza-shop', weight: 6 },
     ],
     treeAccept: 0.35,
     trees: [{ name: 'jacaranda', weight: 24 }, { name: 'shade-tree', weight: 14 }, { name: 'billboard', weight: 8 }],
@@ -159,6 +162,7 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
     structures: [
       { name: 'warehouse', weight: 30 }, { name: 'factory-sawtooth', weight: 16 }, { name: 'tank-farm', weight: 8 },
       { name: 'container-stack', weight: 12 }, { name: 'scrapyard', weight: 8 }, { name: 'big-box', weight: 6 },
+      { name: 'workshop-row', weight: 18 }, { name: 'logistics-depot', weight: 12 },
       { name: 'substation', weight: 3 }, { name: 'water-tower', weight: 3 },
     ],
     treeAccept: 0.3,
@@ -168,6 +172,7 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
     yard: 12, structAccept: 0.36,
     structures: [
       { name: 'farmhouse', weight: 22 }, { name: 'barn', weight: 16 }, { name: 'tin-roof-house', weight: 12 },
+      { name: 'farm-worker-cottages', weight: 14 },
       { name: 'tractor-shed', weight: 12 }, { name: 'kraal', weight: 10 }, { name: 'grain-silo', weight: 6 },
       { name: 'windpomp', weight: 6 }, { name: 'padstal', weight: 5 }, { name: 'water-tower', weight: 2 },
       { name: 'church', weight: 3 }, { name: 'spaza-shop', weight: 6 },
@@ -206,7 +211,8 @@ const AREA_FARM: AreaProfile = {
   structAccept: 0.055,
   structures: [
     { name: 'farmhouse', weight: 12 }, { name: 'barn', weight: 14 }, { name: 'kraal', weight: 12 },
-    { name: 'grain-silo', weight: 8 }, { name: 'windpomp', weight: 10 }, { name: 'tractor-shed', weight: 8 }, { name: 'tin-roof-house', weight: 8 },
+    { name: 'grain-silo', weight: 8 }, { name: 'windpomp', weight: 10 }, { name: 'tractor-shed', weight: 8 },
+    { name: 'tin-roof-house', weight: 8 }, { name: 'farm-worker-cottages', weight: 10 },
   ],
 };
 
@@ -242,11 +248,13 @@ interface Placed { x: number; z: number; footR: number; spacing: number; name: s
  *  model's own `spacing` from any same-model neighbour. */
 class ScatterOccupancy {
   private cells = new Map<string, Placed[]>();
+  private maxFootR = 0;
   constructor(private cell = 32) {}
   private key(x: number, z: number): string { return `${Math.floor(x / this.cell)},${Math.floor(z / this.cell)}`; }
   free(x: number, z: number, footR: number, spacing: number, name: string): boolean {
     const cx = Math.floor(x / this.cell); const cz = Math.floor(z / this.cell);
-    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const reach = Math.max(1, Math.ceil(Math.max(footR + this.maxFootR, spacing) / this.cell) + 1);
+    for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
       for (const other of this.cells.get(`${cx + dx},${cz + dz}`) ?? []) {
         const d2 = (other.x - x) ** 2 + (other.z - z) ** 2;
         if (d2 < (other.footR + footR) ** 2) return false;               // footprints never overlap
@@ -260,6 +268,7 @@ class ScatterOccupancy {
     const bucket = this.cells.get(key);
     const item: Placed = { x, z, footR, spacing, name };
     if (bucket) bucket.push(item); else this.cells.set(key, [item]);
+    this.maxFootR = Math.max(this.maxFootR, footR);
   }
 }
 
@@ -274,6 +283,7 @@ function craftedBlocks(x: number, z: number, radius: number): boolean {
 class BuildingIndex {
   private cells = new Map<string, Array<{ x: number; z: number; r: number }>>();
   private ready = false;
+  private maxRadius = 0;
   constructor(private cell = 40) {}
   private build(): void {
     for (const b of allBuildings()) {
@@ -282,13 +292,15 @@ class BuildingIndex {
       const bucket = this.cells.get(key);
       const item = { x: b.x, z: b.z, r };
       if (bucket) bucket.push(item); else this.cells.set(key, [item]);
+      this.maxRadius = Math.max(this.maxRadius, r);
     }
     this.ready = true;
   }
   blocks(x: number, z: number, radius: number): boolean {
     if (!this.ready) this.build();
     const cx = Math.floor(x / this.cell); const cz = Math.floor(z / this.cell);
-    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const reach = Math.max(1, Math.ceil((radius + this.maxRadius) / this.cell) + 1);
+    for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
       for (const b of this.cells.get(`${cx + dx},${cz + dz}`) ?? []) {
         if ((b.x - x) ** 2 + (b.z - z) ** 2 < (b.r + radius) ** 2) return true;
       }
@@ -330,7 +342,7 @@ function tryPlace(
   if (footprintRoadClearance(x, z, w, d, heading) < roadClear) return false;
   const footR = Math.hypot(w, d) / 2;
   if (craftedBlocks(x, z, footR * 0.7)) return false;
-  if (buildings.blocks(x, z, footR * 0.85)) return false;
+  if (buildings.blocks(x, z, footR)) return false;
   if (!occ.free(x, z, footR, def.spacing, name)) return false;
   occ.add(x, z, footR, def.spacing, name);
   out.push({ name, x, z, heading, seed: Math.floor(seeded(x, z, 91) * 1_000_003), variant: Math.floor(seeded(x, z, 92) * def.variants) });
@@ -428,13 +440,15 @@ function buildAllScatter(): void {
   areaPass(BEACH_POLYGONS, AREA_BEACH, occ, buildings, out);
 
   const cells = new Map<string, ScatteredModel[]>();
+  const canonical: ScatteredModel[] = [];
   for (const model of out) {
     const key = `${Math.floor(model.x / CELL_SIZE)},${Math.floor(model.z / CELL_SIZE)}`;
     const bucket = cells.get(key);
-    if (bucket) { if (bucket.length < SCATTER_CELL_CAP) bucket.push(model); }
-    else cells.set(key, [model]);
+    if (bucket) {
+      if (bucket.length < SCATTER_CELL_CAP) { bucket.push(model); canonical.push(model); }
+    } else { cells.set(key, [model]); canonical.push(model); }
   }
-  allScatter = out;
+  allScatter = canonical;
   scatterCells = cells;
 }
 

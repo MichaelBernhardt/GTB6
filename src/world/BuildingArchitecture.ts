@@ -1,13 +1,23 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
-export type BuildingStyle = 'downtown' | 'residential' | 'industrial' | 'estate';
+export type BuildingStyle =
+  | 'downtown'
+  | 'mixed-use'
+  | 'dense-residential'
+  | 'suburban'
+  | 'industrial'
+  | 'estate'
+  | 'rural';
 
 export const ARCHITECTURE_VARIANTS: Record<BuildingStyle, number> = {
-  downtown: 9,
-  residential: 8,
-  industrial: 8,
-  estate: 7,
+  downtown: 11,
+  'mixed-use': 5,
+  'dense-residential': 6,
+  suburban: 9,
+  industrial: 9,
+  estate: 8,
+  rural: 4,
 };
 
 export interface BuildingSpec {
@@ -31,6 +41,17 @@ export interface BuildingProfile {
   /** Every stacked box of the massing, bottom tier first — the collision registry mirrors these exactly.
    *  Gable roofs are left out: the player stands on the eaves plane beneath them. */
   tiers: MassingTier[];
+}
+
+/** Extend only the building volumes that actually meet the ground down to a common foundation base.
+ *  Keeping each footprint separate prevents the levelling foundation from becoming a parcel-sized box
+ *  around stepped, winged, or otherwise irregular buildings on sloped terrain. */
+export function foundationTiers(tiers: readonly MassingTier[], bottomY: number): MassingTier[] {
+  if (tiers.length === 0) return [];
+  const groundY = Math.min(...tiers.map((tier) => tier.y0));
+  return tiers
+    .filter((tier) => Math.abs(tier.y0 - groundY) < 1e-4)
+    .map((tier) => ({ ...tier, y0: bottomY, y1: tier.y0 }));
 }
 
 const boxMaterials = (facade: THREE.Material, roof: THREE.Material): THREE.Material[] => [facade, facade, roof, roof, facade, facade];
@@ -69,13 +90,13 @@ export class BuildingArchitecture {
   build(spec: BuildingSpec): BuildingProfile {
     this.tiers = [];
     const massing = spec.variant % ARCHITECTURE_VARIANTS[spec.style];
-    const roofY = spec.style === 'downtown'
-      ? this.buildDowntown(spec, massing)
-      : spec.style === 'residential'
-        ? this.buildResidential(spec, massing)
-        : spec.style === 'estate'
-          ? this.buildEstate(spec, massing)
-          : this.buildIndustrial(spec, massing);
+    const roofY = spec.style === 'downtown' ? this.buildDowntown(spec, massing)
+      : spec.style === 'mixed-use' ? this.buildMixedUse(spec, massing)
+        : spec.style === 'dense-residential' ? this.buildDenseResidential(spec, massing)
+          : spec.style === 'suburban' ? this.buildSuburban(spec, massing)
+            : spec.style === 'industrial' ? this.buildIndustrial(spec, massing)
+              : spec.style === 'estate' ? this.buildEstate(spec, massing)
+                : this.buildRural(spec, massing);
     this.addStructuralDetail(spec, massing, roofY);
     return { roofY, massing, tiers: this.tiers };
   }
@@ -131,6 +152,22 @@ export class BuildingArchitecture {
       return h + 3.4;
     }
     if (massing === 5) {
+      const podiumH = Math.min(11, h * 0.2); const towerH = h - podiumH;
+      this.addBox(spec, w, podiumH, d, x, podiumH / 2 + 0.2, z, true);
+      this.addBox(spec, w * 0.7, towerH, d * 0.46, x - w * 0.08, podiumH + towerH / 2 + 0.2, z - d * 0.22);
+      this.addBox(spec, w * 0.38, towerH * 0.78, d * 0.76, x + w * 0.23, podiumH + towerH * 0.39 + 0.2, z + d * 0.08, true);
+      this.addSetbackBand(x - w * 0.08, z - d * 0.22, w * 0.72, d * 0.48, h + 0.2);
+      return h + 0.4;
+    }
+    if (massing === 6) {
+      const baseH = h * 0.36; const middleH = h * 0.34; const topH = h - baseH - middleH;
+      this.addBox(spec, w, baseH, d, x, baseH / 2 + 0.2, z, true);
+      this.addBox(spec, w * 0.78, middleH, d * 0.82, x + w * 0.04, baseH + middleH / 2 + 0.2, z - d * 0.03);
+      this.addBox(spec, w * 0.5, topH, d * 0.56, x - w * 0.1, baseH + middleH + topH / 2 + 0.2, z - d * 0.08, true);
+      this.addSetbackBand(x + w * 0.04, z - d * 0.03, w * 0.8, d * 0.84, baseH + middleH + 0.2);
+      return h + 0.4;
+    }
+    if (massing === 7) {
       // Ziggurat: four stepped setback tiers, deco bands at each step — the Anstey's-era CBD profile.
       let y = 0.2; let tw = w; let td = d;
       for (const share of [0.34, 0.28, 0.22, 0.16]) {
@@ -143,7 +180,7 @@ export class BuildingArchitecture {
       const finial = new THREE.Mesh(new THREE.BoxGeometry(1.1, 3.4, 1.1), this.stone); finial.position.set(x, h + 1.7, z); finial.castShadow = true; this.parent.add(finial);
       return h + 0.2;
     }
-    if (massing === 6) {
+    if (massing === 8) {
       // Colonnade podium: a double-height columned arcade under the podium deck, recessed glazed
       // lobby behind the columns, then a sheer rounded slab. The deck tier floats at 3.6 so the
       // player can actually walk the arcade between the columns.
@@ -159,7 +196,7 @@ export class BuildingArchitecture {
       this.addSetbackBand(x, z, w * 1.01, d * 1.01, podiumH + 0.22);
       return h + 0.2;
     }
-    if (massing === 7) {
+    if (massing === 9) {
       // Corner tower: an L-plan block anchoring the street corner with a full-height drum-capped tower.
       const blockH = h * 0.58;
       this.addBox(spec, w, blockH, d * 0.55, x, blockH / 2 + 0.2, z - d * 0.2);
@@ -171,7 +208,7 @@ export class BuildingArchitecture {
       this.addSetbackBand(x, z - d * 0.2, w * 1.02, d * 0.57, blockH + 0.2);
       return h + 2.8;
     }
-    // massing 8 — twin offset slabs joined by a service core; plant room + braced rooftop water tanks.
+    // massing 10 — twin offset slabs joined by a service core; plant room + braced rooftop water tanks.
     this.addBox(spec, w * 0.46, h, d * 0.9, x - w * 0.24, h / 2 + 0.2, z, true);
     this.addBox(spec, w * 0.46, h * 0.78, d * 0.9, x + w * 0.24, h * 0.39 + 0.2, z);
     this.addBox(spec, w * 0.18, h * 0.88, d * 0.5, x, h * 0.44 + 0.2, z - d * 0.1);
@@ -183,7 +220,66 @@ export class BuildingArchitecture {
     return h + 0.2;
   }
 
-  private buildResidential(spec: BuildingSpec, massing: number): number {
+  private buildMixedUse(spec: BuildingSpec, massing: number): number {
+    const { x, z, width: w, depth: d, height: h } = spec;
+    const shopH = Math.min(4.4, h * 0.38);
+    if (massing === 0) {
+      this.addBox(spec, w, shopH, d, x, shopH / 2 + 0.2, z, true);
+      this.addBox(spec, w * 0.82, h - shopH, d * 0.74, x, shopH + (h - shopH) / 2 + 0.2, z - d * 0.08);
+    } else if (massing === 1) {
+      this.addBox(spec, w, shopH, d, x, shopH / 2 + 0.2, z, true);
+      this.addBox(spec, w * 0.48, h - shopH, d * 0.9, x - w * 0.25, shopH + (h - shopH) / 2 + 0.2, z);
+      this.addBox(spec, w * 0.45, (h - shopH) * 0.76, d * 0.48, x + w * 0.24, shopH + (h - shopH) * 0.38 + 0.2, z - d * 0.22, true);
+    } else if (massing === 2) {
+      this.addBox(spec, w, h * 0.62, d * 0.72, x, h * 0.31 + 0.2, z - d * 0.14, true);
+      this.addBox(spec, w * 0.42, h, d * 0.42, x + w * 0.26, h / 2 + 0.2, z + d * 0.22);
+    } else if (massing === 3) {
+      this.addBox(spec, w, shopH, d, x, shopH / 2 + 0.2, z, true);
+      for (const side of [-1, 1]) this.addBox(spec, w * 0.38, h - shopH, d * 0.7, x + side * w * 0.25, shopH + (h - shopH) / 2 + 0.2, z - side * d * 0.06, side > 0);
+    } else {
+      const lowerH = h * 0.54;
+      this.addBox(spec, w, lowerH, d, x, lowerH / 2 + 0.2, z, true);
+      this.addBox(spec, w * 0.68, h - lowerH, d * 0.72, x - w * 0.08, lowerH + (h - lowerH) / 2 + 0.2, z - d * 0.08, true);
+      this.addSetbackBand(x, z, w, d, lowerH + 0.2);
+    }
+    return h + 0.2;
+  }
+
+  private buildDenseResidential(spec: BuildingSpec, massing: number): number {
+    const { x, z, width: w, depth: d, height: h } = spec;
+    if (massing === 0) {
+      this.addBox(spec, w, h, d * 0.42, x, h / 2 + 0.2, z - d * 0.29, true);
+      for (const side of [-1, 1]) this.addBox(spec, w * 0.28, h * 0.82, d * 0.58, x + side * w * 0.36, h * 0.41 + 0.2, z + d * 0.18);
+    } else if (massing === 1) {
+      this.addBox(spec, w, h, d, x, h / 2 + 0.2, z, true);
+      this.addBox(spec, w * 0.2, h + 2.2, d * 0.34, x - w * 0.34, (h + 2.2) / 2 + 0.2, z + d * 0.2);
+    } else if (massing === 2) {
+      this.addBox(spec, w * 0.62, h, d * 0.72, x - w * 0.12, h / 2 + 0.2, z - d * 0.08);
+      this.addBox(spec, w * 0.5, h * 0.66, d * 0.54, x + w * 0.25, h * 0.33 + 0.2, z + d * 0.22, true);
+    } else if (massing === 3) {
+      const units = 3; const unitW = w / units;
+      for (let unit = 0; unit < units; unit++) this.addBox(spec, unitW * 0.92, h * (0.78 + unit * 0.11), d * 0.82, x - w / 2 + unitW * (unit + 0.5), h * (0.78 + unit * 0.11) / 2 + 0.2, z + (unit % 2) * d * 0.08, unit === 1);
+    } else if (massing === 4) {
+      const floorH = h * 0.46;
+      this.addBox(spec, w, floorH, d, x, floorH / 2 + 0.2, z, true);
+      this.addBox(spec, w * 0.84, h - floorH, d * 0.76, x + w * 0.04, floorH + (h - floorH) / 2 + 0.2, z - d * 0.08);
+      this.addSetbackBand(x, z, w, d, floorH + 0.2);
+    } else {
+      // Three-storey walk-up flats: flat roof behind a parapet, external stair tower, open walkway slabs.
+      const blockH = Math.max(h, 8.6);
+      this.addBox(spec, w, blockH, d * 0.8, x, blockH / 2 + 0.2, z - d * 0.06, true);
+      this.addBox(spec, w * 0.22, blockH + 1.1, d * 0.32, x - w * 0.29, (blockH + 1.1) / 2 + 0.2, z + d * 0.28);
+      const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.3, 0.5, d * 0.8 + 0.3), this.plaster); parapet.position.set(x, blockH + 0.4, z - d * 0.06); parapet.castShadow = true; this.parent.add(parapet);
+      for (let level = 1; level * 2.9 < blockH - 1.2; level++) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.14, 1.15), this.stone); slab.position.set(x, level * 2.9 + 0.2, z - d * 0.06 + d * 0.4 + 0.58); slab.castShadow = true; this.parent.add(slab);
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.08, 0.06), this.darkMetal); rail.position.set(x, level * 2.9 + 1.15, z - d * 0.06 + d * 0.4 + 1.1); this.parent.add(rail);
+      }
+      return blockH + 1.3 + 0.2;
+    }
+    return h + (massing === 1 ? 2.4 : 0.2);
+  }
+
+  private buildSuburban(spec: BuildingSpec, massing: number): number {
     const { x, z, width: w, depth: d, height: h, variant } = spec; const roofRise = Math.min(4.2, Math.max(2.2, w * 0.16));
     if (massing === 0) {
       this.addBox(spec, w, h, d, x, h / 2 + 0.2, z, true);
@@ -204,6 +300,16 @@ export class BuildingArchitecture {
       this.addGableRoof(spec, x, z - d * 0.12, w + 0.6, d * 0.78, h + 0.2, roofRise);
       this.addGableRoof(spec, x + w * 0.22, z + d * 0.28, w * 0.47, d * 0.62, frontWingH + 0.2, roofRise * 0.72);
     } else if (massing === 4) {
+      for (const side of [-1, 1]) {
+        this.addBox(spec, w * 0.47, h * (side > 0 ? 0.86 : 1), d * 0.82, x + side * w * 0.255, h * (side > 0 ? 0.86 : 1) / 2 + 0.2, z + side * d * 0.05, true);
+        this.addGableRoof(spec, x + side * w * 0.255, z + side * d * 0.05, w * 0.5, d * 0.88, h * (side > 0 ? 0.86 : 1) + 0.2, roofRise * 0.82);
+      }
+    } else if (massing === 5) {
+      const lowerH = h * 0.58;
+      this.addBox(spec, w, lowerH, d, x, lowerH / 2 + 0.2, z, true);
+      this.addBox(spec, w * 0.62, h - lowerH, d * 0.68, x - w * 0.08, lowerH + (h - lowerH) / 2 + 0.2, z - d * 0.08, true);
+      this.addSetbackBand(x, z, w, d, lowerH + 0.2);
+    } else if (massing === 6) {
       // Stoep house in a low walled yard — the SA suburb vernacular: raised veranda across the
       // street face under a lean-to roof, boundary wall with a front gap for the path.
       this.addBox(spec, w * 0.86, h, d * 0.76, x, h / 2 + 0.2, z - d * 0.1, true);
@@ -218,25 +324,14 @@ export class BuildingArchitecture {
       for (const side of [-1, 1]) this.addWall(x + side * wx, wallH, z, th, wallH, wz * 2 + th);
       const gap = Math.min(2.2, w * 0.14); const run = (wx * 2 - gap * 2) / 2;
       for (const side of [-1, 1]) this.addWall(x + side * (gap + run / 2), wallH, z + wz, run, wallH, th);
-    } else if (massing === 5) {
-      // Three-storey walk-up flats: flat roof behind a parapet, external stair tower, open walkway slabs.
-      const blockH = Math.max(h, 8.6);
-      this.addBox(spec, w, blockH, d * 0.8, x, blockH / 2 + 0.2, z - d * 0.06, true);
-      this.addBox(spec, w * 0.22, blockH + 1.1, d * 0.32, x - w * 0.29, (blockH + 1.1) / 2 + 0.2, z + d * 0.28);
-      const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.3, 0.5, d * 0.8 + 0.3), this.plaster); parapet.position.set(x, blockH + 0.4, z - d * 0.06); parapet.castShadow = true; this.parent.add(parapet);
-      for (let level = 1; level * 2.9 < blockH - 1.2; level++) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.14, 1.15), this.stone); slab.position.set(x, level * 2.9 + 0.2, z - d * 0.06 + d * 0.4 + 0.58); slab.castShadow = true; this.parent.add(slab);
-        const rail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.08, 0.06), this.darkMetal); rail.position.set(x, level * 2.9 + 1.15, z - d * 0.06 + d * 0.4 + 1.1); this.parent.add(rail);
-      }
-      return blockH + 1.3 + 0.2;
-    } else if (massing === 6) {
+    } else if (massing === 7) {
       // L-plan: two perpendicular gabled wings hugging a front yard corner.
       this.addBox(spec, w, h, d * 0.55, x, h / 2 + 0.2, z - d * 0.2);
       this.addBox(spec, w * 0.42, h, d * 0.88, x + w * 0.26, h / 2 + 0.2, z + d * 0.02, true);
       this.addGableRoof(spec, x, z - d * 0.2, w + 0.6, d * 0.6, h + 0.2, roofRise);
       this.addGableRoof(spec, x + w * 0.26, z + d * 0.02, d * 0.93, w * 0.47, h + 0.2, roofRise * 0.85, Math.PI / 2);
     } else {
-      // massing 7 — double-storey with a first-floor balcony over the entrance.
+      // massing 8 — double-storey with a first-floor balcony over the entrance.
       const lower = h * 0.52;
       this.addBox(spec, w, lower, d, x, lower / 2 + 0.2, z, true);
       this.addBox(spec, w * 0.86, h - lower, d * 0.8, x, lower + (h - lower) / 2 + 0.2, z - d * 0.06);
@@ -245,7 +340,7 @@ export class BuildingArchitecture {
       for (const px of [-w * 0.2, 0, w * 0.2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1, 0.07), this.darkMetal); post.position.set(x + px, lower + 0.85, z + d / 2 + 1.4); this.parent.add(post); }
       const handRail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.44, 0.07, 0.07), this.darkMetal); handRail.position.set(x, lower + 1.35, z + d / 2 + 1.4); this.parent.add(handRail);
     }
-    return h + roofRise + 0.2;
+    return massing === 5 ? h + 0.2 : h + roofRise + 0.2;
   }
 
   private buildIndustrial(spec: BuildingSpec, massing: number): number {
@@ -264,8 +359,11 @@ export class BuildingArchitecture {
       this.addBox(spec, w, h * 0.72, d, x, h * 0.36 + 0.2, z, true);
       const officeH = h * 0.9; this.addBox(spec, w * 0.3, officeH, d * 0.48, x - w * 0.3, officeH / 2 + 0.2, z + d * 0.2);
       this.addGableRoof(spec, x, z, w + 0.6, d + 0.5, h * 0.72 + 0.2, roofRise);
-      return Math.max(h * 0.72 + roofRise, h * 0.9) + 0.2;
     } else if (massing === 4) {
+      this.addBox(spec, w * 0.72, h, d, x - w * 0.14, h / 2 + 0.2, z);
+      this.addBox(spec, w * 0.28, h * 1.18, d * 0.58, x + w * 0.34, h * 0.59 + 0.2, z + d * 0.16, true);
+      this.addGableRoof(spec, x - w * 0.14, z, w * 0.76, d + 0.5, h + 0.2, roofRise);
+    } else if (massing === 5) {
       // Clerestory hall: tall central nave with a raised glazed light strip, low lean-to side aisles.
       const naveH = h * 1.1; const aisleH = h * 0.55;
       this.addBox(spec, w * 0.5, naveH, d, x, naveH / 2 + 0.2, z);
@@ -273,7 +371,7 @@ export class BuildingArchitecture {
       const clerestory = new THREE.Mesh(new THREE.BoxGeometry(w * 0.42, 1.1, d * 0.9), this.glass); clerestory.position.set(x, naveH - 0.9, z); this.parent.add(clerestory);
       this.addGableRoof(spec, x, z, w * 0.54, d + 0.5, naveH + 0.2, roofRise * 0.8);
       return naveH + roofRise * 0.8 + 0.2;
-    } else if (massing === 5) {
+    } else if (massing === 6) {
       // Silo battery: the works shed feeding a row of three cylindrical silos over a catwalk.
       this.addBox(spec, w * 0.55, h, d, x - w * 0.2, h / 2 + 0.2, z);
       this.addGableRoof(spec, x - w * 0.2, z, w * 0.6, d + 0.5, h + 0.2, roofRise);
@@ -285,7 +383,7 @@ export class BuildingArchitecture {
       }
       const catwalk = new THREE.Mesh(new THREE.BoxGeometry(w * 0.45, 0.16, 1.1), this.darkMetal); catwalk.position.set(x + w * 0.08, h + 0.4, z); catwalk.castShadow = true; this.parent.add(catwalk);
       return siloH + 0.4;
-    } else if (massing === 6) {
+    } else if (massing === 7) {
       // Twin long sheds: two parallel gabled halls with a service lane and a gantry frame between them.
       for (const side of [-1, 1]) {
         this.addBox(spec, w * 0.38, h, d, x + side * w * 0.29, h / 2 + 0.2, z);
@@ -296,7 +394,7 @@ export class BuildingArchitecture {
         const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, 0.3, 0.3), this.steel); beam.position.set(x, h + 1.5, z + d * dz); beam.castShadow = true; this.parent.add(beam);
       }
       return h + roofRise + 0.2;
-    } else if (massing === 7) {
+    } else if (massing === 8) {
       // Chimney works: main hall, attached boiler house, tall brick stack and a pipe rack run.
       this.addBox(spec, w * 0.62, h, d, x - w * 0.15, h / 2 + 0.2, z);
       this.addGableRoof(spec, x - w * 0.15, z, w * 0.66, d + 0.5, h + 0.2, roofRise);
@@ -308,7 +406,7 @@ export class BuildingArchitecture {
       for (let py = 1.4; py < boilerH; py += 1.6) { const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, w * 0.42, 10), this.steel); pipe.rotation.z = Math.PI / 2; pipe.position.set(x + w * 0.07, py, z - d * 0.14); this.parent.add(pipe); }
       return stackH + 0.2;
     }
-    return h + roofRise + 0.2;
+    return massing === 2 ? Math.max(h * 0.72 + roofRise, h * 0.9) + 0.2 : massing === 4 ? h * 1.18 + 0.2 : h + roofRise + 0.2;
   }
 
   /** Low walled villa: a wide plastered house, a pool in the front yard, and a perimeter wall with a
@@ -318,6 +416,13 @@ export class BuildingArchitecture {
   private buildEstate(spec: BuildingSpec, massing: number): number {
     const { x, z, width: w, depth: d, height: h } = spec;
     const roofRise = Math.min(3.4, Math.max(2, w * 0.05));
+    if (massing === 3) {
+      this.addBox(spec, w * 0.62, h * 0.58, d * 0.68, x - w * 0.08, h * 0.29 + 0.2, z - d * 0.04, true);
+      this.addBox(spec, w * 0.48, h * 0.42, d * 0.5, x + w * 0.1, h * 0.79 + 0.2, z - d * 0.08, true);
+      this.addBox(spec, w * 0.26, h * 0.46, d * 0.36, x + w * 0.32, h * 0.23 + 0.2, z + d * 0.2);
+      const pool = new THREE.Mesh(new THREE.BoxGeometry(Math.min(w * 0.32, 13), 0.3, Math.min(d * 0.24, 8)), this.pool); pool.position.set(x - w * 0.2, 0.12, z + d * 0.3); pool.receiveShadow = true; this.parent.add(pool);
+      return h + 0.4;
+    }
     const wingSide = massing === 1 ? -1 : 1;
     const mainW = w * 0.6; const mainD = d * 0.66;
     let roofY = h + roofRise + 0.2;
@@ -326,7 +431,7 @@ export class BuildingArchitecture {
       const wingH = h * (massing === 2 ? 1 : 0.82);
       this.addBox(spec, w * 0.3, wingH, d * 0.5, x + wingSide * w * 0.26, wingH / 2 + 0.2, z + d * 0.12, true);
       this.addGableRoof(spec, x - w * 0.02, z - d * 0.04, mainW + 0.6, mainD + 0.6, h + 0.2, roofRise);
-    } else if (massing === 3) {
+    } else if (massing === 4) {
       // U-plan villa: the main house with matched wings both sides framing the pool court.
       this.addBox(spec, mainW, h, d * 0.5, x, h / 2 + 0.2, z - d * 0.14, true);
       this.addGableRoof(spec, x, z - d * 0.14, mainW + 0.6, d * 0.56, h + 0.2, roofRise);
@@ -334,14 +439,14 @@ export class BuildingArchitecture {
         this.addBox(spec, w * 0.24, h * 0.82, d * 0.52, x + side * w * 0.3, h * 0.41 + 0.2, z + d * 0.08, true);
         this.addGableRoof(spec, x + side * w * 0.3, z + d * 0.08, d * 0.57, w * 0.28, h * 0.82 + 0.2, roofRise * 0.8, Math.PI / 2);
       }
-    } else if (massing === 4) {
+    } else if (massing === 5) {
       // Modern flat-roof double storey: stacked offset boxes, cantilevered upper floor, glass band.
       this.addBox(spec, mainW, h * 0.55, mainD, x, h * 0.275 + 0.2, z - d * 0.04, true);
       this.addBox(spec, mainW * 0.86, h * 0.5, mainD * 0.92, x + w * 0.06, h * 0.55 + h * 0.25 + 0.2, z + d * 0.02, true);
       const glassBand = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.8, 1.1, 0.1), this.glass); glassBand.position.set(x + w * 0.06, h * 0.72, z + d * 0.02 + mainD * 0.46 + 0.06); this.parent.add(glassBand);
       const brise = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.9, 0.14, 2), this.timber); brise.position.set(x + w * 0.06, h * 1.05 + 0.35, z + d * 0.02 + mainD * 0.3); brise.castShadow = true; this.parent.add(brise);
       roofY = h * 1.05 + 0.2;
-    } else if (massing === 5) {
+    } else if (massing === 6) {
       // Thatch-look lodge: steep grass-brown gables over a plastered body, plus a rondavel-ish lapa.
       this.addBox(spec, mainW, h * 0.86, mainD, x - w * 0.02, h * 0.43 + 0.2, z - d * 0.04, true);
       const thatchRise = Math.max(roofRise * 1.7, h * 0.5);
@@ -352,7 +457,7 @@ export class BuildingArchitecture {
       const lapaRoof = new THREE.Mesh(new THREE.CylinderGeometry(0.2, lapaR + 0.7, 2.2, 14), this.thatch); lapaRoof.position.set(lx, 3.7, lz); lapaRoof.castShadow = true; this.parent.add(lapaRoof);
       roofY = h * 0.86 + thatchRise + 0.2;
     } else {
-      // massing 6 — tennis-court estate: compact double villa beside a fenced practice court.
+      // massing 7 — tennis-court estate: compact double villa beside a fenced practice court.
       this.addBox(spec, w * 0.44, h, mainD, x - w * 0.24, h / 2 + 0.2, z - d * 0.04, true);
       this.addGableRoof(spec, x - w * 0.24, z - d * 0.04, w * 0.48, mainD + 0.6, h + 0.2, roofRise);
       const courtW = Math.min(w * 0.4, 15); const courtD = Math.min(d * 0.52, 8.2); const cx = x + w * 0.22; const czz = z - d * 0.08;
@@ -379,6 +484,29 @@ export class BuildingArchitecture {
     return roofY;
   }
 
+  private buildRural(spec: BuildingSpec, massing: number): number {
+    const { x, z, width: w, depth: d, height: h } = spec; const roofRise = Math.min(2.8, Math.max(1.4, w * 0.12));
+    if (massing === 0) {
+      this.addBox(spec, w, h, d, x, h / 2 + 0.2, z);
+      this.addGableRoof(spec, x, z, w + 0.8, d + 1, h + 0.2, roofRise);
+    } else if (massing === 1) {
+      this.addBox(spec, w * 0.68, h, d, x - w * 0.16, h / 2 + 0.2, z);
+      this.addBox(spec, w * 0.38, h * 0.72, d * 0.72, x + w * 0.31, h * 0.36 + 0.2, z + d * 0.12);
+      this.addGableRoof(spec, x - w * 0.16, z, w * 0.72, d + 0.8, h + 0.2, roofRise);
+    } else if (massing === 2) {
+      for (const side of [-1, 1]) {
+        const cottageH = h * (side > 0 ? 0.88 : 1);
+        this.addBox(spec, w * 0.46, cottageH, d * 0.82, x + side * w * 0.26, cottageH / 2 + 0.2, z + side * d * 0.06);
+        this.addGableRoof(spec, x + side * w * 0.26, z + side * d * 0.06, w * 0.5, d * 0.9, cottageH + 0.2, roofRise * 0.8);
+      }
+    } else {
+      this.addBox(spec, w, h * 0.72, d, x, h * 0.36 + 0.2, z, true);
+      this.addBox(spec, w * 0.34, h, d * 0.6, x - w * 0.28, h / 2 + 0.2, z - d * 0.12);
+      this.addGableRoof(spec, x - w * 0.28, z - d * 0.12, w * 0.38, d * 0.66, h + 0.2, roofRise);
+    }
+    return h + roofRise + 0.2;
+  }
+
   /** A plastered wall segment that is both a mesh and an axis-aligned collision tier (grounded at +0.2). */
   private addWall(cx: number, _cy: number, cz: number, w: number, h: number, d: number): void {
     const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this.plaster);
@@ -387,7 +515,8 @@ export class BuildingArchitecture {
   }
 
   private addGableRoof(spec: BuildingSpec, x: number, z: number, width: number, depth: number, y: number, rise: number, ry = 0): void {
-    const roof = new THREE.Mesh(createGableGeometry(width, depth, rise), spec.style === 'residential' ? this.terracotta : spec.roof); roof.position.set(x, y, z); roof.rotation.y = ry; roof.castShadow = true; roof.receiveShadow = true; this.parent.add(roof);
+    const tiled = spec.style === 'suburban' || spec.style === 'estate';
+    const roof = new THREE.Mesh(createGableGeometry(width, depth, rise), tiled ? this.terracotta : spec.roof); roof.position.set(x, y, z); roof.rotation.y = ry; roof.castShadow = true; roof.receiveShadow = true; this.parent.add(roof);
   }
 
   private addSetbackBand(x: number, z: number, width: number, depth: number, y: number): void {
@@ -396,29 +525,99 @@ export class BuildingArchitecture {
 
   private addStructuralDetail(spec: BuildingSpec, massing: number, roofY: number): void {
     if (spec.style === 'downtown') this.addDowntownDetail(spec, massing, roofY);
-    else if (spec.style === 'residential') this.addResidentialDetail(spec, massing, roofY);
+    else if (spec.style === 'mixed-use') this.addMixedUseDetail(spec, massing);
+    else if (spec.style === 'dense-residential') this.addDenseResidentialDetail(spec, massing, roofY);
+    else if (spec.style === 'suburban' || spec.style === 'rural') this.addResidentialDetail(spec, massing, roofY);
     else if (spec.style === 'estate') this.addResidentialDetail(spec, massing, roofY); // villa porch/chimney/dormers
     else this.addIndustrialDetail(spec, massing, roofY);
   }
 
+  private addMixedUseDetail(spec: BuildingSpec, massing: number): void {
+    const { x, z, width: w, depth: d, variant } = spec;
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(w * 0.74, 0.18, 1.5), variant % 2 ? this.darkMetal : this.terracotta);
+    canopy.position.set(x, 3.25, z + d / 2 + 0.65); canopy.castShadow = true; this.parent.add(canopy);
+    const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
+    for (let bay = 0; bay < bays; bay++) {
+      const px = x - w * 0.36 + bay * (w * 0.72 / Math.max(1, bays - 1));
+      const shop = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.2, w / bays * 0.72), 2.2, 0.12), this.glass); shop.position.set(px, 1.35, z + d / 2 + 0.08); this.parent.add(shop);
+    }
+    if (massing === 4) this.addSetbackBand(x, z, w * 0.7, d * 0.74, spec.height + 0.3);
+  }
+
+  private addDenseResidentialDetail(spec: BuildingSpec, massing: number, roofY: number): void {
+    const { x, z, width: w, depth: d, height: h } = spec;
+    for (let y = 4; y < h - 1; y += 3.1) {
+      const balcony = new THREE.Mesh(new THREE.BoxGeometry(w * 0.56, 0.14, 1.05), this.stone); balcony.position.set(x + (massing % 2 ? w * 0.08 : 0), y, z + d / 2 + 0.45); balcony.castShadow = true; this.parent.add(balcony);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.56, 0.65, 0.06), this.darkMetal); rail.position.set(balcony.position.x, y + 0.42, z + d / 2 + 0.95); this.parent.add(rail);
+    }
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.8, 1.5, 14), this.darkMetal); tank.position.set(x - w * 0.25, roofY + 0.75, z - d * 0.18); tank.castShadow = true; this.parent.add(tank);
+  }
+
   private addDowntownDetail(spec: BuildingSpec, massing: number, roofY: number): void {
     const { x, z, width: w, depth: d, height: h, variant } = spec;
-    if (variant % 2 === 0 && massing !== 6) { // fins would wall off the colonnade arcade
-      const finCount = Math.max(3, Math.min(7, Math.floor(w / 4)));
-      for (let index = 0; index < finCount; index++) {
-        const px = x - w * 0.38 + index * (w * 0.76 / Math.max(1, finCount - 1));
-        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.16, h * 0.72, 0.52), this.stone); fin.position.set(px, h * 0.51, z + d / 2 + 0.23); fin.castShadow = true; this.parent.add(fin);
+    if (massing === 4) {
+      this.addCylindricalDowntownDetail(spec);
+    } else {
+      if (variant % 2 === 0) {
+        const finCount = Math.max(3, Math.min(7, Math.floor(w / 4)));
+        for (let index = 0; index < finCount; index++) {
+          const px = x - w * 0.38 + index * (w * 0.76 / Math.max(1, finCount - 1));
+          const fin = new THREE.Mesh(new THREE.BoxGeometry(0.16, h * 0.72, 0.52), this.stone); fin.position.set(px, h * 0.51, z + d / 2 + 0.23); fin.castShadow = true; this.parent.add(fin);
+        }
       }
+      for (let y = 11; y < h - 5; y += Math.max(10, h / 5)) {
+        const band = new THREE.Mesh(new THREE.BoxGeometry(w * 0.82, 0.18, 0.28), this.darkMetal); band.position.set(x, y, z + d / 2 + 0.15); this.parent.add(band);
+      }
+      if (variant % 3 === 0 && h > 30) this.addFireEscape(x, z, w, d, h);
     }
-    for (let y = 11; y < h - 5; y += Math.max(10, h / 5)) {
-      const band = new THREE.Mesh(new THREE.BoxGeometry(w * 0.82, 0.18, 0.28), this.darkMetal); band.position.set(x, y, z + d / 2 + 0.15); this.parent.add(band);
-    }
-    if (variant % 3 === 0 && h > 30) this.addFireEscape(x, z, w, d, h);
     if (massing === 2 || massing === 4) {
       const crown = new THREE.Group(); crown.position.set(x, roofY, z);
       for (const px of [-w * 0.2, w * 0.2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 3.5, 0.16), this.darkMetal); post.position.set(px, 1.75, 0); crown.add(post); }
       const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.52, 0.18, 0.18), this.darkMetal); beam.position.y = 3.45; crown.add(beam); this.parent.add(crown);
     }
+  }
+
+  /** Trim for the tapered elliptical downtown tower. The old shared downtown pass placed a flat
+   *  grid at the rectangular parcel edge, leaving its ends visibly detached from this narrower
+   *  massing. Rings and mullions instead use the cylinder's exact 4% bottom-to-top taper. */
+  private addCylindricalDowntownDetail(spec: BuildingSpec): void {
+    const { x, z, width: w, height: h, variant } = spec;
+    const podiumH = Math.min(9, h * 0.2); const towerBottom = podiumH + 0.2; const towerTop = h + 0.2;
+    const ringHeights: number[] = [];
+    for (let y = Math.max(11, towerBottom + 2.5); y < h - 5; y += Math.max(10, h / 5)) {
+      ringHeights.push(y);
+      const { rx, rz } = this.cylindricalTowerRadii(spec, y);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(rz - 0.07, 0.09, 6, 32), this.darkMetal);
+      ring.position.set(x, y, z); ring.rotation.x = Math.PI / 2; ring.scale.x = rx / rz;
+      ring.castShadow = true; ring.name = 'cylindrical-facade-ring'; ring.userData.curvedFacadeDetail = 'ring'; this.parent.add(ring);
+    }
+
+    if (variant % 2 !== 0) return;
+    const finCount = Math.max(3, Math.min(7, Math.floor(w / 4)));
+    const segmentEdges = [towerBottom + 0.8, ...ringHeights, towerTop - 4.7];
+    for (let segment = 0; segment < segmentEdges.length - 1; segment++) {
+      const y0 = segmentEdges[segment]! + (segment === 0 ? 0 : 0.25);
+      const y1 = segmentEdges[segment + 1]! - (segment === segmentEdges.length - 2 ? 0 : 0.25);
+      if (y1 - y0 < 0.6) continue;
+      const cy = (y0 + y1) / 2; const { rx, rz } = this.cylindricalTowerRadii(spec, cy);
+      for (let index = 0; index < finCount; index++) {
+        // Keep the original street-facing spread, but solve each point and its normal on the ellipse.
+        const u = finCount === 1 ? 0 : -0.92 + index * (1.84 / (finCount - 1));
+        const px = u * rx; const pz = Math.sqrt(1 - u * u) * rz;
+        const normal = new THREE.Vector2(px / (rx * rx), pz / (rz * rz)).normalize();
+        const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.18, y1 - y0, 0.28), this.stone);
+        mullion.position.set(x + px - normal.x * 0.1, cy, z + pz - normal.y * 0.1);
+        mullion.rotation.y = Math.atan2(normal.x, normal.y); mullion.castShadow = true;
+        mullion.name = 'cylindrical-facade-mullion'; mullion.userData.curvedFacadeDetail = 'mullion'; this.parent.add(mullion);
+      }
+    }
+  }
+
+  private cylindricalTowerRadii(spec: BuildingSpec, y: number): { rx: number; rz: number } {
+    const podiumH = Math.min(9, spec.height * 0.2); const towerH = spec.height - podiumH;
+    const t = THREE.MathUtils.clamp((y - podiumH - 0.2) / towerH, 0, 1);
+    const taper = THREE.MathUtils.lerp(1.04, 1, t); const rz = spec.depth * 0.39 * taper;
+    return { rx: rz * spec.width / Math.max(spec.depth, 1), rz };
   }
 
   private addFireEscape(x: number, z: number, w: number, d: number, h: number): void {
@@ -433,17 +632,11 @@ export class BuildingArchitecture {
 
   private addResidentialDetail(spec: BuildingSpec, massing: number, roofY: number): void {
     const { x, z, width: w, depth: d, height: h, variant } = spec;
-    // The stoep house (res 4) brings its own veranda, and the walk-up flats (res 5) / modern flat-roof
-    // estate (est 4) are the wrong idiom for a cottage porch, chimney or dormers — skip those dressings.
-    const flatForm = (spec.style === 'residential' && massing === 5) || (spec.style === 'estate' && massing === 4);
-    const ownPorch = spec.style === 'residential' && massing === 4;
-    if (!flatForm && !ownPorch) {
-      const porch = new THREE.Mesh(new THREE.BoxGeometry(w * 0.48, 0.28, 2.3), this.timber); porch.position.set(x, 0.45, z + d / 2 + 1); porch.castShadow = true; this.parent.add(porch);
-      const porchRoof = new THREE.Mesh(new THREE.BoxGeometry(w * 0.56, 0.18, 2.55), variant % 2 ? this.terracotta : this.darkMetal); porchRoof.position.set(x, 3.15, z + d / 2 + 1); porchRoof.rotation.x = -0.08; porchRoof.castShadow = true; this.parent.add(porchRoof);
-      for (const px of [-w * 0.2, w * 0.2]) { const column = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.15, 2.7, 14), this.stone); column.position.set(x + px, 1.8, z + d / 2 + 1.75); column.castShadow = true; this.parent.add(column); }
-    }
-    if (!flatForm) { const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.2, 0.9), this.terracotta); chimney.position.set(x - w * 0.25, roofY - 0.5, z - d * 0.18); chimney.castShadow = true; this.parent.add(chimney); }
-    if (massing !== 2 && !flatForm && !(spec.style === 'estate' && massing === 5) && h > 8) {
+    const porch = new THREE.Mesh(new THREE.BoxGeometry(w * 0.48, 0.28, 2.3), this.timber); porch.position.set(x, 0.45, z + d / 2 + 1); porch.castShadow = true; this.parent.add(porch);
+    const porchRoof = new THREE.Mesh(new THREE.BoxGeometry(w * 0.56, 0.18, 2.55), variant % 2 ? this.terracotta : this.darkMetal); porchRoof.position.set(x, 3.15, z + d / 2 + 1); porchRoof.rotation.x = -0.08; porchRoof.castShadow = true; this.parent.add(porchRoof);
+    for (const px of [-w * 0.2, w * 0.2]) { const column = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.15, 2.7, 14), this.stone); column.position.set(x + px, 1.8, z + d / 2 + 1.75); column.castShadow = true; this.parent.add(column); }
+    const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.2, 0.9), this.terracotta); chimney.position.set(x - w * 0.25, roofY - 0.5, z - d * 0.18); chimney.castShadow = true; this.parent.add(chimney);
+    if (massing !== 2 && h > 8) {
       for (const side of [-1, 1]) {
         const dormer = new THREE.Mesh(new THREE.BoxGeometry(Math.min(2.4, w * 0.2), 1.75, 1.35), boxMaterials(spec.facade, spec.roof)); dormer.position.set(x + side * w * 0.22, h + 1.05, z + d * 0.28); dormer.castShadow = true; this.parent.add(dormer);
         const window = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.92), this.glass); window.position.set(dormer.position.x, dormer.position.y, dormer.position.z + 0.681); this.parent.add(window);

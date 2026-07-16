@@ -1,7 +1,7 @@
 import { FLEE_THRESHOLD } from './FearSystem';
 import type { NavPoint } from './NavGraph';
 
-/** Player taxi job: calm wanderers hail an AVAILABLE cab from the curb; ride pays base fare plus a
+/** Player taxi job: calm wanderers hail an AVAILABLE minibus from the curb; ride pays base fare plus a
  *  driving-quality tip. Pure fare/hail/ride logic lives here — the Game feeds it positions and events. */
 export type TaxiPhase = 'idle' | 'hailed' | 'boarding' | 'riding';
 
@@ -10,7 +10,7 @@ export const FARE_PER_100U = 8; // R per 100 units of A* route distance
 export const TIP_RATIO = 0.25; // starting tip as a share of the fare…
 export const TIP_MIN = 5; // …clamped to a polite floor
 export const TIP_CAP = 40; // …and a generous ceiling
-export const HAIL_RADIUS = 34; // peds this close to an available cab stick an arm out
+export const HAIL_RADIUS = 34; // peds this close to an available taxi stick an arm out
 export const REHAIL_COOLDOWN = 3; // beat between fares so a fresh drop-off doesn't instantly re-hail you
 export const PICKUP_RADIUS = 6; // stop within this range of the hailer to start the pickup
 export const BOARD_RADIUS = 2.6; // hailer reaches the door and climbs in
@@ -23,10 +23,10 @@ export const TIP_SPEED_DRAIN = 3; // R per second of speeding
 export const CRASH_TIP_DIVISOR = 4; // crash tip penalty = impact / divisor (R)
 export const BAIL_IMPACT = 20; // one hit this hard and the passenger is out
 export const BAIL_FEAR = 60; // accumulated gunfire/violence fear that triggers a bail
-export const GUNFIRE_FEAR_RADIUS = 40; // crimes this close to the cab frighten the passenger
+export const GUNFIRE_FEAR_RADIUS = 40; // crimes this close to the taxi frighten the passenger
 export const GUNFIRE_FEAR_SCALE = 3; // heat -> passenger fear multiplier
 
-export function isTaxiKind(kind: string): boolean { return kind === 'cab' || kind === 'taxi'; }
+export function isTaxiKind(kind: string): boolean { return kind === 'taxi'; }
 
 export function routeDistance(points: NavPoint[]): number {
   let total = 0;
@@ -79,7 +79,7 @@ export class TaxiRide {
     return this.duty;
   }
 
-  /** Driver aborts the hail/ride: everything resets and the cab STAYS occupied until T is pressed again. */
+  /** Driver aborts the hail/ride: everything resets and the taxi STAYS occupied until T is pressed again. */
   cancelByDriver(): void { this.reset(); this.duty = 'occupied'; }
 
   hail(): boolean { if (this.phase !== 'idle' || this.duty !== 'available') return false; this.phase = 'hailed'; return true; }

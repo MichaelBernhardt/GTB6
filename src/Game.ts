@@ -23,6 +23,7 @@ import { applyDrink, decayInebriation, DRINK_BY_ID, DRINKS, drunkHealthDelta, in
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
 import { Vehicle } from './entities/Vehicle';
+import { loadTaxiLibrary } from './entities/TaxiAsset';
 import { BulletSystem } from './systems/BulletSystem';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
@@ -213,7 +214,7 @@ export class Game {
   private async prepareAssets(retry = false): Promise<void> {
     const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading'; this.ui.showLoading();
     try {
-      await Promise.all([retry ? this.player.retryCharacter() : this.player.loadCharacter(), loadTreeLibrary()]);
+      await Promise.all([retry ? this.player.retryCharacter() : this.player.loadCharacter(), loadTreeLibrary(), loadTaxiLibrary()]);
       if (attempt !== this.assetLoadAttempt) return;
       this.requiredAssetsReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
     } catch (error) {
@@ -703,7 +704,7 @@ export class Game {
       this.player.setVisible(true); this.player.update(dt, this.input, this.cameraController.yaw, this.city);
       this.combat.tryReload(this.input); this.combat.update(dt);
       const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
-      if (shot.fired && !shot.melee) online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize());
+      if (shot.fired && !shot.melee) { this.player.registerShot(); online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize()); }
     }
     const state = online.update(dt, {
       forward: Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')),
@@ -819,6 +820,7 @@ export class Game {
         if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
       }
     } else if (shot.fired) {
+      this.player.registerShot();
       if (!shot.deferred) this.handleGunshot(shot, this.player.group.position); // rockets report at launch; bullets report when they land
       if (scopeWeapon(this.combat.current)) this.cameraController.recoil(SNIPER_RECOIL); // .303 shoulder thump
     }
@@ -1029,6 +1031,7 @@ export class Game {
     if (driveBy) { // drive-by (car window or bike saddle): Ctrl to aim, LMB fires along the camera ray; no aim, no shooting
       this.combat.tryReload(this.input);
       const shot = this.combat.fire(this.input, this.camera, vehicle.group.position, this.population, { exclude: vehicle, cooldownScale: DRIVEBY_COOLDOWN_SCALE });
+      if (shot.fired) this.player.registerShot();
       if (shot.fired && !shot.deferred) this.handleGunshot(shot, vehicle.group.position);
     }
     if (this.input.consume('KeyE')) {
@@ -1070,7 +1073,7 @@ export class Game {
     this.ui.notify('Knocked off', 'Tar 1, rider 0. The bike is right there.', false);
   }
 
-  /** T between rides toggles AVAILABLE/OCCUPIED; T during a hail/ride cancels it and leaves the cab OCCUPIED. */
+  /** T between rides toggles AVAILABLE/OCCUPIED; T during a hail/ride cancels it and leaves the taxi OCCUPIED. */
   private handleTaxiKey(vehicle: Vehicle): void {
     const ride = this.taxiRide;
     if (ride.phase !== 'idle') {
@@ -1082,9 +1085,9 @@ export class Game {
     }
     const duty = ride.toggleDuty();
     vehicle.setTaxiLight(ride.available); this.audio.ui(duty === 'available');
-    const detail = duty === 'occupied' ? 'Roof light off. No new fares.'
-      : this.wanted.isWanted ? "Roof light on — but no fares while the law's watching. Lose the heat first."
-      : 'Roof light on — watch the curb for a raised arm.';
+    const detail = duty === 'occupied' ? 'Duty set to OCCUPIED. No new fares.'
+      : this.wanted.isWanted ? "Duty is AVAILABLE — but no fares while the law's watching. Lose the heat first."
+      : 'Duty is AVAILABLE — watch the curb for a raised arm.';
     this.ui.notify(duty === 'available' ? 'Taxi: AVAILABLE' : 'Taxi: OCCUPIED', detail, duty === 'available' && !this.wanted.isWanted);
   }
 
@@ -1093,7 +1096,7 @@ export class Game {
     const ride = this.taxiRide; const position = vehicle.group.position;
     if (ride.phase === 'idle') {
       this.taxiHailCooldown = Math.max(0, this.taxiHailCooldown - dt);
-      if (this.taxiHailCooldown > 0 || ride.duty !== 'available' || vehicle.onFire || vehicle.disabled || this.wanted.isWanted) return; // nobody hails an off-duty, burning or police-chased cab
+      if (this.taxiHailCooldown > 0 || ride.duty !== 'available' || vehicle.onFire || vehicle.disabled || this.wanted.isWanted) return; // nobody hails an off-duty, burning or police-chased taxi
       const candidate = this.population.pedestrians
         .filter((ped) => canHail(ped, ped.group.position.distanceTo(position)))
         .sort((a, b) => a.group.position.distanceToSquared(position) - b.group.position.distanceToSquared(position))[0];
@@ -1103,7 +1106,7 @@ export class Game {
     const hail = this.taxiHailPed;
     if (ride.phase === 'hailed') {
       if (!hail || hail.state !== 'idle' || hail.group.position.distanceTo(position) > HAIL_RADIUS * 1.6) { this.cancelTaxi(true); return; }
-      if (Math.abs(vehicle.speed) < STOP_SPEED && hail.group.position.distanceTo(position) <= PICKUP_RADIUS && ride.beginBoarding()) { hail.state = 'walk'; vehicle.setTaxiLight(ride.available); } // fare inbound: auto-occupied, roof light dims
+      if (Math.abs(vehicle.speed) < STOP_SPEED && hail.group.position.distanceTo(position) <= PICKUP_RADIUS && ride.beginBoarding()) { hail.state = 'walk'; vehicle.setTaxiLight(ride.available); } // fare inbound: duty auto-switches to occupied
       return;
     }
     if (ride.phase === 'boarding') {
@@ -1150,7 +1153,7 @@ export class Game {
     const pay = this.taxiRide.payout(); this.economy.earn(pay.total); this.audio.ui(true);
     this.ui.notify('Fare paid', pay.tip > 0 ? `R${pay.fare} on the meter + R${pay.tip} tip. "Sharp sharp, driver!"` : `R${pay.fare} on the meter, no tip. "Eish, that driving..."`);
     this.disembarkPassenger(vehicle.group.position, vehicle.heading, false);
-    this.taxiRide.reset(); this.taxiDestination = undefined; vehicle.setTaxiLight(this.taxiRide.available); this.persist(); // back on the clock: light returns
+    this.taxiRide.reset(); this.taxiDestination = undefined; vehicle.setTaxiLight(this.taxiRide.available); this.persist(); // back on the clock: AVAILABLE returns
   }
 
   private passengerBail(vehicle: Vehicle): void {
@@ -1168,7 +1171,7 @@ export class Game {
     if (panic) { ped.fear = 0; ped.applyFear(FEAR_MAX, origin); this.audio.scream('panic', ped.group.position.x, ped.group.position.z); }
   }
 
-  /** Ends any hail/ride without payment: the hailer drops the arm, a boarded passenger climbs out where the cab stands. */
+  /** Ends any hail/ride without payment: the hailer drops the arm, a boarded passenger climbs out where the taxi stands. */
   private cancelTaxi(quiet = true): void {
     if (this.taxiHailPed) { this.taxiHailPed.setHail(false); this.taxiHailPed = undefined; }
     if (this.taxiPassenger) {
@@ -1179,7 +1182,7 @@ export class Game {
     this.taxiRide.reset(); this.taxiDestination = undefined;
   }
 
-  /** Off shift entirely: end any ride, flip the sign to OCCUPIED and dim the light (exit, store, wreck, respawn, new game). */
+  /** Off shift entirely: end any ride and return duty to OCCUPIED (exit, store, wreck, respawn, new game). */
   private endTaxiShift(vehicle?: Vehicle, quiet = true): void {
     this.cancelTaxi(quiet); this.taxiRide.duty = 'occupied'; vehicle?.setTaxiLight(false);
   }
@@ -1350,7 +1353,7 @@ export class Game {
    *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
   private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
-    if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the cab spooks the passenger
+    if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the taxi spooks the passenger
     const copSaw = options.copWitnessed
       || this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(position) < SIGHT_RADIUS)
       || this.population.pedestrians.some((ped) => ped.police && ped.state !== 'down' && ped.group.position.distanceTo(position) < SIGHT_RADIUS);
@@ -1537,7 +1540,7 @@ export class Game {
 
   private removeGarageVehicle(): void {
     const vehicle = this.garageVehicle; if (!vehicle) return;
-    this.scene.remove(vehicle.group);
+    this.scene.remove(vehicle.group); vehicle.dispose();
     const index = this.population.vehicles.indexOf(vehicle); if (index >= 0) this.population.vehicles.splice(index, 1);
     const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
     this.garageVehicle = undefined;

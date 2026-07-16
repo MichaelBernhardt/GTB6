@@ -136,3 +136,39 @@ export function buildBigBox(seed: number, options: BuildOptions = {}): BuiltMode
   kit.box(M.steel, 2.4, 1.1, 1.1, w * 0.28, 0.12, d / 2 + 4, { cast: false });
   return kit.done();
 }
+
+/** Corner mixed-use block: active shopfront base with compact flats and a chamfer-like corner tower. */
+export function buildMixedUseCorner(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 2)) % 3; const size = options.size ?? kit.rnd(2);
+  const w = 14 + size * 4; const d = 10 + size * 3; const floors = 3 + variant; const floorH = 2.9; const h = floors * floorH;
+  const wall = kit.pick(3, [M.faceBrick, M.tan, M.plaster, M.concrete]);
+  kit.box(wall, w, h, d, 0, 0, 0, { collide: true });
+  kit.box(wall, w * 0.3, h + 2, d * 0.45, w * 0.34, 0, d * 0.2, { rounded: 0.45, collide: true });
+  for (let floor = 1; floor < floors; floor++) {
+    kit.box(M.glassDark, w * 0.64, 1.25, 0.12, -w * 0.08, floor * floorH + 0.6, d / 2 + 0.05, { cast: false });
+    kit.box(M.darkMetal, w * 0.42, 0.08, 0.8, -w * 0.12, floor * floorH, d / 2 + 0.38, { cast: false });
+  }
+  const shops = 3 + (variant % 2);
+  for (let shop = 0; shop < shops; shop++) {
+    const x = -w * 0.38 + shop * (w * 0.76 / Math.max(1, shops - 1));
+    kit.box(M.glass, w / shops * 0.55, 2.3, 0.12, x, 0.15, d / 2 + 0.07, { cast: false });
+  }
+  kit.box(variant % 2 ? M.corrRed : M.corrGreen, w * 0.82, 0.16, 1.5, -w * 0.04, 3, d / 2 + 0.68, { rx: -0.08 });
+  kit.sign(kit.pick(8, ['VILAKAZI CORNER', 'EGOLI ARCADE', 'BRAAM BAZAAR']), '#f1c552', w * 0.48, 0.8, -w * 0.05, 3.65, d / 2 + 0.09);
+  return kit.done();
+}
+
+/** Open-sided multi-storey parking garage with floor plates, ramps and a bright street marker. */
+export function buildParkingGarage(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 1)) % 2; const size = options.size ?? kit.rnd(2);
+  const w = 22 + size * 6; const d = 15 + size * 4; const floors = 3 + variant; const floorH = 2.8;
+  for (let floor = 0; floor <= floors; floor++) kit.box(M.concrete, w, 0.32, d, 0, floor * floorH, 0, { collide: true });
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) kit.box(M.concrete, 0.65, floors * floorH, 0.65, sx * w * 0.42, 0.32, sz * d * 0.4, { collide: true });
+  for (let floor = 0; floor < floors; floor++) {
+    kit.box(M.concrete, w * 0.55, 0.24, d * 0.22, floor % 2 ? -w * 0.14 : w * 0.14, floor * floorH + 0.45, 0, { rz: floor % 2 ? -0.12 : 0.12 });
+    for (const side of [-1, 1]) kit.box(M.darkMetal, w * 0.78, 0.62, 0.08, 0, floor * floorH + 1.1, side * d / 2, { cast: false });
+  }
+  kit.box(M.glassDark, 3.2, floors * floorH + 1, 3.2, -w * 0.34, 0.32, -d * 0.22, { collide: true });
+  kit.sign(variant ? 'PARK & GOED' : 'PARKING, SHARP', '#69d0d0', 5.2, 1.5, w * 0.22, floors * floorH + 1.3, d / 2 + 0.08, { background: '#27353b' });
+  return kit.done();
+}

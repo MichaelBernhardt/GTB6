@@ -9,7 +9,7 @@ import {
   FOLIAGE_ROAD_CLEARANCE,
   type ScatteredModel,
 } from './ModelScatter';
-import { CELL_SIZE, footprintRoadClearance } from './CityGen';
+import { CELL_SIZE, allBuildings, footprintRoadClearance, type GeneratedBuilding } from './CityGen';
 import { MODEL_INDEX } from './models/catalog';
 import { MAP_WORLD_SIZE, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, pointInAnyPolygon } from './mapData';
 import { classifyZone } from './data/zoning';
@@ -85,6 +85,47 @@ describe('citywide model scatter', () => {
     }
   });
 
+  it('keeps model footprints separate and honours same-model spacing citywide', () => {
+    const grid = new Map<string, ScatteredModel[]>(); const cell = 64; let maxRadius = 0;
+    for (const model of all) {
+      const def = MODEL_INDEX.get(model.name)!; const radius = Math.hypot(def.maxFootprint.w, def.maxFootprint.d) / 2;
+      const cx = Math.floor(model.x / cell); const cz = Math.floor(model.z / cell);
+      const reach = Math.max(1, Math.ceil(Math.max(radius + maxRadius, def.spacing) / cell) + 1);
+      for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
+        for (const other of grid.get(`${cx + dx},${cz + dz}`) ?? []) {
+          const otherDef = MODEL_INDEX.get(other.name)!;
+          const otherRadius = Math.hypot(otherDef.maxFootprint.w, otherDef.maxFootprint.d) / 2;
+          const distance = Math.hypot(model.x - other.x, model.z - other.z);
+          if (distance < radius + otherRadius - 1e-6) throw new Error(`${model.name} overlaps ${other.name}`);
+          if (model.name === other.name && distance < Math.max(def.spacing, otherDef.spacing) - 1e-6) throw new Error(`${model.name} violates spacing`);
+        }
+      }
+      const key = `${cx},${cz}`; const bucket = grid.get(key);
+      if (bucket) bucket.push(model); else grid.set(key, [model]);
+      maxRadius = Math.max(maxRadius, radius);
+    }
+  }, 30_000);
+
+  it('never overlaps a streamed procedural building', () => {
+    const cell = 256; const grid = new Map<string, GeneratedBuilding[]>(); let maxRadius = 0;
+    for (const building of allBuildings()) {
+      const key = `${Math.floor(building.x / cell)},${Math.floor(building.z / cell)}`;
+      const bucket = grid.get(key); if (bucket) bucket.push(building); else grid.set(key, [building]);
+      maxRadius = Math.max(maxRadius, Math.hypot(building.width, building.depth) / 2);
+    }
+    for (const model of all) {
+      const def = MODEL_INDEX.get(model.name)!; const radius = Math.hypot(def.maxFootprint.w, def.maxFootprint.d) / 2;
+      const cx = Math.floor(model.x / cell); const cz = Math.floor(model.z / cell);
+      const reach = Math.max(1, Math.ceil((radius + maxRadius) / cell) + 1);
+      for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
+        for (const building of grid.get(`${cx + dx},${cz + dz}`) ?? []) {
+          const buildingRadius = Math.hypot(building.width, building.depth) / 2;
+          if (Math.hypot(model.x - building.x, model.z - building.z) < radius + buildingRadius - 1e-6) throw new Error(`${model.name} overlaps ${building.style}`);
+        }
+      }
+    }
+  }, 30_000);
+
   it('keeps zone affinity: coastal-only models hug the coast, industry stays in the belt', () => {
     // Models that can ONLY come from the coastal promenade / beach passes must be near a beach.
     const coastOnly = new Set(['beach-cafe', 'surf-shack', 'lifeguard-tower', 'beach-loungers', 'pier-kiosk']);
@@ -108,6 +149,24 @@ describe('citywide model scatter', () => {
     // Budget window: high enough that busy cells read dense, capped so a cell's merge stays bounded.
     expect(SCATTER_CELL_CAP).toBeGreaterThanOrEqual(150);
     expect(SCATTER_CELL_CAP).toBeLessThanOrEqual(220);
+  });
+
+  it('streams every new district-specific structure archetype', () => {
+    const counts = scatterStats().perModel;
+    for (const name of [
+      'mixed-use-corner', 'parking-garage', 'semi-detached-house', 'walk-up-flats',
+      'rdp-row', 'workshop-row', 'logistics-depot', 'farm-worker-cottages',
+    ]) expect(counts[name] ?? 0, name).toBeGreaterThan(0);
+  });
+
+  it('reports exactly the capped model set returned by all scatter cells', () => {
+    const cells = new Set(all.map((model) => cellOf(model).join(',')));
+    const streamedTotal = [...cells].reduce((total, key) => {
+      const [cellX, cellZ] = key.split(',').map(Number) as [number, number];
+      return total + scatterCell(cellX, cellZ).length;
+    }, 0);
+    expect(streamedTotal).toBe(all.length);
+    expect(scatterStats().total).toBe(all.length);
   });
 });
 

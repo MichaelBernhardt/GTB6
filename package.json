@@ -22,6 +22,8 @@
     "foliage:validate": "node tools/foliage/validate.mjs",
     "npc:build": "node tools/npc/build.mjs",
     "npc:validate": "node tools/npc/validate.mjs",
+    "vehicle:build": "node tools/vehicle/build.mjs",
+    "vehicle:validate": "node tools/vehicle/validate.mjs",
     "map:build": "tsx tools/mapgen/index.ts",
     "map:png": "tsx tools/mapgen/render-png.ts"
   },

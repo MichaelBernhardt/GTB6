@@ -1,8 +1,30 @@
+import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { InputManager } from '../core/InputManager';
 import type { City } from '../world/City';
+import { installTaxiLibrary } from './TaxiAsset';
 import { bikeLeanTarget, MAX_BIKE_LEAN, Vehicle } from './Vehicle';
+
+class FakeImage {
+  width = 2048; height = 2048;
+  private listeners = new Map<string, () => void>();
+  addEventListener(name: string, callback: () => void): void { this.listeners.set(name, callback); }
+  removeEventListener(): void { /* loader cleanup */ }
+  set src(_value: string) { queueMicrotask(() => this.listeners.get('load')?.call(this)); }
+}
+
+beforeAll(async () => {
+  const originalDocument = globalThis.document;
+  Object.defineProperty(globalThis, 'self', { value: globalThis, configurable: true });
+  Object.defineProperty(globalThis, 'document', { value: { createElementNS: () => new FakeImage() }, configurable: true });
+  const file = await readFile('public/models/vehicles/quantum-express.glb');
+  const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+  installTaxiLibrary(await new GLTFLoader().parseAsync(buffer, '/models/vehicles/'));
+  if (originalDocument === undefined) delete (globalThis as { document?: Document }).document;
+  else Object.defineProperty(globalThis, 'document', { value: originalDocument, configurable: true });
+});
 
 // A tilted ground plane with its analytic normal, so alignToRoad sees genuine terrain pitch.
 function slopedCity(a: number, b: number): City {
@@ -58,29 +80,15 @@ describe('two-wheeler never flips onto its side while turning', () => {
 });
 
 describe('first-person view clears the taxi driver line of sight', () => {
-  it('hides the full-length yellow livery slab in first person (regression: solid-yellow taxi FPV)', () => {
+  it('hides the Blender cabin and roof while leaving the lower livery mounted', () => {
     const taxi = new Vehicle(new THREE.Scene(), 'taxi', new THREE.Vector3());
-    const stripe = taxi.group.getObjectByName('taxistripe');
-    expect(stripe).toBeDefined();
-    expect(stripe!.visible).toBe(true); // livery shows in third person
-    const sign = taxi.group.getObjectByName('sign');
-    expect(sign).toBeDefined();
+    const cabin = taxi.group.getObjectByName('cabin'); const livery = taxi.group.getObjectByName('livery_left');
+    expect(cabin).toBeDefined(); expect(livery).toBeDefined(); expect(taxi.group.getObjectByName('taxi-loading-placeholder')).toBeUndefined();
+    expect(cabin!.visible).toBe(true);
     taxi.setFirstPerson(true);
-    expect(stripe!.visible).toBe(false); // ...and clears out of the driver's eye in first person, like the cabin/roof
-    expect(sign!.visible).toBe(false); // the roof sign bar clears too — not left hanging in the raised driver's view
+    expect(cabin!.visible).toBe(false); expect(livery!.visible).toBe(true);
     taxi.setFirstPerson(false);
-    expect(stripe!.visible).toBe(true); // and comes back
-    expect(sign!.visible).toBe(true);
-  });
-
-  it('hides the meter cab roof light box in first person', () => {
-    const cab = new Vehicle(new THREE.Scene(), 'cab', new THREE.Vector3());
-    const box = cab.group.getObjectByName('taxilight');
-    expect(box).toBeDefined();
-    cab.setFirstPerson(true);
-    expect(box!.visible).toBe(false);
-    cab.setFirstPerson(false);
-    expect(box!.visible).toBe(true);
+    expect(cabin!.visible).toBe(true);
   });
 });
 

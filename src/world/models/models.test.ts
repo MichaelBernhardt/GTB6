@@ -49,6 +49,10 @@ describe('structure model catalog', () => {
       expect(def.maxFootprint.w).toBeGreaterThan(0); expect(def.maxFootprint.d).toBeGreaterThan(0);
     }
     expect(MODEL_INDEX.get('windpomp')).toBeDefined();
+    for (const name of [
+      'mixed-use-corner', 'parking-garage', 'semi-detached-house', 'walk-up-flats',
+      'rdp-row', 'workshop-row', 'logistics-depot', 'farm-worker-cottages',
+    ]) expect(MODEL_INDEX.get(name), name).toBeDefined();
     expect(() => buildModel('nope', 1)).toThrow();
   });
 

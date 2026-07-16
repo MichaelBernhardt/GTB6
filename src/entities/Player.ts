@@ -132,6 +132,8 @@ export class Player {
   heal(): void { this.health = this.maxHealth; this.inebriation = 0; this.setDead(false); }
   setVisible(visible: boolean): void { this.group.visible = visible; }
   setWeapon(id: WeaponId): void { if (id === this.weapon) return; this.weapon = id; this.riggedVisual.setWeapon(id); }
+  /** Report one ranged shot accepted by CombatSystem so visual recoil can retrigger independently of the held trigger. */
+  registerShot(): void { if (this.weapon !== 'fists') this.visualState.shotSequence += 1; }
   punch(): void { this.punchTimer = 0.4; this.punchLeft = !this.punchLeft; this.visualState.attack = this.punchLeft ? 'punch_left' : 'punch_right'; }
 
   setDead(dead: boolean): void {

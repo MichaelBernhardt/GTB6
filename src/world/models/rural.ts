@@ -205,3 +205,22 @@ export function buildPadstal(seed: number, options: BuildOptions = {}): BuiltMod
   if (variant === 2) kit.cyl(M.jojo, 0.85, 0.85, 1.8, -w / 2 - 1.05, 0, -d * 0.2, { seg: 12, collide: true });
   return kit.done();
 }
+
+/** A compact row of farm-worker cottages with stoep slabs, shared tanks and corrugated roofs. */
+export function buildFarmWorkerCottages(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 2)) % 3; const size = options.size ?? kit.rnd(2);
+  const units = 3 + variant; const unitW = 4.2 + size * 0.65; const w = units * unitW; const d = 5.6 + size; const h = 2.65;
+  kit.box(M.dirt, w + 2.5, 0.06, d + 5, 0, 0, 1, { cast: false });
+  for (let unit = 0; unit < units; unit++) {
+    const x = -w / 2 + unitW * (unit + 0.5); const z = -0.7 + (unit % 2) * 0.35;
+    kit.box(kit.pick(10 + unit, WALLS), unitW - 0.3, h, d, x, 0, z, { collide: true });
+    kit.gable(kit.pick(20 + unit, ROOFS), unitW + 0.2, d + 0.7, 1.05, x, h, z);
+    kit.box(M.darkTimber, 0.82, 1.95, 0.08, x - unitW * 0.14, 0, z + d / 2 + 0.05, { cast: false });
+    kit.box(M.glassDark, 0.82, 0.75, 0.08, x + unitW * 0.18, 1.1, z + d / 2 + 0.05, { cast: false });
+    kit.box(M.paving, unitW * 0.82, 0.12, 1.5, x, 0, z + d / 2 + 0.75, { cast: false });
+  }
+  kit.cyl(M.jojo, 0.85, 0.85, 1.8, w / 2 + 0.7, 0, -d * 0.25, { seg: 12, collide: true });
+  for (const side of [-1, 1]) kit.box(M.timber, 0.1, 1.3, 0.1, side * (w / 2 + 0.8), 0, d / 2 + 2);
+  kit.box(M.darkMetal, w + 1.6, 0.025, 0.025, 0, 0.85, d / 2 + 2, { cast: false });
+  return kit.done();
+}

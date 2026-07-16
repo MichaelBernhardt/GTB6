@@ -56,10 +56,15 @@ describe('generated Joburg road topology', () => {
   });
 
   it('provides multiple structural building families in every district', () => {
-    expect(ARCHITECTURE_VARIANTS.downtown).toBeGreaterThanOrEqual(9);
-    expect(ARCHITECTURE_VARIANTS.residential).toBeGreaterThanOrEqual(8);
-    expect(ARCHITECTURE_VARIANTS.industrial).toBeGreaterThanOrEqual(8);
-    expect(ARCHITECTURE_VARIANTS.estate).toBeGreaterThanOrEqual(7);
+    expect(Object.keys(ARCHITECTURE_VARIANTS)).toHaveLength(7);
+    expect(Object.values(ARCHITECTURE_VARIANTS).reduce((sum, count) => sum + count, 0)).toBe(52); // main's 36 + the 16 clutter-variety families
+    expect(ARCHITECTURE_VARIANTS.downtown).toBe(11);
+    expect(ARCHITECTURE_VARIANTS['mixed-use']).toBe(5);
+    expect(ARCHITECTURE_VARIANTS['dense-residential']).toBe(6);
+    expect(ARCHITECTURE_VARIANTS.suburban).toBe(9);
+    expect(ARCHITECTURE_VARIANTS.industrial).toBe(9);
+    expect(ARCHITECTURE_VARIANTS.estate).toBe(8);
+    expect(ARCHITECTURE_VARIANTS.rural).toBe(4);
   });
 });
 
