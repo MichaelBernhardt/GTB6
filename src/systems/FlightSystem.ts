@@ -28,9 +28,12 @@ export const SAFE_LANDING_PITCH = -0.22; // nose-down past this at contact is a 
 export const PLANE_EXIT_SPEED = 4; // slow enough to climb out on the ground
 export const PLANE_WRECK_RESPAWN = 12; // seconds before a wreck is towed back to its apron stand
 
+export const PLANE_RUDDER_RATE = 0.35; // rad/s of airborne rudder yaw at full airspeed — a trim tool, the bank does the turning
+
 export interface PlaneState { heading: number; pitch: number; roll: number; speed: number; throttle: number; grounded: boolean; }
-/** throttle: W(+1)/S(-1) held. steer: A(+1)/D(-1). pitch: ArrowUp(+1) climbs, ArrowDown(-1) dives. */
-export interface PlaneStick { throttle: number; steer: number; pitch: number; }
+/** Real-GTA deck — throttle: W(+1)/S(-1). roll: ←(+1)/→(-1) banks. rudder: A(+1)/D(-1) yaws (and steers
+ *  the nosewheel on the ground). pitch: ↑(+1) climbs, ↓(-1) dives. */
+export interface PlaneStick { throttle: number; roll: number; rudder: number; pitch: number; }
 export interface PlaneStep { dx: number; dz: number; y: number; landed: boolean; crashed: boolean; sink: number; }
 
 export function createPlaneState(heading: number): PlaneState {
@@ -46,8 +49,10 @@ export function stepPlane(state: PlaneState, stick: PlaneStick, dt: number, y: n
   const response = target > state.speed ? PLANE_THRUST_RESPONSE : state.grounded ? PLANE_GROUND_DRAG_RESPONSE : PLANE_AIR_DRAG_RESPONSE;
   state.speed += (target - state.speed) * (1 - Math.exp(-dt * response));
   if (state.grounded) return stepGroundRoll(state, stick, dt, support);
-  state.roll += (stick.steer * PLANE_MAX_ROLL - state.roll) * (1 - Math.exp(-dt * PLANE_ROLL_RESPONSE)); // steer rolls the wings…
-  state.heading += state.roll * PLANE_TURN_RATE * (0.45 + 0.55 * Math.min(1, state.speed / PLANE_MAX_SPEED)) * dt; // …and the bank carries the nose around
+  state.roll += (stick.roll * PLANE_MAX_ROLL - state.roll) * (1 - Math.exp(-dt * PLANE_ROLL_RESPONSE)); // ←/→ roll the wings…
+  const airspeedAuthority = 0.45 + 0.55 * Math.min(1, state.speed / PLANE_MAX_SPEED);
+  state.heading += state.roll * PLANE_TURN_RATE * airspeedAuthority * dt; // …and the bank carries the nose around
+  state.heading += stick.rudder * PLANE_RUDDER_RATE * airspeedAuthority * dt; // A/D rudder: flat yaw for lining up, no bank needed
   if (stick.pitch !== 0) state.pitch = Math.min(PLANE_MAX_PITCH, Math.max(-PLANE_MAX_PITCH, state.pitch + stick.pitch * PLANE_PITCH_RATE * dt));
   else state.pitch -= state.pitch * Math.min(1, dt * PLANE_AUTO_LEVEL); // hands off: the trim eases the nose level
   state.speed = Math.max(0, state.speed - Math.sin(state.pitch) * PLANE_GRAVITY_BLEED * dt); // climbs bleed airspeed, dives build it
@@ -74,7 +79,7 @@ function stepGroundRoll(state: PlaneState, stick: PlaneStick, dt: number, suppor
   state.roll -= state.roll * Math.min(1, dt * 5);
   state.pitch -= state.pitch * Math.min(1, dt * 6);
   const grip = Math.min(1, state.speed / 6) * (1 - Math.min(state.speed / 90, 0.45));
-  state.heading += stick.steer * PLANE_GROUND_STEER * grip * dt;
+  state.heading += stick.rudder * PLANE_GROUND_STEER * grip * dt;
   const dx = Math.sin(state.heading) * state.speed * dt; const dz = Math.cos(state.heading) * state.speed * dt;
   if (stick.pitch > 0 && state.speed >= PLANE_ROTATE_SPEED) { state.grounded = false; state.pitch = 0.12; }
   return { dx, dz, y: support, landed: true, crashed: false, sink: 0 };
@@ -87,7 +92,7 @@ export function planeCrashDamage(sink: number, speed: number): number {
 
 /** HUD hint for the flight phase: taxi, takeoff roll, or airborne. */
 export function planeHint(state: PlaneState): string {
-  if (!state.grounded) return '↑/↓  Climb / dive  ·  A/D  Bank  ·  W/S  Throttle  ·  E  Bail out';
+  if (!state.grounded) return '↑/↓  Climb / dive  ·  ←/→  Bank  ·  A/D  Rudder  ·  W/S  Throttle  ·  E  Bail out';
   if (state.speed >= PLANE_ROTATE_SPEED) return '↑  Pull up to lift off  ·  A/D  Steer  ·  S  Brake';
   return state.speed > PLANE_EXIT_SPEED ? 'W  Throttle up  ·  A/D  Steer  ·  S  Brake' : 'W  Throttle up  ·  A/D  Steer  ·  E  Climb out';
 }

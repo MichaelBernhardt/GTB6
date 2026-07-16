@@ -52,12 +52,11 @@ export class Plane {
 
   /** One piloted tick: stick from the keys, the pure step, then world clamps — bounds, buildings, terrain. */
   updatePlayer(dt: number, input: InputManager, city: City): PlaneUpdate {
-    // GTA-style deck: W/S throttle, ↑/↓ pitch, and BOTH A/D and ←/→ bank (either muscle memory works).
+    // Real GTA deck: W/S throttle, ↑/↓ pitch, ←/→ roll, A/D rudder (and nosewheel on the ground).
     const stick: PlaneStick = {
       throttle: Number(input.down('KeyW')) - Number(input.down('KeyS')),
-      steer: Math.max(-1, Math.min(1,
-        Number(input.down('KeyA')) - Number(input.down('KeyD'))
-        + Number(input.down('ArrowLeft')) - Number(input.down('ArrowRight')))),
+      roll: Number(input.down('ArrowLeft')) - Number(input.down('ArrowRight')),
+      rudder: Number(input.down('KeyA')) - Number(input.down('KeyD')),
       pitch: Number(input.down('ArrowUp')) - Number(input.down('ArrowDown')),
     };
     return this.step(stick, dt, city);
@@ -73,7 +72,7 @@ export class Plane {
       return undefined;
     }
     if (this.state.grounded && this.state.speed < 0.5 && this.state.throttle <= 0) { this.spinProp(dt); return undefined; }
-    const result = this.step({ throttle: -0.3, steer: 0, pitch: 0 }, dt, city);
+    const result = this.step({ throttle: -0.3, roll: 0, rudder: 0, pitch: 0 }, dt, city);
     if (!result.crashed) return undefined;
     const site = { x: this.group.position.x, z: this.group.position.z };
     this.wreck();
