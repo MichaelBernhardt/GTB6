@@ -110,11 +110,12 @@ export function fenceRuns(points: MapPt[], step: number, blocked: (x: number, z:
 
 // ---- Light aircraft (reusable) -------------------------------------------------
 
-export interface BuiltAircraft { group: THREE.Group; halfSpan: number; halfLength: number; height: number; }
+export interface BuiltAircraft { group: THREE.Group; prop: THREE.Group; halfSpan: number; halfLength: number; height: number; }
 
 /** A light aircraft (high-wing single-prop, Cessna-ish) built from primitives at the origin: wheels on
  *  y = 0, nose toward local +z, wings along local x. Deterministic per seed (livery colour). Reusable —
- *  future flying/airfield features should build theirs from this. */
+ *  future flying/airfield features should build theirs from this. The spinner + blades live in the returned
+ *  `prop` subgroup (facing local +z) so a functional plane can spin it; parked dressing leaves it still. */
 export function buildLightAircraft(seed: number): BuiltAircraft {
   const liveries = [0xc9402f, 0x2f6fa8, 0x3e8a52, 0xd08a2c];
   const accent = liveries[Math.floor(seeded(seed, 1, 17) * liveries.length) % liveries.length]!;
@@ -127,9 +128,11 @@ export function buildLightAircraft(seed: number): BuiltAircraft {
   const fuselage = add(new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.5, 3.4, 12), body)); fuselage.rotation.x = Math.PI / 2; fuselage.position.set(0, 1.28, 0.4);
   const tail = add(new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.14, 3.0, 10), body)); tail.rotation.x = Math.PI / 2; tail.position.set(0, 1.38, -2.8);
   const cowl = add(new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.44, 0.7, 12), trim)); cowl.rotation.x = Math.PI / 2; cowl.position.set(0, 1.28, 2.4);
-  const spinner = add(new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.5, 10), dark)); spinner.rotation.x = Math.PI / 2; spinner.position.set(0, 1.28, 2.95);
-  const bladeA = add(new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.95, 0.06), dark)); bladeA.position.set(0, 1.28, 2.82);
-  const bladeB = add(new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.16, 0.06), dark)); bladeB.position.set(0, 1.28, 2.82);
+  const prop = new THREE.Group(); prop.position.set(0, 1.28, 2.82); group.add(prop);
+  const addProp = (mesh: THREE.Mesh): THREE.Mesh => { mesh.castShadow = true; prop.add(mesh); return mesh; };
+  const spinner = addProp(new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.5, 10), dark)); spinner.rotation.x = Math.PI / 2; spinner.position.set(0, 0, 0.13);
+  addProp(new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.95, 0.06), dark));
+  addProp(new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.16, 0.06), dark));
   const canopy = add(new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.55, 1.25), glass)); canopy.position.set(0, 1.85, 0.85);
   const wing = add(new THREE.Mesh(new THREE.BoxGeometry(11, 0.15, 1.55), body)); wing.position.set(0, 2.12, 0.72);
   const wingTipL = add(new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.17, 1.56), trim)); wingTipL.position.set(-4.95, 2.12, 0.72);
@@ -145,7 +148,7 @@ export function buildLightAircraft(seed: number): BuiltAircraft {
   const fin = add(new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.35, 0.9), body)); fin.position.set(0, 2.15, -4.0); fin.rotation.x = 0.18;
   const finFlash = add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.55, 0.92), trim)); finFlash.position.set(0, 2.45, -4.02); finFlash.rotation.x = 0.18;
   const stab = add(new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.09, 0.8), body)); stab.position.set(0, 1.5, -4.1);
-  return { group, halfSpan: 5.6, halfLength: 4.5, height: 3.0 };
+  return { group, prop, halfSpan: 5.6, halfLength: 4.5, height: 3.0 };
 }
 
 // ---- The airfield build ---------------------------------------------------------

@@ -22,6 +22,7 @@ import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, 
 import { applyDrink, decayInebriation, DRINK_BY_ID, DRINKS, drunkHealthDelta, inebriationFraction, INEBRIATION_MAX, resolveDrinkPurchase, type DrinkId } from './core/DrinkRules';
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
+import { functionalPlaneSpawns, Plane } from './entities/Plane';
 import { Vehicle } from './entities/Vehicle';
 import { loadTaxiLibrary } from './entities/TaxiAsset';
 import { BulletSystem } from './systems/BulletSystem';
@@ -46,6 +47,7 @@ import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
 import { canEnterSafehouse, SAFEHOUSES, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
 import { GARAGE_PARK, GARAGE_STEP_OUT, SHOPS, ShopSystem } from './systems/ShopSystem';
 import { airborneHint, canDeploy, chuteLandingDamage, deployParachute, SKYFALL_ALTITUDE, startAirborne, stepAirborne, type AirborneState } from './systems/SkyfallSystem';
+import { PLANE_EXIT_SPEED, PLANE_MAX_SPEED, planeCrashDamage, planeHint } from './systems/FlightSystem';
 import { buildTeleportTargets, clampToWorld, districtAnchors, resolveTeleport, safePlacement, type TeleportTarget } from './systems/Teleport';
 import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADIUS, GUNFIRE_FEAR_SCALE, HAIL_RADIUS, isTaxiKind, MIN_TRIP_DISTANCE, PICKUP_RADIUS, REHAIL_COOLDOWN, routeDistance, STOP_SPEED, TaxiRide, taxiHudText } from './systems/TaxiJobSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
@@ -175,6 +177,8 @@ export class Game {
   private coverLean = 0;
   private inventory: Inventory;
   private airborne?: AirborneState;
+  private planes: Plane[] = [];
+  private activePlane?: Plane;
   private districtTargets: TeleportTarget[];
 
   constructor(private container: HTMLElement) {
@@ -203,6 +207,7 @@ export class Game {
     this.combat.onShot = (position, origin, directions, count, spec, exclude) => this.bullets.spawnShot(position, origin, directions, count, spec, exclude);
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
     this.trains = new TrainSystem(this.scene, this.city);
+    this.planes = functionalPlaneSpawns().map((spawn, index) => new Plane(this.scene, spawn, this.city, 4242 + index * 101));
     this.input = new InputManager(this.renderer.domElement);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
@@ -436,6 +441,7 @@ export class Game {
       this.activeVehicle = undefined; this.transition = undefined;
       this.audio.setEngine(false); this.audio.stopRadio();
     }
+    this.releasePlane();
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose();
     this.player.inVehicle = false; this.player.setVisible(true);
   }
@@ -529,7 +535,7 @@ export class Game {
   private startGame(fresh: boolean): void {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.player.setDead(false); this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
@@ -538,7 +544,7 @@ export class Game {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.endTaxiShift(); this.endCourierShift(); this.online?.close();
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
-    this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose();
+    this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose(); this.releasePlane();
     this.player.group.position.set(2050, 0, 3850); this.player.group.position.y = this.city.surfaceHeightAt(2050, 3850);
     this.player.setDead(false); this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
@@ -609,6 +615,7 @@ export class Game {
     if (this.input.consume('KeyH')) this.useStim();
     if (this.airborne) this.updateAirborne(dt);
     else if (this.transition) this.updateTransition(dt);
+    else if (this.activePlane) this.updateFlying(dt);
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
@@ -636,6 +643,7 @@ export class Game {
     this.lifecycle.update(dt, this.dayNight.hour, { x: eye.x, z: eye.z, dirX: forward.x, dirZ: forward.z }, guarded);
     this.city.update(dt);
     this.trains.update(dt);
+    this.updatePlanes(dt);
     this.applyEskom(this.loadShedding.update(dt));
     this.dayNight.update(dt, focus, this.population.vehicles, this.police.vehicles, this.activeVehicle ?? this.transition?.vehicle);
     for (const impact of this.population.consumeImpacts()) {
@@ -690,7 +698,7 @@ export class Game {
     for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition && !this.airborne)) this.applyPickup(item);
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
     this.updateInebriation(dt);
-    this.saveTimer += dt; if (this.saveTimer > 8) { this.persist(); this.saveTimer = 0; }
+    this.saveTimer += dt; if (this.saveTimer > 8 && !this.activePlane) { this.persist(); this.saveTimer = 0; } // no autosave mid-flight: a resumed save would float the player at altitude
     if (this.player.health <= 0) this.die();
   }
 
@@ -838,6 +846,8 @@ export class Game {
       if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
       const safehouse = this.safehouses.near(this.player.group.position);
       if (safehouse) { this.enterSafehouse(safehouse); return; }
+      const plane = this.nearestPlane();
+      if (plane) { this.enterPlane(plane); return; }
       if (shop?.driveIn && !vehicle && !cruiser) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
       const pick = cruiser && (!vehicle || cruiser.group.position.distanceToSquared(this.player.group.position) < vehicle.group.position.distanceToSquared(this.player.group.position)) ? cruiser : vehicle;
       if (pick === cruiser && cruiser) { this.police.release(cruiser); this.population.vehicles.push(cruiser); } // stolen cruiser leaves the JMPD fleet
@@ -880,6 +890,99 @@ export class Game {
       this.damagePlayer(damage); this.player.tumble();
       this.shake = Math.min(0.7, this.shake + 0.3); this.audio.collision(10 + damage * 0.3);
     } else if (state.mode === 'parachute') this.ui.notify('Textbook landing', 'Two feet down, no paperwork.');
+  }
+
+  /** The nearest boardable flight-ready aircraft: on foot, standing by the airframe. */
+  private nearestPlane(): Plane | undefined {
+    const position = this.player.group.position;
+    return this.planes.find((plane) => !plane.wrecked && plane.group.position.distanceTo(position) < 7);
+  }
+
+  /** Hands the aircraft back to the world (or the tow truck) without touching the player's pose. */
+  private releasePlane(): void {
+    const plane = this.activePlane; if (!plane) return;
+    plane.pilot = false; this.activePlane = undefined;
+  }
+
+  /** Into the cockpit: instant boarding (no lerp transition — the wing is in the way), and the seat-back
+   *  parachute tops the inventory up to one so a bail-out is always survivable. */
+  private enterPlane(plane: Plane): void {
+    this.cover = undefined; this.activePlane = plane; plane.pilot = true;
+    this.player.inVehicle = true; this.player.setVisible(false); this.player.group.position.copy(plane.group.position);
+    if (this.inventory.parachutes < 1) { this.inventory.parachutes = 1; this.persist(); }
+    this.audio.ui(true);
+    this.ui.notify(plane.name, 'W/S throttle · A/D steer & bank · ↑/↓ climb & dive · E bail out. A packed chute waits on the seat back.');
+  }
+
+  /** Flight tick: the plane flies itself through the pure step; E bails out mid-air (into the skydive) or
+   *  climbs out on the ground once the roll has stopped; a crash hands the wreck to the tow-truck loop. */
+  private updateFlying(dt: number): void {
+    const plane = this.activePlane; if (!plane) return;
+    const result = plane.updatePlayer(dt, this.input, this.city);
+    this.player.group.position.copy(plane.group.position);
+    this.player.heading = plane.state.heading;
+    this.audio.setEngine(true, plane.state.speed, plane.state.throttle, PLANE_MAX_SPEED, 'plane');
+    if (result.crashed) { this.crashActivePlane(plane, result.sink, result.speed); return; }
+    if (this.input.consume('KeyE')) {
+      if (!plane.state.grounded) this.bailOut(plane);
+      else if (plane.state.speed <= PLANE_EXIT_SPEED) this.exitPlane(plane);
+      else this.ui.notify('Still rolling', 'Brake with S before climbing out.', false);
+    }
+  }
+
+  /** E mid-flight: out the door into the existing skydive — freefall at the plane's position and heading,
+   *  SPACE deploys the seat-back chute. The pilotless plane flies on, bleeds off and comes down by itself. */
+  private bailOut(plane: Plane): void {
+    this.releasePlane();
+    this.player.inVehicle = false; this.player.setVisible(true);
+    const position = this.player.group.position; position.copy(plane.group.position);
+    position.y = Math.max(this.city.surfaceHeightAt(position.x, position.z), position.y - 2.5); // drop clear of the airframe
+    this.player.onGround = false; this.player.velocityY = 0;
+    this.airborne = startAirborne(plane.state.heading, position.y);
+    this.player.startSkydive();
+    this.cameraController.pitch = 0.62;
+    this.audio.setEngine(false);
+    this.ui.notify('Geronimo!', this.inventory.parachutes > 0 ? 'SPACE deploys the parachute. W dives, S flattens, A/D steer.' : 'No parachute aboard. Good luck.', this.inventory.parachutes > 0);
+  }
+
+  /** Climbing out on the tar: step out under the wing, ringing outward if the stand is cluttered. */
+  private exitPlane(plane: Plane): void {
+    this.releasePlane();
+    this.player.inVehicle = false; this.player.setVisible(true);
+    const heading = plane.state.heading;
+    const door = plane.group.position.clone().add(new THREE.Vector3(Math.cos(heading), 0, -Math.sin(heading)).multiplyScalar(3.2));
+    const spot = safePlacement(door.x, door.z, (px, pz) => this.city.collides(px, pz, PLAYER.radius));
+    this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
+    this.player.velocityY = 0; this.player.onGround = true;
+    this.audio.setEngine(false);
+  }
+
+  /** Hard arrival with the player aboard: the airframe is written off (towed back to the apron later), the
+   *  pilot is thrown clear and billed for the impact — a full-speed stall-in is lethal without the cheat. */
+  private crashActivePlane(plane: Plane, sink: number, speed: number): void {
+    const at = plane.group.position.clone();
+    plane.wreck(); this.releasePlane();
+    this.audio.explosion(at.x, at.z); this.audio.setEngine(false);
+    this.shake = Math.min(0.7, this.shake + 0.5);
+    this.population.broadcastFear(at, FEAR_EVENTS.kill);
+    this.player.inVehicle = false; this.player.setVisible(true);
+    const spot = safePlacement(at.x + 4, at.z, (px, pz) => this.city.collides(px, pz, PLAYER.radius));
+    this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
+    this.player.velocityY = 0; this.player.onGround = true; this.player.resetAirbornePose(); this.player.tumble();
+    this.damagePlayer(planeCrashDamage(sink, speed));
+    this.ui.notify('Plane down', 'That was not a landing. The wreck gets towed back to the airfield just now.', false);
+  }
+
+  /** Pilotless aircraft keep living: a bailed plane stalls in and crashes, wrecks respawn at their stand. */
+  private updatePlanes(dt: number): void {
+    for (const plane of this.planes) {
+      if (plane === this.activePlane) continue;
+      const crash = plane.updateAmbient(dt, this.city);
+      if (!crash) continue;
+      this.audio.explosion(crash.x, crash.z);
+      this.shake = Math.min(0.7, this.shake + 0.25);
+      this.population.broadcastFear(new THREE.Vector3(crash.x, 0, crash.z), FEAR_EVENTS.kill);
+    }
   }
 
   /** H: jab a stim pack — +50 health, clamped; never wasted at full health. */
@@ -929,7 +1032,7 @@ export class Game {
 
   /** Scope mode: aiming the sniper on foot (cover peeks included) — never from a vehicle seat or mid-transition. */
   private get scoped(): boolean {
-    return this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && scopeActive(this.input.aiming, this.combat.current, Boolean(this.activeVehicle));
+    return this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && scopeActive(this.input.aiming, this.combat.current, Boolean(this.activeVehicle));
   }
 
   /** Shared aftermath for a ranged player shot: witnesses, fear, gore, and drops — on foot or drive-by.
@@ -1609,8 +1712,9 @@ export class Game {
   }
 
   private updateCamera(dt: number): void {
-    const target = this.activeVehicle?.group.position ?? this.player.group.position;
-    const view = this.activeVehicle ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
+    const flying = this.activePlane;
+    const target = flying?.group.position ?? this.activeVehicle?.group.position ?? this.player.group.position;
+    const view = this.activeVehicle || flying ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
     const firstPerson = view === 0;
     const riding = Boolean(this.player.inVehicle && this.activeVehicle?.spec.twoWheeler); // riders stay visible except in first person
     const scoped = this.scoped; // scope: first-person eye from any view, model hidden, FOV from the zoom ladder
@@ -1622,10 +1726,10 @@ export class Game {
       : 0; // pull the camera toward the exposed corner for visibility over the shoulder
     this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
     const sensitivity = scoped ? scopeSensitivity(this.settings.mouseSensitivity, this.scopeLevel) : this.settings.mouseSensitivity;
-    const airborneBoost = this.airborne ? (this.airborne.mode === 'freefall' ? 6 : 4) : 0; // skydives read better with the boom pulled back
+    const airborneBoost = this.airborne ? (this.airborne.mode === 'freefall' ? 6 : 4) : flying ? 7 : 0; // skydives and flights read better with the boom pulled back
     const backpedal = this.input.down('KeyS') && !this.input.down('KeyW'); // reversing is a clean straight backpedal — no auto-follow slew, or the camera whips 180° to get behind the rearward heading
     const footTrail = !this.activeVehicle && this.player.moving && !this.input.aiming && !this.cover && !backpedal; // lazy camera follow on foot: keeps keyboard/gamepad-only players oriented; off while aiming or in cover so the shoulder/peek framing holds
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle), sensitivity, view, this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, this.activeVehicle?.spec.size[1] ?? 0, this.player.heading, footTrail);
+    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle) || Boolean(flying), sensitivity, view, flying?.state.heading ?? this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne && !flying, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, flying ? 2.6 : this.activeVehicle?.spec.size[1] ?? 0, this.player.heading, footTrail);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -1692,6 +1796,7 @@ export class Game {
       const shop = this.shops.shopNear(focus);
       if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat' : 'E  Enter nearby vehicle  ·  ENTER  Global chat  ·  Open PvP';
       else if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
+      else if (this.activePlane) prompt = planeHint(this.activePlane.state);
       else if (this.activeVehicle) {
         if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
@@ -1716,6 +1821,7 @@ export class Game {
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.coverAvailable) prompt = 'Q  Take cover';
+      else if (this.nearestPlane()) prompt = 'E  Enter plane';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus) || this.police.stealableNear(focus)) prompt = 'E  Enter vehicle';
     }
@@ -1727,14 +1833,17 @@ export class Game {
       missionName: this.missions.active?.name ?? '', text: this.missions.objective.text, progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
     } : undefined;
-    const vehicle = this.activeVehicle ? {
+    const vehicle = this.activePlane ? {
+      name: `${this.activePlane.name} · ${Math.max(0, Math.round(this.activePlane.group.position.y - this.city.surfaceHeightAt(this.activePlane.group.position.x, this.activePlane.group.position.z)))}m`,
+      speedKph: this.activePlane.state.speed * 3.6, health: this.activePlane.wrecked ? 0 : 100,
+    } : this.activeVehicle ? {
       name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health,
       radio: this.activeVehicle.spec.twoWheeler ? undefined : radioDial(this.audio.currentRadio),
       taxi: isTaxiKind(this.activeVehicle.spec.kind) ? { text: taxiHudText(this.taxiRide.phase, this.taxiRide.duty === 'available', this.taxiRide.fare, this.taxiRide.tip), available: this.taxiRide.available } : undefined,
       courier: this.activeVehicle.spec.kind === 'courier' ? { text: courierHudText(this.courierJob), available: this.courierJob.active } : undefined,
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
-    const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
+    const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
     this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
@@ -1817,6 +1926,7 @@ export class Game {
     this.endTaxiShift(this.activeVehicle);
     this.endCourierShift(this.activeVehicle);
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
+    this.releasePlane();
     this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.resetAirbornePose(); this.player.inVehicle = false; this.player.setVisible(true); this.player.heal();
     const at = busted ? POLICE_STATION : this.save.spawn;
     this.player.group.position.set(...at); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
