@@ -24,7 +24,8 @@ describe('citywide model scatter', () => {
   const all = allScatteredModels();
 
   it('fills the map broadly with thousands of models across every quadrant', () => {
-    expect(all.length).toBeGreaterThan(5000);
+    expect(all.length).toBeGreaterThan(20000); // dense-clutter floor: streets and veld read inhabited
+
     const quadrants = new Set(all.map((m) => `${Math.sign(m.x)},${Math.sign(m.z)}`));
     expect(quadrants.size).toBeGreaterThanOrEqual(4);
   });
@@ -104,6 +105,9 @@ describe('citywide model scatter', () => {
 
   it('never exceeds the per-cell cap (bounds draw calls + generation cost)', () => {
     expect(scatterStats().maxPerCell).toBeLessThanOrEqual(SCATTER_CELL_CAP);
+    // Budget window: high enough that busy cells read dense, capped so a cell's merge stays bounded.
+    expect(SCATTER_CELL_CAP).toBeGreaterThanOrEqual(150);
+    expect(SCATTER_CELL_CAP).toBeLessThanOrEqual(220);
   });
 });
 

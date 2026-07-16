@@ -2,12 +2,12 @@ import * as THREE from 'three';
 import type { AudioManager } from '../core/AudioManager';
 
 export type PropTier = 'solid' | 'knockover';
-export type PropKind = 'tree' | 'palm' | 'fountain' | 'monument' | 'crane' | 'shelter' | 'signal' | 'post' | 'streetlight' | 'sign' | 'hydrant' | 'bench' | 'shrub';
+export type PropKind = 'tree' | 'palm' | 'fountain' | 'monument' | 'crane' | 'shelter' | 'signal' | 'post' | 'streetlight' | 'sign' | 'hydrant' | 'bench' | 'shrub' | 'bin';
 
 /** Solid props stop a car dead (trunk-sized colliders, not crown-sized); the rest tip over when hit fast enough. */
 export const PROP_TIERS: Record<PropKind, PropTier> = {
   tree: 'solid', palm: 'solid', fountain: 'solid', monument: 'solid', crane: 'solid', shelter: 'solid', signal: 'solid', post: 'solid',
-  streetlight: 'knockover', sign: 'knockover', hydrant: 'knockover', bench: 'knockover', shrub: 'knockover',
+  streetlight: 'knockover', sign: 'knockover', hydrant: 'knockover', bench: 'knockover', shrub: 'knockover', bin: 'knockover',
 };
 
 /** Flat-topped street furniture the player can genuinely stand on; poles, trunks and crowns stay walls-only. */

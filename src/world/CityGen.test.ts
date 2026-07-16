@@ -56,6 +56,9 @@ describe('citywide parcel layout', () => {
 
   it('never exceeds the per-cell building cap (bounds draw calls + generation cost)', () => {
     expect(buildingStats().maxPerCell).toBeLessThanOrEqual(CELL_BUILDING_CAP);
+    // Budget window: dense CBD/suburb in-fill without letting one cell's build cost run away.
+    expect(CELL_BUILDING_CAP).toBeGreaterThanOrEqual(50);
+    expect(CELL_BUILDING_CAP).toBeLessThanOrEqual(80);
   });
 
   it('never places a building footprint over a road corridor (no mass overhangs the street)', () => {

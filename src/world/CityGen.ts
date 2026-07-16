@@ -54,8 +54,10 @@ const SHRINK_FACTOR = 0.82;
 const SHRINK_ATTEMPTS = 6;
 /** Never shrink a footprint below this on either axis — reject instead (keeps the street clear). */
 const MIN_FOOTPRINT = 5;
-/** Per-cell hard cap on buildings — bounds both draw calls and per-cell generation cost. */
-export const CELL_BUILDING_CAP = 46;
+/** Per-cell hard cap on buildings — bounds both draw calls and per-cell generation cost. Raised
+ *  46 → 56 with the denser zone acceptance: buildings merge per-cell into a handful of draw calls,
+ *  so the extra 10 costs one-off generation time, not steady-state frame time. */
+export const CELL_BUILDING_CAP = 56;
 const HALF_WORLD = MAP_WORLD_SIZE / 2;
 
 export interface GeneratedBuilding {
@@ -114,19 +116,19 @@ interface ZoneShape {
 
 /** Per-zone parcel geometry. Sizes are in game units at the authored 2.94 m/unit scale (× LAYOUT_SCALE). */
 const ZONE_SHAPE: Record<Exclude<Zone, 'none'>, ZoneShape> = {
-  'commercial-highrise': { style: 'downtown', lot: [26, 44], depth: [22, 38], yard: 1.5, accept: 0.85 },
-  'commercial-strip': { style: 'downtown', lot: [12, 22], depth: [14, 22], yard: 2.2, accept: 0.7 },
-  residential: { style: 'residential', lot: [15, 25], depth: [9, 14], yard: 4, accept: 0.42 },
-  industrial: { style: 'industrial', lot: [26, 46], depth: [22, 40], yard: 3, accept: 0.5 },
-  estate: { style: 'estate', lot: [60, 110], depth: [30, 52], yard: 10, accept: 0.72 },
-  rural: { style: 'residential', lot: [40, 80], depth: [8, 14], yard: 12, accept: 0.28 },
+  'commercial-highrise': { style: 'downtown', lot: [26, 44], depth: [22, 38], yard: 1.5, accept: 0.92 },
+  'commercial-strip': { style: 'downtown', lot: [12, 22], depth: [14, 22], yard: 2.2, accept: 0.78 },
+  residential: { style: 'residential', lot: [15, 25], depth: [9, 14], yard: 4, accept: 0.52 },
+  industrial: { style: 'industrial', lot: [26, 46], depth: [22, 40], yard: 3, accept: 0.62 },
+  estate: { style: 'estate', lot: [60, 110], depth: [30, 52], yard: 10, accept: 0.78 },
+  rural: { style: 'residential', lot: [40, 80], depth: [8, 14], yard: 12, accept: 0.34 },
 };
 
 /** Placement probability for a zone at a point, scaled by the local OSM building density. */
 function acceptance(zone: Exclude<Zone, 'none'>, density: number): number {
   const base = ZONE_SHAPE[zone].accept;
-  if (zone === 'residential') return Math.min(0.6, 0.12 + density / 500);
-  if (zone === 'commercial-strip') return Math.min(0.8, 0.3 + density / 900);
+  if (zone === 'residential') return Math.min(0.72, 0.2 + density / 420);
+  if (zone === 'commercial-strip') return Math.min(0.88, 0.42 + density / 800);
   return base;
 }
 
