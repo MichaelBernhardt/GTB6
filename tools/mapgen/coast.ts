@@ -127,6 +127,21 @@ export function offsetPolyline(points: Pt[], offset: number): Pt[] {
   });
 }
 
+/** Separating-axis overlap test for two convex quads (true when they intersect). */
+export function quadsOverlap(a: Pt[], b: Pt[]): boolean {
+  for (const [first, second] of [[a, b], [b, a]] as const) {
+    for (let i = 0; i < first.length; i++) {
+      const p = first[i]!; const q = first[(i + 1) % first.length]!;
+      const axisX = -(q.z - p.z); const axisZ = q.x - p.x;
+      let minA = Infinity; let maxA = -Infinity; let minB = Infinity; let maxB = -Infinity;
+      for (const v of first) { const d = v.x * axisX + v.z * axisZ; minA = Math.min(minA, d); maxA = Math.max(maxA, d); }
+      for (const v of second) { const d = v.x * axisX + v.z * axisZ; minB = Math.min(minB, d); maxB = Math.max(maxB, d); }
+      if (maxA < minB || maxB < minA) return false; // separating axis found
+    }
+  }
+  return true;
+}
+
 /** Catmull-Rom through control points, sampled ~every `step` metres — the "creative curves". */
 export function smoothCurve(controls: Pt[], step = 90): Pt[] {
   if (controls.length < 3) return [...controls];
@@ -377,7 +392,22 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
     const bc = { x: apronCenter.x + airDx * (i - 1) * 150 + airPx * 190, z: apronCenter.z + airDz * (i - 1) * 150 + airPz * 190 };
     return rectPoly(bc.x, bc.z, airDx, airDz, i === 1 ? 70 : 45, 40);
   });
-  const airportBoundary = rectPoly(airCenter.x + airPx * 160, airCenter.z + airPz * 160, airDx, airDz, runwayHalf + 200, 430);
+  // Organic airfield boundary (owner: the perfect rectangle over the farmland "really looks out
+  // of place"): an fBm-wobbled ellipse around the runway axis instead of a hard rectPoly.
+  const airportBoundary: Pt[] = (() => {
+    const cx = airCenter.x + airPx * 160; const cz = airCenter.z + airPz * 160;
+    const seed = nameSeed(AIRPORT_NAME);
+    const along = runwayHalf + 320; const across = 520;
+    const points: Pt[] = [];
+    for (let i = 0; i < 30; i++) {
+      const angle = (i / 30) * Math.PI * 2;
+      // Periodic noise (sampled on the unit circle) so the outline closes without a seam.
+      const wobble = 1 + 0.11 * (fbm(seed, Math.cos(angle) * 1.9 + 4.2, 3) + fbm(seed + 9, Math.sin(angle) * 1.9 + 7.6, 3));
+      const u = Math.cos(angle) * along * wobble; const v = Math.sin(angle) * across * wobble;
+      points.push({ x: cx + airDx * u + airPx * v, z: cz + airDz * u + airPz * v });
+    }
+    return points;
+  })();
   const airport: CoastAirport = { name: AIRPORT_NAME, runway, taxiway, apron: airportApron, buildings: airportBuildings, boundary: airportBoundary, center: airCenter };
   // Access road from the apron out to the nearest Plaaspad frontage node (stays in the road graph).
   if (frontageIds.length > 0) {
@@ -418,7 +448,7 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
       const cx = bandWest + (bandEast - bandWest) * (0.22 + lane * 0.52) + (seeded(z, lane) - 0.5) * 500;
       const cz = z + (seeded(lane, z) - 0.5) * 420;
       if (!clearOfCorridorRoads(cx, cz, 430)) { fieldIndex++; continue; }
-      if (Math.hypot(cx - airCenter.x, cz - airCenter.z) < 1150) { fieldIndex++; continue; } // keep the aerodrome clear
+      if (Math.hypot(cx - airCenter.x, cz - airCenter.z) < 1450) { fieldIndex++; continue; } // keep the aerodrome clear
       // Never let a field spill toward the shore (the coastline drifts around the corridor's west edge).
       const shoreX = coastline.reduce((best, point) => (Math.abs(point.z - cz) < Math.abs(best.z - cz) ? point : best), coastline[0]!).x;
       if (cx - 600 < shoreX + COAST_ROAD_SETBACK_M) { fieldIndex++; continue; }
@@ -426,7 +456,10 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
       const tilt = (seeded(cx + cz, 7) - 0.5) * 0.35;
       const cos = Math.cos(tilt); const sin = Math.sin(tilt);
       const corner = (sx: number, sz: number): Pt => ({ x: cx + (sx * w * cos - sz * h * sin) / 2, z: cz + (sx * w * sin + sz * h * cos) / 2 });
-      farmland.push({ name: fieldIndex % 3 === 0 ? 'Mielie land' : 'Weiveld', points: [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)] });
+      const quad = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+      // Fields must not overlap their neighbours (owner: overlapping farm regions make no sense).
+      if (farmland.some((field) => quadsOverlap(quad, field.points))) { fieldIndex++; continue; }
+      farmland.push({ name: fieldIndex % 3 === 0 ? 'Mielie land' : 'Weiveld', points: quad });
       if (fieldIndex % 2 === 0 && farms.length < 14) {
         const base = corner(-0.62, -0.55);
         farms.push({ p: base, kind: 'farmhouse' });
