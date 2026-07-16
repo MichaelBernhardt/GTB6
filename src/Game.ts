@@ -94,6 +94,7 @@ export class Game {
   private population: PopulationSystem;
   private lifecycle: LifecycleSystem;
   private cameraForward = new THREE.Vector3();
+  private trainEye = new THREE.Vector3(); // FP drive eye anchor, pushed past the hidden cab shell
   private combat: CombatSystem;
   private gore: GoreSystem;
   private pickups: PickupSystem;
@@ -602,8 +603,8 @@ export class Game {
     if (this.input.consume('Escape')) { this.pause(); return; }
     if (this.input.consume('Backquote')) this.openConsole(); // input suspends, world keeps running
     if (this.input.consume('KeyM')) this.openMap(); // Esc/M closes it (handled by the overlay while open)
-    if (this.input.consume('KeyV')) {
-      const key = this.activeVehicle ? 'cameraViewVehicle' : 'cameraViewFoot';
+    if (this.input.consume('KeyV') && (!this.trains.riding || this.trains.driving)) { // the train aisle is FP-only
+      const key = this.activeVehicle || this.trains.driving ? 'cameraViewVehicle' : 'cameraViewFoot';
       this.settings[key] = cycleView(this.settings[key]);
       this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.settings[key]]}`); this.persist();
     }
@@ -1736,10 +1737,14 @@ export class Game {
   private updateCamera(dt: number): void {
     const flying = this.activePlane;
     const target = flying?.group.position ?? this.activeVehicle?.group.position ?? this.player.group.position;
-    // Aboard a train: first person only — the FP eye composes rigidly with the platform (no lerp lag),
-    // and a third-person boom would sit outside the car shell with the walls occluding the player.
-    const view = this.trains.riding ? 0 : this.activeVehicle || flying ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
+    // Aboard a train the aisle is first-person only (a boom would sit outside the shell), but at the
+    // CONTROLS the vehicle view ladder applies: chase cam by default, or V down to first person — where
+    // the occupied cab's nose shell hides for a clear windscreen (same trick as the cars' cabins).
+    const view = this.trains.riding
+      ? (this.trains.driving ? this.settings.cameraViewVehicle : 0)
+      : this.activeVehicle || flying ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
     const firstPerson = view === 0;
+    this.trains.setDriveFirstPerson(this.trains.driving && firstPerson);
     const riding = Boolean(this.player.inVehicle && this.activeVehicle?.spec.twoWheeler); // riders stay visible except in first person
     const scoped = this.scoped; // scope: first-person eye from any view, model hidden, FOV from the zoom ladder
     this.player.setVisible(riding ? !firstPerson : !this.player.inVehicle && !((firstPerson || scoped) && !this.activeVehicle && !this.transition));
@@ -1750,10 +1755,14 @@ export class Game {
       : 0; // pull the camera toward the exposed corner for visibility over the shoulder
     this.coverLean = THREE.MathUtils.lerp(this.coverLean, leanTarget, 1 - Math.exp(-dt * 8));
     const sensitivity = scoped ? scopeSensitivity(this.settings.mouseSensitivity, this.scopeLevel) : this.settings.mouseSensitivity;
-    const airborneBoost = this.airborne ? (this.airborne.mode === 'freefall' ? 6 : 4) : flying ? 7 : 0; // skydives and flights read better with the boom pulled back
+    const airborneBoost = this.airborne ? (this.airborne.mode === 'freefall' ? 6 : 4) : flying ? 7 : this.trains.driving ? 10 : 0; // skydives, flights and a 60 m consist read better with the boom pulled back
     const backpedal = this.input.down('KeyS') && !this.input.down('KeyW'); // reversing is a clean straight backpedal — no auto-follow slew, or the camera whips 180° to get behind the rearward heading
     const footTrail = !this.activeVehicle && this.player.moving && !this.input.aiming && !this.cover && !backpedal; // lazy camera follow on foot: keeps keyboard/gamepad-only players oriented; off while aiming or in cover so the shoulder/peek framing holds
-    this.cameraController.update(dt, this.input, target, this.city, Boolean(this.activeVehicle) || Boolean(flying), sensitivity, view, flying?.state.heading ?? this.activeVehicle?.heading ?? 0, !this.combat.spec.melee && !this.airborne && !flying, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, flying ? 2.6 : this.activeVehicle?.spec.size[1] ?? 0, this.player.heading, footTrail);
+    const trainHeading = this.trains.driveHeading;
+    const trainFp = this.trains.driving && firstPerson;
+    // FP at the controls: nudge the eye forward past the (hidden) cab shell so the end wall never clips the view.
+    if (trainFp && trainHeading !== undefined) this.trainEye.set(target.x + Math.sin(trainHeading) * 1.15, target.y, target.z + Math.cos(trainHeading) * 1.15);
+    this.cameraController.update(dt, this.input, trainFp && trainHeading !== undefined ? this.trainEye : target, this.city, Boolean(this.activeVehicle) || Boolean(flying) || this.trains.driving, sensitivity, view, flying?.state.heading ?? this.activeVehicle?.heading ?? trainHeading ?? 0, !this.combat.spec.melee && !this.airborne && !flying, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, flying ? 2.6 : this.trains.driving ? 3.4 : this.activeVehicle?.spec.size[1] ?? 0, this.player.heading, footTrail);
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -1834,7 +1843,7 @@ export class Game {
           prompt = `E  Exit vehicle  ·  F  Recover${radioHint}${taxiHint}${courierHint}${sirenHint}`;
         }
       }
-      else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
+      else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  V  Camera  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';

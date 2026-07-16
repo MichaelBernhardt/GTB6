@@ -122,6 +122,8 @@ interface Train {
   state: ShuttleState;
   cars: THREE.Group[];
   trainLength: number;
+  /** The streamlined cab shells (nose + lamps) per end — hidden for the windscreen view in FP driving. */
+  noseParts: { nose: THREE.Object3D[]; tail: THREE.Object3D[] };
 }
 
 export class TrainSystem {
@@ -139,10 +141,13 @@ export class TrainSystem {
     for (const [index, line] of lines.entries()) {
       const carCount = line.cum[line.cum.length - 1]! > 6000 ? 4 : 2;
       const cars: THREE.Group[] = [];
+      const noseParts: Train['noseParts'] = { nose: [], tail: [] };
       for (let car = 0; car < carCount; car++) {
-        const mesh = buildCar(car === 0, car === carCount - 1);
-        scene.add(mesh);
-        cars.push(mesh);
+        const built = buildCar(car === 0, car === carCount - 1);
+        scene.add(built.group);
+        cars.push(built.group);
+        if (car === 0) noseParts.nose = built.noses[1] ?? [];
+        if (car === carCount - 1) noseParts.tail = built.noses[-1] ?? [];
       }
       const trainLength = carCount * CAR_LENGTH + (carCount - 1) * CAR_GAP;
       this.trains.push({
@@ -152,6 +157,7 @@ export class TrainSystem {
         state: { s: trainLength + index * 400, direction: 1, dwell: 0, speed: 0 },
         cars,
         trainLength,
+        noseParts,
       });
       this.place(this.trains[this.trains.length - 1]!);
     }
@@ -186,6 +192,26 @@ export class TrainSystem {
   get driving(): boolean { return Boolean(this.ride?.driving); }
   get atCab(): boolean { const ride = this.ride; return Boolean(ride && !ride.driving && cabAt(ride.s, ride.train.trainLength, CAB_ZONE) !== 0); }
   get rideSpeedKph(): number { const ride = this.ride; return ride ? Math.abs(ride.driving ? ride.v : ride.train.state.speed * ride.train.state.direction) * 3.6 : 0; }
+
+  /** World heading the occupied cab faces (chase camera anchor); undefined off the controls. */
+  get driveHeading(): number | undefined {
+    const ride = this.ride; if (!ride?.driving) return undefined;
+    const pose = poseAt(ride.train.points, ride.train.cum, ride.train.state.s - ride.s);
+    const heading = Math.atan2(pose.dirX, pose.dirZ);
+    return ride.cabSign === 1 ? heading : heading + Math.PI;
+  }
+
+  /** Windscreen view: in first-person driving the occupied cab's streamlined shell (nose + lamps)
+   *  hides — the same trick the cars use for their cabin glass — and restores otherwise. */
+  setDriveFirstPerson(firstPerson: boolean): void {
+    const ride = this.ride;
+    for (const train of this.trains) {
+      const drivenEnd = ride?.train === train && ride.driving && firstPerson ? (ride.cabSign === 1 ? 'nose' : 'tail') : undefined;
+      for (const end of ['nose', 'tail'] as const) {
+        for (const part of train.noseParts[end]) part.visible = end !== drivenEnd;
+      }
+    }
+  }
 
   /** Camera-relative stick + yaw for this sim step, sampled by Game before update() runs. */
   setRideStick(side: number, forward: number, yaw: number, sprint: boolean): void { this.stick = { side, forward, yaw, sprint }; }
@@ -303,7 +329,7 @@ export class TrainSystem {
 }
 
 /** One Gautrain-flavoured EMU car out of primitive geometry (no external assets, ~40 tris). */
-function buildCar(leading: boolean, trailing: boolean): THREE.Group {
+function buildCar(leading: boolean, trailing: boolean): { group: THREE.Group; noses: Partial<Record<1 | -1, THREE.Object3D[]>> } {
   const group = new THREE.Group();
   // Opaque shell renders double-sided so the interior reads as walls/roof/floor for a rider walking
   // the corridor; the glass band stays front-side only, so from inside it is an open view strip.
@@ -323,22 +349,49 @@ function buildCar(leading: boolean, trailing: boolean): THREE.Group {
   under.position.y = 0.55; group.add(under);
   const band = new THREE.Mesh(new THREE.BoxGeometry(3.04, 0.42, CAR_LENGTH - 0.4), navy);
   band.position.y = 1.12; group.add(band);
+  addSeating(group);
 
   // Sloped nose cone + headlights on the leading car (and the mirrored tail on the last).
-  for (const [isNose, sign] of [[leading, 1], [trailing, -1]] as Array<[boolean, number]>) {
+  const noses: Partial<Record<1 | -1, THREE.Object3D[]>> = {};
+  for (const [isNose, sign] of [[leading, 1], [trailing, -1]] as Array<[boolean, 1 | -1]>) {
     if (!isNose) continue;
+    const parts: THREE.Object3D[] = [];
     const nose = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 3.0, 12, 1, false, 0, Math.PI), gold);
     nose.rotation.z = Math.PI / 2; nose.rotation.y = sign > 0 ? 0 : Math.PI;
     nose.scale.set(1, 1.2, 1.66); // stretched half-cylinder reads as a streamlined cab
     nose.position.set(0, 2.1, sign * (CAR_LENGTH / 2 - 0.4));
-    nose.castShadow = true; group.add(nose);
+    nose.castShadow = true; group.add(nose); parts.push(nose);
     const light = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6),
       new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a8, emissiveIntensity: 1.4 }));
     for (const side of [-0.7, 0.7]) {
       const lamp = light.clone();
       lamp.position.set(side, 1.5, sign * (CAR_LENGTH / 2 + 1.7));
-      group.add(lamp);
+      group.add(lamp); parts.push(lamp);
     }
+    noses[sign] = parts;
   }
-  return group;
+  return { group, noses };
+}
+
+/** Rows of paired commuter seats down both walls — the aisle (±AISLE_HALF) stays clear, so the
+ *  rider corridor never needs seat collision. Instanced: two draws per car. */
+function addSeating(group: THREE.Group): void {
+  const cushion = new THREE.MeshStandardMaterial({ color: 0x33456a, roughness: 0.85 });
+  const frame = new THREE.MeshStandardMaterial({ color: 0x2c3238, roughness: 0.6, metalness: 0.35 });
+  const rows: Array<{ z: number; side: 1 | -1; facing: 1 | -1 }> = [];
+  for (let z = -(CAR_LENGTH / 2 - 2.4); z <= CAR_LENGTH / 2 - 2.4; z += 1.9) {
+    for (const side of [-1, 1] as const) rows.push({ z, side, facing: z < 0 ? 1 : -1 }); // bays face the middle doors
+  }
+  const seatX = (AISLE_HALF + 1.5) / 2; // centred between the aisle edge and the wall
+  const cushions = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, 0.1, 0.48), cushion, rows.length);
+  const backs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.42, 0.52, 0.09), cushion, rows.length);
+  const legs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.3, 0.32, 0.34), frame, rows.length);
+  const matrix = new THREE.Matrix4();
+  rows.forEach((row, index) => {
+    const x = row.side * seatX;
+    matrix.makeTranslation(x, FLOOR_Y + 0.42, row.z); cushions.setMatrixAt(index, matrix);
+    matrix.makeTranslation(x, FLOOR_Y + 0.72, row.z - row.facing * 0.24); backs.setMatrixAt(index, matrix);
+    matrix.makeTranslation(x, FLOOR_Y + 0.16, row.z); legs.setMatrixAt(index, matrix);
+  });
+  for (const mesh of [cushions, backs, legs]) { mesh.instanceMatrix.needsUpdate = true; group.add(mesh); }
 }
