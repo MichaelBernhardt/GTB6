@@ -52,9 +52,12 @@ export class Plane {
 
   /** One piloted tick: stick from the keys, the pure step, then world clamps — bounds, buildings, terrain. */
   updatePlayer(dt: number, input: InputManager, city: City): PlaneUpdate {
+    // GTA-style deck: W/S throttle, ↑/↓ pitch, and BOTH A/D and ←/→ bank (either muscle memory works).
     const stick: PlaneStick = {
       throttle: Number(input.down('KeyW')) - Number(input.down('KeyS')),
-      steer: Number(input.down('KeyA')) - Number(input.down('KeyD')),
+      steer: Math.max(-1, Math.min(1,
+        Number(input.down('KeyA')) - Number(input.down('KeyD'))
+        + Number(input.down('ArrowLeft')) - Number(input.down('ArrowRight')))),
       pitch: Number(input.down('ArrowUp')) - Number(input.down('ArrowDown')),
     };
     return this.step(stick, dt, city);
