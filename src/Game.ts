@@ -428,6 +428,7 @@ export class Game {
    *  on foot — the vehicle stays where it was. */
   /** Put the player on foot: exit/free any vehicle, drop cover, cancel airborne/canopy, unwind the airborne pose. */
   private leaveVehicleOnFoot(): void {
+    this.trains.endRide();
     const vehicle = this.activeVehicle ?? this.transition?.vehicle;
     if (vehicle) {
       this.endTaxiShift(vehicle);
@@ -536,7 +537,7 @@ export class Game {
 
   private startOnline(name: string): void {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
-    this.endTaxiShift(); this.endCourierShift(); this.online?.close();
+    this.endTaxiShift(); this.endCourierShift(); this.online?.close(); this.trains.endRide();
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
     this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose();
     this.player.group.position.set(2050, 0, 3850); this.player.group.position.y = this.city.surfaceHeightAt(2050, 3850);
@@ -609,6 +610,7 @@ export class Game {
     if (this.input.consume('KeyH')) this.useStim();
     if (this.airborne) this.updateAirborne(dt);
     else if (this.transition) this.updateTransition(dt);
+    else if (this.trains.riding) this.updateTrainRide();
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
@@ -636,6 +638,8 @@ export class Game {
     this.lifecycle.update(dt, this.dayNight.hour, { x: eye.x, z: eye.z, dirX: forward.x, dirZ: forward.z }, guarded);
     this.city.update(dt);
     this.trains.update(dt);
+    const aboard = this.trains.riderPose(); // platform motion composes into the player BEFORE the camera reads the position
+    if (aboard) { this.player.group.position.set(aboard.x, aboard.y, aboard.z); this.player.setHeading(aboard.heading); this.player.animateAboard(aboard.walkSpeed, aboard.side, aboard.forward); }
     this.applyEskom(this.loadShedding.update(dt));
     this.dayNight.update(dt, focus, this.population.vehicles, this.police.vehicles, this.activeVehicle ?? this.transition?.vehicle);
     for (const impact of this.population.consumeImpacts()) {
@@ -838,11 +842,29 @@ export class Game {
       if (shop?.kind === 'hotdog') { this.buyHotdog(); return; }
       const safehouse = this.safehouses.near(this.player.group.position);
       if (safehouse) { this.enterSafehouse(safehouse); return; }
+      if (this.trains.tryBoard(this.player.group.position)) { this.cover = undefined; this.ui.notify('All aboard', 'WASD walks the aisle. E steps off — or takes the controls from a cab.'); return; }
       if (shop?.driveIn && !vehicle && !cruiser) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
       const pick = cruiser && (!vehicle || cruiser.group.position.distanceToSquared(this.player.group.position) < vehicle.group.position.distanceToSquared(this.player.group.position)) ? cruiser : vehicle;
       if (pick === cruiser && cruiser) { this.police.release(cruiser); this.population.vehicles.push(cruiser); } // stolen cruiser leaves the JMPD fleet
       if (pick) this.beginEnter(pick);
     }
+  }
+
+  /** Aboard a train: E steps off, takes the cab controls, or hands them back; movement intent is
+   *  sampled here and applied by TrainSystem.update after the shuttles advance (see the aboard hook). */
+  private updateTrainRide(): void {
+    if (this.input.consume('KeyE')) {
+      if (this.trains.driving) { this.trains.releaseControls(); this.ui.notify('Controls released', 'The schedule takes it from here.'); }
+      else if (this.trains.atCab) { this.trains.takeControls(); this.ui.notify('You have the train', 'W drives, S brakes then reverses. E in the cab hands it back.'); }
+      else {
+        const exit = this.trains.dismount();
+        if (!exit) { this.ui.notify('Exit blocked', 'No clear ground beside the tracks here.', false); return; }
+        this.player.group.position.set(exit.x, exit.y, exit.z); this.player.velocityY = 0; this.player.onGround = true;
+        if (exit.tumble) { this.player.tumble(); this.shake = Math.min(0.7, this.shake + 0.25); }
+        return;
+      }
+    }
+    this.trains.setRideStick(Number(this.input.down('KeyD')) - Number(this.input.down('KeyA')), Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')), this.cameraController.yaw, this.input.down('ShiftLeft'));
   }
 
   /** Skydive tick: WASD trims pitch and heading via the pure step, walls still clamp the glide, SPACE (or F)
@@ -1610,7 +1632,9 @@ export class Game {
 
   private updateCamera(dt: number): void {
     const target = this.activeVehicle?.group.position ?? this.player.group.position;
-    const view = this.activeVehicle ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
+    // Aboard a train: first person only — the FP eye composes rigidly with the platform (no lerp lag),
+    // and a third-person boom would sit outside the car shell with the walls occluding the player.
+    const view = this.trains.riding ? 0 : this.activeVehicle ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
     const firstPerson = view === 0;
     const riding = Boolean(this.player.inVehicle && this.activeVehicle?.spec.twoWheeler); // riders stay visible except in first person
     const scoped = this.scoped; // scope: first-person eye from any view, model hidden, FOV from the zoom ladder
@@ -1705,6 +1729,7 @@ export class Game {
           prompt = `E  Exit vehicle  ·  F  Recover${radioHint}${taxiHint}${courierHint}${sirenHint}`;
         }
       }
+      else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
@@ -1715,6 +1740,7 @@ export class Game {
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
+      else if (this.trains.boardable(focus)) prompt = 'E  Board the train';
       else if (this.coverAvailable) prompt = 'Q  Take cover';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus) || this.police.stealableNear(focus)) prompt = 'E  Enter vehicle';
@@ -1814,6 +1840,7 @@ export class Game {
   }
 
   private respawn(busted = false): void {
+    this.trains.endRide();
     this.endTaxiShift(this.activeVehicle);
     this.endCourierShift(this.activeVehicle);
     if (this.activeVehicle) { this.activeVehicle.playerControlled = false; this.activeVehicle.setFirstPerson(false); this.activeVehicle = undefined; }
