@@ -539,6 +539,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   const minElevation = Math.min(...heightData);
   const maxElevation = Math.max(...heightData);
   log.push(`elevation: ${composite ? composite.cols : elevation.cols}x${composite ? composite.rows : elevation.rows} grid, ${minElevation}..${maxElevation} m (${composite ? composite.source : elevation.source})`);
+  if (composite) log.push(`range: northern fractal ridge peaks at +${Math.max(...composite.ridge)} m over the base terrain`);
 
   // ---- Land/ocean split (composite stats for the preview) --------------------
   let oceanKm2: number | undefined; let landKm2: number | undefined;
@@ -644,6 +645,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       dz: round2(composite.dz),
       source: composite.source,
       data: composite.data,
+      ridge: composite.ridge,
     } : {
       cols: elevation.cols,
       rows: elevation.rows,

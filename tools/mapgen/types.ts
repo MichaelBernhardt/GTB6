@@ -164,6 +164,9 @@ export interface HeightGrid {
   dz: number;
   source: string;
   data: number[];
+  /** Metres of synthetic northern mountain range included in `data` per cell (coast builds only) —
+   *  shipped so the runtime can exempt the range from detrending (see src/world/mapData.ts). */
+  ridge?: number[];
 }
 
 export interface MapWater {

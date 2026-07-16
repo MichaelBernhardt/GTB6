@@ -3,7 +3,7 @@ import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PLAYER } from '../config';
 import { fallDamage, jumpVelocity, stepVertical, type VerticalMotion } from '../core/GameRules';
 import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, RAILWAY_NETWORK, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
-import { CBD_CENTER, districtCenter, MAP_WORLD_SIZE } from './mapData';
+import { CBD_CENTER, districtCenter, MAP_WORLD_SIZE, ridgeMetresAt } from './mapData';
 import { CITY_JUNCTIONS, signalCornerOffset } from './UrbanInfrastructure';
 
 describe('generated Joburg road topology', () => {
@@ -91,14 +91,17 @@ describe('terrain relief from the SRTM heightgrid', () => {
   });
 
   it('stays within the detrended envelope everywhere (no runaway escarpment cliffs)', () => {
-    // Regional band maxes near maxElevation * scale; local band is capped either side. Sample a coarse
-    // grid over the whole world and assert nothing blows past a generous bound.
-    let lo = Infinity; let hi = -Infinity;
+    // Regional band maxes near maxElevation * scale; local band is capped either side; only the
+    // DELIBERATE northern range (elevation.ridge × TERRAIN_RIDGE_SCALE, ≤ ~475 u) rises past that.
+    // Sample a coarse grid over the whole world and assert nothing blows past the two bounds.
+    let lo = Infinity; let hi = -Infinity; let offRangeHi = -Infinity;
     for (let x = -8900; x <= 8900; x += 445) for (let z = -8900; z <= 8900; z += 445) {
       const h = terrainHeightAt(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h);
+      if (ridgeMetresAt(x, z) === 0) offRangeHi = Math.max(offRangeHi, h);
     }
     expect(lo).toBeGreaterThan(-200);
-    expect(hi).toBeLessThan(400);
+    expect(hi).toBeLessThan(560);
+    expect(offRangeHi).toBeLessThan(400); // away from the range the old detrended ceiling still holds
   });
 
   it('keeps sidewalks stepped above roads above the terrain', () => {

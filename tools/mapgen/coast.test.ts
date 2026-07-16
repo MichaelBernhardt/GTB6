@@ -124,4 +124,22 @@ describe('rural corridor', () => {
     expect(corridorMax).toBeGreaterThan(100);
     expect(corridorMax).toBeLessThan(1900);
   });
+
+  it('raises a tall fractal range along the top edge, tapered off the CBD, corridor and ocean', () => {
+    const e = map.elevation;
+    const ridge = e.ridge!;
+    expect(ridge).toHaveLength(e.data.length);
+    const at = (col: number, row: number): number => ridge[row * e.cols + col]!;
+    const colOf = (x: number): number => Math.round((x - e.x0) / e.dx);
+    const rowOf = (z: number): number => Math.round((z - e.z0) / e.dz);
+    expect(Math.max(...ridge)).toBeGreaterThan(1000); // the crest genuinely towers over the ~1750 m plateau
+    // The southern half of the map (CBD included) carries EXACTLY zero mountain.
+    for (let row = rowOf(-1400); row < e.rows; row++) for (let col = 0; col < e.cols; col++) expect(at(col, row)).toBe(0);
+    expect(at(colOf(2913), rowOf(5332))).toBe(0); // Joburg CBD
+    // The ocean/coast columns and the rural corridor carry none either.
+    for (let row = 0; row < e.rows; row++) {
+      expect(at(2, row)).toBe(0);
+      expect(at(colOf((coast.corridor.westX + coast.corridor.eastX) / 2), row)).toBe(0);
+    }
+  });
 });

@@ -133,6 +133,46 @@ export function createGrassTexture(variant: GrassVariant, repeat: number, size =
 }
 
 /**
+ * Altitude dressing for the ground sheet, injected via onBeforeCompile: high terrain fades from turf
+ * into bare rock and then snowy white above `snowY` (world units). Both transitions ride a world-space
+ * noise dither so the snowline is a natural ragged band, never a hard contour. Only the synthetic
+ * northern mountain range reaches these heights (see City.TERRAIN_RIDGE_SCALE / SNOW_Y) — everywhere
+ * else the blend factors are zero and the grass renders untouched.
+ */
+export function applySnowShader(material: THREE.MeshStandardMaterial, options: { snowY: number; rockY: number }): void {
+  const f = (v: number): string => v.toFixed(1);
+  // Compose with any shader already on the material (the lawn wind/macro pass): run it first, then
+  // altitude-tint its diffuse. Anchors on color_fragment — map_fragment may already be rewritten.
+  const prior = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    prior?.call(material, shader, renderer);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vAltWorld;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvAltWorld = (modelMatrix * vec4(position, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vAltWorld;
+        float aHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float aNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(aHash(i), aHash(i + vec2(1.0, 0.0)), u.x), mix(aHash(i + vec2(0.0, 1.0)), aHash(i + vec2(1.0, 1.0)), u.x), u.y); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          // Two-octave world-space dither (~90u and ~22u) makes both bands ragged and organic.
+          float aDither = (aNoise(vAltWorld.xz * 0.011) * 0.7 + aNoise(vAltWorld.xz * 0.045) * 0.3 - 0.5) * 95.0;
+          float aY = vAltWorld.y + aDither;
+          float rockT = smoothstep(${f(options.rockY)}, ${f(options.snowY)}, aY);
+          vec3 rockTone = vec3(0.36, 0.325, 0.28) * (0.75 + 0.5 * aNoise(vAltWorld.xz * 0.03));
+          diffuseColor.rgb = mix(diffuseColor.rgb, rockTone, rockT * 0.85);
+          float snowT = smoothstep(${f(options.snowY)}, ${f(options.snowY + 75)}, aY);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.91, 0.94, 0.97), snowT);
+        }`);
+  };
+  // Distinct program per (prior shader, snow band): the default cache key would collide for every
+  // material wrapped here (identical wrapper source) and hand one variant the other's program.
+  material.customProgramCacheKey = () => `${String(prior ?? '')}|snow:${options.rockY}:${options.snowY}`;
+}
+
+/**
  * Shader dressing for lawn materials, injected via onBeforeCompile (no geometry; survives the static merge
  * because the material object is reused). Always adds MACRO VARIATION — large-scale world-space noise that
  * lightens/darkens the grass so the small (~6m) tile stops reading as an obvious repeat when viewed from far
