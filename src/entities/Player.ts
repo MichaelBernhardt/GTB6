@@ -116,6 +116,12 @@ export class Player {
     this.setVisualState({ locomotionSpeed: speed, aiming: false, firing: false, onGround: true, velocityY: 0 });
   }
 
+  /** Aboard a moving platform (train corridor): the platform owns the position; this drives the walk/idle rig and the movement flags directly. */
+  animateAboard(speed: number, side: number, forward: number): void {
+    this.moving = speed > 0.1; this.sprinting = false; this.onGround = true; this.velocityY = 0;
+    this.setVisualState({ locomotionSpeed: speed, aiming: false, firing: false, moveSide: side, moveForward: forward, onGround: true, velocityY: 0 });
+  }
+
   toggleGhost(): boolean { this.ghost = !this.ghost; this.velocityY = 0; this.onGround = !this.ghost; this.ghostRise = 0; return this.ghost; }
   ghostAdjustAltitude(scroll: number): void { this.ghostRise += (scroll > 0 ? 1 : -1) * GHOST_WHEEL_STEP; }
   consumeFallDamage(): number { const amount = this.pendingFallDamage; this.pendingFallDamage = 0; return amount; }

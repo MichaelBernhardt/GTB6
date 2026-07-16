@@ -1,5 +1,7 @@
 import * as THREE from 'three';
+import { moveSpeed } from '../core/GameRules';
 import type { City } from '../world/City';
+import { cabAt, nearestArcOnSpan, stepAboard, stepDrive } from './TrainRide';
 
 /**
  * Passenger trains shuttling back and forth along the generated rail lines (City.railPaths).
@@ -10,6 +12,10 @@ import type { City } from '../world/City';
  * arc length so the train articulates around curves and pitches with the relief.
  *
  * No nav-graph, no collisions, no AI — the train is landscape that moves (step off the rails).
+ *
+ * The player can also board a slow/stopped consist, walk its corridor while it runs (the ride
+ * is a nose-offset + lateral point composed against the line pose every frame — moving-platform
+ * physics without a physics engine), and take the controls from either cab. See TrainRide.ts.
  */
 
 // ---- Pure path/shuttle math (unit-tested) ------------------------------------------------
@@ -93,6 +99,23 @@ const DWELL_S = 24;
 
 const GOLD = 0xc7a13b; const NAVY = 0x24356b; const GLASS = 0x141a20; const ROOF = 0x8e949a; const SKIRT = 0x2a2f36;
 
+// ---- Riding & driving (see TrainRide.ts for the pure math) --------------------------------
+const RIDE_MARGIN = 0.8; // rider's stop short of the very nose/tail
+const AISLE_HALF = 1.05; // corridor half-width inside the 3.0-wide body
+const FLOOR_Y = 1.0; // car floor above the car origin (top of the underframe skirt)
+const BOARD_REACH = 4.6; // from the track centreline: half a car width plus an arm's reach
+const BOARD_MAX_SPEED = 3; // board a dwelling or crawling train only
+const BOARD_MAX_CLIMB = 3.5; // no boarding from a bridge above or a cutting below
+const CAB_ZONE = 3; // within this of either end counts as standing at the controls
+const EXIT_SIDE = 3.2; // step-off distance from the centreline (clear of the body)
+const TUMBLE_EXIT_SPEED = 6; // jumping off faster than this ends in a tumble
+const DRIVE = { maxSpeed: 26, accel: 1.6, brake: 3.4, coast: 0.5 };
+
+/** World-space rider placement for the frame, computed after the shuttles advance. */
+export interface RiderPose { x: number; y: number; z: number; heading: number; walkSpeed: number; side: number; forward: number }
+
+interface Ride { train: Train; s: number; lateral: number; heading: number; driving: boolean; cabSign: 1 | -1; v: number }
+
 interface Train {
   points: RailPoint[];
   cum: number[];
@@ -103,6 +126,9 @@ interface Train {
 
 export class TrainSystem {
   private trains: Train[] = [];
+  private ride?: Ride;
+  private stick = { side: 0, forward: 0, yaw: 0, sprint: false };
+  private riderPoseValue?: RiderPose;
 
   constructor(scene: THREE.Scene, private city: City) {
     const lines = [...this.city.railPaths]
@@ -133,16 +159,125 @@ export class TrainSystem {
 
   update(dt: number): void {
     for (const train of this.trains) {
+      const ride = this.ride?.train === train ? this.ride : undefined;
       const before = train.state;
-      train.state = advanceShuttle(train.state, dt, {
-        lineLength: train.cum[train.cum.length - 1]!,
-        trainLength: train.trainLength,
-        maxSpeed: MAX_SPEED,
-        accel: ACCEL,
-        dwellTime: DWELL_S,
-      });
+      if (ride?.driving) {
+        // Player at the controls: the shuttle schedule is suspended; W/S integrate the drive step.
+        const next = stepDrive({ s: train.state.s, v: ride.v }, this.stick.forward, ride.cabSign, dt, { minS: train.trainLength, maxS: train.cum[train.cum.length - 1]!, ...DRIVE });
+        ride.v = next.v;
+        train.state = { s: next.s, direction: next.v > 0.01 ? 1 : next.v < -0.01 ? -1 : train.state.direction, dwell: 0, speed: Math.abs(next.v) };
+      } else {
+        train.state = advanceShuttle(train.state, dt, {
+          lineLength: train.cum[train.cum.length - 1]!,
+          trainLength: train.trainLength,
+          maxSpeed: MAX_SPEED,
+          accel: ACCEL,
+          dwellTime: DWELL_S,
+        });
+      }
       if (train.state.s !== before.s || train.state.direction !== before.direction) this.place(train);
     }
+    this.updateRider(dt);
+  }
+
+  // ---- Rider API (single-player only: Game's offline update is the sole caller) ----------
+
+  get riding(): boolean { return Boolean(this.ride); }
+  get driving(): boolean { return Boolean(this.ride?.driving); }
+  get atCab(): boolean { const ride = this.ride; return Boolean(ride && !ride.driving && cabAt(ride.s, ride.train.trainLength, CAB_ZONE) !== 0); }
+  get rideSpeedKph(): number { const ride = this.ride; return ride ? Math.abs(ride.driving ? ride.v : ride.train.state.speed * ride.train.state.direction) * 3.6 : 0; }
+
+  /** Camera-relative stick + yaw for this sim step, sampled by Game before update() runs. */
+  setRideStick(side: number, forward: number, yaw: number, sprint: boolean): void { this.stick = { side, forward, yaw, sprint }; }
+
+  boardable(position: THREE.Vector3): boolean { return Boolean(this.boardTarget(position)); }
+
+  /** Step aboard the nearest slow/stopped consist within reach; the schedule keeps running. */
+  tryBoard(position: THREE.Vector3): boolean {
+    const hit = this.boardTarget(position);
+    if (!hit) return false;
+    const pose = poseAt(hit.train.points, hit.train.cum, hit.train.state.s - hit.s);
+    this.ride = { train: hit.train, s: hit.s, lateral: hit.lateral, heading: Math.atan2(pose.dirX, pose.dirZ), driving: false, cabSign: 1, v: 0 };
+    return true;
+  }
+
+  /** From a cab: suspend the shuttle and hand the player the current momentum. */
+  takeControls(): void {
+    const ride = this.ride; if (!ride || ride.driving) return;
+    const sign = cabAt(ride.s, ride.train.trainLength, CAB_ZONE); if (!sign) return;
+    ride.driving = true; ride.cabSign = sign;
+    ride.v = ride.train.state.dwell > 0 ? 0 : ride.train.state.speed * ride.train.state.direction;
+  }
+
+  /** Hand the train back to the schedule from wherever (and however fast) the player left it. */
+  releaseControls(): void {
+    const ride = this.ride; if (!ride?.driving) return;
+    ride.driving = false;
+    const train = ride.train;
+    train.state = { s: train.state.s, direction: ride.v > 0.01 ? 1 : ride.v < -0.01 ? -1 : train.state.direction, dwell: 0, speed: Math.abs(ride.v) };
+  }
+
+  /** Step off beside the track (lateral-facing side first); undefined when both sides are blocked. */
+  dismount(): { x: number; y: number; z: number; tumble: boolean } | undefined {
+    const ride = this.ride; if (!ride) return undefined;
+    const train = ride.train;
+    const pose = poseAt(train.points, train.cum, train.state.s - ride.s);
+    const facing = (Math.sign(ride.lateral) || 1) as 1 | -1;
+    for (const side of [facing, -facing]) {
+      const x = pose.x + pose.dirZ * EXIT_SIDE * side; const z = pose.z - pose.dirX * EXIT_SIDE * side;
+      if (this.city.collides(x, z, 0.7)) continue;
+      this.ride = undefined; this.riderPoseValue = undefined;
+      return { x, y: this.city.surfaceHeightAt(x, z), z, tumble: train.state.speed > TUMBLE_EXIT_SPEED };
+    }
+    return undefined;
+  }
+
+  /** Hard reset (respawn, teleport, going online): any driven train reverts to its schedule. */
+  endRide(): void {
+    if (!this.ride) return;
+    if (this.ride.driving) this.releaseControls();
+    this.ride = undefined; this.riderPoseValue = undefined;
+  }
+
+  riderPose(): RiderPose | undefined { return this.ride ? this.riderPoseValue : undefined; }
+
+  /** Corridor walk + world composition for the frame — runs after the shuttles have advanced. */
+  private updateRider(dt: number): void {
+    const ride = this.ride; if (!ride) return;
+    const train = ride.train;
+    let walkSpeed = 0;
+    if (!ride.driving) {
+      const dir = poseAt(train.points, train.cum, train.state.s - ride.s);
+      const speed = moveSpeed(this.stick.sprint, false, false);
+      const step = stepAboard({ s: ride.s, lateral: ride.lateral }, this.stick.side, this.stick.forward, this.stick.yaw, speed, dt, dir, { length: train.trainLength, margin: RIDE_MARGIN, halfWidth: AISLE_HALF });
+      ride.s = step.s; ride.lateral = step.lateral;
+      if (step.moving) { ride.heading = step.heading; walkSpeed = speed; }
+    }
+    const pose = poseAt(train.points, train.cum, train.state.s - ride.s);
+    if (ride.driving) ride.heading = Math.atan2(ride.cabSign * pose.dirX, ride.cabSign * pose.dirZ); // at the controls: face out the cab window
+    this.riderPoseValue = {
+      x: pose.x + pose.dirZ * ride.lateral, z: pose.z - pose.dirX * ride.lateral,
+      y: this.city.terrainHeightAt(pose.x, pose.z) + RAIL_TOP_Y + FLOOR_Y,
+      heading: ride.heading, walkSpeed, side: this.stick.side, forward: this.stick.forward,
+    };
+  }
+
+  /** Nearest boardable consist: slow enough, within reach, and roughly at the player's level. */
+  private boardTarget(position: THREE.Vector3): { train: Train; s: number; lateral: number } | undefined {
+    for (const train of this.trains) {
+      if (train.state.speed >= BOARD_MAX_SPEED) continue;
+      const near = nearestArcOnSpan((s) => poseAt(train.points, train.cum, s), train.state.s - train.trainLength, train.state.s, position.x, position.z);
+      if (near.dist > BOARD_REACH) continue;
+      const pose = poseAt(train.points, train.cum, near.s);
+      if (Math.abs(position.y - (this.city.terrainHeightAt(pose.x, pose.z) + RAIL_TOP_Y + FLOOR_Y)) > BOARD_MAX_CLIMB) continue;
+      const lateral = (position.x - pose.x) * pose.dirZ - (position.z - pose.z) * pose.dirX;
+      return {
+        train,
+        s: Math.min(train.trainLength - RIDE_MARGIN, Math.max(RIDE_MARGIN, train.state.s - near.s)),
+        lateral: Math.min(AISLE_HALF, Math.max(-AISLE_HALF, lateral)),
+      };
+    }
+    return undefined;
   }
 
   /** Pose every car by its own arc window so the consist bends through curves and dips. */
@@ -170,11 +305,13 @@ export class TrainSystem {
 /** One Gautrain-flavoured EMU car out of primitive geometry (no external assets, ~40 tris). */
 function buildCar(leading: boolean, trailing: boolean): THREE.Group {
   const group = new THREE.Group();
-  const gold = new THREE.MeshStandardMaterial({ color: GOLD, roughness: 0.35, metalness: 0.45 });
-  const navy = new THREE.MeshStandardMaterial({ color: NAVY, roughness: 0.6 });
+  // Opaque shell renders double-sided so the interior reads as walls/roof/floor for a rider walking
+  // the corridor; the glass band stays front-side only, so from inside it is an open view strip.
+  const gold = new THREE.MeshStandardMaterial({ color: GOLD, roughness: 0.35, metalness: 0.45, side: THREE.DoubleSide });
+  const navy = new THREE.MeshStandardMaterial({ color: NAVY, roughness: 0.6, side: THREE.DoubleSide });
   const glass = new THREE.MeshStandardMaterial({ color: GLASS, roughness: 0.15, metalness: 0.2 });
-  const roof = new THREE.MeshStandardMaterial({ color: ROOF, roughness: 0.7 });
-  const skirt = new THREE.MeshStandardMaterial({ color: SKIRT, roughness: 0.9 });
+  const roof = new THREE.MeshStandardMaterial({ color: ROOF, roughness: 0.7, side: THREE.DoubleSide });
+  const skirt = new THREE.MeshStandardMaterial({ color: SKIRT, roughness: 0.9, side: THREE.DoubleSide });
 
   const body = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.5, CAR_LENGTH - 0.4), gold);
   body.position.y = 2.15; body.castShadow = true; group.add(body);
