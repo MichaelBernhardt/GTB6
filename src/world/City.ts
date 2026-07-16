@@ -27,6 +27,7 @@ import {
   type MapPt,
 } from './mapData';
 import { OCEAN_Y } from './coast';
+import { buildAirport } from './Airport';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
 import { CELL_SIZE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
 import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter';
@@ -577,7 +578,7 @@ export class City {
     this.architecture = new BuildingArchitecture(this.group);
     ensureParcels(); // build the citywide parcel layout now (during load), not on the first frame
     ensureScatter(); // and the scattered structure/foliage layout (same on-demand streaming path)
-    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks();
+    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks(); this.buildAirfield();
     this.infrastructure = new UrbanInfrastructure(
       this.group,
       this.chunkStore,
@@ -1917,6 +1918,22 @@ export class City {
     const colors = [0x326d43, 0x3d7c49, 0x4b8650];
     const clusters: Array<[number, number, number, number]> = [[0, 6.2, 0, 2.2], [-1.35, 5.7, 0.25, 1.7], [1.2, 5.75, -0.2, 1.8], [0.2, 5.7, 1.1, 1.55]];
     clusters.forEach(([ox, oy, oz, scale], index) => { const crown = new THREE.Mesh(new THREE.SphereGeometry(scale, 20, 14), new THREE.MeshStandardMaterial({ color: colors[(variant + index) % colors.length], roughness: 0.9 })); crown.scale.y = 0.82; crown.position.set(ox, oy, oz); crown.castShadow = true; crown.receiveShadow = true; tree.add(crown); }); this.group.add(tree);
+  }
+
+  // ---- Airport (see world/Airport.ts) ----------------------------------------
+
+  /** O.R. Tambourine Regional: runway/taxiway/apron, terminal + tower + hangars, fence and parked
+   *  aircraft. The runway and taxiway are rendered surfaces ONLY — they are never registered in the
+   *  road index or nav graphs, so NPC traffic, peds and spawns stay off the field. */
+  private buildAirfield(): void {
+    buildAirport({
+      group: this.group, colliders: this.colliders, props: this.props,
+      asphalt: this.asphalt, concrete: this.concrete,
+      ground: (x, z) => terrainHeightAt(x, z),
+      strip: (points, width, material, lift) => this.createRoadStrip(points, width, material, lift, false),
+      addInstanced: (geometry, material, transforms, shadows) => this.addInstanced(geometry, material, transforms, shadows),
+      isOnRoad: (x, z, margin = 0) => this.isOnRoad(x, z, margin),
+    });
   }
 
   // ---- Landmarks -----------------------------------------------------------

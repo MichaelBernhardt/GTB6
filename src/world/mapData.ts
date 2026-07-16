@@ -63,6 +63,14 @@ interface RawMap {
   tracks: Array<{ name: string; width: number; kind: 'track' | 'path'; points: [number, number][] }>;
   railways: Array<{ name: string; points: [number, number][] }>;
   landuse: Array<{ name: string; kind: string; points: [number, number][] }>;
+  /** Stage-3 airfield (tools/mapgen): runway/taxiway centrelines + apron and building footprints. */
+  airport?: {
+    name: string;
+    runway: { kind: string; width: number; points: [number, number][] };
+    taxiway: { kind: string; width: number; points: [number, number][] };
+    apron: [number, number][];
+    buildings: [number, number][][];
+  };
   /** Jozi-by-the-Sea graft (tools/mapgen/coast.ts): synthetic Atlantic seaboard west of the crop. */
   coast?: {
     coastline: [number, number][];
@@ -248,6 +256,32 @@ export const AERODROME_POLYGONS: MapPolygon[] = MAP.landuse
   .filter((area) => AERODROME_KINDS.has(area.kind))
   .map((area) => buildPolygon(area.name, 'aerodrome', area.points))
   .filter((polygon): polygon is MapPolygon => polygon !== undefined);
+
+// ---- Airport (the corridor airfield) -----------------------------------------
+
+/** The generated airfield. The runway/taxiway carry road-like widths but are deliberately NOT part of
+ *  GENERATED_ROADS: they must never enter the road index, nav graphs or spawn surfaces — only the 3D
+ *  airport renderer (world/Airport.ts) and the map view consume them. */
+export interface AirportData {
+  name: string;
+  runway: GeneratedRoad;
+  taxiway: GeneratedRoad;
+  apron: MapPolygon;
+  buildings: MapPolygon[];
+}
+
+const RAW_AIRPORT = MAP.airport;
+const AIRPORT_APRON = RAW_AIRPORT ? buildPolygon(`${RAW_AIRPORT.name} apron`, 'aerodrome', RAW_AIRPORT.apron) : undefined;
+
+export const AIRPORT: AirportData | undefined = RAW_AIRPORT && AIRPORT_APRON ? {
+  name: RAW_AIRPORT.name,
+  runway: { name: `${RAW_AIRPORT.name} runway`, width: RAW_AIRPORT.runway.width, kind: RAW_AIRPORT.runway.kind, points: toPts(RAW_AIRPORT.runway.points) },
+  taxiway: { name: `${RAW_AIRPORT.name} taxiway`, width: RAW_AIRPORT.taxiway.width, kind: RAW_AIRPORT.taxiway.kind, points: toPts(RAW_AIRPORT.taxiway.points) },
+  apron: AIRPORT_APRON,
+  buildings: RAW_AIRPORT.buildings
+    .map((footprint, index) => buildPolygon(`${RAW_AIRPORT.name} building ${index + 1}`, 'aerodrome', footprint))
+    .filter((polygon): polygon is MapPolygon => polygon !== undefined),
+} : undefined;
 
 // ---- Coast (Jozi-by-the-Sea graft) ------------------------------------------
 
