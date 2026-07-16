@@ -20,6 +20,11 @@ export interface GeneratedRoad {
 
 export interface GeneratedTrack extends GeneratedRoad { unpaved: true; }
 
+export interface GeneratedRailway {
+  name: string;
+  points: MapPt[];
+}
+
 export interface DistrictCenter {
   name: District;
   x: number;
@@ -193,8 +198,39 @@ export const GENERATED_TRACKS: GeneratedTrack[] = MAP.tracks
   .map((track) => ({ name: track.name, width: track.width, kind: track.kind, unpaved: true as const, points: toPts(track.points) }));
 
 /** Passenger rail lines (thinned by the pipeline): rendered as ballast + rails, never driveable. */
-export const GENERATED_RAILWAYS: Array<{ name: string; points: MapPt[] }> =
-  (MAP.railways ?? []).map((line) => ({ name: line.name, points: toPts(line.points) }));
+export const GENERATED_RAILWAYS: GeneratedRailway[] = (MAP.railways ?? [])
+  .map((line) => ({ name: line.name, points: toPts(line.points) }))
+  .filter((line) => line.points.length >= 2);
+
+export interface RailwaySpot {
+  x: number;
+  z: number;
+  /** Unit tangent of the railway at the projected point. */
+  dirX: number;
+  dirZ: number;
+  railway: GeneratedRailway;
+}
+
+/** Exact nearest point on any generated railway segment (not merely its nearest source vertex). */
+export function nearestRailwaySpot(x: number, z: number): RailwaySpot | undefined {
+  let best: RailwaySpot | undefined; let bestDistanceSq = Infinity;
+  for (const railway of GENERATED_RAILWAYS) {
+    for (let index = 0; index < railway.points.length - 1; index++) {
+      const a = railway.points[index]!; const b = railway.points[index + 1]!;
+      const dx = b.x - a.x; const dz = b.z - a.z; const lengthSq = dx * dx + dz * dz;
+      if (lengthSq < 1e-8) continue;
+      const t = Math.min(1, Math.max(0, ((x - a.x) * dx + (z - a.z) * dz) / lengthSq));
+      const px = a.x + dx * t; const pz = a.z + dz * t;
+      const distanceSq = (px - x) ** 2 + (pz - z) ** 2;
+      if (distanceSq < bestDistanceSq) {
+        const length = Math.sqrt(lengthSq);
+        bestDistanceSq = distanceSq;
+        best = { x: px, z: pz, dirX: dx / length, dirZ: dz / length, railway };
+      }
+    }
+  }
+  return best;
+}
 
 // ---- Districts -------------------------------------------------------------
 
@@ -355,6 +391,32 @@ export function landmark(name: string): MapLandmark | undefined {
   return LANDMARKS.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
 }
 
+/** Named passenger stations supplied by the map pipeline. */
+export const RAILWAY_STATIONS: MapLandmark[] = LANDMARKS.filter((entry) => entry.kind === 'station');
+
+export interface RailwayStationSite extends MapLandmark {
+  dirX: number;
+  dirZ: number;
+  railway: GeneratedRailway;
+  /** Offset from the source landmark to its rendered, track-aligned site. */
+  sourceDistance: number;
+}
+
+/** Station architecture is snapped to real track so platforms can never float beside or cross the line. */
+export const RAILWAY_STATION_SITES: RailwayStationSite[] = RAILWAY_STATIONS.flatMap((station) => {
+  const spot = nearestRailwaySpot(station.x, station.z);
+  if (!spot) return [];
+  return [{
+    ...station,
+    x: spot.x,
+    z: spot.z,
+    dirX: spot.dirX,
+    dirZ: spot.dirZ,
+    railway: spot.railway,
+    sourceDistance: Math.hypot(spot.x - station.x, spot.z - station.z),
+  }];
+});
+
 // ---- Road spot helpers (data-driven anchor placement) -------------------------
 
 export interface RoadSpot {
@@ -437,6 +499,47 @@ for (const road of GENERATED_ROADS) {
 export function distanceToRoadEdge(x: number, z: number): number {
   let best = ROAD_EDGE_CAP;
   for (const segment of edgeGrid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
+    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
+    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
+    const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
+    if (distance < best) best = distance;
+  }
+  return best;
+}
+
+// ---- Railway-corridor distance grid -----------------------------------------
+
+/** Half-width of the rendered ballast bed. Placement code protects this exact shared corridor. */
+export const RAILWAY_CORRIDOR_HALF_WIDTH = 2.6;
+/** How far beyond the ballast edge the railway grid measures accurately. */
+export const RAILWAY_EDGE_CAP = 18;
+
+const railwayEdgeGrid = new Map<string, EdgeSegment[]>();
+
+function insertRailwaySegment(segment: EdgeSegment): void {
+  const pad = segment.half + RAILWAY_EDGE_CAP;
+  const minX = Math.floor((Math.min(segment.ax, segment.bx) - pad) / EDGE_CELL);
+  const maxX = Math.floor((Math.max(segment.ax, segment.bx) + pad) / EDGE_CELL);
+  const minZ = Math.floor((Math.min(segment.az, segment.bz) - pad) / EDGE_CELL);
+  const maxZ = Math.floor((Math.max(segment.az, segment.bz) + pad) / EDGE_CELL);
+  for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
+    const key = `${cx},${cz}`;
+    const cell = railwayEdgeGrid.get(key);
+    if (cell) cell.push(segment); else railwayEdgeGrid.set(key, [segment]);
+  }
+}
+
+for (const railway of GENERATED_RAILWAYS) {
+  for (let index = 0; index < railway.points.length - 1; index++) {
+    const a = railway.points[index]!; const b = railway.points[index + 1]!;
+    insertRailwaySegment({ ax: a.x, az: a.z, bx: b.x, bz: b.z, half: RAILWAY_CORRIDOR_HALF_WIDTH });
+  }
+}
+
+/** Distance to the nearest ballast edge (negative on the railway bed), capped for cheap bulk placement. */
+export function distanceToRailwayCorridor(x: number, z: number): number {
+  let best = RAILWAY_EDGE_CAP;
+  for (const segment of railwayEdgeGrid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
     const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
     const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
     const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
