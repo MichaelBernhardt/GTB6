@@ -11,7 +11,8 @@ import type { BuildOptions, BuiltModel, ModelDef } from './kit';
 import { buildBarn, buildFarmhouse, buildKraal, buildPadstal, buildSilo, buildTractorShed, buildWaterTower, buildWindpomp } from './rural';
 import { buildBigBox, buildFillingStation, buildOfficeBlock, buildSpazaShop, buildStripMall } from './commercial';
 import { buildContainerStack, buildFactory, buildScrapyard, buildSubstation, buildTankFarm, buildWarehouse } from './industrial';
-import { buildAblutions, buildBeachCafe, buildBeachLoungers, buildIceCreamKiosk, buildLifeguardTower, buildPavilion, buildPierKiosk, buildSurfShack } from './coastal';
+import { buildAblutions, buildBeachCafe, buildBeachLoungers, buildIceCreamKiosk, buildLifeguardTower, buildMooredBoat, buildPavilion, buildPierKiosk, buildSurfShack } from './coastal';
+import { buildSeafrontBar, buildSeafrontCafe, buildSeafrontRestaurant } from './venues';
 import { buildApartmentBlock, buildFaceBrickHouse, buildSandtonVilla, buildTinRoofHouse, buildTownhouseRow } from './residentialSA';
 import { buildBillboard, buildCellTower, buildChurch, buildCommunityHall, buildMosque, buildReservoir, buildSchool, buildSportsGround, buildTaxiRank } from './civic';
 import { buildAcacia, buildAgave, buildAloe, buildBougainvillea, buildGum, buildHedgeUnit, buildJacaranda, buildLandmarkTree, buildPalm, buildPine, buildShadeTree, buildVeldGrass } from './foliage';
@@ -50,6 +51,10 @@ export const MODEL_CATALOG: ModelDef[] = [
   { name: 'lifeguard-tower', category: 'coastal', zones: ['beach'], variants: 2, maxFootprint: { w: 5, d: 11 }, standable: true, landmark: true, spacing: 150, build: buildLifeguardTower },
   { name: 'beach-loungers', category: 'coastal', zones: ['beach'], variants: 3, maxFootprint: { w: 11, d: 11 }, standable: false, spacing: 16, build: buildBeachLoungers },
   { name: 'pier-kiosk', category: 'coastal', zones: ['promenade', 'pier'], variants: 2, maxFootprint: { w: 9, d: 6 }, standable: false, spacing: 30, build: buildPierKiosk },
+  { name: 'seafront-restaurant', category: 'coastal', zones: ['beach', 'promenade', 'highstreet'], variants: 3, maxFootprint: { w: 19, d: 21 }, standable: false, spacing: 40, build: buildSeafrontRestaurant },
+  { name: 'seafront-bar', category: 'coastal', zones: ['beach', 'promenade', 'highstreet'], variants: 3, maxFootprint: { w: 16, d: 18 }, standable: false, spacing: 40, build: buildSeafrontBar },
+  { name: 'seafront-cafe', category: 'coastal', zones: ['beach', 'promenade', 'highstreet', 'park'], variants: 3, maxFootprint: { w: 14, d: 16 }, standable: false, spacing: 34, build: buildSeafrontCafe },
+  { name: 'moored-boat', category: 'coastal', zones: ['harbour', 'pier'], variants: 3, maxFootprint: { w: 3, d: 8.5 }, standable: false, spacing: 9, build: buildMooredBoat },
   // ---- Residential (SA) ----
   { name: 'face-brick-house', category: 'residential', zones: ['suburb'], variants: 3, maxFootprint: { w: 22, d: 20 }, standable: false, spacing: 24, build: buildFaceBrickHouse },
   { name: 'townhouse-row', category: 'residential', zones: ['suburb'], variants: 2, maxFootprint: { w: 30, d: 18 }, standable: false, spacing: 34, build: buildTownhouseRow },

@@ -23,6 +23,7 @@ import {
   type MapPt,
   type SignalJunctionDef,
 } from './mapData';
+import { BEACHFRONT_PADS } from './beachfront';
 
 export interface PlacedSite {
   x: number;
@@ -437,4 +438,5 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: PONTE_SPOT.x, z: PONTE_SPOT.z, radius: 30 },
   { x: HILLBROW_TOWER_SPOT.x, z: HILLBROW_TOWER_SPOT.z, radius: 14 },
   { x: WATER_TOWER_SPOT.x, z: WATER_TOWER_SPOT.z, radius: 10 },
+  ...BEACHFRONT_PADS, // Kaapstad Quay pier + seafront venue strips + beach clutter (beachfront.ts)
 ];

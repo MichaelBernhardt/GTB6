@@ -6,12 +6,14 @@ import { Kit, M, paint, type BuildOptions, type BuiltModel } from './kit';
 
 const UMBRELLAS = [paint(0xd9634a, 0.75), paint(0x3e8ca8, 0.75), paint(0xe0c23c, 0.75), paint(0x69a58e, 0.75), paint(0xd88ab0, 0.75)] as const;
 
-function umbrella(kit: Kit, salt: number, x: number, z: number, scale = 1): void {
+/** Striped parasol on a bleached pole — shared with the seafront venue family (venues.ts). */
+export function umbrella(kit: Kit, salt: number, x: number, z: number, scale = 1): void {
   kit.cyl(M.bleached, 0.05 * scale, 0.05 * scale, 2.2 * scale, x, 0, z, { seg: 6 });
   kit.cyl(kit.pick(salt, UMBRELLAS), 0.02, 1.35 * scale, 0.55 * scale, x, 2.2 * scale, z, { seg: 10, cast: false });
 }
 
-function table(kit: Kit, x: number, z: number, y: number): void {
+/** Round bistro table (top at y+0.72) — shared with the seafront venue family (venues.ts). */
+export function cafeTable(kit: Kit, x: number, z: number, y: number): void {
   kit.cyl(M.bleached, 0.42, 0.42, 0.05, x, y + 0.72, z, { seg: 10, cast: false });
   kit.cyl(M.darkTimber, 0.05, 0.07, 0.72, x, y, z, { seg: 6, cast: false });
 }
@@ -40,7 +42,7 @@ export function buildBeachCafe(seed: number, options: BuildOptions = {}): BuiltM
   for (let seat = 0; seat < 2 + variant; seat++) {
     const x = deckW * 0.18 + (seat % 2) * 2.6 - 1; const z = deckD * 0.05 + Math.floor(seat / 2) * 2.8;
     umbrella(kit, 20 + seat, x, z);
-    table(kit, x + 0.7, z + 0.3, deckH + 0.09);
+    cafeTable(kit, x + 0.7, z + 0.3, deckH + 0.09);
   }
   kit.box(M.bleached, 1.6, 0.16, 2.4, deckW * 0.3, 0.28, deckD / 2 + 1.15, { rx: -0.22 }); // beach steps
   return kit.done();
@@ -180,5 +182,35 @@ export function buildPierKiosk(seed: number, options: BuildOptions = {}): BuiltM
   kit.box(M.darkTimber, 1.9, 0.42, 0.5, -w / 2 - 1.3, 0, 0.3, { collide: true }); // bench
   kit.box(M.darkTimber, 1.9, 0.5, 0.09, -w / 2 - 1.3, 0.42, 0.52, { cast: false });
   if (variant === 1) kit.cyl(M.darkMetal, 0.25, 0.05, 3, w / 2 + 1, 0, -0.4, { seg: 8 }); // storm lamp
+  return kit.done();
+}
+
+const HULLS = [paint(0xe8e4da, 0.7), paint(0x4a7fa0, 0.7), paint(0xa04438, 0.7), paint(0x4f7a58, 0.7)] as const;
+
+/** Moored open boat (bow faces +z): painted hull riding the waterline (slight draft below y=0),
+ *  thwarts and gunwales, then an outboard, a short mast + boom, or a net heap by variant. Placed
+ *  by the beachfront pass at OCEAN_Y, not on the terrain — hence the small negative hull base. */
+export function buildMooredBoat(seed: number, options: BuildOptions = {}): BuiltModel {
+  const kit = new Kit(seed);
+  const variant = (options.variant ?? kit.int(1, 0, 2)) % 3;
+  const len = 5 + (options.size ?? kit.rnd(2)) * 1.6; const beam = 1.8 + kit.rnd(3) * 0.3;
+  const hull = kit.pick(4, HULLS);
+  kit.box(hull, beam, 0.72, len * 0.72, 0, -0.34, 0, { rounded: 0.18, collide: true });
+  kit.box(hull, beam * 0.62, 0.66, len * 0.3, 0, -0.28, len * 0.44, { rounded: 0.2 }); // bow taper
+  kit.box(hull, beam * 0.8, 0.68, len * 0.16, 0, -0.31, -len * 0.42, { rounded: 0.16 }); // transom
+  kit.box(M.bleached, beam * 0.66, 0.05, len * 0.58, 0, 0.02, 0, { cast: false }); // sole
+  for (const tz of [-len * 0.18, len * 0.14]) kit.box(M.timber, beam * 0.8, 0.07, 0.3, 0, 0.26, tz, { cast: false }); // thwarts
+  for (const side of [-1, 1]) kit.box(M.darkTimber, 0.07, 0.1, len * 0.74, side * beam * 0.46, 0.3, 0, { cast: false }); // gunwales
+  if (variant === 0) { // outboard motor on the transom
+    kit.box(M.darkMetal, 0.3, 0.55, 0.35, 0, 0.3, -len * 0.46);
+    kit.cyl(M.darkMetal, 0.05, 0.05, 0.55, 0, -0.2, -len * 0.5, { rx: 0.35, seg: 6 });
+  } else if (variant === 1) { // short mast + boom
+    kit.cyl(M.timber, 0.05, 0.07, 3.2, 0, 0.1, len * 0.08, { seg: 8 });
+    kit.box(M.timber, 0.06, 0.06, 2.1, 0, 1.6, len * 0.08 - 0.9, { cast: false });
+  } else { // heaped nets
+    kit.box(paint(0x6a6f5a, 0.98), beam * 0.6, 0.42, len * 0.26, 0, 0.05, -len * 0.14, { rounded: 0.12, cast: false });
+  }
+  kit.cyl(M.whiteMetal, 0.03, 0.03, 1.15, 0, 0.3, len * 0.42, { seg: 6, cast: false }); // bow pole
+  kit.box(paint(0xd9634a, 0.85), 0.4, 0.26, 0.03, 0.2, 1.15, len * 0.42, { cast: false }); // pennant
   return kit.done();
 }
