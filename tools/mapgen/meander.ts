@@ -66,6 +66,14 @@ export interface MeanderOptions {
   taper?: number;
   /** Chaikin corner-cutting passes per span (endpoints preserved). */
   chaikin?: number;
+  /**
+   * Move interior pinned vertices WITH the noise instead of tapering to zero at them. For
+   * roads whose interior junctions are all their own spur attachments (the orbital, the
+   * frontage road), the junction nodes ride the meander — the spurs stay connected via the
+   * shared node id — so dense spurs no longer flatten the curve into straight runs. Only the
+   * two endpoints stay exact. The caller must write the moved positions back to the nodes.
+   */
+  movePins?: boolean;
 }
 
 /** One meander output vertex; `pin` is the source index when it reuses a pinned node. */
@@ -142,6 +150,7 @@ export function meanderPolyline(points: Pt[], pins: number[], opt: MeanderOption
     arc.push(arc[i - 1]! + Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.z - points[i - 1]!.z));
   }
 
+  const totalLen = arc[arc.length - 1]!;
   const out: MeanderVertex[] = [{ p: { ...points[ordered[0]!]! }, pin: ordered[0]! }];
   for (let k = 0; k < ordered.length - 1; k++) {
     const a = ordered[k]!;
@@ -150,19 +159,24 @@ export function meanderPolyline(points: Pt[], pins: number[], opt: MeanderOption
     const spanStartArc = arc[a]!;
     const spanLen = arc[b]! - spanStartArc;
     const samples = densify(span, step);
-    // Offset every sample except the two span ends (kept exactly on the pins).
+    const lastSpan = k === ordered.length - 2;
+    // Offset every sample except the exact-kept ends: with movePins only the polyline's two
+    // global endpoints stay put; otherwise every span end (= every pin) does.
     const offset: Pt[] = samples.map((sample, idx) => {
-      if (idx === 0 || idx === samples.length - 1) return sample.p;
-      const distToPin = Math.min(sample.s, spanLen - sample.s);
+      const isSpanEnd = idx === 0 || idx === samples.length - 1;
+      const isGlobalEnd = (k === 0 && idx === 0) || (lastSpan && idx === samples.length - 1);
+      if (opt.movePins ? isGlobalEnd : isSpanEnd) return sample.p;
+      const sGlobal = spanStartArc + sample.s;
+      const distToPin = opt.movePins ? Math.min(sGlobal, totalLen - sGlobal) : Math.min(sample.s, spanLen - sample.s);
       const amp = opt.amplitude * Math.min(1, distToPin / Math.max(1, taper));
-      const d = amp * fbm(opt.seed, (spanStartArc + sample.s) / opt.wavelength, octaves);
+      const d = amp * fbm(opt.seed, sGlobal / opt.wavelength, octaves);
       return { x: sample.p.x + sample.nx * d, z: sample.p.z + sample.nz * d };
     });
     const smoothed = chaikin(offset, passes);
     // Drop the first point (already emitted as the previous span's end / this span's start pin),
-    // emit interior points as new nodes, and the last point as pin `b`.
+    // emit interior points as new nodes, and the last point as pin `b` (moved or exact).
     for (let i = 1; i < smoothed.length - 1; i++) out.push({ p: smoothed[i]!, pin: null });
-    out.push({ p: { ...points[b]! }, pin: b });
+    out.push({ p: opt.movePins && !lastSpan ? smoothed[smoothed.length - 1]! : { ...points[b]! }, pin: b });
   }
   return out;
 }

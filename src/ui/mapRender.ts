@@ -17,7 +17,7 @@
  */
 
 /** Bump when the drawing contract changes. Embedded verbatim into the emitted preview. */
-export const MAP_RENDER_VERSION = '1.0.0';
+export const MAP_RENDER_VERSION = '1.1.0';
 
 // ---- Map JSON shape (structural subset this renderer touches) --------------------------------
 type Poly2 = [number, number][];
@@ -34,7 +34,9 @@ export interface RenderMapData {
   elevation?: { cols: number; rows: number; x0: number; z0: number; dx: number; dz: number; data: number[] };
   coast?: {
     coastline: Poly2; ocean: Poly2; beaches: Array<{ name: string; points: Poly2 }>;
-    harbour: { x: number; z: number }; corridor: { eastX: number; westX: number };
+    harbour: { x: number; z: number };
+    /** northZ/southZ clamp the corridor tint to its actual land extent (older maps span fully). */
+    corridor: { eastX: number; westX: number; northZ?: number; southZ?: number };
   };
   rural?: { farms: Array<{ x: number; z: number; kind: string }> };
   airport?: {
@@ -283,14 +285,15 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
   }
   if (layers.corridor && map.coast) {
     const size = map.stats.targetSize; const corridor = map.coast.corridor;
+    const zTop = corridor.northZ ?? -size; const zBottom = corridor.southZ ?? size;
     ctx.save();
     ctx.fillStyle = '#3d4a2c'; ctx.globalAlpha = 0.28;
-    ctx.fillRect(corridor.westX, -size, corridor.eastX - corridor.westX, size * 2);
+    ctx.fillRect(corridor.westX, zTop, corridor.eastX - corridor.westX, zBottom - zTop);
     ctx.globalAlpha = 1;
     ctx.setLineDash([26, 18]); ctx.strokeStyle = '#5c6b3f'; ctx.lineWidth = Math.max(2, 1.2 / zoom);
     ctx.beginPath();
-    ctx.moveTo(corridor.eastX, -size); ctx.lineTo(corridor.eastX, size);
-    ctx.moveTo(corridor.westX, -size); ctx.lineTo(corridor.westX, size);
+    ctx.moveTo(corridor.eastX, zTop); ctx.lineTo(corridor.eastX, zBottom);
+    ctx.moveTo(corridor.westX, zTop); ctx.lineTo(corridor.westX, zBottom);
     ctx.stroke(); ctx.setLineDash([]); ctx.restore();
     if (g.farmlandPath) {
       ctx.fillStyle = FARMLAND_COLOR; ctx.globalAlpha = 0.55; ctx.fill(g.farmlandPath); ctx.globalAlpha = 1;

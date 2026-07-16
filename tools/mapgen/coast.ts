@@ -11,7 +11,11 @@ import {
   AIRPORT_NAME,
   AIRPORT_RUNWAY_BEARING_RAD,
   AIRPORT_RUNWAY_LENGTH_M,
+  BORDER_VELD_DEPTH_MAX_M,
+  BORDER_VELD_DEPTH_MIN_M,
+  BORDER_VELD_NAME,
   CAPE_BBOX,
+  COAST_LOOP_LINKS,
   COAST_ROAD_SETBACK_M,
   COAST_STRETCH_Z,
   COASTAL_ROAD_NAME,
@@ -77,6 +81,8 @@ export interface CoastGraftResult {
   /** Corridor band (metres, x extents). */
   corridorEastX: number;
   corridorWestX: number;
+  /** Node ids of the coastal highway's two dangling tips (for the orbital loop links). */
+  highwayEndIds: { south: number; north: number };
   log: string[];
 }
 
@@ -200,14 +206,17 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   });
   let coastline = capeCoast.map(toComposite);
 
-  // Extend the shoreline synthetically to just past the Joburg z extents, with a gentle wobble.
+  // Extend the shoreline synthetically to just past the Joburg z extents. fBm wobble (tapered
+  // in from the real-data seam) instead of a regular sine — a robotic wave reads instantly fake.
   const extendTo = (from: Pt, direction: 1 | -1, untilZ: number): Pt[] => {
     const output: Pt[] = [];
+    const seed = nameSeed(COASTAL_ROAD_NAME) + (direction === 1 ? 11 : 23);
     let z = from.z; let step = 0;
     while (direction === 1 ? z < untilZ : z > untilZ) {
-      z += direction * 420;
+      z += direction * 380;
       step++;
-      output.push({ x: from.x + Math.sin(step * 0.9 + from.z * 0.001) * 240 - step * 14, z });
+      const blend = Math.min(1, step / 3); // ease away from the seam, no kink at the join
+      output.push({ x: from.x + blend * fbm(seed, z / 1500, 3) * 340 - step * 12, z });
     }
     return output;
   };
@@ -261,7 +270,10 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
     for (const end of [road.nodeIds[0]!, road.nodeIds[road.nodeIds.length - 1]!]) {
       if ((degree.get(end) ?? 0) !== 1) continue;
       const point = net.nodes.get(end)!;
-      if (point.x - jb.minX < joburgWestStubMargin && !westStubs.some((stub) => stub.id === end)) westStubs.push({ id: end, p: point });
+      // Only CITY-edge stubs: without the lower bound the coastal highway's own dangling
+      // tips (3 km west) qualified, and Plaaspad grew spurs to the extreme map corners.
+      const nearWestEdge = point.x >= jb.minX - 60 && point.x - jb.minX < joburgWestStubMargin;
+      if (nearWestEdge && !westStubs.some((stub) => stub.id === end)) westStubs.push({ id: end, p: point });
     }
   }
   westStubs.sort((a, b) => a.p.z - b.p.z);
@@ -271,7 +283,7 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   for (const stub of westStubs) {
     // Low-frequency organic wander of the frontage line (the projection nodes are shared with the
     // spurs, so moving them keeps the network connected while Plaaspad stops being a straight edge).
-    const projectionId = addNode({ x: frontageX + fbm(frontageSeed, stub.p.z / 1400, 3) * 200, z: stub.p.z });
+    const projectionId = addNode({ x: frontageX + fbm(frontageSeed, stub.p.z / 1800, 3) * 340 - 120, z: stub.p.z });
     frontageIds.push(projectionId);
     net.roads.push({ name: FRONTAGE_ROAD_NAME, kind: 'tertiary', width: ROAD_WIDTHS.tertiary ?? 9, nodeIds: [projectionId, stub.id] });
   }
@@ -440,9 +452,16 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   log.push(`coast: harbour '${HARBOUR_DISTRICT_NAME}' at z~${Math.round(harbourAnchor.p.z)}`);
 
   // ---- Ocean polygon ---------------------------------------------------------------------
-  const oceanWestX = Math.min(...coastline.map((point) => point.x)) - OCEAN_EXTENT_M;
-  const first = coastline[0]!; const last = coastline[coastline.length - 1]!;
-  const ocean: Pt[] = [...coastline, { x: oceanWestX, z: last.z }, { x: oceanWestX, z: first.z }];
+  // The shore is extended a further ~2.5 km past the highway tips for the FILL only, so the
+  // NW/SW world corners (behind the edge set-back) still read as sea, not bare void.
+  const oceanShore: Pt[] = [
+    ...extendTo(coastline[0]!, 1, jb.maxZ + 3200).reverse(),
+    ...coastline,
+    ...extendTo(coastline[coastline.length - 1]!, -1, jb.minZ - 3200),
+  ];
+  const oceanWestX = Math.min(...oceanShore.map((point) => point.x)) - OCEAN_EXTENT_M;
+  const first = oceanShore[0]!; const last = oceanShore[oceanShore.length - 1]!;
+  const ocean: Pt[] = [...oceanShore, { x: oceanWestX, z: last.z }, { x: oceanWestX, z: first.z }];
 
   // ---- Sea port / pier on the NW coast (north end of the shoreline) ---------------------
   const portShore = coastline[Math.floor(coastline.length * 0.86)] ?? coastline[coastline.length - 1]!;
@@ -498,8 +517,90 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   return {
     coastline, ocean, beaches, farmland, tracks, farms, padstal, harbour, districts,
     airport, port, lake,
-    corridorEastX, corridorWestX, log,
+    corridorEastX, corridorWestX,
+    highwayEndIds: { south: highwayIds[0]!, north: highwayIds[highwayIds.length - 1]! },
+    log,
   };
+}
+
+/**
+ * Close the orbital's open C onto the coastal highway: one organic connector per corner
+ * (ring end -> Victoria Road tip), bowed inland so neither connector hugs the world edge.
+ * With these two links the whole map is wrapped in a single drivable outer loop.
+ */
+export function closeCoastalLoop(
+  net: RoadNetwork,
+  ringEndIds: [number, number],
+  highwayEndIds: { south: number; north: number },
+): string[] {
+  const log: string[] = [];
+  let nextId = 0;
+  for (const id of net.nodes.keys()) if (id >= nextId) nextId = id + 1;
+  const a = net.nodes.get(ringEndIds[0])!; const b = net.nodes.get(ringEndIds[1])!;
+  const northRingId = a.z < b.z ? ringEndIds[0] : ringEndIds[1];
+  const southRingId = a.z < b.z ? ringEndIds[1] : ringEndIds[0];
+  for (const link of COAST_LOOP_LINKS) {
+    const startId = link.end === 'north' ? northRingId : southRingId;
+    const endId = link.end === 'north' ? highwayEndIds.north : highwayEndIds.south;
+    const start = net.nodes.get(startId); const end = net.nodes.get(endId);
+    if (!start || !end) continue;
+    const inland = link.end === 'north' ? 1 : -1; // +z is south: bow away from the edge
+    const controls: Pt[] = [
+      start,
+      { x: start.x + (end.x - start.x) * 0.34, z: start.z + inland * 340 + (end.z - start.z) * 0.18 },
+      { x: start.x + (end.x - start.x) * 0.72, z: end.z + inland * 220 },
+      end,
+    ];
+    const points = smoothCurve(controls, 110);
+    const nodeIds = points.map((point, index) => {
+      if (index === 0) return startId;
+      if (index === points.length - 1) return endId;
+      const id = nextId++; net.nodes.set(id, point); return id;
+    });
+    net.roads.push({ name: link.name, kind: link.kind, width: ROAD_WIDTHS[link.kind] ?? 14, nodeIds });
+    log.push(`loop: '${link.name}' closes the ${link.end} corner (ring -> coastal highway)`);
+  }
+  return log;
+}
+
+/**
+ * Border veld: organic scrub polygons filling the set-back band between the outermost roads
+ * and the world edge (north, east and south sides — the west edge is ocean). `world` is the
+ * full world square in projected metres (fit.invert of the TARGET_SIZE corners). The inner
+ * boundary is fBm-wavy so the band reads as natural veld, not a picture frame.
+ */
+export function buildBorderVeld(input: {
+  world: { minX: number; maxX: number; minZ: number; maxZ: number };
+  coastline: Pt[];
+}): Array<{ name: string; points: Pt[] }> {
+  const { world, coastline } = input;
+  const seed = nameSeed(BORDER_VELD_NAME);
+  const range = BORDER_VELD_DEPTH_MAX_M - BORDER_VELD_DEPTH_MIN_M;
+  const depth = (t: number, salt: number): number =>
+    BORDER_VELD_DEPTH_MIN_M + (fbm(seed + salt * 97, t / 1250, 3) * 0.5 + 0.5) * range;
+  const coastXAt = (z: number): number =>
+    coastline.reduce((best, point) => (Math.abs(point.z - z) < Math.abs(best.z - z) ? point : best), coastline[0]!).x;
+  const step = 420;
+  const bands: Array<{ name: string; points: Pt[] }> = [];
+  // North and south bands run from just inland of the shoreline to the east corner.
+  for (const side of [
+    { zEdge: world.minZ, inland: 1, salt: 1 },
+    { zEdge: world.maxZ, inland: -1, salt: 2 },
+  ]) {
+    const xStart = coastXAt(side.zEdge) + 650;
+    const points: Pt[] = [{ x: xStart, z: side.zEdge }, { x: world.maxX, z: side.zEdge }];
+    for (let x = world.maxX; x >= xStart; x -= step) {
+      // Pinch the band to a point toward the shore — a full-depth stop reads as a hard seam.
+      const fade = Math.min(1, (x - xStart) / 1700);
+      points.push({ x, z: side.zEdge + side.inland * depth(x, side.salt) * fade });
+    }
+    bands.push({ name: BORDER_VELD_NAME, points });
+  }
+  // East band spans the full height (its corners tuck under the N/S bands — fine, it's veld).
+  const east: Pt[] = [{ x: world.maxX, z: world.minZ }, { x: world.maxX, z: world.maxZ }];
+  for (let z = world.maxZ; z >= world.minZ; z -= step) east.push({ x: world.maxX - depth(z, 3), z });
+  bands.push({ name: BORDER_VELD_NAME, points: east });
+  return bands;
 }
 
 // ---- Composite elevation ---------------------------------------------------------

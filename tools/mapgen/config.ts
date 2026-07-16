@@ -94,9 +94,55 @@ export const PROTECTED_ROAD_NAMES = [
 /** Boundary orbital: dangling endpoints near the crop edge are joined into one ring road. */
 export const RING_BOUNDARY_MARGIN_M = 380;
 export const RING_OFFSET_M = 220;
-export const RING_CORNER_CHAMFER_M = 260;
+export const RING_CORNER_CHAMFER_M = 420;
 export const RING_NAME = 'Egoli Orbital';
 export const RING_KIND = 'trunk' as const;
+
+/**
+ * Set-back between the outermost roads and the world edge (game units). The roads keep the
+ * true-parity TARGET_SIZE fit (1 unit ~= 1 m — do not shrink it, gameplay constants are
+ * calibrated to it); instead the declared world square GROWS by this margin per side, so no
+ * road runs along the very edge — the band gets border veld cover.
+ */
+export const EDGE_MARGIN_UNITS = 600;
+
+/**
+ * Border veld: organic scrub polygons filling the set-back band along the north, east and
+ * south world edges (the west edge is ocean). Scrub is a GREEN_KIND in-game, so the band
+ * grows dry veld grass and scattered trees — cover between the outer roads and the edge.
+ */
+export const BORDER_VELD_NAME = 'Randveld';
+export const BORDER_VELD_DEPTH_MIN_M = 380;
+export const BORDER_VELD_DEPTH_MAX_M = 1050;
+
+/**
+ * Coast loop links: the orbital opens into a C on the west side; these two connectors close
+ * its open ends onto the coastal highway's ends, so the whole map is wrapped in one drivable
+ * loop (no dead-ending ring or highway tips at the corners). Cape names, matching the graft.
+ */
+export const COAST_LOOP_LINKS = [
+  { name: 'Blouberg Road', kind: 'primary', end: 'north' },
+  { name: 'Bakoven Road', kind: 'primary', end: 'south' },
+] as const;
+
+/**
+ * Dead-end resolution (owner: clipped roads "just lead to nowhere"): dangling endpoint pairs
+ * closer than DEADEND_JOIN_M are joined into loops; remaining ends within DEADEND_CONNECT_M
+ * of another road get a T-connector; leftover dangling tails shorter than DEADEND_PRUNE_M
+ * (or _MAJOR_M for primary and up) are truncated back to the last junction.
+ */
+export const DEADEND_JOIN_M = 560;
+export const DEADEND_CONNECT_M = 300;
+export const DEADEND_PRUNE_M = 450;
+export const DEADEND_PRUNE_MAJOR_M = 160;
+/** Roads allowed to end dead (quays, slipways, farm lanes, airport apron access). */
+export const CUL_DE_SAC_NAMES = [
+  'Kaapstad Quay',
+  'Sloepbaai Road',
+  'Aviator Avenue',
+  'Melkweg',
+  'Kraal Close',
+] as const;
 
 /**
  * Jozi-by-the-Sea: the west edge of the map becomes an Atlantic-style coastline grafted
@@ -141,14 +187,19 @@ export interface MeanderSpec {
   step: number;
   taper: number;
   chaikin: number;
+  /** Interior junctions ride the meander (see meander.ts) — for roads whose interior
+   *  junctions are all their own spur/frontage attachments. */
+  movePins?: boolean;
 }
 export const MEANDER_SPECS: Record<string, MeanderSpec> = {
-  'Egoli Orbital': { amplitude: 220, wavelength: 2600, octaves: 3, step: 90, taper: 260, chaikin: 2 },
-  Plaaspad: { amplitude: 120, wavelength: 1600, octaves: 2, step: 80, taper: 170, chaikin: 2 },
+  'Egoli Orbital': { amplitude: 400, wavelength: 1900, octaves: 3, step: 90, taper: 260, chaikin: 2, movePins: true },
+  Plaaspad: { amplitude: 150, wavelength: 1600, octaves: 2, step: 80, taper: 170, chaikin: 2, movePins: true },
   'Madiba Meander': { amplitude: 150, wavelength: 2100, octaves: 2, step: 100, taper: 280, chaikin: 1 },
   'Rooibos Route': { amplitude: 130, wavelength: 1900, octaves: 2, step: 100, taper: 280, chaikin: 1 },
   Melkweg: { amplitude: 90, wavelength: 1400, octaves: 2, step: 90, taper: 160, chaikin: 1 },
   'Kraal Close': { amplitude: 90, wavelength: 1400, octaves: 2, step: 90, taper: 160, chaikin: 1 },
+  'Blouberg Road': { amplitude: 160, wavelength: 1700, octaves: 2, step: 90, taper: 240, chaikin: 2 },
+  'Bakoven Road': { amplitude: 160, wavelength: 1800, octaves: 2, step: 90, taper: 240, chaikin: 2 },
 };
 /** Synthetic-road polylines shorter than this many vertices are spurs, not the spine — left straight. */
 export const MEANDER_MIN_VERTICES = 5;

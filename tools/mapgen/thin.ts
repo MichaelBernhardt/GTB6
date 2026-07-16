@@ -178,9 +178,20 @@ export interface RingOptions {
   width: number;
   /** Leave the west edge open (the coastal highway takes that side): the orbital becomes a C. */
   openAcrossWest?: boolean;
+  /**
+   * Explicit rect (metres) the orbital wraps. Defaults to the network bounds — but pass the
+   * pre-graft city bounds when a coast strip has been grafted, otherwise the stretched bounds
+   * push the ring out to the far corners and city-edge stubs fall outside the catch margin.
+   */
+  bounds?: { minX: number; maxX: number; minZ: number; maxZ: number };
 }
 
-export interface RingReport { stubs: number; built: boolean; }
+export interface RingReport {
+  stubs: number;
+  built: boolean;
+  /** When the orbital is an open C: node ids of its two ends (in walk order), else null. */
+  endNodeIds: [number, number] | null;
+}
 
 interface Bounds { minX: number; maxX: number; minZ: number; maxZ: number; }
 
@@ -231,8 +242,8 @@ function cornerParams(rect: Bounds): number[] {
  * boundary endpoint, so no road stops dead at the crop edge. Returns the stub count.
  */
 export function buildOrbitalRing(net: RoadNetwork, options: RingOptions): RingReport {
-  const bounds = netBounds(net);
-  if (!Number.isFinite(bounds.minX)) return { stubs: 0, built: false };
+  const bounds = options.bounds ?? netBounds(net);
+  if (!Number.isFinite(bounds.minX)) return { stubs: 0, built: false, endNodeIds: null };
   const degree = nodeDegrees(net);
   const stubIds: number[] = [];
   const seen = new Set<number>();
@@ -249,7 +260,7 @@ export function buildOrbitalRing(net: RoadNetwork, options: RingOptions): RingRe
       if (Math.min(dWest, dOther) <= options.boundaryMargin) { stubIds.push(end); seen.add(end); }
     }
   }
-  if (stubIds.length < 2) return { stubs: stubIds.length, built: false };
+  if (stubIds.length < 2) return { stubs: stubIds.length, built: false, endNodeIds: null };
 
   const rect: Bounds = {
     minX: bounds.minX - options.ringOffset, maxX: bounds.maxX + options.ringOffset,
@@ -281,16 +292,27 @@ export function buildOrbitalRing(net: RoadNetwork, options: RingOptions): RingRe
     }
   }
 
-  // Ring vertices: each stub's projection onto the rectangle, with chamfered corner points between.
+  // Group stubs whose projections would sit almost on top of each other: one shared ring
+  // vertex with a spur to each stub (a V fork) instead of twin parallel spurs 100 m apart.
+  const groups: Array<{ t: number; ids: number[] }> = [];
+  for (const stub of stubs) {
+    const last = groups[groups.length - 1];
+    if (last && stub.t - last.t <= 250) last.ids.push(stub.id);
+    else groups.push({ t: stub.t, ids: [stub.id] });
+  }
+
+  // Ring vertices: each group's projection onto the rectangle, with chamfered corner points between.
   const corners = cornerParams(rect);
   const ringNodeIds: number[] = [];
-  for (let index = 0; index < stubs.length; index++) {
-    const current = stubs[index]; const next = stubs[(index + 1) % stubs.length];
+  for (let index = 0; index < groups.length; index++) {
+    const current = groups[index]!; const next = groups[(index + 1) % groups.length]!;
     const projectionId = addNode(perimeterPoint(rect, current.t));
     ringNodeIds.push(projectionId);
-    // Spur from the orbital into the dangling endpoint.
-    net.roads.push({ name: options.name, kind: options.kind, width: options.width, nodeIds: [projectionId, current.id] });
-    if (!closed && index === stubs.length - 1) break; // open orbital: the last stub is an end, not a wrap
+    // Spur from the orbital into each dangling endpoint of the group.
+    for (const id of current.ids) {
+      net.roads.push({ name: options.name, kind: options.kind, width: options.width, nodeIds: [projectionId, id] });
+    }
+    if (!closed && index === groups.length - 1) break; // open orbital: the last stub is an end, not a wrap
     // Chamfered corner vertices between this projection and the next (wrapping), in walk order.
     const end = next.t > current.t ? next.t : next.t + total;
     const between: number[] = [];
@@ -307,5 +329,7 @@ export function buildOrbitalRing(net: RoadNetwork, options: RingOptions): RingRe
     const nodeIds = closed ? [...ringNodeIds, ringNodeIds[0]] : ringNodeIds;
     net.roads.push({ name: options.name, kind: options.kind, width: options.width, nodeIds });
   }
-  return { stubs: stubs.length, built: true };
+  const endNodeIds: [number, number] | null =
+    !closed && ringNodeIds.length >= 2 ? [ringNodeIds[0]!, ringNodeIds[ringNodeIds.length - 1]!] : null;
+  return { stubs: stubs.length, built: true, endNodeIds };
 }

@@ -2,7 +2,13 @@ import {
   BBOX,
   BRIDGE_DISTANCE_M,
   CBD_CENTER,
+  CUL_DE_SAC_NAMES,
+  DEADEND_CONNECT_M,
+  DEADEND_JOIN_M,
+  DEADEND_PRUNE_M,
+  DEADEND_PRUNE_MAJOR_M,
   DISTRICT_RADIUS_M,
+  EDGE_MARGIN_UNITS,
   LANDMARK_CANONICAL,
   MIN_LANDUSE_AREA_M2,
   MEANDER_MIN_VERTICES,
@@ -27,7 +33,8 @@ import {
   THIN_SAMPLE_STEP_M,
   TRACK_WIDTHS,
 } from './config';
-import { compositeElevation, graftCoastAndCorridor, type CoastGraftResult } from './coast';
+import { buildBorderVeld, closeCoastalLoop, compositeElevation, graftCoastAndCorridor, type CoastGraftResult } from './coast';
+import { resolveDeadEnds } from './deadends';
 import { buildOrbitalRing, pruneShortStubs, thinParallelRoads } from './thin';
 import { flatGrid, type ElevationSamples } from './elevation';
 import {
@@ -116,7 +123,15 @@ function meanderSyntheticRoads(net: RoadNetwork): number {
       if (index === 0 || index === road.nodeIds.length - 1 || (refCount.get(id) ?? 0) > 1) pins.push(index);
     });
     const vertices = meanderPolyline(points, pins, { ...spec, seed: nameSeed(road.name) });
-    const newIds = vertices.map((v) => (v.pin !== null ? road.nodeIds[v.pin]! : addNode(v.p)));
+    const lastIndex = road.nodeIds.length - 1;
+    const newIds = vertices.map((v) => {
+      if (v.pin === null) return addNode(v.p);
+      const id = road.nodeIds[v.pin]!;
+      // movePins: interior junctions ride the meander — update the shared node in place so
+      // the spur roads attached to it follow along.
+      if (spec.movePins && v.pin !== 0 && v.pin !== lastIndex) net.nodes.set(id, v.p);
+      return id;
+    });
     road.nodeIds = newIds.filter((id, index) => index === 0 || id !== newIds[index - 1]);
     curved++;
   }
@@ -246,6 +261,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   );
 
   // ---- Jozi-by-the-Sea: coastal strip + rural corridor graft -----------------
+  // City-block bounds BEFORE the graft: the ring must wrap the city, not the stretched
+  // composite (otherwise it runs along the far corners and city-edge stubs miss its margin).
+  const cityBounds = boundsOf(net.nodes.values());
   let coast: CoastGraftResult | undefined;
   if (extras.cape) {
     coast = graftCoastAndCorridor(net, extras.cape);
@@ -262,8 +280,14 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     kind: RING_KIND,
     width: ROAD_WIDTHS[RING_KIND] ?? 18,
     openAcrossWest: Boolean(coast),
+    bounds: cityBounds,
   });
   log.push(`orbital: joined ${ring.stubs} boundary stubs into '${RING_NAME}'${ring.built ? '' : ' (not built)'}${coast ? ' (open west: coastal highway)' : ''}`);
+
+  // Close the orbital's open ends onto the coastal highway — one drivable outer loop.
+  if (coast && ring.endNodeIds) {
+    for (const line of closeCoastalLoop(net, ring.endNodeIds, coast.highwayEndIds)) log.push(line);
+  }
 
   const componentsBefore = connectedComponents(net).length;
   const islands = bridgeIslands(net, BRIDGE_DISTANCE_M);
@@ -274,6 +298,19 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   if (islands.droppedSamples.length > 0) log.push(`dropped island samples: ${islands.droppedSamples.join(', ')}`);
   const componentsAfter = connectedComponents(net).length;
   log.push(`connectivity: final graph has ${componentsAfter} component(s)`);
+
+  // ---- Dead-end resolution (join loops / connect / truncate) ----------------
+  const deadEnds = resolveDeadEnds(net, {
+    joinDistance: DEADEND_JOIN_M,
+    connectDistance: DEADEND_CONNECT_M,
+    pruneLength: DEADEND_PRUNE_M,
+    pruneLengthMajor: DEADEND_PRUNE_MAJOR_M,
+    culDeSacNames: new Set(CUL_DE_SAC_NAMES),
+  });
+  log.push(
+    `dead ends: joined ${deadEnds.joined} pairs into loops, tied ${deadEnds.connected} into nearby roads, ` +
+      `truncated ${deadEnds.truncated} tails (dropped ${deadEnds.droppedRoads} spurs); ${deadEnds.remaining} legit dead ends remain`,
+  );
 
   // ---- Organic curvature for the synthetic roads --------------------------
   const curvedRoads = meanderSyntheticRoads(net);
@@ -424,13 +461,30 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   log.push(`landmarks: ${landmarks.length} (${landmarks.map((l) => l.name).slice(0, 10).join(', ')}${landmarks.length > 10 ? ', ...' : ''})`);
 
   // ---- Fit to target footprint --------------------------------------------
+  // Roads keep the true-parity TARGET_SIZE fit (1 unit ~= 1 m); the declared world square
+  // grows by the edge margin instead, so no road runs along the very world edge — the
+  // set-back band gets border veld below, so the rim is cover, not void.
+  const worldSize = TARGET_SIZE + 2 * EDGE_MARGIN_UNITS;
   const allRoadPoints: Pt[] = simplifiedRoads.flatMap((r) => r.points);
   const bounds = boundsOf(allRoadPoints);
   const fit = makeFitTransform(bounds, TARGET_SIZE);
   log.push(
     `fit: road bbox ${(bounds.maxX - bounds.minX).toFixed(0)} x ${(bounds.maxZ - bounds.minZ).toFixed(0)} m -> ` +
-      `${TARGET_SIZE} unit square, 1 unit = ${fit.metresPerUnit.toFixed(2)} m`,
+      `${TARGET_SIZE} unit fit in a ${worldSize} unit world (${EDGE_MARGIN_UNITS} u edge set-back), ` +
+      `1 unit = ${fit.metresPerUnit.toFixed(2)} m`,
   );
+
+  // ---- Border veld: scrub cover between the outer roads and the world edge ---
+  if (coast) {
+    const worldNW = fit.invert({ x: -worldSize / 2, z: -worldSize / 2 });
+    const worldSE = fit.invert({ x: worldSize / 2, z: worldSize / 2 });
+    const veld = buildBorderVeld({
+      world: { minX: worldNW.x, minZ: worldNW.z, maxX: worldSE.x, maxZ: worldSE.z },
+      coastline: coast.coastline,
+    });
+    for (const band of veld) landuse.push({ name: band.name, kind: 'scrub', points: band.points });
+    log.push(`border: ${veld.length} veld bands along the N/E/S world edges (${EDGE_MARGIN_UNITS} u set-back cover)`);
+  }
   const toUnits = (p: Pt): [number, number] => {
     const q = fit.apply(p);
     return [round2(q.x), round2(q.z)];
@@ -456,7 +510,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     joburgSE: project(BBOX.south, BBOX.east),
     coast,
     fit,
-    targetSize: TARGET_SIZE,
+    targetSize: worldSize,
   }) : undefined;
   const heightData = composite ? composite.data : elevation.data;
   const minElevation = Math.min(...heightData);
@@ -481,11 +535,11 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     const samples = 160;
     let oceanHits = 0;
     for (let row = 0; row < samples; row++) for (let col = 0; col < samples; col++) {
-      const x = -TARGET_SIZE / 2 + ((col + 0.5) * TARGET_SIZE) / samples;
-      const z = -TARGET_SIZE / 2 + ((row + 0.5) * TARGET_SIZE) / samples;
+      const x = -worldSize / 2 + ((col + 0.5) * worldSize) / samples;
+      const z = -worldSize / 2 + ((row + 0.5) * worldSize) / samples;
       if (inOcean(x, z)) oceanHits++;
     }
-    const totalKm2 = (TARGET_SIZE * fit.metresPerUnit / 1000) ** 2;
+    const totalKm2 = (worldSize * fit.metresPerUnit / 1000) ** 2;
     oceanKm2 = Math.round(totalKm2 * (oceanHits / (samples * samples)) * 10) / 10;
     landKm2 = Math.round((totalKm2 - oceanKm2) * 10) / 10;
     log.push(`coast: ocean covers ~${oceanKm2} km2 of the ${Math.round(totalKm2)} km2 square`);
@@ -514,7 +568,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       minElevation,
       maxElevation,
       bbox: { ...BBOX },
-      targetSize: TARGET_SIZE,
+      targetSize: worldSize,
       metresPerUnit: Math.round(fit.metresPerUnit * 1000) / 1000,
       ...(coast ? {
         oceanKm2,
@@ -586,6 +640,8 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
         corridor: {
           eastX: round2(fit.apply({ x: coast.corridorEastX, z: 0 }).x),
           westX: round2(fit.apply({ x: coast.corridorWestX, z: 0 }).x),
+          northZ: round2(fit.apply({ x: 0, z: cityBounds.minZ }).z),
+          southZ: round2(fit.apply({ x: 0, z: cityBounds.maxZ }).z),
         },
       },
       rural: {
