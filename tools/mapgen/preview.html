@@ -56,7 +56,7 @@
 <script>
 'use strict';
 // ===== SHARED RENDERER (single source of truth — see src/ui/mapRender.ts) =====
-/* mapRender v1.1.0 sha256:c54c7431879d — inlined from src/ui/mapRender.ts, do not edit here */
+/* mapRender v1.2.0 sha256:c6e8cd80d0c6 — inlined from src/ui/mapRender.ts, do not edit here */
 /**
  * Shared canvas map renderer — the SINGLE source of truth for drawing the generated Joburg map.
  *
@@ -75,7 +75,7 @@
  *     classic <script> block. (Any real `import` would dangle in the inlined preview.)
  */
 /** Bump when the drawing contract changes. Embedded verbatim into the emitted preview. */
-const MAP_RENDER_VERSION = '1.1.0';
+const MAP_RENDER_VERSION = '1.2.0';
 // ---- Palette (mirrors the original preview) --------------------------------------------------
 const ROAD_COLORS = {
     motorway: '#ff6b4a', motorway_link: '#c9583f', trunk: '#ff9b45', trunk_link: '#c97e3e',
@@ -296,26 +296,8 @@ function renderMap(ctx, map, cam, opts = {}) {
         ctx.fill();
     }
     if (layers.corridor && map.coast) {
-        const size = map.stats.targetSize;
-        const corridor = map.coast.corridor;
-        const zTop = corridor.northZ ?? -size;
-        const zBottom = corridor.southZ ?? size;
-        ctx.save();
-        ctx.fillStyle = '#3d4a2c';
-        ctx.globalAlpha = 0.28;
-        ctx.fillRect(corridor.westX, zTop, corridor.eastX - corridor.westX, zBottom - zTop);
-        ctx.globalAlpha = 1;
-        ctx.setLineDash([26, 18]);
-        ctx.strokeStyle = '#5c6b3f';
-        ctx.lineWidth = Math.max(2, 1.2 / zoom);
-        ctx.beginPath();
-        ctx.moveTo(corridor.eastX, zTop);
-        ctx.lineTo(corridor.eastX, zBottom);
-        ctx.moveTo(corridor.westX, zTop);
-        ctx.lineTo(corridor.westX, zBottom);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
+        // No band tint or dashed boundary: the corridor is communicated by its farmland fields and
+        // veld — a straight-edged administrative rectangle read as an artifact on the map (owner).
         if (g.farmlandPath) {
             ctx.fillStyle = FARMLAND_COLOR;
             ctx.globalAlpha = 0.55;

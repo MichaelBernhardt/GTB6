@@ -17,7 +17,7 @@
  */
 
 /** Bump when the drawing contract changes. Embedded verbatim into the emitted preview. */
-export const MAP_RENDER_VERSION = '1.1.0';
+export const MAP_RENDER_VERSION = '1.2.0';
 
 // ---- Map JSON shape (structural subset this renderer touches) --------------------------------
 type Poly2 = [number, number][];
@@ -35,7 +35,7 @@ export interface RenderMapData {
   coast?: {
     coastline: Poly2; ocean: Poly2; beaches: Array<{ name: string; points: Poly2 }>;
     harbour: { x: number; z: number };
-    /** northZ/southZ clamp the corridor tint to its actual land extent (older maps span fully). */
+    /** Corridor band extents (metadata for zoning; the map draws no band tint). */
     corridor: { eastX: number; westX: number; northZ?: number; southZ?: number };
   };
   rural?: { farms: Array<{ x: number; z: number; kind: string }> };
@@ -284,17 +284,8 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
     ctx.beginPath(); ctx.arc(map.coast.harbour.x, map.coast.harbour.z, Math.max(9, 5 / zoom), 0, Math.PI * 2); ctx.fill();
   }
   if (layers.corridor && map.coast) {
-    const size = map.stats.targetSize; const corridor = map.coast.corridor;
-    const zTop = corridor.northZ ?? -size; const zBottom = corridor.southZ ?? size;
-    ctx.save();
-    ctx.fillStyle = '#3d4a2c'; ctx.globalAlpha = 0.28;
-    ctx.fillRect(corridor.westX, zTop, corridor.eastX - corridor.westX, zBottom - zTop);
-    ctx.globalAlpha = 1;
-    ctx.setLineDash([26, 18]); ctx.strokeStyle = '#5c6b3f'; ctx.lineWidth = Math.max(2, 1.2 / zoom);
-    ctx.beginPath();
-    ctx.moveTo(corridor.eastX, zTop); ctx.lineTo(corridor.eastX, zBottom);
-    ctx.moveTo(corridor.westX, zTop); ctx.lineTo(corridor.westX, zBottom);
-    ctx.stroke(); ctx.setLineDash([]); ctx.restore();
+    // No band tint or dashed boundary: the corridor is communicated by its farmland fields and
+    // veld — a straight-edged administrative rectangle read as an artifact on the map (owner).
     if (g.farmlandPath) {
       ctx.fillStyle = FARMLAND_COLOR; ctx.globalAlpha = 0.55; ctx.fill(g.farmlandPath); ctx.globalAlpha = 1;
       ctx.strokeStyle = '#7a6244'; ctx.lineWidth = Math.max(1.5, 1 / zoom); ctx.stroke(g.farmlandPath);
