@@ -181,8 +181,9 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
 const COAST_FRONTAGE: FrontageProfile = {
   yard: 4, structAccept: 0.58,
   structures: [
-    { name: 'beach-cafe', weight: 20 }, { name: 'ice-cream-kiosk', weight: 18 }, { name: 'pier-kiosk', weight: 12 },
-    { name: 'pavilion', weight: 12 }, { name: 'ablutions', weight: 8 }, { name: 'surf-shack', weight: 10 },
+    { name: 'beach-cafe', weight: 16 }, { name: 'ice-cream-kiosk', weight: 16 }, { name: 'pier-kiosk', weight: 10 },
+    { name: 'pavilion', weight: 10 }, { name: 'ablutions', weight: 8 }, { name: 'surf-shack', weight: 10 },
+    { name: 'seafront-cafe', weight: 10 }, { name: 'seafront-bar', weight: 7 }, { name: 'seafront-restaurant', weight: 7 },
   ],
   treeAccept: 0.78,
   trees: [{ name: 'palm', weight: 40 }, { name: 'agave', weight: 16 }, { name: 'aloe', weight: 14 }],
@@ -229,6 +230,7 @@ const AREA_BEACH: AreaProfile = {
   structures: [
     { name: 'beach-loungers', weight: 24 }, { name: 'surf-shack', weight: 14 }, { name: 'lifeguard-tower', weight: 8 },
     { name: 'ice-cream-kiosk', weight: 12 }, { name: 'ablutions', weight: 6 }, { name: 'beach-cafe', weight: 6 },
+    { name: 'seafront-cafe', weight: 5 },
   ],
 };
 

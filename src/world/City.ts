@@ -16,7 +16,6 @@ import {
   GREEN_POLYGONS,
   DIRT_POLYGONS,
   FARM_POLYGONS,
-  HARBOUR_POINT,
   JUNCTION_SURFACES,
   junctionPaves,
   junctionReach,
@@ -29,6 +28,8 @@ import {
 } from './mapData';
 import { OCEAN_Y } from './coast';
 import { buildAirport } from './Airport';
+import { BEACHFRONT } from './beachfront';
+import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
 import { CELL_SIZE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
 import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter';
@@ -1543,7 +1544,7 @@ export class City {
     });
 
     this.buildBeach();
-    this.buildHarbourApron();
+    this.buildBeachfront();
   }
 
   /** The sandy sea floor: a single draped sheet from the sand crest out to the west map edge, stuck to the
@@ -1583,13 +1584,58 @@ export class City {
     this.group.add(sand);
   }
 
-  /** Trivial dock apron where Kaapstad Quay meets the sea: a flat concrete slab at the waterline.
-   *  Placeholder for the Stage-3 harbour manicure (cranes, jetties, moored boats). */
-  private buildHarbourApron(): void {
-    if (!HARBOUR_POINT) return;
-    const apron = new THREE.Mesh(new THREE.PlaneGeometry(52, 34), new THREE.MeshStandardMaterial({ color: 0x8f8c85, map: this.concrete, roughness: 0.9 }));
-    apron.rotation.x = -Math.PI / 2; apron.position.set(HARBOUR_POINT.x + 18, OCEAN_Y + 0.02, HARBOUR_POINT.z); apron.receiveShadow = true;
-    this.group.add(apron);
+  /** The beachfront manicure (replaces the old placeholder harbour slab): the Kaapstad Quay
+   *  pleasure pier + paved quay forecourt, seafront venue strips at the quay and Bantry Bay,
+   *  beach clutter (loungers, lifeguard tower, towels) and moored boats — all placed from the
+   *  pure plan in beachfront.ts, whose pads CityGen/ModelScatter already keep clear. Venues and
+   *  clutter reuse the catalog path (buildOneModel) so slope plinths + oriented colliders come
+   *  for free; boats float at the waterline instead of sitting on the seabed terrain. */
+  private buildBeachfront(): void {
+    const plan = BEACHFRONT;
+    if (plan.apron) { // paved quay forecourt draped over the shore terrain
+      const { minX, maxX, minZ, maxZ } = plan.apron;
+      const polygon: MapPolygon = {
+        name: 'Kaapstad Quay apron', kind: 'beach', minX, maxX, minZ, maxZ,
+        points: [{ x: minX, z: minZ }, { x: maxX, z: minZ }, { x: maxX, z: maxZ }, { x: minX, z: maxZ }],
+        cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, area: (maxX - minX) * (maxZ - minZ),
+      };
+      this.addGroundCover(polygon, new THREE.MeshStandardMaterial({ color: 0x9c9a90, map: this.concrete, roughness: 0.92 }), 0.07);
+    }
+    if (plan.pier) {
+      const { x, z, length, width, sign } = plan.pier;
+      const heading = Math.PI / 2; // entrance (local +z) faces east onto the quay; the deck runs west over the water
+      const pier = buildPleasurePier(Math.floor(seeded(x, z, 55) * 1e6), { length, width, sign });
+      pier.group.position.set(x, 0, z); pier.group.rotation.y = heading;
+      this.group.add(pier.group);
+      for (const tier of pier.tiers) this.colliders.push(this.tierToWorldCollider(tier, x, z, heading, 0));
+    }
+    for (const spot of [...plan.venues, ...plan.clutter]) {
+      const { group, colliders } = this.buildOneModel(spot);
+      this.group.add(group); this.colliders.push(...colliders);
+    }
+    for (const boat of plan.boats) {
+      const built = buildModel(boat.name, boat.seed, { variant: boat.variant });
+      built.group.position.set(boat.x, OCEAN_Y + 0.03, boat.z); built.group.rotation.y = boat.heading;
+      this.group.add(built.group);
+      for (const tier of built.tiers) this.colliders.push(this.tierToWorldCollider(tier, boat.x, boat.z, boat.heading, OCEAN_Y));
+    }
+    if (plan.towels.length) { // bright towels: one instanced batch per colour on the dry sand
+      const towelGeometry = new THREE.BoxGeometry(1, 1, 1);
+      const colors = [0xd9634a, 0x3e8ca8, 0xe0c23c, 0xd88ab0];
+      const byColor: THREE.Matrix4[][] = colors.map(() => []);
+      const up = new THREE.Vector3(0, 1, 0);
+      for (const towel of plan.towels) {
+        const matrix = new THREE.Matrix4().compose(
+          new THREE.Vector3(towel.x, terrainHeightAt(towel.x, towel.z) + 0.05, towel.z),
+          new THREE.Quaternion().setFromAxisAngle(up, towel.heading),
+          new THREE.Vector3(0.95, 0.05, 1.85),
+        );
+        byColor[towel.color % colors.length]!.push(matrix);
+      }
+      colors.forEach((color, index) => {
+        if (byColor[index]!.length) this.addInstanced(towelGeometry, new THREE.MeshStandardMaterial({ color, roughness: 0.96 }), byColor[index]!, { receive: true });
+      });
+    }
   }
 
   // ---- Parks & green space (generated landuse polygons) ----------------------
