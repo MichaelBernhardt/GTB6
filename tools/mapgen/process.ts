@@ -33,8 +33,9 @@ import {
   THIN_SAMPLE_STEP_M,
   TRACK_WIDTHS,
 } from './config';
-import { buildBorderVeld, closeCoastalLoop, compositeElevation, graftCoastAndCorridor, type CoastGraftResult } from './coast';
+import { buildBorderVeld, closeCoastalLoop, compositeElevation, graftCoastAndCorridor, smoothCurve, type CoastGraftResult } from './coast';
 import { resolveDeadEnds } from './deadends';
+import { thinRailways } from './railways';
 import { buildOrbitalRing, pruneShortStubs, thinParallelRoads } from './thin';
 import { flatGrid, type ElevationSamples } from './elevation';
 import {
@@ -47,7 +48,7 @@ import {
   type GraphRoad,
   type RoadNetwork,
 } from './graph';
-import { meanderPolyline, nameSeed } from './meander';
+import { fbm, meanderPolyline, nameSeed } from './meander';
 import { boundsOf, makeFitTransform, makeProjector, polylineLength } from './projection';
 import { simplifyPolyline, simplifyWithPins } from './simplify';
 import type {
@@ -363,18 +364,40 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   if (coast) water.push({ name: coast.lake.name, points: coast.lake.polygon });
   log.push(`water: ${water.length} polygons >= ${MIN_WATER_AREA_M2} m2 (${water.filter((w) => w.name !== 'Water').map((w) => w.name).slice(0, 8).join(', ')})`);
 
-  // ---- Railways ----------------------------------------------------------
-  const railways: Array<{ name: string; points: Pt[] }> = [];
-  for (const way of ways) {
-    if (!way.tags?.railway || !way.nodes) continue;
-    const points = way.nodes
-      .map((id) => osmNodes.get(id))
-      .filter((n): n is OsmNode => Boolean(n) && inBbox(n!.lat, n!.lon))
-      .map((n) => project(n.lat, n.lon));
-    if (points.length < 2) continue;
-    railways.push({ name: way.tags.name ?? way.tags.railway, points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
+  // ---- Railways (thinned to a few real lines; the yards are 600+ ways of spaghetti) -------
+  const thinned = thinRailways(ways, osmNodes, project, inBbox);
+  log.push(thinned.log);
+  const railways: Array<{ name: string; points: Pt[] }> = thinned.lines
+    .map((line) => ({ name: line.name, points: simplifyPolyline(line.points, SIMPLIFY_TOLERANCE_M) }));
+  // Synthetic spur across the corridor to the airport: branch off the nearest mainline point
+  // and swing to a halt beside the apron.
+  if (coast && railways.length > 0) {
+    const apron = coast.airport.apron;
+    const halt: Pt = {
+      x: apron.reduce((sum, p) => sum + p.x, 0) / apron.length,
+      z: apron.reduce((sum, p) => sum + p.z, 0) / apron.length + 340,
+    };
+    let branch: Pt | null = null; let bestDistance = Infinity;
+    for (const line of railways) {
+      for (const p of line.points) {
+        const d = Math.hypot(p.x - halt.x, p.z - halt.z);
+        if (d < bestDistance) { bestDistance = d; branch = p; }
+      }
+    }
+    if (branch) {
+      const spurSeed = nameSeed('Lughawe Spur');
+      const controls: Pt[] = [branch];
+      for (const t of [0.3, 0.62]) {
+        controls.push({
+          x: branch.x + (halt.x - branch.x) * t + fbm(spurSeed, t * 4, 2) * 260,
+          z: branch.z + (halt.z - branch.z) * t + fbm(spurSeed + 7, t * 4, 2) * 260,
+        });
+      }
+      controls.push({ x: halt.x + 260, z: halt.z + 60 }, halt);
+      railways.push({ name: 'Lughawe Spur', points: simplifyPolyline(smoothCurve(controls, 130), SIMPLIFY_TOLERANCE_M) });
+      log.push(`railways: 'Lughawe Spur' branches ${Math.round(bestDistance / 1000)} km to the airport halt`);
+    }
   }
-  log.push(`railways: ${railways.length} segments`);
 
   // ---- Tracks / trails (off-road; kept out of the connected road graph) ---
   const tracks: Array<{ name: string; kind: 'track' | 'path'; width: number; points: Pt[] }> = [];

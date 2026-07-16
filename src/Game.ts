@@ -40,6 +40,7 @@ import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './syst
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
+import { TrainSystem } from './systems/TrainSystem';
 import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
 import { canEnterSafehouse, SAFEHOUSES, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
 import { GARAGE_PARK, GARAGE_STEP_OUT, SHOPS, ShopSystem } from './systems/ShopSystem';
@@ -101,6 +102,7 @@ export class Game {
   private wanted = new WantedSystem();
   private knowledge = new PoliceKnowledge<Pedestrian>();
   private police: PoliceSystem;
+  private trains: TrainSystem;
   private missions = new MissionSystem();
   private loadShedding = new LoadSheddingSystem();
   private livingCity: LivingCitySystem;
@@ -199,6 +201,7 @@ export class Game {
     this.combat.onRocket = (origin, direction, spec) => { if (spec.projectile) this.projectiles.spawn(origin, direction, spec.projectile, spec.range); };
     this.combat.onShot = (position, origin, directions, count, spec, exclude) => this.bullets.spawnShot(position, origin, directions, count, spec, exclude);
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
+    this.trains = new TrainSystem(this.scene, this.city);
     this.input = new InputManager(this.renderer.domElement);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
@@ -631,6 +634,7 @@ export class Game {
     const eye = this.camera.position;
     this.lifecycle.update(dt, this.dayNight.hour, { x: eye.x, z: eye.z, dirX: forward.x, dirZ: forward.z }, guarded);
     this.city.update(dt);
+    this.trains.update(dt);
     this.applyEskom(this.loadShedding.update(dt));
     this.dayNight.update(dt, focus, this.population.vehicles, this.police.vehicles, this.activeVehicle ?? this.transition?.vehicle);
     for (const impact of this.population.consumeImpacts()) {

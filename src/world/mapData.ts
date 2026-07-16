@@ -61,6 +61,7 @@ interface RawMap {
   water: Array<{ name: string; points: [number, number][] }>;
   landmarks: Array<{ name: string; x: number; z: number; kind: string }>;
   tracks: Array<{ name: string; width: number; kind: 'track' | 'path'; points: [number, number][] }>;
+  railways: Array<{ name: string; points: [number, number][] }>;
   landuse: Array<{ name: string; kind: string; points: [number, number][] }>;
   /** Jozi-by-the-Sea graft (tools/mapgen/coast.ts): synthetic Atlantic seaboard west of the crop. */
   coast?: {
@@ -158,6 +159,10 @@ export const GENERATED_ROADS: GeneratedRoad[] = MAP.roads.map((road) => ({
 export const GENERATED_TRACKS: GeneratedTrack[] = MAP.tracks
   .filter((track) => track.kind === 'track')
   .map((track) => ({ name: track.name, width: track.width, kind: track.kind, unpaved: true as const, points: toPts(track.points) }));
+
+/** Passenger rail lines (thinned by the pipeline): rendered as ballast + rails, never driveable. */
+export const GENERATED_RAILWAYS: Array<{ name: string; points: MapPt[] }> =
+  (MAP.railways ?? []).map((line) => ({ name: line.name, points: toPts(line.points) }));
 
 // ---- Districts -------------------------------------------------------------
 

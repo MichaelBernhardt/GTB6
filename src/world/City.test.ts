@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PLAYER } from '../config';
 import { fallDamage, jumpVelocity, stepVertical, type VerticalMotion } from '../core/GameRules';
-import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
+import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, RAILWAY_NETWORK, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
 import { CBD_CENTER, districtCenter, MAP_WORLD_SIZE } from './mapData';
 import { CITY_JUNCTIONS, signalCornerOffset } from './UrbanInfrastructure';
 
@@ -31,6 +31,18 @@ describe('generated Joburg road topology', () => {
   it('renders off-road tracks separately from the driveable network', () => {
     expect(TRACK_NETWORK.length).toBeGreaterThan(10);
     expect(TRACK_NETWORK.every((track) => track.width <= 6)).toBe(true);
+  });
+
+  it('carries a thinned passenger rail network with the airport spur', () => {
+    expect(RAILWAY_NETWORK.length).toBeGreaterThanOrEqual(3);
+    expect(RAILWAY_NETWORK.length).toBeLessThanOrEqual(8); // a few lines, not the 800-way yard spaghetti
+    const names = RAILWAY_NETWORK.map((line) => line.name);
+    expect(names).toContain('Lughawe Spur'); // the airport gets rail service
+    expect(names.some((name) => name.includes('Main Line'))).toBe(true);
+    // Lines are long, coherent polylines — not fragments.
+    const length = (points: { x: number; z: number }[]): number =>
+      points.reduce((sum, point, index) => index ? sum + Math.hypot(point.x - points[index - 1]!.x, point.z - points[index - 1]!.z) : 0, 0);
+    expect(RAILWAY_NETWORK.every((line) => length(line.points) >= 1200)).toBe(true);
   });
 
   it('defines named, phased signalized intersections at major crossings', () => {

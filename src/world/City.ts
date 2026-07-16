@@ -10,6 +10,7 @@ import {
   regionalMetresAt,
   HAS_ELEVATION,
   GENERATED_ROADS,
+  GENERATED_RAILWAYS,
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
@@ -233,6 +234,13 @@ export const districtAt = generatedDistrictAt;
 export const ROAD_NETWORK: RoadDefinition[] = GENERATED_ROADS.map((road) => ({ name: road.name, width: road.width, points: road.points }));
 /** Off-road dirt tracks: rendered as narrow unpaved strips, not part of the nav graph. */
 export const TRACK_NETWORK: RoadDefinition[] = GENERATED_TRACKS.map((track) => ({ name: track.name, width: track.width, points: track.points }));
+/** Passenger rail lines: ballast + rails + sleepers, never driveable, outside every nav graph. */
+export const RAILWAY_NETWORK: Array<{ name: string; points: RoadPoint[] }> =
+  GENERATED_RAILWAYS.map((line) => ({ name: line.name, points: line.points }));
+/** Rail-to-rail centre spacing (u) — reads as SA cape gauge at game scale. */
+export const RAIL_GAUGE = 1.6;
+/** Gravel ballast bed width (u). */
+export const RAIL_BALLAST_WIDTH = 5.2;
 
 const seeded = (x: number, z: number, salt = 0): number => {
   const value = Math.sin(x * 12.9898 + z * 78.233 + salt * 41.17) * 43758.5453;
@@ -526,6 +534,8 @@ export class City {
    *  from the verge roadsidePoints so lamp pitch is set by arc length, not the coarser roadside stride. */
   streetlampPoints: RoadsidePoint[] = buildStreetlampPoints(ROAD_NETWORK);
   roadPaths: RoadPoint[][] = [];
+  /** Sampled rail centrelines (world XZ) — the train system runs along these. */
+  railPaths: RoadPoint[][] = [];
   trafficRoutes: RoadPoint[][] = [];
   private navPaths = buildCityNavPaths(ROAD_NETWORK);
   vehicleNav: NavGraph = buildVehicleNav(ROAD_NETWORK); // directed one-way lanes (left-hand); pedNav stays undirected
@@ -939,6 +949,49 @@ export class City {
     this.buildStopLines();
     this.buildIntersections();
     this.buildPotholes();
+    this.buildRailways();
+  }
+
+  /** Passenger rail: a draped ballast strip with instanced sleepers and twin rails. Level crossings
+   *  come free — the rail bed rides just above the tar where a line crosses a carriageway. */
+  private buildRailways(): void {
+    if (RAILWAY_NETWORK.length === 0) return;
+    const ballastMat = new THREE.MeshStandardMaterial({ color: 0x6b625a, map: this.sand, roughness: 0.98 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.42, metalness: 0.6 });
+    const sleeperMat = new THREE.MeshStandardMaterial({ color: 0x453527, roughness: 0.95 });
+    const railTransforms: THREE.Matrix4[] = []; const sleeperTransforms: THREE.Matrix4[] = [];
+    const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion();
+    const RAIL_PITCH = 12; // chord length for the rail boxes: follows the relief without instance spam
+    for (const line of RAILWAY_NETWORK) {
+      const sampled = this.samplePath(line.points, false, ROAD_SAMPLE_SPACING);
+      const ballast = this.createRoadStrip(sampled, RAIL_BALLAST_WIDTH, ballastMat, 0.045, false);
+      ballast.receiveShadow = true; this.group.add(ballast);
+      this.railPaths.push(sampled.map((point) => ({ ...point })));
+      const chords = this.densifyPath(sampled, RAIL_PITCH, false);
+      for (let index = 0; index < chords.length - 1; index++) {
+        const start = chords[index]; const end = chords[index + 1]; if (!start || !end) continue;
+        const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz);
+        if (length < 0.5) continue;
+        const normalX = -dz / length; const normalZ = dx / length;
+        quaternion.copy(this.surfaceSegmentQuaternion(start.x, start.z, end.x, end.z, 'terrain'));
+        const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
+        for (const side of [-1, 1]) {
+          const x = midX + normalX * side * (RAIL_GAUGE / 2); const z = midZ + normalZ * side * (RAIL_GAUGE / 2);
+          matrix.compose(new THREE.Vector3(x, this.terrainHeightAt(x, z) + 0.16, z), quaternion, new THREE.Vector3(0.16, 0.14, length + 0.3));
+          railTransforms.push(matrix.clone());
+        }
+        const sleepers = Math.max(1, Math.round(length / 2.6));
+        for (let s = 0; s < sleepers; s++) {
+          const t = (s + 0.5) / sleepers;
+          const x = start.x + dx * t; const z = start.z + dz * t;
+          matrix.compose(new THREE.Vector3(x, this.terrainHeightAt(x, z) + 0.075, z), quaternion, new THREE.Vector3(2.4, 0.07, 0.55));
+          sleeperTransforms.push(matrix.clone());
+        }
+      }
+    }
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    this.addInstanced(box, railMat, railTransforms, { receive: true });
+    this.addInstanced(box, sleeperMat, sleeperTransforms, { receive: true });
   }
 
   /** Paves every real crossing (T / cross / multi-way) with a filled asphalt disc laid just over the
