@@ -38,6 +38,7 @@ import {
 import { nodeDegrees, type RoadNetwork } from './graph';
 import { fbm, nameSeed } from './meander';
 import { boundsOf, makeProjector } from './projection';
+import { ridgeMetresAt } from './ridge';
 import { simplifyPolyline } from './simplify';
 import type { MapRuralBuilding, OsmNode, OsmResponse, OsmWay, Pt, RoadKind } from './types';
 
@@ -654,6 +655,9 @@ export interface CompositeElevationGrid {
   cols: number; rows: number;
   x0: number; z0: number; dx: number; dz: number;
   data: number[];
+  /** Metres of synthetic mountain range included in `data` per cell (see ridge.ts) — shipped
+   *  alongside so the runtime can exempt the range from detrending and keep it TALL in-game. */
+  ridge: number[];
   source: string;
 }
 
@@ -693,16 +697,18 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
   };
 
   const data: number[] = [];
+  const ridge: number[] = [];
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       const unit = { x: x0 + col * dx, z: z0 + row * dz };
       const m = fit.invert(unit);
       const coastX = coastXAt(m.z);
       let height: number;
+      let mountain = 0;
       if (m.x >= coast.corridorEastX) {
         height = sampleSrtm(m);
       } else if (m.x <= coastX) {
-        height = 0; // ocean
+        height = 0; // ocean — no mountain reaches the water (ridge.ts gates well east of here anyway)
       } else {
         // Rolling descent from the Joburg edge down to the shore.
         const t = (coast.corridorEastX - m.x) / (coast.corridorEastX - coastX);
@@ -711,8 +717,10 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
         const hills = 110 * Math.sin(Math.PI * Math.min(1, t * 1.15)) * (0.55 + 0.45 * Math.sin(m.z / 1300 + m.x / 950));
         height = Math.max(2, base + hills * (t < 0.92 ? 1 : (1 - t) / 0.08));
       }
-      data.push(Math.round(height));
+      if (m.x > coastX) mountain = Math.round(ridgeMetresAt(unit.x, unit.z)); // fractal northern range (ridge.ts), zero across most of the map
+      data.push(Math.round(height) + mountain);
+      ridge.push(mountain);
     }
   }
-  return { cols, rows, x0, z0, dx, dz, data, source: `${srtm.source} + synthetic corridor/coast composite` };
+  return { cols, rows, x0, z0, dx, dz, data, ridge, source: `${srtm.source} + synthetic corridor/coast composite + northern fractal range` };
 }

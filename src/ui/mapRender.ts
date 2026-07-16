@@ -17,7 +17,11 @@
  */
 
 /** Bump when the drawing contract changes. Embedded verbatim into the emitted preview. */
-export const MAP_RENDER_VERSION = '1.2.0';
+export const MAP_RENDER_VERSION = '1.3.0'; // 1.2.0 was claimed twice: corridor-tint removal + snowy hillshade
+
+/** Raw composite metres ASL where the hillshade turns snowy (matches City.SNOWLINE_METRES — the
+ *  in-game ground shader whitens the same tops; a unit test keeps the two constants equal). */
+export const MAP_SNOWLINE_METRES = 2400;
 
 // ---- Map JSON shape (structural subset this renderer touches) --------------------------------
 type Poly2 = [number, number][];
@@ -179,6 +183,16 @@ function polyPathOf(polys: Array<{ points: Poly2 }>): Path2D {
   return p;
 }
 
+/** Deterministic 2-D value noise in [0, 1] for the snowline dither (self-contained — no imports). */
+function snowNoise(x: number, z: number): number {
+  const h = (ix: number, iz: number): number => { const s = Math.sin(ix * 127.1 + iz * 311.7) * 43758.5453; return s - Math.floor(s); };
+  const ix = Math.floor(x); const iz = Math.floor(z);
+  const fx = x - ix; const fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx); const uz = fz * fz * (3 - 2 * fz);
+  const a = h(ix, iz); const b = h(ix + 1, iz); const c = h(ix, iz + 1); const d = h(ix + 1, iz + 1);
+  return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
+}
+
 function buildHillshade(map: RenderMapData): Prebuilt['hillshade'] {
   const e = map.elevation;
   if (!e || e.data.every((v) => v === e.data[0])) return null;
@@ -197,9 +211,14 @@ function buildHillshade(map: RenderMapData): Prebuilt['hillshade'] {
       let shade = 0.72 - 2.2 * (dzdx * -0.707 + dzdy * -0.707);
       shade = Math.max(0.25, Math.min(1.15, shade));
       const t = (at(col, row) - min) / (max - min);
-      const base = [46 + 44 * t, 56 + 40 * t, 52 + 30 * t];
+      let r = 46 + 44 * t; let bg = 56 + 40 * t; let bb = 52 + 30 * t;
+      // Snowy tops: blend toward white above the (noise-dithered) snowline, keeping the relief shading.
+      const metres = at(col, row); // grid values are metres ASL already
+      const dither = (snowNoise(col * 0.31, row * 0.31) * 0.7 + snowNoise(col * 1.17, row * 1.17) * 0.3 - 0.5) * 240;
+      const snow = Math.max(0, Math.min(1, (metres - (MAP_SNOWLINE_METRES + dither)) / 150));
+      if (snow > 0) { r += (236 - r) * snow; bg += (241 - bg) * snow; bb += (247 - bb) * snow; shade = Math.min(1.15, shade + 0.22 * snow); }
       const i = (row * e.cols + col) * 4;
-      img.data[i] = base[0]! * shade; img.data[i + 1] = base[1]! * shade; img.data[i + 2] = base[2]! * shade; img.data[i + 3] = 255;
+      img.data[i] = r * shade; img.data[i + 1] = bg * shade; img.data[i + 2] = bb * shade; img.data[i + 3] = 255;
     }
   }
   g.putImageData(img, 0, 0);

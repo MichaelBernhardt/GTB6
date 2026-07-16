@@ -6,8 +6,9 @@ import {
   COASTLINE,
   COAST_CORRIDOR,
   districtAt as generatedDistrictAt,
-  elevationMetresAt,
+  baseMetresAt,
   regionalMetresAt,
+  ridgeMetresAt,
   HAS_ELEVATION,
   GENERATED_ROADS,
   GENERATED_RAILWAYS,
@@ -34,7 +35,7 @@ import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter'
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { applyGrassShader, createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
+import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
@@ -133,6 +134,17 @@ export const TERRAIN_LOCAL_SCALE = 2.0; // fine residual: metres → units (exag
 /** Cap on the local residual (metres) BEFORE exaggeration, so the blur's overshoot at the steep synthetic
  *  escarpment kink can't blow up into a spike; gentle CBD undulation is well under this. */
 export const TERRAIN_LOCAL_CAP = 18;
+/** The synthetic northern mountain range rides ABOVE the detrend split (mapData ships its metres
+ *  separately and detrends only the base terrain), scaled straight to world Y — ~1250 m of crest
+ *  becomes ~400 u of in-game mountain, dwarfing the ±36 u local hills while the CBD feels nothing. */
+export const TERRAIN_RIDGE_SCALE = 0.32;
+/** Raw composite metres ASL where the mountain tops turn snowy. The shared map renderer paints the
+ *  same contour (MAP_SNOWLINE_METRES in src/ui/mapRender.ts — kept equal by a unit test). */
+export const SNOWLINE_METRES = 2400;
+/** Base terrain the range rises from (~the plateau) — maps SNOWLINE_METRES into in-game Y. */
+export const RIDGE_BASE_METRES = 1730;
+/** In-game Y where snow begins (fbm-dithered in the ground shader; full cover one band higher). */
+export const SNOW_Y = (SNOWLINE_METRES - RIDGE_BASE_METRES) * TERRAIN_RIDGE_SCALE;
 /** Coastline vertices sorted by z, for a per-z land/sea boundary lookup: the synthetic shore meanders
  *  across x by ~1.6 km, so a single global coast x would sink real coastal land (roads, beach) below sea
  *  level. terrain crosses 0 at coastlineXAt(z); seaward of it the ground sinks into the seabed slope. */
@@ -160,13 +172,14 @@ export const BEACH_INLAND = 40;
 /** How far the ocean surface reaches past the shoreline into the beach, so waves lap up and down the slope. */
 export const BEACH_WATER_INLAND = 60;
 
-/** The detrended, exaggerated, capped land relief at a point (before any coastal fade). */
+/** The detrended, exaggerated, capped land relief at a point (before any coastal fade): the base
+ *  terrain's regional/local split plus the mountain range riding above it at its own scale. */
 function landRelief(x: number, z: number): number {
   const regional = regionalMetresAt(x, z);
-  let local = elevationMetresAt(x, z) - regional;
+  let local = baseMetresAt(x, z) - regional;
   if (local > TERRAIN_LOCAL_CAP) local = TERRAIN_LOCAL_CAP;
   else if (local < -TERRAIN_LOCAL_CAP) local = -TERRAIN_LOCAL_CAP;
-  return regional * TERRAIN_REGIONAL_SCALE + local * TERRAIN_LOCAL_SCALE;
+  return regional * TERRAIN_REGIONAL_SCALE + local * TERRAIN_LOCAL_SCALE + ridgeMetresAt(x, z) * TERRAIN_RIDGE_SCALE;
 }
 
 function analyticTerrainHeightAt(x: number, z: number): number {
@@ -872,7 +885,9 @@ export class City {
     pos.needsUpdate = true;
     geometry.computeVertexNormals(); // real normals so slopes catch the light instead of reading flat
     setTerrainGrid(grid, n, step); // from here, terrainHeightAt returns this exact drawn surface
-    const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.groundGrass, roughness: 0.96 }));
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.groundGrass, roughness: 0.96 });
+    applySnowShader(groundMat, { snowY: SNOW_Y, rockY: SNOW_Y * 0.55 }); // veld → rock → snow up the northern range
+    const ground = new THREE.Mesh(geometry, groundMat);
     ground.receiveShadow = true;
     ground.userData.far = true;
     this.group.add(ground);
@@ -1585,6 +1600,7 @@ export class City {
     // for now — so the world matches the map. (`polygon.manicured` is still carried for a future custom pass.)
     const parkMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.grassLush, roughness: 0.95 });
     this.grassWind = applyGrassShader(parkMaterial, { wind: true }); // lush lawns: macro detile + wind ripple
+    applySnowShader(parkMaterial, { snowY: SNOW_Y, rockY: SNOW_Y * 0.55 }); // veld draped up the range whitens with the ground under it
     const dirtMaterial = new THREE.MeshStandardMaterial({ color: 0xb59d5a, map: this.sand, roughness: 0.97 });
     for (const polygon of GREEN_POLYGONS) {
       this.addGroundCover(polygon, parkMaterial, 0.05); // drapes onto the relief
@@ -1604,6 +1620,7 @@ export class City {
       const z = polygon.minZ + seeded(polygon.cx, polygon.cz + attempt, 32) * (polygon.maxZ - polygon.minZ);
       if (!pointInPolygon(polygon, x, z) || this.inWater(x, z)) continue;
       if (this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2)) continue;
+      if (terrainHeightAt(x, z) > SNOW_Y * 0.55) continue; // no leafy park trees above the range's rock line
       this.addParkTree(x, z, attempt + Math.round(polygon.cx));
       planted++;
     }

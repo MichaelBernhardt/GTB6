@@ -6,8 +6,8 @@ import { renderMapModuleJs } from './preview';
 import type { JoburgMap } from './types';
 
 /**
- * Render the generated map to a static PNG — geometry only (roads, tracks, railways, water,
- * landuse, coast, airport, port), no labels, no hillshade.
+ * Render the generated map to a static PNG — geometry plus terrain hillshade (roads, tracks,
+ * railways, water, landuse, coast, airport, port), no labels.
  *
  * Re-runnable any time:   npm run map:png   (or: tsx tools/mapgen/render-png.ts)
  * Options:                --size 1024   --out tools/mapgen/map.png
@@ -35,16 +35,18 @@ interface SharedRenderer {
   renderMap: (ctx: unknown, map: object, cam: MapCamera, opts: { layers: Record<string, boolean> }) => void;
   fitZoom: (targetSize: number, width: number, height: number) => number;
 }
-const factory = new Function('Path2D', `${renderMapModuleJs()}\nreturn { renderMap, fitZoom };`);
-const { renderMap, fitZoom } = factory(Path2D) as SharedRenderer;
+// buildHillshade() renders its shading into a `document.createElement('canvas')` — hand the
+// evaluated module a minimal shim backed by @napi-rs/canvas so the terrain (and the northern
+// mountain range's relief + snow) shows in the PNG exactly as in the game map.
+const documentShim = { createElement: () => createCanvas(1, 1) };
+const factory = new Function('Path2D', 'document', `${renderMapModuleJs()}\nreturn { renderMap, fitZoom };`);
+const { renderMap, fitZoom } = factory(Path2D, documentShim) as SharedRenderer;
 
 const map = JSON.parse(readFileSync(MAP_JSON, 'utf8')) as JoburgMap;
-// No elevation → buildHillshade() bails before touching `document`, which Node doesn't have.
-const flatMap = { ...map, elevation: undefined };
 
 const layers = {
-  hillshade: false, districts: false, landmarks: false, // no labels / terrain shading
-  coast: true, corridor: true, landuse: true, airport: true, port: true,
+  districts: false, landmarks: false, // no labels
+  hillshade: true, coast: true, corridor: true, landuse: true, airport: true, port: true,
   water: true, railways: true, tracks: true, roads: true,
 };
 
@@ -58,7 +60,7 @@ const cam: MapCamera = {
   height: size,
   dpr: 1,
 };
-renderMap(canvas.getContext('2d'), flatMap, cam, { layers });
+renderMap(canvas.getContext('2d'), map, cam, { layers });
 
 writeFileSync(outPath, canvas.encodeSync('png'));
 console.log(`[render-png] wrote ${outPath} (${size}x${size}, ${map.stats.totalRoadKm} km of road)`);

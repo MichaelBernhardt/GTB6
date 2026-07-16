@@ -102,7 +102,14 @@ describe('generated joburg-map.json', () => {
     expect(e.data).toHaveLength(e.cols * e.rows);
     // With the coast graft the composite grid reaches sea level; inland-only builds stay on the Rand.
     expect(map.stats.minElevation).toBeGreaterThanOrEqual(map.coast ? 0 : 1200);
-    expect(map.stats.maxElevation).toBeLessThan(2200);
+    // Coast builds stack the synthetic northern range on the plateau; the BASE terrain under it
+    // (data − ridge, per cell) must still respect the old Witwatersrand ceiling.
+    expect(map.stats.maxElevation).toBeLessThan(e.ridge ? 3400 : 2200);
+    if (e.ridge) {
+      expect(e.ridge).toHaveLength(e.data.length);
+      expect(Math.max(...e.data.map((v, i) => v - e.ridge![i]!))).toBeLessThan(2200);
+      expect(map.stats.maxElevation).toBeGreaterThan(2600); // the range is genuinely tall
+    }
     expect(map.stats.maxElevation - map.stats.minElevation).toBeGreaterThan(80);
     expect(e.dx).toBeGreaterThan(0);
     expect(e.dz).toBeGreaterThan(0);
