@@ -61,7 +61,16 @@ interface RawMap {
   water: Array<{ name: string; points: [number, number][] }>;
   landmarks: Array<{ name: string; x: number; z: number; kind: string }>;
   tracks: Array<{ name: string; width: number; kind: 'track' | 'path'; points: [number, number][] }>;
+  railways: Array<{ name: string; points: [number, number][] }>;
   landuse: Array<{ name: string; kind: string; points: [number, number][] }>;
+  /** Stage-3 airfield (tools/mapgen): runway/taxiway centrelines + apron and building footprints. */
+  airport?: {
+    name: string;
+    runway: { kind: string; width: number; points: [number, number][] };
+    taxiway: { kind: string; width: number; points: [number, number][] };
+    apron: [number, number][];
+    buildings: [number, number][][];
+  };
   /** Jozi-by-the-Sea graft (tools/mapgen/coast.ts): synthetic Atlantic seaboard west of the crop. */
   coast?: {
     coastline: [number, number][];
@@ -71,8 +80,9 @@ interface RawMap {
     corridor: { eastX: number; westX: number };
   };
   /** SRTM 90 m heightgrid (+ synthetic corridor/coast composite): row-major from the NW corner, values in
-   *  metres above sea level, placed in world XZ by an affine origin (x0,z0) + spacing (dx,dz) in game units. */
-  elevation?: { cols: number; rows: number; x0: number; z0: number; dx: number; dz: number; data: number[] };
+   *  metres above sea level, placed in world XZ by an affine origin (x0,z0) + spacing (dx,dz) in game units.
+   *  `ridge` is the synthetic northern mountain range's contribution included in `data` per cell. */
+  elevation?: { cols: number; rows: number; x0: number; z0: number; dx: number; dz: number; data: number[]; ridge?: number[] };
 }
 
 const MAP = rawMap as unknown as RawMap;
@@ -94,16 +104,29 @@ export const METRES_PER_UNIT = MAP.stats.metresPerUnit;
  * LOCAL residual (raw − regional) carries the fine undulation. City.terrainHeightAt scales them
  * independently — regional DOWN to tame the escarpment, local UP to make the flat land read as hills —
  * with the ocean (0 m) staying anchored at Y≈0 because both fields vanish there.
+ *
+ * The synthetic northern mountain range (tools/mapgen/ridge.ts) would be destroyed by that split — a
+ * broad ridge lands almost entirely in the discarded REGIONAL trend and the crumbs left in LOCAL hit
+ * the cap. The pipeline therefore ships the range's per-cell contribution as `elevation.ridge`; we
+ * subtract it BEFORE detrending (both fields see only the pre-range BASE terrain) and City adds it
+ * back at its own scale, so the mountains stay genuinely tall in-game while the CBD is untouched.
  */
 const EL = MAP.elevation;
+
+/** The synthetic mountain range's metres per cell (zero-filled when the map ships none). */
+const RIDGE_DATA: number[] | undefined = EL?.ridge && EL.ridge.length === EL.data.length ? EL.ridge : undefined;
+
+/** The heightgrid with the mountain range removed — what the regional/local detrend split sees. */
+const BASE_DATA: number[] | undefined = EL ? (RIDGE_DATA ? EL.data.map((v, i) => v - RIDGE_DATA[i]!) : EL.data) : undefined;
 
 /** Blur radius for the regional trend, in grid cells (~1 cell = dx units). */
 const REGIONAL_BLUR_CELLS = 6;
 
-/** Separable box-blur of the heightgrid → the smooth regional trend. Computed once; clamped at edges. */
+/** Separable box-blur of the BASE heightgrid → the smooth regional trend. Computed once; clamped at edges. */
 const REGIONAL_DATA: number[] | undefined = (() => {
-  if (!EL) return undefined;
-  const { cols, rows, data } = EL;
+  if (!EL || !BASE_DATA) return undefined;
+  const { cols, rows } = EL;
+  const data = BASE_DATA;
   const clamp = (v: number, hi: number): number => (v < 0 ? 0 : v > hi ? hi : v);
   const pass = (src: number[], horizontal: boolean): number[] => {
     const out = new Array<number>(src.length);
@@ -147,6 +170,16 @@ export function regionalMetresAt(x: number, z: number): number {
   return REGIONAL_DATA ? sampleGrid(REGIONAL_DATA, x, z) : 0;
 }
 
+/** Bilinear-sampled BASE elevation (raw minus the synthetic range) — what the detrend split applies to. */
+export function baseMetresAt(x: number, z: number): number {
+  return BASE_DATA ? sampleGrid(BASE_DATA, x, z) : 0;
+}
+
+/** Bilinear-sampled synthetic mountain-range contribution, in metres (0 on maps without the range). */
+export function ridgeMetresAt(x: number, z: number): number {
+  return RIDGE_DATA ? sampleGrid(RIDGE_DATA, x, z) : 0;
+}
+
 const toPts = (points: [number, number][]): MapPt[] => points.map(([x, z]) => ({ x, z }));
 
 /** Every driveable road polyline (all highway classes; the pipeline already thinned residentials to the CBD). */
@@ -158,6 +191,10 @@ export const GENERATED_ROADS: GeneratedRoad[] = MAP.roads.map((road) => ({
 export const GENERATED_TRACKS: GeneratedTrack[] = MAP.tracks
   .filter((track) => track.kind === 'track')
   .map((track) => ({ name: track.name, width: track.width, kind: track.kind, unpaved: true as const, points: toPts(track.points) }));
+
+/** Passenger rail lines (thinned by the pipeline): rendered as ballast + rails, never driveable. */
+export const GENERATED_RAILWAYS: Array<{ name: string; points: MapPt[] }> =
+  (MAP.railways ?? []).map((line) => ({ name: line.name, points: toPts(line.points) }));
 
 // ---- Districts -------------------------------------------------------------
 
@@ -243,6 +280,32 @@ export const AERODROME_POLYGONS: MapPolygon[] = MAP.landuse
   .filter((area) => AERODROME_KINDS.has(area.kind))
   .map((area) => buildPolygon(area.name, 'aerodrome', area.points))
   .filter((polygon): polygon is MapPolygon => polygon !== undefined);
+
+// ---- Airport (the corridor airfield) -----------------------------------------
+
+/** The generated airfield. The runway/taxiway carry road-like widths but are deliberately NOT part of
+ *  GENERATED_ROADS: they must never enter the road index, nav graphs or spawn surfaces — only the 3D
+ *  airport renderer (world/Airport.ts) and the map view consume them. */
+export interface AirportData {
+  name: string;
+  runway: GeneratedRoad;
+  taxiway: GeneratedRoad;
+  apron: MapPolygon;
+  buildings: MapPolygon[];
+}
+
+const RAW_AIRPORT = MAP.airport;
+const AIRPORT_APRON = RAW_AIRPORT ? buildPolygon(`${RAW_AIRPORT.name} apron`, 'aerodrome', RAW_AIRPORT.apron) : undefined;
+
+export const AIRPORT: AirportData | undefined = RAW_AIRPORT && AIRPORT_APRON ? {
+  name: RAW_AIRPORT.name,
+  runway: { name: `${RAW_AIRPORT.name} runway`, width: RAW_AIRPORT.runway.width, kind: RAW_AIRPORT.runway.kind, points: toPts(RAW_AIRPORT.runway.points) },
+  taxiway: { name: `${RAW_AIRPORT.name} taxiway`, width: RAW_AIRPORT.taxiway.width, kind: RAW_AIRPORT.taxiway.kind, points: toPts(RAW_AIRPORT.taxiway.points) },
+  apron: AIRPORT_APRON,
+  buildings: RAW_AIRPORT.buildings
+    .map((footprint, index) => buildPolygon(`${RAW_AIRPORT.name} building ${index + 1}`, 'aerodrome', footprint))
+    .filter((polygon): polygon is MapPolygon => polygon !== undefined),
+} : undefined;
 
 // ---- Coast (Jozi-by-the-Sea graft) ------------------------------------------
 

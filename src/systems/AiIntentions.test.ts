@@ -163,9 +163,11 @@ describe('ai intentions simulation', () => {
   it('never finds a hidden player: the search fans outward from the scene without cheating, until the heat decays', () => {
     const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
     const wanted = new WantedSystem(); wanted.addCrime(60); // three stars: a few units to spread the search
-    const knowledge = new PoliceKnowledge(); knowledge.copWitness(0, 0);
-    const player = new THREE.Vector3(900, 0, 900); // hiding far away — well beyond any drift before the heat clears
-    const scene = new THREE.Vector3(0, 0, 0);
+    // Anchor the scene on the CBD spawn: a dense, stable grid. An arbitrary fixed point drifts
+    // onto different (sometimes sparse) suburbia whenever the generated map is refitted.
+    const scene = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z);
+    const knowledge = new PoliceKnowledge(); knowledge.copWitness(scene.x, scene.z);
+    const player = new THREE.Vector3(scene.x + 900, 0, scene.z + 900); // hiding far away — well beyond any drift before the heat clears
     let closestToPlayer = Infinity; let farthestWhileHot = 0;
     for (let frame = 0; frame < 2400; frame++) {
       police.update(1 / 30, player, true, wanted, knowledge, () => {});
@@ -176,7 +178,7 @@ describe('ai intentions simulation', () => {
       }
     }
     expect(closestToPlayer).toBeGreaterThan(SIGHT_RADIUS); // nobody ever stumbled onto the hidden player
-    expect(knowledge.lastKnown).toMatchObject({ x: 0, z: 0 }); // knowledge never advanced past the scene — no cheating onto the live position
+    expect(knowledge.lastKnown).toMatchObject({ x: scene.x, z: scene.z }); // knowledge never advanced past the scene — no cheating onto the live position
     expect(farthestWhileHot).toBeGreaterThan(ROAM_RADIUS); // the search drifts outward from the scene, not orbiting it
     expect(wanted.isWanted).toBe(false); // unseen decay ended the alert
   });

@@ -137,8 +137,9 @@ export interface MapCoast {
   beaches: Array<{ name: string; points: [number, number][] }>;
   /** V&A-style working waterfront anchor on the coastal road. */
   harbour: { x: number; z: number };
-  /** Rural corridor band between the Joburg block and the coast (game-unit x extents). */
-  corridor: { eastX: number; westX: number };
+  /** Rural corridor band between the Joburg block and the coast (game-unit extents; the
+   *  z clamp keeps the map tint on the corridor's actual land, not the full square). */
+  corridor: { eastX: number; westX: number; northZ: number; southZ: number };
 }
 
 export interface MapRuralBuilding { x: number; z: number; kind: 'farmhouse' | 'barn' | 'silo' | 'windmill'; }
@@ -163,6 +164,9 @@ export interface HeightGrid {
   dz: number;
   source: string;
   data: number[];
+  /** Metres of synthetic northern mountain range included in `data` per cell (coast builds only) —
+   *  shipped so the runtime can exempt the range from detrending (see src/world/mapData.ts). */
+  ridge?: number[];
 }
 
 export interface MapWater {

@@ -139,12 +139,12 @@ function remapRoadNodes(net: RoadNetwork, remap: Map<number, number>): void {
   for (const id of remap.keys()) net.nodes.delete(id);
 }
 
-interface SegmentRef {
+export interface SegmentRef {
   roadIndex: number;
   segIndex: number;
 }
 
-function buildSegmentGrid(net: RoadNetwork, cell: number): Map<string, SegmentRef[]> {
+export function buildSegmentGrid(net: RoadNetwork, cell: number): Map<string, SegmentRef[]> {
   const grid = new Map<string, SegmentRef[]>();
   net.roads.forEach((road, roadIndex) => {
     for (let s = 0; s < road.nodeIds.length - 1; s++) {
@@ -167,7 +167,7 @@ function buildSegmentGrid(net: RoadNetwork, cell: number): Map<string, SegmentRe
   return grid;
 }
 
-function projectOnSegment(p: Pt, a: Pt, b: Pt): { point: Pt; t: number; distance: number } {
+export function projectOnSegment(p: Pt, a: Pt, b: Pt): { point: Pt; t: number; distance: number } {
   const dx = b.x - a.x;
   const dz = b.z - a.z;
   const lengthSq = dx * dx + dz * dz;
@@ -361,7 +361,7 @@ export function bridgeIslands(net: RoadNetwork, bridgeDistance: number): IslandR
   return report;
 }
 
-function pruneOrphanNodes(net: RoadNetwork): void {
+export function pruneOrphanNodes(net: RoadNetwork): void {
   const used = new Set<number>();
   for (const road of net.roads) for (const id of road.nodeIds) used.add(id);
   for (const id of [...net.nodes.keys()]) if (!used.has(id)) net.nodes.delete(id);

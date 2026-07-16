@@ -11,7 +11,11 @@ import {
   AIRPORT_NAME,
   AIRPORT_RUNWAY_BEARING_RAD,
   AIRPORT_RUNWAY_LENGTH_M,
+  BORDER_VELD_DEPTH_MAX_M,
+  BORDER_VELD_DEPTH_MIN_M,
+  BORDER_VELD_NAME,
   CAPE_BBOX,
+  COAST_LOOP_LINKS,
   COAST_ROAD_SETBACK_M,
   COAST_STRETCH_Z,
   COASTAL_ROAD_NAME,
@@ -34,6 +38,7 @@ import {
 import { nodeDegrees, type RoadNetwork } from './graph';
 import { fbm, nameSeed } from './meander';
 import { boundsOf, makeProjector } from './projection';
+import { ridgeMetresAt } from './ridge';
 import { simplifyPolyline } from './simplify';
 import type { MapRuralBuilding, OsmNode, OsmResponse, OsmWay, Pt, RoadKind } from './types';
 
@@ -77,6 +82,8 @@ export interface CoastGraftResult {
   /** Corridor band (metres, x extents). */
   corridorEastX: number;
   corridorWestX: number;
+  /** Node ids of the coastal highway's two dangling tips (for the orbital loop links). */
+  highwayEndIds: { south: number; north: number };
   log: string[];
 }
 
@@ -119,6 +126,21 @@ export function offsetPolyline(points: Pt[], offset: number): Pt[] {
     const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
     return { x: point.x - (dz / length) * offset, z: point.z + (dx / length) * offset };
   });
+}
+
+/** Separating-axis overlap test for two convex quads (true when they intersect). */
+export function quadsOverlap(a: Pt[], b: Pt[]): boolean {
+  for (const [first, second] of [[a, b], [b, a]] as const) {
+    for (let i = 0; i < first.length; i++) {
+      const p = first[i]!; const q = first[(i + 1) % first.length]!;
+      const axisX = -(q.z - p.z); const axisZ = q.x - p.x;
+      let minA = Infinity; let maxA = -Infinity; let minB = Infinity; let maxB = -Infinity;
+      for (const v of first) { const d = v.x * axisX + v.z * axisZ; minA = Math.min(minA, d); maxA = Math.max(maxA, d); }
+      for (const v of second) { const d = v.x * axisX + v.z * axisZ; minB = Math.min(minB, d); maxB = Math.max(maxB, d); }
+      if (maxA < minB || maxB < minA) return false; // separating axis found
+    }
+  }
+  return true;
 }
 
 /** Catmull-Rom through control points, sampled ~every `step` metres — the "creative curves". */
@@ -200,14 +222,17 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   });
   let coastline = capeCoast.map(toComposite);
 
-  // Extend the shoreline synthetically to just past the Joburg z extents, with a gentle wobble.
+  // Extend the shoreline synthetically to just past the Joburg z extents. fBm wobble (tapered
+  // in from the real-data seam) instead of a regular sine — a robotic wave reads instantly fake.
   const extendTo = (from: Pt, direction: 1 | -1, untilZ: number): Pt[] => {
     const output: Pt[] = [];
+    const seed = nameSeed(COASTAL_ROAD_NAME) + (direction === 1 ? 11 : 23);
     let z = from.z; let step = 0;
     while (direction === 1 ? z < untilZ : z > untilZ) {
-      z += direction * 420;
+      z += direction * 380;
       step++;
-      output.push({ x: from.x + Math.sin(step * 0.9 + from.z * 0.001) * 240 - step * 14, z });
+      const blend = Math.min(1, step / 3); // ease away from the seam, no kink at the join
+      output.push({ x: from.x + blend * fbm(seed, z / 1500, 3) * 340 - step * 12, z });
     }
     return output;
   };
@@ -261,7 +286,10 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
     for (const end of [road.nodeIds[0]!, road.nodeIds[road.nodeIds.length - 1]!]) {
       if ((degree.get(end) ?? 0) !== 1) continue;
       const point = net.nodes.get(end)!;
-      if (point.x - jb.minX < joburgWestStubMargin && !westStubs.some((stub) => stub.id === end)) westStubs.push({ id: end, p: point });
+      // Only CITY-edge stubs: without the lower bound the coastal highway's own dangling
+      // tips (3 km west) qualified, and Plaaspad grew spurs to the extreme map corners.
+      const nearWestEdge = point.x >= jb.minX - 60 && point.x - jb.minX < joburgWestStubMargin;
+      if (nearWestEdge && !westStubs.some((stub) => stub.id === end)) westStubs.push({ id: end, p: point });
     }
   }
   westStubs.sort((a, b) => a.p.z - b.p.z);
@@ -271,7 +299,7 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   for (const stub of westStubs) {
     // Low-frequency organic wander of the frontage line (the projection nodes are shared with the
     // spurs, so moving them keeps the network connected while Plaaspad stops being a straight edge).
-    const projectionId = addNode({ x: frontageX + fbm(frontageSeed, stub.p.z / 1400, 3) * 200, z: stub.p.z });
+    const projectionId = addNode({ x: frontageX + fbm(frontageSeed, stub.p.z / 1800, 3) * 340 - 120, z: stub.p.z });
     frontageIds.push(projectionId);
     net.roads.push({ name: FRONTAGE_ROAD_NAME, kind: 'tertiary', width: ROAD_WIDTHS.tertiary ?? 9, nodeIds: [projectionId, stub.id] });
   }
@@ -365,7 +393,22 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
     const bc = { x: apronCenter.x + airDx * (i - 1) * 150 + airPx * 190, z: apronCenter.z + airDz * (i - 1) * 150 + airPz * 190 };
     return rectPoly(bc.x, bc.z, airDx, airDz, i === 1 ? 70 : 45, 40);
   });
-  const airportBoundary = rectPoly(airCenter.x + airPx * 160, airCenter.z + airPz * 160, airDx, airDz, runwayHalf + 200, 430);
+  // Organic airfield boundary (owner: the perfect rectangle over the farmland "really looks out
+  // of place"): an fBm-wobbled ellipse around the runway axis instead of a hard rectPoly.
+  const airportBoundary: Pt[] = (() => {
+    const cx = airCenter.x + airPx * 160; const cz = airCenter.z + airPz * 160;
+    const seed = nameSeed(AIRPORT_NAME);
+    const along = runwayHalf + 320; const across = 520;
+    const points: Pt[] = [];
+    for (let i = 0; i < 30; i++) {
+      const angle = (i / 30) * Math.PI * 2;
+      // Periodic noise (sampled on the unit circle) so the outline closes without a seam.
+      const wobble = 1 + 0.11 * (fbm(seed, Math.cos(angle) * 1.9 + 4.2, 3) + fbm(seed + 9, Math.sin(angle) * 1.9 + 7.6, 3));
+      const u = Math.cos(angle) * along * wobble; const v = Math.sin(angle) * across * wobble;
+      points.push({ x: cx + airDx * u + airPx * v, z: cz + airDz * u + airPz * v });
+    }
+    return points;
+  })();
   const airport: CoastAirport = { name: AIRPORT_NAME, runway, taxiway, apron: airportApron, buildings: airportBuildings, boundary: airportBoundary, center: airCenter };
   // Access road from the apron out to the nearest Plaaspad frontage node (stays in the road graph).
   if (frontageIds.length > 0) {
@@ -406,7 +449,7 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
       const cx = bandWest + (bandEast - bandWest) * (0.22 + lane * 0.52) + (seeded(z, lane) - 0.5) * 500;
       const cz = z + (seeded(lane, z) - 0.5) * 420;
       if (!clearOfCorridorRoads(cx, cz, 430)) { fieldIndex++; continue; }
-      if (Math.hypot(cx - airCenter.x, cz - airCenter.z) < 1150) { fieldIndex++; continue; } // keep the aerodrome clear
+      if (Math.hypot(cx - airCenter.x, cz - airCenter.z) < 1450) { fieldIndex++; continue; } // keep the aerodrome clear
       // Never let a field spill toward the shore (the coastline drifts around the corridor's west edge).
       const shoreX = coastline.reduce((best, point) => (Math.abs(point.z - cz) < Math.abs(best.z - cz) ? point : best), coastline[0]!).x;
       if (cx - 600 < shoreX + COAST_ROAD_SETBACK_M) { fieldIndex++; continue; }
@@ -414,7 +457,10 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
       const tilt = (seeded(cx + cz, 7) - 0.5) * 0.35;
       const cos = Math.cos(tilt); const sin = Math.sin(tilt);
       const corner = (sx: number, sz: number): Pt => ({ x: cx + (sx * w * cos - sz * h * sin) / 2, z: cz + (sx * w * sin + sz * h * cos) / 2 });
-      farmland.push({ name: fieldIndex % 3 === 0 ? 'Mielie land' : 'Weiveld', points: [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)] });
+      const quad = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+      // Fields must not overlap their neighbours (owner: overlapping farm regions make no sense).
+      if (farmland.some((field) => quadsOverlap(quad, field.points))) { fieldIndex++; continue; }
+      farmland.push({ name: fieldIndex % 3 === 0 ? 'Mielie land' : 'Weiveld', points: quad });
       if (fieldIndex % 2 === 0 && farms.length < 14) {
         const base = corner(-0.62, -0.55);
         farms.push({ p: base, kind: 'farmhouse' });
@@ -440,9 +486,16 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   log.push(`coast: harbour '${HARBOUR_DISTRICT_NAME}' at z~${Math.round(harbourAnchor.p.z)}`);
 
   // ---- Ocean polygon ---------------------------------------------------------------------
-  const oceanWestX = Math.min(...coastline.map((point) => point.x)) - OCEAN_EXTENT_M;
-  const first = coastline[0]!; const last = coastline[coastline.length - 1]!;
-  const ocean: Pt[] = [...coastline, { x: oceanWestX, z: last.z }, { x: oceanWestX, z: first.z }];
+  // The shore is extended a further ~2.5 km past the highway tips for the FILL only, so the
+  // NW/SW world corners (behind the edge set-back) still read as sea, not bare void.
+  const oceanShore: Pt[] = [
+    ...extendTo(coastline[0]!, 1, jb.maxZ + 3200).reverse(),
+    ...coastline,
+    ...extendTo(coastline[coastline.length - 1]!, -1, jb.minZ - 3200),
+  ];
+  const oceanWestX = Math.min(...oceanShore.map((point) => point.x)) - OCEAN_EXTENT_M;
+  const first = oceanShore[0]!; const last = oceanShore[oceanShore.length - 1]!;
+  const ocean: Pt[] = [...oceanShore, { x: oceanWestX, z: last.z }, { x: oceanWestX, z: first.z }];
 
   // ---- Sea port / pier on the NW coast (north end of the shoreline) ---------------------
   const portShore = coastline[Math.floor(coastline.length * 0.86)] ?? coastline[coastline.length - 1]!;
@@ -498,8 +551,90 @@ export function graftCoastAndCorridor(net: RoadNetwork, cape: OsmResponse, jobur
   return {
     coastline, ocean, beaches, farmland, tracks, farms, padstal, harbour, districts,
     airport, port, lake,
-    corridorEastX, corridorWestX, log,
+    corridorEastX, corridorWestX,
+    highwayEndIds: { south: highwayIds[0]!, north: highwayIds[highwayIds.length - 1]! },
+    log,
   };
+}
+
+/**
+ * Close the orbital's open C onto the coastal highway: one organic connector per corner
+ * (ring end -> Victoria Road tip), bowed inland so neither connector hugs the world edge.
+ * With these two links the whole map is wrapped in a single drivable outer loop.
+ */
+export function closeCoastalLoop(
+  net: RoadNetwork,
+  ringEndIds: [number, number],
+  highwayEndIds: { south: number; north: number },
+): string[] {
+  const log: string[] = [];
+  let nextId = 0;
+  for (const id of net.nodes.keys()) if (id >= nextId) nextId = id + 1;
+  const a = net.nodes.get(ringEndIds[0])!; const b = net.nodes.get(ringEndIds[1])!;
+  const northRingId = a.z < b.z ? ringEndIds[0] : ringEndIds[1];
+  const southRingId = a.z < b.z ? ringEndIds[1] : ringEndIds[0];
+  for (const link of COAST_LOOP_LINKS) {
+    const startId = link.end === 'north' ? northRingId : southRingId;
+    const endId = link.end === 'north' ? highwayEndIds.north : highwayEndIds.south;
+    const start = net.nodes.get(startId); const end = net.nodes.get(endId);
+    if (!start || !end) continue;
+    const inland = link.end === 'north' ? 1 : -1; // +z is south: bow away from the edge
+    const controls: Pt[] = [
+      start,
+      { x: start.x + (end.x - start.x) * 0.34, z: start.z + inland * 340 + (end.z - start.z) * 0.18 },
+      { x: start.x + (end.x - start.x) * 0.72, z: end.z + inland * 220 },
+      end,
+    ];
+    const points = smoothCurve(controls, 110);
+    const nodeIds = points.map((point, index) => {
+      if (index === 0) return startId;
+      if (index === points.length - 1) return endId;
+      const id = nextId++; net.nodes.set(id, point); return id;
+    });
+    net.roads.push({ name: link.name, kind: link.kind, width: ROAD_WIDTHS[link.kind] ?? 14, nodeIds });
+    log.push(`loop: '${link.name}' closes the ${link.end} corner (ring -> coastal highway)`);
+  }
+  return log;
+}
+
+/**
+ * Border veld: organic scrub polygons filling the set-back band between the outermost roads
+ * and the world edge (north, east and south sides — the west edge is ocean). `world` is the
+ * full world square in projected metres (fit.invert of the TARGET_SIZE corners). The inner
+ * boundary is fBm-wavy so the band reads as natural veld, not a picture frame.
+ */
+export function buildBorderVeld(input: {
+  world: { minX: number; maxX: number; minZ: number; maxZ: number };
+  coastline: Pt[];
+}): Array<{ name: string; points: Pt[] }> {
+  const { world, coastline } = input;
+  const seed = nameSeed(BORDER_VELD_NAME);
+  const range = BORDER_VELD_DEPTH_MAX_M - BORDER_VELD_DEPTH_MIN_M;
+  const depth = (t: number, salt: number): number =>
+    BORDER_VELD_DEPTH_MIN_M + (fbm(seed + salt * 97, t / 1250, 3) * 0.5 + 0.5) * range;
+  const coastXAt = (z: number): number =>
+    coastline.reduce((best, point) => (Math.abs(point.z - z) < Math.abs(best.z - z) ? point : best), coastline[0]!).x;
+  const step = 420;
+  const bands: Array<{ name: string; points: Pt[] }> = [];
+  // North and south bands run from just inland of the shoreline to the east corner.
+  for (const side of [
+    { zEdge: world.minZ, inland: 1, salt: 1 },
+    { zEdge: world.maxZ, inland: -1, salt: 2 },
+  ]) {
+    const xStart = coastXAt(side.zEdge) + 650;
+    const points: Pt[] = [{ x: xStart, z: side.zEdge }, { x: world.maxX, z: side.zEdge }];
+    for (let x = world.maxX; x >= xStart; x -= step) {
+      // Pinch the band to a point toward the shore — a full-depth stop reads as a hard seam.
+      const fade = Math.min(1, (x - xStart) / 1700);
+      points.push({ x, z: side.zEdge + side.inland * depth(x, side.salt) * fade });
+    }
+    bands.push({ name: BORDER_VELD_NAME, points });
+  }
+  // East band spans the full height (its corners tuck under the N/S bands — fine, it's veld).
+  const east: Pt[] = [{ x: world.maxX, z: world.minZ }, { x: world.maxX, z: world.maxZ }];
+  for (let z = world.maxZ; z >= world.minZ; z -= step) east.push({ x: world.maxX - depth(z, 3), z });
+  bands.push({ name: BORDER_VELD_NAME, points: east });
+  return bands;
 }
 
 // ---- Composite elevation ---------------------------------------------------------
@@ -520,6 +655,9 @@ export interface CompositeElevationGrid {
   cols: number; rows: number;
   x0: number; z0: number; dx: number; dz: number;
   data: number[];
+  /** Metres of synthetic mountain range included in `data` per cell (see ridge.ts) — shipped
+   *  alongside so the runtime can exempt the range from detrending and keep it TALL in-game. */
+  ridge: number[];
   source: string;
 }
 
@@ -559,16 +697,18 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
   };
 
   const data: number[] = [];
+  const ridge: number[] = [];
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       const unit = { x: x0 + col * dx, z: z0 + row * dz };
       const m = fit.invert(unit);
       const coastX = coastXAt(m.z);
       let height: number;
+      let mountain = 0;
       if (m.x >= coast.corridorEastX) {
         height = sampleSrtm(m);
       } else if (m.x <= coastX) {
-        height = 0; // ocean
+        height = 0; // ocean — no mountain reaches the water (ridge.ts gates well east of here anyway)
       } else {
         // Rolling descent from the Joburg edge down to the shore.
         const t = (coast.corridorEastX - m.x) / (coast.corridorEastX - coastX);
@@ -577,8 +717,10 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
         const hills = 110 * Math.sin(Math.PI * Math.min(1, t * 1.15)) * (0.55 + 0.45 * Math.sin(m.z / 1300 + m.x / 950));
         height = Math.max(2, base + hills * (t < 0.92 ? 1 : (1 - t) / 0.08));
       }
-      data.push(Math.round(height));
+      if (m.x > coastX) mountain = Math.round(ridgeMetresAt(unit.x, unit.z)); // fractal northern range (ridge.ts), zero across most of the map
+      data.push(Math.round(height) + mountain);
+      ridge.push(mountain);
     }
   }
-  return { cols, rows, x0, z0, dx, dz, data, source: `${srtm.source} + synthetic corridor/coast composite` };
+  return { cols, rows, x0, z0, dx, dz, data, ridge, source: `${srtm.source} + synthetic corridor/coast composite + northern fractal range` };
 }

@@ -129,6 +129,7 @@ export class UrbanInfrastructure {
     this.buildStreetSigns();
     this.buildRoadsideSigns();
     this.buildStreetFurniture();
+    this.buildLitterBins();
     this.buildTransitStops();
     this.buildEtollGantries();
     this.groundInfrastructure();
@@ -200,9 +201,10 @@ export class UrbanInfrastructure {
   private buildVegetation(): void {
     // Verge planting: trees/shrubs stand 2.1u OUTWARD of the roadside line, clear of both the sidewalk walk
     // line peds actually route along and of junction lane chords. The generated map has ~15k roadside
-    // points, so strides are wider than the old hand-authored city to keep instance budgets sane.
+    // points, so strides are wider than the old hand-authored city to keep instance budgets sane
+    // (stride 6 ≈ 2.5k tree sites citywide — instanced trunks/crowns, a few draw calls per chunk).
     const sites = this.roadsidePoints
-      .filter((point, index) => index % 9 === 0 && point.width >= 9)
+      .filter((point, index) => index % 6 === 0 && point.width >= 9)
       .map((point) => ({ x: point.x - point.inwardX * 2.1, z: point.z - point.inwardZ * 2.1 }))
       .filter((point) => !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 2.4));
     const jacarandas = sites.filter((_, index) => index % 2 === 0);
@@ -472,7 +474,7 @@ export class UrbanInfrastructure {
   }
 
   private buildStreetFurniture(): void {
-    const sites = this.roadsidePoints.filter((point, index) => index % 21 === 3 && point.width >= 9 && !this.isBlocked(point.x, point.z, 2) && !this.isRoad(point.x, point.z, 0.7));
+    const sites = this.roadsidePoints.filter((point, index) => index % 13 === 3 && point.width >= 9 && !this.isBlocked(point.x, point.z, 2) && !this.isRoad(point.x, point.z, 0.7));
     const wood = new THREE.MeshStandardMaterial({ color: 0x744d32, roughness: 0.77 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x2c3739, metalness: 0.72, roughness: 0.35 });
     const red = new THREE.MeshStandardMaterial({ color: 0xa8322d, metalness: 0.3, roughness: 0.5 });
@@ -526,6 +528,38 @@ export class UrbanInfrastructure {
           const group = new THREE.Group(); group.position.set(hx, this.surfaceHeight(hx, hz), hz);
           const body = new THREE.Mesh(bodyGeometry, red); body.position.y = 0.36; body.castShadow = true;
           const cap = new THREE.Mesh(capGeometry, red); cap.position.y = 0.76; group.add(body, cap);
+          return group;
+        },
+      });
+    });
+  }
+
+  /** Municipal litter bins on their own roadside stride (offset from the bench stride so streets
+   *  carry both): a ribbed drum + darker lid, instanced per detail chunk, knockable like a hydrant. */
+  private buildLitterBins(): void {
+    const sites = this.roadsidePoints.filter((point, index) => index % 17 === 8 && point.width >= 9 && !this.isBlocked(point.x, point.z, 1.4) && !this.isRoad(point.x, point.z, 0.7));
+    const drum = new THREE.MeshStandardMaterial({ color: 0x3f5c46, metalness: 0.35, roughness: 0.6 });
+    const lidMaterial = new THREE.MeshStandardMaterial({ color: 0x22302a, metalness: 0.45, roughness: 0.5 });
+    const drumGeometry = new THREE.CylinderGeometry(0.3, 0.26, 0.82, 12);
+    const lidGeometry = new THREE.CylinderGeometry(0.33, 0.33, 0.12, 12);
+    const identity = new THREE.Quaternion(); const one = new THREE.Vector3(1, 1, 1);
+    const drumItems: InstanceItem[] = []; const lidItems: InstanceItem[] = [];
+    const binSpots: Array<{ x: number; z: number }> = [];
+    sites.forEach((site) => {
+      const x = site.x - site.inwardX * 0.7; const z = site.z - site.inwardZ * 0.7; // off the ped walk line, like hydrants
+      drumItems.push({ x, z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(x, 0.41, z), identity, one) });
+      lidItems.push({ x, z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(x, 0.88, z), identity, one) });
+      binSpots.push({ x, z });
+    });
+    const drumSlots = addInstancedChunks(this.detail, drumGeometry, drum, this.groundItems(drumItems), { cast: true, receive: true });
+    const lidSlots = addInstancedChunks(this.detail, lidGeometry, lidMaterial, this.groundItems(lidItems), { cast: true, receive: true });
+    binSpots.forEach(({ x, z }, index) => {
+      this.props.register('bin', x, z, 0.34, 0.95, {
+        hide: () => { hideSlot(drumSlots[index]!); hideSlot(lidSlots[index]!); },
+        debris: () => {
+          const group = new THREE.Group(); group.position.set(x, this.surfaceHeight(x, z), z);
+          const body = new THREE.Mesh(drumGeometry, drum); body.position.y = 0.41; body.castShadow = true;
+          const lid = new THREE.Mesh(lidGeometry, lidMaterial); lid.position.y = 0.88; group.add(body, lid);
           return group;
         },
       });

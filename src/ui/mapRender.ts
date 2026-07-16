@@ -17,7 +17,11 @@
  */
 
 /** Bump when the drawing contract changes. Embedded verbatim into the emitted preview. */
-export const MAP_RENDER_VERSION = '1.0.0';
+export const MAP_RENDER_VERSION = '1.3.0'; // 1.2.0 was claimed twice: corridor-tint removal + snowy hillshade
+
+/** Raw composite metres ASL where the hillshade turns snowy (matches City.SNOWLINE_METRES — the
+ *  in-game ground shader whitens the same tops; a unit test keeps the two constants equal). */
+export const MAP_SNOWLINE_METRES = 2400;
 
 // ---- Map JSON shape (structural subset this renderer touches) --------------------------------
 type Poly2 = [number, number][];
@@ -34,7 +38,9 @@ export interface RenderMapData {
   elevation?: { cols: number; rows: number; x0: number; z0: number; dx: number; dz: number; data: number[] };
   coast?: {
     coastline: Poly2; ocean: Poly2; beaches: Array<{ name: string; points: Poly2 }>;
-    harbour: { x: number; z: number }; corridor: { eastX: number; westX: number };
+    harbour: { x: number; z: number };
+    /** Corridor band extents (metadata for zoning; the map draws no band tint). */
+    corridor: { eastX: number; westX: number; northZ?: number; southZ?: number };
   };
   rural?: { farms: Array<{ x: number; z: number; kind: string }> };
   airport?: {
@@ -177,6 +183,16 @@ function polyPathOf(polys: Array<{ points: Poly2 }>): Path2D {
   return p;
 }
 
+/** Deterministic 2-D value noise in [0, 1] for the snowline dither (self-contained — no imports). */
+function snowNoise(x: number, z: number): number {
+  const h = (ix: number, iz: number): number => { const s = Math.sin(ix * 127.1 + iz * 311.7) * 43758.5453; return s - Math.floor(s); };
+  const ix = Math.floor(x); const iz = Math.floor(z);
+  const fx = x - ix; const fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx); const uz = fz * fz * (3 - 2 * fz);
+  const a = h(ix, iz); const b = h(ix + 1, iz); const c = h(ix, iz + 1); const d = h(ix + 1, iz + 1);
+  return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
+}
+
 function buildHillshade(map: RenderMapData): Prebuilt['hillshade'] {
   const e = map.elevation;
   if (!e || e.data.every((v) => v === e.data[0])) return null;
@@ -195,9 +211,14 @@ function buildHillshade(map: RenderMapData): Prebuilt['hillshade'] {
       let shade = 0.72 - 2.2 * (dzdx * -0.707 + dzdy * -0.707);
       shade = Math.max(0.25, Math.min(1.15, shade));
       const t = (at(col, row) - min) / (max - min);
-      const base = [46 + 44 * t, 56 + 40 * t, 52 + 30 * t];
+      let r = 46 + 44 * t; let bg = 56 + 40 * t; let bb = 52 + 30 * t;
+      // Snowy tops: blend toward white above the (noise-dithered) snowline, keeping the relief shading.
+      const metres = at(col, row); // grid values are metres ASL already
+      const dither = (snowNoise(col * 0.31, row * 0.31) * 0.7 + snowNoise(col * 1.17, row * 1.17) * 0.3 - 0.5) * 240;
+      const snow = Math.max(0, Math.min(1, (metres - (MAP_SNOWLINE_METRES + dither)) / 150));
+      if (snow > 0) { r += (236 - r) * snow; bg += (241 - bg) * snow; bb += (247 - bb) * snow; shade = Math.min(1.15, shade + 0.22 * snow); }
       const i = (row * e.cols + col) * 4;
-      img.data[i] = base[0]! * shade; img.data[i + 1] = base[1]! * shade; img.data[i + 2] = base[2]! * shade; img.data[i + 3] = 255;
+      img.data[i] = r * shade; img.data[i + 1] = bg * shade; img.data[i + 2] = bb * shade; img.data[i + 3] = 255;
     }
   }
   g.putImageData(img, 0, 0);
@@ -282,16 +303,8 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
     ctx.beginPath(); ctx.arc(map.coast.harbour.x, map.coast.harbour.z, Math.max(9, 5 / zoom), 0, Math.PI * 2); ctx.fill();
   }
   if (layers.corridor && map.coast) {
-    const size = map.stats.targetSize; const corridor = map.coast.corridor;
-    ctx.save();
-    ctx.fillStyle = '#3d4a2c'; ctx.globalAlpha = 0.28;
-    ctx.fillRect(corridor.westX, -size, corridor.eastX - corridor.westX, size * 2);
-    ctx.globalAlpha = 1;
-    ctx.setLineDash([26, 18]); ctx.strokeStyle = '#5c6b3f'; ctx.lineWidth = Math.max(2, 1.2 / zoom);
-    ctx.beginPath();
-    ctx.moveTo(corridor.eastX, -size); ctx.lineTo(corridor.eastX, size);
-    ctx.moveTo(corridor.westX, -size); ctx.lineTo(corridor.westX, size);
-    ctx.stroke(); ctx.setLineDash([]); ctx.restore();
+    // No band tint or dashed boundary: the corridor is communicated by its farmland fields and
+    // veld — a straight-edged administrative rectangle read as an artifact on the map (owner).
     if (g.farmlandPath) {
       ctx.fillStyle = FARMLAND_COLOR; ctx.globalAlpha = 0.55; ctx.fill(g.farmlandPath); ctx.globalAlpha = 1;
       ctx.strokeStyle = '#7a6244'; ctx.lineWidth = Math.max(1.5, 1 / zoom); ctx.stroke(g.farmlandPath);

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PLAYER } from '../config';
 import { fallDamage, jumpVelocity, stepVertical, type VerticalMotion } from '../core/GameRules';
-import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
-import { CBD_CENTER, districtCenter, MAP_WORLD_SIZE } from './mapData';
+import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, RAILWAY_NETWORK, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
+import { CBD_CENTER, districtCenter, MAP_WORLD_SIZE, ridgeMetresAt } from './mapData';
 import { CITY_JUNCTIONS, signalCornerOffset } from './UrbanInfrastructure';
 
 describe('generated Joburg road topology', () => {
@@ -33,6 +33,18 @@ describe('generated Joburg road topology', () => {
     expect(TRACK_NETWORK.every((track) => track.width <= 6)).toBe(true);
   });
 
+  it('carries a thinned passenger rail network with the airport spur', () => {
+    expect(RAILWAY_NETWORK.length).toBeGreaterThanOrEqual(3);
+    expect(RAILWAY_NETWORK.length).toBeLessThanOrEqual(8); // a few lines, not the 800-way yard spaghetti
+    const names = RAILWAY_NETWORK.map((line) => line.name);
+    expect(names).toContain('Lughawe Spur'); // the airport gets rail service
+    expect(names.some((name) => name.includes('Main Line'))).toBe(true);
+    // Lines are long, coherent polylines — not fragments.
+    const length = (points: { x: number; z: number }[]): number =>
+      points.reduce((sum, point, index) => index ? sum + Math.hypot(point.x - points[index - 1]!.x, point.z - points[index - 1]!.z) : 0, 0);
+    expect(RAILWAY_NETWORK.every((line) => length(line.points) >= 1200)).toBe(true);
+  });
+
   it('defines named, phased signalized intersections at major crossings', () => {
     expect(CITY_JUNCTIONS.length).toBeGreaterThanOrEqual(24);
     expect(CITY_JUNCTIONS.length).toBeLessThanOrEqual(80); // visual/update budget
@@ -45,13 +57,13 @@ describe('generated Joburg road topology', () => {
 
   it('provides multiple structural building families in every district', () => {
     expect(Object.keys(ARCHITECTURE_VARIANTS)).toHaveLength(7);
-    expect(Object.values(ARCHITECTURE_VARIANTS).reduce((sum, count) => sum + count, 0)).toBe(36);
-    expect(ARCHITECTURE_VARIANTS.downtown).toBe(7);
+    expect(Object.values(ARCHITECTURE_VARIANTS).reduce((sum, count) => sum + count, 0)).toBe(52); // main's 36 + the 16 clutter-variety families
+    expect(ARCHITECTURE_VARIANTS.downtown).toBe(11);
     expect(ARCHITECTURE_VARIANTS['mixed-use']).toBe(5);
-    expect(ARCHITECTURE_VARIANTS['dense-residential']).toBe(5);
-    expect(ARCHITECTURE_VARIANTS.suburban).toBe(6);
-    expect(ARCHITECTURE_VARIANTS.industrial).toBe(5);
-    expect(ARCHITECTURE_VARIANTS.estate).toBe(4);
+    expect(ARCHITECTURE_VARIANTS['dense-residential']).toBe(6);
+    expect(ARCHITECTURE_VARIANTS.suburban).toBe(9);
+    expect(ARCHITECTURE_VARIANTS.industrial).toBe(9);
+    expect(ARCHITECTURE_VARIANTS.estate).toBe(8);
     expect(ARCHITECTURE_VARIANTS.rural).toBe(4);
   });
 });
@@ -85,14 +97,17 @@ describe('terrain relief from the SRTM heightgrid', () => {
   });
 
   it('stays within the detrended envelope everywhere (no runaway escarpment cliffs)', () => {
-    // Regional band maxes near maxElevation * scale; local band is capped either side. Sample a coarse
-    // grid over the whole world and assert nothing blows past a generous bound.
-    let lo = Infinity; let hi = -Infinity;
+    // Regional band maxes near maxElevation * scale; local band is capped either side; only the
+    // DELIBERATE northern range (elevation.ridge × TERRAIN_RIDGE_SCALE, ≤ ~475 u) rises past that.
+    // Sample a coarse grid over the whole world and assert nothing blows past the two bounds.
+    let lo = Infinity; let hi = -Infinity; let offRangeHi = -Infinity;
     for (let x = -8900; x <= 8900; x += 445) for (let z = -8900; z <= 8900; z += 445) {
       const h = terrainHeightAt(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h);
+      if (ridgeMetresAt(x, z) === 0) offRangeHi = Math.max(offRangeHi, h);
     }
     expect(lo).toBeGreaterThan(-200);
-    expect(hi).toBeLessThan(400);
+    expect(hi).toBeLessThan(560);
+    expect(offRangeHi).toBeLessThan(400); // away from the range the old detrended ceiling still holds
   });
 
   it('keeps sidewalks stepped above roads above the terrain', () => {

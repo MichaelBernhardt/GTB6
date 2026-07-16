@@ -6,15 +6,16 @@ import {
   COASTLINE,
   COAST_CORRIDOR,
   districtAt as generatedDistrictAt,
-  elevationMetresAt,
+  baseMetresAt,
   regionalMetresAt,
+  ridgeMetresAt,
   HAS_ELEVATION,
   GENERATED_ROADS,
+  GENERATED_RAILWAYS,
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
   FARM_POLYGONS,
-  HARBOUR_POINT,
   JUNCTION_SURFACES,
   junctionPaves,
   junctionReach,
@@ -26,13 +27,16 @@ import {
   type MapPt,
 } from './mapData';
 import { OCEAN_Y } from './coast';
+import { buildAirport } from './Airport';
+import { BEACHFRONT } from './beachfront';
+import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
 import { CELL_SIZE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
 import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { applyGrassShader, createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
+import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
@@ -131,6 +135,17 @@ export const TERRAIN_LOCAL_SCALE = 2.0; // fine residual: metres → units (exag
 /** Cap on the local residual (metres) BEFORE exaggeration, so the blur's overshoot at the steep synthetic
  *  escarpment kink can't blow up into a spike; gentle CBD undulation is well under this. */
 export const TERRAIN_LOCAL_CAP = 18;
+/** The synthetic northern mountain range rides ABOVE the detrend split (mapData ships its metres
+ *  separately and detrends only the base terrain), scaled straight to world Y — ~1250 m of crest
+ *  becomes ~400 u of in-game mountain, dwarfing the ±36 u local hills while the CBD feels nothing. */
+export const TERRAIN_RIDGE_SCALE = 0.32;
+/** Raw composite metres ASL where the mountain tops turn snowy. The shared map renderer paints the
+ *  same contour (MAP_SNOWLINE_METRES in src/ui/mapRender.ts — kept equal by a unit test). */
+export const SNOWLINE_METRES = 2400;
+/** Base terrain the range rises from (~the plateau) — maps SNOWLINE_METRES into in-game Y. */
+export const RIDGE_BASE_METRES = 1730;
+/** In-game Y where snow begins (fbm-dithered in the ground shader; full cover one band higher). */
+export const SNOW_Y = (SNOWLINE_METRES - RIDGE_BASE_METRES) * TERRAIN_RIDGE_SCALE;
 /** Coastline vertices sorted by z, for a per-z land/sea boundary lookup: the synthetic shore meanders
  *  across x by ~1.6 km, so a single global coast x would sink real coastal land (roads, beach) below sea
  *  level. terrain crosses 0 at coastlineXAt(z); seaward of it the ground sinks into the seabed slope. */
@@ -158,13 +173,14 @@ export const BEACH_INLAND = 40;
 /** How far the ocean surface reaches past the shoreline into the beach, so waves lap up and down the slope. */
 export const BEACH_WATER_INLAND = 60;
 
-/** The detrended, exaggerated, capped land relief at a point (before any coastal fade). */
+/** The detrended, exaggerated, capped land relief at a point (before any coastal fade): the base
+ *  terrain's regional/local split plus the mountain range riding above it at its own scale. */
 function landRelief(x: number, z: number): number {
   const regional = regionalMetresAt(x, z);
-  let local = elevationMetresAt(x, z) - regional;
+  let local = baseMetresAt(x, z) - regional;
   if (local > TERRAIN_LOCAL_CAP) local = TERRAIN_LOCAL_CAP;
   else if (local < -TERRAIN_LOCAL_CAP) local = -TERRAIN_LOCAL_CAP;
-  return regional * TERRAIN_REGIONAL_SCALE + local * TERRAIN_LOCAL_SCALE;
+  return regional * TERRAIN_REGIONAL_SCALE + local * TERRAIN_LOCAL_SCALE + ridgeMetresAt(x, z) * TERRAIN_RIDGE_SCALE;
 }
 
 function analyticTerrainHeightAt(x: number, z: number): number {
@@ -233,6 +249,13 @@ export const districtAt = generatedDistrictAt;
 export const ROAD_NETWORK: RoadDefinition[] = GENERATED_ROADS.map((road) => ({ name: road.name, width: road.width, points: road.points }));
 /** Off-road dirt tracks: rendered as narrow unpaved strips, not part of the nav graph. */
 export const TRACK_NETWORK: RoadDefinition[] = GENERATED_TRACKS.map((track) => ({ name: track.name, width: track.width, points: track.points }));
+/** Passenger rail lines: ballast + rails + sleepers, never driveable, outside every nav graph. */
+export const RAILWAY_NETWORK: Array<{ name: string; points: RoadPoint[] }> =
+  GENERATED_RAILWAYS.map((line) => ({ name: line.name, points: line.points }));
+/** Rail-to-rail centre spacing (u) — reads as SA cape gauge at game scale. */
+export const RAIL_GAUGE = 1.6;
+/** Gravel ballast bed width (u). */
+export const RAIL_BALLAST_WIDTH = 5.2;
 
 const seeded = (x: number, z: number, salt = 0): number => {
   const value = Math.sin(x * 12.9898 + z * 78.233 + salt * 41.17) * 43758.5453;
@@ -537,6 +560,8 @@ export class City {
    *  from the verge roadsidePoints so lamp pitch is set by arc length, not the coarser roadside stride. */
   streetlampPoints: RoadsidePoint[] = buildStreetlampPoints(ROAD_NETWORK);
   roadPaths: RoadPoint[][] = [];
+  /** Sampled rail centrelines (world XZ) — the train system runs along these. */
+  railPaths: RoadPoint[][] = [];
   trafficRoutes: RoadPoint[][] = [];
   private navPaths = buildCityNavPaths(ROAD_NETWORK);
   vehicleNav: NavGraph = buildVehicleNav(ROAD_NETWORK); // directed one-way lanes (left-hand); pedNav stays undirected
@@ -579,7 +604,7 @@ export class City {
     this.architecture = new BuildingArchitecture(this.group);
     ensureParcels(); // build the citywide parcel layout now (during load), not on the first frame
     ensureScatter(); // and the scattered structure/foliage layout (same on-demand streaming path)
-    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks();
+    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks(); this.buildAirfield();
     this.infrastructure = new UrbanInfrastructure(
       this.group,
       this.chunkStore,
@@ -873,7 +898,9 @@ export class City {
     pos.needsUpdate = true;
     geometry.computeVertexNormals(); // real normals so slopes catch the light instead of reading flat
     setTerrainGrid(grid, n, step); // from here, terrainHeightAt returns this exact drawn surface
-    const ground = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.groundGrass, roughness: 0.96 }));
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.groundGrass, roughness: 0.96 });
+    applySnowShader(groundMat, { snowY: SNOW_Y, rockY: SNOW_Y * 0.55 }); // veld → rock → snow up the northern range
+    const ground = new THREE.Mesh(geometry, groundMat);
     ground.receiveShadow = true;
     ground.userData.far = true;
     this.group.add(ground);
@@ -951,6 +978,49 @@ export class City {
     this.buildStopLines();
     this.buildIntersections();
     this.buildPotholes();
+    this.buildRailways();
+  }
+
+  /** Passenger rail: a draped ballast strip with instanced sleepers and twin rails. Level crossings
+   *  come free — the rail bed rides just above the tar where a line crosses a carriageway. */
+  private buildRailways(): void {
+    if (RAILWAY_NETWORK.length === 0) return;
+    const ballastMat = new THREE.MeshStandardMaterial({ color: 0x6b625a, map: this.sand, roughness: 0.98 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.42, metalness: 0.6 });
+    const sleeperMat = new THREE.MeshStandardMaterial({ color: 0x453527, roughness: 0.95 });
+    const railTransforms: THREE.Matrix4[] = []; const sleeperTransforms: THREE.Matrix4[] = [];
+    const matrix = new THREE.Matrix4(); const quaternion = new THREE.Quaternion();
+    const RAIL_PITCH = 12; // chord length for the rail boxes: follows the relief without instance spam
+    for (const line of RAILWAY_NETWORK) {
+      const sampled = this.samplePath(line.points, false, ROAD_SAMPLE_SPACING);
+      const ballast = this.createRoadStrip(sampled, RAIL_BALLAST_WIDTH, ballastMat, 0.045, false);
+      ballast.receiveShadow = true; this.group.add(ballast);
+      this.railPaths.push(sampled.map((point) => ({ ...point })));
+      const chords = this.densifyPath(sampled, RAIL_PITCH, false);
+      for (let index = 0; index < chords.length - 1; index++) {
+        const start = chords[index]; const end = chords[index + 1]; if (!start || !end) continue;
+        const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz);
+        if (length < 0.5) continue;
+        const normalX = -dz / length; const normalZ = dx / length;
+        quaternion.copy(this.surfaceSegmentQuaternion(start.x, start.z, end.x, end.z, 'terrain'));
+        const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
+        for (const side of [-1, 1]) {
+          const x = midX + normalX * side * (RAIL_GAUGE / 2); const z = midZ + normalZ * side * (RAIL_GAUGE / 2);
+          matrix.compose(new THREE.Vector3(x, this.terrainHeightAt(x, z) + 0.16, z), quaternion, new THREE.Vector3(0.16, 0.14, length + 0.3));
+          railTransforms.push(matrix.clone());
+        }
+        const sleepers = Math.max(1, Math.round(length / 2.6));
+        for (let s = 0; s < sleepers; s++) {
+          const t = (s + 0.5) / sleepers;
+          const x = start.x + dx * t; const z = start.z + dz * t;
+          matrix.compose(new THREE.Vector3(x, this.terrainHeightAt(x, z) + 0.075, z), quaternion, new THREE.Vector3(2.4, 0.07, 0.55));
+          sleeperTransforms.push(matrix.clone());
+        }
+      }
+    }
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    this.addInstanced(box, railMat, railTransforms, { receive: true });
+    this.addInstanced(box, sleeperMat, sleeperTransforms, { receive: true });
   }
 
   /** Paves every real crossing (T / cross / multi-way) with a filled asphalt disc laid just over the
@@ -1486,7 +1556,7 @@ export class City {
     });
 
     this.buildBeach();
-    this.buildHarbourApron();
+    this.buildBeachfront();
   }
 
   /** The sandy sea floor: a single draped sheet from the sand crest out to the west map edge, stuck to the
@@ -1526,13 +1596,58 @@ export class City {
     this.group.add(sand);
   }
 
-  /** Trivial dock apron where Kaapstad Quay meets the sea: a flat concrete slab at the waterline.
-   *  Placeholder for the Stage-3 harbour manicure (cranes, jetties, moored boats). */
-  private buildHarbourApron(): void {
-    if (!HARBOUR_POINT) return;
-    const apron = new THREE.Mesh(new THREE.PlaneGeometry(52, 34), new THREE.MeshStandardMaterial({ color: 0x8f8c85, map: this.concrete, roughness: 0.9 }));
-    apron.rotation.x = -Math.PI / 2; apron.position.set(HARBOUR_POINT.x + 18, OCEAN_Y + 0.02, HARBOUR_POINT.z); apron.receiveShadow = true;
-    this.group.add(apron);
+  /** The beachfront manicure (replaces the old placeholder harbour slab): the Kaapstad Quay
+   *  pleasure pier + paved quay forecourt, seafront venue strips at the quay and Bantry Bay,
+   *  beach clutter (loungers, lifeguard tower, towels) and moored boats — all placed from the
+   *  pure plan in beachfront.ts, whose pads CityGen/ModelScatter already keep clear. Venues and
+   *  clutter reuse the catalog path (buildOneModel) so slope plinths + oriented colliders come
+   *  for free; boats float at the waterline instead of sitting on the seabed terrain. */
+  private buildBeachfront(): void {
+    const plan = BEACHFRONT;
+    if (plan.apron) { // paved quay forecourt draped over the shore terrain
+      const { minX, maxX, minZ, maxZ } = plan.apron;
+      const polygon: MapPolygon = {
+        name: 'Kaapstad Quay apron', kind: 'beach', minX, maxX, minZ, maxZ,
+        points: [{ x: minX, z: minZ }, { x: maxX, z: minZ }, { x: maxX, z: maxZ }, { x: minX, z: maxZ }],
+        cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, area: (maxX - minX) * (maxZ - minZ),
+      };
+      this.addGroundCover(polygon, new THREE.MeshStandardMaterial({ color: 0x9c9a90, map: this.concrete, roughness: 0.92 }), 0.07);
+    }
+    if (plan.pier) {
+      const { x, z, length, width, sign } = plan.pier;
+      const heading = Math.PI / 2; // entrance (local +z) faces east onto the quay; the deck runs west over the water
+      const pier = buildPleasurePier(Math.floor(seeded(x, z, 55) * 1e6), { length, width, sign });
+      pier.group.position.set(x, 0, z); pier.group.rotation.y = heading;
+      this.group.add(pier.group);
+      for (const tier of pier.tiers) this.colliders.push(this.tierToWorldCollider(tier, x, z, heading, 0));
+    }
+    for (const spot of [...plan.venues, ...plan.clutter]) {
+      const { group, colliders } = this.buildOneModel(spot);
+      this.group.add(group); this.colliders.push(...colliders);
+    }
+    for (const boat of plan.boats) {
+      const built = buildModel(boat.name, boat.seed, { variant: boat.variant });
+      built.group.position.set(boat.x, OCEAN_Y + 0.03, boat.z); built.group.rotation.y = boat.heading;
+      this.group.add(built.group);
+      for (const tier of built.tiers) this.colliders.push(this.tierToWorldCollider(tier, boat.x, boat.z, boat.heading, OCEAN_Y));
+    }
+    if (plan.towels.length) { // bright towels: one instanced batch per colour on the dry sand
+      const towelGeometry = new THREE.BoxGeometry(1, 1, 1);
+      const colors = [0xd9634a, 0x3e8ca8, 0xe0c23c, 0xd88ab0];
+      const byColor: THREE.Matrix4[][] = colors.map(() => []);
+      const up = new THREE.Vector3(0, 1, 0);
+      for (const towel of plan.towels) {
+        const matrix = new THREE.Matrix4().compose(
+          new THREE.Vector3(towel.x, terrainHeightAt(towel.x, towel.z) + 0.05, towel.z),
+          new THREE.Quaternion().setFromAxisAngle(up, towel.heading),
+          new THREE.Vector3(0.95, 0.05, 1.85),
+        );
+        byColor[towel.color % colors.length]!.push(matrix);
+      }
+      colors.forEach((color, index) => {
+        if (byColor[index]!.length) this.addInstanced(towelGeometry, new THREE.MeshStandardMaterial({ color, roughness: 0.96 }), byColor[index]!, { receive: true });
+      });
+    }
   }
 
   // ---- Parks & green space (generated landuse polygons) ----------------------
@@ -1543,6 +1658,7 @@ export class City {
     // for now — so the world matches the map. (`polygon.manicured` is still carried for a future custom pass.)
     const parkMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.grassLush, roughness: 0.95 });
     this.grassWind = applyGrassShader(parkMaterial, { wind: true }); // lush lawns: macro detile + wind ripple
+    applySnowShader(parkMaterial, { snowY: SNOW_Y, rockY: SNOW_Y * 0.55 }); // veld draped up the range whitens with the ground under it
     const dirtMaterial = new THREE.MeshStandardMaterial({ color: 0xb59d5a, map: this.sand, roughness: 0.97 });
     for (const polygon of GREEN_POLYGONS) {
       this.addGroundCover(polygon, parkMaterial, 0.05); // drapes onto the relief
@@ -1562,6 +1678,7 @@ export class City {
       const z = polygon.minZ + seeded(polygon.cx, polygon.cz + attempt, 32) * (polygon.maxZ - polygon.minZ);
       if (!pointInPolygon(polygon, x, z) || this.inWater(x, z)) continue;
       if (this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2)) continue;
+      if (terrainHeightAt(x, z) > SNOW_Y * 0.55) continue; // no leafy park trees above the range's rock line
       this.addParkTree(x, z, attempt + Math.round(polygon.cx));
       planted++;
     }
@@ -1882,6 +1999,22 @@ export class City {
     const colors = [0x326d43, 0x3d7c49, 0x4b8650];
     const clusters: Array<[number, number, number, number]> = [[0, 6.2, 0, 2.2], [-1.35, 5.7, 0.25, 1.7], [1.2, 5.75, -0.2, 1.8], [0.2, 5.7, 1.1, 1.55]];
     clusters.forEach(([ox, oy, oz, scale], index) => { const crown = new THREE.Mesh(new THREE.SphereGeometry(scale, 20, 14), new THREE.MeshStandardMaterial({ color: colors[(variant + index) % colors.length], roughness: 0.9 })); crown.scale.y = 0.82; crown.position.set(ox, oy, oz); crown.castShadow = true; crown.receiveShadow = true; tree.add(crown); }); this.group.add(tree);
+  }
+
+  // ---- Airport (see world/Airport.ts) ----------------------------------------
+
+  /** O.R. Tambourine Regional: runway/taxiway/apron, terminal + tower + hangars, fence and parked
+   *  aircraft. The runway and taxiway are rendered surfaces ONLY — they are never registered in the
+   *  road index or nav graphs, so NPC traffic, peds and spawns stay off the field. */
+  private buildAirfield(): void {
+    buildAirport({
+      group: this.group, colliders: this.colliders, props: this.props,
+      asphalt: this.asphalt, concrete: this.concrete,
+      ground: (x, z) => terrainHeightAt(x, z),
+      strip: (points, width, material, lift) => this.createRoadStrip(points, width, material, lift, false),
+      addInstanced: (geometry, material, transforms, shadows) => this.addInstanced(geometry, material, transforms, shadows),
+      isOnRoad: (x, z, margin = 0) => this.isOnRoad(x, z, margin),
+    });
   }
 
   // ---- Landmarks -----------------------------------------------------------

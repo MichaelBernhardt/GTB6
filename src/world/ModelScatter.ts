@@ -63,8 +63,11 @@ function seeded(x: number, z: number, salt = 0): number {
   return value - Math.floor(value);
 }
 
-/** Per-cell hard cap on scattered models — bounds per-cell generation cost + draw calls. */
-export const SCATTER_CELL_CAP = 120;
+/** Per-cell hard cap on scattered models — bounds per-cell generation cost + draw calls. Raised
+ *  120 → 170 with the denser profiles: scattered models bake into per-cell merged draw calls, so
+ *  the extra 50 is one-off cell-generation cost, not per-frame cost, and the occupancy grid still
+ *  bounds true overlap. */
+export const SCATTER_CELL_CAP = 170;
 /** A structure footprint must clear the carriageway + apron by this (units) — reuses CityGen's rule. */
 export const STRUCT_ROAD_CLEARANCE = 2.5;
 /** Foliage may hug the verge but never a live lane (keeps trunks off the tar). */
@@ -72,7 +75,7 @@ export const FOLIAGE_ROAD_CLEARANCE = 0.7;
 /** Frontage verge line: one apron beyond the kerb, matching the sidewalk setback. */
 const VERGE_CLEARANCE = 3.05;
 /** Arc-length pitch (units) between frontage placement attempts. */
-const FRONTAGE_PITCH = 22;
+const FRONTAGE_PITCH = 16;
 
 // ---- Weighted model pick -----------------------------------------------------------------------
 
@@ -105,12 +108,12 @@ interface FrontageProfile {
  * Frontage catalogue per map zone. Structure weights follow the model `spacing` metadata for
  * rarity too (a filling-station has spacing 260, so it self-limits regardless of weight), but the
  * weights keep the common case common: houses in suburbs, sheds in the industrial belt, veld
- * furniture along rural roads. Kept deliberately sparse (low accept) so scatter ENRICHES the
- * procedural buildings rather than crowding every metre of kerb.
+ * furniture along rural roads. Accepts are tuned dense enough that streets read inhabited, while
+ * the occupancy grid + per-model spacing still stop scatter crowding the procedural buildings.
  */
 const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
   residential: {
-    yard: 5, structAccept: 0.5,
+    yard: 5, structAccept: 0.6,
     structures: [
       { name: 'face-brick-house', weight: 30 }, { name: 'tin-roof-house', weight: 10 },
       { name: 'townhouse-row', weight: 12 }, { name: 'apartment-block', weight: 8 },
@@ -118,55 +121,55 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
       { name: 'spaza-shop', weight: 10 }, { name: 'church', weight: 3 }, { name: 'mosque', weight: 2 },
       { name: 'school', weight: 2 }, { name: 'community-hall', weight: 2 }, { name: 'strip-mall', weight: 4 },
     ],
-    treeAccept: 0.6,
+    treeAccept: 0.72,
     trees: [
       { name: 'jacaranda', weight: 30 }, { name: 'shade-tree', weight: 22 }, { name: 'gum', weight: 12 },
       { name: 'bougainvillea', weight: 10 }, { name: 'hedge-unit', weight: 14 },
     ],
   },
   estate: {
-    yard: 9, structAccept: 0.55,
+    yard: 9, structAccept: 0.62,
     structures: [
       { name: 'sandton-villa', weight: 34 }, { name: 'face-brick-house', weight: 14 }, { name: 'townhouse-row', weight: 8 },
     ],
-    treeAccept: 0.7,
+    treeAccept: 0.78,
     trees: [
       { name: 'jacaranda', weight: 24 }, { name: 'shade-tree', weight: 28 }, { name: 'pine', weight: 12 },
       { name: 'hedge-unit', weight: 26 }, { name: 'bougainvillea', weight: 8 },
     ],
   },
   'commercial-strip': {
-    yard: 3, structAccept: 0.55,
+    yard: 3, structAccept: 0.65,
     structures: [
       { name: 'strip-mall', weight: 26 }, { name: 'spaza-shop', weight: 16 }, { name: 'office-block', weight: 14 },
       { name: 'mixed-use-corner', weight: 18 }, { name: 'parking-garage', weight: 5 },
       { name: 'filling-station', weight: 8 }, { name: 'taxi-rank', weight: 6 }, { name: 'big-box', weight: 4 },
     ],
-    treeAccept: 0.28,
+    treeAccept: 0.4,
     trees: [{ name: 'jacaranda', weight: 20 }, { name: 'shade-tree', weight: 16 }, { name: 'billboard', weight: 10 }, { name: 'cell-tower', weight: 4 }],
   },
   'commercial-highrise': {
-    yard: 2.5, structAccept: 0.4,
+    yard: 2.5, structAccept: 0.55,
     structures: [
       { name: 'office-block', weight: 30 }, { name: 'mixed-use-corner', weight: 18 }, { name: 'parking-garage', weight: 7 },
       { name: 'walk-up-flats', weight: 7 }, { name: 'strip-mall', weight: 12 }, { name: 'taxi-rank', weight: 8 }, { name: 'spaza-shop', weight: 6 },
     ],
-    treeAccept: 0.22,
+    treeAccept: 0.35,
     trees: [{ name: 'jacaranda', weight: 24 }, { name: 'shade-tree', weight: 14 }, { name: 'billboard', weight: 8 }],
   },
   industrial: {
-    yard: 4, structAccept: 0.55,
+    yard: 4, structAccept: 0.65,
     structures: [
       { name: 'warehouse', weight: 30 }, { name: 'factory-sawtooth', weight: 16 }, { name: 'tank-farm', weight: 8 },
       { name: 'container-stack', weight: 12 }, { name: 'scrapyard', weight: 8 }, { name: 'big-box', weight: 6 },
       { name: 'workshop-row', weight: 18 }, { name: 'logistics-depot', weight: 12 },
       { name: 'substation', weight: 3 }, { name: 'water-tower', weight: 3 },
     ],
-    treeAccept: 0.18,
+    treeAccept: 0.3,
     trees: [{ name: 'billboard', weight: 16 }, { name: 'cell-tower', weight: 8 }, { name: 'gum', weight: 12 }],
   },
   rural: {
-    yard: 12, structAccept: 0.28,
+    yard: 12, structAccept: 0.36,
     structures: [
       { name: 'farmhouse', weight: 22 }, { name: 'barn', weight: 16 }, { name: 'tin-roof-house', weight: 12 },
       { name: 'farm-worker-cottages', weight: 14 },
@@ -174,19 +177,20 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
       { name: 'windpomp', weight: 6 }, { name: 'padstal', weight: 5 }, { name: 'water-tower', weight: 2 },
       { name: 'church', weight: 3 }, { name: 'spaza-shop', weight: 6 },
     ],
-    treeAccept: 0.4,
+    treeAccept: 0.5,
     trees: [{ name: 'acacia', weight: 34 }, { name: 'aloe', weight: 14 }, { name: 'veld-grass', weight: 24 }, { name: 'gum', weight: 8 }],
   },
 };
 
 /** Coastal promenade override — used on any frontage near a beach, whatever the base zone. */
 const COAST_FRONTAGE: FrontageProfile = {
-  yard: 4, structAccept: 0.5,
+  yard: 4, structAccept: 0.58,
   structures: [
-    { name: 'beach-cafe', weight: 20 }, { name: 'ice-cream-kiosk', weight: 18 }, { name: 'pier-kiosk', weight: 12 },
-    { name: 'pavilion', weight: 12 }, { name: 'ablutions', weight: 8 }, { name: 'surf-shack', weight: 10 },
+    { name: 'beach-cafe', weight: 16 }, { name: 'ice-cream-kiosk', weight: 16 }, { name: 'pier-kiosk', weight: 10 },
+    { name: 'pavilion', weight: 10 }, { name: 'ablutions', weight: 8 }, { name: 'surf-shack', weight: 10 },
+    { name: 'seafront-cafe', weight: 10 }, { name: 'seafront-bar', weight: 7 }, { name: 'seafront-restaurant', weight: 7 },
   ],
-  treeAccept: 0.7,
+  treeAccept: 0.78,
   trees: [{ name: 'palm', weight: 40 }, { name: 'agave', weight: 16 }, { name: 'aloe', weight: 14 }],
 };
 
@@ -202,9 +206,9 @@ interface AreaProfile {
 }
 
 const AREA_FARM: AreaProfile = {
-  step: 20, foliageAccept: 0.5,
+  step: 18, foliageAccept: 0.6,
   foliage: [{ name: 'acacia', weight: 30 }, { name: 'veld-grass', weight: 40 }, { name: 'aloe', weight: 18 }],
-  structAccept: 0.04,
+  structAccept: 0.055,
   structures: [
     { name: 'farmhouse', weight: 12 }, { name: 'barn', weight: 14 }, { name: 'kraal', weight: 12 },
     { name: 'grain-silo', weight: 8 }, { name: 'windpomp', weight: 10 }, { name: 'tractor-shed', weight: 8 },
@@ -213,12 +217,12 @@ const AREA_FARM: AreaProfile = {
 };
 
 const AREA_PARK: AreaProfile = {
-  step: 15, foliageAccept: 0.55,
+  step: 13, foliageAccept: 0.68,
   foliage: [
     { name: 'shade-tree', weight: 28 }, { name: 'jacaranda', weight: 20 }, { name: 'pine', weight: 20 },
     { name: 'gum', weight: 14 }, { name: 'landmark-tree', weight: 6 },
   ],
-  structAccept: 0.015,
+  structAccept: 0.025,
   structures: [
     { name: 'pavilion', weight: 16 }, { name: 'ice-cream-kiosk', weight: 12 }, { name: 'sports-ground', weight: 4 },
     { name: 'reservoir', weight: 4 }, { name: 'ablutions', weight: 6 },
@@ -226,12 +230,13 @@ const AREA_PARK: AreaProfile = {
 };
 
 const AREA_BEACH: AreaProfile = {
-  step: 12, foliageAccept: 0.4,
+  step: 11, foliageAccept: 0.5,
   foliage: [{ name: 'palm', weight: 30 }, { name: 'agave', weight: 22 }, { name: 'aloe', weight: 20 }],
-  structAccept: 0.06,
+  structAccept: 0.08,
   structures: [
     { name: 'beach-loungers', weight: 24 }, { name: 'surf-shack', weight: 14 }, { name: 'lifeguard-tower', weight: 8 },
     { name: 'ice-cream-kiosk', weight: 12 }, { name: 'ablutions', weight: 6 }, { name: 'beach-cafe', weight: 6 },
+    { name: 'seafront-cafe', weight: 5 },
   ],
 };
 
