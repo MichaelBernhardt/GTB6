@@ -163,7 +163,7 @@ describe('hints', () => {
     state.speed = PLANE_EXIT_SPEED + 4;
     expect(planeHint(state)).toContain('Brake');
     state.speed = PLANE_ROTATE_SPEED;
-    expect(planeHint(state)).toContain('Pull up');
+    expect(planeHint(state)).toContain('Pull back to lift off');
     state.grounded = false;
     expect(planeHint(state)).toContain('Bail out');
   });

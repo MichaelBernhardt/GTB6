@@ -52,12 +52,13 @@ export class Plane {
 
   /** One piloted tick: stick from the keys, the pure step, then world clamps — bounds, buildings, terrain. */
   updatePlayer(dt: number, input: InputManager, city: City): PlaneUpdate {
-    // Real GTA deck: W/S throttle, ↑/↓ pitch, ←/→ roll, A/D rudder (and nosewheel on the ground).
+    // Real GTA deck: W/S throttle, ←/→ roll, A/D rudder (and nosewheel on the ground). Pitch is
+    // stick convention like GTA's: ↓ pulls back to climb, ↑ pushes the nose down (owner-confirmed).
     const stick: PlaneStick = {
       throttle: Number(input.down('KeyW')) - Number(input.down('KeyS')),
       roll: Number(input.down('ArrowLeft')) - Number(input.down('ArrowRight')),
       rudder: Number(input.down('KeyA')) - Number(input.down('KeyD')),
-      pitch: Number(input.down('ArrowUp')) - Number(input.down('ArrowDown')),
+      pitch: Number(input.down('ArrowDown')) - Number(input.down('ArrowUp')),
     };
     return this.step(stick, dt, city);
   }

@@ -32,7 +32,7 @@ export const PLANE_RUDDER_RATE = 0.35; // rad/s of airborne rudder yaw at full a
 
 export interface PlaneState { heading: number; pitch: number; roll: number; speed: number; throttle: number; grounded: boolean; }
 /** Real-GTA deck — throttle: W(+1)/S(-1). roll: ←(+1)/→(-1) banks. rudder: A(+1)/D(-1) yaws (and steers
- *  the nosewheel on the ground). pitch: ↑(+1) climbs, ↓(-1) dives. */
+ *  the nosewheel on the ground). pitch: +1 climbs, -1 dives — mapped stick-style (↓ pulls back to climb). */
 export interface PlaneStick { throttle: number; roll: number; rudder: number; pitch: number; }
 export interface PlaneStep { dx: number; dz: number; y: number; landed: boolean; crashed: boolean; sink: number; }
 
@@ -92,7 +92,7 @@ export function planeCrashDamage(sink: number, speed: number): number {
 
 /** HUD hint for the flight phase: taxi, takeoff roll, or airborne. */
 export function planeHint(state: PlaneState): string {
-  if (!state.grounded) return '↑/↓  Climb / dive  ·  ←/→  Bank  ·  A/D  Rudder  ·  W/S  Throttle  ·  E  Bail out';
-  if (state.speed >= PLANE_ROTATE_SPEED) return '↑  Pull up to lift off  ·  A/D  Steer  ·  S  Brake';
+  if (!state.grounded) return '↓  Pull back to climb  ·  ↑  Nose down  ·  ←/→  Bank  ·  A/D  Rudder  ·  W/S  Throttle  ·  E  Bail out';
+  if (state.speed >= PLANE_ROTATE_SPEED) return '↓  Pull back to lift off  ·  A/D  Steer  ·  S  Brake';
   return state.speed > PLANE_EXIT_SPEED ? 'W  Throttle up  ·  A/D  Steer  ·  S  Brake' : 'W  Throttle up  ·  A/D  Steer  ·  E  Climb out';
 }

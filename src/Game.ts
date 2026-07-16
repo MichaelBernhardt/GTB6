@@ -933,7 +933,7 @@ export class Game {
     this.player.inVehicle = true; this.player.setVisible(false); this.player.group.position.copy(plane.group.position);
     if (this.inventory.parachutes < 1) { this.inventory.parachutes = 1; this.persist(); }
     this.audio.ui(true);
-    this.ui.notify(plane.name, 'W/S throttle · ←/→ bank · ↑/↓ climb & dive · A/D rudder · E bail out. A packed chute waits on the seat back.');
+    this.ui.notify(plane.name, 'W/S throttle · ←/→ bank · ↓ pulls back to climb · A/D rudder · E bail out. A packed chute waits on the seat back.');
   }
 
   /** Flight tick: the plane flies itself through the pure step; E bails out mid-air (into the skydive) or
