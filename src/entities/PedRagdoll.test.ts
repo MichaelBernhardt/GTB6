@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RAGDOLL_PARTICLES, RAGDOLL_PARTICLE_COUNT, RAGDOLL_REST_STEPS, RAGDOLL_STEP, RAGDOLL_TIMEOUT,
-  VerletRagdoll, type RagdollEnvironment,
+  impactKickSpeed, RAGDOLL_PARTICLES, RAGDOLL_PARTICLE_COUNT, RAGDOLL_REST_STEPS, RAGDOLL_STEP,
+  RAGDOLL_TIMEOUT, VerletRagdoll, type RagdollEnvironment,
 } from './PedRagdoll';
 
 const P = RAGDOLL_PARTICLES;
@@ -97,6 +97,14 @@ describe('VerletRagdoll', () => {
     expect(before).toBeGreaterThan(0.3); // clearly wrong-way
     simulate(body, flat, RAGDOLL_TIMEOUT);
     for (let hinge = 0; hinge < body.hingeCount; hinge++) expect(body.hingeViolation(hinge)).toBeLessThan(0.25); // settled inside the loose limit
+  });
+
+  it('scales the impact kick with damage: a shoulder bump nudges, a car hit launches, blasts are capped', () => {
+    const bump = impactKickSpeed(12); // KNOCKDOWN_DAMAGE
+    const car = impactKickSpeed(25 * 2.8); // vehicle hit at speed 25 (PopulationSystem's |speed| * 2.8)
+    expect(bump).toBeGreaterThan(2); expect(bump).toBeLessThan(4);
+    expect(car).toBeGreaterThan(bump * 2); // a car hit visibly out-kicks a bump
+    expect(impactKickSpeed(999)).toBeLessThanOrEqual(9); // point-blank shotgun doesn't launch the body across the street
   });
 
   it('is deterministic for identical seeds and kicks', () => {

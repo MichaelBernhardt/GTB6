@@ -93,6 +93,10 @@ const KICK_LIFT = new Float32Array([
   0, 0, 0,
 ]);
 
+/** Impact impulse from damage: a shoulder bump nudges (~3 m/s), a car hit or blast launches — capped
+ *  so a point-blank shotgun doesn't fire the body across the street. */
+export function impactKickSpeed(damage: number): number { return Math.min(9, 2 + damage * 0.09); }
+
 export class VerletRagdoll {
   /** World-space particle positions, xyz-interleaved. Read-only outside the sim. */
   readonly positions: Float32Array;

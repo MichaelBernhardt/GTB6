@@ -30,7 +30,7 @@ const loadNpc = async (id = 'braamfontein-creative'): Promise<GLTF> => {
   return new GLTFLoader().parseAsync(buffer, '/models/npcs/');
 };
 const state = (overrides: Partial<RiggedPedestrianState> = {}): RiggedPedestrianState => ({
-  state: 'idle', dead: false, punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0, ...overrides,
+  state: 'idle', dead: false, knockdown: false, punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0, ...overrides,
 });
 
 /** World-space min skinned-vertex y — measured from the scene root so the ped's own transform counts. */
@@ -78,7 +78,7 @@ describe('cached rigged pedestrian instances', () => {
   });
 
   it('maps pedestrian behavior to locomotion and one-shot animations', async () => {
-    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.7 }); // 0.7: the mocap-pose death path
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.95 }); // 0.95 ≥ ragdoll chance: the mocap-pose death path
     await visual.load();
     const transitions: Array<[Partial<RiggedPedestrianState>, string]> = [
       [{ state: 'walk' }, 'walk'], [{ state: 'flee' }, 'sprint'], [{ state: 'hostile' }, 'sprint'],
@@ -113,7 +113,7 @@ describe('cached rigged pedestrian instances', () => {
   });
 
   it('slams the death fall: playback accelerates instead of floating down at capture speed', async () => {
-    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.7 });
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.95 });
     await visual.load();
     expect(visual.deathStyle).toBe('pose');
     visual.setState(state({ state: 'down' })); visual.update(1 / 30);
@@ -169,16 +169,22 @@ describe('cached rigged pedestrian instances', () => {
     expect(Math.abs(hips.x - 500)).toBeLessThan(3); expect(Math.abs(hips.z + 300)).toBeLessThan(3); // the body stayed where the ped died
   });
 
-  it('knockdown survivors never ragdoll and recover cleanly to animation', async () => {
-    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 }); // ragdoll-fated ped
+  it('knockdown survivors ragdoll for the down window — whatever the death-style draw — then hand back to animation', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.95 }); // pose-fated: knockdowns must ragdoll anyway
     await visual.load();
-    visual.setState(state({ state: 'down', dead: false })); // floored but alive: downTimer is running
-    for (let frame = 0; frame < 30; frame++) visual.update(1 / 30);
-    expect(visual.activeAnimation).toBe('death'); // the pose path plays; no physics took over
-    expect(visual.ragdollBody).toBeUndefined();
-    expect(activeRagdollCount()).toBe(0);
-    visual.setState(state({ state: 'walk' })); visual.update(1 / 30);
+    visual.primeRagdollImpact(1, 0, 3.1); // shoulder-bump-grade kick
+    visual.setState(state({ state: 'down', dead: false, knockdown: true })); // floored but alive: downTimer is running
+    for (let frame = 0; frame < 60; frame++) visual.update(1 / 30, env); // ~the 2s knockdown window
+    expect(visual.activeAnimation).toBeUndefined(); // physics owns the fall, not the death clip
+    expect(visual.ragdollBody).toBeDefined();
+    expect(skinnedFloorOf(visual.group)).toBeLessThan(0.1); // actually went down
+    visual.setState(state({ state: 'walk' })); visual.update(1 / 30, env); // downTimer expired: rise
     expect(visual.activeAnimation).toBe('walk'); // back on their feet, mixer in charge
+    expect(visual.ragdollBody).toBeUndefined(); // sim released
+    expect(activeRagdollCount()).toBe(0);
+    for (let frame = 0; frame < 30; frame++) visual.update(1 / 30, env); // and it keeps animating cleanly
+    expect(visual.activeAnimation).toBe('walk');
   });
 
   it('caps concurrent ragdolls: the oldest freezes where it is when one more death starts', async () => {

@@ -15,6 +15,9 @@ export interface RiggedPedestrianState {
   state: PedState;
   /** Health-depleted down (a corpse) as opposed to a knockdown survivor about to rise. */
   dead: boolean;
+  /** Floored by a physical impact (sprint bump, vehicle): always ragdolls, whatever the death-style
+   *  draw; survivors hand back to animation when the down timer expires and they rise. */
+  knockdown: boolean;
   punching: boolean;
   hailing: boolean;
   covering: boolean;
@@ -86,7 +89,7 @@ export const DEATH_FLOOR_SAMPLE_STEP = 0.1;
 export interface DeathFloorCurve { step: number; floors: number[]; }
 
 export const DEATH_EXTRA_SINK = 0.2; // owner call: corpses aren't limp, so stiff limbs read as floating — bury the body slightly (pose deaths; ragdolls rest by physics)
-export const RAGDOLL_DEATH_CHANCE = 0.5; // owner call: half the cast dies in a physical ragdoll instead of the mocap pose
+export const RAGDOLL_DEATH_CHANCE = 0.9; // owner call: 90% ragdoll, 10% mocap pose ("pose might be eliminated entirely later")
 export const MAX_ACTIVE_RAGDOLLS = 8; // dying peds beyond this freeze the oldest ragdoll first
 
 /** Only actively-simulating ragdolls; frozen corpses leave the list and cost nothing. */
@@ -217,7 +220,7 @@ export class RiggedPedestrianVisual {
   private actions = new Map<NpcAnimationName, THREE.AnimationAction>();
   private current?: THREE.AnimationAction;
   private currentName?: NpcAnimationName;
-  private state: RiggedPedestrianState = { state: 'idle', dead: false, punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
+  private state: RiggedPedestrianState = { state: 'idle', dead: false, knockdown: false, punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
   private deathFloor: DeathFloorCurve = { step: DEATH_FLOOR_SAMPLE_STEP, floors: [] };
   private ragdollDeath = false;
   private ragdollJitter: number[] = [];
@@ -229,6 +232,7 @@ export class RiggedPedestrianVisual {
   private ragdollGroundY = 0;
   private impactX?: number;
   private impactZ?: number;
+  private impactSpeed?: number;
   /** Bare-visual fallback (unit tests / missing city): flat ground at the ped group's own height. */
   private readonly fallbackEnv: RagdollEnvironment = { heightAt: () => this.ragdollGroundY };
   private disposed = false;
@@ -266,16 +270,17 @@ export class RiggedPedestrianVisual {
   update(dt: number, env?: RagdollEnvironment): void {
     if (!this.ready || !this.mixer || !this.bones) return;
     this.group.position.set(0, 0, 0); this.group.rotation.set(0, 0, 0); this.group.scale.set(1, 1, 1);
-    if (this.state.state === 'down' && this.state.dead && this.ragdollDeath) { this.updateRagdoll(Math.max(0, dt), env); return; }
-    if (this.ragdoll) this.endRagdoll(); // no longer a dead-down ped: hand the bones back to the mixer
+    if (this.state.state === 'down' && (this.state.knockdown || (this.state.dead && this.ragdollDeath))) { this.updateRagdoll(Math.max(0, dt), env); return; }
+    if (this.ragdoll) this.endRagdoll(); // knocked-down ped is back up: hand the bones back to the mixer
     const animation = selectNpcAnimation(this.state); this.transitionTo(animation); this.setPlaybackRate(animation);
     this.mixer.update(Math.max(0, dt)); this.applyAdditivePose();
   }
 
-  /** The ped was killed by an impact from `direction` (world XZ, pointing away from the source):
-   *  the ragdoll starts with a matching kick instead of the pose path's yaw whip. */
-  primeRagdollImpact(directionX?: number, directionZ?: number): void {
-    this.impactX = directionX; this.impactZ = directionZ;
+  /** The ped was felled by an impact from `direction` (world XZ, pointing away from the source):
+   *  the ragdoll starts with a matching kick — `speed` scales it (bump vs car) — instead of the
+   *  pose path's yaw whip. */
+  primeRagdollImpact(directionX?: number, directionZ?: number, speed?: number): void {
+    this.impactX = directionX; this.impactZ = directionZ; this.impactSpeed = speed;
   }
 
   private updateRagdoll(dt: number, env?: RagdollEnvironment): void {
@@ -330,8 +335,8 @@ export class RiggedPedestrianVisual {
     let kickX = this.impactX ?? 0; let kickZ = this.impactZ ?? 0;
     if (kickX * kickX + kickZ * kickZ < 1e-6) { const angle = r5 * Math.PI * 2; kickX = Math.sin(angle); kickZ = Math.cos(angle); }
     const twist = (r1 - 0.5) * 0.5; const cos = Math.cos(twist); const sin = Math.sin(twist); // ±14°: same shot, different falls
-    this.ragdoll.kick(kickX * cos - kickZ * sin, kickX * sin + kickZ * cos, 2.6 + r0 * 1.6);
-    this.impactX = undefined; this.impactZ = undefined;
+    this.ragdoll.kick(kickX * cos - kickZ * sin, kickX * sin + kickZ * cos, this.impactSpeed ?? (2.6 + r0 * 1.6));
+    this.impactX = undefined; this.impactZ = undefined; this.impactSpeed = undefined;
     if (activeRagdolls.length >= MAX_ACTIVE_RAGDOLLS) activeRagdolls[0]?.haltRagdoll();
     activeRagdolls.push(this);
   }

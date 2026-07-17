@@ -5,7 +5,7 @@ import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, F
 import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
 import type { NpcCharacterId } from './NpcCatalog';
-import type { RagdollEnvironment } from './PedRagdoll';
+import { impactKickSpeed, type RagdollEnvironment } from './PedRagdoll';
 import { RiggedPedestrianVisual } from './RiggedPedestrianVisual';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
@@ -41,6 +41,7 @@ export class Pedestrian {
   private watchdog = new ProgressWatchdog();
   private punchTimer = 0;
   private downTimer = 0;
+  private knockedDown = false;
   private deathSpinTotal = 0;
   private deathSpinElapsed = DEATH_SPIN_DURATION;
   private stumbleTimer = 0;
@@ -157,6 +158,7 @@ export class Pedestrian {
     visual.setState({
       state: this.state,
       dead: this.state === 'down' && this.health === 0,
+      knockdown: this.state === 'down' && this.knockedDown,
       punching: this.punchTimer > 0,
       hailing: this.hailing,
       covering: this.covering,
@@ -180,18 +182,20 @@ export class Pedestrian {
     if (this.state === 'down' || this.contact) return false;
     this.health = Math.max(0, this.health - amount); this.fear = FEAR_MAX; this.enraged = this.aggressive && this.health > 0;
     this.state = this.health === 0 ? 'down' : this.aggressive ? 'hostile' : 'flee';
-    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36; this.beginDeathFall(origin); }
+    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36; this.beginDeathFall(origin, amount); }
     return this.health === 0;
   }
 
   /** A kill starts either the ragdoll (rigged ragdoll-fated peds — the sim gets the impact as a
-   *  kick, and yawing the group would drag the whole particle frame) or the pose path's yaw whip. */
-  private beginDeathFall(origin?: THREE.Vector3): void {
+   *  damage-scaled kick, and yawing the group would drag the whole particle frame) or the pose
+   *  path's yaw whip. */
+  private beginDeathFall(origin: THREE.Vector3 | undefined, damage: number): void {
     const visual = this.riggedVisual;
     if (visual?.ready && visual.deathStyle === 'ragdoll') {
       visual.primeRagdollImpact(
         origin ? this.group.position.x - origin.x : undefined,
         origin ? this.group.position.z - origin.z : undefined,
+        impactKickSpeed(damage),
       );
       return;
     }
@@ -217,20 +221,25 @@ export class Pedestrian {
     this.stumbleTimer = STUMBLE_DURATION; this.threat.copy(origin);
   }
 
-  /** Sprint bump: floors the ped; they get back up after ~2s unless health is depleted. Returns true on kill. */
+  /** Sprint bump / vehicle hit: floors the ped; they get back up after ~2s unless health is depleted.
+   *  Rigged peds ragdoll for the whole down window (owner call — no posed knockdowns), kicked away
+   *  from the impact with damage-scaled force; the procedural fallback keeps the lie-flat pose.
+   *  Returns true on kill. */
   knockdown(origin: THREE.Vector3, damage = KNOCKDOWN_DAMAGE): boolean {
     if (this.state === 'down' || this.contact) return false;
     const outcome = knockdownOutcome(this.health, damage);
     this.health = outcome.health; this.downTimer = outcome.downTime; this.threat.copy(origin);
-    this.fear = accumulateFear(this.fear, FEAR_EVENTS.assault.base); this.stumbleTimer = 0; this.state = 'down';
+    this.fear = accumulateFear(this.fear, FEAR_EVENTS.assault.base); this.stumbleTimer = 0; this.state = 'down'; this.knockedDown = true;
     this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36;
-    if (outcome.killed) { this.enraged = false; this.beginDeathFall(origin); }
+    if (this.riggedVisual?.ready) this.riggedVisual.primeRagdollImpact(this.group.position.x - origin.x, this.group.position.z - origin.z, impactKickSpeed(damage));
+    else if (outcome.killed) this.beginDeathSpin(origin);
+    if (outcome.killed) this.enraged = false;
     return outcome.killed;
   }
 
   /** Back on their feet after a knockdown: personality decides fight or flight. */
   private rise(player: THREE.Vector3): void {
-    this.group.rotation.z = 0; this.group.position.y = this.groundY;
+    this.group.rotation.z = 0; this.group.position.y = this.groundY; this.knockedDown = false;
     const response = fearResponse(this.fear, this.aggressive, this.bravery);
     if (response === 'fight') { this.enraged = true; this.state = 'hostile'; this.destination.copy(player); }
     else if (response === 'cower') this.state = 'cower';
