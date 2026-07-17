@@ -55,3 +55,27 @@ describe('LivingCitySystem', () => {
     expect(city.district(CBD).policePressure).toBe(44);
   });
 });
+
+describe('grid resolution events', () => {
+  it('applies exclusive grid resolutions with standing floors, mirroring joziArms', () => {
+    const defended = new LivingCitySystem();
+    defended.apply({ kind: 'grid-defended', district: CBD });
+    expect(defended.state.gridResolution).toBe('defended');
+    expect(defended.district(CBD).communityStanding).toBeGreaterThanOrEqual(60);
+    expect(defended.district(CBD).policePressure).toBe(25);
+    const sold = new LivingCitySystem();
+    sold.apply({ kind: 'grid-sold', district: CBD });
+    expect(sold.state.gridResolution).toBe('sold');
+    expect(sold.district(CBD).communityStanding).toBeLessThanOrEqual(-60);
+    expect(sold.district(CBD).policePressure).toBe(40);
+  });
+
+  it('sanitizes and round-trips the grid resolution', () => {
+    expect(sanitizeLivingCityState({ gridResolution: 'defended' }).gridResolution).toBe('defended');
+    expect(sanitizeLivingCityState({ gridResolution: 'nonsense' }).gridResolution).toBeNull();
+    expect(sanitizeLivingCityState(undefined).gridResolution).toBeNull();
+    const system = new LivingCitySystem();
+    system.apply({ kind: 'grid-sold', district: CBD });
+    expect(new LivingCitySystem(JSON.parse(JSON.stringify(system.state))).state.gridResolution).toBe('sold');
+  });
+});

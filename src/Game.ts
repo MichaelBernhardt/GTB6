@@ -35,6 +35,7 @@ import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
+import { StoryDirector } from './systems/StoryDirector';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
@@ -109,6 +110,7 @@ export class Game {
   private police: PoliceSystem;
   private trains: TrainSystem;
   private missions = new MissionSystem();
+  private story = new StoryDirector();
   private loadShedding = new LoadSheddingSystem();
   private torch: TorchSystem;
   private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
@@ -216,6 +218,7 @@ export class Game {
     this.input = new InputManager(this.renderer.domElement);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
+    this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
     this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
     if (import.meta.env.DEV) Object.assign(window, { __game: this });
@@ -541,7 +544,7 @@ export class Game {
   private startGame(fresh: boolean): void {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.player.setDead(false); this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
@@ -1938,6 +1941,7 @@ export class Game {
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current);
     this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.missions.completed = new Set(this.save.completedMissions);
+    this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.dayNight.hour = this.save.timeOfDay;
     this.player.heal();
     this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice();
@@ -1993,7 +1997,7 @@ export class Game {
   private persist(): void {
     const at = this.activeVehicle?.group.position ?? this.player.group.position; // live location (the vehicle is the player while driving)
     const heading = this.activeVehicle?.heading ?? this.player.heading;
-    this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, position: [at.x, at.y, at.z], heading, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } };
+    this.save = { version: 3, money: this.economy.balance, completedMissions: [...this.missions.completed], storyFlags: this.story.serializeFlags(), diaryPages: this.story.serializeDiaryPages(), spawn: this.save.spawn, position: [at.x, at.y, at.z], heading, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } };
     this.saveManager.save(this.save);
   }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
