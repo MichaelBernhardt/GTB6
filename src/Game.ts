@@ -460,6 +460,14 @@ export class Game {
       this.player.inebriation = Math.max(0, Math.min(INEBRIATION_MAX, level ?? INEBRIATION_MAX));
       return this.player.inebriation <= 0 ? 'Sobered up. Straight as an arrow.' : `Inebriation set to ${Math.round(this.player.inebriation)}/100. Mind the lampposts.`;
     },
+    missionList: () => MISSIONS.map((mission, index) =>
+      `${index + 1}. ${mission.name} — ${mission.contact}${this.missions.active?.id === mission.id ? ' ← active' : this.missions.completed.has(mission.id) ? ' ✓ done' : ''}`),
+    missionStart: (index) => {
+      const mission = this.missions.forceStart(index);
+      if (!mission) return `Eish, no mission ${index}. Type "mission" for the list (1-${MISSIONS.length}).`;
+      this.teleportPlayer(mission.start.position.x, mission.start.position.z, mission.contact);
+      return `Mission ${index} "${mission.name}" armed — you're with ${mission.contact}. Objective: ${this.missions.objective?.text ?? ''}`;
+    },
   };
 
   /** The gazetteer is rebuilt per query so the `spawn` entry tracks the current wake-up spot; districts are sampled once. */

@@ -111,9 +111,11 @@ window.__qa = (() => {
       else {
         result.roadDistance = Math.round(routeLength(pts));
         if (o.timeLimit) {
-          const need = result.roadDistance / cruise();
+          // Bumbling pace (owner): 50% of cruise, with a 1.25x wrong-turn detour on the route.
+          const bumbleSpeed = (g.activeVehicle?.spec.maxSpeed ?? 34) * 0.5;
+          const need = (result.roadDistance * 1.25) / bumbleSpeed;
           result.timerNeed = Math.round(need);
-          if (o.timeLimit < need * 1.8) finding('fail', `timer ${o.timeLimit}s < 1.8x measured ${Math.round(need)}s (route ${result.roadDistance}u @ ${cruise().toFixed(0)}u/s) — set >= ${Math.ceil(need * 1.8 / 10) * 10}s`);
+          if (o.timeLimit < need * 1.8) finding('fail', `timer ${o.timeLimit}s < 1.8x bumbling ${Math.round(need)}s (route ${result.roadDistance}u, detour 1.25x @ ${bumbleSpeed.toFixed(0)}u/s) — set >= ${Math.ceil(need * 1.8 / 10) * 10}s`);
         }
       }
     }

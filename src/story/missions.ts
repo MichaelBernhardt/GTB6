@@ -14,7 +14,7 @@ const SINDI = 'Sindi Mokoena';
 const SPOTTED = { kind: 'detected', reason: 'Floodlights slam on. The whole yard saw you.' } as const;
 
 /** Candice's van dying ends the mission at any stage. */
-const VAN_DOWN = { kind: 'vehicle-health-below', value: 0.35, reason: 'Candice\'s van is finished — and so is her route' } as const;
+const VAN_DOWN = { kind: 'vehicle-health-below', value: 0.12, reason: 'Candice\'s van is finished — and so is her route' } as const;
 
 export const target = (x: number, y: number, z: number, label: string, color = '#f5c542'): WorldTarget => ({ position: new Vector3(x, y, z), label, color });
 export const spot = (place: { x: number; z: number }, label: string): WorldTarget => target(place.x, 0, place.z, label);
@@ -26,8 +26,8 @@ export const MISSIONS: MissionDefinition[] = [
     intro: 'Howzit boet. Sold the couch on Marketplace but eish, the bakkie is gone. Take my yellow Citi Golf — three drops, sharp sharp. The couch fits, I promise.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Enter Auntie Portia\'s yellow Citi Golf' },
-      { kind: 'checkpoints', text: 'Make the two drops (now now, not just now)', required: 2 },
-      { kind: 'reach', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Return the Citi Golf to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia\'s driveway') },
+      { kind: 'checkpoints', text: 'Make the two drops (now now, not just now)', required: 2, checkpoint: true },
+      { kind: 'reach', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Return the Citi Golf to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia\'s driveway'), checkpoint: true },
     ],
   },
   {
@@ -35,8 +35,8 @@ export const MISSIONS: MissionDefinition[] = [
     intro: 'A red GTI is parked on Commissioner Street, boot full of municipal cable that fell off a substation, yoh. Bring it to my Braamfontein lock-up when the heat fades. Vrrr phaa, but gently.',
     start: spot(VUSI_START, 'Bra Vusi'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'sport', vehicleColor: 0xd83a40, text: 'Take the red GTI from the CBD' },
-      { kind: 'lose-wanted', text: 'Lose the JMPD pursuit' },
-      { kind: 'reach', vehicleKind: 'sport', vehicleColor: 0xd83a40, text: 'Deliver the GTI to Braamfontein', target: spot(LOCKUP_SPOT, 'Lock-up garage') },
+      { kind: 'lose-wanted', text: 'Lose the JMPD pursuit', checkpoint: true },
+      { kind: 'reach', vehicleKind: 'sport', vehicleColor: 0xd83a40, text: 'Deliver the GTI to Braamfontein', target: spot(LOCKUP_SPOT, 'Lock-up garage'), checkpoint: true },
     ],
   },
   {
@@ -45,9 +45,9 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(CANDICE_START, 'Candice'), objectives: [
       { kind: 'reach', text: 'Travel to the Wemmer taxi terminal', target: spot(TERMINAL_SPOT, 'Wemmer terminal') },
       { kind: 'defeat', text: 'Moer the rank enforcers', required: 3, checkpoint: true },
-      { kind: 'collect', text: 'Grab the route permit', target: spot(PERMIT_SPOT, 'Route permit') },
-      { kind: 'escape', text: 'Escape the terminal perimeter', target: spot(ESCAPE_SPOT, 'Safe route') },
-      { kind: 'reach', text: 'Bring it to Candice at Zoo Lake', target: spot(KIOSK_SPOT, 'Braai kiosk') },
+      { kind: 'collect', text: 'Grab the route permit', target: spot(PERMIT_SPOT, 'Route permit'), checkpoint: true },
+      { kind: 'escape', text: 'Escape the terminal perimeter', target: spot(ESCAPE_SPOT, 'Safe route'), checkpoint: true },
+      { kind: 'reach', text: 'Bring it to Candice at Zoo Lake', target: spot(KIOSK_SPOT, 'Braai kiosk'), checkpoint: true },
     ],
   },
   {
@@ -69,7 +69,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
       { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Sandton Station' }, text: 'Ride the rails to Sandton Station', target: spot(SANDTON_PLATFORM, 'Sandton Station') },
       { kind: 'collect', text: 'Fetch the rent bag from the vetkoek stand', target: spot(SANDTON_BAG_SPOT, 'Rent bag'), checkpoint: true },
-      { kind: 'reach', text: 'Bring the bag back to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia') },
+      { kind: 'reach', text: 'Bring the bag back to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
   },
   {
@@ -79,7 +79,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(VUSI_START, 'Bra Vusi'), objectives: [
       { kind: 'reach', text: 'Get near the buyer\'s bakkie — quietly', target: spot(QUARRY_SPAWN, 'The buyer\'s bakkie') },
       { kind: 'follow', text: 'Tail the bakkie — stay with it, don\'t spook it', checkpoint: true, failIf: [
-        { kind: 'strayed', value: 90, reason: 'You lost the bakkie in traffic' },
+        { kind: 'strayed', value: 150, reason: 'You lost the bakkie in traffic' },
         { kind: 'escort-down', reason: 'The bakkie is wrecked — no yard today' },
       ] },
       { kind: 'reach', text: 'Get eyes on the yard gate', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), checkpoint: true },
@@ -93,7 +93,7 @@ export const MISSIONS: MissionDefinition[] = [
       { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: CANDICE_VAN_COLOR, text: 'Take the wheel of Candice\'s route van' },
       { kind: 'checkpoints', required: 2, vehicleColor: CANDICE_VAN_COLOR, text: 'Show the flag at both contested ranks', failIf: [VAN_DOWN] },
       { kind: 'defeat', required: 3, vehicleColor: CANDICE_VAN_COLOR, text: 'Moer the Wemmer heavies off the van', checkpoint: true, failIf: [VAN_DOWN] },
-      { kind: 'reach', vehicleKind: 'van', vehicleColor: CANDICE_VAN_COLOR, text: 'Get the van back to Zoo Lake in one piece', target: spot(CANDICE_START, 'Zoo Lake rank'), failIf: [VAN_DOWN] },
+      { kind: 'reach', vehicleKind: 'van', vehicleColor: CANDICE_VAN_COLOR, text: 'Get the van back to Zoo Lake in one piece', target: spot(CANDICE_START, 'Zoo Lake rank'), checkpoint: true, failIf: [VAN_DOWN] },
     ],
   },
   {
@@ -115,8 +115,8 @@ export const MISSIONS: MissionDefinition[] = [
     intro: 'Vusi says you can drive and you can keep quiet. Prove half of that: there\'s a diesel tanker on Wemmer Jubilee Road that forgot who it belongs to. Bring it home without a scratch.',
     start: spot(SOLLY_START, 'Solly'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Take the diesel tanker from Wemmer Jubilee Road' },
-      { kind: 'reach', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Bring the tanker to Kelvin Yard — gently', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, failIf: [
-        { kind: 'vehicle-health-below', value: 0.6, reason: 'The tanker is bleeding diesel — Solly\'s money burns with it' },
+      { kind: 'reach', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Bring the tanker to Kelvin Yard — gently', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, checkpoint: true, failIf: [
+        { kind: 'vehicle-health-below', value: 0.3, reason: 'The tanker is bleeding diesel — Solly\'s money burns with it' },
       ] },
     ],
   },
@@ -127,7 +127,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SOLLY_START, 'Solly'), objectives: [
       { kind: 'reach', conditions: { atNight: true }, text: 'Get to the Ophirton feeder substation after dark', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
       { kind: 'collect', text: 'Throw the main breaker', target: spot(SUBSTATION_BREAKER, 'Main breaker'), checkpoint: true },
-      { kind: 'lose-wanted', text: 'Get clear of the JMPD response' },
+      { kind: 'lose-wanted', text: 'Get clear of the JMPD response', checkpoint: true },
     ],
   },
   {
@@ -136,7 +136,7 @@ export const MISSIONS: MissionDefinition[] = [
     intro: 'There\'s a superbike in a Sandton showroom that a friend of mine keeps dreaming about. Fetch it tonight. However loud it gets — it arrives.',
     start: spot(SOLLY_START, 'Solly'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'superbike', text: 'Take the showroom superbike in Sandton' },
-      { kind: 'reach', vehicleKind: 'superbike', text: 'Bring it to Kelvin Yard', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12 },
+      { kind: 'reach', vehicleKind: 'superbike', text: 'Bring it to Kelvin Yard', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, checkpoint: true },
     ],
   },
   {
@@ -146,7 +146,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SOLLY_START, 'Solly'), objectives: [
       { kind: 'checkpoints', required: 3, text: 'Collect the generator subscriptions — three doors, no receipts' },
       { kind: 'defeat', required: 2, text: 'The holdout\'s muscle wants a discount. Correct them.', checkpoint: true },
-      { kind: 'reach', text: 'Bring Solly his money', target: spot(SOLLY_START, 'Solly') },
+      { kind: 'reach', text: 'Bring Solly his money', target: spot(SOLLY_START, 'Solly'), checkpoint: true },
     ],
   },
   {
@@ -156,7 +156,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SINDI_START, 'Sindi'), objectives: [
       { kind: 'reach', hidden: true, text: '"Collect at the rail halt whose name is Afrikaans for the place aeroplanes live."', target: spot(LUGHAWE_DROP, 'The dead drop') },
       { kind: 'collect', text: 'Take the dossier from the drop', target: spot(LUGHAWE_DROP, 'Dossier'), checkpoint: true },
-      { kind: 'reach', text: 'Bring the dossier back to Sindi', target: spot(SINDI_START, 'Sindi') },
+      { kind: 'reach', text: 'Bring the dossier back to Sindi', target: spot(SINDI_START, 'Sindi'), checkpoint: true },
     ],
   },
   {
@@ -166,7 +166,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SOLLY_START, 'Solly'), objectives: [
       { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true }, text: 'Take the controls of a consist', target: spot(PARK_STATION_SPOT, 'Park Station') },
       { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true, stationName: 'Crown Station' }, text: 'Stop the train dead at the Crown Station siding', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
-      { kind: 'reach', text: 'Walk away and let the crew unload', target: spot(SOLLY_START, 'Solly') },
+      { kind: 'reach', text: 'Walk away and let the crew unload', target: spot(SOLLY_START, 'Solly'), checkpoint: true },
     ],
   },
   {
@@ -176,7 +176,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SIPHO_START, 'Skywise Sipho'), objectives: [
       { kind: 'reach', conditionsOnly: true, conditions: { inPlane: true, altitudeAbove: 40 }, text: 'Get a Karoo Kite in the air', target: spot(LUGHAWE_HALT, 'O.R. Tambourine apron') },
       { kind: 'reach', radius: 260, conditions: { inPlane: true, altitudeAbove: 150 }, text: 'Bring the parts high over Ponte Tower', target: spot(PONTE_POINT, 'Over Ponte'), checkpoint: true },
-      { kind: 'reach', timeLimit: 90, text: 'Get down to the Ponte forecourt drop — quickly', target: spot(PONTE_FORECOURT, 'Forecourt drop') },
+      { kind: 'reach', timeLimit: 150, text: 'Get down to the Ponte forecourt drop — quickly', target: spot(PONTE_FORECOURT, 'Forecourt drop'), checkpoint: true },
     ],
   },
   {
@@ -197,7 +197,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SOLLY_START, 'Solly'), setFlags: ['act3'], objectives: [
       { kind: 'reach', timeLimit: 240, text: 'Find Sindi\'s evidence van below Braamfontein', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van') },
       { kind: 'collect', text: 'Douse the van and strike the match', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van'), checkpoint: true },
-      { kind: 'lose-wanted', text: 'Vanish before JMPD boxes the block' },
+      { kind: 'lose-wanted', text: 'Vanish before JMPD boxes the block', checkpoint: true },
     ],
   },
   {
@@ -207,8 +207,8 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SINDI_START, 'Sindi'), setFlags: ['act3'], objectives: [
       { kind: 'reach', conditions: { atNight: true }, text: 'Be at the Ophirton feeder after dark', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
       { kind: 'defeat', required: 3, text: 'Drop the cutting crew before they finish the job', checkpoint: true },
-      { kind: 'collect', text: 'Photograph the cutting rig', target: spot(SUBSTATION_BREAKER, 'Cutting rig') },
-      { kind: 'reach', text: 'Bring Sindi the proof', target: spot(SINDI_START, 'Sindi') },
+      { kind: 'collect', text: 'Photograph the cutting rig', target: spot(SUBSTATION_BREAKER, 'Cutting rig'), checkpoint: true },
+      { kind: 'reach', text: 'Bring Sindi the proof', target: spot(SINDI_START, 'Sindi'), checkpoint: true },
     ],
   },
 
@@ -220,7 +220,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SAFEHOUSE_SITE.pad, 'The burner phone'), setFlags: ['ledger'], objectives: [
       { kind: 'reach', radius: 14, text: 'Case Kelvin Yard', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard') },
       { kind: 'reach', radius: 6, conditions: { undetected: true }, failIf: [SPOTTED], checkpoint: true, text: 'Get into the records office. Figure it out.', target: spot(KELVIN_OFFICE_SPOT, 'Records office') },
-      { kind: 'collect', conditions: { undetected: true }, failIf: [SPOTTED], text: 'Take the black ledger', target: spot(KELVIN_OFFICE_SPOT, 'Black ledger') },
+      { kind: 'collect', conditions: { undetected: true }, failIf: [SPOTTED], checkpoint: true, text: 'Take the black ledger', target: spot(KELVIN_OFFICE_SPOT, 'Black ledger') },
       { kind: 'escape', radius: 12, failIf: [SPOTTED], text: 'Get out of the yard, unseen', target: spot(KELVIN_GATE_SPOT, 'Out the gate') },
     ],
   },
@@ -231,7 +231,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SOLLY_START, 'Kelvin Yard gate'), setFlags: ['endgame'], objectives: [
       { kind: 'reach', radius: 14, text: 'Stand in Kelvin Yard as the word goes out', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard') },
       { kind: 'survive', timeLimit: 60, text: 'Hold the yard — Solly\'s loyalists want it back', checkpoint: true },
-      { kind: 'defeat', required: 4, text: 'Break the last of the loyalists' },
+      { kind: 'defeat', required: 4, text: 'Break the last of the loyalists', checkpoint: true },
     ],
   },
   {
@@ -241,7 +241,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SINDI_START, 'Sindi'), setFlags: ['endgame'], objectives: [
       { kind: 'reach', timeLimit: 240, text: 'Run the ledger to the Constitution Hill handover', target: spot(CON_HILL_SPOT, 'Handover') },
       { kind: 'lose-wanted', text: 'Shake the heat', checkpoint: true },
-      { kind: 'checkpoints', required: 3, timeLimit: 420, text: 'Pick the carcass: three cartel stashes before SAPS seals them' },
+      { kind: 'checkpoints', required: 3, timeLimit: 600, text: 'Pick the carcass: three cartel stashes before SAPS seals them', checkpoint: true },
     ],
   },
   {
@@ -251,7 +251,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SINDI_START, 'Sindi'), setFlags: ['stage-six-over'], objectives: [
       { kind: 'reach', timeLimit: 240, text: 'Get to the Ophirton feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
       { kind: 'defeat', required: 4, text: 'Put the wreckers down', checkpoint: true },
-      { kind: 'survive', timeLimit: 90, text: 'Hold the substation until the relief crew arrives' },
+      { kind: 'survive', timeLimit: 90, text: 'Hold the substation until the relief crew arrives', checkpoint: true },
     ],
   },
 
@@ -261,9 +261,9 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['last-coach-home'] },
     intro: 'The stokvel ordered from Ouma se Padstal — koeksisters, biltong, the works. It\'s a DRIVE, boet. Take something with a working radio.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
-      { kind: 'reach', radius: 10, timeLimit: 600, text: 'Take the stokvel order out to Ouma se Padstal', target: spot(PADSTAL_SPOT, 'Ouma se Padstal') },
+      { kind: 'reach', radius: 10, timeLimit: 900, text: 'Take the stokvel order out to Ouma se Padstal', target: spot(PADSTAL_SPOT, 'Ouma se Padstal') },
       { kind: 'collect', text: 'Load Ouma\'s koeksisters', target: spot(PADSTAL_SPOT, 'The order'), checkpoint: true },
-      { kind: 'reach', timeLimit: 600, text: 'Home again before the tea goes cold', target: spot(PORTIA_START, 'Auntie Portia') },
+      { kind: 'reach', timeLimit: 900, text: 'Home again before the tea goes cold', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
   },
   {
@@ -273,7 +273,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(CANDICE_START, 'Candice'), objectives: [
       { kind: 'reach', radius: 12, timeLimit: 300, text: 'Catch the fare-skipper before his boat leaves Seepunt Pier', target: spot(PIER_SPOT, 'Seepunt Pier') },
       { kind: 'defeat', required: 1, text: 'Convince him', checkpoint: true },
-      { kind: 'collect', text: 'Take what he owes — plus interest', target: spot(PIER_SPOT, 'The fare') },
+      { kind: 'collect', text: 'Take what he owes — plus interest', target: spot(PIER_SPOT, 'The fare'), checkpoint: true },
     ],
   },
 ];
