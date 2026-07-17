@@ -46,12 +46,13 @@ def boot(browser, port):
 def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows):
     print(f'=== {mission} ===', flush=True)
     status = page.evaluate(f"() => window.__qa.prep('{mission}')")
-    if status != 'ready':
+    if status == 'ready':  # the opener exercises the real dialogue-accept flow
+        status = page.evaluate("() => window.__qa.accept()")
+        if status != 'armed':
+            all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': f'accept path broke: {status}'})
+            return
+    elif status != 'armed-direct':  # everything else arms via the `mission <n>` console command
         all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': f'prep: {status}'})
-        return
-    status = page.evaluate("() => window.__qa.accept()")
-    if status != 'armed':
-        all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': f'accept path broke: {status}'})
         return
     for _safety in range(10):  # objectives + checkpoint re-entries per mission
         info = json.loads(page.evaluate("() => JSON.stringify({ audit: window.__qa.audit(), idx: window.__qa.objIndex(), state: window.__qa.g.missions.state })"))

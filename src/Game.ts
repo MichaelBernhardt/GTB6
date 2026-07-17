@@ -463,8 +463,14 @@ export class Game {
     missionList: () => MISSIONS.map((mission, index) =>
       `${index + 1}. ${mission.name} — ${mission.contact}${this.missions.active?.id === mission.id ? ' ← active' : this.missions.completed.has(mission.id) ? ' ✓ done' : ''}`),
     missionStart: (index) => {
+      const target = this.missions.missions[index - 1];
+      if (!target) return `Eish, no mission ${index}. Type "mission" for the list (1-${MISSIONS.length}).`;
+      this.story.synthesizePrerequisites(target, this.missions.missions, this.missions.completed); // works cold from a fresh save
+      this.dialogue.abandon(); this.story.abandonOffer();
+      this.missions.active = undefined; this.missions.state = 'available';
+      this.resetMissionRuntime();
       const mission = this.missions.forceStart(index);
-      if (!mission) return `Eish, no mission ${index}. Type "mission" for the list (1-${MISSIONS.length}).`;
+      if (!mission) return `Eish, mission ${index} would not arm.`;
       this.teleportPlayer(mission.start.position.x, mission.start.position.z, mission.contact);
       return `Mission ${index} "${mission.name}" armed — you're with ${mission.contact}. Objective: ${this.missions.objective?.text ?? ''}`;
     },

@@ -62,7 +62,22 @@ window.__qa = (() => {
       if (`${g.missions.active?.id}:${objIndex()}:${g.missions.progress}` !== startObjective) return sim;
       if (g.missions.state === 'failed') return sim;
     }
-    // route exhausted: settle a few steps at the destination
+    // Route exhausted at the nearest LANE NODE — which can sit outside the objective radius.
+    // Final approach: close the remaining gap straight toward the marker itself.
+    const marker = g.markerTarget ?? g.missionTargetRaw?.();
+    if (marker) {
+      let guard = 0;
+      while (guard++ < 300 && Math.hypot(marker.position.x - px, marker.position.z - pz) > 1.5) {
+        const dx = marker.position.x - px, dz = marker.position.z - pz; const d = Math.hypot(dx, dz);
+        const stepLen = Math.min(d, speed * STEP);
+        px += (dx / d) * stepLen; pz += (dz / d) * stepLen;
+        if (v) { v.group.position.set(px, g.city.roadHeightAt(px, pz), pz); v.speed = speed * 0.5; }
+        else g.player.group.position.set(px, surface(px, pz), pz);
+        g.update(STEP); sim += STEP;
+        if (`${g.missions.active?.id}:${objIndex()}:${g.missions.progress}` !== startObjective) return sim;
+        if (g.missions.state === 'failed') return sim;
+      }
+    }
     for (let k = 0; k < 20; k++) {
       g.update(STEP); sim += STEP;
       if (`${g.missions.active?.id}:${objIndex()}:${g.missions.progress}` !== startObjective) return sim;
@@ -144,11 +159,12 @@ window.__qa = (() => {
       }
       case 'reach': case 'escape': case 'checkpoints': case 'collect': {
         if (o.hidden && !g.riddleRevealed) {
-          // Play the riddle the merciful way: let the hint clock run to the reveal, then navigate the blip.
-          let sim = 0;
-          while (!g.riddleRevealed && sim < 400) { g.update(1); sim += 1; }
+          // Play the riddle the merciful way: walk the hint ladder (clock jumped to each threshold —
+          // the hints still fire through the real updateRiddleHints path) until the reveal blip drops.
+          const hintTimes = (window.__scripts?.[g.missions.active?.id]?.hints ?? []).filter((h) => h.objective === objIndex()).map((h) => h.afterSeconds).sort((a, b) => a - b);
+          for (const at of hintTimes) { g.objectiveElapsed = at + 1; g.update(0.1); }
           if (!g.riddleRevealed) return 'stuck:riddle-never-revealed';
-          note(`riddle revealed after ${Math.round(sim)}s of hints`);
+          note(`riddle revealed via hint ladder (${hintTimes.length} hints)`);
         }
         if (o.conditions?.atNight && !(g.dayNight.hour > 19 || g.dayNight.hour < 5)) { g.dayNight.hour = 22; note('shortcut: set hour 22 for atNight'); }
         if (o.conditions?.blackoutAbove && g.dayNight.blackoutFactor < o.conditions.blackoutAbove) return 'needs:blackout';
@@ -246,8 +262,14 @@ window.__qa = (() => {
       let sim = 0;
       while (best.state.speed > 0.4 && sim < 60) { g.update(STEP); sim += STEP; }
       const noseAt = noseWorld(best);
-      g.player.group.position.set(noseAt.x, surface(noseAt.x, noseAt.z) + 1.2, noseAt.z);
-      if (!g.trains.tryBoard(g.player.group.position)) { finding('fail', 'could not board the dwelling train at its nose'); return 'stuck:board-failed'; }
+      // Boarding gates on the aisle-floor height (terrain + rail top + floor, constants private):
+      // scan plausible offsets above the terrain until the real tryBoard accepts one.
+      let boarded = false;
+      for (const dy of [1.1, 0.6, 1.6, 2.1, 0.1, 2.6, 3.1]) {
+        g.player.group.position.set(noseAt.x, g.city.terrainHeightAt(noseAt.x, noseAt.z) + dy, noseAt.z);
+        if (g.trains.tryBoard(g.player.group.position)) { boarded = true; break; }
+      }
+      if (!boarded) { finding('fail', 'could not board the dwelling train at its nose (all heights)'); return 'stuck:board-failed'; }
     }
     if (drive && !g.trains.driving) { g.trains.takeControls(); if (!g.trains.driving) { finding('fail', 'takeControls failed at the nose cab'); return 'stuck:no-controls'; } }
     // teleport the train's nose arc to the station
@@ -289,16 +311,18 @@ window.__qa = (() => {
       if (!g.activePlane) { finding('fail', 'enterPlane did not take'); return 'stuck:enter-plane'; }
     }
     if (!target) return 'stuck:no-air-target';
-    // teleport-fly: climb the real airframe to the objective point
-    plane.state.grounded = false; plane.state.speed = 40;
-    plane.group.position.set(target.position.x, surface(target.position.x, target.position.z) + 220, target.position.z);
-    step(20, 1 / 20);
+    // teleport-fly: hover the real airframe high over the objective — above the tower line, low
+    // momentum so the settle frames don't fly it into Ponte (sweep 2: crashed, bail found no plane)
+    plane.state.grounded = false; plane.state.speed = 12;
+    plane.group.position.set(target.position.x, surface(target.position.x, target.position.z) + 300, target.position.z);
+    step(6, 1 / 30);
     return 'ok-carrier';
   }
 
   function bailAndLand(tx, tz) {
-    const plane = g.activePlane; if (!plane) return 'stuck:not-flying';
-    g.bailOut(plane);
+    const plane = g.activePlane;
+    if (plane) g.bailOut(plane);
+    else if (!g.airborne) return 'stuck:not-flying';
     if (!g.airborne) { finding('fail', 'bailOut did not enter the skydive'); return 'stuck:no-airborne'; }
     key('Space'); // canopy (real deploy path; inventory topped up by boarding)
     let sim = 0;
@@ -396,32 +420,29 @@ window.__qa = (() => {
 
   // ---- orchestration ----------------------------------------------------------------
 
-  const PREREQ_FLAGS = { 'paper-fire': ['choice:two-fires:solly'], 'long-live-the-king': ['choice:two-fires:solly'], 'catch-them-cutting': ['choice:two-fires:sindi'], 'carcass': ['choice:two-fires:sindi'], 'dark-house': ['act3'], 'the-switch': ['endgame'] };
 
   function prep(missionId) {
     state.mission = missionId; state.lastFail = null;
-    const mission = g.missions.missions.find((entry) => entry.id === missionId);
-    if (!mission) return 'no-such-mission';
-    // synthesize the prerequisite closure
-    const need = [...(mission.prerequisites?.missions ?? [])];
-    while (need.length) {
-      const id = need.pop(); if (g.missions.completed.has(id)) continue;
-      g.missions.completed.add(id);
-      const m2 = g.missions.missions.find((entry) => entry.id === id);
-      for (const flag of m2?.setFlags ?? []) g.story.raise(flag);
-      need.push(...(m2?.prerequisites?.missions ?? []));
-    }
-    for (const flag of mission.prerequisites?.flags ?? []) g.story.raise(flag);
-    for (const flag of PREREQ_FLAGS[missionId] ?? []) g.story.raise(flag);
-    // clean slate for the run itself
-    g.missions.active = undefined; g.missions.state = 'available';
-    g.dialogue.abandon?.(); g.story.abandonOffer?.();
+    const index = g.missions.missions.findIndex((entry) => entry.id === missionId) + 1;
+    if (!index) return 'no-such-mission';
+    g.cheats.invulnerable = true; // the harness verifies mission logic, not AFK survival in traffic
     g.wanted.clear();
-    const s = mission.start.position;
-    g.teleportPlayer(s.x, s.z, missionId);
-    pump(s.x, s.z);
+    if (missionId === 'delivery-run') {
+      // The opener keeps the REAL offer path: walk up, talk, accept — the one dialogue-accept flow test.
+      g.missions.active = undefined; g.missions.state = 'available';
+      g.dialogue.abandon?.(); g.story.abandonOffer?.();
+      const s2 = g.missions.missions[index - 1].start.position;
+      g.teleportPlayer(s2.x, s2.z, missionId);
+      pump(s2.x, s2.z);
+      step(6, 1 / 30);
+      return 'ready';
+    }
+    // Everything else arms through the same console command players/testers use: `mission <n>`.
+    const said = g.consoleHost.missionStart(index);
+    pump(g.player.group.position.x, g.player.group.position.z);
     step(6, 1 / 30);
-    return 'ready';
+    if (g.missions.active?.id !== missionId) { note(`missionStart said: ${said}`); return `not-armed:${g.missions.active?.id ?? 'none'}`; }
+    return 'armed-direct';
   }
 
   function accept() {

@@ -412,8 +412,9 @@ export class PopulationSystem {
 
   /** Put a scripted vehicle on the road toward a specific destination (nearest lane node to it). */
   routeVehicleTo(vehicle: Vehicle, x: number, z: number): boolean {
-    const goal = this.vehiclePlanner.nearest(x, z);
-    const points = this.vehiclePlanner.plan(vehicle.group.position.x, vehicle.group.position.z, goal);
+    // A scripted quarry may cross the whole city (Vusi's block to Kelvin Yard): the per-frame
+    // expansion cap declared such routes unreachable, so this one-off solve gets the citywide cap.
+    const points = this.vehiclePlanner.planFar(vehicle.group.position.x, vehicle.group.position.z, x, z);
     if (!points?.length) return false;
     vehicle.occupied = true;
     if (!this.traffic.includes(vehicle)) this.traffic.push(vehicle);

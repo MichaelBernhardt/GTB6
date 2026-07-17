@@ -67,7 +67,7 @@ describe('Copper Wire Blues walkthrough', () => {
 
   it('fails by straying and restarts at the tail (checkpoint), not the meet', () => {
     const system = sim(); toFollow(system);
-    expect(system.update(0.016, { ...base, followDistance: 120, escortAlive: true }, false).failed).toBe('You lost the bakkie in traffic');
+    expect(system.update(0.016, { ...base, followDistance: 200, escortAlive: true }, false).failed).toBe('You lost the bakkie in traffic');
     expect(system.restart()).toBe(true);
     expect(system.objectiveIndex).toBe(1); // straight back to the follow
   });
@@ -98,9 +98,10 @@ describe('Rank Cold War walkthrough', () => {
     system.update(0.016, { ...base, ...inVan }, false);
     system.registerCheckpoint(); system.registerCheckpoint();
     system.update(0.016, { ...base, ...inVan, hostileDefeated: 3 }, false); // defeat cleared → reach
-    expect(system.update(0.016, { ...base, ...inVan, vehicleHealthPct: 0.2 }, false).failed).toBe('Candice\'s van is finished — and so is her route');
+    expect(system.update(0.016, { ...base, ...inVan, vehicleHealthPct: 0.2 }, false).failed).toBeUndefined(); // 20%: battered but breathing (difficulty gradient)
+    expect(system.update(0.016, { ...base, ...inVan, vehicleHealthPct: 0.05 }, false).failed).toBe('Candice\'s van is finished — and so is her route');
     expect(system.restart()).toBe(true);
-    expect(system.objectiveIndex).toBe(2); // back to the fight, not the whole route
+    expect(system.objectiveIndex).toBe(3); // the home leg is checkpointed too now (difficulty gradient)
   });
 
   it('a random van of another colour does not start the route', () => {

@@ -80,8 +80,12 @@ export function nearestNode(graph: NavGraph, x: number, z: number): number {
  *  (ambient wander goals settle a few hundred at most) but far below the full graph, so a mis-aimed or
  *  cross-island goal costs a bounded slice instead of the whole city. */
 export const MAX_PATH_EXPANSIONS = 4000;
+/** Cap for deliberate cross-city solves (scripted mission routes, spawn-time setup): the whole
+ *  ~40k-node graph. A citywide A* runs once per scripted route, not per frame — the cost is fine;
+ *  the 4000 default exists to stop PER-FRAME replans from scanning the city. */
+export const MAX_PATH_EXPANSIONS_CITYWIDE = 60000;
 
-export function findPath(graph: NavGraph, start: number, goal: number): number[] | undefined {
+export function findPath(graph: NavGraph, start: number, goal: number, maxExpansions = MAX_PATH_EXPANSIONS): number[] | undefined {
   const { nodes, edges } = graph; const count = nodes.length;
   if (start < 0 || goal < 0 || start >= count || goal >= count) return undefined;
   if (start === goal) return [start];
@@ -128,7 +132,7 @@ export function findPath(graph: NavGraph, start: number, goal: number): number[]
     // Hard cap on work: a goal that isn't found within this many settled nodes is treated as unreachable
     // rather than letting one solve scan the whole ~40k-node graph. Ambient wander goals are local, so a real
     // route settles far fewer than this; the cap only bites pathological far/unreachable goals.
-    if (++settledCount > MAX_PATH_EXPANSIONS) return undefined;
+    if (++settledCount > maxExpansions) return undefined;
     const currentNode = nodes[current]; if (!currentNode) continue;
     for (const neighbor of edges[current] ?? []) {
       if (settled[neighbor]) continue;
@@ -324,13 +328,19 @@ export class RoutePlanner {
   }
 
   /** Unbudgeted solve (spawn-time setup). Goal defaults to a random node. */
-  plan(fromX: number, fromZ: number, goal = this.randomGoal()): NavPoint[] | undefined {
+  plan(fromX: number, fromZ: number, goal = this.randomGoal(), maxExpansions?: number): NavPoint[] | undefined {
     const start = nearestNode(this.graph, fromX, fromZ);
     if (start < 0 || goal < 0) return undefined;
     const started = performance.now();
-    const path = findPath(this.graph, start, goal);
+    const path = findPath(this.graph, start, goal, maxExpansions);
     this.solveMs += performance.now() - started; this.solves += 1;
     return path?.map((index) => this.graph.nodes[index]).filter((point): point is NavPoint => Boolean(point));
+  }
+
+  /** Deliberate cross-city solve for scripted mission routes: one-off, so the citywide cap is safe.
+   *  Per-frame traffic replans must keep using plan()/tryPlan() with the local cap. */
+  planFar(fromX: number, fromZ: number, toX: number, toZ: number): NavPoint[] | undefined {
+    return this.plan(fromX, fromZ, nearestNode(this.graph, toX, toZ), MAX_PATH_EXPANSIONS_CITYWIDE);
   }
 
   /** Budgeted solve for per-frame replans; returns undefined without solving once the frame budget is spent. */
