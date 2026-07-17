@@ -347,7 +347,7 @@ export class Game {
     if (this.online) return this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const }));
     return [
       ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
-      ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : []),
+      ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true }] : []),
       ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : []),
     ];
   }
@@ -1799,9 +1799,11 @@ export class Game {
   }
 
   private buildMarker(): void {
+    // A beacon you can orient by from streets away — the old 11u x 12%-opacity beam was invisible.
     const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 8, 28), new THREE.MeshBasicMaterial({ color: 0xf5c451 })); ring.rotation.x = Math.PI / 2;
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.8, 11, 18, 1, true), new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.12, side: THREE.DoubleSide })); beam.position.y = 5.5;
-    this.marker.add(ring, beam); this.scene.add(this.marker);
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.9, 130, 12, 1, true), new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false })); core.position.y = 65;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.8, 130, 18, 1, true), new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false })); beam.position.y = 65;
+    this.marker.add(ring, core, beam); this.scene.add(this.marker);
   }
 
   private updateMarker(dt: number): void {

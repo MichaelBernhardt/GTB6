@@ -16,12 +16,11 @@ describe('MissionSystem', () => {
     expect(system.completed.has('delivery-run')).toBe(true);
   });
 
-  it('fails a timed objective and can restart', () => {
+  it('leaves the opener untimed — its old 210s limit was impossible for the 3630u route', () => {
     const system = new MissionSystem(); system.start('delivery-run');
     system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'compact', vehicleColor: 0xf1c232 }, false);
-    expect(system.update(211, snapshot, false).failed).toBe('Time expired');
-    expect(system.restart()).toBe(true);
-    expect(system.objectiveIndex).toBe(0);
+    expect(system.objective?.timeLimit).toBeUndefined();
+    expect(system.update(600, snapshot, false).failed).toBeUndefined(); // ten idle minutes cannot fail it
   });
 
   it('completes the CBD dilemma with one authored choice', () => {
