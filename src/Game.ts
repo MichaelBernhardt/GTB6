@@ -254,6 +254,7 @@ export class Game {
     try {
       await Promise.all([retry ? this.player.retryCharacter() : this.player.loadCharacter(), loadTreeLibrary(), loadTaxiLibrary()]);
       if (attempt !== this.assetLoadAttempt) return;
+      this.city.installTreeAssets();
       this.requiredAssetsReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
     } catch (error) {
       if (attempt !== this.assetLoadAttempt) return;

@@ -603,6 +603,8 @@ export class City {
   private waterMood?: { hour: number; sun: THREE.Vector3; color: THREE.Color };
   private architecture: BuildingArchitecture;
   private infrastructure: UrbanInfrastructure;
+  private parkTreeSites: Array<{ x: number; z: number; seed: number }> = [];
+  private treeAssetsInstalled = false;
 
   constructor(scene: THREE.Scene, quality: BaseQuality = 'medium') {
     this.group.name = 'Joburg'; scene.add(this.group);
@@ -624,6 +626,18 @@ export class City {
     );
     mergeStaticGeometry(this.group, MERGE_CHUNK_SIZE, this.chunkStore); // water is built after the merge: its meshes stay live for per-frame animation
     this.setWaterQuality(quality);
+  }
+
+  /** Finish tree-dependent city construction only after loadTreeLibrary() validates the required GLB.
+   *  Park trees join the normal merged world chunks; roadside trees retain per-variant instancing. */
+  installTreeAssets(): void {
+    if (this.treeAssetsInstalled) return;
+    const parks = new THREE.Group(); parks.name = 'Authored park trees'; this.group.add(parks);
+    for (const site of this.parkTreeSites) this.addParkTree(site.x, site.z, site.seed, parks);
+    mergeStaticGeometry(parks, MERGE_CHUNK_SIZE, this.chunkStore);
+    parks.removeFromParent();
+    this.infrastructure.installTreeAssets();
+    this.treeAssetsInstalled = true;
   }
 
   update(dt: number): void {
@@ -1780,7 +1794,7 @@ export class City {
       if (!pointInPolygon(polygon, x, z) || this.inWater(x, z)) continue;
       if (this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2) || distanceToRailwayCorridor(x, z) < 0.7) continue; // parks can straddle the rails: no trunks on the ballast
       if (terrainHeightAt(x, z) > SNOW_Y * 0.55) continue; // no leafy park trees above the range's rock line
-      this.addParkTree(x, z, attempt + Math.round(polygon.cx));
+      this.parkTreeSites.push({ x, z, seed: attempt + Math.round(polygon.cx) });
       planted++;
     }
   }
@@ -2092,7 +2106,7 @@ export class City {
     for (const px of [-3, 3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 8), new THREE.MeshStandardMaterial({ color: 0x343b3d, metalness: 0.7 })); post.position.set(x + px, h + 1.5, z + d / 2); this.target.add(post); }
   }
 
-  private addParkTree(x: number, z: number, seed: number): void {
+  private addParkTree(x: number, z: number, seed: number, target: THREE.Group): void {
     if (this.isOnRoad(x, z, 2.4)) return; // parks can overlap roads: no trunks on the tar
     const species = PARK_TREE_SPECIES[Math.abs(Math.trunc(seed)) % PARK_TREE_SPECIES.length]!;
     const built = buildModel(species, seed);
@@ -2104,7 +2118,7 @@ export class City {
     );
     built.group.position.set(x, terrainHeightAt(x, z), z); // sit on the terrain, not the flat plane
     built.group.rotation.y = seed * 2.399963229728653;
-    this.group.add(built.group); // the constructor's static merge bakes these into the normal world chunks
+    target.add(built.group);
   }
 
   // ---- Airport (see world/Airport.ts) ----------------------------------------

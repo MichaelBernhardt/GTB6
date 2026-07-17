@@ -107,6 +107,8 @@ export class UrbanInfrastructure {
   private elapsed = 0;
   private bulbMaterial?: THREE.MeshBasicMaterial;
   private powered = true;
+  private treeSites: RoadPoint[] = [];
+  private treeAssetsInstalled = false;
 
   constructor(
     parent: THREE.Group,
@@ -199,6 +201,17 @@ export class UrbanInfrastructure {
     this.bulbMaterial?.color.setHex(BULB_COLOR).multiplyScalar(0.35 + factor * 2.85);
   }
 
+  /** Add the required Blender-authored roadside trees after the shared GLB passes its startup gate.
+   *  Everything else can construct immediately, leaving the normal retry UI alive if asset loading fails. */
+  installTreeAssets(): void {
+    if (this.treeAssetsInstalled) return;
+    const jacarandas = this.treeSites.filter((_, index) => index % 2 === 0);
+    const broadleaf = this.treeSites.filter((_, index) => index % 2 !== 0);
+    this.buildBroadleafTrees(broadleaf);
+    this.buildJacarandas(jacarandas);
+    this.treeAssetsInstalled = true;
+  }
+
   private buildVegetation(): void {
     // Verge planting: trees/shrubs stand 2.1u OUTWARD of the roadside line, clear of both the sidewalk walk
     // line peds actually route along and of junction lane chords. The generated map has ~15k roadside
@@ -208,10 +221,7 @@ export class UrbanInfrastructure {
       .filter((point, index) => index % 6 === 0 && point.width >= 9)
       .map((point) => ({ x: point.x - point.inwardX * 2.1, z: point.z - point.inwardZ * 2.1 }))
       .filter((point) => !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 2.4));
-    const jacarandas = sites.filter((_, index) => index % 2 === 0);
-    const broadleaf = sites.filter((_, index) => index % 2 !== 0);
-    this.buildBroadleafTrees(broadleaf);
-    this.buildJacarandas(jacarandas);
+    this.treeSites = sites;
 
     const shrubSites = sites.filter((_, index) => index % 3 === 0);
     const shrubGeometry = new THREE.SphereGeometry(1, 16, 10);
