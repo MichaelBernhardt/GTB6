@@ -2,7 +2,7 @@ import { MAP_WORLD_SIZE } from '../world/mapData';
 import type { RoadPoint } from '../world/City';
 
 export interface MapPoint { x: number; z: number; }
-export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; }
+export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; objective?: boolean; }
 
 /** Units-to-pixels factors, ordered widest view to tightest, over the 240px minimap canvas.
  *  'City' is derived from the map footprint so the widest level always frames the whole generated
@@ -70,6 +70,7 @@ export class MinimapView {
     ctx.strokeStyle = '#c8c4ad'; ctx.lineWidth = Math.max(1.2, 7 * scale);
     for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (let index = 1; index < road.length; index++) { const point = road[index]!; ctx.lineTo(point.x * scale, point.z * scale); } ctx.stroke(); }
     for (const marker of markers) {
+      if (marker.objective) continue; // drawn after restore in screen space, so it can pin to the edge
       ctx.save(); ctx.translate(marker.x * scale, marker.z * scale); ctx.rotate(counter);
       ctx.fillStyle = marker.color; ctx.strokeStyle = '#111817'; ctx.lineWidth = 2; ctx.beginPath();
       if (marker.shape === 'diamond') { ctx.moveTo(0, -6.5); ctx.lineTo(6.5, 0); ctx.lineTo(0, 6.5); ctx.lineTo(-6.5, 0); ctx.closePath(); }
@@ -80,6 +81,21 @@ export class MinimapView {
     ctx.fillStyle = '#56b7d7'; for (const unit of police) { ctx.save(); ctx.translate(unit.x * scale, unit.z * scale); ctx.rotate(counter); ctx.fillRect(-4, -4, 8, 8); ctx.restore(); }
     ctx.fillStyle = '#e3533f'; for (const foe of hostiles) { ctx.beginPath(); ctx.arc(foe.x * scale, foe.z * scale, 4, 0, Math.PI * 2); ctx.fill(); }
     ctx.restore();
+    // The mission objective NEVER disappears: in range it's a big ringed diamond at its spot; out of
+    // range it pins to the minimap edge in its true direction with an outward arrowhead.
+    for (const marker of markers) {
+      if (!marker.objective) continue;
+      const angle = heading - Math.PI; const cosA = Math.cos(angle); const sinA = Math.sin(angle);
+      const dx = (marker.x - x) * scale; const dz = (marker.z - z) * scale;
+      let sx = dx * cosA - dz * sinA; let sy = dx * sinA + dz * cosA;
+      const range = Math.hypot(sx, sy); const maxRange = size / 2 - 16; const pinned = range > maxRange;
+      if (pinned) { sx *= maxRange / range; sy *= maxRange / range; }
+      ctx.save(); ctx.translate(size / 2 + sx, size / 2 + sy);
+      ctx.fillStyle = marker.color; ctx.strokeStyle = '#f6f1de'; ctx.lineWidth = 2.5; ctx.beginPath();
+      ctx.moveTo(0, -8); ctx.lineTo(8, 0); ctx.lineTo(0, 8); ctx.lineTo(-8, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+      if (pinned) { ctx.rotate(Math.atan2(sy, sx) + Math.PI / 2); ctx.fillStyle = '#f6f1de'; ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(5.5, -8); ctx.lineTo(-5.5, -8); ctx.closePath(); ctx.fill(); }
+      ctx.restore();
+    }
     ctx.save(); ctx.translate(size / 2, size / 2); ctx.fillStyle = '#f7c843'; ctx.strokeStyle = '#101615'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(-8, 10); ctx.lineTo(0, 6); ctx.lineTo(8, 10); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
     // Compass rose: an outward arrowhead + upright 'N' riding the minimap edge, tracking true north as the map rotates.
     const phi = minimapNorthAngle(heading); const dirX = Math.sin(phi); const dirY = -Math.cos(phi); const ring = size / 2 - 22;

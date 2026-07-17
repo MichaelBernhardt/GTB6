@@ -373,7 +373,7 @@ export class Game {
     if (this.online) return this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const }));
     return [
       ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
-      ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542' }] : []),
+      ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true }] : []),
       ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : []),
     ];
   }
@@ -1476,7 +1476,7 @@ export class Game {
     this.updateContactPresence(dt);
     const objective = this.missions.objective;
     if (this.missions.state === 'active' && objective?.vehicleColor) {
-      const requiredVehicle = this.population.vehicles.find((vehicle) => vehicle.spec.color === objective.vehicleColor);
+      const requiredVehicle = this.findMissionVehicle(undefined, objective.vehicleColor);
       if (requiredVehicle?.disabled) { this.processMissionUpdate(this.missions.fail(`${requiredVehicle.spec.name} was destroyed`)); return; }
     }
     this.updateQuarry();
@@ -1592,7 +1592,7 @@ export class Game {
   /** Snapshot for the pure mission engine: combat/vehicle facts plus story context and any script overlay. */
   private buildMissionSnapshot(focus: THREE.Vector3): GameSnapshot {
     const objective = this.missions.objective;
-    const requiredVehicle = objective?.vehicleColor ? this.population.vehicles.find((vehicle) => vehicle.spec.color === objective.vehicleColor) : undefined;
+    const requiredVehicle = objective?.vehicleColor ? this.findMissionVehicle(undefined, objective.vehicleColor) : undefined;
     const missionVehicle = requiredVehicle ?? this.activeVehicle;
     return {
       playerPosition: focus, inVehicle: Boolean(this.activeVehicle), vehicleKind: this.activeVehicle?.spec.kind, vehicleColor: this.activeVehicle?.spec.color,
@@ -1966,7 +1966,7 @@ export class Game {
     this.deliveryIndex = 0; this.collectedItem = false; this.hostileDefeated = 0; this.previousObjective = ''; this.missionContext = {};
     const script = MISSION_SCRIPTS[this.missions.active?.id ?? ''];
     if (script?.vehicle) {
-      const vehicle = this.population.vehicles.find((item) => item.spec.color === script.vehicle!.color);
+      const vehicle = this.findMissionVehicle(undefined, script.vehicle.color);
       if (vehicle) {
         vehicle.restore();
         vehicle.heading = script.vehicle.spot.heading;
@@ -1992,6 +1992,13 @@ export class Game {
     if (this.story.diaryComplete) { this.economy.earn(DIARY_STASH_REWARD); this.ui.notify('The planner\'s stash', `${DIARY_STASH_NOTE} +R${DIARY_STASH_REWARD.toLocaleString()}`); }
     this.persist();
     return true;
+  }
+
+  /** Mission vehicles resolve to parked/scripted cars first — ambient traffic that happens to share
+   *  the paint colour must never steal the blip or the destroyed-check (owner playtest, Hot Copper). */
+  private findMissionVehicle(kind: string | undefined, color: number | undefined): Vehicle | undefined {
+    const matches = this.population.vehicles.filter((item) => (!kind || item.spec.kind === kind) && (!color || item.spec.color === color));
+    return matches.find((item) => !this.population.traffic.includes(item)) ?? matches[0];
   }
 
   /** The active objective's real-world target, blip or not — hidden riddles still need reach checks. */
@@ -2027,7 +2034,7 @@ export class Game {
       return undefined;
     }
     if (objective?.kind === 'enter-kind') {
-      const vehicle = this.population.vehicles.find((item) => item.spec.kind === objective.vehicleKind && (!objective.vehicleColor || item.spec.color === objective.vehicleColor));
+      const vehicle = this.findMissionVehicle(objective.vehicleKind, objective.vehicleColor);
       if (vehicle) return { position: vehicle.group.position, label: vehicle.spec.name, color: '#65d8ff' };
     }
     return undefined;
@@ -2081,8 +2088,10 @@ export class Game {
 
   private buildMarker(): void {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 8, 28), new THREE.MeshBasicMaterial({ color: 0xf5c451 })); ring.rotation.x = Math.PI / 2;
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.8, 11, 18, 1, true), new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.12, side: THREE.DoubleSide })); beam.position.y = 5.5;
-    this.marker.add(ring, beam); this.scene.add(this.marker);
+    // A beacon you can orient by from streets away — the old 11u x 12%-opacity beam was invisible.
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.9, 130, 12, 1, true), new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false })); core.position.y = 65;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.8, 130, 18, 1, true), new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false })); beam.position.y = 65;
+    this.marker.add(ring, core, beam); this.scene.add(this.marker);
   }
 
   private updateMarker(dt: number): void {

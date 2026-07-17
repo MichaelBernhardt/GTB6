@@ -404,7 +404,7 @@ export class PopulationSystem {
 
   /** Story missions: a scripted vehicle parked at a kerb, driven only once routed somewhere. */
   spawnScriptVehicle(kind: VehicleKind, x: number, z: number, heading: number, color?: number): Vehicle {
-    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), color);
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.surfaceHeightAt(x, z), z), color);
     vehicle.heading = heading; vehicle.group.rotation.y = heading;
     this.vehicles.push(vehicle);
     return vehicle;
@@ -497,7 +497,9 @@ export class PopulationSystem {
     // Parked vehicles come from the generated-map placements: kerbside spots around the CBD spawn
     // blocks (plus a Sandton toy), already vetted against roads and each other.
     for (const spot of PARKED_VEHICLES) {
-      const vehicle = new Vehicle(this.scene, spot.kind as VehicleKind, new THREE.Vector3(spot.x, 0, spot.z), spot.color);
+      // Parked cars never run the driving update that grounds moving traffic — spawn at the surface,
+      // not y=0 (terrain relief raised the CBD ~18u and buried the whole kerbside fleet).
+      const vehicle = new Vehicle(this.scene, spot.kind as VehicleKind, new THREE.Vector3(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z), spot.color);
       vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([spot.x, spot.z]);
     }

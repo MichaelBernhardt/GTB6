@@ -1,4 +1,4 @@
-/* eslint-env browser */
+/* global window, KeyboardEvent */
 /**
  * In-page mission QA core (installed by mission-harness.py, driven per-objective from Python).
  *
