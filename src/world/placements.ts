@@ -282,11 +282,13 @@ export const DELIVERY_STOPS: MapPt[] = [
 
 /** Bra Vusi (Hot Copper): Pothole Street block. */
 export const VUSI_START = walkSpot('Pothole Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z - 75 * P }, 3, 5);
-/** Braamfontein lock-up: roadside near the district centre. */
-export const LOCKUP_SPOT = walkSpotNear({ x: braamfontein.x - 30 * P, z: braamfontein.z + 20 * P }, 4.5, 6);
+/** Vusi's lock-up: a CBD-edge garage a short drive from the GTI (was Braamfontein, ~1.8km — the
+ *  arc is 1:1 Joburg and must not be sized to the map; act 1 clusters inside the CBD). */
+export const LOCKUP_SPOT = walkSpot('Anderson Street', { x: CBD_CENTER.x - 55 * P, z: CBD_CENTER.z + 30 * P }, 4.5, 6);
 
-/** Candice (Rank Business): Jan Smuts Avenue at Zoo Lake. */
-export const CANDICE_START = walkSpot('Jan Smuts Avenue', zooLakeCenter, 3, 5);
+/** Candice (Rank Business): a CBD taxi rank (was Zoo Lake, far north — re-anchored local so the
+ *  permit run and rank war fit inside one CBD drive). */
+export const CANDICE_START = walkSpot('Commissioner Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 35 * P }, 3, 5);
 /** The stolen-permit taxi terminal: Wemmer Jubilee Road, south of the CBD (industrial belt). */
 const terminalSpot = bestKerbSpot({ name: 'Wemmer Jubilee Road', near: { x: CBD_CENTER.x + 20 * P, z: CBD_CENTER.z + 120 * P }, clearance: 6, ownRadius: 12, minEdge: 5 });
 export const TERMINAL_SPOT: MapPt = { x: terminalSpot.x, z: terminalSpot.z };
@@ -296,8 +298,8 @@ export const PERMIT_SPOT: MapPt = {
 };
 /** Escape marker: back on Albertina Sisulu, north-west of the terminal. */
 export const ESCAPE_SPOT = walkSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 120 * P, z: CBD_CENTER.z - 40 * P }, 3, 5);
-/** Braai kiosk on the Zoo Lake shore. */
-export const KIOSK_SPOT = walkSpotNear(zooLakeCenter, 3.4, 5);
+/** Candice's braai kiosk beside her CBD rank (was the Zoo Lake shore). */
+export const KIOSK_SPOT = walkSpotNear({ x: CBD_CENTER.x - 50 * P, z: CBD_CENTER.z + 42 * P }, 3.4, 5);
 
 /** Rank enforcer spawn spots around the terminal. */
 export const HOSTILE_SPOTS: MapPt[] = [
@@ -318,9 +320,10 @@ const stationPoint = (name: string): MapPt => {
 
 /** Oupa Jakes holds court outside Park Station, where he announced trains for thirty years. */
 export const PARK_STATION_SPOT = walkSpotNear(stationPoint('Johannesburg Park Station'), 3, 5);
-/** Sandton Station: where Portia's nephew abandoned the rent bag. */
-export const SANDTON_PLATFORM = stationPoint('Sandton Station');
-export const SANDTON_BAG_SPOT = walkSpotNear(SANDTON_PLATFORM, 3, 5);
+/** Where Portia's nephew abandoned the rent bag — Park Station, the central hub one short hop
+ *  away (was Sandton, ~13km north: an absurd act-1 journey). Name kept generic in the copy. */
+export const RENT_BAG_PLATFORM = stationPoint('Johannesburg Park Station');
+export const RENT_BAG_SPOT = walkSpotNear({ x: RENT_BAG_PLATFORM.x + 8, z: RENT_BAG_PLATFORM.z + 6 }, 3, 5);
 
 /** Riddle chain targets — real named streets with in-world street signs (no map markers). */
 export const RIDDLE_SPOTS: MapPt[] = [
@@ -336,13 +339,16 @@ export const KELVIN_GATE_SPOT: MapPt = { x: kelvinKerb.x, z: kelvinKerb.z };
 
 /** The cable buyer's bakkie idles up the block from Bra Vusi (Copper Wire Blues tail). */
 export const QUARRY_SPAWN = kerbVehicleSpot('Pothole Street', { x: VUSI_START.x + 8 * P, z: VUSI_START.z });
+/** The buyer's LOCAL cable yard — a CBD-edge lot a short tail away (the cartel's real Kelvin Yard
+ *  in Crown is discovered later, in Act 2's Audition; act 1 stays inside the CBD). */
+export const CABLE_YARD_SPOT = walkSpotNear({ x: CBD_CENTER.x + 70 * P, z: CBD_CENTER.z - 95 * P }, 4, 6);
 
-/** Candice's bottle-green route van at the Zoo Lake rank. */
-export const CANDICE_VAN_SPOT = kerbVehicleSpot('Jan Smuts Avenue', { x: zooLakeCenter.x + 6 * P, z: zooLakeCenter.z });
-/** The two contested ranks on her route (Rank Cold War). */
+/** Candice's bottle-green route van at her CBD rank. */
+export const CANDICE_VAN_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z + 40 * P });
+/** The two contested ranks on her route — both CBD-local (were Hillbrow/Newtown district centres). */
 export const RANK_STOPS: MapPt[] = [
-  walkSpotNear({ x: hillbrow.x + 10 * P, z: hillbrow.z - 8 * P }, 3.4, 5),
-  walkSpotNear({ x: newtown.x - 14 * P, z: newtown.z + 10 * P }, 3.4, 5),
+  walkSpot('Risk-It Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z + 55 * P }, 3.4, 5),
+  walkSpot('Anderson Street', { x: CBD_CENTER.x - 60 * P, z: CBD_CENTER.z + 10 * P }, 3.4, 5),
 ];
 
 // ---- Story arc (Acts 2-3): the cartel, the engineer, the sky, the yard ----------------

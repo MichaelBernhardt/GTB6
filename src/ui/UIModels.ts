@@ -10,6 +10,7 @@ export interface CourierTelemetry { text: string; available: boolean; }
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; taxi?: TaxiTelemetry; courier?: CourierTelemetry; radio?: string; }
 export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; failed?: string; }
 export interface DialogueView { speaker: string; text: string; more: boolean; offer?: boolean; }
+export interface MissionPassedView { name: string; items: string[] }
 
 /** Advance-key affordance on the dialogue card. A job offer must end on an explicit accept — players
  *  used to instant E-to-start missions read a bare "DONE" as already-hired and wander off (which
@@ -39,6 +40,7 @@ export interface HudState {
   vehicle?: VehicleTelemetry;
   objective?: ObjectiveView;
   dialogue?: DialogueView; // face-to-face exchange card: E advances, walking away abandons
+  missionPassed?: MissionPassedView; // GTA-style completion celebration with itemized rewards
   fps: number;
   loopTotalPct: number; // whole game-loop CPU cost as a % of the 60fps frame budget (100% = one 60fps frame)
   loopSample: { name: string; pct: number }[]; // this frame's raw per-phase split in stable order — one column of the scrolling chart

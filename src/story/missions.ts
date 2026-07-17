@@ -4,7 +4,7 @@ import type { WorldTarget } from '../types';
 import {
   CANDICE_START, CON_HILL_SPOT, ESCAPE_SPOT, EVIDENCE_VAN_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
   CROWN_STATION, KIOSK_SPOT, LOCKUP_SPOT, LUGHAWE_DROP, LUGHAWE_HALT, PADSTAL_SPOT, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
-  PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RIDDLE_SPOTS, SAFEHOUSE_SITE, SANDTON_BAG_SPOT, SANDTON_PLATFORM, SINDI_START, SIPHO_START,
+  CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_PLATFORM, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
   SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START,
 } from '../world/placements';
 import { CANDICE_VAN_COLOR, TANKER_COLOR } from './scripts';
@@ -67,8 +67,8 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['delivery-run'] },
     intro: 'My nephew fell asleep on the Sandton train and walked off without my rent bag. Ride out there and fetch it, boet — before someone honest finds it.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
-      { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Sandton Station' }, text: 'Ride the rails to Sandton Station', target: spot(SANDTON_PLATFORM, 'Sandton Station') },
-      { kind: 'collect', text: 'Fetch the rent bag from the vetkoek stand', target: spot(SANDTON_BAG_SPOT, 'Rent bag'), checkpoint: true },
+      { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Johannesburg Park Station' }, text: 'Ride one stop to Park Station', target: spot(RENT_BAG_PLATFORM, 'Park Station') },
+      { kind: 'collect', text: 'Fetch the rent bag from the vetkoek stand', target: spot(RENT_BAG_SPOT, 'Rent bag'), checkpoint: true },
       { kind: 'reach', text: 'Bring the bag back to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
   },
@@ -82,7 +82,7 @@ export const MISSIONS: MissionDefinition[] = [
         { kind: 'strayed', value: 150, reason: 'You lost the bakkie in traffic' },
         { kind: 'escort-down', reason: 'The bakkie is wrecked — no yard today' },
       ] },
-      { kind: 'reach', text: 'Get eyes on the yard gate', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), checkpoint: true },
+      { kind: 'reach', text: 'Get eyes on the buyer\'s cable yard', target: spot(CABLE_YARD_SPOT, 'The cable yard'), checkpoint: true },
     ],
   },
   {

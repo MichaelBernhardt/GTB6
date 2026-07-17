@@ -85,6 +85,11 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
             elif status == 'needs:blackout':
                 page.evaluate("() => { const q = window.__qa; q.g.dayNight.hour = 22; if (!q.g.loadShedding.active) q.g.applyEskom(q.g.loadShedding.force()); q.step(40, 0.2); return 0; }")
                 status = 'carrier'
+        # low-agency cap (owner): no follow may hold the player longer than ~90s
+        if audit.get('kind') == 'follow':
+            follow_sim = page.evaluate("() => window.__qa.state.simSeconds ?? null")
+            if follow_sim and follow_sim > 90:
+                all_findings.append({'mission': mission, 'objective': info['idx'], 'severity': 'fail', 'what': f'follow objective held the player {round(follow_sim)}s — cap is 90s'})
         # empirical timer check: sim seconds actually used vs the objective clock
         sim_used = page.evaluate("() => window.__qa.state.simSeconds ?? null")
         timer = audit.get('timer')
@@ -110,6 +115,12 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
     print(f'    -> {"COMPLETE" if done else "DID NOT COMPLETE"}', flush=True)
     if not done:
         all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': 'mission never completed under the harness'})
+    else:
+        # reward emission (owner: no silent payouts) — every paying mission raises the MISSION PASSED card
+        card = page.evaluate("() => Boolean(window.__qa.g.missionPassedView)")
+        base = page.evaluate(f"() => window.__qa.g.missions.missions.find(m => m.id === '{mission}')?.reward ?? 0")
+        if base > 0 and not card:
+            all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': 'completion paid a reward but showed no MISSION PASSED card'})
 
 
 def run(port: int, out: Path, missions: list[str]) -> int:

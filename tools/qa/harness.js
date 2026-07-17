@@ -125,6 +125,15 @@ window.__qa = (() => {
       if (!pts?.length) finding('fail', `no road route from player to "${destination.label}"`);
       else {
         result.roadDistance = Math.round(routeLength(pts));
+        // Distance cap (owner: missions must not be sized to the 1:1 map). Default <=1200u; a declared
+        // journey (the-wrong-train drive, Crosswinds flight) may reach further, hard cap 2000u; act 1
+        // may never declare a journey.
+        const journeys = window.__scripts?.[g.missions.active?.id]?.journeys ?? [];
+        const isJourney = journeys.includes(objIndex());
+        const isAct1 = (g.missions.active?.act === 'hustle');
+        if (result.roadDistance > 2000) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u — over the 2000u hard cap; re-anchor local`);
+        else if (result.roadDistance > 1200 && !isJourney) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u (>1200u) and not a declared journey — re-anchor near the contact`);
+        else if (result.roadDistance > 1200 && isAct1) finding('fail', `act-1 objective routes ${result.roadDistance}u — act 1 allows no long journeys`);
         if (o.timeLimit) {
           // Bumbling pace (owner): 50% of cruise, with a 1.25x wrong-turn detour on the route.
           const bumbleSpeed = (g.activeVehicle?.spec.maxSpeed ?? 34) * 0.5;
@@ -223,10 +232,11 @@ window.__qa = (() => {
       case 'follow': {
         if (!g.quarry) return 'stuck:no-quarry';
         let sim = 0;
+        state.simSeconds = 0;
         while (sim < 900 && !advanced() && g.missions.state === 'active') {
           const qp = g.quarry.group.position;
           g.player.group.position.set(qp.x + 12, surface(qp.x + 12, qp.z), qp.z + 6); // shadow the bakkie
-          g.update(STEP); sim += STEP;
+          g.update(STEP); sim += STEP; state.simSeconds = sim;
         }
         if (g.missions.state === 'failed') return 'failed:' + state.lastFail;
         return advanced() ? 'ok' : 'stuck:quarry-never-arrived';
@@ -261,15 +271,25 @@ window.__qa = (() => {
       // wait for a dwell, then board at the nose for real
       let sim = 0;
       while (best.state.speed > 0.4 && sim < 60) { g.update(STEP); sim += STEP; }
-      const noseAt = noseWorld(best);
-      // Boarding gates on the aisle-floor height (terrain + rail top + floor, constants private):
-      // scan plausible offsets above the terrain until the real tryBoard accepts one.
+      // Every vertex within the consist's span is on the track; try boarding from each x a few heights.
       let boarded = false;
-      for (const dy of [1.1, 0.6, 1.6, 2.1, 0.1, 2.6, 3.1]) {
-        g.player.group.position.set(noseAt.x, g.city.terrainHeightAt(noseAt.x, noseAt.z) + dy, noseAt.z);
-        if (g.trains.tryBoard(g.player.group.position)) { boarded = true; break; }
+      const cumEnd = best.cum[best.cum.length - 1];
+      for (let vi = 0; vi < best.points.length && !boarded; vi++) {
+        const arc = best.cum[vi];
+        if (arc < best.state.s - best.trainLength - 2 || arc > best.state.s + 2) continue; // within the consist span
+        const pt = best.points[vi];
+        for (const dy of [1.1, 0.6, 1.6, 0.1, 2.1, 2.6]) {
+          g.player.group.position.set(pt.x, g.city.terrainHeightAt(pt.x, pt.z) + dy, pt.z);
+          if (g.trains.tryBoard(g.player.group.position)) { boarded = true; break; }
+        }
       }
-      if (!boarded) { finding('fail', 'could not board the dwelling train at its nose (all heights)'); return 'stuck:board-failed'; }
+      if (!boarded && cumEnd) { // last resort: sweep the whole line finely
+        for (let arc = 0; arc < cumEnd && !boarded; arc += 3) {
+          const p = arcPoint(best, arc);
+          for (const dy of [1.1, 0.6, 1.6]) { g.player.group.position.set(p.x, g.city.terrainHeightAt(p.x, p.z) + dy, p.z); if (g.trains.tryBoard(g.player.group.position)) { boarded = true; break; } }
+        }
+      }
+      if (!boarded) { finding('fail', 'could not board the dwelling train anywhere along its span'); return 'stuck:board-failed'; }
     }
     if (drive && !g.trains.driving) { g.trains.takeControls(); if (!g.trains.driving) { finding('fail', 'takeControls failed at the nose cab'); return 'stuck:no-controls'; } }
     // teleport the train's nose arc to the station
@@ -280,7 +300,6 @@ window.__qa = (() => {
     note(`train teleported to arc ${Math.round(arc)} near ${target.label} (station reads: ${g.trains.currentStationName ?? 'none'})`);
     return 'ok-carrier';
   }
-  function noseWorld(train) { const s = train.state.s; return arcPoint(train, s); }
   function arcPoint(train, s) {
     const cum = train.cum; const pts = train.points;
     let i = 1; while (i < cum.length && cum[i] < s) i++;

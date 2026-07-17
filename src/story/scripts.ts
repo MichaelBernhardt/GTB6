@@ -1,8 +1,9 @@
+import type { WeaponId } from '../config';
 import type { MapPt } from '../world/mapData';
 import type { PlacedSite } from '../world/placements';
 import {
   CANDICE_VAN_SPOT, DELIVERY_STOPS, EVIDENCE_VAN_SPOT, GENNY_ROUND_STOPS, GTI_SPOT, HOSTILE_SPOTS,
-  KELVIN_GATE_SPOT, PIER_SPOT, PORTIA_CAR_SPOT, QUARRY_SPAWN, RANK_STOPS, STASH_SPOTS, SUBSTATION_SPOT, TANKER_SPOT,
+  CABLE_YARD_SPOT, KELVIN_GATE_SPOT, PIER_SPOT, PORTIA_CAR_SPOT, QUARRY_SPAWN, RANK_STOPS, STASH_SPOTS, SUBSTATION_SPOT, TANKER_SPOT,
 } from '../world/placements';
 
 export const CANDICE_VAN_COLOR = 0x2e8b57; // bottle-green, matches her utility streetwear
@@ -13,8 +14,10 @@ export const EVIDENCE_VAN_COLOR = 0xdfe3e6; // Sindi's boxy white evidence van
 /** Hostile crew spawned when the mission enters an objective (or registers a specific checkpoint stop). */
 export interface MissionWave { objective: number; checkpoint?: number; spots: MapPt[] }
 /** A scripted vehicle: parked at `spawn` from `spawnObjective`; optionally drives off at `departObjective`
- *  toward `destination`; optionally set alight when `igniteObjective` begins (Paper Fire). */
-export interface MissionQuarry { spawnObjective: number; departObjective?: number; kind: string; color: number; spawn: PlacedSite; destination?: MapPt; arriveRadius?: number; igniteObjective?: number }
+ *  toward `destination`; optionally set alight when `igniteObjective` begins (Paper Fire).
+ *  `followCapSeconds`: after that much successful tailing the follow objective completes early with
+ *  `followCapNote` — nobody tails a bakkie across a whole city for fun (owner playtest). */
+export interface MissionQuarry { spawnObjective: number; departObjective?: number; kind: string; color: number; spawn: PlacedSite; destination?: MapPt; arriveRadius?: number; igniteObjective?: number; followCapSeconds?: number; followCapNote?: { title: string; detail: string } }
 /** Showroom-style alarm: evaluated once when the objective begins — screams if the grid is up, dead if not. */
 export interface MissionAlarm { objective: number; level: number; title: string; detail: string; silentTitle: string; silentDetail: string }
 
@@ -45,6 +48,12 @@ export interface MissionScript {
   depot?: boolean;
   /** Grid Diary page granted when the mission completes. */
   diaryPage?: number;
+  /** Felt payback beyond the base cash reward — a keepable/unlock most missions, celebrated on the
+   *  MISSION PASSED card (owner: 'give them something in return for the work'). */
+  rewards?: { weapon?: WeaponId; grantVehicle?: { kind: string; color: number }; standing?: number; note?: string };
+  /** A deliberately long objective (the journey IS the mission): exempt from the ~1200u route cap.
+   *  Rare and earned — never in act 1 (owner). */
+  journeys?: number[];
 }
 
 const around = (point: MapPt, offsets: Array<[number, number]>): MapPt[] => offsets.map(([dx, dz]) => ({ x: point.x + dx, z: point.z + dz }));
@@ -54,6 +63,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   'delivery-run': {
     stops: DELIVERY_STOPS,
     vehicle: { color: 0xf1c232, spot: PORTIA_CAR_SPOT },
+    rewards: { grantVehicle: { kind: 'compact', color: 0xf1c232 }, note: 'Auntie Portia signs the yellow Golf over to you — it\'s in your garage now' },
     forceBlackout: 1, // the opener's thesis, 90 seconds in: the grid dies around the player mid-drive
     radio: [
       { objective: 1, title: 'Auntie Portia', detail: 'Load shedding NOW? There was no shedding on the schedule, boet. Somebody\'s schedule, maybe.' },
@@ -68,21 +78,28 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     vehicle: { color: 0xd83a40, spot: GTI_SPOT },
     outro: [
       { speaker: 'Bra Vusi', text: 'Sweet. The buyer pays TRIPLE when the power\'s out, and never asks where cable comes from.' },
-      { speaker: 'Bra Vusi', text: 'A man like that is worth knowing better. When you want real work, come ask me about him.' },
+      { speaker: 'Bra Vusi', text: 'Take this — micro SMG, off the same truck as the cable. A man in this business shouldn\'t walk around with just his fists.' },
     ],
+    rewards: { weapon: 'smg', note: 'Bra Vusi throws in a Micro SMG' },
   },
   'dockside-signal': {
     waves: [{ objective: 1, spots: HOSTILE_SPOTS }],
+    rewards: { weapon: 'shotgun', standing: 6, note: 'Candice arms her new enforcer — a pump shotgun, and the ranks know your name' },
     radio: [{ objective: 3, title: 'Candice', detail: 'What did you grab exactly? Ricardo says there\'s a paper stapled to my permit… a DIESEL roster. Wemmer moves fuel for somebody big.' }],
     outro: [
       { speaker: 'Candice', text: 'Depots, litres, dates. My little rank war is somebody\'s fuel empire, sweetie.' },
       { speaker: 'Candice', text: 'They call him the Genny King. If his diesel runs through MY ranks, I want to know everything. Keep your ears open.' },
     ],
   },
-  'copper-wire-blues': { quarry: { spawnObjective: 0, departObjective: 1, kind: 'van', color: QUARRY_COLOR, spawn: QUARRY_SPAWN, destination: KELVIN_GATE_SPOT, arriveRadius: 26 } },
+  'copper-wire-blues': { quarry: {
+    spawnObjective: 0, departObjective: 1, kind: 'van', color: QUARRY_COLOR, spawn: QUARRY_SPAWN, destination: CABLE_YARD_SPOT, arriveRadius: 22,
+    followCapSeconds: 45, // you tailed him, you didn't commute behind him
+    followCapNote: { title: 'Bra Vusi', detail: 'He\'s turning into his yard up ahead — you clocked it? Pull in and have a look. Nice and easy.' },
+  } },
   'rank-cold-war': {
     stops: RANK_STOPS,
     vehicle: { color: CANDICE_VAN_COLOR, spot: CANDICE_VAN_SPOT },
+    rewards: { standing: 8, note: 'Candice\'s ranks are yours to move through — respect earned' },
     waves: [
       { objective: 1, checkpoint: 0, spots: around(RANK_STOPS[0]!, [[7, 4], [-6, 6]]) },
       { objective: 1, checkpoint: 1, spots: around(RANK_STOPS[1]!, [[6, -5], [-7, 4], [4, 8]]) },
@@ -93,6 +110,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
   'reading-signs': {
     diaryPage: 1,
+    rewards: { standing: 4, note: 'Oupa Jakes nods — you can read this city now' },
     hints: [
       { objective: 0, afterSeconds: 90, detail: 'Think, laaitie. Which road ADMITS what broke your suspension?' },
       { objective: 0, afterSeconds: 210, detail: 'Ag fine — Pothole Street, south side of the circle, by the dip that eats bakkies.', reveal: true },
@@ -107,7 +125,8 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   'the-audition': {
     vehicle: { color: TANKER_COLOR, spot: TANKER_SPOT },
     radio: [{ objective: 1, title: 'Solly', detail: 'Gently, my laaitie. That tanker is worth more than you are. For now.' }],
-    outro: [{ speaker: 'Solly', text: 'Not a scratch. Vusi said you were quiet; he didn\'t say you were smooth. You\'re on the payroll. Don\'t make me learn your name for the wrong reasons.' }],
+    outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the bakkie, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
+    rewards: { grantVehicle: { kind: 'van', color: 0xb8621b }, note: 'Solly hands you a cartel bakkie — parked in your garage' },
   },
   'pull-the-plug': {
     forceBlackout: 2, // the breaker goes over: the grid dies around you
@@ -133,9 +152,10 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     ],
   },
   'the-wrong-train': {
+    journeys: [1], // driving the consist to Crown IS the mission — the one earned long haul, with transport handed over
     radio: [{ objective: 1, title: 'Solly', detail: 'Crown Station siding. Stop it like you own it, because tonight you do.' }],
   },
-  'crosswinds': { grantParachute: 0 },
+  'crosswinds': { grantParachute: 0, journeys: [1] }, // the flight IS the mission (plane provided)
   'two-fires': {},
   'paper-fire': {
     quarry: { spawnObjective: 0, kind: 'van', color: EVIDENCE_VAN_COLOR, spawn: EVIDENCE_VAN_SPOT, igniteObjective: 2 },
