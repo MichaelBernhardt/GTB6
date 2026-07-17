@@ -100,6 +100,14 @@ function bestKerbSpot(query: SpotQuery): KerbSpot {
       const x = px - dirZ * offset; const z = pz + dirX * offset;
       const edge = distanceToRoadEdge(x, z);
       if (edge < minEdge || !clearOfClaims(x, z, ownRadius)) continue;
+      // The FOOTPRINT must clear the tar too, not just the centre: at an intersection a spot beside
+      // the named road can hang its building into the CROSSING carriageway (the Sip ’n Save bug).
+      // Probe the claim circle, clamped inside the own-road clearance so the road-side probe passes
+      // by construction (kerb-hugging vehicle spots keep working) — a failing probe therefore means
+      // a FOREIGN road runs under the footprint.
+      const reach = Math.min(ownRadius * 0.8, Math.max(0.4, clearance - 0.4));
+      if ([[reach, 0], [-reach, 0], [0, reach], [0, -reach]]
+        .some(([ox, oz]) => distanceToRoadEdge(x + ox!, z + oz!) < 0.3)) continue;
       const score = Math.min(edge, 6) * 2 - Math.hypot(x - near.x, z - near.z) * 0.06;
       if (score > bestScore) { bestScore = score; best = { x, z, roadX: px, roadZ: pz, dirX, dirZ, side, road }; }
     }
@@ -124,20 +132,25 @@ function bestKerbSpot(query: SpotQuery): KerbSpot {
   };
   scan(query.minEdge, false);
   if (!best) scan(Math.min(query.minEdge, 0.2), false); // relax edge clearance
-  if (!best) { // last resort: nearest vertex of the matching road, claims ignored
+  if (!best) { // last resort: nearest vertex of the matching road, claims ignored — but simplification
+    // pins surviving vertices AT junctions, so prefer one whose spot doesn't sit in a crossing road
+    // (the Sip ’n Save landed dead-centre in the Victoria Road / Madiba Meander intersection this way).
+    let bestAny: KerbSpot | undefined; let bestAnyD = Infinity; let bestCleanD = Infinity;
     for (const road of GENERATED_ROADS) {
       if (query.name !== undefined && road.name !== query.name) continue;
       for (let index = 0; index < road.points.length; index++) {
         const point = road.points[index]!;
         const distance = (point.x - near.x) ** 2 + (point.z - near.z) ** 2;
-        if (distance < (best ? (best.x - near.x) ** 2 + (best.z - near.z) ** 2 : Infinity)) {
-          const previous = road.points[Math.max(0, index - 1)]!; const next = road.points[Math.min(road.points.length - 1, index + 1)]!;
-          const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
-          const offset = road.width / 2 + query.clearance;
-          best = { x: point.x - (dz / length) * offset, z: point.z + (dx / length) * offset, roadX: point.x, roadZ: point.z, dirX: dx / length, dirZ: dz / length, side: 1, road };
-        }
+        if (distance >= bestAnyD && distance >= bestCleanD) continue;
+        const previous = road.points[Math.max(0, index - 1)]!; const next = road.points[Math.min(road.points.length - 1, index + 1)]!;
+        const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
+        const offset = road.width / 2 + query.clearance;
+        const spot: KerbSpot = { x: point.x - (dz / length) * offset, z: point.z + (dx / length) * offset, roadX: point.x, roadZ: point.z, dirX: dx / length, dirZ: dz / length, side: 1, road };
+        if (distance < bestAnyD) { bestAny = spot; bestAnyD = distance; }
+        if (distance < bestCleanD && distanceToRoadEdge(spot.x, spot.z) >= 0.3) { best = spot; bestCleanD = distance; }
       }
     }
+    best ??= bestAny;
   }
   if (!best) throw new Error(`placements: no road matches ${query.name ?? 'any'}`);
   claim(best.x, best.z, ownRadius);
@@ -221,7 +234,7 @@ export const BOTTLE_STORES: BottleStore[] = [
   { name: 'Rivonia Cellars', sign: 'CELLARS', site: shopSite('South Road', { x: 5444, z: -7670 }, 8, 3.6, 7.5, 3) },
   { name: 'Randburg Drankwinkel', sign: 'LIQUORS', site: shopSite('Republic Road', { x: -2650, z: -6920 }, 8, 3.6, 7.5, 3) },
   // Coast promenade (inland side of the beachfront road so they sit on land, not sand)
-  { name: 'Sea Point Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Victoria Road', { x: -6850, z: -2689 }, 8, 3.6, 7.5, 3) },
+  { name: 'Sea Point Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Victoria Road', { x: -7360, z: -2689 }, 8, 3.6, 7.5, 3) },
   { name: 'Green Point Grog', sign: 'GROG', site: shopSite('Madiba Meander', { x: -5100, z: -2560 }, 8, 3.6, 7.5, 3) },
 ];
 
