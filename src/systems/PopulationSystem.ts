@@ -394,6 +394,14 @@ export class PopulationSystem {
     spots.forEach(({ x, z }, index) => { const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), index + 30, true, false, this.nextSpecialNpcVariant(RANK_ENFORCER_NPC_ID)); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
   }
 
+  /** Story: a hi-vis security guard standing a post (Kelvin Yard); the mission director sweeps his torch. */
+  spawnYardGuard(x: number, z: number): Pedestrian {
+    const guard = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++ + 90, false, false, this.nextSpecialNpcVariant(CAR_GUARD_NPC_ID));
+    guard.state = 'idle'; guard.idleTime = 999999; guard.makeCarGuard(); guard.group.name = 'Yard Security';
+    this.pedestrians.push(guard);
+    return guard;
+  }
+
   /** Story missions: a scripted vehicle parked at a kerb, driven only once routed somewhere. */
   spawnScriptVehicle(kind: VehicleKind, x: number, z: number, heading: number, color?: number): Vehicle {
     const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), color);

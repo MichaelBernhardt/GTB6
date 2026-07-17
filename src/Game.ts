@@ -42,6 +42,7 @@ import { MISSION_SCRIPTS } from './story/scripts';
 import { DIARY_STASH_NOTE, DIARY_STASH_REWARD, DIARY_TEXTS, DIARY_WORLD_PAGES } from './story/diaries';
 import { DEPOT_DARK_THRESHOLD, DepotSecurity, depotDark, guardSees } from './systems/DepotSecurity';
 import { KELVIN_FENCE_RADIUS, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } from './world/placements';
+import { buildKelvinYard } from './world/KelvinYard';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
@@ -128,7 +129,8 @@ export class Game {
   private quarryArrived = false;
   private depotSecurity = new DepotSecurity();
   private depotWasSpotted = false;
-  private depotClock = 0; // drives the Kelvin Yard guard patrol orbits
+  private depotClock = 0; // sweeps the Kelvin Yard guards' torch cones
+  private yardGuards: Pedestrian[] = [];
   private loadShedding = new LoadSheddingSystem();
   private torch: TorchSystem;
   private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
@@ -215,6 +217,8 @@ export class Game {
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.baseQuality(), this.save.timeOfDay);
     this.torch = new TorchSystem(this.scene);
     this.shops = new ShopSystem(this.scene, this.city);
+    buildKelvinYard(this.scene, this.city);
+    this.yardGuards = [0, Math.PI].map((angle) => this.population.spawnYardGuard(KELVIN_OFFICE_SPOT.x + Math.sin(angle) * 12, KELVIN_OFFICE_SPOT.z + Math.cos(angle) * 12));
     this.safehouses = new SafehouseSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.position)); // resume where the last save actually left off (Continue); New Game repositions to spawn in startGame
     this.player.group.position.y = this.restoreY(this.save.position[0], this.save.position[2], this.save.position[1]); // keep saved elevation (rooftop/overpass), else sit on the ground
@@ -1480,9 +1484,10 @@ export class Game {
     const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
     if (objective?.kind === 'checkpoints' && reached) {
       const stopIndex = this.deliveryIndex;
-      const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1;
+      const stopObjective = this.missions.objectiveIndex; // captured BEFORE the register: the final stop advances the index
       const missionId = this.missions.active?.id ?? '';
-      for (const wave of MISSION_SCRIPTS[missionId]?.waves ?? []) if (wave.objective === this.missions.objectiveIndex && wave.checkpoint === stopIndex) this.population.spawnHostileWave(wave.spots);
+      const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1;
+      for (const wave of MISSION_SCRIPTS[missionId]?.waves ?? []) if (wave.objective === stopObjective && wave.checkpoint === stopIndex) this.population.spawnHostileWave(wave.spots);
       this.processMissionUpdate(result);
     }
     const result = this.missions.update(dt, this.buildMissionSnapshot(focus), reached);
@@ -1532,10 +1537,12 @@ export class Game {
     const focus = this.player.group.position;
     const insideFence = Math.hypot(focus.x - KELVIN_YARD_CENTER.x, focus.z - KELVIN_YARD_CENTER.z) < KELVIN_FENCE_RADIUS;
     const dark = depotDark(this.dayNight.blackoutFactor, nightFactor(this.dayNight.hour) > 0.5);
-    // Two torch guards orbit the records office in opposite directions, facing along their walk.
-    const guards = [0, Math.PI].map((phase, index) => {
-      const angle = phase + this.depotClock * 0.18 * (index === 0 ? 1 : -1);
-      return { x: KELVIN_OFFICE_SPOT.x + Math.sin(angle) * 12, z: KELVIN_OFFICE_SPOT.z + Math.cos(angle) * 12, heading: angle + (index === 0 ? Math.PI / 2 : -Math.PI / 2) };
+    // The two posted guards sweep their torches like slow turrets; a downed guard sweeps nothing.
+    const guards = this.yardGuards.filter((guard) => guard.state !== 'down').map((guard, index) => {
+      const base = Math.atan2(KELVIN_OFFICE_SPOT.x - guard.group.position.x, KELVIN_OFFICE_SPOT.z - guard.group.position.z) + Math.PI; // face outward from the office
+      const heading = base + Math.sin(this.depotClock * 0.5 + index * 2.1) * 1.2;
+      guard.group.rotation.y = heading;
+      return { x: guard.group.position.x, z: guard.group.position.z, heading };
     });
     const seen = dark && guards.some((guard) => guardSees(guard, focus.x, focus.z));
     const cone = (vehicle: Vehicle) => vehicle.headlightsOn && inHeadlightCone(vehicle.group.position.x, vehicle.group.position.z, vehicle.heading, focus.x, focus.z);
