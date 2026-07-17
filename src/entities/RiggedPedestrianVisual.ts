@@ -129,6 +129,8 @@ const RAGDOLL_DRIVE_SPECS: ReadonlyArray<{ bone: HumanoidBone; from: number; to:
   { bone: 'leftLowerLeg', from: PARTICLE.kneeL, to: PARTICLE.ankleL, rightFrom: -1, rightTo: -1, frame: false },
   { bone: 'rightUpperLeg', from: PARTICLE.hipR, to: PARTICLE.kneeR, rightFrom: -1, rightTo: -1, frame: false },
   { bone: 'rightLowerLeg', from: PARTICLE.kneeR, to: PARTICLE.ankleR, rightFrom: -1, rightTo: -1, frame: false },
+  { bone: 'leftFoot', from: PARTICLE.ankleL, to: PARTICLE.toeL, rightFrom: -1, rightTo: -1, frame: false },
+  { bone: 'rightFoot', from: PARTICLE.ankleR, to: PARTICLE.toeR, rightFrom: -1, rightTo: -1, frame: false },
 ];
 
 interface RagdollDrive {
@@ -299,12 +301,20 @@ export class RiggedPedestrianVisual {
     const bones = this.bones!;
     this.mixer!.stopAllAction(); this.current = undefined; this.currentName = undefined;
     this.group.updateWorldMatrix(true, true);
+    this.group.getWorldQuaternion(this.ragdollGroupQuat);
     for (const [name, particle] of RAGDOLL_BONE_PARTICLES) {
       bones[name].getWorldPosition(SCRATCH_V1);
       SEED_SCRATCH[particle * 3] = SCRATCH_V1.x; SEED_SCRATCH[particle * 3 + 1] = SCRATCH_V1.y; SEED_SCRATCH[particle * 3 + 2] = SCRATCH_V1.z;
     }
+    // Toe particles sit at the ball-of-foot so the whole foot rests on the road (the retarget keeps
+    // ball_l/ball_r); if a future rig drops them, fall back to a nominal foot-length ahead of the ankle.
+    for (const [foot, ballName, particle] of [[bones.leftFoot, 'ball_l', PARTICLE.toeL], [bones.rightFoot, 'ball_r', PARTICLE.toeR]] as const) {
+      const ball = foot.getObjectByName(ballName);
+      if (ball) ball.getWorldPosition(SCRATCH_V1);
+      else foot.getWorldPosition(SCRATCH_V1).add(SCRATCH_V2.set(0, 0, 0.14).applyQuaternion(this.ragdollGroupQuat));
+      SEED_SCRATCH[particle * 3] = SCRATCH_V1.x; SEED_SCRATCH[particle * 3 + 1] = SCRATCH_V1.y; SEED_SCRATCH[particle * 3 + 2] = SCRATCH_V1.z;
+    }
     this.ragdoll = new VerletRagdoll(SEED_SCRATCH);
-    this.group.getWorldQuaternion(this.ragdollGroupQuat);
     this.ragdollHipsParentInverse.copy((bones.hips.parent ?? this.group).matrixWorld).invert();
     this.ragdollHipsUndoPos.copy(bones.hips.position);
     this.ragdollGroundY = this.group.getWorldPosition(SCRATCH_V1).y;

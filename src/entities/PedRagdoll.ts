@@ -10,15 +10,18 @@ export interface RagdollEnvironment {
   blockedAt?(x: number, z: number, radius: number): boolean;
 }
 
-/** One particle per major joint. Torso particles sit at bone origins; limb particles at the joint chain. */
+/** One particle per major joint. Torso particles sit at bone origins; limb particles at the joint
+ *  chain. Toes carry the ball-of-foot: without them the foot hangs past the ankle sphere and buries
+ *  its toes in the road (the exact owner complaint on settled corpses). */
 export const RAGDOLL_PARTICLES = {
   hips: 0, chest: 1, head: 2,
   shoulderL: 3, elbowL: 4, wristL: 5,
   shoulderR: 6, elbowR: 7, wristR: 8,
   hipL: 9, kneeL: 10, ankleL: 11,
   hipR: 12, kneeR: 13, ankleR: 14,
+  toeL: 15, toeR: 16,
 } as const;
-export const RAGDOLL_PARTICLE_COUNT = 15;
+export const RAGDOLL_PARTICLE_COUNT = 17;
 
 export const RAGDOLL_TIMEOUT = 10; // owner call: hard stop — the body freezes wherever it is
 export const RAGDOLL_STEP = 1 / 60;
@@ -33,14 +36,16 @@ const GROUND_FRICTION = 0.65; // tangential velocity lost per grounded step — 
 const SOLVER_ITERATIONS = 6;
 const SPACER_FACTOR = 0.4; // a folded limb keeps at least this share of its full length end-to-end
 
-/** Collision radius per particle — roughly flesh thickness around the joint, so the mesh surface
- *  rests at ground level when the particle chain does. */
+/** Collision radius per particle — the local body thickness around the joint (ankles/wrists thin,
+ *  hips/chest/head thick), so joints rest at ground+radius and the SKIN rests ON the surface.
+ *  Calibrated against the shipped cast: settled skinned floor within ±0.05 of the ground. */
 const RADII = new Float32Array([
-  0.12, 0.13, 0.11,
-  0.09, 0.06, 0.05,
-  0.09, 0.06, 0.05,
-  0.10, 0.06, 0.05,
-  0.10, 0.06, 0.05,
+  0.14, 0.15, 0.12,
+  0.11, 0.08, 0.07,
+  0.11, 0.08, 0.07,
+  0.12, 0.10, 0.09,
+  0.12, 0.10, 0.09,
+  0.03, 0.03,
 ]);
 
 const P = RAGDOLL_PARTICLES;
@@ -55,6 +60,7 @@ const RODS: ReadonlyArray<readonly [number, number]> = [
   [P.chest, P.hipL], [P.chest, P.hipR],
   [P.shoulderL, P.elbowL], [P.elbowL, P.wristL], [P.shoulderR, P.elbowR], [P.elbowR, P.wristR],
   [P.hipL, P.kneeL], [P.kneeL, P.ankleL], [P.hipR, P.kneeR], [P.kneeR, P.ankleR],
+  [P.ankleL, P.toeL], [P.kneeL, P.toeL], [P.ankleR, P.toeR], [P.kneeR, P.toeR], // rigid-ish feet: toes rest on the road, the shin brace keeps the foot from flopping through
 ];
 /** Push-apart-only spacers [end, end, joint]: stop a limb folding fully through itself. */
 const SPACERS: ReadonlyArray<readonly [number, number, number]> = [
@@ -84,6 +90,7 @@ const KICK_WEIGHTS = new Float32Array([
   1, 0.85, 0.7,
   0.5, 0.25, 0.1,
   0.5, 0.25, 0.1,
+  0.05, 0.05,
 ]);
 const KICK_LIFT = new Float32Array([
   0.1, 0.25, 0.3,
@@ -91,6 +98,7 @@ const KICK_LIFT = new Float32Array([
   0.25, 0, 0,
   0, 0, 0,
   0, 0, 0,
+  0, 0,
 ]);
 
 /** Impact impulse from damage: a shoulder bump nudges (~3 m/s), a car hit or blast launches — capped

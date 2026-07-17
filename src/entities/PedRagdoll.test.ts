@@ -16,6 +16,7 @@ function standingSeed(): Float32Array {
   set(P.shoulderR, 0.2, 1.45, 0); set(P.elbowR, 0.24, 1.15, -0.05); set(P.wristR, 0.26, 0.88, -0.1);
   set(P.hipL, -0.1, 0.95, 0); set(P.kneeL, -0.1, 0.52, 0.06); set(P.ankleL, -0.1, 0.12, 0);
   set(P.hipR, 0.1, 0.95, 0); set(P.kneeR, 0.1, 0.52, -0.06); set(P.ankleR, 0.1, 0.12, 0.04);
+  set(P.toeL, -0.1, 0.06, 0.15); set(P.toeR, 0.1, 0.06, 0.19);
   return seed;
 }
 
