@@ -188,8 +188,10 @@ window.__qa = (() => {
       }
       case 'reach': case 'escape': case 'checkpoints': case 'collect': {
         if (g.trains.riding && !o.conditions?.onTrain && !o.conditions?.drivingTrain) {
-          const exit = g.trains.dismount();
+          let exit = g.trains.dismount();
+          for (let tries = 0; !exit && tries < 12 && g.trains.ride; tries++) { g.trains.ride.train.state.s += 6; exit = g.trains.dismount(); } // nudge along the line for clear ground
           if (exit) { g.player.group.position.set(exit.x, exit.y, exit.z); g.player.onGround = true; step(3, 1 / 30); note('stepped off the train for an on-foot objective'); }
+          else if (marker) { g.player.group.position.set(marker.position.x, surface(marker.position.x, marker.position.z), marker.position.z); g.player.onGround = true; g.trains.dismount(); step(3, 1 / 30); note('shortcut: placed on foot at the marker (no clear ground beside the siding)'); }
         }
         if (o.hidden && !g.riddleRevealed) {
           // Play the riddle the merciful way: walk the hint ladder (clock jumped to each threshold —
@@ -383,6 +385,13 @@ window.__qa = (() => {
     }
     if (g.airborne) return 'stuck:never-landed';
     note(`landed after ${Math.round(sim)}s of canopy`);
+    // A canopy landing rarely stops on the exact reach point — walk the rest of the way in on foot.
+    let wsim = 0;
+    while (wsim < 40 && Math.hypot(tx - g.player.group.position.x, tz - g.player.group.position.z) > 4) {
+      walkToward(tx, tz, 7, STEP); g.update(STEP); wsim += STEP;
+      if (g.missions.state !== 'active') break;
+    }
+    step(4);
     return 'ok';
   }
 
@@ -466,8 +475,18 @@ window.__qa = (() => {
       while (walkToward(wx, wz, 7, STEP) === false && guard++ < 200) { keepDark(); g.update(STEP); if (g.missions.state !== 'active') break; }
       if (g.missions.state !== 'active') break;
     }
-    let guard = 0;
-    while (g.missions.state === 'active' && guard++ < 300) { keepDark(); const r = walkToward(gate.position.x, gate.position.z, 7, STEP); g.update(STEP); if (r === 'blocked' && guard > 60) break; }
+    // Persistent gate approach from outside the fence: sidestep around the perimeter if blocked.
+    let guard = 0; let blocked = 0;
+    while (g.missions.state === 'active' && guard++ < 800) {
+      keepDark();
+      const r = walkToward(gate.position.x, gate.position.z, 7, STEP); g.update(STEP);
+      if (!g.missions.active || g.missions.state !== 'active') break;
+      if (r === 'blocked') { if (++blocked > 20) { // slide along the ring toward the gate angle, then retry
+        const a = Math.atan2(g.player.group.position.x - cx, g.player.group.position.z - cz) + 0.3;
+        const sx = cx + Math.sin(a) * (ring + 3), sz = cz + Math.cos(a) * (ring + 3);
+        let g2 = 0; while (walkToward(sx, sz, 7, STEP) === false && g2++ < 60) { keepDark(); g.update(STEP); } blocked = 0;
+      } } else blocked = 0;
+    }
     step(10);
     return g.missions.state === 'complete' || !g.missions.active ? 'ok' : g.missions.state === 'failed' ? 'failed:' + state.lastFail : 'stuck:escape';
   }
