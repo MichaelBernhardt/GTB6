@@ -106,7 +106,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     ],
   },
   'last-coach-home': {
-    radio: [{ objective: 0, title: 'Auntie Portia', detail: 'The vetkoek lady says Sandton side just went dark too. The trains keep their own power, boet — safest lights in Joburg tonight.' }],
+    radio: [{ objective: 0, title: 'Auntie Portia', detail: 'And if the rank boys give you attitude, tell them Portia sent you. They know me.' }],
   },
   'reading-signs': {
     diaryPage: 1,
@@ -186,6 +186,6 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
 
   // ---- Side pieces --------------------------------------------------------------------
-  'padstal-run': { journeys: [0, 1, 2] }, // a scenic long-haul over the pass — the drive IS the point (optional side)
+  'padstal-run': {},
   'pier-pressure': { waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
 };

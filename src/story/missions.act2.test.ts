@@ -99,7 +99,7 @@ describe('Crosswinds walkthrough', () => {
     expect(system.update(0.016, { ...base, inPlane: true, altitude: 60 }, false).advanced).toBe(true);
     expect(system.update(0.016, { ...base, inPlane: true, altitude: 200 }, false).advanced).toBeUndefined(); // high, but not over Ponte
     expect(system.update(0.016, { ...base, inPlane: true, altitude: 200 }, true).advanced).toBe(true);
-    expect(system.remainingTime).toBe(150); // the descent clock arms
+    expect(system.remainingTime).toBe(300); // the descent clock arms
     expect(system.update(1, base, true).completed?.id).toBe('crosswinds');
   });
 
@@ -107,7 +107,7 @@ describe('Crosswinds walkthrough', () => {
     const system = sim(); system.start('crosswinds');
     system.update(0.016, { ...base, inPlane: true, altitude: 60 }, false);
     system.update(0.016, { ...base, inPlane: true, altitude: 200 }, true);
-    expect(system.update(151, base, false).failed).toBe('Time expired');
+    expect(system.update(301, base, false).failed).toBe('Time expired');
     system.restart();
     expect(system.objectiveIndex).toBe(2); // the drop leg is checkpointed (difficulty gradient)
   });
@@ -132,7 +132,7 @@ describe('Two Fires branch', () => {
 describe('Paper Fire walkthrough (loyalist branch)', () => {
   it('completes: find the van in time, light it, vanish', () => {
     const system = sim(); system.start('paper-fire');
-    expect(system.remainingTime).toBe(420);
+    expect(system.remainingTime).toBe(600);
     expect(system.update(1, base, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, wantedLevel: 0 }, false).completed?.id).toBe('paper-fire');
@@ -142,7 +142,7 @@ describe('Paper Fire walkthrough (loyalist branch)', () => {
 
   it('running out the clock fails the approach', () => {
     const system = sim(); system.start('paper-fire');
-    expect(system.update(421, base, false).failed).toBe('Time expired');
+    expect(system.update(601, base, false).failed).toBe('Time expired');
   });
 });
 

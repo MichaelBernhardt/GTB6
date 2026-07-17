@@ -315,7 +315,12 @@ window.__qa = (() => {
       }
       if (!boarded) { finding('fail', 'could not board the dwelling train anywhere along its span'); return 'stuck:board-failed'; }
     }
-    if (drive && !g.trains.driving) { g.trains.takeControls(); if (!g.trains.driving) { finding('fail', 'takeControls failed at the nose cab'); return 'stuck:no-controls'; } }
+    if (drive && !g.trains.driving) {
+      // takeControls needs the rider standing in a cab zone (near the nose): seat them at s≈margin.
+      if (g.trains.ride) g.trains.ride.s = 1.0;
+      g.trains.takeControls();
+      if (!g.trains.driving) { finding('fail', 'takeControls failed at the nose cab'); return 'stuck:no-controls'; }
+    }
     // teleport the train's nose arc to the station
     const arc = nearestArc(best, target.position.x, target.position.z);
     best.state.s = arc; best.state.speed = 0; best.state.dwell = drive ? 0 : 8;
@@ -357,7 +362,7 @@ window.__qa = (() => {
     // teleport-fly: hover the real airframe high over the objective — above the tower line, low
     // momentum so the settle frames don't fly it into Ponte (sweep 2: crashed, bail found no plane)
     plane.state.grounded = false; plane.state.speed = 12;
-    plane.group.position.set(target.position.x, surface(target.position.x, target.position.z) + 300, target.position.z);
+    plane.group.position.set(target.position.x, surface(target.position.x, target.position.z) + 160, target.position.z);
     step(6, 1 / 30);
     return 'ok-carrier';
   }
@@ -431,6 +436,7 @@ window.__qa = (() => {
   function escapeYard() {
     g.dayNight.hour = 22; g.torch.on = false;
     if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force());
+    let dsim = 0; while (g.dayNight.blackoutFactor < 0.78 && dsim < 30) { g.update(STEP); dsim += STEP; } // let the dark ramp in before moving
     for (const guard of g.yardGuards ?? []) if (guard.state !== 'down') guard.takeDamage?.(1000);
     const gate = g.markerTarget ?? g.missionTargetRaw?.();
     if (!gate) return 'stuck:no-gate-target';

@@ -35,14 +35,10 @@ describe('mission content sanity', () => {
 });
 
 describe('Last Coach Home walkthrough', () => {
-  it('completes: ride one stop to Park Station aboard, fetch the bag, return', () => {
+  it('completes: reach the rank, fetch the bag, return — a tight local fetch (no train)', () => {
     const system = sim(); expect(system.start('last-coach-home')).toBe(true);
-    // driving to Sandton in a car does NOT count
-    expect(system.update(0.016, { ...base, inVehicle: true, vehicleKind: 'compact' }, true).advanced).toBeUndefined();
-    // aboard, but dwelling at the wrong station
-    expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Crown Station' }, false).advanced).toBeUndefined();
-    // aboard at Park Station (re-anchored local from Sandton): the conditions are the objective
-    expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Johannesburg Park Station' }, false).advanced).toBe(true);
+    expect(system.objective?.kind).toBe('reach');
+    expect(system.update(0.016, base, true).advanced).toBe(true); // reached the rank
     expect(system.objective?.kind).toBe('collect');
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
     const done = system.update(0.016, base, true);

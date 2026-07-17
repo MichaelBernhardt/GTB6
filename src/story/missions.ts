@@ -4,7 +4,7 @@ import type { WorldTarget } from '../types';
 import {
   CANDICE_START, CON_HILL_SPOT, ESCAPE_SPOT, EVIDENCE_VAN_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
   AIRPORT_APRON, CROWN_STATION, KIOSK_SPOT, LOCKUP_SPOT, PADSTAL_SPOT, PAPER_DROP, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
-  CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_PLATFORM, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
+  CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
   SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START,
 } from '../world/placements';
 import { CANDICE_VAN_COLOR, TANKER_COLOR } from './scripts';
@@ -65,9 +65,9 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'last-coach-home', name: 'Last Coach Home', contact: 'Auntie Portia', reward: 1100, act: 'hustle',
     prerequisites: { missions: ['delivery-run'] },
-    intro: 'My nephew fell asleep on the Sandton train and walked off without my rent bag. Ride out there and fetch it, boet — before someone honest finds it.',
+    intro: 'My nephew left my rent bag at the taxi rank round the corner — fell asleep waiting, the dof child. Go fetch it before someone honest finds it, boet.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
-      { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Johannesburg Park Station' }, text: 'Ride one stop to Park Station', target: spot(RENT_BAG_PLATFORM, 'Park Station') },
+      { kind: 'reach', text: 'Get to the taxi rank', target: spot(RENT_BAG_SPOT, 'The taxi rank') },
       { kind: 'collect', text: 'Fetch the rent bag from the vetkoek stand', target: spot(RENT_BAG_SPOT, 'Rent bag'), checkpoint: true },
       { kind: 'reach', text: 'Bring the bag back to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
@@ -176,7 +176,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SIPHO_START, 'Skywise Sipho'), objectives: [
       { kind: 'reach', conditionsOnly: true, conditions: { inPlane: true, altitudeAbove: 40 }, text: 'Get a Karoo Kite in the air', target: spot(AIRPORT_APRON, 'O.R. Tambourine apron') },
       { kind: 'reach', radius: 260, conditions: { inPlane: true, altitudeAbove: 150 }, text: 'Bring the parts high over Ponte Tower', target: spot(PONTE_POINT, 'Over Ponte'), checkpoint: true },
-      { kind: 'reach', timeLimit: 150, text: 'Get down to the Ponte forecourt drop — quickly', target: spot(PONTE_FORECOURT, 'Forecourt drop'), checkpoint: true },
+      { kind: 'reach', timeLimit: 300, text: 'Get down to the Ponte forecourt drop — quickly', target: spot(PONTE_FORECOURT, 'Forecourt drop'), checkpoint: true },
     ],
   },
   {
@@ -195,7 +195,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['choice:two-fires:solly'] },
     intro: 'Her van sleeps under the Jan Smuts lamps below Braamfontein. Paper burns lekker. Go before the shift changes.',
     start: spot(SOLLY_START, 'Solly'), setFlags: ['act3'], objectives: [
-      { kind: 'reach', timeLimit: 420, text: 'Find Sindi\'s evidence van', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van') },
+      { kind: 'reach', timeLimit: 600, text: 'Find Sindi\'s evidence van', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van') },
       { kind: 'collect', text: 'Douse the van and strike the match', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van'), checkpoint: true },
       { kind: 'lose-wanted', text: 'Vanish before JMPD boxes the block', checkpoint: true },
     ],
@@ -239,7 +239,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['choice:two-fires:sindi'], missions: ['dark-house'] },
     intro: 'The ledger goes to the Constitution Hill handover — and the cartel knows you have it. After that, everything they own is evidence. Evidence goes missing all the time.',
     start: spot(SINDI_START, 'Sindi'), setFlags: ['endgame'], objectives: [
-      { kind: 'reach', timeLimit: 240, text: 'Run the ledger to the Constitution Hill handover', target: spot(CON_HILL_SPOT, 'Handover') },
+      { kind: 'reach', timeLimit: 400, text: 'Run the ledger to the Constitution Hill handover', target: spot(CON_HILL_SPOT, 'Handover') },
       { kind: 'lose-wanted', text: 'Shake the heat', checkpoint: true },
       { kind: 'checkpoints', required: 3, timeLimit: 600, text: 'Pick the carcass: three cartel stashes before SAPS seals them', checkpoint: true },
     ],
@@ -249,7 +249,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['endgame'] },
     intro: 'Listen to me. The Ophirton feeder is rigged to blow — a permanent Stage Six, the whole grid on its knees. Whatever you are now, your city dies with that substation. Go.',
     start: spot(SINDI_START, 'Sindi'), setFlags: ['stage-six-over'], objectives: [
-      { kind: 'reach', timeLimit: 240, text: 'Get to the Ophirton feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
+      { kind: 'reach', timeLimit: 400, text: 'Get to the CBD feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'CBD feeder') },
       { kind: 'defeat', required: 4, text: 'Put the wreckers down', checkpoint: true },
       { kind: 'survive', timeLimit: 90, text: 'Hold the substation until the relief crew arrives', checkpoint: true },
     ],

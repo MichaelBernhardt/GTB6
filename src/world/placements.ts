@@ -372,9 +372,9 @@ export const KELVIN_FENCE_RADIUS = 26;
 
 /** The CBD feeder substation on the CBD's south-west industrial edge; Sindi works its night shift
  *  (was Ophirton, ~2.2km — moved local so Pull the Plug / The Switch cluster with the rest). */
-export const SUBSTATION_SPOT = walkSpotNear({ x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 35 * P }, 4, 6);
+export const SUBSTATION_SPOT = walkSpotNear({ x: CBD_CENTER.x - 30 * P, z: CBD_CENTER.z + 20 * P }, 4, 6);
 export const SUBSTATION_BREAKER: MapPt = { x: SUBSTATION_SPOT.x + 6, z: SUBSTATION_SPOT.z + 4 };
-export const SINDI_START = walkSpotNear({ x: CBD_CENTER.x - 35 * P, z: CBD_CENTER.z + 25 * P }, 3, 5);
+export const SINDI_START = walkSpotNear({ x: CBD_CENTER.x - 12 * P, z: CBD_CENTER.z + 8 * P }, 3, 5);
 
 /** Generator-subscription collections: three CBD businesses behind on payments. */
 export const GENNY_ROUND_STOPS: MapPt[] = [
@@ -388,7 +388,7 @@ export const CROWN_STATION = stationPoint('Crown Station');
 
 /** Sindi's dead drop: a CBD rail platform locker (was the airport halt, ~10km — a riddle you'd
  *  need to cross the map to answer is no fun; the clue now points at the central station). */
-export const PAPER_DROP: MapPt = walkSpotNear({ x: RENT_BAG_PLATFORM.x - 6, z: RENT_BAG_PLATFORM.z + 10 }, 3, 5);
+export const PAPER_DROP: MapPt = walkSpot('Commissioner Street', { x: CBD_CENTER.x + 10 * P, z: CBD_CENTER.z + 5 * P }, 3, 5);
 /** Skywise Sipho waits at a CBD-edge airstrip office; the Kite itself is out at the airport (the flight
  *  is the one earned journey — transport provided). */
 export const SIPHO_START: MapPt = walkSpotNear({ x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z + 145 * P }, 3, 5);
@@ -401,12 +401,10 @@ export const PONTE_FORECOURT = walkSpotNear(PONTE_POINT, 3, 5);
 /** Constitution Hill handover (Carcass) and the coastal pier (Pier Pressure). */
 export const CON_HILL_SPOT = walkSpot('Anderson Street', { x: CBD_CENTER.x - 30 * P, z: CBD_CENTER.z - 20 * P }, 3, 5);
 export const PIER_POINT = landmarkPoint('Seepunt Pier', { x: CBD_CENTER.x, z: CBD_CENTER.z });
-const pierKerb = bestKerbSpot({ near: PIER_POINT, clearance: 3, ownRadius: 5, minEdge: 2 });
-export const PIER_SPOT: MapPt = { x: pierKerb.x, z: pierKerb.z };
+export const PIER_SPOT: MapPt = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 65 * P, z: CBD_CENTER.z + 135 * P }, 3, 5);
 /** Ouma se Padstal doorstep (long-haul side run). */
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
-const padstalKerb = bestKerbSpot({ near: PADSTAL_POINT, clearance: 3, ownRadius: 5, minEdge: 2 });
-export const PADSTAL_SPOT: MapPt = { x: padstalKerb.x, z: padstalKerb.z };
+export const PADSTAL_SPOT: MapPt = walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z + 90 * P }, 3, 5);
 
 /** Sindi's evidence van (Paper Fire target) parked below Braamfontein. */
 export const EVIDENCE_VAN_SPOT = kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 65 * P, z: CBD_CENTER.z + 25 * P });
