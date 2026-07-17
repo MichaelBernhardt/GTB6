@@ -9,6 +9,7 @@ export interface TaxiTelemetry { text: string; available: boolean; }
 export interface CourierTelemetry { text: string; available: boolean; }
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; taxi?: TaxiTelemetry; courier?: CourierTelemetry; radio?: string; }
 export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; }
+export interface DialogueView { speaker: string; text: string; more: boolean; }
 
 export interface HudState {
   health: number;
@@ -32,6 +33,7 @@ export interface HudState {
   scope?: { zoom: string };
   vehicle?: VehicleTelemetry;
   objective?: ObjectiveView;
+  dialogue?: DialogueView; // face-to-face exchange card: E advances, walking away abandons
   fps: number;
   loopTotalPct: number; // whole game-loop CPU cost as a % of the 60fps frame budget (100% = one 60fps frame)
   loopSample: { name: string; pct: number }[]; // this frame's raw per-phase split in stable order — one column of the scrolling chart

@@ -7,6 +7,7 @@ import { SIGNAL_JUNCTIONS, STREET_SIGN_JUNCTIONS } from './mapData';
 import { ETOLL_SPOTS, ROADSIDE_SIGNS, SPAWN_SIGN_JUNCTIONS, TRANSIT_STOPS } from './placements';
 import { createSignMesh } from './ProceduralMaterials';
 import { onPowerChange } from './powerGrid';
+import { buildTreeInstance, type TreeInstancePart, type TreeSpecies } from './FoliageAssets';
 
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
@@ -106,6 +107,8 @@ export class UrbanInfrastructure {
   private elapsed = 0;
   private bulbMaterial?: THREE.MeshBasicMaterial;
   private powered = true;
+  private treeSites: RoadPoint[] = [];
+  private treeAssetsInstalled = false;
 
   constructor(
     parent: THREE.Group,
@@ -198,19 +201,27 @@ export class UrbanInfrastructure {
     this.bulbMaterial?.color.setHex(BULB_COLOR).multiplyScalar(0.35 + factor * 2.85);
   }
 
+  /** Add the required Blender-authored roadside trees after the shared GLB passes its startup gate.
+   *  Everything else can construct immediately, leaving the normal retry UI alive if asset loading fails. */
+  installTreeAssets(): void {
+    if (this.treeAssetsInstalled) return;
+    const jacarandas = this.treeSites.filter((_, index) => index % 2 === 0);
+    const broadleaf = this.treeSites.filter((_, index) => index % 2 !== 0);
+    this.buildBroadleafTrees(broadleaf);
+    this.buildJacarandas(jacarandas);
+    this.treeAssetsInstalled = true;
+  }
+
   private buildVegetation(): void {
     // Verge planting: trees/shrubs stand 2.1u OUTWARD of the roadside line, clear of both the sidewalk walk
     // line peds actually route along and of junction lane chords. The generated map has ~15k roadside
     // points, so strides are wider than the old hand-authored city to keep instance budgets sane
-    // (stride 6 ≈ 2.5k tree sites citywide — instanced trunks/crowns, a few draw calls per chunk).
+    // (stride 6 ≈ 2.5k tree sites citywide — authored variants, instanced per chunk).
     const sites = this.roadsidePoints
       .filter((point, index) => index % 6 === 0 && point.width >= 9)
       .map((point) => ({ x: point.x - point.inwardX * 2.1, z: point.z - point.inwardZ * 2.1 }))
       .filter((point) => !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 2.4));
-    const jacarandas = sites.filter((_, index) => index % 2 === 0);
-    const broadleaf = sites.filter((_, index) => index % 2 !== 0);
-    this.buildBroadleafTrees(broadleaf);
-    this.buildJacarandas(jacarandas);
+    this.treeSites = sites;
 
     const shrubSites = sites.filter((_, index) => index % 3 === 0);
     const shrubGeometry = new THREE.SphereGeometry(1, 16, 10);
@@ -241,50 +252,39 @@ export class UrbanInfrastructure {
   }
 
   private buildBroadleafTrees(sites: RoadPoint[]): void {
-    const trunkGeometry = new THREE.CylinderGeometry(0.32, 0.58, 5.2, 14);
-    const crownGeometry = new THREE.SphereGeometry(1, 20, 14);
-    const trunkItems: InstanceItem[] = []; const crownItems: InstanceItem[] = [];
-    const quaternion = new THREE.Quaternion();
-    sites.forEach((site, index) => {
-      const height = 0.9 + (index % 5) * 0.035;
-      this.props.register('tree', site.x, site.z, 0.5, 5.2 * height); // trunk-sized, so the sidewalk stays walkable
-      trunkItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 2.6 * height, site.z), quaternion, new THREE.Vector3(height, height, height)) });
-      const offsets: Array<[number, number, number, number]> = [[0, 6.2, 0, 2.25], [-1.45, 5.65, 0.3, 1.8], [1.35, 5.75, -0.35, 1.9], [0.25, 5.6, 1.3, 1.65], [-0.35, 6.45, -0.9, 1.55]];
-      const palette = index % 4 === 0 ? [0x8a6cc4, 0x9b7fd4, 0xb18ae0, 0x8a6cc4] : [0x4c6b38, 0x5d7a3e, 0x6f8646, 0x445e34];
-      offsets.forEach(([ox, oy, oz, scale], cluster) => {
-        const sway = ((index * 17 + cluster * 7) % 11 - 5) * 0.055;
-        crownItems.push({
-          x: site.x, z: site.z,
-          matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x + ox + sway, oy * height, site.z + oz - sway), quaternion, new THREE.Vector3(scale * (1 + sway * 0.2), scale * 0.78, scale)),
-          color: new THREE.Color(palette[(index + cluster) % 4] ?? 0x5d7a3e),
-        });
-      });
-    });
-    addInstancedChunks(this.chunks, trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x5c402c, roughness: 0.96 }), this.groundItems(trunkItems), { cast: true, receive: true });
-    addInstancedChunks(this.chunks, crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }), this.groundItems(crownItems), { cast: true, receive: true });
+    this.buildAuthoredTrees(sites, 'shade-tree');
   }
 
   private buildJacarandas(sites: RoadPoint[]): void {
-    const trunkGeometry = new THREE.CylinderGeometry(0.26, 0.52, 4.6, 14);
-    const crownGeometry = new THREE.SphereGeometry(1, 20, 14);
-    const trunkItems: InstanceItem[] = []; const crownItems: InstanceItem[] = [];
-    const quaternion = new THREE.Quaternion();
+    this.buildAuthoredTrees(sites, 'jacaranda');
+  }
+
+  /** Roadside trees use the same required Blender library as streamed foliage. Each authored variant stays
+   *  instanced per chunk, including its material groups, so the richer silhouettes do not restore one draw
+   *  call per tree. */
+  private buildAuthoredTrees(sites: RoadPoint[], species: TreeSpecies): void {
+    interface Batch { part: TreeInstancePart; items: InstanceItem[]; }
+    const batches = new Map<string, Batch>();
+    const up = new THREE.Vector3(0, 1, 0);
     sites.forEach((site, index) => {
-      const height = 0.92 + (index % 4) * 0.045;
-      this.props.register('tree', site.x, site.z, 0.45, 4.6 * height); // jacaranda trunks are as solid as any other tree
-      trunkItems.push({ x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x, 2.3 * height, site.z), quaternion, new THREE.Vector3(height, height, height)) });
-      const offsets: Array<[number, number, number, number]> = [[0, 5.4, 0, 2.5], [-1.7, 4.9, 0.4, 1.9], [1.6, 5, -0.4, 2], [0.3, 4.8, 1.55, 1.75], [-0.45, 5.6, -1.05, 1.6]];
-      offsets.forEach(([ox, oy, oz, scale], cluster) => {
-        const sway = ((index * 13 + cluster * 5) % 9 - 4) * 0.06;
-        crownItems.push({
-          x: site.x, z: site.z,
-          matrix: new THREE.Matrix4().compose(new THREE.Vector3(site.x + ox + sway, oy * height, site.z + oz - sway), quaternion, new THREE.Vector3(scale * 1.1, scale * 0.66, scale * 1.1)),
-          color: new THREE.Color([0x9b7fd4, 0xb18ae0, 0x8a6cc4][(index + cluster) % 3] ?? 0x9b7fd4),
-        });
+      const seed = site.x * 0.017 + site.z * 0.031 + index * 13.7;
+      const tree = buildTreeInstance(species, seed);
+      this.props.register('tree', site.x, site.z, tree.trunkRadius, tree.trunkHeight);
+      const placement = new THREE.Matrix4().compose(
+        new THREE.Vector3(site.x, 0, site.z),
+        new THREE.Quaternion().setFromAxisAngle(up, index * 2.399963229728653),
+        new THREE.Vector3(tree.scale, tree.scale, tree.scale),
+      );
+      tree.parts.forEach((part, partIndex) => {
+        const key = `${tree.variant}:${partIndex}`;
+        const batch = batches.get(key) ?? { part, items: [] };
+        batch.items.push({ x: site.x, z: site.z, matrix: placement.clone().multiply(part.matrix) });
+        batches.set(key, batch);
       });
     });
-    addInstancedChunks(this.chunks, trunkGeometry, new THREE.MeshStandardMaterial({ color: 0x6b4d38, roughness: 0.92 }), this.groundItems(trunkItems), { cast: true, receive: true });
-    addInstancedChunks(this.chunks, crownGeometry, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86 }), this.groundItems(crownItems), { cast: true, receive: true });
+    for (const { part, items } of batches.values()) {
+      addInstancedChunks(this.chunks, part.geometry, part.material, this.groundItems(items), { cast: true, receive: true });
+    }
   }
 
   private buildStreetlights(): void {

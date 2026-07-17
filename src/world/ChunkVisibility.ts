@@ -78,7 +78,7 @@ export interface InstanceItem { x: number; z: number; matrix: THREE.Matrix4; col
 export function addInstancedChunks(
   store: ChunkStore,
   geometry: THREE.BufferGeometry,
-  material: THREE.Material,
+  material: THREE.Material | THREE.Material[],
   items: readonly InstanceItem[],
   shadows: { cast?: boolean; receive?: boolean } = {},
 ): InstanceSlot[] {

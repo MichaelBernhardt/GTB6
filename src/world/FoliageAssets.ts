@@ -11,6 +11,25 @@ interface TreeRecord {
   source: THREE.Object3D;
   size: THREE.Vector3;
   trunkCollider: readonly [number, number, number];
+  instanceParts: readonly TreeInstancePart[];
+}
+
+/** One reusable mesh below an authored tree root. The matrix is relative to that root, so callers can
+ *  combine it with a per-tree placement matrix and keep thousands of trees genuinely instanced. */
+export interface TreeInstancePart {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material | THREE.Material[];
+  matrix: THREE.Matrix4;
+}
+
+/** Lightweight authored-tree placement data. Unlike buildTreeAsset(), this deliberately retains the
+ *  library geometry because InstancedMesh owns no disposable per-tree clone. */
+export interface TreeInstance {
+  variant: number;
+  scale: number;
+  trunkRadius: number;
+  trunkHeight: number;
+  parts: readonly TreeInstancePart[];
 }
 
 export class TreeLibraryError extends Error {
@@ -66,7 +85,18 @@ export function installTreeLibrary(gltf: GLTF): void {
     if (size.x > maxFootprint[0] || size.z > maxFootprint[1] || size.y < 4 || trunkCollider[2]! > size.y) {
       throw new TreeLibraryError(`${name} exceeds its footprint or has an invalid height.`);
     }
-    installed.set(name, { source, size, trunkCollider: trunkCollider as [number, number, number] });
+    source.updateWorldMatrix(true, true);
+    const inverseRoot = source.matrixWorld.clone().invert();
+    const instanceParts: TreeInstancePart[] = [];
+    source.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      instanceParts.push({
+        geometry: object.geometry,
+        material: object.material,
+        matrix: inverseRoot.clone().multiply(object.matrixWorld),
+      });
+    });
+    installed.set(name, { source, size, trunkCollider: trunkCollider as [number, number, number], instanceParts });
   }
   if (library.children.length !== installed.size) throw new TreeLibraryError('The Blender tree library contains unexpected root assets.');
   records = installed;
@@ -82,14 +112,31 @@ export function loadTreeLibrary(load: TreeLoad = (url) => new GLTFLoader().loadA
   return loading;
 }
 
-/** Clone one Blender-authored variant with deterministic scale variation and disposable geometry. */
-export function buildTreeAsset(species: TreeSpecies, seed: number, options: BuildOptions = {}): BuiltModel {
+function resolveTree(species: TreeSpecies, seed: number, options: BuildOptions): { record: TreeRecord; variant: number; scale: number } {
   if (!records) throw new TreeLibraryError('The required Blender tree library has not been loaded.');
   const variant = Math.abs(Math.trunc(options.variant ?? Math.floor(hash(seed, 71) * 2))) % 2;
   const record = records.get(key(species, variant));
   if (!record) throw new TreeLibraryError(`The required ${key(species, variant)} tree asset is unavailable.`);
   const size = THREE.MathUtils.clamp(options.size ?? hash(seed, 72), 0, 1);
-  const scale = 0.84 + size * 0.16;
+  return { record, variant, scale: 0.84 + size * 0.16 };
+}
+
+/** Resolve reusable source geometry plus deterministic scale/collider data for an InstancedMesh placement. */
+export function buildTreeInstance(species: TreeSpecies, seed: number, options: BuildOptions = {}): TreeInstance {
+  const { record, variant, scale } = resolveTree(species, seed, options);
+  const [colliderW, colliderD, colliderH] = record.trunkCollider;
+  return {
+    variant,
+    scale,
+    trunkRadius: Math.max(colliderW, colliderD) * scale / 2,
+    trunkHeight: colliderH * scale,
+    parts: record.instanceParts,
+  };
+}
+
+/** Clone one Blender-authored variant with deterministic scale variation and disposable geometry. */
+export function buildTreeAsset(species: TreeSpecies, seed: number, options: BuildOptions = {}): BuiltModel {
+  const { record, variant, scale } = resolveTree(species, seed, options);
   const group = record.source.clone(true) as THREE.Group;
   group.name = `${key(species, variant)}__instance`;
   group.userData.assetSource = 'blender'; group.userData.treeSpecies = species; group.userData.treeVariant = variant;

@@ -2,6 +2,7 @@ import type { District } from '../types';
 
 export type ReputationTier = 'notorious' | 'feared' | 'neutral' | 'known' | 'trusted';
 export type MissionResolution = 'protected' | 'robbed';
+export type GridResolution = 'defended' | 'sold';
 
 export interface DistrictState {
   communityStanding: number;
@@ -11,6 +12,7 @@ export interface DistrictState {
 export interface LivingCityState {
   districts: Record<District, DistrictState>;
   joziArmsResolution: MissionResolution | null;
+  gridResolution: GridResolution | null;
 }
 
 export type CityEvent =
@@ -20,7 +22,9 @@ export type CityEvent =
   | { kind: 'shop-purchase'; district: District }
   | { kind: 'police-evaded'; district: District }
   | { kind: 'mission-protected'; district: District }
-  | { kind: 'mission-robbed'; district: District };
+  | { kind: 'mission-robbed'; district: District }
+  | { kind: 'grid-defended'; district: District }
+  | { kind: 'grid-sold'; district: District };
 
 export interface CityTransition {
   previous: ReputationTier;
@@ -39,6 +43,7 @@ export function defaultLivingCityState(): LivingCityState {
   return {
     districts: Object.fromEntries(DISTRICTS.map((district) => [district, neutralDistrict()])) as Record<District, DistrictState>,
     joziArmsResolution: null,
+    gridResolution: null,
   };
 }
 
@@ -55,6 +60,7 @@ export function sanitizeLivingCityState(raw: unknown): LivingCityState {
     };
   }
   if (value.joziArmsResolution === 'protected' || value.joziArmsResolution === 'robbed') result.joziArmsResolution = value.joziArmsResolution;
+  if (value.gridResolution === 'defended' || value.gridResolution === 'sold') result.gridResolution = value.gridResolution;
   return result;
 }
 
@@ -110,6 +116,7 @@ export class LivingCitySystem {
     const changes: Record<CityEvent['kind'], [number, number]> = {
       'civilian-assault': [-8, 5], 'civilian-murder': [-18, 12], mugging: [-10, 7],
       'shop-purchase': [1, 0], 'police-evaded': [0, -3], 'mission-protected': [0, 30], 'mission-robbed': [0, 45],
+      'grid-defended': [0, 25], 'grid-sold': [0, 40],
     };
     const [standing, pressure] = changes[event.kind];
     state.communityStanding = clamp(state.communityStanding + standing, -100, 100);
@@ -118,6 +125,8 @@ export class LivingCitySystem {
     state.policePressure = clamp(state.policePressure + pressure, 0, 100);
     if (event.kind === 'mission-protected') this.state.joziArmsResolution = 'protected';
     if (event.kind === 'mission-robbed') this.state.joziArmsResolution = 'robbed';
+    if (event.kind === 'grid-defended') { this.state.gridResolution = 'defended'; state.communityStanding = Math.max(60, state.communityStanding); }
+    if (event.kind === 'grid-sold') { this.state.gridResolution = 'sold'; state.communityStanding = Math.min(-60, state.communityStanding); }
     const current = reputationTier(state.communityStanding);
     return current === previous ? undefined : { previous, current, state: { ...state } };
   }
