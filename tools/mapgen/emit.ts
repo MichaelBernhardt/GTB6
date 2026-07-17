@@ -31,6 +31,17 @@ export function applyNameOverrides(map: JoburgMap, overrides: NameOverrides): Jo
       roads: [...new Set(junction.roads.map(rename))].sort(),
     })),
     districts: map.districts.map((district) => ({ ...district, name: rename(district.name) })),
+    // Stations follow their namesakes: exact matches first, then a renamed district/road PREFIX
+    // ('Marshalltown Station' must read 'Joburg CBD Station' once Marshalltown itself is renamed).
+    stations: map.stations.map((station) => {
+      let name = rename(station.name);
+      if (name === station.name) {
+        for (const [from, to] of Object.entries(overrides)) {
+          if (name.startsWith(`${from} `) || name.startsWith(`${from}-`)) { name = to + name.slice(from.length); break; }
+        }
+      }
+      return { ...station, name };
+    }),
     landmarks: map.landmarks.map((landmark) => ({ ...landmark, name: rename(landmark.name) })),
     ...(map.rural ? { rural: { ...map.rural, padstal: { ...map.rural.padstal, name: rename(map.rural.padstal.name) } } } : {}),
     ...(map.airport ? { airport: { ...map.airport, name: rename(map.airport.name) } } : {}),

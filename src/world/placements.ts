@@ -17,6 +17,7 @@ import {
   landmark,
   METRES_PER_UNIT,
   SIGNAL_JUNCTIONS,
+  STATIONS,
   WATER_POLYGONS,
   DIRT_POLYGONS,
   type GeneratedRoad,
@@ -439,4 +440,6 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: HILLBROW_TOWER_SPOT.x, z: HILLBROW_TOWER_SPOT.z, radius: 14 },
   { x: WATER_TOWER_SPOT.x, z: WATER_TOWER_SPOT.z, radius: 10 },
   ...BEACHFRONT_PADS, // Kaapstad Quay pier + seafront venue strips + beach clutter (beachfront.ts)
+  // Rail station aprons: platforms, shelters and their forecourts stay clear of buildings/scatter.
+  ...STATIONS.map((station) => ({ x: station.x, z: station.z, radius: 22 })),
 ];

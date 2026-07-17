@@ -22,12 +22,15 @@ import {
   METRES_PER_UNIT,
   OCEAN_POLYGON,
   pointInPolygon,
+  RAIL_BALLAST_WIDTH,
+  distanceToRailEdge,
   WATER_POLYGONS,
   type MapPolygon,
   type MapPt,
 } from './mapData';
 import { OCEAN_Y } from './coast';
 import { buildAirport } from './Airport';
+import { buildRailStations } from './RailStations';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
@@ -254,8 +257,8 @@ export const RAILWAY_NETWORK: Array<{ name: string; points: RoadPoint[] }> =
   GENERATED_RAILWAYS.map((line) => ({ name: line.name, points: line.points }));
 /** Rail-to-rail centre spacing (u) — reads as SA cape gauge at game scale. */
 export const RAIL_GAUGE = 1.6;
-/** Gravel ballast bed width (u). */
-export const RAIL_BALLAST_WIDTH = 5.2;
+/** Gravel ballast bed width (u) — lives in mapData so the placement clearance rules share it. */
+export { RAIL_BALLAST_WIDTH };
 
 const seeded = (x: number, z: number, salt = 0): number => {
   const value = Math.sin(x * 12.9898 + z * 78.233 + salt * 41.17) * 43758.5453;
@@ -560,8 +563,9 @@ export class City {
    *  from the verge roadsidePoints so lamp pitch is set by arc length, not the coarser roadside stride. */
   streetlampPoints: RoadsidePoint[] = buildStreetlampPoints(ROAD_NETWORK);
   roadPaths: RoadPoint[][] = [];
-  /** Sampled rail centrelines (world XZ) — the train system runs along these. */
-  railPaths: RoadPoint[][] = [];
+  /** Sampled rail centrelines (world XZ, named) — the train system runs along these and matches
+   *  each line's stations (mapData.STATIONS) by name. */
+  railPaths: Array<{ name: string; points: RoadPoint[] }> = [];
   trafficRoutes: RoadPoint[][] = [];
   private navPaths = buildCityNavPaths(ROAD_NETWORK);
   vehicleNav: NavGraph = buildVehicleNav(ROAD_NETWORK); // directed one-way lanes (left-hand); pedNav stays undirected
@@ -604,14 +608,14 @@ export class City {
     this.architecture = new BuildingArchitecture(this.group);
     ensureParcels(); // build the citywide parcel layout now (during load), not on the first frame
     ensureScatter(); // and the scattered structure/foliage layout (same on-demand streaming path)
-    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks(); this.buildAirfield();
+    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks(); this.buildAirfield(); this.buildStations();
     this.infrastructure = new UrbanInfrastructure(
       this.group,
       this.chunkStore,
       this.detailStore,
       this.roadsidePoints,
       this.streetlampPoints,
-      (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius),
+      (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius) || distanceToRailEdge(x, z) < radius, // street furniture keeps off the rail corridor too
       (x, z, margin) => this.isOnRoad(x, z, margin),
       this.props,
       (x, z) => this.sidewalkHeightAt(x, z),
@@ -995,7 +999,7 @@ export class City {
       const sampled = this.samplePath(line.points, false, ROAD_SAMPLE_SPACING);
       const ballast = this.createRoadStrip(sampled, RAIL_BALLAST_WIDTH, ballastMat, 0.045, false);
       ballast.receiveShadow = true; this.group.add(ballast);
-      this.railPaths.push(sampled.map((point) => ({ ...point })));
+      this.railPaths.push({ name: line.name, points: sampled.map((point) => ({ ...point })) });
       const chords = this.densifyPath(sampled, RAIL_PITCH, false);
       for (let index = 0; index < chords.length - 1; index++) {
         const start = chords[index]; const end = chords[index + 1]; if (!start || !end) continue;
@@ -1677,7 +1681,7 @@ export class City {
       const x = polygon.minX + seeded(polygon.cx + attempt, polygon.cz, 31) * (polygon.maxX - polygon.minX);
       const z = polygon.minZ + seeded(polygon.cx, polygon.cz + attempt, 32) * (polygon.maxZ - polygon.minZ);
       if (!pointInPolygon(polygon, x, z) || this.inWater(x, z)) continue;
-      if (this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2)) continue;
+      if (this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2) || distanceToRailEdge(x, z) < 0.7) continue; // parks can straddle the rails: no trunks on the ballast
       if (terrainHeightAt(x, z) > SNOW_Y * 0.55) continue; // no leafy park trees above the range's rock line
       this.addParkTree(x, z, attempt + Math.round(polygon.cx));
       planted++;
@@ -2014,6 +2018,16 @@ export class City {
       strip: (points, width, material, lift) => this.createRoadStrip(points, width, material, lift, false),
       addInstanced: (geometry, material, transforms, shadows) => this.addInstanced(geometry, material, transforms, shadows),
       isOnRoad: (x, z, margin = 0) => this.isOnRoad(x, z, margin),
+    });
+  }
+
+  /** Rail stations (see world/RailStations.ts): a platform + shelter + name board at every
+   *  generated stop, built before the static merge so they chunk with the world. */
+  private buildStations(): void {
+    buildRailStations({
+      group: this.group, colliders: this.colliders, props: this.props,
+      concrete: this.concrete,
+      ground: (x, z) => terrainHeightAt(x, z),
     });
   }
 

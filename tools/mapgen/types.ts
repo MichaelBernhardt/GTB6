@@ -179,6 +179,17 @@ export interface MapRailway {
   points: [number, number][];
 }
 
+/** A passenger stop on a kept rail line — trains brake to it, the game builds a platform at it. */
+export interface MapStation {
+  name: string;
+  /** Owning line (matches a MapRailway name). */
+  line: string;
+  x: number;
+  z: number;
+  /** Real OSM railway=station/halt node vs pipeline-synthesized infill/end stop. */
+  source: 'osm' | 'synthetic';
+}
+
 export interface MapLandmark {
   name: string;
   x: number;
@@ -196,6 +207,7 @@ export interface MapStats {
   trackKm: number;
   trackCount: number;
   landuseCount: number;
+  stationCount: number;
   bridgedIslands: number;
   droppedIslands: number;
   droppedIslandKm: number;
@@ -223,6 +235,7 @@ export interface JoburgMap {
   districts: MapDistrict[];
   water: MapWater[];
   railways: MapRailway[];
+  stations: MapStation[];
   landmarks: MapLandmark[];
   tracks: MapTrack[];
   landuse: MapArea[];

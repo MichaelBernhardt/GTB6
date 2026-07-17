@@ -62,6 +62,7 @@ interface RawMap {
   landmarks: Array<{ name: string; x: number; z: number; kind: string }>;
   tracks: Array<{ name: string; width: number; kind: 'track' | 'path'; points: [number, number][] }>;
   railways: Array<{ name: string; points: [number, number][] }>;
+  stations?: Array<{ name: string; line: string; x: number; z: number; source: 'osm' | 'synthetic' }>;
   landuse: Array<{ name: string; kind: string; points: [number, number][] }>;
   /** Stage-3 airfield (tools/mapgen): runway/taxiway centrelines + apron and building footprints. */
   airport?: {
@@ -195,6 +196,15 @@ export const GENERATED_TRACKS: GeneratedTrack[] = MAP.tracks
 /** Passenger rail lines (thinned by the pipeline): rendered as ballast + rails, never driveable. */
 export const GENERATED_RAILWAYS: Array<{ name: string; points: MapPt[] }> =
   (MAP.railways ?? []).map((line) => ({ name: line.name, points: toPts(line.points) }));
+
+/** A passenger stop on a rail line: trains dwell here, the world builds a platform here. */
+export interface MapStation { name: string; line: string; x: number; z: number; source: 'osm' | 'synthetic'; }
+
+/** Every generated rail station (both line ends + OSM/synthesized intermediate stops). */
+export const STATIONS: MapStation[] = MAP.stations ?? [];
+
+/** Gravel ballast bed width (u) — the rail corridor every placement rule must keep clear of. */
+export const RAIL_BALLAST_WIDTH = 5.2;
 
 // ---- Districts -------------------------------------------------------------
 
@@ -407,25 +417,36 @@ export const ROAD_EDGE_CAP = 14;
 interface EdgeSegment { ax: number; az: number; bx: number; bz: number; half: number; }
 
 const EDGE_CELL = 26;
-const edgeGrid = new Map<string, EdgeSegment[]>();
 
-function insertEdgeSegment(segment: EdgeSegment): void {
-  const pad = segment.half + ROAD_EDGE_CAP;
+function insertEdgeSegment(grid: Map<string, EdgeSegment[]>, segment: EdgeSegment, cap: number): void {
+  const pad = segment.half + cap;
   const minX = Math.floor((Math.min(segment.ax, segment.bx) - pad) / EDGE_CELL);
   const maxX = Math.floor((Math.max(segment.ax, segment.bx) + pad) / EDGE_CELL);
   const minZ = Math.floor((Math.min(segment.az, segment.bz) - pad) / EDGE_CELL);
   const maxZ = Math.floor((Math.max(segment.az, segment.bz) + pad) / EDGE_CELL);
   for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
     const key = `${cx},${cz}`;
-    const cell = edgeGrid.get(key);
-    if (cell) cell.push(segment); else edgeGrid.set(key, [segment]);
+    const cell = grid.get(key);
+    if (cell) cell.push(segment); else grid.set(key, [segment]);
   }
 }
 
+function distanceToEdge(grid: Map<string, EdgeSegment[]>, x: number, z: number, cap: number): number {
+  let best = cap;
+  for (const segment of grid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
+    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
+    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
+    const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
+    if (distance < best) best = distance;
+  }
+  return best;
+}
+
+const edgeGrid = new Map<string, EdgeSegment[]>();
 for (const road of GENERATED_ROADS) {
   for (let index = 0; index < road.points.length - 1; index++) {
     const a = road.points[index]!; const b = road.points[index + 1]!;
-    insertEdgeSegment({ ax: a.x, az: a.z, bx: b.x, bz: b.z, half: road.width / 2 });
+    insertEdgeSegment(edgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: road.width / 2 }, ROAD_EDGE_CAP);
   }
 }
 
@@ -435,14 +456,29 @@ for (const road of GENERATED_ROADS) {
  * Grid-backed, so placement code and tests can call it liberally.
  */
 export function distanceToRoadEdge(x: number, z: number): number {
-  let best = ROAD_EDGE_CAP;
-  for (const segment of edgeGrid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
-    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
-    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
-    const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
-    if (distance < best) best = distance;
+  return distanceToEdge(edgeGrid, x, z, ROAD_EDGE_CAP);
+}
+
+// ---- Rail-corridor distance grid -------------------------------------------------
+
+/** How far beyond the ballast edge the rail grid can measure accurately. */
+export const RAIL_EDGE_CAP = 14;
+
+const railEdgeGrid = new Map<string, EdgeSegment[]>();
+for (const line of GENERATED_RAILWAYS) {
+  for (let index = 0; index < line.points.length - 1; index++) {
+    const a = line.points[index]!; const b = line.points[index + 1]!;
+    insertEdgeSegment(railEdgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: RAIL_BALLAST_WIDTH / 2 }, RAIL_EDGE_CAP);
   }
-  return best;
+}
+
+/**
+ * Distance from a point to the nearest rail BALLAST edge (negative when on the rail bed),
+ * clamped to RAIL_EDGE_CAP — the road-corridor rule's twin, so buildings and scatter keep
+ * off the tracks exactly the way they keep off the streets.
+ */
+export function distanceToRailEdge(x: number, z: number): number {
+  return distanceToEdge(railEdgeGrid, x, z, RAIL_EDGE_CAP);
 }
 
 // ---- Signalised junctions -----------------------------------------------------

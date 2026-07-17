@@ -15,6 +15,7 @@
  * Pure data + pure functions (no three.js) so tests and the headless perf script consume it freely.
  */
 import {
+  distanceToRailEdge,
   distanceToRoadEdge,
   GENERATED_ROADS,
   METRES_PER_UNIT,
@@ -53,6 +54,9 @@ const WALK_STEP = 8;
  * so a building fronting its own road is never rejected by its own frontage.
  */
 const ROAD_CLEARANCE = 2.5;
+/** Minimum clear distance a footprint must keep from the rail BALLAST edge — the road rule's twin
+ *  (trains own their corridor the way traffic owns the carriageway; nothing may overhang it). */
+const RAIL_CLEARANCE = 2.5;
 /** Footprint sampling pitch (units) for the road-corridor test — quarter-snapped AABBs sample exactly. */
 const FOOTPRINT_SAMPLE_STEP = 3;
 /** Shrink schedule for a mass that overhangs a road: multiply w&d per attempt, up to this many tries. */
@@ -91,7 +95,7 @@ function seeded(x: number, z: number, salt = 0): number {
  * centre. Uses the shared road-edge grid, so it is pure, deterministic and cheap. Exported so tests
  * can assert the citywide guarantee (no footprint intersects a road corridor).
  */
-export function footprintRoadClearance(cx: number, cz: number, width: number, depth: number, heading: number): number {
+function footprintEdgeClearance(distanceTo: (x: number, z: number) => number, cx: number, cz: number, width: number, depth: number, heading: number): number {
   const c = Math.cos(heading); const s = Math.sin(heading);
   const hx = width / 2; const hz = depth / 2;
   const nx = Math.max(1, Math.ceil(width / FOOTPRINT_SAMPLE_STEP));
@@ -104,11 +108,20 @@ export function footprintRoadClearance(cx: number, cz: number, width: number, de
       // Same rotation City uses to place the collider, so the sampled rectangle IS the collider footprint.
       const wx = cx + lx * c + lz * s;
       const wz = cz - lx * s + lz * c;
-      const d = distanceToRoadEdge(wx, wz);
+      const d = distanceTo(wx, wz);
       if (d < min) min = d;
     }
   }
   return min;
+}
+
+export function footprintRoadClearance(cx: number, cz: number, width: number, depth: number, heading: number): number {
+  return footprintEdgeClearance(distanceToRoadEdge, cx, cz, width, depth, heading);
+}
+
+/** The rail twin of footprintRoadClearance: minimum footprint distance to the ballast edge. */
+export function footprintRailClearance(cx: number, cz: number, width: number, depth: number, heading: number): number {
+  return footprintEdgeClearance(distanceToRailEdge, cx, cz, width, depth, heading);
 }
 
 interface ZoneShape {
@@ -231,7 +244,8 @@ function fitFootprint(
   let width = width0; let depth = depth0;
   for (let attempt = 0; attempt <= SHRINK_ATTEMPTS; attempt++) {
     const x = faceX + nX * (depth / 2); const z = faceZ + nZ * (depth / 2);
-    if (footprintRoadClearance(x, z, width, depth, heading) >= ROAD_CLEARANCE) return { x, z, width, depth };
+    if (footprintRoadClearance(x, z, width, depth, heading) >= ROAD_CLEARANCE
+      && footprintRailClearance(x, z, width, depth, heading) >= RAIL_CLEARANCE) return { x, z, width, depth };
     if (Math.min(width, depth) * SHRINK_FACTOR < MIN_FOOTPRINT) break;
     width *= SHRINK_FACTOR; depth *= SHRINK_FACTOR;
   }

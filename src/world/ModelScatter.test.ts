@@ -9,7 +9,7 @@ import {
   FOLIAGE_ROAD_CLEARANCE,
   type ScatteredModel,
 } from './ModelScatter';
-import { CELL_SIZE, allBuildings, footprintRoadClearance, type GeneratedBuilding } from './CityGen';
+import { CELL_SIZE, allBuildings, footprintRailClearance, footprintRoadClearance, type GeneratedBuilding } from './CityGen';
 import { MODEL_INDEX } from './models/catalog';
 import { MAP_WORLD_SIZE, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, pointInAnyPolygon } from './mapData';
 import { classifyZone } from './data/zoning';
@@ -68,6 +68,17 @@ describe('citywide model scatter', () => {
       expect(clr, `${m.name} on the tar`).toBeGreaterThanOrEqual(FOLIAGE_ROAD_CLEARANCE - 1e-6);
     }
   }, 30_000); // full-city scan across ~41k scattered models (post-density-increase) needs more than the 5 s default
+
+  it('never overhangs a rail corridor: structures clear the ballast, trunks stay off the bed', () => {
+    // Owner: "ensure buildings and clutter aren't placed on tracks" — same margins as the road rule.
+    const verge = new Set(['billboard', 'cell-tower']);
+    for (const m of all) {
+      const def = MODEL_INDEX.get(m.name)!;
+      const clr = footprintRailClearance(m.x, m.z, def.maxFootprint.w, def.maxFootprint.d, m.heading);
+      const min = isFoliage(m.name) || verge.has(m.name) ? FOLIAGE_ROAD_CLEARANCE : STRUCT_ROAD_CLEARANCE;
+      expect(clr, `${m.name} @ ${m.x.toFixed(1)},${m.z.toFixed(1)}`).toBeGreaterThanOrEqual(min - 1e-6);
+    }
+  }, 30_000);
 
   it('respects the crafted-first contract: nothing overlaps a manicured site claim', () => {
     for (const site of MANICURED_FOOTPRINTS) {

@@ -41,7 +41,7 @@ import { classifyZone, type Zone } from './data/zoning';
 import { RESERVED_PADS } from './placements';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 import { MODEL_INDEX } from './models/catalog';
-import { CELL_SIZE, allBuildings, footprintRoadClearance } from './CityGen';
+import { CELL_SIZE, allBuildings, footprintRailClearance, footprintRoadClearance } from './CityGen';
 
 /** One placed model: which catalog builder to run, where, and the seed/variant it builds from. */
 export interface ScatteredModel {
@@ -340,6 +340,8 @@ function tryPlace(
   // otherwise drift a mass off the buildable ground.
   if (pointInAnyPolygon(WATER_POLYGONS, x, z) || pointInAnyPolygon(AERODROME_POLYGONS, x, z)) return false;
   if (footprintRoadClearance(x, z, w, d, heading) < roadClear) return false;
+  // The rail corridor is as off-limits as the carriageway: same margins (structures 2.5, foliage 0.7).
+  if (footprintRailClearance(x, z, w, d, heading) < roadClear) return false;
   const footR = Math.hypot(w, d) / 2;
   if (craftedBlocks(x, z, footR * 0.7)) return false;
   if (buildings.blocks(x, z, footR)) return false;

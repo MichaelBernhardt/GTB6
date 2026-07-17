@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { DISTRICT_RADIUS_M } from './config';
 import { fetchElevationGrid } from './elevation';
 import { applyNameOverrides, loadNameOverrides } from './emit';
-import { fetchBuildingCounts, fetchCape, fetchOsm } from './overpass';
+import { fetchBuildingCounts, fetchCape, fetchOsm, fetchStations } from './overpass';
 import { buildPreviewHtml } from './preview';
 import { extractDistrictNodes, processOsm } from './process';
 
@@ -34,6 +34,11 @@ async function main(): Promise<void> {
   const cape = await fetchCape({ refresh });
   console.log(`[mapgen] Cape seaboard extract: ${cape.data.elements.length} elements${cape.fromCache ? ' (from cache)' : ''}`);
 
+  const osmStations = await fetchStations({ refresh });
+  console.log(osmStations
+    ? `[mapgen] rail stations: ${osmStations.nodes.length} nodes${osmStations.fromCache ? ' (from cache)' : ''}`
+    : '[mapgen] rail stations: OSM fetch unavailable — synthesizing every stop');
+
   const districtNodes = extractDistrictNodes(data);
   const [elevation, buildingCounts] = [
     await fetchElevationGrid(),
@@ -41,7 +46,7 @@ async function main(): Promise<void> {
   ];
 
   const overrides = loadNameOverrides();
-  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data });
+  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, stations: osmStations?.nodes ?? null });
   for (const line of log) console.log(`[process] ${line}`);
 
   const finalMap = applyNameOverrides(map, overrides);
@@ -58,7 +63,7 @@ async function main(): Promise<void> {
   console.log(
     `[stats] ${s.totalRoadKm} km of road in ${s.roadCount} polylines, ${s.junctionCount} junctions, ` +
       `${s.trackCount} off-road tracks (${s.trackKm} km), ${s.landuseCount} landuse polygons, ` +
-      `${s.districtCount} districts, ${s.waterCount} water bodies, ${s.landmarkCount} landmarks, ` +
+      `${s.districtCount} districts, ${s.waterCount} water bodies, ${s.landmarkCount} landmarks, ${s.stationCount} rail stations, ` +
       `elevation ${s.minElevation}-${s.maxElevation} m; bridged ${s.bridgedIslands} island joins, ` +
       `dropped ${s.droppedIslands} islands (${s.droppedIslandKm} km); 1 unit = ${s.metresPerUnit} m` +
       (s.oceanKm2 !== undefined ? `; ocean ${s.oceanKm2} km2 / land ${s.landKm2} km2, corridor ${s.corridorWidthUnits}u wide` : ''),
