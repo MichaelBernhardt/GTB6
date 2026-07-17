@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEPOT_DARK_THRESHOLD, DepotSecurity, depotDark, GUARD_TORCH_RANGE, guardSees, POWER_SURGE_GRACE_S, type DepotSnapshot } from './DepotSecurity';
 
-const base: DepotSnapshot = { insideFence: true, blackout: 1, isNight: true, torchOn: false, firedRecently: false, guardSees: false };
+const base: DepotSnapshot = { insideFence: true, playerX: 0, playerZ: 0, blackout: 1, isNight: true, torchOn: false, muzzleFlash: 0, headlights: [], guardSees: false };
 
 describe('depotDark / gate', () => {
   it('is only dark at night during a deep blackout', () => {
@@ -31,10 +31,12 @@ describe('DepotSecurity.update', () => {
     expect(new DepotSecurity().update(0.016, { ...base, insideFence: false, blackout: 0 })).toBe('clear');
   });
 
-  it('blackout night breach is clear unless torch, gunfire, or a guard cone gives it away', () => {
+  it('blackout night breach is clear unless torch, muzzle flash, headlights, or a guard cone gives it away', () => {
     expect(new DepotSecurity().update(0.016, base)).toBe('clear');
     expect(new DepotSecurity().update(0.016, { ...base, torchOn: true })).toBe('spotted');
-    expect(new DepotSecurity().update(0.016, { ...base, firedRecently: true })).toBe('spotted');
+    expect(new DepotSecurity().update(0.016, { ...base, muzzleFlash: 1.2 })).toBe('spotted');
+    expect(new DepotSecurity().update(0.016, { ...base, headlights: [{ x: 0, z: -10, heading: 0 }] })).toBe('spotted'); // beam facing +z lights the player
+    expect(new DepotSecurity().update(0.016, { ...base, headlights: [{ x: 0, z: 10, heading: 0 }] })).toBe('clear'); // beam pointing away
     expect(new DepotSecurity().update(0.016, { ...base, guardSees: true })).toBe('spotted');
   });
 

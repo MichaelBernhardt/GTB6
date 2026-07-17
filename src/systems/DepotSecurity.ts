@@ -7,18 +7,22 @@
  * maglock — then the remaining threat is torch-patrol guards, the player's own torch,
  * and gunfire. The game never states this; failure copy stays diegetic.
  *
- * TODO(blackout-stealth): once feat/polish-round's BlackoutStealth merges to main,
- * route the guard-vision check through its concealment model (headlight cones,
- * fired-within-1.5s visibility) instead of the local cone math in `guardSees`.
+ * Giveaways route through BlackoutStealth's shared model (own torch, muzzle-flash
+ * afterimage, live headlight cones), so what betrays you to JMPD in a blackout
+ * betrays you to the yard too. Guard torch patrols stay mission-owned cone math.
  */
+import { visibleInBlackout, type HeadlightCone } from './BlackoutStealth';
 
 export interface DepotGuard { x: number; z: number; heading: number; }
 export interface DepotSnapshot {
   insideFence: boolean;
+  playerX: number;
+  playerZ: number;
   blackout: number; // eased 0..1 grid-down factor
   isNight: boolean;
   torchOn: boolean;
-  firedRecently: boolean;
+  muzzleFlash: number; // seconds of muzzle-flash afterimage remaining (BlackoutStealth convention)
+  headlights: readonly HeadlightCone[]; // live vehicle beams near the yard
   guardSees: boolean;
 }
 
@@ -60,7 +64,8 @@ export class DepotSecurity {
     this.surge = Math.max(0, this.surge - Math.max(0, dt));
     if (!snapshot.insideFence) return 'clear';
     if (!dark && this.surge <= 0) return 'spotted'; // floodlights (or daylight watch): unconditional
-    if (snapshot.torchOn || snapshot.firedRecently || snapshot.guardSees) return 'spotted';
+    if (visibleInBlackout(snapshot.playerX, snapshot.playerZ, snapshot.torchOn, snapshot.muzzleFlash, snapshot.headlights)) return 'spotted';
+    if (snapshot.guardSees) return 'spotted';
     return 'clear';
   }
 

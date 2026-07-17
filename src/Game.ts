@@ -36,6 +36,8 @@ import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
 import { StoryDirector } from './systems/StoryDirector';
+import { DialogueSystem } from './systems/DialogueSystem';
+import { introScript } from './story/dialogues';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
@@ -56,7 +58,7 @@ import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADI
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
-import type { BaseQuality, CheatSettings, GameMode, GameSettings, Inventory, SavedGame, WorldTarget } from './types';
+import type { BaseQuality, CheatSettings, GameMode, GameSettings, GameSnapshot, Inventory, SavedGame, WorldTarget } from './types';
 import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
@@ -112,6 +114,11 @@ export class Game {
   private trains: TrainSystem;
   private missions = new MissionSystem();
   private story = new StoryDirector();
+  private dialogue = new DialogueSystem();
+  /** Mission-script overlay merged into every engine snapshot (detection verdicts, escort/follow state). */
+  private missionContext: Partial<GameSnapshot> = {};
+  private focusSpeed = 0;
+  private lastFocus?: THREE.Vector3;
   private loadShedding = new LoadSheddingSystem();
   private torch: TorchSystem;
   private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
@@ -858,7 +865,8 @@ export class Game {
     this.player.setWeapon(this.combat.current);
     if (this.input.consume('KeyF')) this.tryMugOrMelee();
     if (this.input.consume('KeyE')) {
-      const collectTarget = this.missions.objective?.kind === 'collect' ? this.currentTarget() : undefined;
+      if (this.advanceDialogue()) return;
+      const collectTarget = this.missions.objective?.kind === 'collect' ? this.missionTargetRaw() : undefined;
       if (collectTarget && collectTarget.position.distanceTo(this.player.group.position) < 8) { this.collectedItem = true; return; }
       if (this.tryMissionInteraction()) return;
       const vehicle = this.population.nearestEnterable(this.player.group.position);
@@ -1446,6 +1454,7 @@ export class Game {
   }
 
   private updateMission(dt: number): void {
+    this.updateDialogueAbandon();
     const objective = this.missions.objective;
     if (this.missions.state === 'active' && objective?.vehicleColor) {
       const requiredVehicle = this.population.vehicles.find((vehicle) => vehicle.spec.color === objective.vehicleColor);
@@ -1453,16 +1462,57 @@ export class Game {
     }
     if (objective?.kind === 'defeat') this.population.spawnHostiles();
     if (this.missions.active?.id === 'hot-property' && objective?.kind === 'enter-kind' && this.activeVehicle?.spec.kind === 'sport' && this.activeVehicle.spec.color === 0xd83a40) this.forceWanted(2);
-    const target = this.currentTarget(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    const target = this.missionTargetRaw(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    if (dt > 0 && this.lastFocus) this.focusSpeed = Math.min(80, Math.hypot(focus.x - this.lastFocus.x, focus.z - this.lastFocus.z) / dt);
+    (this.lastFocus ??= new THREE.Vector3()).copy(focus);
     const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.kind === 'escape' ? 12 : 8));
     if (objective?.kind === 'checkpoints' && reached) { const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1; this.processMissionUpdate(result); }
-    const result = this.missions.update(dt, {
-      playerPosition: focus, inVehicle: Boolean(this.activeVehicle), vehicleKind: this.activeVehicle?.spec.kind,
-      wantedLevel: this.wanted.level, shotsFired: this.combat.shotsFired, hostileDefeated: this.hostileDefeated, collectedItem: this.collectedItem, vehicleColor: this.activeVehicle?.spec.color,
-    }, reached);
+    const result = this.missions.update(dt, this.buildMissionSnapshot(focus), reached);
     this.processMissionUpdate(result);
     const current = `${this.missions.active?.id ?? ''}:${this.missions.objectiveIndex}`;
     if (current !== this.previousObjective) { this.previousObjective = current; if (this.missions.objective) this.ui.notify('Objective updated', this.missions.objective.text); }
+  }
+
+  /** Snapshot for the pure mission engine: combat/vehicle facts plus story context and any script overlay. */
+  private buildMissionSnapshot(focus: THREE.Vector3): GameSnapshot {
+    const objective = this.missions.objective;
+    const requiredVehicle = objective?.vehicleColor ? this.population.vehicles.find((vehicle) => vehicle.spec.color === objective.vehicleColor) : undefined;
+    const missionVehicle = requiredVehicle ?? this.activeVehicle;
+    return {
+      playerPosition: focus, inVehicle: Boolean(this.activeVehicle), vehicleKind: this.activeVehicle?.spec.kind, vehicleColor: this.activeVehicle?.spec.color,
+      wantedLevel: this.wanted.level, shotsFired: this.combat.shotsFired, hostileDefeated: this.hostileDefeated, collectedItem: this.collectedItem,
+      hour: this.dayNight.hour, blackout: this.dayNight.blackoutFactor, isNight: nightFactor(this.dayNight.hour) > 0.5,
+      onTrain: this.trains.riding, drivingTrain: this.trains.driving, trainSpeed: this.trains.rideSpeedKph / 3.6, stationName: this.trains.currentStationName,
+      inPlane: Boolean(this.activePlane),
+      altitude: this.activePlane ? Math.max(0, this.activePlane.group.position.y - this.city.surfaceHeightAt(this.activePlane.group.position.x, this.activePlane.group.position.z))
+        : this.airborne ? Math.max(0, this.player.group.position.y - this.city.supportHeight(focus.x, focus.z, this.player.group.position.y)) : undefined,
+      parachuted: this.airborne ? this.airborne.mode === 'parachute' : undefined,
+      playerSpeed: this.trains.driving ? this.trains.rideSpeedKph / 3.6 : this.activeVehicle ? Math.abs(this.activeVehicle.speed) : this.focusSpeed,
+      vehicleHealthPct: missionVehicle ? missionVehicle.health / missionVehicle.maxHealth : undefined,
+      torchOn: this.torch.on,
+      ...this.missionContext,
+    };
+  }
+
+  /** E while a dialogue card shows: step it; finishing an intro exchange accepts the offered mission. */
+  private advanceDialogue(): boolean {
+    if (!this.dialogue.active) return false;
+    if (this.dialogue.advance() === 'finished') {
+      const offered = this.story.acceptOffer();
+      if (offered) { this.resetMissionRuntime(); this.missions.start(offered); }
+    }
+    this.audio.ui(true);
+    return true;
+  }
+
+  /** Walking away from the contact mid-exchange declines the offer (or drops a re-stated riddle). */
+  private updateDialogueAbandon(): void {
+    if (!this.dialogue.active) return;
+    const pendingId = this.story.pendingOffer;
+    const anchor = pendingId ? MISSIONS.find((item) => item.id === pendingId)?.start : this.missions.active?.start;
+    if (!anchor) return;
+    const position = this.player.group.position;
+    if (Math.hypot(anchor.position.x - position.x, anchor.position.z - position.z) > 12) { this.dialogue.abandon(); this.story.abandonOffer(); }
   }
 
   private tryMissionInteraction(): boolean {
@@ -1472,9 +1522,20 @@ export class Game {
       this.mode = 'paused'; document.exitPointerLock(); this.ui.showMissionChoice(this.missions.active?.name ?? 'Choose', this.missions.objective.choices ?? []); return true;
     }
     const position = this.player.group.position;
-    const mission = MISSIONS.find((item) => !this.missions.completed.has(item.id) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
-    if (!mission || this.missions.active) return false;
-    this.resetMissionRuntime(); this.missions.start(mission.id); this.ui.notify(mission.name, `${mission.contact}: ${mission.intro}`); return true;
+    if (this.missions.active) {
+      // Riddle missions: the contact re-states the current clue on demand (owner steer).
+      const active = this.missions.active;
+      if (this.missions.objective?.hidden && Math.hypot(active.start.position.x - position.x, active.start.position.z - position.z) < 7) {
+        this.dialogue.start({ id: `${active.id}:restate`, lines: [{ speaker: active.contact, text: this.missions.objective.text }] });
+        return true;
+      }
+      return false;
+    }
+    const mission = MISSIONS.find((item) => !this.missions.completed.has(item.id) && this.story.isUnlocked(item, this.missions.completed) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
+    if (!mission) return false;
+    this.story.beginOffer(mission.id);
+    this.dialogue.start(introScript(mission));
+    return true;
   }
 
   private tryMugOrMelee(): void {
@@ -1716,7 +1777,7 @@ export class Game {
   }
 
   private resetMissionRuntime(): void {
-    this.deliveryIndex = 0; this.collectedItem = false; this.hostileDefeated = 0; this.previousObjective = '';
+    this.deliveryIndex = 0; this.collectedItem = false; this.hostileDefeated = 0; this.previousObjective = ''; this.missionContext = {};
     const missionId = this.missions.active?.id;
     const vehicle = this.population.vehicles.find((item) => missionId === 'delivery-run' ? item.spec.color === 0xf1c232 : missionId === 'hot-property' ? item.spec.color === 0xd83a40 : false);
     if (vehicle) {
@@ -1727,20 +1788,30 @@ export class Game {
     }
   }
 
+  /** The active objective's real-world target, blip or not — hidden riddles still need reach checks. */
+  private missionTargetRaw(): WorldTarget | undefined {
+    const objective = this.missions.objective;
+    if (!objective) return undefined;
+    if (objective.kind === 'checkpoints') {
+      const stop = DELIVERY_STOPS[Math.min(this.deliveryIndex, DELIVERY_STOPS.length - 1)];
+      return stop ? { position: new THREE.Vector3(stop.x, this.city.roadHeightAt(stop.x, stop.z), stop.z), label: `Delivery ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
+    }
+    if (objective.target) { const position = objective.target.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...objective.target, position }; }
+    return undefined;
+  }
+
   private currentTarget(): WorldTarget | undefined {
     if (this.taxiDestination) return { position: this.taxiDestination, label: 'Drop-off', color: '#7fe08d' }; // active fare outranks mission breadcrumbs
     if (this.courierJob.phase === 'collecting') return { position: new THREE.Vector3(COURIER_DEPOT.x, this.city.roadHeightAt(COURIER_DEPOT.x, COURIER_DEPOT.z), COURIER_DEPOT.z), label: 'Sixty-Sekonds dispatch', color: '#84f01c' };
     if (this.courierDestination) return { position: this.courierDestination, label: `Order ${this.courierJob.completed + 1}`, color: '#84f01c' };
     const objective = this.missions.objective;
-    if (objective?.kind === 'checkpoints') {
-      const stop = DELIVERY_STOPS[Math.min(this.deliveryIndex, DELIVERY_STOPS.length - 1)];
-      return stop ? { position: new THREE.Vector3(stop.x, this.city.roadHeightAt(stop.x, stop.z), stop.z), label: `Delivery ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
-    }
-    if (objective?.target) { const position = objective.target.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...objective.target, position }; }
+    if (objective?.hidden) return undefined; // riddle objectives: the text is the only guide
+    const raw = this.missionTargetRaw();
+    if (raw) return raw;
     if (!this.missions.active) {
       let nearest: (typeof MISSIONS)[number] | undefined; let nearestDistance = Infinity;
       for (const mission of MISSIONS) {
-        if (this.missions.completed.has(mission.id)) continue;
+        if (this.missions.completed.has(mission.id) || !this.story.isUnlocked(mission, this.missions.completed)) continue;
         const distance = (mission.start.position.x - this.player.group.position.x) ** 2 + (mission.start.position.z - this.player.group.position.z) ** 2;
         if (distance < nearestDistance) { nearest = mission; nearestDistance = distance; }
       }
@@ -1878,7 +1949,7 @@ export class Game {
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (this.missions.objective?.kind === 'choice') prompt = 'E  Decide the fate of Jozi Arms';
-      else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && Math.hypot(mission.start.position.x - focus.x, mission.start.position.z - focus.z) < 7)) prompt = 'E  Speak to contact';
+      else if (!this.dialogue.active && MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && this.story.isUnlocked(mission, this.missions.completed) && Math.hypot(mission.start.position.x - focus.x, mission.start.position.z - focus.z) < 7)) prompt = 'E  Speak to contact';
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
       else if (shop?.kind === 'bottle') prompt = `E  Browse ${shop.name}`;
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
@@ -1909,7 +1980,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore } : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

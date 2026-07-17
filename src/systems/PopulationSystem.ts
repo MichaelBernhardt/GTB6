@@ -494,9 +494,12 @@ export class PopulationSystem {
       const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
       const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant()); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
     }
+    const seenContacts = new Set<string>(); // one body per contact, at their first-listed mission's spot
     MISSIONS.forEach((mission, index) => {
+      if (seenContacts.has(mission.contact)) return; seenContacts.add(mission.contact);
+      const variant = MISSION_CONTACT_NPC_IDS[mission.id]; if (!variant) return;
       const contactPosition = mission.start.position.clone(); contactPosition.y = this.city.surfaceHeightAt(contactPosition.x, contactPosition.z);
-      const contact = new Pedestrian(this.scene, contactPosition, index + 70, false, false, this.nextSpecialNpcVariant(MISSION_CONTACT_NPC_IDS[mission.id]!));
+      const contact = new Pedestrian(this.scene, contactPosition, index + 70, false, false, this.nextSpecialNpcVariant(variant));
       contact.state = 'idle'; contact.idleTime = 999999; contact.contact = true; contact.group.name = mission.contact; this.pedestrians.push(contact);
     });
     this.parkedSpots.slice(0, 4).forEach(([x, z], index) => {

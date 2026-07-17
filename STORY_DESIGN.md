@@ -1,215 +1,181 @@
-# Story & Mission Buildout — Design Doc
+# Story & Mission Buildout — Design Doc (rev 2, owner-corrected)
 
 Branch `feat/story-missions`. Extends the existing 4-mission vertical slice into a 3-act
-arc with ~15 new missions plus side content. Everything below is designed against systems
-already on `main` (LoadShedding + DayNight blackout, trains, planes/skydive, taxis,
-LivingCity, safehouses, shops), with a marked seam for BlackoutStealth when it lands.
+arc with ~15 new missions plus side content. BlackoutStealth (PR #77) is merged into this
+branch; DepotSecurity routes giveaways through its shared concealment model.
+
+**Owner steers (binding, from design review):**
+- Protagonist is a BAD GUY — a criminal opportunist who joins the cartel early and does
+  its dirty work from inside. Never civic virtue. The irony of the arc: the player causes
+  the blackouts that later become their stealth cover.
+- Flagship break-in is impossible outside load shedding and the game NEVER tells the
+  player how — no instructional text anywhere. Teaching is experiential only.
+- Riddle missions: every referent exists in shipped map data; the contact re-states the
+  riddle on demand (E at the contact while the mission is active).
 
 ## Synopsis — "Stage Six"
 
-Joburg's blackouts aren't all Eskom's fault. A generator-and-diesel cartel — run by
-Solly "the Genny King" Malaka — pays crews to strip substations and trip the grid, then
-sells the city its own light back: gennies, diesel, "security". The player, a fresh
-arrival grinding gigs for Auntie Portia, Bra Vusi and Candice, starts seeing the pattern
-from below: Vusi's "fallen off a substation" copper is cartel salvage, Candice's rank war
-is about who moves the diesel, and every blackout makes somebody rich. A night-shift
-substation engineer, Sindi Mokoena, catches a sabotage crew red-handed and starts feeding
-the player evidence. Act 2 has the player working both sides until they must pick one:
-Sindi and the lights, or the Genny King and the money. Act 3 converges on Kelvin Yard,
-the cartel's fortified depot, where the ledger that proves everything is kept — behind
-floodlights that only ever go out when the grid does. Finale: the cartel tries to blow
-the CBD substation for one last, permanent Stage Six; the player stops it (or inherits
-the ashes, per branch).
+Joburg's blackouts aren't all Eskom's fault. A generator-and-diesel cartel — run by Solly
+"the Genny King" Malaka — trips the grid on purpose and sells the city its own light
+back: gennies, diesel, "security subscriptions". The player claws up from gig work (the
+existing four missions), gets noticed moving hot copper, and is recruited onto Solly's
+payroll: tanker hijacks, substation sabotage, collections, arson. The player personally
+throws the breakers that black out the city. Sindi Mokoena, a night-shift substation
+engineer, reads the fault logs and knows the trips are manual — she's a threat, then an
+asset. The branch: stay loyal and rise to take Solly's throne, or feed Sindi the evidence
+and pick over the cartel's carcass for money. Both criminal, both paid. Either way the
+road runs through Kelvin Yard's records office — sealed behind mains floodlights that
+only ever die when the grid does — and ends at the CBD substation, where Solly's people
+rig one last, permanent Stage Six.
 
-Backstory rides collectibles: 12 "Grid Diary" pages (a fired Eskom planner's notes)
-scattered at landmarks, each one paragraph of lore; finding all 12 unlocks a side payoff.
+Backstory rides 12 collectible "Grid Diary" pages: a fired Eskom planner's notes — the
+man who first sold Solly the idea. All 12 unlock a cash stash + epilogue scrap.
 
-## Contact roster (voices)
+## Contact roster (voices; models reuse existing NPC GLBs)
 
 | Contact | Voice | Role |
 |---|---|---|
 | Auntie Portia | warm, motherly hustle, "boet", "sharp sharp" | Act 1 anchor, existing |
-| Bra Vusi | chancer, "yoh", "vrrr phaa" | Act 1, unknowing cartel supplier |
-| Candice from Boksburg | brassy rank politics | Act 1–2, taxi/diesel angle |
-| Thandi (Jozi Arms) | terse, transactional | existing; ammo/branch flavour |
-| **Sindi Mokoena** (new) | precise engineer dryness, "load factor", "per spec" | whistleblower, Act 2–3 |
-| **Solly "Genny King" Malaka** (new) | charming menace, money talk, "my laaitie" | antagonist/employer, Act 2–3 |
-| **Skywise Sipho** (new, minor) | bush-pilot bravado | airport missions |
-| **Oupa Jakes** (new, minor) | retired Park Station announcer, riddles | puzzle missions |
+| Bra Vusi | chancer, "yoh", "vrrr phaa" | Act 1; the cartel's copper fence, vouches you in |
+| Candice from Boksburg | brassy rank politics | Act 1; diesel moves through her rank |
+| Thandi (Jozi Arms) | terse, transactional | existing |
+| **Solly "Genny King" Malaka** (new) | charming menace, "my laaitie" | employer, Act 2–3 antagonist |
+| **Sindi Mokoena** (new) | precise engineer dryness | threat → asset, Act 2–3 |
+| **Skywise Sipho** (new, minor) | bush-pilot bravado | airport mission |
+| **Oupa Jakes** (new, minor) | retired Park Station announcer | riddle missions |
 
 ## Act structure & mission list
 
-Existing 4 missions become the on-ramp (Act 0); completing any 2 raises flag `act1`.
+Existing 4 missions are the on-ramp. `hot-property` (Vusi's copper) is the thread the
+cartel pulls.
 
-**ACT 1 — "Hustle"** (contacts you know; seeds of the plot)
-1. **Last Coach Home** (Portia) — *trains*: her nephew left her rent bag on a train.
-   Deduce the right platform at Park Station from his voice-note ("the one that smells
-   the sea" → coastal line), board, ride to the named station, grab the bag, ride back.
-   New snapshot: `onTrain`, `stationName`.
-2. **Copper Wire Blues** (Vusi) — *tail*: follow the buyer's bakkie to its yard without
-   spooking it (stay within 45u, don't touch it, don't shoot). Discovers Kelvin Yard —
-   establishes the flagship location early, innocently. New kind: `follow`.
-3. **Rank Cold War** (Candice) — *escort*: ride shotgun in Candice's taxi; fight off two
-   ambushes at rival-rank territory. Fail if the taxi dies. New kind: `survive` +
-   `failIf: vehicleDestroyed`.
-4. **The Reading of the Signs** (Oupa Jakes) — *puzzle*: riddle chain across the joke
-   street names, **no map markers** — the objective text IS the riddle ("Stand where the
-   road confesses its condition" → Pothole Street; "…where the lights never stay" →
-   Loadshed Lane; "…where the city still sends paper" → Fax Street). New objective flag:
-   `hidden: true` (no blip/breadcrumb). Reward + first Grid Diary page.
+**ACT 1 — "Hustle"** (grind; the city teaches you its systems)
+1. **Last Coach Home** (Portia; *trains*) — her nephew abandoned her rent bag on the
+   Sandton line. Board at any station, ride to Sandton Station, grab the bag off the
+   platform, bring it back. Conditions: `onTrain` + `stationName`.
+2. **Copper Wire Blues** (Vusi; *tail*) — follow the cable buyer's bakkie across town
+   without losing it (`follow` + `strayed` failIf). It parks at Kelvin Yard — the player
+   sees the fence, the floodlight masts, the gate. First sight of the flagship location,
+   innocently.
+3. **Rank Cold War** (Candice; *escort*) — drive Candice's taxi through two rival-rank
+   ambushes; the taxi must survive (`vehicle-health-below` failIf, hostile waves).
+4. **The Reading of the Signs** (Oupa Jakes; *riddle*, no markers) — riddle chain over
+   real map streets: Pothole Street → Loadshed Lane → Fax Street. Objective text IS the
+   riddle (`hidden: true`); Oupa re-states it on demand. Pays a Grid Diary page.
 
-**ACT 2 — "The Grid"** (flag `act1` → Sindi & Genny King unlock)
-5. **Night Shift** (Sindi intro) — reach the CBD substation, catch and beat off a
-   sabotage crew mid-cut. Learn the blackouts are induced.
-6. **Diesel Run** (Genny King intro) — hijack a parked diesel tanker (van kind, cartel
-   colours) and deliver it **gently**: fail if vehicle health drops below 60%. New
-   snapshot: `vehicleHealthPct`; new `failIf: vehicleHealthBelow`.
-7. **Paper Round** (Sindi, *puzzle*) — her dead-drop location is encoded in a classified
-   ad she reads you: "For sale: one-way ticket. Meet where the Halt serves the sky."
-   → Lughawe Halt, the airport station ("lughawe" = Afrikaans for airport; the airport is
-   right there on the map — solvable by exploring the rail line, no external knowledge).
-   `hidden: true` reach.
-8. **Stage Fright** (Genny King) — steal the Sandton showroom superbike. His brief carries
-   the *teaching hint*: "When the lights die, the cameras die with them, laaitie." Attempt
-   with grid up → alarm, 3-star wanted, mission continues (get away with it hot) — attempt
-   in a blackout → silent. This teaches the blackout-as-opportunity grammar ONCE, with a
-   hint, so the flagship can stay hintless. New snapshot: `blackout` (0..1), `isNight`.
-9. **The Wrong Train** (Candice) — *drive a train*: the cartel rails diesel at night; take
-   the freight consist and stop it dead at the Crown Station siding (precision stop:
-   `reach` + `speedBelow` condition while `drivingTrain`).
-10. **Crosswinds** (Skywise Sipho) — fly the plane from O.R. Tambourine through three sky
-    checkpoints, then bail and land the chute on the Ponte Tower roof. New snapshot:
-    `inPlane`, `altitude`, `parachuted`; new kind reuse: `checkpoints` (sky) + `reach`
-    with `landedOnFoot` condition.
-11. **Two Fires** (branch, both contacts) — Sindi has enough to go public but needs the
-    sabotage crew caught in the act; the Genny King wants her charge sheet burned and her
-    name smeared. `choice` objective → flags `sided-sindi` / `sided-solly`, feeds
-    LivingCity (new events `grid-defended` / `grid-sold`, CBD standing ±, pressure +).
-    Each side gets one exclusive follow-up mission:
-    - *sided-sindi*: **Catch Them Cutting** — stake out the substation, defeat the crew,
-      photograph (collect) the cutting rig.
-    - *sided-solly*: **Paper Fire** — torch Sindi's evidence van before 06:00 (timed,
-      wanted heat, escape).
+Act gate: completing 2 of the original 4 **plus** Copper Wire Blues raises `act2`
+(recruitment — Vusi vouches for you; Solly sends word).
 
-**ACT 3 — "Stage Six"** (branch resolved → `act3`)
-12. **FLAGSHIP: Dark House** — see below. Both branches need the Kelvin Yard ledger.
-13. Branch tail:
-    - *sided-sindi*: **Daylight** — run the ledger to Constitution Hill with cartel
-      hit-cars on you the whole way (escort-self, `failIf: vehicleDestroyed`, no wanted-
-      laundering allowed: JMPD also want it).
-    - *sided-solly*: **Ash Ledger** — deliver the ledger to Solly, then hold Kelvin Yard
-      against the rival crew he sold out (survive wave defence).
-14. **The Switch** (finale, both branches) — the cartel (or its remnant) rigs the CBD
-    substation to blow for a permanent blackout. Timed: reach it, defeat the wreckers,
-    then `survive` 90s holding the perimeter until Sindi (or a bought JMPD unit) arrives.
-    Epilogue dialogue differs by branch; LivingCity settles final standing.
+**ACT 2 — "The Payroll"** (inside the cartel, working for Solly)
+5. **The Audition** (Solly intro; *gentle-drive*) — hijack a diesel tanker and bring it
+   to Kelvin Yard without denting it (`vehicleHealthPct` failIf). The crew waves you in
+   the gate by day: you see the yard from inside; the records office stays locked — Solly
+   trusts nobody with the books.
+6. **Pull the Plug** (Solly; *sabotage*) — night job: reach the CBD feeder substation,
+   throw the breaker (collect), watch the grid die around you (the script forces a
+   load-shedding start), then get clear of the JMPD response. **Experiential teaching #1:
+   your hand on the breaker → the lights die.** No commentary.
+7. **Stage Fright** (Solly; *stealth-steal*) — "the Sandton superbike. Tonight." The
+   showroom forecourt is floodlit with a mains maglock gate — the same furniture as
+   Kelvin Yard. Grid up: alarm screams, 3 stars, ride it out hot (mission continues).
+   Grid down: silent. Unlocks immediately after Pull the Plug completes — a player who
+   moves fast does the steal inside their own blackout and feels the connection. Nobody
+   says it. **Experiential teaching #2.**
+8. **The Genny Round** (Solly; *collections*) — three businesses behind on "generator
+   subscriptions": visit each (checkpoints), lean on the one holdout (defeat 1), get the
+   money to Solly. LivingCity standing cost baked in (assault events).
+9. **Paper Round** (Sindi approaches YOU; *riddle*) — "I read the fault logs. That trip
+   was manual. Let's talk — if you can read." Her dead-drop is a classified ad: "For
+   sale: one-way ticket. Collect where the Halt serves the sky." → Lughawe Halt (the
+   airport station; solvable by riding the line). `hidden: true`. You take her dossier —
+   what you do with it comes later.
+10. **The Wrong Train** (Solly; *drive a train*) — the cartel rails diesel at night; take
+    the consist and stop it dead at the Crown Station siding (`drivingTrain` +
+    `speedBelow` at the target).
+11. **Crosswinds** (Skywise Sipho; *fly + skydive*) — run "spare parts" through three sky
+    checkpoints out of O.R. Tambourine, then bail and put the chute down on the Ponte
+    Tower roof (`inPlane`/`altitude`/`parachuted` conditions).
+12. **Two Fires** (branch `choice`) — Solly's order: Sindi's evidence van burns tonight.
+    - **Loyal** (`choice:two-fires:solly`) → **Paper Fire**: torch the van before 06:00,
+      lose the heat. You're made — Solly's right hand.
+    - **Feed Sindi** (`choice:two-fires:sindi`) → **Catch Them Cutting**: help her
+      photograph your own crew mid-cut at the substation (stakeout, defeat, collect the
+      rig photo). Still a criminal play: she pays, and the carcass will be yours to pick.
 
-**SIDE PIECES** (optional, any time after act 1)
-- **Ouma se Padstal Run** — scenic long-haul delivery to the padstal over the mountain
-  pass; timed generously; pure tourism reward.
-- **Grid Diaries** — 12 collectible lore pages (`collect`, hidden, clued by each other);
-  all 12 → cash + a "the planner knew" epilogue scrap.
-- **Pier Pressure** (Candice) — a fare skipped without paying, big time: chase him down
-  the coastal strip to Seepunt Pier by taxi before his boat leaves (timed pursuit).
+**ACT 3 — "Stage Six"** (gate: branch resolved)
+13. **FLAGSHIP: Dark House** — both branches need Solly's black ledger. Throne: leverage
+    to turn his lieutenants. Sindi: the page her case (and your payday) hangs on. The
+    records office at Kelvin Yard is sealed to everyone — including you. See flagship
+    spec below. Zero hints, diegetic failure only.
+14. Branch tails:
+    - *Loyal/throne*: **Long Live the King** — the ledger turns the lieutenants; hold
+      Kelvin Yard against Solly's loyalists (survive wave defence). The yard is yours.
+    - *Sindi*: **Carcass** — run the ledger to the Constitution Hill handover with
+      cartel hit-cars on you; then sweep three cartel stashes for cash before the seals
+      go on (timed checkpoints).
+15. **The Switch** (finale, both branches) — Solly (or his bitter remnant) rigs the CBD
+    substation to blow: a permanent Stage Six. You stop it — throne branch because it's
+    your grid to milk now, Sindi branch because your money dies with the city. Timed
+    reach → defeat the wreckers → survive 90s holding the perimeter. Epilogue dialogue
+    per branch; LivingCity settles final standing (grid-defended/grid-sold).
 
-Count: 15 scripted missions (two branch-exclusive) + 3 side pieces + collectibles = the
-12–18 target with verb variety: courier, tail, escort, riddle×2, defend, gentle-drive,
-train-ride, train-drive, fly+skydive, stealth-steal, stakeout, arson-timed, infiltration,
-convoy, hold-out, pursuit.
+**SIDE PIECES** (optional)
+- **Ouma se Padstal Run** — scenic long-haul to the padstal; generous timer; tourism pay.
+- **Pier Pressure** (Candice) — a skipped fare, big time: run him down before his boat
+  leaves Seepunt Pier (timed pursuit).
+- **Grid Diaries** — 12 hidden lore pages, clued by each other; all 12 → stash + scrap.
+
+Verb variety: courier, tail, escort, riddle×2, sabotage, stealth-steal, collections,
+train-ride, train-drive, fly+skydive, timed arson, stakeout, infiltration, convoy,
+hold-out, pursuit, loot-sweep.
 
 ## FLAGSHIP: "Dark House" (Kelvin Yard break-in)
 
-**Setup.** Kelvin Yard: a fenced cartel depot in the southern industrial belt (placed via
-`bestKerbSpot` like other sites) — floodlight masts on the fence, one gate, a records
-office at the back. The mission giver says only: "Get me the black ledger out of the
-records office at Kelvin Yard. Their security is… thorough. Figure it out."
+Mission giver (either branch): "The black ledger sleeps in the records office at Kelvin
+Yard. Security answers to nobody — not even me. Figure it out." Nothing else, ever.
 
-**Grid up (day or night): impossible, diegetically.**
-- Floodlights blaze at night; by day the yard is simply watched.
-- Crossing the perimeter → floodlights snap to the player, klaxon, instant 4-star wanted,
-  objective fails with only diegetic copy: *"Floodlights slam on. The whole yard saw you."*
-  No mechanic named, no schedule hinted. Restart is one E-press (checkpointed).
-- The gate is electrically sealed — mains-powered maglock. It won't open. Ever. (Physical
-  blocker + the above detection = hard impossible, not merely hard.)
+**Grid up (day or night): impossible.** Mains floodlights; crossing the fence →
+floodlights snap on, klaxon, instant 4-star, objective fails with diegetic copy only
+(*"Floodlights slam on. The whole yard saw you."*). The office gate maglock is mains-fed
+and physically sealed. Hard impossible, not merely hard.
 
-**Grid down at night (blackout ≥ threshold): possible.**
-- Floodlights dead, maglock released (gate sags open a crack), two guards walk torch
-  patrols with narrow cones — avoid the cones, torch OFF (your own torch inside the
-  fence = detected), no gunfire. Reach office → `collect` ledger → get out past the fence.
-- Mid-mission grid return: lights surge back with a *bang* — you have a 5s grace surge-
-  flicker to get out of the open, then normal detection resumes. (Cruel but fair; the
-  outage window is ~32–44s per LoadSheddingSystem so the run is tight by design — and the
-  player can retry on the next outage or force one at a substation? No: no player control,
-  the waiting IS the discovery.)
+**Grid down at night (`blackout ≥ 0.7`): possible.** Floodlights dead, maglock sags
+open, two guards on torch patrols (narrow cones). Own torch inside the fence, muzzle
+flash, or a live headlight cone = spotted (shared BlackoutStealth model). Reach office →
+collect ledger → get back out. Grid returning mid-run: 5s surge-flicker grace, then
+normal watch resumes.
 
-**Discovery breadcrumbs (all oblique, all optional).**
-- Gate guard ambient bark (approach while casing): "Third month the genny's got no
-  diesel. Eskom hiccups and this whole yard goes blind — but do they listen?"
-- Newspaper scrap collectible at the fence: *"TENDER WATCH: security firm bills Kelvin
-  Yard for backup diesel never delivered."*
-- Stage Fright (mission 8) already taught blackout = dead cameras, with Solly's one hint.
-- The failure copy mentions floodlights every time; floodlights are visibly mains-fed
-  (they go dark citywide in every blackout the player has ever seen).
+**Discovery is experiential:** the player has thrown the breaker themselves (mission 6),
+has robbed a floodlit-maglock forecourt that fell silent in a blackout (mission 7), and
+has seen Kelvin Yard's floodlight masts from both sides (missions 2 and 5). Optional
+oblique flavour only: a guard grumbling the backup genny has no diesel; a newspaper scrap
+about billed-but-undelivered diesel. No objective text, no character line states the
+mechanic. The failure copy mentions floodlights every time; every blackout the player has
+ever seen kills floodlights citywide.
 
-**Detection implementation** — mission-owned, pure module `DepotSecurity.ts`:
-`assess({ playerInsideFence, blackout, isNight, torchOn, firedRecently, guardCones })` →
-`'clear' | 'spotted'`. Grid-up spotting is unconditional inside the fence. Fully sim-
-testable. **Seam:** when BlackoutStealth merges to main, its concealment check replaces
-the cone math behind the same `assess` signature (marked `TODO(blackout-stealth)`).
+Implementation: pure `DepotSecurity` (done, tested) — `update(dt, snapshot)` verdict +
+surge grace + `gateOpen()`; giveaways via BlackoutStealth's `visibleInBlackout`.
 
-## Engine extensions (EXTEND, no rewrite)
+## Engine (done, committed)
 
-**New ObjectiveKinds** (3 only): `follow`, `survive`, plus everything else expressed via
-existing kinds + two new orthogonal objective fields:
-- `conditions?: ObjectiveCondition[]` — extra predicates ANDed into `done` (e.g.
-  `{ onTrain: true }`, `{ speedBelow: 0.5 }`, `{ blackoutAbove: 0.7 }`, `{ undetected: true }`).
-- `failIf?: FailCondition[]` — per-objective failure triggers (`vehicleHealthBelow`,
-  `vehicleDestroyed` (exists ad-hoc, generalise), `detected`, `wantedAbove`, `leftRadius`).
-- `hidden?: true` — no blip, no breadcrumb (riddle missions).
-- `checkpoint?: true` — `restart()` resumes from the most recent checkpointed objective
-  index instead of 0 (long-mission mercy; engine change ~10 lines, fully tested).
+New kinds `follow`/`survive`; `conditions[]` (onTrain, drivingTrain, inPlane, onFoot,
+parachuted, speedBelow, altitudeAbove, blackoutAbove, undetected, torchOff, stationName);
+`failIf[]` (vehicle-health-below, detected, wanted-above, escort-down, strayed) with
+per-rule diegetic reasons; `hidden` (no blip); `checkpoint` (restart resumes there);
+`prerequisites`/`setFlags`/`act`; `missionUnlocked()`. GameSnapshot enriched (optional
+fields). DialogueSystem (pure), StoryDirector (flags/unlocks/offer handshake/diary),
+DepotSecurity, save v3 (storyFlags+diaryPages), LivingCity grid events. All sim-tested.
 
-**GameSnapshot additions** (all optional, fed by thin Game.ts wiring): `hour`, `blackout`,
-`isNight`, `onTrain`, `drivingTrain`, `trainSpeed`, `stationName`, `inPlane`, `altitude`,
-`parachuted`, `vehicleHealthPct`, `playerSpeed`, `followDistance`, `escortAlive`,
-`detected`, `district`, `torchOn`.
+## Dialogue layer
 
-**MissionDefinition additions**: `prerequisites?: { missions?: string[]; flags?: string[] }`,
-`setFlags?: string[]` (on complete), `giver` dialogue script id, `act` label. Contact
-markers only appear when prerequisites pass.
-
-**New modules** (Game.ts stays thin wiring):
-- `src/systems/StoryDirector.ts` — story flags, unlock evaluation, per-mission scripted
-  beats (hostile spawns, guard patrols, ambushes, timers), dialogue triggering,
-  Grid Diary registry. Pure core + small wiring surface.
-- `src/systems/DialogueSystem.ts` — pure sequential-line state machine (speaker, text,
-  advance, abandon-if-player-leaves). UI: one new HUD card in HudView (existing style),
-  E/click to advance, non-pausing.
-- `src/systems/DepotSecurity.ts` — flagship detection (above).
-- `src/world/placements.ts` — new anchors via the existing `walkSpot`/`bestKerbSpot`
-  helpers (Kelvin Yard, substation, dead-drops, diary pages, contact spots). No hand
-  coordinates.
-
-**Save schema v3**: `version: 3`, add `storyFlags: string[]` (sanitized to known-flag
-whitelist), `diaryPages: number[]`. Follow the existing deserialize spread + per-field
-sanitizer pattern; accept versions 1|2|3; migration test v2→v3.
-
-**LivingCity**: two new CityEvents `grid-defended` / `grid-sold` + `gridResolution` field
-mirroring the `joziArmsResolution` pattern (sanitizer + save round-trip).
-
-## Dialogue layer sketch
-
-`DialogueScript { id, lines: { speaker, text }[] }` — plays non-pausing above the HUD
-objective card; E advances (E is already the interact key; dialogue card visible =
-E routes to dialogue first); walking >12u from the contact abandons intro dialogue and
-cancels the mission offer (accepting = finishing the dialogue). Mission intros convert
-from single toasts to 3–6 line exchanges; mid-mission beats are 1–2 line radio-style
-(reuse `notify` radio tone for those, full dialogue only face-to-face).
+`DialogueScript { id, lines[{speaker, text}] }`, non-pausing HUD card (shipped), E
+advances, walking >12u away abandons the offer. Intros are 3–6 line exchanges
+(`story/dialogues.ts`); mid-mission beats use the radio-tone toast. Riddle contacts
+re-state the active riddle when spoken to again.
 
 ## Verification plan
 
-Pure Vitest sims only (owner's rule): walkthrough sim per mission (completion path +
-every failure mode), DialogueSystem tests, DepotSecurity matrix (grid-up night/day,
-blackout, torch, gunfire, grace window), unlock gating, story-flag persistence + v2→v3
-migration, checkpoint-restart, `follow`/`survive` kind unit tests. Gate: lint + tsc -b +
-full vitest green (LifecycleSystem/AiIntentions re-run isolated if flaky under load).
+Pure Vitest sims (owner's rule): a scripted walkthrough per mission (completion + every
+failure mode), DepotSecurity matrix, dialogue/director/save/gating tests (shipped), and
+the flagship discovery loop simulated end-to-end (grid-up fail → blackout success →
+mid-run power return). Gate: lint + tsc -b + full vitest green.
