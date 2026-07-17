@@ -38,6 +38,7 @@ import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSy
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
+import { BLACKOUT_STEALTH_THRESHOLD, concealedInBlackout, inHeadlightCone, MUZZLE_FLASH_SECONDS } from './systems/BlackoutStealth';
 import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
@@ -112,6 +113,8 @@ export class Game {
   private loadShedding = new LoadSheddingSystem();
   private torch: TorchSystem;
   private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
+  private muzzleFlash = 0; // seconds the player's last shot keeps them lit for blackout stealth — shooting gives you away
+  private concealed = false; // blackout stealth verdict this frame: JMPD sight checks shrink to whites-of-eyes while true
   private livingCity: LivingCitySystem;
   private economy: Economy;
   private shops: ShopSystem;
@@ -669,8 +672,10 @@ export class Game {
     this.population.setPolicePatrolCount(reinforcementModifier, focus);
     // Two-wheelers stay a vehicle pursuit (no standoff/arrest), but they grant no cover: JMPD fire lands on the rider.
     const riddenBike = Boolean(this.activeVehicle?.spec.twoWheeler);
+    this.muzzleFlash = Math.max(0, this.muzzleFlash - dt);
+    this.concealed = this.isConcealed(focus.x, focus.z);
     this.police.update(dt, focus, Boolean(this.activeVehicle), this.wanted, this.knowledge, (amount) => this.damagePlayer(amount), reinforcementModifier,
-      (amount) => { if (riddenBike) this.damagePlayer(amount); else this.activeVehicle?.takeDamage(amount); }, Boolean(this.activeVehicle?.police && this.activeVehicle.sirenOn));
+      (amount) => { if (riddenBike) this.damagePlayer(amount); else this.activeVehicle?.takeDamage(amount); }, Boolean(this.activeVehicle?.police && this.activeVehicle.sirenOn), this.concealed);
     for (const event of this.police.consumeEvents()) {
       if (event.kind === 'freeze') this.ui.notify('JMPD', '"FREEZE! Hands where I can see them!"', false);
       else if (event.kind === 'officers') this.population.pedestrians.push(...event.officers);
@@ -843,6 +848,7 @@ export class Game {
       }
     } else if (shot.fired) {
       this.player.registerShot();
+      this.muzzleFlash = MUZZLE_FLASH_SECONDS; // set before the crime files: the flash lights the shooter for the report itself
       if (!shot.deferred) this.handleGunshot(shot, this.player.group.position); // rockets report at launch; bullets report when they land
       if (scopeWeapon(this.combat.current)) this.cameraController.recoil(SNIPER_RECOIL); // .303 shoulder thump
     }
@@ -1166,7 +1172,7 @@ export class Game {
     if (driveBy) { // drive-by (car window or bike saddle): Ctrl to aim, LMB fires along the camera ray; no aim, no shooting
       this.combat.tryReload(this.input);
       const shot = this.combat.fire(this.input, this.camera, vehicle.group.position, this.population, { exclude: vehicle, cooldownScale: DRIVEBY_COOLDOWN_SCALE });
-      if (shot.fired) this.player.registerShot();
+      if (shot.fired) { this.player.registerShot(); this.muzzleFlash = MUZZLE_FLASH_SECONDS; }
       if (shot.fired && !shot.deferred) this.handleGunshot(shot, vehicle.group.position);
     }
     if (this.input.consume('KeyE')) {
@@ -1483,15 +1489,26 @@ export class Game {
     if (killed) this.spawnDrops(victim);
   }
 
+  /** Live blackout-stealth verdict at a world point: concealed only in deep night-time load shedding with no
+   *  torch, no fresh muzzle flash, no lit ride under the player, and no live headlight cone catching them. */
+  private isConcealed(px: number, pz: number): boolean {
+    if (this.online || this.dayNight.blackoutDarkness <= BLACKOUT_STEALTH_THRESHOLD) return false; // grid up, daylight, or ramp still fading: no dark to hide in
+    const cone = (vehicle: Vehicle) => vehicle.headlightsOn && inHeadlightCone(vehicle.group.position.x, vehicle.group.position.z, vehicle.heading, px, pz);
+    return concealedInBlackout(this.dayNight.blackoutDarkness, this.torch.on || this.muzzleFlash > 0 || Boolean(this.activeVehicle?.headlightsOn) || this.population.vehicles.some(cone) || this.police.vehicles.some(cone));
+  }
+
   /** Files a crime with JMPD using only what the world could actually see: a cop nearby means immediate heat
    *  and a sighting; otherwise a surviving victim or a living bystander within radius phones it in after
    *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
   private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
     if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the taxi spooks the passenger
+    // A concealed-in-blackout player commits crimes unseen: proximity cops don't witness what they can't make
+    // out (a muzzle flash lights the shooter first, so gunfire near JMPD is still caught in the act), but a
+    // directly-affected cop (copWitnessed, e.g. one you shot) always knows, and civilian phone-ins run as usual.
     const copSaw = options.copWitnessed
-      || this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(position) < SIGHT_RADIUS)
-      || this.population.pedestrians.some((ped) => ped.police && ped.state !== 'down' && ped.group.position.distanceTo(position) < SIGHT_RADIUS);
+      || (!this.isConcealed(position.x, position.z) && (this.police.vehicles.some((unit) => !unit.wrecked && unit.group.position.distanceTo(position) < SIGHT_RADIUS)
+        || this.population.pedestrians.some((ped) => ped.police && ped.state !== 'down' && ped.group.position.distanceTo(position) < SIGHT_RADIUS)));
     if (copSaw) { this.wanted.addCrime(heat); this.wanted.reportSeen(); this.knowledge.copWitness(position.x, position.z); this.radioDispatch(options.label, position.x, position.z, true); return; }
     if (options.copOnly) return; // only a cop who saw it counts (e.g. a shot that hit no one): civilians don't phone it in
     const victims = options.victims ?? [];
@@ -1889,7 +1906,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles
