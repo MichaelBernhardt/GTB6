@@ -152,6 +152,8 @@ describe('heatAfterStarDrop', () => {
 describe('runConsoleCommand', () => {
   const host: ConsoleHost = {
     setTime: (hour) => `time:${hour}`,
+    missionList: () => ['mission:list'],
+    missionStart: (index) => `mission:${index}`,
     setTimerate: (rate) => `timerate:${rate}`,
     toggleFps: () => 'fps',
     togglePerfChart: () => 'perfchart',
@@ -219,6 +221,10 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('tp 15 -30', host)).toEqual(['tp:15,-30']);
     expect(runConsoleCommand('tp jozi arms', host)).toEqual(['tpn:jozi arms']);
     expect(runConsoleCommand('tp list', host)).toEqual(['place one', 'place two']);
+    expect(runConsoleCommand('mission', host)).toEqual(['mission:list']);
+    expect(runConsoleCommand('mission 3', host)).toEqual(['mission:3']);
+    expect(runConsoleCommand('mission zero', host)[0]).toMatch(/Usage: mission/);
+    expect(runConsoleCommand('mission 0', host)[0]).toMatch(/Usage: mission/);
     expect(runConsoleCommand('skyfall', host)).toEqual(['skyfall:here']);
     expect(runConsoleCommand('skyfall sandton', host)).toEqual(['skyfall:sandton']);
     expect(runConsoleCommand('give rpg', host)).toEqual(['weapon:rpg']);

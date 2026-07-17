@@ -5,6 +5,8 @@ export const STAR_HEAT = 20; // one wanted star spans 20 heat points
 
 export type ConsoleCommand =
   | { kind: 'noop' }
+  | { kind: 'mission-list' }
+  | { kind: 'mission-start'; index: number }
   | { kind: 'help' }
   | { kind: 'fps' }
   | { kind: 'perfchart' }
@@ -66,6 +68,8 @@ export interface ConsoleHost {
   giveArmour(): string;
   giveItem(item: 'parachute' | 'stim', count: number): string;
   setInebriation(level?: number): string;
+  missionList(): string[];
+  missionStart(index: number): string;
 }
 
 const KINDS = Object.keys(VEHICLE_SPECS) as VehicleKind[];
@@ -105,6 +109,7 @@ export const HELP_LINES = [
   'ghost — free-fly test mode: wheel = altitude, gravity off, clip through everything',
   'fps — toggle the performance display (shows X/Y/Z position)',
   'perfchart — toggle the scrolling game-loop timing graph (stacked % of the 60fps budget per phase)',
+  'mission [n] — list the missions, or jump-start mission n at its contact (replays even completed ones)',
   `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
   'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens',
 ];
@@ -206,6 +211,12 @@ export function parseCommand(input: string): ConsoleCommand {
     if ((GIVE_WEAPON_IDS as string[]).includes(what)) return countToken === undefined ? { kind: 'give-weapon', weapon: what as WeaponId } : { kind: 'error', message: usage };
     return { kind: 'error', message: `Eish, can't give "${what}". ${usage}` };
   }
+  if (head === 'mission') {
+    if (rest.length === 0) return { kind: 'mission-list' };
+    const index = rest.length === 1 ? parseCount(rest[0]!) : undefined;
+    if (index === undefined || index < 1) return { kind: 'error', message: 'Usage: mission — list them · mission <n> — jump-start mission n (testing).' };
+    return { kind: 'mission-start', index };
+  }
   return { kind: 'error', message: `Eish, unknown command: ${input.trim()}. Type "help" for the list.` };
 }
 
@@ -243,5 +254,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'give-armour': return [host.giveArmour()];
     case 'give-item': return [host.giveItem(command.item, command.count)];
     case 'drunk': return [host.setInebriation(command.level)];
+    case 'mission-list': return host.missionList();
+    case 'mission-start': return [host.missionStart(command.index)];
   }
 }
