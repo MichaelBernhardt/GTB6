@@ -42,6 +42,7 @@ import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './syst
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
+import { TorchSystem } from './systems/TorchSystem';
 import { formatCountdown, TrainSystem } from './systems/TrainSystem';
 import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
 import { canEnterSafehouse, SAFEHOUSES, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
@@ -60,7 +61,7 @@ import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } fr
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
 import { COURIER_DEPOT, DELIVERY_STOPS, GTI_SPOT, POLICE_STATION, PORTIA_CAR_SPOT } from './world/placements';
-import { DayNightSystem } from './world/DayNight';
+import { DayNightSystem, nightFactor } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
@@ -109,6 +110,8 @@ export class Game {
   private trains: TrainSystem;
   private missions = new MissionSystem();
   private loadShedding = new LoadSheddingSystem();
+  private torch: TorchSystem;
+  private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
   private livingCity: LivingCitySystem;
   private economy: Economy;
   private shops: ShopSystem;
@@ -188,6 +191,7 @@ export class Game {
     this.city = new City(this.scene, this.baseQuality());
     this.districtTargets = districtAnchors((x, z) => this.city.districtAt(x, z));
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.baseQuality(), this.save.timeOfDay);
+    this.torch = new TorchSystem(this.scene);
     this.shops = new ShopSystem(this.scene, this.city);
     this.safehouses = new SafehouseSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.position)); // resume where the last save actually left off (Continue); New Game repositions to spawn in startGame
@@ -615,6 +619,7 @@ export class Game {
       this.ui.notify(`Minimap: ${MINIMAP_ZOOM_NAMES[this.settings.minimapZoom]}`);
     }
     if (this.input.consume('KeyH')) this.useStim();
+    if (this.input.consume('KeyL')) this.audio.ui(this.torch.toggle()); // works on foot, driving, riding, flying — the click doubles as on/off feedback
     if (this.airborne) this.updateAirborne(dt);
     else if (this.transition) this.updateTransition(dt);
     else if (this.activePlane) this.updateFlying(dt);
@@ -740,7 +745,11 @@ export class Game {
   }
 
   private applyEskom(event: 'start' | 'end' | undefined): void {
-    if (event === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
+    if (event === 'start') {
+      setPower(false);
+      const hint = !this.torchHintShown && nightFactor(this.dayNight.hour) > 0.5; if (hint) this.torchHintShown = true; // teach the key the first time the lights die in actual darkness
+      this.ui.notify('Load shedding: Stage 4', hint ? 'Eskom sends regards. Pitch dark out there — L for torch.' : 'Eskom sends regards. The robots are out.', false);
+    }
     else if (event === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
   }
 
@@ -1763,6 +1772,7 @@ export class Game {
     // FP at the controls: nudge the eye forward past the (hidden) cab shell so the end wall never clips the view.
     if (trainFp && trainHeading !== undefined) this.trainEye.set(target.x + Math.sin(trainHeading) * 1.15, target.y, target.z + Math.cos(trainHeading) * 1.15);
     this.cameraController.update(dt, this.input, trainFp && trainHeading !== undefined ? this.trainEye : target, this.city, Boolean(this.activeVehicle) || Boolean(flying) || this.trains.driving, sensitivity, view, flying?.state.heading ?? this.activeVehicle?.heading ?? trainHeading ?? 0, !this.combat.spec.melee && !this.airborne && !flying, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, flying ? 2.6 : this.trains.driving ? 3.4 : this.activeVehicle?.spec.size[1] ?? 0, this.player.heading, footTrail);
+    this.torch.frame(this.camera, target, firstPerson || scoped, !this.online); // after the camera settles so the beam tracks this frame's free-look exactly
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);
       this.camera.position.x += (Math.random() - 0.5) * this.shake * 0.5;
@@ -1879,7 +1889,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

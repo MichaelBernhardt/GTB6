@@ -56,6 +56,27 @@ export function formatClock(hour: number): string {
 
 const smooth = (t: number): number => { const x = Math.min(1, Math.max(0, t)); return x * x * (3 - 2 * x); };
 
+/** Load-shedding blackout: how hard the generalised city glow dies when the grid is down at night. */
+export const BLACKOUT_FADE_SECONDS = 3; // ambient/sky ease over a few seconds — the fixtures themselves may cut instantly, the eye adjusts gradually
+export const BLACKOUT_SKY_SCALE = 0.88; // sky/fog colours sink toward true black (no urban glow bouncing off the haze)
+export const BLACKOUT_AMBIENT_SCALE = 0.92; export const BLACKOUT_HEMI_SCALE = 0.93; export const BLACKOUT_SUN_SCALE = 0.85; // moonless: barely-visible silhouettes
+
+/** Linear ease of the blackout factor toward 0 (grid up) or 1 (shedding); dt=Infinity snaps. */
+export function advanceBlackout(value: number, target: number, dt: number): number {
+  const step = dt / BLACKOUT_FADE_SECONDS;
+  return Math.min(1, Math.max(0, value + Math.min(step, Math.max(-step, target - value))));
+}
+
+/** Sink a sampled sky toward moonless black. `dark` is blackout × nightFactor, so daytime shedding is a no-op. */
+export function applyBlackout(sample: SkySample, dark: number): SkySample {
+  if (dark <= 0) return sample;
+  sample.sky.multiplyScalar(1 - dark * BLACKOUT_SKY_SCALE); sample.fog.multiplyScalar(1 - dark * BLACKOUT_SKY_SCALE);
+  sample.ambientIntensity *= 1 - dark * BLACKOUT_AMBIENT_SCALE;
+  sample.hemiIntensity *= 1 - dark * BLACKOUT_HEMI_SCALE;
+  sample.sunIntensity *= 1 - dark * BLACKOUT_SUN_SCALE;
+  return sample;
+}
+
 /** 0 in full daylight, 1 at night, smooth ramps through dawn and dusk. Drives streetlights, windows, and headlights. */
 export function nightFactor(hour: number): number {
   const h = wrapHour(hour);
@@ -116,6 +137,7 @@ export class DayNightSystem {
   private streetFound = 0; private streetRefresh = Infinity; private streetFocusX = Infinity; private streetFocusZ = Infinity; private streetActive = false;
   private headPool: THREE.SpotLight[] = [];
   private facades: THREE.MeshStandardMaterial[];
+  private blackout = 0; // eased 0..1 toward "grid down"; with nightFactor it kills the ambient city glow
   private candidates: Vehicle[] = [];
   private candidateXZ = new Float32Array(64);
   private candidateIndices: number[] = []; private candidateDistances: number[] = [];
@@ -153,20 +175,22 @@ export class DayNightSystem {
 
   private apply(focus: THREE.Vector3, traffic: readonly Vehicle[] = [], police: readonly Vehicle[] = [], playerVehicle?: Vehicle, dt = Infinity): void {
     const sky = sampleSky(this.hour, this.sample); const night = nightFactor(this.hour);
+    this.blackout = advanceBlackout(this.blackout, powerOn() ? 0 : 1, dt);
+    applyBlackout(sky, this.blackout * night); // shedding at night: the generalised city glow is gone, silhouettes only
     const env = this.environment;
     env.sun.color.copy(sky.sun); env.sun.intensity = sky.sunIntensity;
     env.hemisphere.color.copy(sky.hemiSky); env.hemisphere.groundColor.copy(sky.hemiGround); env.hemisphere.intensity = sky.hemiIntensity;
     env.ambient.color.copy(sky.ambient); env.ambient.intensity = sky.ambientIntensity;
     if (this.scene.background instanceof THREE.Color) this.scene.background.copy(sky.sky);
     if (this.scene.fog) this.scene.fog.color.copy(sky.fog);
-    this.scene.environmentIntensity = 0.32 * (1 - night * 0.72);
+    this.scene.environmentIntensity = 0.32 * (1 - night * 0.72) * (1 - this.blackout * night * 0.9); // IBL ambience is city glow too
     sunDirection(this.hour, this.sunDir); sunDirection(this.hour + 12, this.moonDir);
     env.setSunDirection(this.sunDir.y >= this.moonDir.y ? this.sunDir : this.moonDir); // shadow light tracks whichever body is up
     env.sunDisc.position.copy(focus).addScaledVector(this.sunDir, DISC_DISTANCE); env.sunDisc.visible = this.sunDir.y > -0.05;
     (env.sunDisc.material as THREE.MeshBasicMaterial).color.copy(sky.sun);
     this.moon.position.copy(focus).addScaledVector(this.moonDir, DISC_DISTANCE); this.moon.visible = this.moonDir.y > -0.05;
     this.city.setWaterMood(this.hour, this.sunDir.y >= this.moonDir.y ? this.sunDir : this.moonDir, sky.sun); // water tint and its specular body track the sky
-    const gridNight = powerOn() ? night : 0; // load shedding: mains-fed lights go dark, whatever the hour
+    const gridNight = night * (1 - this.blackout); // load shedding: mains-fed lights go dark, whatever the hour — eased with the same blackout ramp
     this.city.setStreetlightGlow(night); // the bulb material checks the grid itself so panels also read dark by day
     for (const material of this.facades) material.emissiveIntensity = gridNight * FACADE_NIGHT_EMISSIVE;
     this.updateStreetlightPool(focus, gridNight, dt);
