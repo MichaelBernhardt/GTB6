@@ -8,7 +8,7 @@ export type MenuScreen = 'none' | 'loading' | 'asset-failed' | 'main' | 'pause' 
 export interface TaxiTelemetry { text: string; available: boolean; }
 export interface CourierTelemetry { text: string; available: boolean; }
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; taxi?: TaxiTelemetry; courier?: CourierTelemetry; radio?: string; }
-export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; }
+export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; failed?: string; }
 export interface DialogueView { speaker: string; text: string; more: boolean; offer?: boolean; }
 
 /** Advance-key affordance on the dialogue card. A job offer must end on an explicit accept — players

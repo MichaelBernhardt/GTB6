@@ -130,7 +130,9 @@ export class HudView {
     this.wantedContainer.classList.toggle('is-unseen', unseen); setHidden(this.unseen, !unseen); setAttribute(this.wantedContainer, 'aria-label', `Wanted level ${state.wanted} of 5${unseen ? ', unseen in the blackout' : ''}`);
     setHidden(this.objective, !state.objective);
     if (state.objective) {
-      setText(this.objectiveName, state.objective.missionName); setText(this.objectiveText, state.objective.text);
+      this.objective.classList.toggle('is-failed', Boolean(state.objective.failed));
+      setText(this.objectiveName, state.objective.failed ? 'MISSION FAILED' : state.objective.missionName);
+      setText(this.objectiveText, state.objective.failed ? `${state.objective.failed} — find the gold beacon to retry (E)` : state.objective.text);
       const bits: string[] = [];
       if (state.objective.required && state.objective.progress !== undefined) bits.push(`${state.objective.progress}/${state.objective.required}`);
       if (state.objective.remainingSeconds) bits.push(`${Math.ceil(state.objective.remainingSeconds)} SEC`);

@@ -114,6 +114,8 @@ export class MissionSystem {
   remainingTime = 0;
   completed = new Set<string>();
   state: MissionState = 'available';
+  /** Why the mission failed — retained for the persistent HUD failure card until restart. */
+  failReason?: string;
   /** Objective index a failed-mission restart resumes from (latest reached `checkpoint: true`). */
   checkpointIndex = 0;
 
@@ -124,19 +126,19 @@ export class MissionSystem {
   start(id: string): boolean {
     const mission = this.missions.find((item) => item.id === id);
     if (!mission || this.active) return false;
-    this.active = mission; this.objectiveIndex = 0; this.progress = 0; this.state = 'active'; this.checkpointIndex = 0;
+    this.active = mission; this.objectiveIndex = 0; this.progress = 0; this.state = 'active'; this.checkpointIndex = 0; this.failReason = undefined;
     this.remainingTime = mission.objectives[0]?.timeLimit ?? 0;
     return true;
   }
 
   restart(): boolean {
     if (!this.active || this.state !== 'failed') return false;
-    this.objectiveIndex = this.checkpointIndex; this.progress = 0; this.state = 'active';
+    this.objectiveIndex = this.checkpointIndex; this.progress = 0; this.state = 'active'; this.failReason = undefined;
     this.remainingTime = this.objective?.timeLimit ?? 0;
     return true;
   }
 
-  fail(reason: string): MissionUpdate { this.state = 'failed'; return { failed: reason }; }
+  fail(reason: string): MissionUpdate { this.state = 'failed'; this.failReason = reason; return { failed: reason }; }
 
   update(dt: number, snapshot: GameSnapshot, reachedTarget: boolean): MissionUpdate {
     const objective = this.objective;

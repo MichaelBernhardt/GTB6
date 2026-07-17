@@ -45,6 +45,7 @@ window.__qa = (() => {
 
   /** Drive the active vehicle (or walk the player) along road route points. Returns steps used or -1 if the objective never advanced. */
   function driveRoute(points, maxSimSeconds) {
+    state.simSeconds = 0;
     const startObjective = `${g.missions.active?.id}:${objIndex()}:${g.missions.progress}`;
     const v = g.activeVehicle; const speed = v ? cruise() : 7;
     let i = 0; let sim = 0;
@@ -57,7 +58,7 @@ window.__qa = (() => {
       px += (dx / d) * stepLen; pz += (dz / d) * stepLen;
       if (v) { v.group.position.set(px, g.city.roadHeightAt(px, pz), pz); v.heading = Math.atan2(dx, dz); v.group.rotation.y = v.heading; v.speed = speed; }
       else { g.player.group.position.set(px, surface(px, pz), pz); }
-      g.update(STEP); sim += STEP;
+      g.update(STEP); sim += STEP; state.simSeconds = sim;
       if (`${g.missions.active?.id}:${objIndex()}:${g.missions.progress}` !== startObjective) return sim;
       if (g.missions.state === 'failed') return sim;
     }
@@ -77,7 +78,13 @@ window.__qa = (() => {
     const result = { kind: o.kind, text: o.text, hidden: Boolean(o.hidden), marker: marker?.label ?? null, timer: g.missions.remainingTime || null, roadDistance: null };
     const raw = g.missionTargetRaw?.() ?? null;
     if (o.hidden) {
-      if (marker && raw && Math.hypot(marker.position.x - raw.position.x, marker.position.z - raw.position.z) < 2) finding('fail', `hidden objective leaks its marker: ${marker.label}`);
+      if (marker && !g.riddleRevealed && raw && Math.hypot(marker.position.x - raw.position.x, marker.position.z - raw.position.z) < 2) finding('fail', `hidden objective leaks its marker: ${marker.label}`);
+      const area = g.riddleSearchArea?.();
+      if (!area) finding('fail', `riddle "${o.text}" has no search circle (owner: markerless one-liners are hostile)`);
+      else if (raw && Math.hypot(area.x - raw.position.x, area.z - raw.position.z) > area.radius - 10) finding('fail', `riddle search circle does not safely contain its answer (${Math.round(Math.hypot(area.x - raw.position.x, area.z - raw.position.z))}u vs r=${area.radius})`);
+      const hints = (window.__scripts?.[g.missions.active?.id]?.hints ?? []).filter((h) => h.objective === objIndex());
+      if (!hints.length) finding('fail', `riddle "${o.text}" has no progressive hints`);
+      else if (!hints.some((h) => h.reveal)) finding('fail', `riddle "${o.text}" hints never escalate to a real blip`);
     } else if (['reach', 'escape', 'collect', 'checkpoints', 'enter-kind', 'follow'].includes(o.kind)) {
       if (!marker) finding(o.conditionsOnly && !o.target ? 'warn' : 'fail', `no world marker for located objective "${o.text}"`);
       if (marker) {
@@ -134,6 +141,13 @@ window.__qa = (() => {
         return advanced() ? 'ok' : 'stuck:entered-but-not-advanced';
       }
       case 'reach': case 'escape': case 'checkpoints': case 'collect': {
+        if (o.hidden && !g.riddleRevealed) {
+          // Play the riddle the merciful way: let the hint clock run to the reveal, then navigate the blip.
+          let sim = 0;
+          while (!g.riddleRevealed && sim < 400) { g.update(1); sim += 1; }
+          if (!g.riddleRevealed) return 'stuck:riddle-never-revealed';
+          note(`riddle revealed after ${Math.round(sim)}s of hints`);
+        }
         if (o.conditions?.atNight && !(g.dayNight.hour > 19 || g.dayNight.hour < 5)) { g.dayNight.hour = 22; note('shortcut: set hour 22 for atNight'); }
         if (o.conditions?.blackoutAbove && g.dayNight.blackoutFactor < o.conditions.blackoutAbove) return 'needs:blackout';
         if (o.conditions?.drivingTrain || o.conditions?.onTrain) return 'needs:train';
@@ -163,8 +177,9 @@ window.__qa = (() => {
         return advanced() ? 'ok' : 'stuck:arrived-but-not-advanced';
       }
       case 'lose-wanted': {
-        if (g.wanted.level === 0) { note('no heat to lose (script may not have forced it)'); finding('warn', 'lose-wanted objective began with zero heat'); }
-        g.wanted.clear(); note('shortcut: wanted cleared via API (evasion sim skipped)');
+        const scripted = (window.__scripts?.[g.missions.active?.id]?.wanted ?? null);
+        if (g.wanted.level === 0) finding(scripted ? 'fail' : 'warn', `lose-wanted began with zero heat${scripted ? ' although the script forces wanted ' + scripted.level + ' at objective ' + scripted.objective : ''}`);
+        g.wanted.clear(); note('shortcut: wanted cleared via API AFTER asserting heat was present (evasion sim skipped)');
         step(10);
         return advanced() ? 'ok' : 'stuck:wanted-cleared-but-not-advanced';
       }

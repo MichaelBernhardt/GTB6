@@ -101,9 +101,9 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['delivery-run'] },
     intro: 'Thirty years I called the trains at Park Station. Now I call the streets. Three riddles, no map, no hand-holding — read the signs like we used to.',
     start: spot(PARK_STATION_SPOT, 'Oupa Jakes'), objectives: [
-      { kind: 'reach', hidden: true, text: '"Stand where the road confesses its own condition."', target: spot(RIDDLE_SPOTS[0]!, 'Pothole Street') },
-      { kind: 'reach', hidden: true, text: '"Stand where the lights never stay."', target: spot(RIDDLE_SPOTS[1]!, 'Loadshed Lane'), checkpoint: true },
-      { kind: 'reach', hidden: true, text: '"Stand where the city still sends paper."', target: spot(RIDDLE_SPOTS[2]!, 'Fax Street'), checkpoint: true },
+      { kind: 'reach', hidden: true, text: '"Stand where the street sign admits what broke your suspension."', target: spot(RIDDLE_SPOTS[0]!, 'Pothole Street') },
+      { kind: 'reach', hidden: true, text: '"Stand in the lane they named after the dark — Eskom\'s favourite address."', target: spot(RIDDLE_SPOTS[1]!, 'Loadshed Lane'), checkpoint: true },
+      { kind: 'reach', hidden: true, text: '"Stand in the street named for what offices sent before email."', target: spot(RIDDLE_SPOTS[2]!, 'Fax Street'), checkpoint: true },
       { kind: 'reach', text: 'Tell Oupa Jakes what you saw', target: spot(PARK_STATION_SPOT, 'Oupa Jakes') },
     ],
   },
@@ -154,7 +154,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['pull-the-plug'] },
     intro: 'I read the fault logs. That trip pattern was manual — a hand on a breaker. Your hand. Let\'s see if you can read too: "FOR SALE: one-way ticket. Collect where the Halt serves the sky."',
     start: spot(SINDI_START, 'Sindi'), objectives: [
-      { kind: 'reach', hidden: true, text: '"Collect where the Halt serves the sky."', target: spot(LUGHAWE_DROP, 'The dead drop') },
+      { kind: 'reach', hidden: true, text: '"Collect at the rail halt whose name is Afrikaans for the place aeroplanes live."', target: spot(LUGHAWE_DROP, 'The dead drop') },
       { kind: 'collect', text: 'Take the dossier from the drop', target: spot(LUGHAWE_DROP, 'Dossier'), checkpoint: true },
       { kind: 'reach', text: 'Bring the dossier back to Sindi', target: spot(SINDI_START, 'Sindi') },
     ],

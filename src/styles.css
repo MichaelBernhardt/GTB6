@@ -72,6 +72,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-weapon em { display: block; margin-top: 2px; color: var(--red); font: 900 9px Inter, sans-serif; font-style: normal; letter-spacing: 1.2px; }
 
 .hud-objective { position: absolute; top: 24px; left: 50%; width: min(520px, 42vw); padding: 10px 14px 12px; transform: translateX(-50%) rotate(-.25deg); background: rgba(17, 24, 23, .91); border-top: 5px solid var(--yellow); box-shadow: 7px 7px 0 rgba(17, 24, 23, .22), var(--shadow); backdrop-filter: blur(8px); }
+.hud-objective.is-failed { border-top-color: var(--red); }
+.hud-objective.is-failed small { color: var(--red); }
 .hud-objective > div:first-child { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
 .hud-objective small, .hud-objective span { color: var(--yellow); font: 900 9px Inter, sans-serif; letter-spacing: 1.2px; text-transform: uppercase; }
 .hud-objective strong { display: block; font-size: clamp(16px, 1.4vw, 21px); line-height: 1.14; }

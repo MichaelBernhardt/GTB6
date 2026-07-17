@@ -8,15 +8,15 @@ import type { MissionDefinition } from '../systems/MissionSystem';
  */
 export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'delivery-run': { id: 'delivery-run:intro', lines: [
-    { speaker: 'Auntie Portia', text: 'Howzit boet. Sold the couch on Marketplace, but eish — the bakkie is gone. Gone!' },
-    { speaker: 'You', text: 'Gone like stolen, Auntie, or gone like Uncle Sipho borrowed it?' },
-    { speaker: 'Auntie Portia', text: 'Same thing, my laaitie. Take my yellow Citi Golf. Three drops, sharp sharp, before the buyers change their minds.' },
-    { speaker: 'Auntie Portia', text: 'And the couch fits in a Citi Golf. It fits. Don\'t start with me.' },
+    { speaker: 'Auntie Portia', text: 'Howzit boet. Sold the couch on Marketplace, but eish — the bakkie is gone. GONE.' },
+    { speaker: 'You', text: 'A couch. In a Citi Golf?' },
+    { speaker: 'Auntie Portia', text: 'It FITS. Two drops, now now — not just now, NOW now. The buyers change their minds like robots change to red.' },
+    { speaker: 'Auntie Portia', text: 'And if the lights go while you drive, don\'t stop for the dead robots. Nobody else does.' },
   ] },
   'hot-property': { id: 'hot-property:intro', lines: [
-    { speaker: 'Bra Vusi', text: 'Yoh, my friend, perfect timing. There\'s a red GTI on Commissioner Street. Boot FULL of municipal cable.' },
-    { speaker: 'You', text: 'Fell off a substation, did it?' },
-    { speaker: 'Bra Vusi', text: 'Tripped and fell, swear on my mother. Bring it to the Braamfontein lock-up once the heat fades. Vrrr phaa — but gently, né?' },
+    { speaker: 'Bra Vusi', text: 'Portia\'s driver! Perfect timing. There\'s a red GTI on Commissioner Street, boot FULL of municipal cable — the thick stuff, off the Ophirton feeder.' },
+    { speaker: 'You', text: 'The feeder that keeps tripping?' },
+    { speaker: 'Bra Vusi', text: 'Keeps tripping, keeps getting stripped, keeps getting paid for. A beautiful circle, née? Bring the car to my Braamfontein lock-up when the heat fades. Vrrr phaa — but gently.' },
   ] },
   'dockside-signal': { id: 'dockside-signal:intro', lines: [
     { speaker: 'Candice', text: 'Ag no man. The Wemmer crew took our route permit. TOOK it. Off the seat of Ricardo\'s taxi.' },
@@ -24,9 +24,9 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Candice', text: 'I want it back TODAY. Go moer them, grab the permit, bring it here to the braai kiosk. I\'ll have a plate for you. Sharp?' },
   ] },
   'arms-deal': { id: 'arms-deal:intro', lines: [
-    { speaker: 'Thandi', text: 'Two crews want tonight\'s shipment. I can pay you to keep the shop standing.' },
-    { speaker: 'Thandi', text: 'Or you take the stock yourself and get rich. I\'m not going to pretend you haven\'t thought it.' },
-    { speaker: 'Thandi', text: 'Either way, the CBD will remember what you do tonight.' },
+    { speaker: 'Thandi', text: 'Two crews want tonight\'s shipment. I can pay you to keep the shop standing — or you take the stock and get rich. I won\'t pretend you haven\'t thought it.' },
+    { speaker: 'Thandi', text: 'You know why my sales double every stage of shedding? Dark streets sell steel.' },
+    { speaker: 'Thandi', text: 'Someone is FARMING this city. Either way, the CBD will remember what you do tonight.' },
   ] },
   'last-coach-home': { id: 'last-coach-home:intro', lines: [
     { speaker: 'Auntie Portia', text: 'Boet! Disaster. My nephew fell asleep on the Sandton train and got off without my rent bag.' },
@@ -46,8 +46,8 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'reading-signs': { id: 'reading-signs:intro', lines: [
     { speaker: 'Oupa Jakes', text: 'Thirty years I called the trains at Park Station. Platform two, the eight-fifteen, mind the gap. Now the city calls ME names. Hah.' },
     { speaker: 'You', text: 'And you\'re telling me this because…' },
-    { speaker: 'Oupa Jakes', text: 'Because you look like someone who reads. Three riddles. No map. The streets of this city confess everything if you read their signs. Come back when you\'ve stood in all three places.' },
-    { speaker: 'Oupa Jakes', text: 'Ask me again if you forget the words. My memory is the last thing still working.' },
+    { speaker: 'Oupa Jakes', text: 'Because you look like someone who reads. Three riddles — each answer is a street with its NAME on the pole, inside the circle I\'ll mark on your map.' },
+    { speaker: 'Oupa Jakes', text: 'The lights people own this city now, laaitie, but the streets still tell the truth. Ask me again any time — the words get easier the longer you stand there looking lost.' },
   ] },
   'the-audition': { id: 'the-audition:intro', lines: [
     { speaker: 'Solly', text: 'So this is Vusi\'s quiet driver. You found my yard by following one of my bakkies. That was either very good or very stupid.' },

@@ -37,6 +37,10 @@ export interface MissionScript {
   alarm?: MissionAlarm;
   /** Radio-tone story beats when an objective begins. */
   radio?: Array<{ objective: number; title: string; detail: string }>;
+  /** Riddle hint escalation on a per-objective clock; `reveal` drops a real blip (the final mercy). */
+  hints?: Array<{ objective: number; afterSeconds: number; detail: string; reveal?: boolean }>;
+  /** Spoken on completion (dialogue card): where every act-1 hook to the next rung lands. */
+  outro?: Array<{ speaker: string; text: string }>;
   /** Run the Kelvin Yard security model every frame while this mission is active. */
   depot?: boolean;
   /** Grid Diary page granted when the mission completes. */
@@ -51,10 +55,30 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     stops: DELIVERY_STOPS,
     vehicle: { color: 0xf1c232, spot: PORTIA_CAR_SPOT },
     forceBlackout: 1, // the opener's thesis, 90 seconds in: the grid dies around the player mid-drive
-    radio: [{ objective: 1, title: 'Auntie Portia', detail: 'Load shedding NOW? There was no shedding on the schedule, boet. Somebody\'s schedule, maybe.' }],
+    radio: [
+      { objective: 1, title: 'Auntie Portia', detail: 'Load shedding NOW? There was no shedding on the schedule, boet. Somebody\'s schedule, maybe.' },
+      { objective: 2, title: 'Auntie Portia', detail: 'Second buyer paid short — says his genny subscription is due. EVERYONE\'S genny subscription is due. Since when is light a subscription, boet?' },
+    ],
+    outro: [
+      { speaker: 'Auntie Portia', text: 'You drove through that blackout like a taxi man. Sharp sharp.' },
+      { speaker: 'Auntie Portia', text: 'Listen — everyone in this city pays twice for light now. Vusi says there\'s cash in that. Pothole Street. Tell him Portia sent you, and don\'t sign anything.' },
+    ],
   },
-  'hot-property': { vehicle: { color: 0xd83a40, spot: GTI_SPOT } },
-  'dockside-signal': { waves: [{ objective: 1, spots: HOSTILE_SPOTS }] },
+  'hot-property': {
+    vehicle: { color: 0xd83a40, spot: GTI_SPOT },
+    outro: [
+      { speaker: 'Bra Vusi', text: 'Sweet. The buyer pays TRIPLE when the power\'s out, and never asks where cable comes from.' },
+      { speaker: 'Bra Vusi', text: 'A man like that is worth knowing better. When you want real work, come ask me about him.' },
+    ],
+  },
+  'dockside-signal': {
+    waves: [{ objective: 1, spots: HOSTILE_SPOTS }],
+    radio: [{ objective: 3, title: 'Candice', detail: 'What did you grab exactly? Ricardo says there\'s a paper stapled to my permit… a DIESEL roster. Wemmer moves fuel for somebody big.' }],
+    outro: [
+      { speaker: 'Candice', text: 'Depots, litres, dates. My little rank war is somebody\'s fuel empire, sweetie.' },
+      { speaker: 'Candice', text: 'They call him the Genny King. If his diesel runs through MY ranks, I want to know everything. Keep your ears open.' },
+    ],
+  },
   'copper-wire-blues': { quarry: { spawnObjective: 0, departObjective: 1, kind: 'van', color: QUARRY_COLOR, spawn: QUARRY_SPAWN, destination: KELVIN_GATE_SPOT, arriveRadius: 26 } },
   'rank-cold-war': {
     stops: RANK_STOPS,
@@ -64,12 +88,26 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
       { objective: 1, checkpoint: 1, spots: around(RANK_STOPS[1]!, [[6, -5], [-7, 4], [4, 8]]) },
     ],
   },
-  'reading-signs': { diaryPage: 1 },
+  'last-coach-home': {
+    radio: [{ objective: 0, title: 'Auntie Portia', detail: 'The vetkoek lady says Sandton side just went dark too. The trains keep their own power, boet — safest lights in Joburg tonight.' }],
+  },
+  'reading-signs': {
+    diaryPage: 1,
+    hints: [
+      { objective: 0, afterSeconds: 90, detail: 'Think, laaitie. Which road ADMITS what broke your suspension?' },
+      { objective: 0, afterSeconds: 210, detail: 'Ag fine — Pothole Street, south side of the circle, by the dip that eats bakkies.', reveal: true },
+      { objective: 1, afterSeconds: 90, detail: 'The lane is NAMED for the dark. The city put it on a green sign and everything.' },
+      { objective: 1, afterSeconds: 210, detail: 'Loadshed Lane, two blocks on. I\'m old, not patient.', reveal: true },
+      { objective: 2, afterSeconds: 90, detail: 'What did offices send before email? This city still sends it.' },
+      { objective: 2, afterSeconds: 210, detail: 'Fax Street. East side of your circle. Read faster next time.', reveal: true },
+    ],
+  },
 
   // ---- Act 2: "The Payroll" ---------------------------------------------------------
   'the-audition': {
     vehicle: { color: TANKER_COLOR, spot: TANKER_SPOT },
     radio: [{ objective: 1, title: 'Solly', detail: 'Gently, my laaitie. That tanker is worth more than you are. For now.' }],
+    outro: [{ speaker: 'Solly', text: 'Not a scratch. Vusi said you were quiet; he didn\'t say you were smooth. You\'re on the payroll. Don\'t make me learn your name for the wrong reasons.' }],
   },
   'pull-the-plug': {
     forceBlackout: 2, // the breaker goes over: the grid dies around you
@@ -87,7 +125,13 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     stops: GENNY_ROUND_STOPS,
     waves: [{ objective: 0, checkpoint: 2, spots: around(GENNY_ROUND_STOPS[2]!, [[6, 4], [-5, 6]]) }],
   },
-  'paper-round': { diaryPage: 2 },
+  'paper-round': {
+    diaryPage: 2,
+    hints: [
+      { objective: 0, afterSeconds: 120, detail: '\'Lughawe\'. It\'s Afrikaans. Look at a rail map and think about aeroplanes.' },
+      { objective: 0, afterSeconds: 240, detail: 'The rail halt AT THE AIRPORT. If you can throw a breaker you can read a station board.', reveal: true },
+    ],
+  },
   'the-wrong-train': {
     radio: [{ objective: 1, title: 'Solly', detail: 'Crown Station siding. Stop it like you own it, because tonight you do.' }],
   },

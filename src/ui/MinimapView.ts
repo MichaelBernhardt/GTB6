@@ -2,7 +2,7 @@ import { MAP_WORLD_SIZE } from '../world/mapData';
 import type { RoadPoint } from '../world/City';
 
 export interface MapPoint { x: number; z: number; }
-export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; objective?: boolean; }
+export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; objective?: boolean; area?: number; }
 
 /** Units-to-pixels factors, ordered widest view to tightest, over the 240px minimap canvas.
  *  'City' is derived from the map footprint so the widest level always frames the whole generated
@@ -71,6 +71,12 @@ export class MinimapView {
     for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (let index = 1; index < road.length; index++) { const point = road[index]!; ctx.lineTo(point.x * scale, point.z * scale); } ctx.stroke(); }
     for (const marker of markers) {
       if (marker.objective) continue; // drawn after restore in screen space, so it can pin to the edge
+      if (marker.area) { // riddle search circle: a region to comb, deliberately not a point
+        ctx.save(); ctx.translate(marker.x * scale, marker.z * scale);
+        ctx.fillStyle = 'rgba(245, 197, 66, 0.12)'; ctx.strokeStyle = 'rgba(245, 197, 66, 0.65)'; ctx.lineWidth = 2; ctx.setLineDash([7, 5]);
+        ctx.beginPath(); ctx.arc(0, 0, marker.area * scale, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.restore(); continue;
+      }
       ctx.save(); ctx.translate(marker.x * scale, marker.z * scale); ctx.rotate(counter);
       ctx.fillStyle = marker.color; ctx.strokeStyle = '#111817'; ctx.lineWidth = 2; ctx.beginPath();
       if (marker.shape === 'diamond') { ctx.moveTo(0, -6.5); ctx.lineTo(6.5, 0); ctx.lineTo(0, 6.5); ctx.lineTo(-6.5, 0); ctx.closePath(); }

@@ -128,6 +128,9 @@ export class Game {
   private quarry?: Vehicle;
   private quarryArrived = false;
   private contactCullTimer = 0;
+  private objectiveElapsed = 0;
+  private hintsFired = new Set<number>();
+  private riddleRevealed = false;
   private depotSecurity = new DepotSecurity();
   private depotWasSpotted = false;
   private depotClock = 0; // sweeps the Kelvin Yard guards' torch cones
@@ -247,7 +250,7 @@ export class Game {
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
     this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
-    if (import.meta.env.DEV) Object.assign(window, { __game: this });
+    if (import.meta.env.DEV) Object.assign(window, { __game: this, __scripts: MISSION_SCRIPTS });
   }
 
   private async prepareAssets(retry = false): Promise<void> {
@@ -374,6 +377,7 @@ export class Game {
     return [
       ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
       ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true }] : []),
+      ...((area) => area ? [{ x: area.x, z: area.z, color: '#f5c542', area: area.radius }] : [])(this.riddleSearchArea()),
       ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : []),
     ];
   }
@@ -1501,6 +1505,7 @@ export class Game {
       this.previousObjective = current;
       this.hostileDefeated = 0; // defeat counters are per-objective, not per-mission
       this.collectedItem = false;
+      this.objectiveElapsed = 0; this.hintsFired.clear(); this.riddleRevealed = false;
       this.runObjectiveBeats();
       if (this.missions.objective) this.ui.notify('Objective updated', this.missions.objective.text);
     }
@@ -1508,6 +1513,35 @@ export class Game {
     // objective advances, the gold marker and minimap blip already point at the new target
     // (owner playtest: accepting Couch Run left the marker on Portia instead of the Golf).
     this.markerTarget = this.currentTarget();
+    this.objectiveElapsed += dt;
+    this.updateRiddleHints();
+  }
+
+  /** Riddle fail-softs: a generous minimap search circle around the answer (offset centre so the
+   *  circle never pinpoints it), and hints that sharpen on a clock — the final hint drops a real
+   *  blip (owner: markerless one-liners against a whole city are hostile; deduction stays, despair goes). */
+  private riddleSearchArea(): { x: number; z: number; radius: number } | undefined {
+    const objective = this.missions.objective;
+    if (!objective?.hidden || !objective.target || this.missions.state !== 'active') return undefined;
+    if (this.riddleRevealed) return undefined; // final hint escalated to an exact blip
+    const seed = `${this.missions.active?.id}:${this.missions.objectiveIndex}`;
+    let hash = 0; for (const ch of seed) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+    const angle = (hash % 628) / 100; const offset = 90 + (Math.abs(hash >> 4) % 80);
+    return { x: objective.target.position.x + Math.sin(angle) * offset, z: objective.target.position.z + Math.cos(angle) * offset, radius: 300 };
+  }
+
+  /** Hint escalation: fires each script hint once per objective when its clock passes (re-briefs also escalate). */
+  private updateRiddleHints(): void {
+    const mission = this.missions.active;
+    if (!mission || this.missions.state !== 'active') return;
+    const hints = MISSION_SCRIPTS[mission.id]?.hints ?? [];
+    for (let index = 0; index < hints.length; index++) {
+      const hint = hints[index]!;
+      if (hint.objective !== this.missions.objectiveIndex || this.hintsFired.has(index) || this.objectiveElapsed < hint.afterSeconds) continue;
+      this.hintsFired.add(index);
+      this.ui.notify(mission.contact, hint.detail, true, 'radio');
+      if (hint.reveal) this.riddleRevealed = true; // the final mercy: an exact blip
+    }
   }
 
   /** Scripted events keyed to the objective the mission just entered (waves, quarry spawn/departure). */
@@ -1940,6 +1974,8 @@ export class Game {
     } else if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); }
     if (update.completed) {
       for (const flag of this.story.onMissionCompleted(update.completed)) if (flag.startsWith('act')) this.ui.notify('Word travels', 'New contacts will hear your name now.', true, 'reputation');
+      const outro = MISSION_SCRIPTS[update.completed.id]?.outro;
+      if (outro?.length) this.dialogue.start({ id: `${update.completed.id}:outro`, lines: outro });
       const page = MISSION_SCRIPTS[update.completed.id]?.diaryPage;
       if (page !== undefined && this.story.collectDiaryPage(page)) this.ui.notify('Grid Diary', `Page ${page} of 12 — someone planned all of this.`, true, 'reputation');
       this.quarry = undefined; this.quarryArrived = false; // a parked quarry stays where it arrived
@@ -2015,11 +2051,17 @@ export class Game {
   }
 
   private currentTarget(): WorldTarget | undefined {
+    if (this.missions.state === 'failed' && this.missions.active) {
+      // The failure card says "find the gold beacon to retry" — the beacon must therefore lead home.
+      const start = this.missions.active.start;
+      const position = start.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z);
+      return { position, label: `Retry: ${this.missions.active.name}`, color: '#e3533f' };
+    }
     if (this.taxiDestination) return { position: this.taxiDestination, label: 'Drop-off', color: '#7fe08d' }; // active fare outranks mission breadcrumbs
     if (this.courierJob.phase === 'collecting') return { position: new THREE.Vector3(COURIER_DEPOT.x, this.city.roadHeightAt(COURIER_DEPOT.x, COURIER_DEPOT.z), COURIER_DEPOT.z), label: 'Sixty-Sekonds dispatch', color: '#84f01c' };
     if (this.courierDestination) return { position: this.courierDestination, label: `Order ${this.courierJob.completed + 1}`, color: '#84f01c' };
     const objective = this.missions.objective;
-    if (objective?.hidden) return undefined; // riddle objectives: the text is the only guide
+    if (objective?.hidden && !this.riddleRevealed) return undefined; // riddles: search circle + hints, exact blip only after the final hint
     if (objective?.kind === 'follow' && this.quarry) return { position: this.quarry.group.position, label: 'The bakkie', color: '#e8a13d' };
     const raw = this.missionTargetRaw();
     if (raw) return raw;
@@ -2166,7 +2208,7 @@ export class Game {
       else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  V  Camera  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
-      else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
+      else if (this.missions.state === 'failed' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 10) prompt = 'E  Restart mission';
       else if (this.missions.objective?.kind === 'choice') prompt = `E  ${this.missions.objective.text}`;
       else if (contactPrompt) prompt = contactPrompt;
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
@@ -2188,6 +2230,7 @@ export class Game {
     const objective = !this.online && this.missions.objective ? {
       missionName: this.missions.active?.name ?? '', text: this.missions.objective.text, progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
+      failed: this.missions.state === 'failed' ? this.missions.failReason ?? 'Mission failed' : undefined,
     } : undefined;
     const vehicle = this.activePlane ? {
       name: `${this.activePlane.name} · ${Math.max(0, Math.round(this.activePlane.group.position.y - this.city.surfaceHeightAt(this.activePlane.group.position.x, this.activePlane.group.position.z)))}m`,
