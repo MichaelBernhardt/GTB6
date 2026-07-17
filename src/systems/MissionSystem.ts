@@ -41,6 +41,8 @@ export interface MissionObjective {
   failIf?: FailCondition[];
   /** Riddle objectives: no blip, no breadcrumb — the text is the only guide. */
   hidden?: boolean;
+  /** The conditions ARE the objective: a target (if any) is just the blip, not a reach check. */
+  conditionsOnly?: boolean;
   /** Restarting a failed mission resumes from the latest reached objective marked as a checkpoint. */
   checkpoint?: boolean;
 }
@@ -143,7 +145,7 @@ export class MissionSystem {
     }
     let done = false;
     switch (objective.kind) {
-      case 'reach': case 'escape': done = reachedTarget && (!objective.vehicleKind || (snapshot.inVehicle && snapshot.vehicleKind === objective.vehicleKind && (!objective.vehicleColor || snapshot.vehicleColor === objective.vehicleColor))); break;
+      case 'reach': case 'escape': done = (objective.conditionsOnly ? true : reachedTarget) && (!objective.vehicleKind || (snapshot.inVehicle && snapshot.vehicleKind === objective.vehicleKind && (!objective.vehicleColor || snapshot.vehicleColor === objective.vehicleColor))); break;
       case 'enter-kind': done = snapshot.inVehicle && snapshot.vehicleKind === objective.vehicleKind && (!objective.vehicleColor || snapshot.vehicleColor === objective.vehicleColor); break;
       case 'lose-wanted': done = snapshot.wantedLevel === 0; break;
       case 'defeat': this.progress = snapshot.hostileDefeated; done = this.progress >= (objective.required ?? 1); break;

@@ -29,6 +29,11 @@ export const MISSION_CONTACT_NPC_IDS: Readonly<Record<string, NpcCharacterId>> =
   'hot-property': 'bra-vusi',
   'dockside-signal': 'candice-boksburg',
   'arms-deal': 'thandi-arms',
+  // Story arc (models reuse existing bodies; contact labels carry the character names)
+  'last-coach-home': 'auntie-portia',
+  'copper-wire-blues': 'bra-vusi',
+  'rank-cold-war': 'candice-boksburg',
+  'reading-signs': 'joburg-driver', // Oupa Jakes
 };
 export const JMPD_PATROL_NPC_ID: NpcCharacterId = 'jmpd-patrol-officer';
 export const RANK_ENFORCER_NPC_ID: NpcCharacterId = 'bree-rank-enforcer';

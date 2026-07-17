@@ -38,6 +38,7 @@ import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSy
 import { StoryDirector } from './systems/StoryDirector';
 import { DialogueSystem } from './systems/DialogueSystem';
 import { introScript } from './story/dialogues';
+import { MISSION_SCRIPTS } from './story/scripts';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
@@ -64,7 +65,7 @@ import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
-import { COURIER_DEPOT, DELIVERY_STOPS, GTI_SPOT, POLICE_STATION, PORTIA_CAR_SPOT } from './world/placements';
+import { COURIER_DEPOT, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
@@ -119,6 +120,9 @@ export class Game {
   private missionContext: Partial<GameSnapshot> = {};
   private focusSpeed = 0;
   private lastFocus?: THREE.Vector3;
+  /** Scripted tail target (follow missions): spawned/parked/removed by mission beats. */
+  private quarry?: Vehicle;
+  private quarryArrived = false;
   private loadShedding = new LoadSheddingSystem();
   private torch: TorchSystem;
   private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
@@ -1460,17 +1464,62 @@ export class Game {
       const requiredVehicle = this.population.vehicles.find((vehicle) => vehicle.spec.color === objective.vehicleColor);
       if (requiredVehicle?.disabled) { this.processMissionUpdate(this.missions.fail(`${requiredVehicle.spec.name} was destroyed`)); return; }
     }
-    if (objective?.kind === 'defeat') this.population.spawnHostiles();
+    this.updateQuarry();
     if (this.missions.active?.id === 'hot-property' && objective?.kind === 'enter-kind' && this.activeVehicle?.spec.kind === 'sport' && this.activeVehicle.spec.color === 0xd83a40) this.forceWanted(2);
     const target = this.missionTargetRaw(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     if (dt > 0 && this.lastFocus) this.focusSpeed = Math.min(80, Math.hypot(focus.x - this.lastFocus.x, focus.z - this.lastFocus.z) / dt);
     (this.lastFocus ??= new THREE.Vector3()).copy(focus);
-    const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.kind === 'escape' ? 12 : 8));
-    if (objective?.kind === 'checkpoints' && reached) { const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1; this.processMissionUpdate(result); }
+    const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8));
+    if (objective?.kind === 'checkpoints' && reached) {
+      const stopIndex = this.deliveryIndex;
+      const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1;
+      const missionId = this.missions.active?.id ?? '';
+      for (const wave of MISSION_SCRIPTS[missionId]?.waves ?? []) if (wave.objective === this.missions.objectiveIndex && wave.checkpoint === stopIndex) this.population.spawnHostileWave(wave.spots);
+      this.processMissionUpdate(result);
+    }
     const result = this.missions.update(dt, this.buildMissionSnapshot(focus), reached);
     this.processMissionUpdate(result);
     const current = `${this.missions.active?.id ?? ''}:${this.missions.objectiveIndex}`;
-    if (current !== this.previousObjective) { this.previousObjective = current; if (this.missions.objective) this.ui.notify('Objective updated', this.missions.objective.text); }
+    if (current !== this.previousObjective) {
+      this.previousObjective = current;
+      this.hostileDefeated = 0; // defeat counters are per-objective, not per-mission
+      this.collectedItem = false;
+      this.runObjectiveBeats();
+      if (this.missions.objective) this.ui.notify('Objective updated', this.missions.objective.text);
+    }
+  }
+
+  /** Scripted events keyed to the objective the mission just entered (waves, quarry spawn/departure). */
+  private runObjectiveBeats(): void {
+    const mission = this.missions.active;
+    if (!mission || this.missions.state !== 'active') return;
+    const script = MISSION_SCRIPTS[mission.id];
+    const index = this.missions.objectiveIndex;
+    for (const wave of script?.waves ?? []) if (wave.objective === index && wave.checkpoint === undefined) this.population.spawnHostileWave(wave.spots);
+    const quarry = script?.quarry;
+    if (!quarry) return;
+    if (index >= quarry.spawnObjective && !this.quarry) {
+      this.quarry = this.population.spawnScriptVehicle(quarry.kind as VehicleKind, quarry.spawn.x, quarry.spawn.z, quarry.spawn.heading, quarry.color);
+      this.quarryArrived = false;
+    }
+    if (index >= quarry.departObjective && this.quarry && !this.quarryArrived) this.population.routeVehicleTo(this.quarry, quarry.destination.x, quarry.destination.z);
+  }
+
+  /** Per-frame follow feed: distance to the quarry, arrival at its mark, and whether it survives. */
+  private updateQuarry(): void {
+    const quarry = this.quarry;
+    const script = MISSION_SCRIPTS[this.missions.active?.id ?? '']?.quarry;
+    if (!quarry || !script || this.missions.state !== 'active') return;
+    const position = quarry.group.position;
+    if (!this.quarryArrived && Math.hypot(position.x - script.destination.x, position.z - script.destination.z) < script.arriveRadius) {
+      this.quarryArrived = true;
+      this.population.parkScriptVehicle(quarry);
+    }
+    if (this.missions.objective?.kind !== 'follow') return;
+    this.missionContext.escortAlive = !quarry.disabled;
+    const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    this.missionContext.followDistance = Math.hypot(position.x - focus.x, position.z - focus.z);
+    this.missionContext.followArrived = this.quarryArrived;
   }
 
   /** Snapshot for the pure mission engine: combat/vehicle facts plus story context and any script overlay. */
@@ -1773,19 +1822,27 @@ export class Game {
         ? `Jozi Arms is safe · trusted status · 20% discount · +R${update.choice.choice.reward.toLocaleString()}`
         : `Shipment taken · notorious status · ammo secured · +R${update.choice.choice.reward.toLocaleString()}`, protectedShop);
     } else if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); }
-    if (update.completed) this.persist();
+    if (update.completed) {
+      for (const flag of this.story.onMissionCompleted(update.completed)) if (flag.startsWith('act')) this.ui.notify('Word travels', 'New contacts will hear your name now.', true, 'reputation');
+      const page = MISSION_SCRIPTS[update.completed.id]?.diaryPage;
+      if (page !== undefined && this.story.collectDiaryPage(page)) this.ui.notify('Grid Diary', `Page ${page} of 12 — someone planned all of this.`, true, 'reputation');
+      this.quarry = undefined; this.quarryArrived = false; // a parked quarry stays where it arrived
+      this.persist();
+    }
   }
 
   private resetMissionRuntime(): void {
     this.deliveryIndex = 0; this.collectedItem = false; this.hostileDefeated = 0; this.previousObjective = ''; this.missionContext = {};
-    const missionId = this.missions.active?.id;
-    const vehicle = this.population.vehicles.find((item) => missionId === 'delivery-run' ? item.spec.color === 0xf1c232 : missionId === 'hot-property' ? item.spec.color === 0xd83a40 : false);
-    if (vehicle) {
-      const spot = missionId === 'delivery-run' ? PORTIA_CAR_SPOT : GTI_SPOT;
-      vehicle.restore();
-      vehicle.heading = spot.heading;
-      vehicle.reset(new THREE.Vector3(spot.x, 0, spot.z), this.city);
+    const script = MISSION_SCRIPTS[this.missions.active?.id ?? ''];
+    if (script?.vehicle) {
+      const vehicle = this.population.vehicles.find((item) => item.spec.color === script.vehicle!.color);
+      if (vehicle) {
+        vehicle.restore();
+        vehicle.heading = script.vehicle.spot.heading;
+        vehicle.reset(new THREE.Vector3(script.vehicle.spot.x, 0, script.vehicle.spot.z), this.city);
+      }
     }
+    if (this.quarry) { this.population.removeVehicle(this.quarry); this.quarry = undefined; this.quarryArrived = false; }
   }
 
   /** The active objective's real-world target, blip or not — hidden riddles still need reach checks. */
@@ -1793,8 +1850,9 @@ export class Game {
     const objective = this.missions.objective;
     if (!objective) return undefined;
     if (objective.kind === 'checkpoints') {
-      const stop = DELIVERY_STOPS[Math.min(this.deliveryIndex, DELIVERY_STOPS.length - 1)];
-      return stop ? { position: new THREE.Vector3(stop.x, this.city.roadHeightAt(stop.x, stop.z), stop.z), label: `Delivery ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
+      const stops = MISSION_SCRIPTS[this.missions.active?.id ?? '']?.stops ?? [];
+      const stop = stops[Math.min(this.deliveryIndex, stops.length - 1)];
+      return stop ? { position: new THREE.Vector3(stop.x, this.city.roadHeightAt(stop.x, stop.z), stop.z), label: `Stop ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
     }
     if (objective.target) { const position = objective.target.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...objective.target, position }; }
     return undefined;
@@ -1806,6 +1864,7 @@ export class Game {
     if (this.courierDestination) return { position: this.courierDestination, label: `Order ${this.courierJob.completed + 1}`, color: '#84f01c' };
     const objective = this.missions.objective;
     if (objective?.hidden) return undefined; // riddle objectives: the text is the only guide
+    if (objective?.kind === 'follow' && this.quarry) return { position: this.quarry.group.position, label: 'The bakkie', color: '#e8a13d' };
     const raw = this.missionTargetRaw();
     if (raw) return raw;
     if (!this.missions.active) {
@@ -1946,9 +2005,9 @@ export class Game {
       }
       else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  V  Camera  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
-      else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
+      else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
-      else if (this.missions.objective?.kind === 'choice') prompt = 'E  Decide the fate of Jozi Arms';
+      else if (this.missions.objective?.kind === 'choice') prompt = `E  ${this.missions.objective.text}`;
       else if (!this.dialogue.active && MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && this.story.isUnlocked(mission, this.missions.completed) && Math.hypot(mission.start.position.x - focus.x, mission.start.position.z - focus.z) < 7)) prompt = 'E  Speak to contact';
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
       else if (shop?.kind === 'bottle') prompt = `E  Browse ${shop.name}`;

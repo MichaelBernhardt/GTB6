@@ -384,7 +384,41 @@ export class PopulationSystem {
 
   spawnHostiles(): void {
     if (this.hostiles.some((ped) => ped.state !== 'down')) return;
-    HOSTILE_SPOTS.forEach(({ x, z }, index) => { const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), index + 30, true, false, this.nextSpecialNpcVariant(RANK_ENFORCER_NPC_ID)); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
+    this.spawnHostileWave(HOSTILE_SPOTS);
+  }
+
+  /** Story missions: replace the current hostile crew with a fresh wave at the given spots. */
+  spawnHostileWave(spots: ReadonlyArray<{ x: number; z: number }>): void {
+    for (const ped of this.hostiles) this.removePedestrian(ped);
+    this.hostiles.length = 0;
+    spots.forEach(({ x, z }, index) => { const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), index + 30, true, false, this.nextSpecialNpcVariant(RANK_ENFORCER_NPC_ID)); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
+  }
+
+  /** Story missions: a scripted vehicle parked at a kerb, driven only once routed somewhere. */
+  spawnScriptVehicle(kind: VehicleKind, x: number, z: number, heading: number, color?: number): Vehicle {
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), color);
+    vehicle.heading = heading; vehicle.group.rotation.y = heading;
+    this.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  /** Put a scripted vehicle on the road toward a specific destination (nearest lane node to it). */
+  routeVehicleTo(vehicle: Vehicle, x: number, z: number): boolean {
+    const goal = this.vehiclePlanner.nearest(x, z);
+    const points = this.vehiclePlanner.plan(vehicle.group.position.x, vehicle.group.position.z, goal);
+    if (!points?.length) return false;
+    vehicle.occupied = true;
+    if (!this.traffic.includes(vehicle)) this.traffic.push(vehicle);
+    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });
+    const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);
+    return true;
+  }
+
+  /** A scripted vehicle reached its mark: pull it off the road so ambient routing never claims it. */
+  parkScriptVehicle(vehicle: Vehicle): void {
+    const index = this.traffic.indexOf(vehicle); if (index >= 0) this.traffic.splice(index, 1);
+    this.trafficPlans.delete(vehicle);
+    vehicle.occupied = false; vehicle.speed = 0;
   }
 
   nearestEnterable(position: THREE.Vector3, maxDistance = 4.2): Vehicle | undefined {

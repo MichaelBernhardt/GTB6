@@ -10,6 +10,7 @@
  */
 import {
   CBD_CENTER,
+  STATIONS,
   computeSignalJunctions,
   districtCenter,
   distanceToRoadEdge,
@@ -308,6 +309,42 @@ export const HOSTILE_SPOTS: MapPt[] = [
 /** Thandi (The Arms Deal): at the Jozi Arms pad. */
 export const THANDI_START: MapPt = { x: ARMS_SITE.pad.x + 2.5, z: ARMS_SITE.pad.z + 2 };
 
+// ---- Story arc (Act 1): stations, riddle streets, the cartel yard ------------------
+
+const stationPoint = (name: string): MapPt => {
+  const station = STATIONS.find((entry) => entry.name === name);
+  return station ? { x: station.x, z: station.z } : { x: CBD_CENTER.x, z: CBD_CENTER.z };
+};
+
+/** Oupa Jakes holds court outside Park Station, where he announced trains for thirty years. */
+export const PARK_STATION_SPOT = walkSpotNear(stationPoint('Johannesburg Park Station'), 3, 5);
+/** Sandton Station: where Portia's nephew abandoned the rent bag. */
+export const SANDTON_PLATFORM = stationPoint('Sandton Station');
+export const SANDTON_BAG_SPOT = walkSpotNear(SANDTON_PLATFORM, 3, 5);
+
+/** Riddle chain targets — real named streets with in-world street signs (no map markers). */
+export const RIDDLE_SPOTS: MapPt[] = [
+  walkSpot('Pothole Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z - 78 * P }, 3, 5),
+  walkSpot('Loadshed Lane', { x: CBD_CENTER.x - 25 * P, z: CBD_CENTER.z - 90 * P }, 3, 5),
+  walkSpot('Fax Street', { x: CBD_CENTER.x + 60 * P, z: CBD_CENTER.z - 35 * P }, 3, 5),
+];
+
+/** Kelvin Yard: the cartel's fenced depot in the Crown industrial belt. */
+const crown = districtCenter('Crown') ?? CBD_CENTER;
+const kelvinKerb = bestKerbSpot({ near: { x: crown.x, z: crown.z }, clearance: 8, ownRadius: 16, minEdge: 6 });
+export const KELVIN_GATE_SPOT: MapPt = { x: kelvinKerb.x, z: kelvinKerb.z };
+
+/** The cable buyer's bakkie idles up the block from Bra Vusi (Copper Wire Blues tail). */
+export const QUARRY_SPAWN = kerbVehicleSpot('Pothole Street', { x: VUSI_START.x + 8 * P, z: VUSI_START.z });
+
+/** Candice's bottle-green route van at the Zoo Lake rank. */
+export const CANDICE_VAN_SPOT = kerbVehicleSpot('Jan Smuts Avenue', { x: zooLakeCenter.x + 6 * P, z: zooLakeCenter.z });
+/** The two contested ranks on her route (Rank Cold War). */
+export const RANK_STOPS: MapPt[] = [
+  walkSpotNear({ x: hillbrow.x + 10 * P, z: hillbrow.z - 8 * P }, 3.4, 5),
+  walkSpotNear({ x: newtown.x - 14 * P, z: newtown.z + 10 * P }, 3.4, 5),
+];
+
 // ---- Parked vehicles ----------------------------------------------------------------
 
 export interface ParkedVehicleSpot { kind: string; x: number; z: number; heading: number; color?: number; }
@@ -322,6 +359,7 @@ export const GTI_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x
 
 export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('compact', PORTIA_CAR_SPOT, 0xf1c232),
+  parkedEntry('van', CANDICE_VAN_SPOT, 0x2e8b57), // Candice's route van (Rank Cold War)
   parkedEntry('sport', GTI_SPOT, 0xd83a40),
   parkedEntry('van', kerbVehicleSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 150 * P, z: CBD_CENTER.z - 45 * P })),
   parkedEntry('compact', kerbVehicleSpot('Hairyson Street', { x: CBD_CENTER.x - 35 * P, z: CBD_CENTER.z - 60 * P })),

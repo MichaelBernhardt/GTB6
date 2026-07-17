@@ -9,6 +9,7 @@ import {
   MISSION_CONTACT_NPC_IDS,
   RANK_ENFORCER_NPC_ID,
 } from '../entities/NpcCatalog';
+import { MISSIONS } from '../systems/MissionSystem';
 import type { City } from '../world/City';
 import { SPAWN_POINT } from '../world/placements';
 import { PopulationSystem } from './PopulationSystem';
@@ -55,7 +56,10 @@ describe('all-Blender NPC population policy', () => {
   it('assigns dedicated Blender identities to contacts, guards, hostiles, patrols, and drivers', () => {
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const contacts = population.pedestrians.filter((ped) => ped.contact && !ped.carGuard);
-    expect(contacts.map((ped) => ped.visualVariant)).toEqual(Object.values(MISSION_CONTACT_NPC_IDS));
+    // One body per contact person: missions sharing a contact (story arc) share the spawned pedestrian.
+    const seen = new Set<string>();
+    const expected = MISSIONS.filter((mission) => { if (seen.has(mission.contact) || !MISSION_CONTACT_NPC_IDS[mission.id]) return false; seen.add(mission.contact); return true; }).map((mission) => MISSION_CONTACT_NPC_IDS[mission.id]);
+    expect(contacts.map((ped) => ped.visualVariant)).toEqual(expected);
     expect(population.pedestrians.filter((ped) => ped.carGuard).every((ped) => ped.visualVariant === CAR_GUARD_NPC_ID)).toBe(true);
 
     population.spawnHostiles();

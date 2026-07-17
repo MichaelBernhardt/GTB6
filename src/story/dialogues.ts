@@ -28,6 +28,27 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Thandi', text: 'Or you take the stock yourself and get rich. I\'m not going to pretend you haven\'t thought it.' },
     { speaker: 'Thandi', text: 'Either way, the CBD will remember what you do tonight.' },
   ] },
+  'last-coach-home': { id: 'last-coach-home:intro', lines: [
+    { speaker: 'Auntie Portia', text: 'Boet! Disaster. My nephew fell asleep on the Sandton train and got off without my rent bag.' },
+    { speaker: 'You', text: 'Your rent was riding the train?' },
+    { speaker: 'Auntie Portia', text: 'The vetkoek lady by Sandton Station is holding it. Ride out there — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home.' },
+  ] },
+  'copper-wire-blues': { id: 'copper-wire-blues:intro', lines: [
+    { speaker: 'Bra Vusi', text: 'That cable from the GTI? The buyer paid cash, no name, no yard. A man like that is worth knowing better.' },
+    { speaker: 'You', text: 'So I go ask him nicely where he lives?' },
+    { speaker: 'Bra Vusi', text: 'You ask NOTHING. His bakkie is up the block. When it moves, you move. Stay close, stay boring. I want that yard\'s address, not a funeral.' },
+  ] },
+  'rank-cold-war': { id: 'rank-cold-war:intro', lines: [
+    { speaker: 'Candice', text: 'The Wemmer crew is leaning on my ranks now. MY ranks. Two stops on my route think Candice has gone soft.' },
+    { speaker: 'You', text: 'And I\'m the hard part?' },
+    { speaker: 'Candice', text: 'You\'re the van driver, sweetie. Drive my green van down the route, show the flag at both ranks, and if they get brave — moer them off my property. Bring my van back breathing.' },
+  ] },
+  'reading-signs': { id: 'reading-signs:intro', lines: [
+    { speaker: 'Oupa Jakes', text: 'Thirty years I called the trains at Park Station. Platform two, the eight-fifteen, mind the gap. Now the city calls ME names. Hah.' },
+    { speaker: 'You', text: 'And you\'re telling me this because…' },
+    { speaker: 'Oupa Jakes', text: 'Because you look like someone who reads. Three riddles. No map. The streets of this city confess everything if you read their signs. Come back when you\'ve stood in all three places.' },
+    { speaker: 'Oupa Jakes', text: 'Ask me again if you forget the words. My memory is the last thing still working.' },
+  ] },
 };
 
 export function introScript(mission: MissionDefinition): DialogueScript {
