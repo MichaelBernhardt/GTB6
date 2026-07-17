@@ -2023,6 +2023,7 @@ export class Game {
     const rewards = MISSION_SCRIPTS[mission.id]?.rewards;
     if (rewards?.weapon) { const result = this.combat.grantWeapon(rewards.weapon); items.push(`${WEAPON_BY_ID[rewards.weapon].name}${result === 'ammo' ? ' ammo' : ''}`); }
     if (rewards?.grantVehicle) { this.grantGarageVehicle(rewards.grantVehicle.kind as VehicleKind, rewards.grantVehicle.color); items.push(`${VEHICLE_SPECS[rewards.grantVehicle.kind as VehicleKind].name} (garaged)`); }
+    if (rewards?.armour) { this.inventory.armour = Math.min(ARMOUR_MAX, this.inventory.armour + rewards.armour); items.push(`Body armour +${rewards.armour}`); }
     if (rewards?.standing) { this.livingCity.district(CBD).communityStanding = Math.min(100, this.livingCity.district(CBD).communityStanding + rewards.standing); items.push(`Street respect +${rewards.standing}`); }
     if (rewards?.note) items.push(rewards.note);
     this.missionPassedView = { name: mission.name, items };

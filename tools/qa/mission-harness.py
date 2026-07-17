@@ -128,11 +128,11 @@ def run(port: int, out: Path, missions: list[str]) -> int:
     all_findings, all_measurements, sheet_rows = [], [], []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-gpu-sandbox'])
-        page = None
-        for mission in missions:
-            for attempt in (1, 2):  # fresh page per mission; one retry on a renderer crash
+        page = None  # ONE page is reused across missions (prep() via `mission <n>` fully resets state);
+        for mission in missions:               # re-boot only on a renderer crash — 24 boots was the slow part
+            for attempt in (1, 2):
                 try:
-                    if page is None or attempt == 2:
+                    if page is None:
                         page = boot(browser, port)
                     play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
                     try:
@@ -142,9 +142,7 @@ def run(port: int, out: Path, missions: list[str]) -> int:
                             print('   ', line, flush=True)
                     except Exception:
                         pass
-                    page.close()
-                    page = None
-                    break
+                    break  # keep the page for the next mission
                 except Exception as error:
                     print(f'    !! harness crash on {mission} (attempt {attempt}): {type(error).__name__}', flush=True)
                     try:

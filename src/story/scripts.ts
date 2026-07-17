@@ -50,7 +50,7 @@ export interface MissionScript {
   diaryPage?: number;
   /** Felt payback beyond the base cash reward — a keepable/unlock most missions, celebrated on the
    *  MISSION PASSED card (owner: 'give them something in return for the work'). */
-  rewards?: { weapon?: WeaponId; grantVehicle?: { kind: string; color: number }; standing?: number; note?: string };
+  rewards?: { weapon?: WeaponId; armour?: number; grantVehicle?: { kind: string; color: number }; standing?: number; note?: string };
   /** A deliberately long objective (the journey IS the mission): exempt from the ~1200u route cap.
    *  Rare and earned — never in act 1 (owner). */
   journeys?: number[];
@@ -63,15 +63,15 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   'delivery-run': {
     stops: DELIVERY_STOPS,
     vehicle: { color: 0xf1c232, spot: PORTIA_CAR_SPOT },
-    rewards: { grantVehicle: { kind: 'compact', color: 0xf1c232 }, note: 'Auntie Portia signs the yellow Golf over to you — it\'s in your garage now' },
+    rewards: { armour: 50, note: 'Auntie Portia sends you off with cash and her late husband\'s body armour' },
     forceBlackout: 1, // the opener's thesis, 90 seconds in: the grid dies around the player mid-drive
     radio: [
       { objective: 1, title: 'Auntie Portia', detail: 'Load shedding NOW? There was no shedding on the schedule, boet. Somebody\'s schedule, maybe.' },
       { objective: 2, title: 'Auntie Portia', detail: 'Second buyer paid short — says his genny subscription is due. EVERYONE\'S genny subscription is due. Since when is light a subscription, boet?' },
     ],
     outro: [
-      { speaker: 'Auntie Portia', text: 'You drove through that blackout like a taxi man. Sharp sharp.' },
-      { speaker: 'Auntie Portia', text: 'Listen — everyone in this city pays twice for light now. Vusi says there\'s cash in that. Pothole Street. Tell him Portia sent you, and don\'t sign anything.' },
+      { speaker: 'Auntie Portia', text: 'You drove through that blackout like a taxi man. Sharp sharp. Keep the Golf as long as you need it.' },
+      { speaker: 'Auntie Portia', text: 'And take this — my late Sipho\'s vest. Everyone in this city pays twice for light now, and Vusi says there\'s cash in that. Pothole Street. Don\'t sign anything.' },
     ],
   },
   'hot-property': {
@@ -99,7 +99,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   'rank-cold-war': {
     stops: RANK_STOPS,
     vehicle: { color: CANDICE_VAN_COLOR, spot: CANDICE_VAN_SPOT },
-    rewards: { standing: 8, note: 'Candice\'s ranks are yours to move through — respect earned' },
+    rewards: { armour: 50, standing: 8, note: 'Candice\'s ranks are yours to move through — respect, and a vest for the road' },
     waves: [
       { objective: 1, checkpoint: 0, spots: around(RANK_STOPS[0]!, [[7, 4], [-6, 6]]) },
       { objective: 1, checkpoint: 1, spots: around(RANK_STOPS[1]!, [[6, -5], [-7, 4], [4, 8]]) },
@@ -126,7 +126,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     vehicle: { color: TANKER_COLOR, spot: TANKER_SPOT },
     radio: [{ objective: 1, title: 'Solly', detail: 'Gently, my laaitie. That tanker is worth more than you are. For now.' }],
     outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the bakkie, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
-    rewards: { grantVehicle: { kind: 'van', color: 0xb8621b }, note: 'Solly hands you a cartel bakkie — parked in your garage' },
+    rewards: { armour: 100, note: 'The crew kits you out — full body armour on Solly\'s tab' },
   },
   'pull-the-plug': {
     forceBlackout: 2, // the breaker goes over: the grid dies around you
@@ -134,6 +134,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     radio: [{ objective: 2, title: 'The city goes dark', detail: 'Every light you can see just died. Somewhere, a control room phone is ringing.' }],
   },
   'stage-fright': {
+    rewards: { grantVehicle: { kind: 'superbike', color: 0x1b1b1e }, note: 'Solly lets you keep a superbike off the showroom floor — pristine, in your garage, yours for good' },
     alarm: {
       objective: 1, level: 3,
       title: 'Showroom alarm', detail: 'The forecourt floodlights snap to you. All of Sandton hears it.',
