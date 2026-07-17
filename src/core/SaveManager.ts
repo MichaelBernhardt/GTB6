@@ -4,7 +4,6 @@ import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import { DEFAULT_MINIMAP_ZOOM, sanitizeMinimapZoom } from '../ui/MinimapView';
 import type { CheatSettings, GameSettings, Inventory, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
 import { defaultLivingCityState, sanitizeLivingCityState } from '../systems/LivingCitySystem';
-import { DIARY_PAGE_COUNT } from '../systems/StoryDirector';
 import { SAFEHOUSE_IDS, type SafehouseId } from '../systems/SafehouseSystem';
 import { PLAYER_SPAWN } from '../world/placements';
 import { distanceToRoadEdge, MAP_WORLD_SIZE, ROAD_EDGE_CAP } from '../world/mapData';
@@ -100,19 +99,7 @@ export function sanitizeSafehouses(raw: unknown): SafehouseId[] {
   return [...new Set<SafehouseId>([STARTER_SAFEHOUSE, ...valid])];
 }
 
-/** Story flags: plain lowercase tokens (`act1`, `choice:two-fires:sindi`); junk and duplicates drop. */
-export function sanitizeStoryFlags(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  return [...new Set(raw.filter((flag): flag is string => typeof flag === 'string' && /^[a-z0-9:-]{1,64}$/.test(flag)))].sort();
-}
-
-/** Grid Diary pages: integers within the printed run; anything else never existed. */
-export function sanitizeDiaryPages(raw: unknown): number[] {
-  if (!Array.isArray(raw)) return [];
-  return [...new Set(raw.filter((page): page is number => Number.isInteger(page) && page >= 1 && page <= DIARY_PAGE_COUNT))].sort((a, b) => a - b);
-}
-
-export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY };
+export const DEFAULT_SAVE: SavedGame = { version: 2, money: 750, completedMissions: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -121,17 +108,15 @@ function deserialize(value: string | null): SavedGame {
   try {
     if (!value) return structuredClone(DEFAULT_SAVE);
     const parsed = JSON.parse(value) as Partial<Omit<SavedGame, 'version'>> & { version?: number };
-    if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) return structuredClone(DEFAULT_SAVE);
+    if (parsed.version !== 1 && parsed.version !== 2) return structuredClone(DEFAULT_SAVE);
     const settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
     if (settings.quality !== 'low' && settings.quality !== 'medium' && settings.quality !== 'high' && settings.quality !== 'ultra') settings.quality = 'high';
     settings.cameraViewFoot = sanitizeView(settings.cameraViewFoot); settings.cameraViewVehicle = sanitizeView(settings.cameraViewVehicle);
     settings.minimapZoom = sanitizeMinimapZoom(settings.minimapZoom);
     const spawn = sanitizeSpawn(parsed.spawn);
     return {
-      ...structuredClone(DEFAULT_SAVE), ...parsed, version: 3,
+      ...structuredClone(DEFAULT_SAVE), ...parsed, version: 2,
       completedMissions: Array.isArray(parsed.completedMissions) ? parsed.completedMissions : [],
-      storyFlags: sanitizeStoryFlags(parsed.storyFlags), // v1/v2 saves carry none — the arc starts fresh
-      diaryPages: sanitizeDiaryPages(parsed.diaryPages),
       spawn,
       position: sanitizePosition(parsed.position, spawn), // old saves (no position) resume at the respawn anchor
       heading: sanitizeHeading(parsed.heading),
