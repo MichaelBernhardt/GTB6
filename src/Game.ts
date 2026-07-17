@@ -1657,7 +1657,7 @@ export class Game {
       this.reportCrime(this.player.group.position, 14, { victims: [victim], radius: FEAR_EVENTS.assault.radius, cityEvent: 'mugging', label: 'mugging' }); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault); this.audio.melee();
       this.ui.notify('Street robbery', `They dropped R${cash}. Witnesses are calling the JMPD.`, false); return;
     }
-    const killed = victim.takeDamage(34); this.reportCrime(this.player.group.position, killed ? 24 : 16, { victims: [victim], radius: (killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius, cityEvent: !victim.hostile && !victim.police ? (killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: killed ? 'murder' : 'assault' }); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
+    const killed = victim.takeDamage(34, this.player.group.position); this.reportCrime(this.player.group.position, killed ? 24 : 16, { victims: [victim], radius: (killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius, cityEvent: !victim.hostile && !victim.police ? (killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: killed ? 'murder' : 'assault' }); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
     this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.melee();
     this.audio.splat(killed ? 1 : 0.6, victim.group.position.x, victim.group.position.z); this.audio.scream('pain', victim.group.position.x, victim.group.position.z);
     if (killed) this.spawnDrops(victim);

@@ -130,7 +130,7 @@ export class CombatSystem {
     this.cooldown = spec.cooldown;
     const victim = population.nearestPedestrian(origin, spec.range);
     if (!victim) { this.audio.whiff(); return { fired: true, melee: true }; }
-    const killed = victim.takeDamage(spec.damage);
+    const killed = victim.takeDamage(spec.damage, origin);
     this.audio.melee();
     return { fired: true, melee: true, victim, killed, policeHit: victim.police, hitPoint: victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)) };
   }

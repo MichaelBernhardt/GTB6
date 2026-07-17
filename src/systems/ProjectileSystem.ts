@@ -79,7 +79,7 @@ export class ProjectileSystem {
       if (ped.state === 'down') continue;
       const damage = splashDamage(rocket.damage, ped.group.position.distanceTo(position), rocket.radius);
       if (damage <= 0) continue;
-      const killed = ped.takeDamage(damage);
+      const killed = ped.takeDamage(damage, position);
       victims.push({ ped, killed, position: ped.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)) });
       policeHit ||= ped.police;
     }
