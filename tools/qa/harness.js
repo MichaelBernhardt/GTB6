@@ -16,6 +16,26 @@ window.__qa = (() => {
   const STEP = 0.15; // sim step used for fast-forwarding
   const state = { mission: null, log: [], findings: [], shots: [] };
 
+  // SwiftShader dies under the continuous background RAF render of a 3.2M-triangle scene across a
+  // long sweep. The harness drives via direct sim steps and doesn't need the live view, so suppress
+  // the renderer entirely (restored only for a screenshot). This removes the crash source.
+  const realComposerRender = g.composer ? g.composer.render.bind(g.composer) : null;
+  const realRendererRender = g.renderer.render.bind(g.renderer);
+  let renderSuppressed = false;
+  function suppressRender() {
+    if (renderSuppressed) return;
+    renderSuppressed = true;
+    if (g.composer) g.composer.render = () => {};
+    g.renderer.render = () => {};
+  }
+  function withRender(fn) {
+    if (g.composer && realComposerRender) g.composer.render = realComposerRender;
+    g.renderer.render = realRendererRender;
+    const out = fn();
+    if (renderSuppressed) { if (g.composer) g.composer.render = () => {}; g.renderer.render = () => {}; }
+    return out;
+  }
+
   const finding = (severity, what) => { state.findings.push({ mission: state.mission, objective: objIndex(), severity, what }); };
   const note = (what) => state.log.push(`[${state.mission}:${objIndex()}] ${what}`);
   const objIndex = () => g.missions.active ? g.missions.objectiveIndex : -1;
@@ -478,13 +498,16 @@ window.__qa = (() => {
     const p = focus(); pump(p.x, p.z);
     for (let i = 0; i < 8; i++) g.update(1 / 60);
     g.updateCamera(1 / 60);
-    if (g.composer) g.composer.render(); else g.renderer.render(g.scene, g.camera);
-    return g.renderer.domElement.toDataURL('image/jpeg', 0.7);
+    return withRender(() => {
+      if (g.composer && realComposerRender) realComposerRender(); else realRendererRender(g.scene, g.camera);
+      return g.renderer.domElement.toDataURL('image/jpeg', 0.7);
+    });
   }
 
   // capture the last failure reason for reporting
   const origFail = g.missions.fail.bind(g.missions);
   g.missions.fail = (reason) => { state.lastFail = reason; return origFail(reason); };
 
+  suppressRender();
   return { g, state, prep, accept, audit, resolve, trainTo, flyTo, bailAndLand, breachYard, escapeYard, shot, step, note, finding, objIndex };
 })();
