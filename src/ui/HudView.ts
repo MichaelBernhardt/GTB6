@@ -42,10 +42,6 @@ export class HudView {
   private objectiveFill: HTMLElement;
   private objectiveTrack: HTMLElement;
   private prompt: HTMLElement;
-  private dialogue: HTMLElement;
-  private dialogueSpeaker: HTMLElement;
-  private dialogueText: HTMLElement;
-  private dialogueMore: HTMLElement;
   private vehicle: HTMLElement;
   private vehicleName: HTMLElement;
   private vehicleSpeed: HTMLElement;
@@ -86,7 +82,6 @@ export class HudView {
         <strong data-hud="objective-text"></strong><div class="hud-objective-track" data-hud="objective-track" role="progressbar" aria-label="Objective progress" aria-valuemin="0" aria-valuemax="100"><i data-hud="objective-fill"></i></div>
       </section>
       <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em><i class="hud-radio" data-hud="radio" role="status"></i><i class="hud-taxi" data-hud="taxi" role="status"></i></section>
-      <section class="hud-dialogue" data-hud="dialogue" role="status" aria-live="polite" hidden><small data-hud="dialogue-speaker"></small><p data-hud="dialogue-text"></p><em data-hud="dialogue-more"></em></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
       <div class="hud-items" data-hud="items" aria-label="Carried items" hidden><i data-hud="stims" hidden></i><i data-hud="chutes" hidden></i><i data-hud="torch" hidden></i></div>
       <div class="hud-fps" data-hud="fps"></div>
@@ -101,7 +96,7 @@ export class HudView {
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i')); this.unseen = required(root, '[data-hud="unseen"]');
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
-    this.prompt = required(root, '[data-hud="prompt"]'); this.dialogue = required(root, '[data-hud="dialogue"]'); this.dialogueSpeaker = required(root, '[data-hud="dialogue-speaker"]'); this.dialogueText = required(root, '[data-hud="dialogue-text"]'); this.dialogueMore = required(root, '[data-hud="dialogue-more"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.radio = required(root, '[data-hud="radio"]'); this.taxi = required(root, '[data-hud="taxi"]');
+    this.prompt = required(root, '[data-hud="prompt"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.radio = required(root, '[data-hud="radio"]'); this.taxi = required(root, '[data-hud="taxi"]');
     this.fps = required(root, '[data-hud="fps"]'); this.perf = required(root, '[data-hud="perf"]'); this.perfLegend = required(root, '[data-hud="perf-legend"]');
     this.perfGraph = new ProfileGraph(required<HTMLCanvasElement>(root, '[data-hud="perf-graph"]'));
     this.cheats = required(root, '[data-hud="cheats"]'); this.crosshair = required(root, '[data-hud="crosshair"]');
@@ -136,8 +131,6 @@ export class HudView {
       if (state.objective.remainingSeconds) bits.push(`${Math.ceil(state.objective.remainingSeconds)} SEC`);
       setText(this.objectiveMeta, bits.join(' · ')); const progress = objectiveProgress(state.objective); setWidth(this.objectiveFill, `${progress ?? 0}%`); setHidden(this.objectiveTrack, progress === undefined); setAttribute(this.objectiveTrack, 'aria-valuenow', String(progress ?? 0));
     }
-    setHidden(this.dialogue, !state.dialogue);
-    if (state.dialogue) { setText(this.dialogueSpeaker, state.dialogue.speaker); setText(this.dialogueText, state.dialogue.text); setText(this.dialogueMore, state.dialogue.more ? 'E  MORE' : 'E  DONE'); }
     setText(this.prompt, state.prompt); setHidden(this.prompt, !state.prompt);
     setHidden(this.vehicle, !state.vehicle);
     if (state.vehicle) {

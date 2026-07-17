@@ -84,12 +84,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-radio { display: block; margin-top: 5px; color: var(--blue); font: 900 9px "Courier New", ui-monospace, monospace; font-style: normal; letter-spacing: .4px; text-transform: uppercase; }
 .hud-taxi { display: block; margin-top: 3px; color: var(--paper-dim); font: 900 10px Inter, sans-serif; font-style: normal; letter-spacing: 1px; }
 .hud-taxi.is-on { color: var(--yellow); text-shadow: 0 0 8px rgba(242, 197, 33, .55); }
-.hud-dialogue { position: absolute; bottom: 86px; left: 50%; width: min(560px, 62vw); padding: 11px 16px 9px; transform: translateX(-50%) rotate(.2deg); background: rgba(17, 24, 23, .93); border-left: 7px solid var(--yellow); box-shadow: 7px 7px 0 rgba(17, 24, 23, .22), var(--shadow); backdrop-filter: blur(8px); }
-.hud-dialogue small { color: var(--yellow); font: 900 10px Inter, sans-serif; letter-spacing: 1.2px; text-transform: uppercase; }
-.hud-dialogue p { margin: 3px 0 0; font-size: clamp(14px, 1.2vw, 18px); line-height: 1.25; }
-.hud-dialogue em { display: block; margin-top: 5px; text-align: right; color: var(--paper-dim); font: 900 9px Inter, sans-serif; font-style: normal; letter-spacing: 1.1px; }
-.hud-dialogue em::first-letter { color: var(--red); }
-
 .hud-prompt { position: absolute; bottom: 28px; left: 50%; max-width: min(620px, 60vw); padding: 10px 16px; transform: translateX(-50%); color: var(--ink); background: var(--paper); border-left: 7px solid var(--yellow); box-shadow: var(--shadow); font: 900 13px Inter, sans-serif; letter-spacing: .35px; text-align: center; }
 .hud-prompt::first-letter { color: var(--red); }
 .hud-crosshair { position: absolute; top: 50%; left: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); opacity: .9; filter: drop-shadow(0 1px 2px #000); }
