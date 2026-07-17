@@ -26,7 +26,7 @@ export const MISSIONS: MissionDefinition[] = [
     intro: 'Howzit boet. Sold the couch on Marketplace but eish, the bakkie is gone. Take my yellow Citi Golf — three drops, sharp sharp. The couch fits, I promise.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Enter Auntie Portia\'s yellow Citi Golf' },
-      { kind: 'checkpoints', text: 'Make the three drops (now now, not just now)', required: 3, timeLimit: 210 },
+      { kind: 'checkpoints', text: 'Make the two drops (now now, not just now)', required: 2 },
       { kind: 'reach', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Return the Citi Golf to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia\'s driveway') },
     ],
   },

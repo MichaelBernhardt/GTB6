@@ -47,7 +47,12 @@ const around = (point: MapPt, offsets: Array<[number, number]>): MapPt[] => offs
 
 export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   // ---- On-ramp + Act 1 --------------------------------------------------------------
-  'delivery-run': { stops: DELIVERY_STOPS, vehicle: { color: 0xf1c232, spot: PORTIA_CAR_SPOT } },
+  'delivery-run': {
+    stops: DELIVERY_STOPS,
+    vehicle: { color: 0xf1c232, spot: PORTIA_CAR_SPOT },
+    forceBlackout: 1, // the opener's thesis, 90 seconds in: the grid dies around the player mid-drive
+    radio: [{ objective: 1, title: 'Auntie Portia', detail: 'Load shedding NOW? There was no shedding on the schedule, boet. Somebody\'s schedule, maybe.' }],
+  },
   'hot-property': { vehicle: { color: 0xd83a40, spot: GTI_SPOT } },
   'dockside-signal': { waves: [{ objective: 1, spots: HOSTILE_SPOTS }] },
   'copper-wire-blues': { quarry: { spawnObjective: 0, departObjective: 1, kind: 'van', color: QUARRY_COLOR, spawn: QUARRY_SPAWN, destination: KELVIN_GATE_SPOT, arriveRadius: 26 } },

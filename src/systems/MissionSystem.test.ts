@@ -17,9 +17,10 @@ describe('MissionSystem', () => {
   });
 
   it('fails a timed objective and can restart', () => {
-    const system = new MissionSystem(); system.start('delivery-run');
-    system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'compact', vehicleColor: 0xf1c232 }, false);
-    expect(system.update(211, snapshot, false).failed).toBe('Time expired');
+    // content no longer times the opener (owner: forgiving first mission) — use a synthetic timed run
+    const timed = { id: 'timed', name: 'Timed', contact: 'X', intro: '', reward: 0, start: { position: new Vector3(), label: 's' }, objectives: [{ kind: 'reach' as const, text: 'go', timeLimit: 30, target: { position: new Vector3(), label: 't' } }] };
+    const system = new MissionSystem([timed]); system.start('timed');
+    expect(system.update(31, snapshot, false).failed).toBe('Time expired');
     expect(system.restart()).toBe(true);
     expect(system.objectiveIndex).toBe(0);
   });

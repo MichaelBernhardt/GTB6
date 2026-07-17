@@ -273,11 +273,11 @@ const zooLakeCenter: MapPt = zooLake ? { x: zooLake.cx, z: zooLake.cz } : { x: b
 
 /** Auntie Portia (Couch Run): You-Bet Street, around the corner from spawn. */
 export const PORTIA_START = walkSpot('You-Bet Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z + 25 * P }, 3, 5);
-/** The three couch drops: Newtown, Braamfontein, Hillbrow roadside spots. */
+/** The couch drops: two roadside spots a short hop from Portia — the opener must be
+ *  winnable by anyone who can drive (the old 3-district, 210s route measured impossible). */
 export const DELIVERY_STOPS: MapPt[] = [
+  walkSpot('Commissioner Street', { x: CBD_CENTER.x - 15 * P, z: CBD_CENTER.z - 20 * P }, 3, 5),
   walkSpotNear({ x: newtown.x, z: newtown.z }, 3, 5),
-  walkSpotNear({ x: braamfontein.x, z: braamfontein.z }, 3, 5),
-  walkSpotNear({ x: hillbrow.x, z: hillbrow.z }, 3, 5),
 ];
 
 /** Bra Vusi (Hot Copper): Pothole Street block. */
