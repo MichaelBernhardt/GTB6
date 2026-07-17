@@ -77,7 +77,24 @@ describe('cached rigged pedestrian instances', () => {
     visual.setState(state({ state: 'idle', hailing: true })); visual.update(1 / 30);
     expect(visual.group.getObjectByName('UpperArm_R')!.rotation.z).not.toBe(0);
     visual.setState(state({ state: 'walk', stumbling: true, stumbleAmount: 0.5 })); visual.update(1 / 30); expect(visual.group.rotation.x).toBeCloseTo(-0.16);
-    visual.setState(state({ state: 'down' })); visual.update(1 / 30); expect(visual.group.position.y).toBeCloseTo(-0.53);
+    const skinnedFloor = (): number => {
+      visual.group.updateMatrixWorld(true);
+      let floor = Infinity; const box = new THREE.Box3();
+      visual.group.traverse((object) => {
+        if (!(object instanceof THREE.SkinnedMesh)) return;
+        object.computeBoundingBox();
+        floor = Math.min(floor, box.copy(object.boundingBox!).applyMatrix4(object.matrixWorld).min.y);
+      });
+      return floor;
+    };
+    visual.setState(state({ state: 'down' })); visual.update(1 / 30);
+    expect(visual.group.position.y).toBeGreaterThan(-0.05); // the just-shot body hasn't fallen yet — no early sink through the road
+    for (let frame = 0; frame < 45; frame++) { // through the fall AND at rest: in ground contact, never hovering or buried
+      visual.update(1 / 30);
+      expect(Math.abs(skinnedFloor())).toBeLessThan(0.08);
+    }
+    visual.update(10); // fully clamped at the clip end
+    expect(skinnedFloor()).toBeCloseTo(0, 1); // the settled corpse lies ON the ground, not floating above it
   });
 
   it('replaces a placeholder asynchronously and remains fail-open when loading fails', async () => {

@@ -76,15 +76,53 @@ export function validateNpcGltf(gltf: GLTF, expectedId?: NpcCharacterId): Valida
   return { clips: new Map(NPC_ANIMATIONS.map((name) => [name, gltf.animations.find((clip) => clip.name === name)!])) };
 }
 
-interface NpcTemplate { gltf: GLTF; validated: ValidatedNpcGltf; }
+interface NpcTemplate { gltf: GLTF; validated: ValidatedNpcGltf; deathFloor: DeathFloorCurve; }
 const templateCache = new Map<string, Promise<NpcTemplate>>();
+
+export const DEATH_FLOOR_SAMPLE_STEP = 0.1;
+export interface DeathFloorCurve { step: number; floors: number[]; }
+
+/** Floor (min skinned-vertex y, model space) of this rig's death pose, sampled across the clip.
+ *  The retargeted capture keeps the hips near standing height while the body tips over, so the pose's
+ *  lowest point climbs 0 → ~0.65 through the clip (varying per character) — played raw, corpses end up
+ *  hovering above the road. Sinking the rig by this measured curve keeps the body in ground contact for
+ *  the whole collapse and lets it settle exactly when the animation does. Posed on a throwaway clone so
+ *  the cached template stays in bind pose. */
+function measureDeathFloorCurve(scene: THREE.Object3D, death: THREE.AnimationClip): DeathFloorCurve {
+  const posed = cloneSkeleton(scene);
+  const mixer = new THREE.AnimationMixer(posed);
+  const action = mixer.clipAction(death); action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; action.play();
+  const floors: number[] = []; const box = new THREE.Box3();
+  for (let time = 0, previous = 0; time <= death.duration + DEATH_FLOOR_SAMPLE_STEP; time += DEATH_FLOOR_SAMPLE_STEP) {
+    mixer.update(time - previous); previous = time;
+    posed.updateMatrixWorld(true);
+    let floor = Infinity;
+    posed.traverse((object) => {
+      if (!(object instanceof THREE.SkinnedMesh)) return;
+      object.computeBoundingBox(); // SkinnedMesh override: skinning-aware, so it reads the posed bones
+      floor = Math.min(floor, box.copy(object.boundingBox!).applyMatrix4(object.matrixWorld).min.y);
+    });
+    floors.push(Number.isFinite(floor) ? Math.max(0, floor) : 0); // never lift the body, only ground it
+  }
+  return { step: DEATH_FLOOR_SAMPLE_STEP, floors };
+}
+
+export function deathFloorAt(curve: DeathFloorCurve, time: number): number {
+  if (curve.floors.length === 0) return 0;
+  const position = THREE.MathUtils.clamp(time / curve.step, 0, curve.floors.length - 1);
+  const index = Math.floor(position); const next = Math.min(index + 1, curve.floors.length - 1);
+  return THREE.MathUtils.lerp(curve.floors[index], curve.floors[next], position - index);
+}
 
 export function clearNpcTemplateCache(): void { templateCache.clear(); }
 export function cachedNpcTemplateCount(): number { return templateCache.size; }
 
 function loadTemplate(url: string, id: NpcCharacterId, load: (url: string) => Promise<GLTF>): Promise<NpcTemplate> {
   const existing = templateCache.get(url); if (existing) return existing;
-  const pending = Promise.resolve().then(() => load(url)).then((gltf) => ({ gltf, validated: validateNpcGltf(gltf, id) })).catch((reason: unknown) => {
+  const pending = Promise.resolve().then(() => load(url)).then((gltf) => {
+    const validated = validateNpcGltf(gltf, id);
+    return { gltf, validated, deathFloor: measureDeathFloorCurve(gltf.scene, validated.clips.get('death')!) };
+  }).catch((reason: unknown) => {
     templateCache.delete(url); throw reason;
   });
   templateCache.set(url, pending); return pending;
@@ -109,6 +147,7 @@ export class RiggedPedestrianVisual {
   private current?: THREE.AnimationAction;
   private currentName?: NpcAnimationName;
   private state: RiggedPedestrianState = { state: 'idle', punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
+  private deathFloor: DeathFloorCurve = { step: DEATH_FLOOR_SAMPLE_STEP, floors: [] };
   private disposed = false;
 
   constructor(private parent: THREE.Object3D, readonly characterId: NpcCharacterId, private options: RiggedPedestrianVisualOptions = {}) {
@@ -158,7 +197,7 @@ export class RiggedPedestrianVisual {
     if (!bones) throw new NpcCharacterError('Cloned NPC is missing its humanoid skeleton.');
     model.name = `NpcInstance:${this.characterId}`;
     model.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.receiveShadow = true; object.frustumCulled = false; } });
-    this.model = model; this.bones = bones; this.mixer = new THREE.AnimationMixer(model);
+    this.model = model; this.bones = bones; this.mixer = new THREE.AnimationMixer(model); this.deathFloor = template.deathFloor;
     const random = this.options.random ?? Math.random;
     for (const [name, clip] of template.validated.clips) {
       const action = this.mixer.clipAction(clip); action.time = random() * Math.max(0, clip.duration);
@@ -178,7 +217,8 @@ export class RiggedPedestrianVisual {
 
   private setPlaybackRate(name: NpcAnimationName): void {
     if (!this.current) return;
-    this.current.setEffectiveTimeScale(name === 'walk' ? 0.92 : name === 'sprint' ? 1.08 : 1);
+    // death at 1.35×: the capture is a gentle 1.2s tip-over; shot bodies should drop fast (owner call).
+    this.current.setEffectiveTimeScale(name === 'walk' ? 0.92 : name === 'sprint' ? 1.08 : name === 'death' ? 1.35 : 1);
   }
 
   private applyAdditivePose(): void {
@@ -200,6 +240,11 @@ export class RiggedPedestrianVisual {
       this.group.rotation.x = -0.32 * this.state.stumbleAmount;
       bones.leftUpperArm.rotation.x += 0.7 * this.state.stumbleAmount; bones.rightUpperArm.rotation.x += 0.7 * this.state.stumbleAmount;
     }
-    if (this.state.state === 'down') this.group.position.y = -0.53;
+    if (this.state.state === 'down') {
+      // Keep the collapsing body in ground contact: sink by the measured floor of the CURRENT death
+      // pose, so the fall lands as fast as the clip plays and the corpse rests on the road, never
+      // hovering (the capture tips over at standing hip height) nor clipping through mid-fall.
+      this.group.position.y -= deathFloorAt(this.deathFloor, this.actions.get('death')?.time ?? 0);
+    }
   }
 }
