@@ -148,7 +148,7 @@ export class VehicleFireSystem {
       if (ped.state === 'down') continue;
       const damage = splashDamage(BURNOUT_PED_DAMAGE, ped.group.position.distanceTo(position), BURNOUT_RADIUS);
       if (damage <= 0) continue;
-      const killed = ped.takeDamage(damage);
+      const killed = ped.takeDamage(damage, position);
       victims.push({ ped, killed, position: ped.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)) });
     }
     // Chain reaction: a car caught in the blast catches fire outright — even at full health — and

@@ -217,8 +217,15 @@ export class RiggedPedestrianVisual {
 
   private setPlaybackRate(name: NpcAnimationName): void {
     if (!this.current) return;
-    // death at 1.35×: the capture is a gentle 1.2s tip-over; shot bodies should drop fast (owner call).
-    this.current.setEffectiveTimeScale(name === 'walk' ? 0.92 : name === 'sprint' ? 1.08 : name === 'death' ? 1.35 : 1);
+    if (name === 'death') {
+      // The capture is a gentle 1.2s tip-over; a shot body should collapse and SLAM (owner call).
+      // Accelerating playback reads as gravity taking over: ~1.1× at the hit, ~3.6× at the ground.
+      const clip = this.current.getClip();
+      const progress = clip.duration > 0 ? THREE.MathUtils.clamp(this.current.time / clip.duration, 0, 1) : 1;
+      this.current.setEffectiveTimeScale(1.1 + 2.5 * progress);
+      return;
+    }
+    this.current.setEffectiveTimeScale(name === 'walk' ? 0.92 : name === 'sprint' ? 1.08 : 1);
   }
 
   private applyAdditivePose(): void {

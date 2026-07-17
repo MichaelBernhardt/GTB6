@@ -8,6 +8,7 @@ import type { NpcCharacterId } from './NpcCatalog';
 import { RiggedPedestrianVisual } from './RiggedPedestrianVisual';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
+export const DEATH_SPIN_DURATION = 0.55; // seconds of impact whip as the body drops
 const skinColors = [0x613e30, 0x8b5b43, 0xb77a58, 0xd2a078];
 const shirtColors = [0x375e70, 0x9d5d55, 0xd1a343, 0x536f4a, 0x725887];
 
@@ -39,6 +40,8 @@ export class Pedestrian {
   private watchdog = new ProgressWatchdog();
   private punchTimer = 0;
   private downTimer = 0;
+  private deathSpinTotal = 0;
+  private deathSpinElapsed = DEATH_SPIN_DURATION;
   private stumbleTimer = 0;
   private covering = false;
   private phase = Math.random() * Math.PI * 2;
@@ -75,6 +78,13 @@ export class Pedestrian {
   private updateMotion(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
     if (this.state === 'down') {
       this.groundY = city.surfaceHeightAt(this.group.position.x, this.group.position.z); this.group.position.y = this.groundY + 0.36;
+      if (this.deathSpinElapsed < DEATH_SPIN_DURATION) {
+        // Impact whip: yaw the felled body away from the shot, fast at first and decaying to rest.
+        const ease = (t: number) => 1 - (1 - t) ** 2;
+        const before = ease(this.deathSpinElapsed / DEATH_SPIN_DURATION);
+        this.deathSpinElapsed = Math.min(DEATH_SPIN_DURATION, this.deathSpinElapsed + dt);
+        this.group.rotation.y += this.deathSpinTotal * (ease(this.deathSpinElapsed / DEATH_SPIN_DURATION) - before);
+      }
       if (this.downTimer <= 0) return; // health depleted: stays down
       this.downTimer -= dt;
       if (this.downTimer <= 0) this.rise(player);
@@ -157,12 +167,25 @@ export class Pedestrian {
     else if (response === 'flee') { this.state = 'flee'; this.fleeFrom(origin); }
   }
 
-  takeDamage(amount: number): boolean {
+  takeDamage(amount: number, origin?: THREE.Vector3): boolean {
     if (this.state === 'down' || this.contact) return false;
     this.health = Math.max(0, this.health - amount); this.fear = FEAR_MAX; this.enraged = this.aggressive && this.health > 0;
     this.state = this.health === 0 ? 'down' : this.aggressive ? 'hostile' : 'flee';
-    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36; }
+    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36; this.beginDeathSpin(origin); }
     return this.health === 0;
+  }
+
+  /** Impact theatre for a kill: pick how far the dropping body whips around, torqued away from the
+   *  side the shot came from (or whichever way, when the source is unknown — e.g. a blast at the feet). */
+  private beginDeathSpin(origin?: THREE.Vector3): void {
+    const heading = this.group.rotation.y;
+    let side = this.phase > Math.PI ? -1 : 1; // no known source: the ped's own random phase picks the side
+    if (origin) {
+      const cross = Math.cos(heading) * (origin.x - this.group.position.x) - Math.sin(heading) * (origin.z - this.group.position.z);
+      if (Math.abs(cross) > 0.001) side = cross > 0 ? -1 : 1; // hit from the right → spin left, and vice versa
+    }
+    this.deathSpinTotal = side * (1.1 + ((this.phase * 7) % 1) * 1.1); // ~65–125°, deterministic per ped
+    this.deathSpinElapsed = 0;
   }
 
   /** Soft player bump: a brief off-balance reaction, no state change. */
@@ -178,7 +201,7 @@ export class Pedestrian {
     this.health = outcome.health; this.downTimer = outcome.downTime; this.threat.copy(origin);
     this.fear = accumulateFear(this.fear, FEAR_EVENTS.assault.base); this.stumbleTimer = 0; this.state = 'down';
     this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36;
-    if (outcome.killed) this.enraged = false;
+    if (outcome.killed) { this.enraged = false; this.beginDeathSpin(origin); }
     return outcome.killed;
   }
 

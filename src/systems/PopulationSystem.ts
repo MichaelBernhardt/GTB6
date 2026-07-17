@@ -576,7 +576,7 @@ export class PopulationSystem {
         if (ped.state === 'down' || (this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
         const distanceSq = vehicle.group.position.distanceToSquared(ped.group.position);
         if (distanceSq < 5) {
-          const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
+          const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8, vehicle.group.position); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
           this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
           this.pedestrianImpactCooldown.set(ped, 1);
           if (!vehicle.playerControlled) this.requestCollisionReplan(vehicle); // NPC that just hit someone: try a fresh way through

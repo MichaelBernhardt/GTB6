@@ -99,7 +99,7 @@ export class BulletSystem {
     const shot = bullet.shot; const distance = bullet.traveled + advance;
     this.point.copy(bullet.position).addScaledVector(bullet.direction, advance);
     if (ped) {
-      const dead = ped.takeDamage(calculateDamage(shot.damage, distance, 0, shot.falloffFloor));
+      const dead = ped.takeDamage(calculateDamage(shot.damage, distance, 0, shot.falloffFloor), this.point.clone().addScaledVector(bullet.direction, -1)); // impact source: one unit back along the round's path
       shot.policeHit ||= ped.police;
       if (!shot.victim || ped === shot.victim) { shot.victim = ped; shot.killed ||= dead; shot.hitPoint ??= this.point.clone(); } // first ped struck is the reported victim, as with hitscan pellets
       this.impact(this.point, 0xffcc72);

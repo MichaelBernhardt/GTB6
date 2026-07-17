@@ -97,6 +97,19 @@ describe('cached rigged pedestrian instances', () => {
     expect(skinnedFloor()).toBeCloseTo(0, 1); // the settled corpse lies ON the ground, not floating above it
   });
 
+  it('slams the death fall: playback accelerates instead of floating down at capture speed', async () => {
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    await visual.load();
+    visual.setState(state({ state: 'down' })); visual.update(1 / 30);
+    const start = visual.animationTime('death')!;
+    for (let frame = 0; frame < 6; frame++) visual.update(1 / 30);
+    const early = visual.animationTime('death')! - start;
+    for (let frame = 0; frame < 6; frame++) visual.update(1 / 30);
+    const late = visual.animationTime('death')! - start - early;
+    expect(early).toBeGreaterThan(6 / 30); // faster than the raw capture from the first frames
+    expect(late).toBeGreaterThan(early * 1.15); // and accelerating — gravity wins, the body slams
+  });
+
   it('replaces a placeholder asynchronously and remains fail-open when loading fails', async () => {
     const parent = new THREE.Group(); const placeholder = new THREE.Group(); parent.add(placeholder);
     let resolve!: (gltf: GLTF) => void; const deferred = new Promise<GLTF>((accept) => { resolve = accept; });
