@@ -67,6 +67,7 @@ interface RawMap {
   landmarks: Array<{ name: string; x: number; z: number; kind: string }>;
   tracks: Array<{ name: string; width: number; kind: 'track' | 'path'; points: [number, number][] }>;
   railways: Array<{ name: string; points: [number, number][] }>;
+  stations?: Array<{ name: string; line: string; x: number; z: number; source: 'osm' | 'synthetic' }>;
   landuse: Array<{ name: string; kind: string; points: [number, number][] }>;
   /** Stage-3 airfield (tools/mapgen): runway/taxiway centrelines + apron and building footprints. */
   airport?: {
@@ -231,6 +232,12 @@ export function nearestRailwaySpot(x: number, z: number): RailwaySpot | undefine
   }
   return best;
 }
+
+/** A passenger stop on a rail line: trains dwell here, the world builds a platform here. */
+export interface MapStation { name: string; line: string; x: number; z: number; source: 'osm' | 'synthetic'; }
+
+/** Every generated rail station (both line ends + OSM/synthesized intermediate stops). */
+export const STATIONS: MapStation[] = MAP.stations ?? [];
 
 // ---- Districts -------------------------------------------------------------
 
@@ -402,20 +409,32 @@ export interface RailwayStationSite extends MapLandmark {
   sourceDistance: number;
 }
 
-/** Station architecture is snapped to real track so platforms can never float beside or cross the line. */
-export const RAILWAY_STATION_SITES: RailwayStationSite[] = RAILWAY_STATIONS.flatMap((station) => {
-  const spot = nearestRailwaySpot(station.x, station.z);
-  if (!spot) return [];
-  return [{
-    ...station,
-    x: spot.x,
-    z: spot.z,
-    dirX: spot.dirX,
-    dirZ: spot.dirZ,
-    railway: spot.railway,
-    sourceDistance: Math.hypot(spot.x - station.x, spot.z - station.z),
-  }];
-});
+/** Station architecture is snapped to real track so platforms can never float beside or cross the line.
+ *  Sites come from the pipeline's full `stations` coverage (a stop at every line end + 2.5–5 km spacing),
+ *  deduped at shared-interchange points; the station-kind landmarks are the fallback on older maps.
+ *  The Lughawe Halt is excluded — Airport.ts builds its own bespoke platform beside the apron. */
+export const RAILWAY_STATION_SITES: RailwayStationSite[] = (() => {
+  const sources: Array<{ name: string; x: number; z: number }> = STATIONS.length > 0
+    ? STATIONS.filter((station) => !/^lughawe halt$/i.test(station.name))
+    : RAILWAY_STATIONS;
+  const sites: RailwayStationSite[] = [];
+  for (const station of sources) {
+    if (sites.some((prior) => (prior.x - station.x) ** 2 + (prior.z - station.z) ** 2 < 40 ** 2)) continue; // one physical interchange, one site
+    const spot = nearestRailwaySpot(station.x, station.z);
+    if (!spot) continue;
+    sites.push({
+      name: station.name,
+      kind: 'station',
+      x: spot.x,
+      z: spot.z,
+      dirX: spot.dirX,
+      dirZ: spot.dirZ,
+      railway: spot.railway,
+      sourceDistance: Math.hypot(spot.x - station.x, spot.z - station.z),
+    });
+  }
+  return sites;
+})();
 
 // ---- Road spot helpers (data-driven anchor placement) -------------------------
 
@@ -469,25 +488,36 @@ export const ROAD_EDGE_CAP = 14;
 interface EdgeSegment { ax: number; az: number; bx: number; bz: number; half: number; }
 
 const EDGE_CELL = 26;
-const edgeGrid = new Map<string, EdgeSegment[]>();
 
-function insertEdgeSegment(segment: EdgeSegment): void {
-  const pad = segment.half + ROAD_EDGE_CAP;
+function insertEdgeSegment(grid: Map<string, EdgeSegment[]>, segment: EdgeSegment, cap: number): void {
+  const pad = segment.half + cap;
   const minX = Math.floor((Math.min(segment.ax, segment.bx) - pad) / EDGE_CELL);
   const maxX = Math.floor((Math.max(segment.ax, segment.bx) + pad) / EDGE_CELL);
   const minZ = Math.floor((Math.min(segment.az, segment.bz) - pad) / EDGE_CELL);
   const maxZ = Math.floor((Math.max(segment.az, segment.bz) + pad) / EDGE_CELL);
   for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
     const key = `${cx},${cz}`;
-    const cell = edgeGrid.get(key);
-    if (cell) cell.push(segment); else edgeGrid.set(key, [segment]);
+    const cell = grid.get(key);
+    if (cell) cell.push(segment); else grid.set(key, [segment]);
   }
 }
 
+function distanceToEdge(grid: Map<string, EdgeSegment[]>, x: number, z: number, cap: number): number {
+  let best = cap;
+  for (const segment of grid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
+    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
+    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
+    const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
+    if (distance < best) best = distance;
+  }
+  return best;
+}
+
+const edgeGrid = new Map<string, EdgeSegment[]>();
 for (const road of GENERATED_ROADS) {
   for (let index = 0; index < road.points.length - 1; index++) {
     const a = road.points[index]!; const b = road.points[index + 1]!;
-    insertEdgeSegment({ ax: a.x, az: a.z, bx: b.x, bz: b.z, half: road.width / 2 });
+    insertEdgeSegment(edgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: road.width / 2 }, ROAD_EDGE_CAP);
   }
 }
 
@@ -497,14 +527,7 @@ for (const road of GENERATED_ROADS) {
  * Grid-backed, so placement code and tests can call it liberally.
  */
 export function distanceToRoadEdge(x: number, z: number): number {
-  let best = ROAD_EDGE_CAP;
-  for (const segment of edgeGrid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
-    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
-    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
-    const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
-    if (distance < best) best = distance;
-  }
-  return best;
+  return distanceToEdge(edgeGrid, x, z, ROAD_EDGE_CAP);
 }
 
 // ---- Railway-corridor distance grid -----------------------------------------
@@ -515,37 +538,16 @@ export const RAILWAY_CORRIDOR_HALF_WIDTH = 2.6;
 export const RAILWAY_EDGE_CAP = 18;
 
 const railwayEdgeGrid = new Map<string, EdgeSegment[]>();
-
-function insertRailwaySegment(segment: EdgeSegment): void {
-  const pad = segment.half + RAILWAY_EDGE_CAP;
-  const minX = Math.floor((Math.min(segment.ax, segment.bx) - pad) / EDGE_CELL);
-  const maxX = Math.floor((Math.max(segment.ax, segment.bx) + pad) / EDGE_CELL);
-  const minZ = Math.floor((Math.min(segment.az, segment.bz) - pad) / EDGE_CELL);
-  const maxZ = Math.floor((Math.max(segment.az, segment.bz) + pad) / EDGE_CELL);
-  for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
-    const key = `${cx},${cz}`;
-    const cell = railwayEdgeGrid.get(key);
-    if (cell) cell.push(segment); else railwayEdgeGrid.set(key, [segment]);
-  }
-}
-
 for (const railway of GENERATED_RAILWAYS) {
   for (let index = 0; index < railway.points.length - 1; index++) {
     const a = railway.points[index]!; const b = railway.points[index + 1]!;
-    insertRailwaySegment({ ax: a.x, az: a.z, bx: b.x, bz: b.z, half: RAILWAY_CORRIDOR_HALF_WIDTH });
+    insertEdgeSegment(railwayEdgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: RAILWAY_CORRIDOR_HALF_WIDTH }, RAILWAY_EDGE_CAP);
   }
 }
 
 /** Distance to the nearest ballast edge (negative on the railway bed), capped for cheap bulk placement. */
 export function distanceToRailwayCorridor(x: number, z: number): number {
-  let best = RAILWAY_EDGE_CAP;
-  for (const segment of railwayEdgeGrid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
-    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
-    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
-    const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
-    if (distance < best) best = distance;
-  }
-  return best;
+  return distanceToEdge(railwayEdgeGrid, x, z, RAILWAY_EDGE_CAP);
 }
 
 // ---- Signalised junctions -----------------------------------------------------

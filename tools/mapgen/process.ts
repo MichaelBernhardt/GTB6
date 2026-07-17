@@ -36,6 +36,7 @@ import {
 import { buildBorderVeld, closeCoastalLoop, compositeElevation, graftCoastAndCorridor, smoothCurve, type CoastGraftResult } from './coast';
 import { resolveDeadEnds } from './deadends';
 import { thinRailways } from './railways';
+import { buildStations } from './stations';
 import { buildOrbitalRing, pruneShortStubs, thinParallelRoads } from './thin';
 import { flatGrid, type ElevationSamples } from './elevation';
 import {
@@ -158,6 +159,8 @@ export interface ProcessExtras {
   protectedNames?: Iterable<string>;
   /** Cape Town seaboard extract: enables the Jozi-by-the-Sea coast + rural corridor graft. */
   cape?: OsmResponse;
+  /** railway=station/halt nodes (fetchStations) — null/absent when the network was unavailable. */
+  stations?: OsmNode[] | null;
 }
 
 function landuseKind(tags: Record<string, string>): MapArea['kind'] | null {
@@ -448,6 +451,17 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   const districtNodes = extractDistrictNodes(data);
   const districts = districtNodes.map(({ name, lat, lon }) => ({ name, p: project(lat, lon) }));
   if (coast) districts.push(...coast.districts);
+
+  // ---- Rail stations (OSM-snapped where possible, synthesized elsewhere; both ends always) ----
+  const osmStationNodes = (extras.stations ?? [])
+    .filter((node) => node.tags?.name !== undefined && inBbox(node.lat, node.lon))
+    .map((node) => ({ name: node.tags!.name!, ...project(node.lat, node.lon) }));
+  const stationPlan = buildStations(
+    railways,
+    osmStationNodes,
+    districts.map(({ name, p }) => ({ name, x: p.x, z: p.z })),
+  );
+  log.push(`${stationPlan.log}${extras.stations == null ? ' [OSM stations unavailable]' : ` [${osmStationNodes.length} OSM candidates]`}`);
   const buildingCounts = extras.buildingCounts ?? null;
   log.push(`districts: ${districts.length} place nodes${buildingCounts ? ' (with building densities)' : ' (building densities unavailable)'}`);
 
@@ -586,6 +600,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       trackKm: Math.round(trackKm * 10) / 10,
       trackCount: tracks.length,
       landuseCount: landuse.length,
+      stationCount: stationPlan.stations.length,
       bridgedIslands: islands.bridged,
       droppedIslands: islands.droppedIslands,
       droppedIslandKm: Math.round(islands.droppedKm * 10) / 10,
@@ -624,6 +639,10 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     }),
     water: water.map(({ name, points }) => ({ name, points: points.map(toUnits) })),
     railways: railways.map(({ name, points }) => ({ name, points: points.map(toUnits) })),
+    stations: stationPlan.stations.map(({ name, line, x, z, source }) => {
+      const [ux, uz] = toUnits({ x, z });
+      return { name, line, x: ux, z: uz, source };
+    }),
     landmarks: landmarks.map(({ name, p, kind }) => {
       const [x, z] = toUnits(p);
       return { name, x, z, kind };

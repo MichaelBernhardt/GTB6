@@ -42,7 +42,7 @@ import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './syst
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
-import { TrainSystem } from './systems/TrainSystem';
+import { formatCountdown, TrainSystem } from './systems/TrainSystem';
 import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
 import { canEnterSafehouse, SAFEHOUSES, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
 import { GARAGE_PARK, GARAGE_STEP_OUT, SHOPS, ShopSystem } from './systems/ShopSystem';
@@ -1854,7 +1854,7 @@ export class Game {
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
-      else if (this.trains.boardable(focus)) prompt = 'E  Board the train';
+      else if (this.trains.boardable(focus)) { const wait = this.trains.boardCountdown(focus); prompt = wait === undefined ? 'E  Board the train' : `E  Board · departs in ${formatCountdown(wait)}`; }
       else if (this.coverAvailable) prompt = 'Q  Take cover';
       else if (this.nearestPlane()) prompt = 'E  Enter plane';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';

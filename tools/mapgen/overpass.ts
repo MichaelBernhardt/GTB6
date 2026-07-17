@@ -11,7 +11,7 @@ import {
   OVERPASS_USER_AGENT,
   RESIDENTIAL_RADIUS_M,
 } from './config';
-import type { OsmResponse } from './types';
+import type { OsmNode, OsmResponse } from './types';
 
 const CACHE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'cache');
 
@@ -109,6 +109,45 @@ export async function fetchOsm(options: { refresh?: boolean } = {}): Promise<{ d
     }
   }
   throw new Error(`All Overpass attempts failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+/** Rail stations/halts in the main bbox — a separate small query so the big extract cache stays valid. */
+export function buildStationsQuery(): string {
+  return `
+[out:json][timeout:90];
+node["railway"~"^(station|halt)$"](${bbox});
+out body;
+`.trim();
+}
+
+/**
+ * Fetch railway=station/halt nodes (cached like the main extract). Stations are an OPTIONAL
+ * garnish — the pipeline synthesizes stops regardless — so unlike fetchOsm this returns null
+ * instead of throwing when every endpoint fails (offline map:build keeps working).
+ */
+export async function fetchStations(options: { refresh?: boolean } = {}): Promise<{ nodes: OsmNode[]; fromCache: boolean } | null> {
+  const query = buildStationsQuery();
+  const hash = createHash('sha256').update(query).digest('hex').slice(0, 16);
+  const cacheFile = join(CACHE_DIR, `overpass-stations-${hash}.json`);
+  if (!options.refresh && existsSync(cacheFile)) {
+    const data = JSON.parse(readFileSync(cacheFile, 'utf8')) as OsmResponse;
+    return { nodes: data.elements.filter((e): e is OsmNode => e.type === 'node'), fromCache: true };
+  }
+  mkdirSync(CACHE_DIR, { recursive: true });
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      console.log(`[overpass] querying rail stations via ${endpoint} ...`);
+      const data = await requestOnce(endpoint, query);
+      writeFileSync(cacheFile, JSON.stringify(data));
+      console.log(`[overpass] got ${data.elements.length} station nodes, cached to ${cacheFile}`);
+      return { nodes: data.elements.filter((e): e is OsmNode => e.type === 'node'), fromCache: false };
+    } catch (error) {
+      console.warn(`[overpass] station attempt failed: ${error instanceof Error ? error.message : String(error)}`);
+      await sleep(5_000);
+    }
+  }
+  console.warn('[overpass] rail stations unavailable (offline?) — the pipeline will synthesize all stops');
+  return null;
 }
 
 /** Cape Town Atlantic-seaboard extract for the Jozi-by-the-Sea coast graft. */

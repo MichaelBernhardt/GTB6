@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { moveSpeed } from '../core/GameRules';
+import { STATIONS } from '../world/mapData';
 import type { City } from '../world/City';
 import { cabAt, nearestArcOnSpan, stepAboard, stepDrive, stitchRailPaths } from './TrainRide';
 
@@ -8,8 +9,9 @@ import { cabAt, nearestArcOnSpan, stepAboard, stepDrive, stitchRailPaths } from 
  *
  * Purely scenic kinematics: each line ≥ MIN_LINE_LENGTH gets one Gautrain-styled consist
  * (gold flanks, dark window band, blue skirt) that accelerates out of its terminus, cruises,
- * brakes to a stop at the far end, dwells, and comes back. Cars are placed independently by
- * arc length so the train articulates around curves and pitches with the relief.
+ * brakes into every station along the line (mapData.STATIONS), dwells DWELL_S with the boarding
+ * countdown showing, and reverses at the far end. Cars are placed independently by arc length
+ * so the train articulates around curves and pitches with the relief.
  *
  * No nav-graph, no collisions, no AI — the train is landscape that moves (step off the rails).
  *
@@ -49,7 +51,7 @@ export interface ShuttleState {
   s: number;
   /** +1 toward the far end, -1 back toward the start. */
   direction: 1 | -1;
-  /** Remaining dwell at a terminus (s of stillness). */
+  /** Remaining dwell at a station stop or terminus (s of stillness). */
   dwell: number;
   speed: number;
 }
@@ -61,28 +63,66 @@ export interface ShuttleParams {
   maxSpeed: number;
   accel: number;
   dwellTime: number;
+  /** Nose arc positions of intermediate station stops, sorted ascending and strictly inside
+   *  (trainLength, lineLength). Omit/empty for the plain end-to-end shuttle. */
+  stops?: number[];
+}
+
+/** The next stop the nose brakes for from `s` travelling `direction` — the nearest stop STRICTLY
+ *  ahead, else the terminus. Arrival clamps s exactly onto the stop, so the platform being dwelt
+ *  at (or just departed) is excluded by the strict comparison alone. */
+export function nextStop(s: number, direction: 1 | -1, params: ShuttleParams): number {
+  const EPS = 1e-6;
+  let target = direction === 1 ? params.lineLength : params.trainLength;
+  for (const stop of params.stops ?? []) {
+    if (direction === 1) { if (stop > s + EPS && stop < target) target = stop; }
+    else if (stop < s - EPS && stop > target) target = stop;
+  }
+  return target;
 }
 
 /**
- * Advance the shuttle: accelerate at `accel` toward `maxSpeed`, brake so speed hits ~0 at the
- * terminus, dwell, then reverse. The nose runs in [trainLength, lineLength].
+ * Advance the shuttle: accelerate at `accel` toward `maxSpeed`, brake so speed hits ~0 at the next
+ * station stop (v = sqrt(2·a·d)), dwell there, continue; reverse only at the line ends. The nose
+ * runs in [trainLength, lineLength].
  */
 export function advanceShuttle(state: ShuttleState, dt: number, params: ShuttleParams): ShuttleState {
+  const nearEnd = params.trainLength; const farEnd = params.lineLength;
   if (state.dwell > 0) {
     const dwell = state.dwell - dt;
     if (dwell > 0) return { ...state, dwell, speed: 0 };
-    return { s: state.s, direction: (state.direction * -1) as 1 | -1, dwell: 0, speed: 0 };
+    // Doors closed: an intermediate stop continues the same way; a terminus turns the train around.
+    const atEnd = state.direction === 1 ? state.s >= farEnd - 1e-6 : state.s <= nearEnd + 1e-6;
+    return { s: state.s, direction: atEnd ? (state.direction * -1) as 1 | -1 : state.direction, dwell: 0, speed: 0 };
   }
-  const nearEnd = params.trainLength; const farEnd = params.lineLength;
-  const remaining = state.direction === 1 ? farEnd - state.s : state.s - nearEnd;
-  // Brake to stop exactly at the terminus: v = sqrt(2·a·d); accelerate otherwise.
+  const target = nextStop(state.s, state.direction, params);
+  const remaining = state.direction === 1 ? target - state.s : state.s - target;
   const brakeCap = Math.sqrt(Math.max(0, 2 * params.accel * remaining));
   const speed = Math.min(params.maxSpeed, state.speed + params.accel * dt, Math.max(0.6, brakeCap));
   const s = state.s + state.direction * speed * dt;
-  if (state.direction === 1 ? s >= farEnd : s <= nearEnd) {
-    return { s: state.direction === 1 ? farEnd : nearEnd, direction: state.direction, dwell: params.dwellTime, speed: 0 };
+  if (state.direction === 1 ? s >= target : s <= target) {
+    return { s: target, direction: state.direction, dwell: params.dwellTime, speed: 0 };
   }
   return { s, direction: state.direction, dwell: 0, speed };
+}
+
+/** Live "departs in m:ss" text for the boarding prompt (ceil, so it never reads 0:00 while held). */
+export function formatCountdown(seconds: number): string {
+  const t = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+}
+
+/** Arc position on a sampled path closest to (x, z) — projects onto every segment; O(n), load-time only. */
+export function nearestArc(points: RailPoint[], cum: number[], x: number, z: number): number {
+  let bestS = 0; let bestD = Infinity;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!; const b = points[i]!;
+    const dx = b.x - a.x; const dz = b.z - a.z; const lengthSq = dx * dx + dz * dz || 1;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / lengthSq));
+    const d = Math.hypot(x - (a.x + dx * t), z - (a.z + dz * t));
+    if (d < bestD) { bestD = d; bestS = cum[i - 1]! + Math.sqrt(lengthSq) * t; }
+  }
+  return bestS;
 }
 
 // ---- Scene-side system --------------------------------------------------------------------
@@ -95,7 +135,7 @@ const CAR_GAP = 1.1;
 const RAIL_TOP_Y = 0.32;
 const MAX_SPEED = 21; // ~75 km/h at 1 u ≈ 1 m
 const ACCEL = 1.35;
-const DWELL_S = 24;
+const DWELL_S = 30; // station + terminus dwell: matches the owner's "departs in 00:30" boarding window
 
 const GOLD = 0xc7a13b; const NAVY = 0x24356b; const GLASS = 0x141a20; const ROOF = 0x8e949a; const SKIRT = 0x2a2f36;
 
@@ -122,6 +162,8 @@ interface Train {
   state: ShuttleState;
   cars: THREE.Group[];
   trainLength: number;
+  /** Nose arc positions of the line's intermediate station stops (sorted; termini excluded). */
+  stops: number[];
   /** The streamlined cab shells (nose + lamps) per end — hidden for the windscreen view in FP driving. */
   noseParts: { nose: THREE.Object3D[]; tail: THREE.Object3D[] };
 }
@@ -152,6 +194,17 @@ export class TrainSystem {
         if (car === carCount - 1) noseParts.tail = built.noses[-1] ?? [];
       }
       const trainLength = carCount * CAR_LENGTH + (carCount - 1) * CAR_GAP;
+      const total = line.cum[line.cum.length - 1]!;
+      // Station stops on this consist's (possibly stitched) line: every generated station that lies
+      // ON this path — matched by projection, not by name, so a stitched Main-Line+spur through-line
+      // serves both legs' stations. Nose target = station arc + half the consist (centred on the
+      // platform); termini fall out (the shuttle already stops there).
+      const stops = [...new Set(STATIONS
+        .map((station) => nearestArc(line.points, line.cum, station.x, station.z))
+        .filter((s, index) => { const pose = poseAt(line.points, line.cum, s); const station = STATIONS[index]!; return Math.hypot(pose.x - station.x, pose.z - station.z) < 30; })
+        .map((s) => Math.round(Math.min(total, Math.max(trainLength, s + trainLength / 2))))
+        .filter((s) => s > trainLength + 1 && s < total - 1))]
+        .sort((a, b) => a - b);
       this.trains.push({
         points: line.points,
         cum: line.cum,
@@ -159,6 +212,7 @@ export class TrainSystem {
         state: { s: trainLength + index * 400, direction: 1, dwell: 0, speed: 0 },
         cars,
         trainLength,
+        stops,
         noseParts,
       });
       this.place(this.trains[this.trains.length - 1]!);
@@ -181,6 +235,7 @@ export class TrainSystem {
           maxSpeed: MAX_SPEED,
           accel: ACCEL,
           dwellTime: DWELL_S,
+          stops: train.stops,
         });
       }
       if (train.state.s !== before.s || train.state.direction !== before.direction) this.place(train);
@@ -219,6 +274,13 @@ export class TrainSystem {
   setRideStick(side: number, forward: number, yaw: number, sprint: boolean): void { this.stick = { side, forward, yaw, sprint }; }
 
   boardable(position: THREE.Vector3): boolean { return Boolean(this.boardTarget(position)); }
+
+  /** Remaining dwell (s) of the nearest boardable DWELLING consist — the "departs in" countdown.
+   *  Undefined while it is merely crawling (no schedule to quote) or the player holds the controls. */
+  boardCountdown(position: THREE.Vector3): number | undefined {
+    const hit = this.boardTarget(position);
+    return hit && hit.train.state.dwell > 0 && this.ride?.train !== hit.train ? hit.train.state.dwell : undefined;
+  }
 
   /** Step aboard the nearest slow/stopped consist within reach; the schedule keeps running. */
   tryBoard(position: THREE.Vector3): boolean {

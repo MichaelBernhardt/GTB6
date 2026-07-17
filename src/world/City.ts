@@ -6,6 +6,7 @@ import {
   COASTLINE,
   COAST_CORRIDOR,
   distanceToRailwayCorridor,
+  distanceToRoadEdge,
   districtAt as generatedDistrictAt,
   baseMetresAt,
   regionalMetresAt,
@@ -1073,6 +1074,14 @@ export class City {
 
     for (const side of [-1, 1]) {
       const platformX = side * offset;
+      // With full-line station coverage some stops sit near level crossings: a platform side whose
+      // slab would land on a carriageway is skipped (the other side still serves the stop).
+      let overlapsRoad = false;
+      for (let lz = -length / 2; lz <= length / 2 && !overlapsRoad; lz += 6) {
+        const probe = toWorld(platformX, lz);
+        if (distanceToRoadEdge(probe.x, probe.z) < width / 2 - 0.4) overlapsRoad = true;
+      }
+      if (overlapsRoad) continue;
       const slab = new THREE.Mesh(new THREE.BoxGeometry(width, platformHeight, length), materials.concrete);
       slab.position.set(platformX, (platformTop + platformBottom) / 2, 0); slab.receiveShadow = true; group.add(slab);
       const edgeX = side * (offset - width / 2 + 0.16);
@@ -1768,7 +1777,7 @@ export class City {
       const x = polygon.minX + seeded(polygon.cx + attempt, polygon.cz, 31) * (polygon.maxX - polygon.minX);
       const z = polygon.minZ + seeded(polygon.cx, polygon.cz + attempt, 32) * (polygon.maxZ - polygon.minZ);
       if (!pointInPolygon(polygon, x, z) || this.inWater(x, z)) continue;
-      if (this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2)) continue;
+      if (this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2) || distanceToRailwayCorridor(x, z) < 0.7) continue; // parks can straddle the rails: no trunks on the ballast
       if (terrainHeightAt(x, z) > SNOW_Y * 0.55) continue; // no leafy park trees above the range's rock line
       this.addParkTree(x, z, attempt + Math.round(polygon.cx));
       planted++;
