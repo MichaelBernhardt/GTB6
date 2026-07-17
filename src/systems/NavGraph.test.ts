@@ -305,3 +305,17 @@ describe('RoutePlanner.planTo (road-preferring offroad targets)', () => {
     expect(budgeted.tryPlanTo(0, 0, 88, 30)).toBeUndefined(); // budget spent
   });
 });
+
+describe('cross-city scripted routes (planFar)', () => {
+  // The per-frame cap (4000 settled nodes) exists for traffic replans; scripted mission routes
+  // legitimately cross the city and must use the citywide cap — the QA harness caught Zoo Lake →
+  // Wemmer and CBD → Kelvin Yard reported unreachable through plan().
+  it('routes between far mission anchors that the frame-capped plan() gives up on', async () => {
+    const { CANDICE_START, TERMINAL_SPOT, KELVIN_GATE_SPOT, VUSI_START } = await import('../world/placements');
+    const planner = new RoutePlanner(buildVehicleNav(), 2);
+    for (const [from, to] of [[CANDICE_START, TERMINAL_SPOT], [VUSI_START, KELVIN_GATE_SPOT]] as const) {
+      const far = planner.planFar(from.x, from.z, to.x, to.z);
+      expect(far?.length ?? 0, `route ${JSON.stringify(from)} -> ${JSON.stringify(to)}`).toBeGreaterThan(2);
+    }
+  });
+});

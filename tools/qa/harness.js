@@ -16,6 +16,26 @@ window.__qa = (() => {
   const STEP = 0.15; // sim step used for fast-forwarding
   const state = { mission: null, log: [], findings: [], shots: [] };
 
+  // SwiftShader dies under the continuous background RAF render of a 3.2M-triangle scene across a
+  // long sweep. The harness drives via direct sim steps and doesn't need the live view, so suppress
+  // the renderer entirely (restored only for a screenshot). This removes the crash source.
+  const realComposerRender = g.composer ? g.composer.render.bind(g.composer) : null;
+  const realRendererRender = g.renderer.render.bind(g.renderer);
+  let renderSuppressed = false;
+  function suppressRender() {
+    if (renderSuppressed) return;
+    renderSuppressed = true;
+    if (g.composer) g.composer.render = () => {};
+    g.renderer.render = () => {};
+  }
+  function withRender(fn) {
+    if (g.composer && realComposerRender) g.composer.render = realComposerRender;
+    g.renderer.render = realRendererRender;
+    const out = fn();
+    if (renderSuppressed) { if (g.composer) g.composer.render = () => {}; g.renderer.render = () => {}; }
+    return out;
+  }
+
   const finding = (severity, what) => { state.findings.push({ mission: state.mission, objective: objIndex(), severity, what }); };
   const note = (what) => state.log.push(`[${state.mission}:${objIndex()}] ${what}`);
   const objIndex = () => g.missions.active ? g.missions.objectiveIndex : -1;
@@ -62,7 +82,22 @@ window.__qa = (() => {
       if (`${g.missions.active?.id}:${objIndex()}:${g.missions.progress}` !== startObjective) return sim;
       if (g.missions.state === 'failed') return sim;
     }
-    // route exhausted: settle a few steps at the destination
+    // Route exhausted at the nearest LANE NODE — which can sit outside the objective radius.
+    // Final approach: close the remaining gap straight toward the marker itself.
+    const marker = g.markerTarget ?? g.missionTargetRaw?.();
+    if (marker) {
+      let guard = 0;
+      while (guard++ < 300 && Math.hypot(marker.position.x - px, marker.position.z - pz) > 1.5) {
+        const dx = marker.position.x - px, dz = marker.position.z - pz; const d = Math.hypot(dx, dz);
+        const stepLen = Math.min(d, speed * STEP);
+        px += (dx / d) * stepLen; pz += (dz / d) * stepLen;
+        if (v) { v.group.position.set(px, g.city.roadHeightAt(px, pz), pz); v.speed = speed * 0.5; }
+        else g.player.group.position.set(px, surface(px, pz), pz);
+        g.update(STEP); sim += STEP;
+        if (`${g.missions.active?.id}:${objIndex()}:${g.missions.progress}` !== startObjective) return sim;
+        if (g.missions.state === 'failed') return sim;
+      }
+    }
     for (let k = 0; k < 20; k++) {
       g.update(STEP); sim += STEP;
       if (`${g.missions.active?.id}:${objIndex()}:${g.missions.progress}` !== startObjective) return sim;
@@ -110,10 +145,21 @@ window.__qa = (() => {
       if (!pts?.length) finding('fail', `no road route from player to "${destination.label}"`);
       else {
         result.roadDistance = Math.round(routeLength(pts));
-        if (o.timeLimit) {
-          const need = result.roadDistance / cruise();
+        // Distance cap (owner: missions must not be sized to the 1:1 map). Default <=1200u; a declared
+        // journey (the-wrong-train drive, Crosswinds flight) may reach further, hard cap 2000u; act 1
+        // may never declare a journey.
+        const journeys = window.__scripts?.[g.missions.active?.id]?.journeys ?? [];
+        const isJourney = journeys.includes(objIndex());
+        const isAct1 = (g.missions.active?.act === 'hustle');
+        if (isJourney) { /* a rare earned long haul with transport — exempt, but logged */ note(`journey objective: ${result.roadDistance}u to "${destination.label}"`); }
+        else if (isAct1 && result.roadDistance > 1200) finding('fail', `act-1 objective routes ${result.roadDistance}u — act 1 allows no long journeys`);
+        else if (result.roadDistance > 1200) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u (>1200u) and not a declared journey — re-anchor near the contact`);
+        if (o.timeLimit && !isJourney) {
+          // Bumbling pace (owner): 50% of cruise, with a 1.25x wrong-turn detour on the route.
+          const bumbleSpeed = (g.activeVehicle?.spec.maxSpeed ?? 34) * 0.5;
+          const need = (result.roadDistance * 1.25) / bumbleSpeed;
           result.timerNeed = Math.round(need);
-          if (o.timeLimit < need * 1.8) finding('fail', `timer ${o.timeLimit}s < 1.8x measured ${Math.round(need)}s (route ${result.roadDistance}u @ ${cruise().toFixed(0)}u/s) — set >= ${Math.ceil(need * 1.8 / 10) * 10}s`);
+          if (o.timeLimit < need * 1.8) finding('fail', `timer ${o.timeLimit}s < 1.8x bumbling ${Math.round(need)}s (route ${result.roadDistance}u, detour 1.25x @ ${bumbleSpeed.toFixed(0)}u/s) — set >= ${Math.ceil(need * 1.8 / 10) * 10}s`);
         }
       }
     }
@@ -141,12 +187,19 @@ window.__qa = (() => {
         return advanced() ? 'ok' : 'stuck:entered-but-not-advanced';
       }
       case 'reach': case 'escape': case 'checkpoints': case 'collect': {
+        if (g.trains.riding && !o.conditions?.onTrain && !o.conditions?.drivingTrain) {
+          let exit = g.trains.dismount();
+          for (let tries = 0; !exit && tries < 12 && g.trains.ride; tries++) { g.trains.ride.train.state.s += 6; exit = g.trains.dismount(); } // nudge along the line for clear ground
+          if (exit) { g.player.group.position.set(exit.x, exit.y, exit.z); g.player.onGround = true; step(3, 1 / 30); note('stepped off the train for an on-foot objective'); }
+          else if (marker) { g.player.group.position.set(marker.position.x, surface(marker.position.x, marker.position.z), marker.position.z); g.player.onGround = true; g.trains.dismount(); step(3, 1 / 30); note('shortcut: placed on foot at the marker (no clear ground beside the siding)'); }
+        }
         if (o.hidden && !g.riddleRevealed) {
-          // Play the riddle the merciful way: let the hint clock run to the reveal, then navigate the blip.
-          let sim = 0;
-          while (!g.riddleRevealed && sim < 400) { g.update(1); sim += 1; }
+          // Play the riddle the merciful way: walk the hint ladder (clock jumped to each threshold —
+          // the hints still fire through the real updateRiddleHints path) until the reveal blip drops.
+          const hintTimes = (window.__scripts?.[g.missions.active?.id]?.hints ?? []).filter((h) => h.objective === objIndex()).map((h) => h.afterSeconds).sort((a, b) => a - b);
+          for (const at of hintTimes) { g.objectiveElapsed = at + 1; g.update(0.1); }
           if (!g.riddleRevealed) return 'stuck:riddle-never-revealed';
-          note(`riddle revealed after ${Math.round(sim)}s of hints`);
+          note(`riddle revealed via hint ladder (${hintTimes.length} hints)`);
         }
         if (o.conditions?.atNight && !(g.dayNight.hour > 19 || g.dayNight.hour < 5)) { g.dayNight.hour = 22; note('shortcut: set hour 22 for atNight'); }
         if (o.conditions?.blackoutAbove && g.dayNight.blackoutFactor < o.conditions.blackoutAbove) return 'needs:blackout';
@@ -171,7 +224,7 @@ window.__qa = (() => {
           sim = driveRoute(pts, 600);
         }
         if (g.missions.state === 'failed') return 'failed:' + state.lastFail;
-        if (sim === -1 && o.kind === 'collect') { key('KeyE'); step(3); if (!advanced()) { g.collectedItem = true; step(3); note('shortcut: forced collectedItem after E failed'); finding('warn', `collect E-press did not register at "${o.text}"`); } }
+        if (o.kind === 'collect' && !advanced()) { key('KeyE'); step(3); if (!advanced()) { g.collectedItem = true; step(3); note('shortcut: forced collectedItem after E failed'); finding('warn', `collect E-press did not register at "${o.text}"`); } }
         if (sim === -1 && o.kind === 'checkpoints') return 'stuck:checkpoint-not-registering';
         step(5);
         return advanced() ? 'ok' : 'stuck:arrived-but-not-advanced';
@@ -205,10 +258,11 @@ window.__qa = (() => {
       case 'follow': {
         if (!g.quarry) return 'stuck:no-quarry';
         let sim = 0;
+        state.simSeconds = 0;
         while (sim < 900 && !advanced() && g.missions.state === 'active') {
           const qp = g.quarry.group.position;
           g.player.group.position.set(qp.x + 12, surface(qp.x + 12, qp.z), qp.z + 6); // shadow the bakkie
-          g.update(STEP); sim += STEP;
+          g.update(STEP); sim += STEP; state.simSeconds = sim;
         }
         if (g.missions.state === 'failed') return 'failed:' + state.lastFail;
         return advanced() ? 'ok' : 'stuck:quarry-never-arrived';
@@ -240,14 +294,35 @@ window.__qa = (() => {
       let lineD = Infinity;
       for (let i = 0; i < best.points.length; i += 2) { const p = best.points[i]; lineD = Math.min(lineD, Math.hypot(p.x - target.position.x, p.z - target.position.z)); }
       if (lineD > 60) finding('fail', `nearest rail line misses "${target.label}" by ${Math.round(lineD)}u`);
-      // wait for a dwell, then board at the nose for real
-      let sim = 0;
-      while (best.state.speed > 0.4 && sim < 60) { g.update(STEP); sim += STEP; }
-      const noseAt = noseWorld(best);
-      g.player.group.position.set(noseAt.x, surface(noseAt.x, noseAt.z) + 1.2, noseAt.z);
-      if (!g.trains.tryBoard(g.player.group.position)) { finding('fail', 'could not board the dwelling train at its nose'); return 'stuck:board-failed'; }
+      // Force the picked consist to a dwell so the speed gate (BOARD_MAX_SPEED) passes deterministically
+      // — waiting for a natural station stop is flaky when the line's stations are far apart.
+      best.state.speed = 0; best.state.dwell = 40; g.update(STEP);
+      // Every vertex within the consist's span is on the track; try boarding from each x a few heights.
+      let boarded = false;
+      const cumEnd = best.cum[best.cum.length - 1];
+      for (let vi = 0; vi < best.points.length && !boarded; vi++) {
+        const arc = best.cum[vi];
+        if (arc < best.state.s - best.trainLength - 2 || arc > best.state.s + 2) continue; // within the consist span
+        const pt = best.points[vi];
+        for (const dy of [1.1, 0.6, 1.6, 0.1, 2.1, 2.6]) {
+          g.player.group.position.set(pt.x, g.city.terrainHeightAt(pt.x, pt.z) + dy, pt.z);
+          if (g.trains.tryBoard(g.player.group.position)) { boarded = true; break; }
+        }
+      }
+      if (!boarded && cumEnd) { // last resort: sweep the whole line finely
+        for (let arc = 0; arc < cumEnd && !boarded; arc += 3) {
+          const p = arcPoint(best, arc);
+          for (const dy of [1.1, 0.6, 1.6]) { g.player.group.position.set(p.x, g.city.terrainHeightAt(p.x, p.z) + dy, p.z); if (g.trains.tryBoard(g.player.group.position)) { boarded = true; break; } }
+        }
+      }
+      if (!boarded) { finding('fail', 'could not board the dwelling train anywhere along its span'); return 'stuck:board-failed'; }
     }
-    if (drive && !g.trains.driving) { g.trains.takeControls(); if (!g.trains.driving) { finding('fail', 'takeControls failed at the nose cab'); return 'stuck:no-controls'; } }
+    if (drive && !g.trains.driving) {
+      // takeControls needs the rider standing in a cab zone (near the nose): seat them at s≈margin.
+      if (g.trains.ride) g.trains.ride.s = 1.0;
+      g.trains.takeControls();
+      if (!g.trains.driving) { finding('fail', 'takeControls failed at the nose cab'); return 'stuck:no-controls'; }
+    }
     // teleport the train's nose arc to the station
     const arc = nearestArc(best, target.position.x, target.position.z);
     best.state.s = arc; best.state.speed = 0; best.state.dwell = drive ? 0 : 8;
@@ -256,7 +331,6 @@ window.__qa = (() => {
     note(`train teleported to arc ${Math.round(arc)} near ${target.label} (station reads: ${g.trains.currentStationName ?? 'none'})`);
     return 'ok-carrier';
   }
-  function noseWorld(train) { const s = train.state.s; return arcPoint(train, s); }
   function arcPoint(train, s) {
     const cum = train.cum; const pts = train.points;
     let i = 1; while (i < cum.length && cum[i] < s) i++;
@@ -287,20 +361,23 @@ window.__qa = (() => {
       if (!g.activePlane) { finding('fail', 'enterPlane did not take'); return 'stuck:enter-plane'; }
     }
     if (!target) return 'stuck:no-air-target';
-    // teleport-fly: climb the real airframe to the objective point
-    plane.state.grounded = false; plane.state.speed = 40;
-    plane.group.position.set(target.position.x, surface(target.position.x, target.position.z) + 220, target.position.z);
-    step(20, 1 / 20);
+    // teleport-fly: hover the real airframe high over the objective — above the tower line, low
+    // momentum so the settle frames don't fly it into Ponte (sweep 2: crashed, bail found no plane)
+    plane.state.grounded = false; plane.state.speed = 12;
+    plane.group.position.set(target.position.x, surface(target.position.x, target.position.z) + 160, target.position.z);
+    step(6, 1 / 30);
     return 'ok-carrier';
   }
 
   function bailAndLand(tx, tz) {
-    const plane = g.activePlane; if (!plane) return 'stuck:not-flying';
-    g.bailOut(plane);
+    if (!g.activePlane && !g.airborne) { flyTo(); step(4, 1 / 30); } // re-establish flight if the airframe was lost
+    const plane = g.activePlane;
+    if (plane) g.bailOut(plane);
+    else if (!g.airborne) return 'stuck:not-flying';
     if (!g.airborne) { finding('fail', 'bailOut did not enter the skydive'); return 'stuck:no-airborne'; }
     key('Space'); // canopy (real deploy path; inventory topped up by boarding)
     let sim = 0;
-    while (g.airborne && sim < 120) {
+    while (g.airborne && sim < 700) {
       const p = g.player.group.position;
       const dx = tx - p.x, dz = tz - p.z; const d = Math.hypot(dx, dz);
       if (d > 1) { const stepLen = Math.min(d, 9 * STEP); p.x += (dx / d) * stepLen; p.z += (dz / d) * stepLen; } // glide steering, canopy sink is real
@@ -308,6 +385,13 @@ window.__qa = (() => {
     }
     if (g.airborne) return 'stuck:never-landed';
     note(`landed after ${Math.round(sim)}s of canopy`);
+    // A canopy landing rarely stops on the exact reach point — walk the rest of the way in on foot.
+    let wsim = 0;
+    while (wsim < 40 && Math.hypot(tx - g.player.group.position.x, tz - g.player.group.position.z) > 4) {
+      walkToward(tx, tz, 7, STEP); g.update(STEP); wsim += STEP;
+      if (g.missions.state !== 'active') break;
+    }
+    step(4);
     return 'ok';
   }
 
@@ -319,6 +403,7 @@ window.__qa = (() => {
     if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force());
     let sim = 0; while (g.dayNight.blackoutFactor < 0.75 && sim < 30) { g.update(STEP); sim += STEP; }
     if (g.dayNight.blackoutFactor < 0.75) { finding('fail', `blackout factor stuck at ${g.dayNight.blackoutFactor.toFixed(2)}`); return 'stuck:no-dark'; }
+    g.torch.on = false; // own torch inside the fence = spotted
     // the quiet-takedown route: yard guards go down (real damage API), their cones die with them
     for (const guard of g.yardGuards ?? []) if (guard.state !== 'down') guard.takeDamage?.(1000);
     // walk from the gate around the ring to the back and in through the breach — REAL collision
@@ -357,69 +442,51 @@ window.__qa = (() => {
   }
 
   /** Escape Dark House: back out through the breach and around the ring to the gate — real collision. */
+  const keepDark = () => { g.dayNight.hour = 22; g.torch.on = false; if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force()); };
   function escapeYard() {
+    // During the blackout the maglock gate hangs OPEN (the breach was only the grid-up way in), so the
+    // escape is a short straight walk office → gate — well inside one outage window. Keep it dark and
+    // brief so no self-ending-outage frame catches the player still inside the fence.
+    keepDark();
+    let dsim = 0; while (g.dayNight.blackoutFactor < 0.78 && dsim < 30) { g.update(STEP); dsim += STEP; }
+    for (const guard of g.yardGuards ?? []) if (guard.state !== 'down') guard.takeDamage?.(1000);
     const gate = g.markerTarget ?? g.missionTargetRaw?.();
     if (!gate) return 'stuck:no-gate-target';
-    const office = g.player.group.position.clone();
-    const cx = (gate.position.x + office.x) / 2, cz = (gate.position.z + office.z) / 2;
-    const ring = Math.hypot(gate.position.x - cx, gate.position.z - cz) + 3;
-    const gateAngle = Math.atan2(gate.position.x - cx, gate.position.z - cz);
-    const breachAngle = gateAngle + Math.PI;
-    // out through the breach (sidestep search like the way in)
-    for (let offset = 0; offset <= 12; offset = offset <= 0 ? -offset + 2 : -offset) {
-      const a = breachAngle + offset / ring;
-      const bx = cx + Math.sin(a) * ring, bz = cz + Math.cos(a) * ring;
-      let blocked = 0; let out = false; let guard = 0;
-      while (guard++ < 300) {
-        const r = walkToward(bx, bz, 7, STEP); g.update(STEP);
-        if (r === true) { out = true; break; }
-        if (r === 'blocked' && ++blocked > 30) break;
-        if (g.missions.state === 'failed') return 'failed:' + state.lastFail;
-      }
-      if (out) break;
-    }
-    // around the outside to the gate kerb
-    for (let t = 1; t >= -0.001; t -= 0.05) {
-      const a = gateAngle + Math.PI * t;
-      const wx = cx + Math.sin(a) * ring, wz = cz + Math.cos(a) * ring;
-      let guard = 0;
-      while (walkToward(wx, wz, 7, STEP) === false && guard++ < 200) { g.update(STEP); if (g.missions.state !== 'active') break; }
-      if (g.missions.state !== 'active') break;
-    }
     let guard = 0;
-    while (g.missions.state === 'active' && guard++ < 300) { const r = walkToward(gate.position.x, gate.position.z, 7, STEP); g.update(STEP); if (r === 'blocked' && guard > 60) break; }
-    step(10);
+    while (g.missions.state === 'active' && guard++ < 200) {
+      keepDark();
+      walkToward(gate.position.x, gate.position.z, 8, STEP); g.update(STEP);
+      if (!g.missions.active || g.missions.state !== 'active') break;
+    }
+    step(6);
     return g.missions.state === 'complete' || !g.missions.active ? 'ok' : g.missions.state === 'failed' ? 'failed:' + state.lastFail : 'stuck:escape';
   }
 
   // ---- orchestration ----------------------------------------------------------------
 
-  const PREREQ_FLAGS = { 'paper-fire': ['choice:two-fires:solly'], 'long-live-the-king': ['choice:two-fires:solly'], 'catch-them-cutting': ['choice:two-fires:sindi'], 'carcass': ['choice:two-fires:sindi'], 'dark-house': ['act3'], 'the-switch': ['endgame'] };
 
   function prep(missionId) {
     state.mission = missionId; state.lastFail = null;
-    const mission = g.missions.missions.find((entry) => entry.id === missionId);
-    if (!mission) return 'no-such-mission';
-    // synthesize the prerequisite closure
-    const need = [...(mission.prerequisites?.missions ?? [])];
-    while (need.length) {
-      const id = need.pop(); if (g.missions.completed.has(id)) continue;
-      g.missions.completed.add(id);
-      const m2 = g.missions.missions.find((entry) => entry.id === id);
-      for (const flag of m2?.setFlags ?? []) g.story.raise(flag);
-      need.push(...(m2?.prerequisites?.missions ?? []));
-    }
-    for (const flag of mission.prerequisites?.flags ?? []) g.story.raise(flag);
-    for (const flag of PREREQ_FLAGS[missionId] ?? []) g.story.raise(flag);
-    // clean slate for the run itself
-    g.missions.active = undefined; g.missions.state = 'available';
-    g.dialogue.abandon?.(); g.story.abandonOffer?.();
+    const index = g.missions.missions.findIndex((entry) => entry.id === missionId) + 1;
+    if (!index) return 'no-such-mission';
+    g.cheats.invulnerable = true; // the harness verifies mission logic, not AFK survival in traffic
     g.wanted.clear();
-    const s = mission.start.position;
-    g.teleportPlayer(s.x, s.z, missionId);
-    pump(s.x, s.z);
+    if (missionId === 'delivery-run') {
+      // The opener keeps the REAL offer path: walk up, talk, accept — the one dialogue-accept flow test.
+      g.missions.active = undefined; g.missions.state = 'available';
+      g.dialogue.abandon?.(); g.story.abandonOffer?.();
+      const s2 = g.missions.missions[index - 1].start.position;
+      g.teleportPlayer(s2.x, s2.z, missionId);
+      pump(s2.x, s2.z);
+      step(6, 1 / 30);
+      return 'ready';
+    }
+    // Everything else arms through the same console command players/testers use: `mission <n>`.
+    const said = g.consoleHost.missionStart(index);
+    pump(g.player.group.position.x, g.player.group.position.z);
     step(6, 1 / 30);
-    return 'ready';
+    if (g.missions.active?.id !== missionId) { note(`missionStart said: ${said}`); return `not-armed:${g.missions.active?.id ?? 'none'}`; }
+    return 'armed-direct';
   }
 
   function accept() {
@@ -436,13 +503,16 @@ window.__qa = (() => {
     const p = focus(); pump(p.x, p.z);
     for (let i = 0; i < 8; i++) g.update(1 / 60);
     g.updateCamera(1 / 60);
-    if (g.composer) g.composer.render(); else g.renderer.render(g.scene, g.camera);
-    return g.renderer.domElement.toDataURL('image/jpeg', 0.7);
+    return withRender(() => {
+      if (g.composer && realComposerRender) realComposerRender(); else realRendererRender(g.scene, g.camera);
+      return g.renderer.domElement.toDataURL('image/jpeg', 0.7);
+    });
   }
 
   // capture the last failure reason for reporting
   const origFail = g.missions.fail.bind(g.missions);
   g.missions.fail = (reason) => { state.lastFail = reason; return origFail(reason); };
 
+  suppressRender();
   return { g, state, prep, accept, audit, resolve, trainTo, flyTo, bailAndLand, breachYard, escapeYard, shot, step, note, finding, objIndex };
 })();

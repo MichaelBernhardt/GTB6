@@ -58,6 +58,22 @@ export class StoryDirector {
     return flag;
   }
 
+  /** Testing/console (`mission <n>`): satisfy every prerequisite of `mission` — transitively
+   *  complete prerequisite missions (raising their setFlags) and raise required flags directly,
+   *  so a jump-start works cold from a fresh save exactly as natural progression would allow. */
+  synthesizePrerequisites(mission: MissionDefinition, missions: readonly MissionDefinition[], completed: Set<string>): void {
+    const need = [...(mission.prerequisites?.missions ?? [])];
+    while (need.length) {
+      const id = need.pop()!;
+      if (completed.has(id)) continue;
+      completed.add(id);
+      const entry = missions.find((item) => item.id === id);
+      for (const flag of entry?.setFlags ?? []) this.raise(flag);
+      need.push(...(entry?.prerequisites?.missions ?? []));
+    }
+    for (const flag of mission.prerequisites?.flags ?? []) this.raise(flag);
+  }
+
   /** Pick up a diary page; true if it was new. */
   collectDiaryPage(page: number): boolean {
     if (!Number.isInteger(page) || page < 1 || page > DIARY_PAGE_COUNT || this.diaryPages.has(page)) return false;

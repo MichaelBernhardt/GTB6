@@ -282,22 +282,24 @@ export const DELIVERY_STOPS: MapPt[] = [
 
 /** Bra Vusi (Hot Copper): Pothole Street block. */
 export const VUSI_START = walkSpot('Pothole Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z - 75 * P }, 3, 5);
-/** Braamfontein lock-up: roadside near the district centre. */
-export const LOCKUP_SPOT = walkSpotNear({ x: braamfontein.x - 30 * P, z: braamfontein.z + 20 * P }, 4.5, 6);
+/** Vusi's lock-up: a CBD-edge garage a short drive from the GTI (was Braamfontein, ~1.8km — the
+ *  arc is 1:1 Joburg and must not be sized to the map; act 1 clusters inside the CBD). */
+export const LOCKUP_SPOT = walkSpot('Anderson Street', { x: CBD_CENTER.x - 55 * P, z: CBD_CENTER.z + 30 * P }, 4.5, 6);
 
-/** Candice (Rank Business): Jan Smuts Avenue at Zoo Lake. */
-export const CANDICE_START = walkSpot('Jan Smuts Avenue', zooLakeCenter, 3, 5);
+/** Candice (Rank Business): a CBD taxi rank (was Zoo Lake, far north — re-anchored local so the
+ *  permit run and rank war fit inside one CBD drive). */
+export const CANDICE_START = walkSpot('Commissioner Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 35 * P }, 3, 5);
 /** The stolen-permit taxi terminal: Wemmer Jubilee Road, south of the CBD (industrial belt). */
-const terminalSpot = bestKerbSpot({ name: 'Wemmer Jubilee Road', near: { x: CBD_CENTER.x + 20 * P, z: CBD_CENTER.z + 120 * P }, clearance: 6, ownRadius: 12, minEdge: 5 });
+const terminalSpot = bestKerbSpot({ name: 'Anderson Street', near: { x: CBD_CENTER.x - 35 * P, z: CBD_CENTER.z + 60 * P }, clearance: 6, ownRadius: 12, minEdge: 5 });
 export const TERMINAL_SPOT: MapPt = { x: terminalSpot.x, z: terminalSpot.z };
 export const PERMIT_SPOT: MapPt = {
   x: terminalSpot.x + (terminalSpot.x - terminalSpot.roadX) * 0.7,
   z: terminalSpot.z + (terminalSpot.z - terminalSpot.roadZ) * 0.7,
 };
 /** Escape marker: back on Albertina Sisulu, north-west of the terminal. */
-export const ESCAPE_SPOT = walkSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 120 * P, z: CBD_CENTER.z - 40 * P }, 3, 5);
-/** Braai kiosk on the Zoo Lake shore. */
-export const KIOSK_SPOT = walkSpotNear(zooLakeCenter, 3.4, 5);
+export const ESCAPE_SPOT = walkSpot('Commissioner Street', { x: CBD_CENTER.x - 55 * P, z: CBD_CENTER.z + 25 * P }, 3, 5);
+/** Candice's braai kiosk beside her CBD rank (was the Zoo Lake shore). */
+export const KIOSK_SPOT = walkSpotNear({ x: CBD_CENTER.x - 50 * P, z: CBD_CENTER.z + 42 * P }, 3.4, 5);
 
 /** Rank enforcer spawn spots around the terminal. */
 export const HOSTILE_SPOTS: MapPt[] = [
@@ -318,9 +320,9 @@ const stationPoint = (name: string): MapPt => {
 
 /** Oupa Jakes holds court outside Park Station, where he announced trains for thirty years. */
 export const PARK_STATION_SPOT = walkSpotNear(stationPoint('Johannesburg Park Station'), 3, 5);
-/** Sandton Station: where Portia's nephew abandoned the rent bag. */
-export const SANDTON_PLATFORM = stationPoint('Sandton Station');
-export const SANDTON_BAG_SPOT = walkSpotNear(SANDTON_PLATFORM, 3, 5);
+/** Where Portia's nephew abandoned the rent bag — Park Station, the central hub one short hop
+ *  away (was Sandton, ~13km north: an absurd act-1 journey). Name kept generic in the copy. */
+export const RENT_BAG_SPOT = walkSpot('You-Bet Street', { x: CBD_CENTER.x + 45 * P, z: CBD_CENTER.z + 42 * P }, 3, 5);
 
 /** Riddle chain targets — real named streets with in-world street signs (no map markers). */
 export const RIDDLE_SPOTS: MapPt[] = [
@@ -330,19 +332,23 @@ export const RIDDLE_SPOTS: MapPt[] = [
 ];
 
 /** Kelvin Yard: the cartel's fenced depot in the Crown industrial belt. */
-const crown = districtCenter('Crown') ?? CBD_CENTER;
-const kelvinKerb = bestKerbSpot({ near: { x: crown.x, z: crown.z }, clearance: 8, ownRadius: 16, minEdge: 6 });
+// Kelvin Yard + Solly on the CBD's south-east industrial edge (was Crown, ~3.6km — the whole
+// cartel cluster must sit close, act 1 pattern, or every Solly mission is a cross-city haul).
+const kelvinKerb = bestKerbSpot({ near: { x: CBD_CENTER.x + 70 * P, z: CBD_CENTER.z + 165 * P }, clearance: 8, ownRadius: 16, minEdge: 6 });
 export const KELVIN_GATE_SPOT: MapPt = { x: kelvinKerb.x, z: kelvinKerb.z };
 
 /** The cable buyer's bakkie idles up the block from Bra Vusi (Copper Wire Blues tail). */
 export const QUARRY_SPAWN = kerbVehicleSpot('Pothole Street', { x: VUSI_START.x + 8 * P, z: VUSI_START.z });
+/** The buyer's LOCAL cable yard — a CBD-edge lot a short tail away (the cartel's real Kelvin Yard
+ *  in Crown is discovered later, in Act 2's Audition; act 1 stays inside the CBD). */
+export const CABLE_YARD_SPOT = walkSpotNear({ x: CBD_CENTER.x + 70 * P, z: CBD_CENTER.z - 95 * P }, 4, 6);
 
-/** Candice's bottle-green route van at the Zoo Lake rank. */
-export const CANDICE_VAN_SPOT = kerbVehicleSpot('Jan Smuts Avenue', { x: zooLakeCenter.x + 6 * P, z: zooLakeCenter.z });
-/** The two contested ranks on her route (Rank Cold War). */
+/** Candice's bottle-green route van at her CBD rank. */
+export const CANDICE_VAN_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z + 40 * P });
+/** The two contested ranks on her route — both CBD-local (were Hillbrow/Newtown district centres). */
 export const RANK_STOPS: MapPt[] = [
-  walkSpotNear({ x: hillbrow.x + 10 * P, z: hillbrow.z - 8 * P }, 3.4, 5),
-  walkSpotNear({ x: newtown.x - 14 * P, z: newtown.z + 10 * P }, 3.4, 5),
+  walkSpot('Risk-It Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z + 55 * P }, 3.4, 5),
+  walkSpot('Anderson Street', { x: CBD_CENTER.x - 60 * P, z: CBD_CENTER.z + 10 * P }, 3.4, 5),
 ];
 
 // ---- Story arc (Acts 2-3): the cartel, the engineer, the sky, the yard ----------------
@@ -363,11 +369,11 @@ export const KELVIN_OFFICE_SPOT: MapPt = { x: kelvinKerb.x + kelvinIn.x * 42, z:
 /** Crossing this ring around the yard centre counts as being inside the fence. */
 export const KELVIN_FENCE_RADIUS = 26;
 
-/** The CBD feeder substation lives in the Ophirton industrial belt; Sindi works its night shift. */
-const ophirton = districtCenter('Ophirton') ?? CBD_CENTER;
-export const SUBSTATION_SPOT = walkSpotNear({ x: ophirton.x, z: ophirton.z }, 4, 6);
+/** The CBD feeder substation on the CBD's south-west industrial edge; Sindi works its night shift
+ *  (was Ophirton, ~2.2km — moved local so Pull the Plug / The Switch cluster with the rest). */
+export const SUBSTATION_SPOT = walkSpotNear({ x: CBD_CENTER.x - 30 * P, z: CBD_CENTER.z + 20 * P }, 4, 6);
 export const SUBSTATION_BREAKER: MapPt = { x: SUBSTATION_SPOT.x + 6, z: SUBSTATION_SPOT.z + 4 };
-export const SINDI_START = walkSpotNear({ x: ophirton.x + 12 * P, z: ophirton.z - 10 * P }, 3, 5);
+export const SINDI_START = walkSpotNear({ x: CBD_CENTER.x - 12 * P, z: CBD_CENTER.z + 8 * P }, 3, 5);
 
 /** Generator-subscription collections: three CBD businesses behind on payments. */
 export const GENNY_ROUND_STOPS: MapPt[] = [
@@ -379,33 +385,36 @@ export const GENNY_ROUND_STOPS: MapPt[] = [
 /** Crown Station: where the misplaced diesel consist must stop (The Wrong Train). */
 export const CROWN_STATION = stationPoint('Crown Station');
 
-/** The airport halt: Sindi's classified-ad dead drop, and where Skywise Sipho loiters. */
-export const LUGHAWE_HALT = stationPoint('Lughawe Halt');
-export const LUGHAWE_DROP: MapPt = { x: LUGHAWE_HALT.x + 10, z: LUGHAWE_HALT.z + 6 };
-export const SIPHO_START: MapPt = { x: LUGHAWE_HALT.x + 16, z: LUGHAWE_HALT.z - 4 };
+/** Sindi's dead drop: a CBD rail platform locker (was the airport halt, ~10km — a riddle you'd
+ *  need to cross the map to answer is no fun; the clue now points at the central station). */
+export const PAPER_DROP: MapPt = walkSpot('Commissioner Street', { x: CBD_CENTER.x + 10 * P, z: CBD_CENTER.z + 5 * P }, 3, 5);
+/** Skywise Sipho waits at a CBD-edge airstrip office; the Kite itself is out at the airport (the flight
+ *  is the one earned journey — transport provided). */
+export const SIPHO_START: MapPt = walkSpotNear({ x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z + 145 * P }, 3, 5);
+export const AIRPORT_APRON: MapPt = stationPoint('Lughawe Halt'); // where the Kite sits (journey target)
 
 /** Ponte Tower forecourt: Crosswinds' drop after the skydive. */
 export const PONTE_POINT = landmarkPoint('Ponte Tower', { x: CBD_CENTER.x, z: CBD_CENTER.z });
 export const PONTE_FORECOURT = walkSpotNear(PONTE_POINT, 3, 5);
 
 /** Constitution Hill handover (Carcass) and the coastal pier (Pier Pressure). */
-export const CON_HILL_SPOT = walkSpotNear(landmarkPoint('Constitution Hill', { x: hillbrow.x, z: hillbrow.z }), 3, 5);
+export const CON_HILL_SPOT = walkSpot('Anderson Street', { x: CBD_CENTER.x - 30 * P, z: CBD_CENTER.z - 20 * P }, 3, 5);
 export const PIER_POINT = landmarkPoint('Seepunt Pier', { x: CBD_CENTER.x, z: CBD_CENTER.z });
-export const PIER_SPOT: MapPt = { x: PIER_POINT.x, z: PIER_POINT.z };
+export const PIER_SPOT: MapPt = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 65 * P, z: CBD_CENTER.z + 135 * P }, 3, 5);
 /** Ouma se Padstal doorstep (long-haul side run). */
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
-export const PADSTAL_SPOT: MapPt = { x: PADSTAL_POINT.x + 6, z: PADSTAL_POINT.z };
+export const PADSTAL_SPOT: MapPt = walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 70 * P }, 3, 5);
 
 /** Sindi's evidence van (Paper Fire target) parked below Braamfontein. */
-export const EVIDENCE_VAN_SPOT = kerbVehicleSpot('Jan Smuts Avenue', { x: braamfontein.x + 20 * P, z: braamfontein.z - 15 * P });
+export const EVIDENCE_VAN_SPOT = kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 65 * P, z: CBD_CENTER.z + 25 * P });
 /** The cartel's diesel tanker on the industrial belt (The Audition). */
 export const TANKER_SPOT = kerbVehicleSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 125 * P });
 
 /** Cartel stash sweep (Carcass): three lock-ups across the belt. */
 export const STASH_SPOTS: MapPt[] = [
   walkSpot('Commissioner Street', { x: CBD_CENTER.x + 70 * P, z: CBD_CENTER.z - 50 * P }, 3, 5),
-  walkSpotNear({ x: braamfontein.x - 25 * P, z: braamfontein.z + 28 * P }, 3, 5),
-  walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 60 * P, z: CBD_CENTER.z + 130 * P }, 3, 5),
+  walkSpot('Risk-It Street', { x: CBD_CENTER.x + 20 * P, z: CBD_CENTER.z + 50 * P }, 3, 5),
+  walkSpot('Anderson Street', { x: CBD_CENTER.x - 55 * P, z: CBD_CENTER.z + 5 * P }, 3, 5),
 ];
 
 /** Grid Diary pages 3-12 scattered at the city's proudest places (pages 1-2 are mission rewards). */
@@ -413,7 +422,7 @@ export const DIARY_SPOTS: Array<{ page: number; x: number; z: number }> = (() =>
   const tower = landmarkPoint('Hillbrow tower', { x: hillbrow.x, z: hillbrow.z });
   const conHill = landmarkPoint('Constitution Hill', { x: hillbrow.x, z: hillbrow.z });
   const parkStation = landmarkPoint('Park Station', { x: CBD_CENTER.x, z: CBD_CENTER.z });
-  const airportPt = landmarkPoint('O.R. Tambourine Regional', LUGHAWE_HALT);
+  const airportPt = landmarkPoint('O.R. Tambourine Regional', AIRPORT_APRON);
   const sandtonStation = stationPoint('Sandton Station');
   return [
     { page: 3, x: tower.x + 8, z: tower.z + 5 },
@@ -459,7 +468,7 @@ export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('motorbike', kerbVehicleSpot('You-Bet Street', { x: CBD_CENTER.x + 32 * P, z: CBD_CENTER.z + 55 * P }, 2)),
   parkedEntry('motorbike', kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 25 * P }, 2)),
   parkedEntry('courier', kerbVehicleSpot('Commissioner Street', { x: COURIER_DEPOT.x, z: COURIER_DEPOT.z }, 2), 0x84f01c),
-  (() => { const spot = bestKerbSpot({ near: { x: sandton.x, z: sandton.z }, clearance: 2, ownRadius: 3.4, minEdge: 0.1, minRoadWidth: 7 }); return { kind: 'superbike', x: spot.x, z: spot.z, heading: Math.atan2(spot.dirX, spot.dirZ) }; })(), // flashy toy on a Sandton kerb
+  (() => { const spot = bestKerbSpot({ near: { x: CBD_CENTER.x + 35 * P, z: CBD_CENTER.z - 40 * P }, clearance: 2, ownRadius: 3.4, minEdge: 0.1, minRoadWidth: 7 }); return { kind: 'superbike', x: spot.x, z: spot.z, heading: Math.atan2(spot.dirX, spot.dirZ) }; })(), // showroom superbike on a CBD kerb (Stage Fright)
 ];
 
 // ---- e-toll gantries (on the M1) -----------------------------------------------------

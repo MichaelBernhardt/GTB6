@@ -18,10 +18,11 @@ describe('The Audition walkthrough', () => {
     expect(system.update(0.016, { ...base, ...inTanker }, true).completed?.reward).toBe(3000);
   });
 
-  it('fails when the tanker bleeds below 60%', () => {
+  it('fails when the tanker bleeds below 30% (forgives several ordinary crashes)', () => {
     const system = sim(); system.start('the-audition');
     system.update(0.016, { ...base, ...inTanker }, false);
-    expect(system.update(0.016, { ...base, ...inTanker, vehicleHealthPct: 0.5 }, false).failed).toContain('bleeding diesel');
+    expect(system.update(0.016, { ...base, ...inTanker, vehicleHealthPct: 0.45 }, false).failed).toBeUndefined();
+    expect(system.update(0.016, { ...base, ...inTanker, vehicleHealthPct: 0.25 }, false).failed).toContain('bleeding diesel');
   });
 });
 
@@ -98,7 +99,7 @@ describe('Crosswinds walkthrough', () => {
     expect(system.update(0.016, { ...base, inPlane: true, altitude: 60 }, false).advanced).toBe(true);
     expect(system.update(0.016, { ...base, inPlane: true, altitude: 200 }, false).advanced).toBeUndefined(); // high, but not over Ponte
     expect(system.update(0.016, { ...base, inPlane: true, altitude: 200 }, true).advanced).toBe(true);
-    expect(system.remainingTime).toBe(90); // the descent clock arms
+    expect(system.remainingTime).toBe(300); // the descent clock arms
     expect(system.update(1, base, true).completed?.id).toBe('crosswinds');
   });
 
@@ -106,9 +107,9 @@ describe('Crosswinds walkthrough', () => {
     const system = sim(); system.start('crosswinds');
     system.update(0.016, { ...base, inPlane: true, altitude: 60 }, false);
     system.update(0.016, { ...base, inPlane: true, altitude: 200 }, true);
-    expect(system.update(91, base, false).failed).toBe('Time expired');
+    expect(system.update(301, base, false).failed).toBe('Time expired');
     system.restart();
-    expect(system.objectiveIndex).toBe(1); // back over Ponte, not back to the runway
+    expect(system.objectiveIndex).toBe(2); // the drop leg is checkpointed (difficulty gradient)
   });
 });
 
@@ -131,7 +132,7 @@ describe('Two Fires branch', () => {
 describe('Paper Fire walkthrough (loyalist branch)', () => {
   it('completes: find the van in time, light it, vanish', () => {
     const system = sim(); system.start('paper-fire');
-    expect(system.remainingTime).toBe(240);
+    expect(system.remainingTime).toBe(600);
     expect(system.update(1, base, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, wantedLevel: 0 }, false).completed?.id).toBe('paper-fire');
@@ -141,7 +142,7 @@ describe('Paper Fire walkthrough (loyalist branch)', () => {
 
   it('running out the clock fails the approach', () => {
     const system = sim(); system.start('paper-fire');
-    expect(system.update(241, base, false).failed).toBe('Time expired');
+    expect(system.update(601, base, false).failed).toBe('Time expired');
   });
 });
 
@@ -210,7 +211,7 @@ describe('Act 3 tails and finale', () => {
     const system = sim(); system.start('carcass');
     expect(system.update(1, base, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, wantedLevel: 0 }, false).advanced).toBe(true);
-    expect(system.remainingTime).toBe(420);
+    expect(system.remainingTime).toBe(600);
     system.registerCheckpoint(); system.registerCheckpoint();
     const done = system.registerCheckpoint();
     expect(done.completed?.reward).toBe(12000);
@@ -226,7 +227,7 @@ describe('Act 3 tails and finale', () => {
 
   it('missing the finale timer fails and restarts from the top', () => {
     const system = sim(); system.start('the-switch');
-    expect(system.update(241, base, false).failed).toBe('Time expired');
+    expect(system.update(421, base, false).failed).toBe('Time expired');
     system.restart();
     expect(system.objectiveIndex).toBe(0);
   });
@@ -235,10 +236,10 @@ describe('Act 3 tails and finale', () => {
 describe('side pieces', () => {
   it('Padstal Run: out, load, home — both legs timed', () => {
     const system = sim(); system.start('padstal-run');
-    expect(system.remainingTime).toBe(600);
+    expect(system.remainingTime).toBe(900);
     expect(system.update(1, base, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
-    expect(system.remainingTime).toBe(600); // the home leg gets its own clock
+    expect(system.remainingTime).toBe(900); // the home leg gets its own clock
     expect(system.update(1, base, true).completed?.reward).toBe(4000);
   });
 

@@ -46,12 +46,13 @@ def boot(browser, port):
 def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows):
     print(f'=== {mission} ===', flush=True)
     status = page.evaluate(f"() => window.__qa.prep('{mission}')")
-    if status != 'ready':
+    if status == 'ready':  # the opener exercises the real dialogue-accept flow
+        status = page.evaluate("() => window.__qa.accept()")
+        if status != 'armed':
+            all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': f'accept path broke: {status}'})
+            return
+    elif status != 'armed-direct':  # everything else arms via the `mission <n>` console command
         all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': f'prep: {status}'})
-        return
-    status = page.evaluate("() => window.__qa.accept()")
-    if status != 'armed':
-        all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': f'accept path broke: {status}'})
         return
     for _safety in range(10):  # objectives + checkpoint re-entries per mission
         info = json.loads(page.evaluate("() => JSON.stringify({ audit: window.__qa.audit(), idx: window.__qa.objIndex(), state: window.__qa.g.missions.state })"))
@@ -84,11 +85,21 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
             elif status == 'needs:blackout':
                 page.evaluate("() => { const q = window.__qa; q.g.dayNight.hour = 22; if (!q.g.loadShedding.active) q.g.applyEskom(q.g.loadShedding.force()); q.step(40, 0.2); return 0; }")
                 status = 'carrier'
+        # low-agency cap (owner): no follow may hold the player longer than ~90s
+        if audit.get('kind') == 'follow':
+            follow_sim = page.evaluate("() => window.__qa.state.simSeconds ?? null")
+            if follow_sim and follow_sim > 90:
+                all_findings.append({'mission': mission, 'objective': info['idx'], 'severity': 'fail', 'what': f'follow objective held the player {round(follow_sim)}s — cap is 90s'})
         # empirical timer check: sim seconds actually used vs the objective clock
         sim_used = page.evaluate("() => window.__qa.state.simSeconds ?? null")
         timer = audit.get('timer')
-        if timer and sim_used and sim_used * 1.8 > timer:
-            all_findings.append({'mission': mission, 'objective': info['idx'], 'severity': 'fail', 'what': f'timer {round(timer)}s < 1.8x measured play time {round(sim_used)}s — raise it'})
+        obj_kind = audit.get('kind')
+        journeys = page.evaluate(f"() => (window.__scripts?.['{mission}']?.journeys ?? [])")
+        skip_timer = obj_kind in ('survive', 'choice') or (info['idx'] in (journeys or []))
+        # empirical backstop at the bumbling ratio: the bot drives at 65% cruise, a bumbling player
+        # at ~50% with detours — so the bot's time scales by ~1.6, then 1.8x slack on top
+        if timer and sim_used and not skip_timer and sim_used * 1.6 * 1.8 > timer:
+            all_findings.append({'mission': mission, 'objective': info['idx'], 'severity': 'fail', 'what': f'timer {round(timer)}s < 1.8x bumbling-scaled play time {round(sim_used * 1.6)}s — raise it'})
         after = json.loads(page.evaluate("() => JSON.stringify({ idx: window.__qa.objIndex(), state: window.__qa.g.missions.state })"))
         if after['state'] == 'failed':
             fail_reason = page.evaluate("() => window.__qa.state.lastFail")
@@ -107,6 +118,12 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
     print(f'    -> {"COMPLETE" if done else "DID NOT COMPLETE"}', flush=True)
     if not done:
         all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': 'mission never completed under the harness'})
+    else:
+        # reward emission (owner: no silent payouts) — every paying mission raises the MISSION PASSED card
+        card = page.evaluate("() => Boolean(window.__qa.g.missionPassedView)")
+        base = page.evaluate(f"() => window.__qa.g.missions.missions.find(m => m.id === '{mission}')?.reward ?? 0")
+        if base > 0 and not card:
+            all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': 'completion paid a reward but showed no MISSION PASSED card'})
 
 
 def run(port: int, out: Path, missions: list[str]) -> int:
@@ -114,11 +131,11 @@ def run(port: int, out: Path, missions: list[str]) -> int:
     all_findings, all_measurements, sheet_rows = [], [], []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-gpu-sandbox'])
-        page = None
-        for mission in missions:
-            for attempt in (1, 2):  # fresh page per mission; one retry on a renderer crash
+        page = None  # ONE page is reused across missions (prep() via `mission <n>` fully resets state);
+        for mission in missions:               # re-boot only on a renderer crash — 24 boots was the slow part
+            for attempt in (1, 2):
                 try:
-                    if page is None or attempt == 2:
+                    if page is None:
                         page = boot(browser, port)
                     play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
                     try:
@@ -128,9 +145,7 @@ def run(port: int, out: Path, missions: list[str]) -> int:
                             print('   ', line, flush=True)
                     except Exception:
                         pass
-                    page.close()
-                    page = None
-                    break
+                    break  # keep the page for the next mission
                 except Exception as error:
                     print(f'    !! harness crash on {mission} (attempt {attempt}): {type(error).__name__}', flush=True)
                     try:

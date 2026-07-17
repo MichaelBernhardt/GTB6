@@ -129,6 +129,10 @@ export class Game {
   private quarryArrived = false;
   private contactCullTimer = 0;
   private objectiveElapsed = 0;
+  private missionPassedTimer = 0;
+  private missionPassedView?: { name: string; items: string[] };
+  private followElapsed = 0;
+  private followCapFired = false;
   private hintsFired = new Set<number>();
   private riddleRevealed = false;
   private depotSecurity = new DepotSecurity();
@@ -463,8 +467,14 @@ export class Game {
     missionList: () => MISSIONS.map((mission, index) =>
       `${index + 1}. ${mission.name} — ${mission.contact}${this.missions.active?.id === mission.id ? ' ← active' : this.missions.completed.has(mission.id) ? ' ✓ done' : ''}`),
     missionStart: (index) => {
+      const target = this.missions.missions[index - 1];
+      if (!target) return `Eish, no mission ${index}. Type "mission" for the list (1-${MISSIONS.length}).`;
+      this.story.synthesizePrerequisites(target, this.missions.missions, this.missions.completed); // works cold from a fresh save
+      this.dialogue.abandon(); this.story.abandonOffer();
+      this.missions.active = undefined; this.missions.state = 'available';
+      this.resetMissionRuntime();
       const mission = this.missions.forceStart(index);
-      if (!mission) return `Eish, no mission ${index}. Type "mission" for the list (1-${MISSIONS.length}).`;
+      if (!mission) return `Eish, mission ${index} would not arm.`;
       this.teleportPlayer(mission.start.position.x, mission.start.position.z, mission.contact);
       return `Mission ${index} "${mission.name}" armed — you're with ${mission.contact}. Objective: ${this.missions.objective?.text ?? ''}`;
     },
@@ -1491,7 +1501,7 @@ export class Game {
       const requiredVehicle = this.findMissionVehicle(undefined, objective.vehicleColor);
       if (requiredVehicle?.disabled) { this.processMissionUpdate(this.missions.fail(`${requiredVehicle.spec.name} was destroyed`)); return; }
     }
-    this.updateQuarry();
+    this.updateQuarry(dt);
     this.updateDepot(dt);
     if (this.missions.active?.id === 'hot-property' && objective?.kind === 'enter-kind' && this.activeVehicle?.spec.kind === 'sport' && this.activeVehicle.spec.color === 0xd83a40) this.forceWanted(2);
     const target = this.missionTargetRaw(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
@@ -1514,6 +1524,7 @@ export class Game {
       this.hostileDefeated = 0; // defeat counters are per-objective, not per-mission
       this.collectedItem = false;
       this.objectiveElapsed = 0; this.hintsFired.clear(); this.riddleRevealed = false;
+      this.followElapsed = 0; this.followCapFired = false;
       this.runObjectiveBeats();
       if (this.missions.objective) this.ui.notify('Objective updated', this.missions.objective.text);
     }
@@ -1523,6 +1534,7 @@ export class Game {
     this.markerTarget = this.currentTarget();
     this.objectiveElapsed += dt;
     this.updateRiddleHints();
+    if (this.missionPassedTimer > 0) { this.missionPassedTimer -= dt; if (this.missionPassedTimer <= 0) this.missionPassedView = undefined; }
   }
 
   /** Riddle fail-softs: a generous minimap search circle around the answer (offset centre so the
@@ -1614,8 +1626,10 @@ export class Game {
     this.depotWasSpotted = spotted;
   }
 
-  /** Per-frame follow feed: distance to the quarry, arrival at its mark, and whether it survives. */
-  private updateQuarry(): void {
+  /** Per-frame follow feed: distance to the quarry, arrival at its mark, and whether it survives.
+   *  A successful tail COMPLETES after followCapSeconds — the low-agency crawl converts into a
+   *  free-drive reach with an in-fiction beat (owner: no follow may outstay ~90s of wall time). */
+  private updateQuarry(dt: number): void {
     const quarry = this.quarry;
     const script = MISSION_SCRIPTS[this.missions.active?.id ?? '']?.quarry;
     if (!quarry || !script || this.missions.state !== 'active') return;
@@ -1627,8 +1641,15 @@ export class Game {
     if (this.missions.objective?.kind !== 'follow') return;
     this.missionContext.escortAlive = !quarry.disabled;
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
-    this.missionContext.followDistance = Math.hypot(position.x - focus.x, position.z - focus.z);
-    this.missionContext.followArrived = this.quarryArrived;
+    const distance = Math.hypot(position.x - focus.x, position.z - focus.z);
+    this.missionContext.followDistance = distance;
+    const strayLimit = (this.missions.objective.failIf ?? []).find((rule) => rule.kind === 'strayed');
+    if (!quarry.disabled && (!strayLimit || distance <= strayLimit.value)) this.followElapsed += dt;
+    if (script.followCapSeconds && this.followElapsed >= script.followCapSeconds && !this.followCapFired) {
+      this.followCapFired = true;
+      if (script.followCapNote) this.ui.notify(script.followCapNote.title, script.followCapNote.detail, true, 'radio');
+    }
+    this.missionContext.followArrived = this.quarryArrived || this.followCapFired;
   }
 
   /** Snapshot for the pure mission engine: combat/vehicle facts plus story context and any script overlay. */
@@ -1979,7 +2000,7 @@ export class Game {
         this.economy.earn(choice.reward);
         this.audio.ui(true); this.ui.notify('The word is given', `${choice.label} · +R${choice.reward.toLocaleString()}`);
       }
-    } else if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); }
+    } else if (update.completed) { this.celebrateMission(update.completed); }
     if (update.completed) {
       for (const flag of this.story.onMissionCompleted(update.completed)) if (flag.startsWith('act')) this.ui.notify('Word travels', 'New contacts will hear your name now.', true, 'reputation');
       const outro = MISSION_SCRIPTS[update.completed.id]?.outro;
@@ -1990,6 +2011,30 @@ export class Game {
       if (update.completed.id === 'the-switch') this.settleStageSix();
       this.persist();
     }
+  }
+
+  /** Mission complete: pay the base cash, apply extra payback (keepable car, weapon, standing) and
+   *  raise the GTA-style MISSION PASSED card with an itemized reward list (owner: 'give them something
+   *  in return for the work', celebrate it — not a 4-second toast). */
+  private celebrateMission(mission: MissionDefinition): void {
+    this.economy.earn(mission.reward);
+    this.audio.ui(true);
+    const items: string[] = [`R${mission.reward.toLocaleString()} cash`];
+    const rewards = MISSION_SCRIPTS[mission.id]?.rewards;
+    if (rewards?.weapon) { const result = this.combat.grantWeapon(rewards.weapon); items.push(`${WEAPON_BY_ID[rewards.weapon].name}${result === 'ammo' ? ' ammo' : ''}`); }
+    if (rewards?.grantVehicle) { this.grantGarageVehicle(rewards.grantVehicle.kind as VehicleKind, rewards.grantVehicle.color); items.push(`${VEHICLE_SPECS[rewards.grantVehicle.kind as VehicleKind].name} (garaged)`); }
+    if (rewards?.armour) { this.inventory.armour = Math.min(ARMOUR_MAX, this.inventory.armour + rewards.armour); items.push(`Body armour +${rewards.armour}`); }
+    if (rewards?.standing) { this.livingCity.district(CBD).communityStanding = Math.min(100, this.livingCity.district(CBD).communityStanding + rewards.standing); items.push(`Street respect +${rewards.standing}`); }
+    if (rewards?.note) items.push(rewards.note);
+    this.missionPassedView = { name: mission.name, items };
+    this.missionPassedTimer = 6.5;
+  }
+
+  /** Hand the player a permanent vehicle in the garage (mission reward). Replaces any stored car. */
+  private grantGarageVehicle(kind: VehicleKind, color: number): void {
+    if (this.garageVehicle) this.removeGarageVehicle();
+    this.save.garage = { kind, color, health: VEHICLE_SPECS[kind].health };
+    this.restoreGarageVehicle();
   }
 
   /** Finale epilogue: the branch decides what the city remembers about the grid — and about you. */
@@ -2251,7 +2296,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

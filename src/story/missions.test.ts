@@ -35,14 +35,10 @@ describe('mission content sanity', () => {
 });
 
 describe('Last Coach Home walkthrough', () => {
-  it('completes: ride to Sandton Station aboard, fetch the bag, return', () => {
+  it('completes: reach the rank, fetch the bag, return — a tight local fetch (no train)', () => {
     const system = sim(); expect(system.start('last-coach-home')).toBe(true);
-    // driving to Sandton in a car does NOT count
-    expect(system.update(0.016, { ...base, inVehicle: true, vehicleKind: 'compact' }, true).advanced).toBeUndefined();
-    // aboard, but dwelling at the wrong station
-    expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Crown Station' }, false).advanced).toBeUndefined();
-    // aboard at Sandton Station: the conditions are the objective (no reach flag needed)
-    expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Sandton Station' }, false).advanced).toBe(true);
+    expect(system.objective?.kind).toBe('reach');
+    expect(system.update(0.016, base, true).advanced).toBe(true); // reached the rank
     expect(system.objective?.kind).toBe('collect');
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
     const done = system.update(0.016, base, true);
@@ -67,7 +63,7 @@ describe('Copper Wire Blues walkthrough', () => {
 
   it('fails by straying and restarts at the tail (checkpoint), not the meet', () => {
     const system = sim(); toFollow(system);
-    expect(system.update(0.016, { ...base, followDistance: 120, escortAlive: true }, false).failed).toBe('You lost the bakkie in traffic');
+    expect(system.update(0.016, { ...base, followDistance: 200, escortAlive: true }, false).failed).toBe('You lost the bakkie in traffic');
     expect(system.restart()).toBe(true);
     expect(system.objectiveIndex).toBe(1); // straight back to the follow
   });
@@ -98,9 +94,10 @@ describe('Rank Cold War walkthrough', () => {
     system.update(0.016, { ...base, ...inVan }, false);
     system.registerCheckpoint(); system.registerCheckpoint();
     system.update(0.016, { ...base, ...inVan, hostileDefeated: 3 }, false); // defeat cleared → reach
-    expect(system.update(0.016, { ...base, ...inVan, vehicleHealthPct: 0.2 }, false).failed).toBe('Candice\'s van is finished — and so is her route');
+    expect(system.update(0.016, { ...base, ...inVan, vehicleHealthPct: 0.2 }, false).failed).toBeUndefined(); // 20%: battered but breathing (difficulty gradient)
+    expect(system.update(0.016, { ...base, ...inVan, vehicleHealthPct: 0.05 }, false).failed).toBe('Candice\'s van is finished — and so is her route');
     expect(system.restart()).toBe(true);
-    expect(system.objectiveIndex).toBe(2); // back to the fight, not the whole route
+    expect(system.objectiveIndex).toBe(3); // the home leg is checkpointed too now (difficulty gradient)
   });
 
   it('a random van of another colour does not start the route', () => {
