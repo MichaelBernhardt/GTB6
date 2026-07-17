@@ -444,50 +444,21 @@ window.__qa = (() => {
   /** Escape Dark House: back out through the breach and around the ring to the gate — real collision. */
   const keepDark = () => { g.dayNight.hour = 22; g.torch.on = false; if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force()); };
   function escapeYard() {
+    // During the blackout the maglock gate hangs OPEN (the breach was only the grid-up way in), so the
+    // escape is a short straight walk office → gate — well inside one outage window. Keep it dark and
+    // brief so no self-ending-outage frame catches the player still inside the fence.
     keepDark();
-    let dsim = 0; while (g.dayNight.blackoutFactor < 0.78 && dsim < 30) { g.update(STEP); dsim += STEP; } // let the dark ramp in before moving
+    let dsim = 0; while (g.dayNight.blackoutFactor < 0.78 && dsim < 30) { g.update(STEP); dsim += STEP; }
     for (const guard of g.yardGuards ?? []) if (guard.state !== 'down') guard.takeDamage?.(1000);
     const gate = g.markerTarget ?? g.missionTargetRaw?.();
     if (!gate) return 'stuck:no-gate-target';
-    const office = g.player.group.position.clone();
-    const cx = (gate.position.x + office.x) / 2, cz = (gate.position.z + office.z) / 2;
-    const ring = Math.hypot(gate.position.x - cx, gate.position.z - cz) + 3;
-    const gateAngle = Math.atan2(gate.position.x - cx, gate.position.z - cz);
-    const breachAngle = gateAngle + Math.PI;
-    // out through the breach (sidestep search like the way in)
-    for (let offset = 0; offset <= 12; offset = offset <= 0 ? -offset + 2 : -offset) {
-      const a = breachAngle + offset / ring;
-      const bx = cx + Math.sin(a) * ring, bz = cz + Math.cos(a) * ring;
-      let blocked = 0; let out = false; let guard = 0;
-      while (guard++ < 300) {
-        keepDark(); const r = walkToward(bx, bz, 7, STEP); g.update(STEP);
-        if (r === true) { out = true; break; }
-        if (r === 'blocked' && ++blocked > 30) break;
-        if (g.missions.state === 'failed') return 'failed:' + state.lastFail;
-      }
-      if (out) break;
-    }
-    // around the outside to the gate kerb
-    for (let t = 1; t >= -0.001; t -= 0.05) {
-      const a = gateAngle + Math.PI * t;
-      const wx = cx + Math.sin(a) * ring, wz = cz + Math.cos(a) * ring;
-      let guard = 0;
-      while (walkToward(wx, wz, 7, STEP) === false && guard++ < 200) { keepDark(); g.update(STEP); if (g.missions.state !== 'active') break; }
-      if (g.missions.state !== 'active') break;
-    }
-    // Persistent gate approach from outside the fence: sidestep around the perimeter if blocked.
-    let guard = 0; let blocked = 0;
-    while (g.missions.state === 'active' && guard++ < 800) {
+    let guard = 0;
+    while (g.missions.state === 'active' && guard++ < 200) {
       keepDark();
-      const r = walkToward(gate.position.x, gate.position.z, 7, STEP); g.update(STEP);
+      walkToward(gate.position.x, gate.position.z, 8, STEP); g.update(STEP);
       if (!g.missions.active || g.missions.state !== 'active') break;
-      if (r === 'blocked') { if (++blocked > 20) { // slide along the ring toward the gate angle, then retry
-        const a = Math.atan2(g.player.group.position.x - cx, g.player.group.position.z - cz) + 0.3;
-        const sx = cx + Math.sin(a) * (ring + 3), sz = cz + Math.cos(a) * (ring + 3);
-        let g2 = 0; while (walkToward(sx, sz, 7, STEP) === false && g2++ < 60) { keepDark(); g.update(STEP); } blocked = 0;
-      } } else blocked = 0;
     }
-    step(10);
+    step(6);
     return g.missions.state === 'complete' || !g.missions.active ? 'ok' : g.missions.state === 'failed' ? 'failed:' + state.lastFail : 'stuck:escape';
   }
 
