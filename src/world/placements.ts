@@ -322,8 +322,7 @@ const stationPoint = (name: string): MapPt => {
 export const PARK_STATION_SPOT = walkSpotNear(stationPoint('Johannesburg Park Station'), 3, 5);
 /** Where Portia's nephew abandoned the rent bag — Park Station, the central hub one short hop
  *  away (was Sandton, ~13km north: an absurd act-1 journey). Name kept generic in the copy. */
-export const RENT_BAG_PLATFORM = stationPoint('Johannesburg Park Station');
-export const RENT_BAG_SPOT = walkSpotNear({ x: RENT_BAG_PLATFORM.x + 8, z: RENT_BAG_PLATFORM.z + 6 }, 3, 5);
+export const RENT_BAG_SPOT = walkSpot('You-Bet Street', { x: CBD_CENTER.x + 45 * P, z: CBD_CENTER.z + 42 * P }, 3, 5);
 
 /** Riddle chain targets — real named streets with in-world street signs (no map markers). */
 export const RIDDLE_SPOTS: MapPt[] = [
@@ -404,7 +403,7 @@ export const PIER_POINT = landmarkPoint('Seepunt Pier', { x: CBD_CENTER.x, z: CB
 export const PIER_SPOT: MapPt = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 65 * P, z: CBD_CENTER.z + 135 * P }, 3, 5);
 /** Ouma se Padstal doorstep (long-haul side run). */
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
-export const PADSTAL_SPOT: MapPt = walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z + 90 * P }, 3, 5);
+export const PADSTAL_SPOT: MapPt = walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 70 * P }, 3, 5);
 
 /** Sindi's evidence van (Paper Fire target) parked below Braamfontein. */
 export const EVIDENCE_VAN_SPOT = kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 65 * P, z: CBD_CENTER.z + 25 * P });

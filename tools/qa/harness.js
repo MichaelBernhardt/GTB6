@@ -375,7 +375,7 @@ window.__qa = (() => {
     if (!g.airborne) { finding('fail', 'bailOut did not enter the skydive'); return 'stuck:no-airborne'; }
     key('Space'); // canopy (real deploy path; inventory topped up by boarding)
     let sim = 0;
-    while (g.airborne && sim < 120) {
+    while (g.airborne && sim < 700) {
       const p = g.player.group.position;
       const dx = tx - p.x, dz = tz - p.z; const d = Math.hypot(dx, dz);
       if (d > 1) { const stepLen = Math.min(d, 9 * STEP); p.x += (dx / d) * stepLen; p.z += (dz / d) * stepLen; } // glide steering, canopy sink is real
@@ -433,9 +433,9 @@ window.__qa = (() => {
   }
 
   /** Escape Dark House: back out through the breach and around the ring to the gate — real collision. */
+  const keepDark = () => { g.dayNight.hour = 22; g.torch.on = false; if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force()); };
   function escapeYard() {
-    g.dayNight.hour = 22; g.torch.on = false;
-    if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force());
+    keepDark();
     let dsim = 0; while (g.dayNight.blackoutFactor < 0.78 && dsim < 30) { g.update(STEP); dsim += STEP; } // let the dark ramp in before moving
     for (const guard of g.yardGuards ?? []) if (guard.state !== 'down') guard.takeDamage?.(1000);
     const gate = g.markerTarget ?? g.missionTargetRaw?.();
@@ -451,7 +451,7 @@ window.__qa = (() => {
       const bx = cx + Math.sin(a) * ring, bz = cz + Math.cos(a) * ring;
       let blocked = 0; let out = false; let guard = 0;
       while (guard++ < 300) {
-        const r = walkToward(bx, bz, 7, STEP); g.update(STEP);
+        keepDark(); const r = walkToward(bx, bz, 7, STEP); g.update(STEP);
         if (r === true) { out = true; break; }
         if (r === 'blocked' && ++blocked > 30) break;
         if (g.missions.state === 'failed') return 'failed:' + state.lastFail;
@@ -463,11 +463,11 @@ window.__qa = (() => {
       const a = gateAngle + Math.PI * t;
       const wx = cx + Math.sin(a) * ring, wz = cz + Math.cos(a) * ring;
       let guard = 0;
-      while (walkToward(wx, wz, 7, STEP) === false && guard++ < 200) { g.update(STEP); if (g.missions.state !== 'active') break; }
+      while (walkToward(wx, wz, 7, STEP) === false && guard++ < 200) { keepDark(); g.update(STEP); if (g.missions.state !== 'active') break; }
       if (g.missions.state !== 'active') break;
     }
     let guard = 0;
-    while (g.missions.state === 'active' && guard++ < 300) { const r = walkToward(gate.position.x, gate.position.z, 7, STEP); g.update(STEP); if (r === 'blocked' && guard > 60) break; }
+    while (g.missions.state === 'active' && guard++ < 300) { keepDark(); const r = walkToward(gate.position.x, gate.position.z, 7, STEP); g.update(STEP); if (r === 'blocked' && guard > 60) break; }
     step(10);
     return g.missions.state === 'complete' || !g.missions.active ? 'ok' : g.missions.state === 'failed' ? 'failed:' + state.lastFail : 'stuck:escape';
   }

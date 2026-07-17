@@ -166,7 +166,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SOLLY_START, 'Solly'), objectives: [
       { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true }, text: 'Take the controls of a consist', target: spot(PARK_STATION_SPOT, 'Park Station') },
       { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true, stationName: 'Crown Station' }, text: 'Stop the train dead at the Crown Station siding', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
-      { kind: 'reach', radius: 20, conditionsOnly: true, conditions: { onFoot: true }, text: 'Step off — the crew takes it from here', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
+      { kind: 'reach', radius: 45, conditionsOnly: true, conditions: { onFoot: true }, text: 'Step off — the crew takes it from here', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
     ],
   },
   {
@@ -271,7 +271,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['rank-cold-war'] },
     intro: 'A fare ran on Ricardo — a BIG fare, airport run, coastal toll, the lot. He\'s bragging at Seepunt Pier before his boat leaves. Go collect. With interest.',
     start: spot(CANDICE_START, 'Candice'), objectives: [
-      { kind: 'reach', radius: 12, timeLimit: 300, text: 'Catch the fare-skipper before his boat leaves Seepunt Pier', target: spot(PIER_SPOT, 'Seepunt Pier') },
+      { kind: 'reach', radius: 12, timeLimit: 480, text: 'Catch the fare-skipper before his boat leaves Seepunt Pier', target: spot(PIER_SPOT, 'Seepunt Pier') },
       { kind: 'defeat', required: 1, text: 'Convince him', checkpoint: true },
       { kind: 'collect', text: 'Take what he owes — plus interest', target: spot(PIER_SPOT, 'The fare'), checkpoint: true },
     ],
