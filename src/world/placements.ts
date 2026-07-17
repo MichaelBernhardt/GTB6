@@ -290,14 +290,14 @@ export const LOCKUP_SPOT = walkSpot('Anderson Street', { x: CBD_CENTER.x - 55 * 
  *  permit run and rank war fit inside one CBD drive). */
 export const CANDICE_START = walkSpot('Commissioner Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 35 * P }, 3, 5);
 /** The stolen-permit taxi terminal: Wemmer Jubilee Road, south of the CBD (industrial belt). */
-const terminalSpot = bestKerbSpot({ name: 'Wemmer Jubilee Road', near: { x: CBD_CENTER.x + 10 * P, z: CBD_CENTER.z + 90 * P }, clearance: 6, ownRadius: 12, minEdge: 5 });
+const terminalSpot = bestKerbSpot({ name: 'Anderson Street', near: { x: CBD_CENTER.x - 35 * P, z: CBD_CENTER.z + 60 * P }, clearance: 6, ownRadius: 12, minEdge: 5 });
 export const TERMINAL_SPOT: MapPt = { x: terminalSpot.x, z: terminalSpot.z };
 export const PERMIT_SPOT: MapPt = {
   x: terminalSpot.x + (terminalSpot.x - terminalSpot.roadX) * 0.7,
   z: terminalSpot.z + (terminalSpot.z - terminalSpot.roadZ) * 0.7,
 };
 /** Escape marker: back on Albertina Sisulu, north-west of the terminal. */
-export const ESCAPE_SPOT = walkSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 120 * P, z: CBD_CENTER.z - 40 * P }, 3, 5);
+export const ESCAPE_SPOT = walkSpot('Commissioner Street', { x: CBD_CENTER.x - 55 * P, z: CBD_CENTER.z + 25 * P }, 3, 5);
 /** Candice's braai kiosk beside her CBD rank (was the Zoo Lake shore). */
 export const KIOSK_SPOT = walkSpotNear({ x: CBD_CENTER.x - 50 * P, z: CBD_CENTER.z + 42 * P }, 3.4, 5);
 
@@ -372,9 +372,9 @@ export const KELVIN_FENCE_RADIUS = 26;
 
 /** The CBD feeder substation on the CBD's south-west industrial edge; Sindi works its night shift
  *  (was Ophirton, ~2.2km — moved local so Pull the Plug / The Switch cluster with the rest). */
-export const SUBSTATION_SPOT = walkSpotNear({ x: CBD_CENTER.x - 80 * P, z: CBD_CENTER.z + 70 * P }, 4, 6);
+export const SUBSTATION_SPOT = walkSpotNear({ x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 35 * P }, 4, 6);
 export const SUBSTATION_BREAKER: MapPt = { x: SUBSTATION_SPOT.x + 6, z: SUBSTATION_SPOT.z + 4 };
-export const SINDI_START = walkSpotNear({ x: CBD_CENTER.x - 70 * P, z: CBD_CENTER.z + 55 * P }, 3, 5);
+export const SINDI_START = walkSpotNear({ x: CBD_CENTER.x - 35 * P, z: CBD_CENTER.z + 25 * P }, 3, 5);
 
 /** Generator-subscription collections: three CBD businesses behind on payments. */
 export const GENNY_ROUND_STOPS: MapPt[] = [
@@ -401,10 +401,12 @@ export const PONTE_FORECOURT = walkSpotNear(PONTE_POINT, 3, 5);
 /** Constitution Hill handover (Carcass) and the coastal pier (Pier Pressure). */
 export const CON_HILL_SPOT = walkSpot('Anderson Street', { x: CBD_CENTER.x - 30 * P, z: CBD_CENTER.z - 20 * P }, 3, 5);
 export const PIER_POINT = landmarkPoint('Seepunt Pier', { x: CBD_CENTER.x, z: CBD_CENTER.z });
-export const PIER_SPOT: MapPt = { x: PIER_POINT.x, z: PIER_POINT.z };
+const pierKerb = bestKerbSpot({ near: PIER_POINT, clearance: 3, ownRadius: 5, minEdge: 2 });
+export const PIER_SPOT: MapPt = { x: pierKerb.x, z: pierKerb.z };
 /** Ouma se Padstal doorstep (long-haul side run). */
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
-export const PADSTAL_SPOT: MapPt = { x: PADSTAL_POINT.x + 6, z: PADSTAL_POINT.z };
+const padstalKerb = bestKerbSpot({ near: PADSTAL_POINT, clearance: 3, ownRadius: 5, minEdge: 2 });
+export const PADSTAL_SPOT: MapPt = { x: padstalKerb.x, z: padstalKerb.z };
 
 /** Sindi's evidence van (Paper Fire target) parked below Braamfontein. */
 export const EVIDENCE_VAN_SPOT = kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 65 * P, z: CBD_CENTER.z + 25 * P });

@@ -187,6 +187,10 @@ window.__qa = (() => {
         return advanced() ? 'ok' : 'stuck:entered-but-not-advanced';
       }
       case 'reach': case 'escape': case 'checkpoints': case 'collect': {
+        if (g.trains.riding && !o.conditions?.onTrain && !o.conditions?.drivingTrain) {
+          const exit = g.trains.dismount();
+          if (exit) { g.player.group.position.set(exit.x, exit.y, exit.z); g.player.onGround = true; step(3, 1 / 30); note('stepped off the train for an on-foot objective'); }
+        }
         if (o.hidden && !g.riddleRevealed) {
           // Play the riddle the merciful way: walk the hint ladder (clock jumped to each threshold —
           // the hints still fire through the real updateRiddleHints path) until the reveal blip drops.
@@ -359,6 +363,7 @@ window.__qa = (() => {
   }
 
   function bailAndLand(tx, tz) {
+    if (!g.activePlane && !g.airborne) { flyTo(); step(4, 1 / 30); } // re-establish flight if the airframe was lost
     const plane = g.activePlane;
     if (plane) g.bailOut(plane);
     else if (!g.airborne) return 'stuck:not-flying';
@@ -384,6 +389,7 @@ window.__qa = (() => {
     if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force());
     let sim = 0; while (g.dayNight.blackoutFactor < 0.75 && sim < 30) { g.update(STEP); sim += STEP; }
     if (g.dayNight.blackoutFactor < 0.75) { finding('fail', `blackout factor stuck at ${g.dayNight.blackoutFactor.toFixed(2)}`); return 'stuck:no-dark'; }
+    g.torch.on = false; // own torch inside the fence = spotted
     // the quiet-takedown route: yard guards go down (real damage API), their cones die with them
     for (const guard of g.yardGuards ?? []) if (guard.state !== 'down') guard.takeDamage?.(1000);
     // walk from the gate around the ring to the back and in through the breach — REAL collision
@@ -423,6 +429,9 @@ window.__qa = (() => {
 
   /** Escape Dark House: back out through the breach and around the ring to the gate — real collision. */
   function escapeYard() {
+    g.dayNight.hour = 22; g.torch.on = false;
+    if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force());
+    for (const guard of g.yardGuards ?? []) if (guard.state !== 'down') guard.takeDamage?.(1000);
     const gate = g.markerTarget ?? g.missionTargetRaw?.();
     if (!gate) return 'stuck:no-gate-target';
     const office = g.player.group.position.clone();

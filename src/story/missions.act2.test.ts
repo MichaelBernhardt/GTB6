@@ -132,7 +132,7 @@ describe('Two Fires branch', () => {
 describe('Paper Fire walkthrough (loyalist branch)', () => {
   it('completes: find the van in time, light it, vanish', () => {
     const system = sim(); system.start('paper-fire');
-    expect(system.remainingTime).toBe(240);
+    expect(system.remainingTime).toBe(420);
     expect(system.update(1, base, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, wantedLevel: 0 }, false).completed?.id).toBe('paper-fire');
@@ -142,7 +142,7 @@ describe('Paper Fire walkthrough (loyalist branch)', () => {
 
   it('running out the clock fails the approach', () => {
     const system = sim(); system.start('paper-fire');
-    expect(system.update(241, base, false).failed).toBe('Time expired');
+    expect(system.update(421, base, false).failed).toBe('Time expired');
   });
 });
 
@@ -227,7 +227,7 @@ describe('Act 3 tails and finale', () => {
 
   it('missing the finale timer fails and restarts from the top', () => {
     const system = sim(); system.start('the-switch');
-    expect(system.update(241, base, false).failed).toBe('Time expired');
+    expect(system.update(421, base, false).failed).toBe('Time expired');
     system.restart();
     expect(system.objectiveIndex).toBe(0);
   });

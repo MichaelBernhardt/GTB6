@@ -166,7 +166,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SOLLY_START, 'Solly'), objectives: [
       { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true }, text: 'Take the controls of a consist', target: spot(PARK_STATION_SPOT, 'Park Station') },
       { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true, stationName: 'Crown Station' }, text: 'Stop the train dead at the Crown Station siding', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
-      { kind: 'reach', text: 'Walk away and let the crew unload', target: spot(SOLLY_START, 'Solly'), checkpoint: true },
+      { kind: 'reach', radius: 20, conditionsOnly: true, conditions: { onFoot: true }, text: 'Step off — the crew takes it from here', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
     ],
   },
   {
@@ -195,7 +195,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['choice:two-fires:solly'] },
     intro: 'Her van sleeps under the Jan Smuts lamps below Braamfontein. Paper burns lekker. Go before the shift changes.',
     start: spot(SOLLY_START, 'Solly'), setFlags: ['act3'], objectives: [
-      { kind: 'reach', timeLimit: 240, text: 'Find Sindi\'s evidence van below Braamfontein', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van') },
+      { kind: 'reach', timeLimit: 420, text: 'Find Sindi\'s evidence van', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van') },
       { kind: 'collect', text: 'Douse the van and strike the match', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van'), checkpoint: true },
       { kind: 'lose-wanted', text: 'Vanish before JMPD boxes the block', checkpoint: true },
     ],
