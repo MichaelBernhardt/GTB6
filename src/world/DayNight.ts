@@ -4,6 +4,7 @@ import type { BaseQuality } from '../types';
 import type { City } from './City';
 import type { EnvironmentHandle } from './Environment';
 import { powerOn } from './powerGrid';
+import { setSignGlow } from './ProceduralMaterials';
 
 /** One full 24h cycle in 10 real minutes. */
 export const DAY_CYCLE_SECONDS = 600;
@@ -193,6 +194,7 @@ export class DayNightSystem {
     const gridNight = night * (1 - this.blackout); // load shedding: mains-fed lights go dark, whatever the hour — eased with the same blackout ramp
     this.city.setStreetlightGlow(night); // the bulb material checks the grid itself so panels also read dark by day
     for (const material of this.facades) material.emissiveIntensity = gridNight * FACADE_NIGHT_EMISSIVE;
+    setSignGlow(night, this.blackout); // painted boards ride the same ramp: night glow on a healthy grid, torch-lit paint in a blackout
     this.updateStreetlightPool(focus, gridNight, dt);
     this.updateHeadlightPool(focus, night, traffic, police, playerVehicle); // cars run on batteries — Eskom can't touch these
   }
