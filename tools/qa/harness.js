@@ -237,22 +237,25 @@ window.__qa = (() => {
         return advanced() ? 'ok' : 'stuck:wanted-cleared-but-not-advanced';
       }
       case 'defeat': {
-        // REAL kills (no API crediting): kill each hostile through the ped's own damage path and assert
-        // the mission counter follows — this is the hole that let uncredited kills ship (owner: 0/3).
+        // REAL kills (no API crediting): kill the whole crew through the ped's own damage path and
+        // assert the counter follows each kill — this is the hole that let uncredited kills ship
+        // (owner: Rank Cold War 0/3). One pass kills all of them so a per-kill progress bump doesn't
+        // make the outer loop re-enter on a depleted crew.
         const need = o.required ?? 1;
-        const crew = g.population.hostiles.filter((ped) => ped.state !== 'down');
-        if (crew.length < need) finding('fail', `defeat needs ${need} hostiles but only ${crew.length} are alive to kill`);
-        let credited = 0;
-        for (const ped of crew) {
+        const capacity = g.population.hostiles.length;
+        if (capacity < need) { finding('fail', `defeat needs ${need} hostiles but the wave only holds ${capacity}`); return 'stuck:defeat-short-wave'; }
+        const startIdx = g.missions.objectiveIndex; // stop the moment THIS defeat objective advances —
+        let guard = 0;                              // a following objective's fresh wave must not get farmed
+        while (g.population.defeatedHostiles() < need && g.missions.state === 'active' && g.missions.objectiveIndex === startIdx && guard++ < 20) {
+          const alive = g.population.hostiles.filter((ped) => ped.state !== 'down');
+          if (!alive.length) break;
           const before = g.population.defeatedHostiles();
-          ped.takeDamage(1000, g.player.group.position); // a real death, same path bullets/melee call
+          alive[0].takeDamage(1000, g.player.group.position); // a real death, same path bullets/melee call
           step(3);
-          if (g.population.defeatedHostiles() > before) credited++;
-          else finding('fail', `killing a mission hostile did not credit the defeat counter (${ped.group.name})`);
-          if (advanced()) break;
+          if (g.population.defeatedHostiles() <= before && g.missions.objectiveIndex === startIdx) finding('fail', `killing a mission hostile did not credit the defeat counter (${alive[0].group.name})`);
         }
         step(5);
-        if (!advanced() && g.missions.state === 'active') finding('fail', `defeat did not advance after ${credited}/${need} real kills`);
+        if (!advanced() && g.missions.state === 'active') finding('fail', `defeat did not advance after ${g.population.defeatedHostiles()}/${need} real kills`);
         return advanced() ? 'ok' : 'stuck:defeat-not-advancing';
       }
       case 'survive': {
