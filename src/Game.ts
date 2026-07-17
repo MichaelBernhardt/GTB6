@@ -1659,7 +1659,7 @@ export class Game {
     const missionVehicle = requiredVehicle ?? this.activeVehicle;
     return {
       playerPosition: focus, inVehicle: Boolean(this.activeVehicle), vehicleKind: this.activeVehicle?.spec.kind, vehicleColor: this.activeVehicle?.spec.color,
-      wantedLevel: this.wanted.level, shotsFired: this.combat.shotsFired, hostileDefeated: this.hostileDefeated, collectedItem: this.collectedItem,
+      wantedLevel: this.wanted.level, shotsFired: this.combat.shotsFired, hostileDefeated: this.population.defeatedHostiles(), collectedItem: this.collectedItem,
       hour: this.dayNight.hour, blackout: this.dayNight.blackoutFactor, isNight: nightFactor(this.dayNight.hour) > 0.5,
       onTrain: this.trains.riding, drivingTrain: this.trains.driving, trainSpeed: this.trains.rideSpeedKph / 3.6, stationName: this.trains.currentStationName,
       inPlane: Boolean(this.activePlane),

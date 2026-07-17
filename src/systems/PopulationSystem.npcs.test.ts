@@ -74,3 +74,22 @@ describe('all-Blender NPC population policy', () => {
     expect(population.riggedPedestrianCount()).toBe(population.pedestrians.length);
   });
 });
+
+  it('credits defeated hostiles by DEATH STATE, not by kill path — any way of downing one counts', () => {
+    // Regression: Rank Cold War stuck at 0/3 because kill crediting was coupled to the shot handler,
+    // so melee/vehicle/ragdoll deaths never incremented the counter. defeatedHostiles() reads the
+    // population's own down-state, so every death path credits.
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    population.spawnHostileWave([{ x: 0, z: 0 }, { x: 4, z: 0 }, { x: 8, z: 0 }]);
+    expect(population.hostiles).toHaveLength(3);
+    expect(population.defeatedHostiles()).toBe(0);
+    // kill each directly through the ped's own damage path (NOT via any Game shot handler)
+    population.hostiles[0]!.takeDamage(1000);
+    expect(population.defeatedHostiles()).toBe(1);
+    population.hostiles[1]!.takeDamage(1000);
+    population.hostiles[2]!.takeDamage(1000);
+    expect(population.defeatedHostiles()).toBe(3);
+    // a fresh wave clears the dead crew — the count resets for the next objective
+    population.spawnHostileWave([{ x: 0, z: 0 }]);
+    expect(population.defeatedHostiles()).toBe(0);
+  });

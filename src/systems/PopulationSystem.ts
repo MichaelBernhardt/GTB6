@@ -387,6 +387,11 @@ export class PopulationSystem {
     this.spawnHostileWave(HOSTILE_SPOTS);
   }
 
+  /** Mission credit: how many of the current hostile crew are down — killed OR knocked out, by ANY
+   *  path (bullet, melee, vehicle, explosion, ragdoll slam). Authoritative, so defeat objectives can't
+   *  miss a kill just because a death flow doesn't route through a per-site counter. */
+  defeatedHostiles(): number { return this.hostiles.filter((ped) => ped.state === 'down').length; }
+
   /** Story missions: replace the current hostile crew with a fresh wave at the given spots. */
   spawnHostileWave(spots: ReadonlyArray<{ x: number; z: number }>): void {
     for (const ped of this.hostiles) this.removePedestrian(ped);

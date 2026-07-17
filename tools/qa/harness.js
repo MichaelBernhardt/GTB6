@@ -237,10 +237,22 @@ window.__qa = (() => {
         return advanced() ? 'ok' : 'stuck:wanted-cleared-but-not-advanced';
       }
       case 'defeat': {
-        const alive = g.population.hostiles.filter((ped) => ped.state !== 'down').length;
-        if (alive < (o.required ?? 1)) finding('fail', `defeat needs ${o.required ?? 1} hostiles but only ${alive} spawned`);
-        g.hostileDefeated = o.required ?? 1; note('shortcut: kill counter set (combat sim skipped)');
+        // REAL kills (no API crediting): kill each hostile through the ped's own damage path and assert
+        // the mission counter follows — this is the hole that let uncredited kills ship (owner: 0/3).
+        const need = o.required ?? 1;
+        const crew = g.population.hostiles.filter((ped) => ped.state !== 'down');
+        if (crew.length < need) finding('fail', `defeat needs ${need} hostiles but only ${crew.length} are alive to kill`);
+        let credited = 0;
+        for (const ped of crew) {
+          const before = g.population.defeatedHostiles();
+          ped.takeDamage(1000, g.player.group.position); // a real death, same path bullets/melee call
+          step(3);
+          if (g.population.defeatedHostiles() > before) credited++;
+          else finding('fail', `killing a mission hostile did not credit the defeat counter (${ped.group.name})`);
+          if (advanced()) break;
+        }
         step(5);
+        if (!advanced() && g.missions.state === 'active') finding('fail', `defeat did not advance after ${credited}/${need} real kills`);
         return advanced() ? 'ok' : 'stuck:defeat-not-advancing';
       }
       case 'survive': {
