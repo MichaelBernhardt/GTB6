@@ -1622,7 +1622,12 @@ export class Game {
     const anchor = pendingId ? MISSIONS.find((item) => item.id === pendingId)?.start : this.missions.active?.start;
     if (!anchor) return;
     const position = this.player.group.position;
-    if (Math.hypot(anchor.position.x - position.x, anchor.position.z - position.z) > 12) { this.dialogue.abandon(); this.story.abandonOffer(); }
+    if (Math.hypot(anchor.position.x - position.x, anchor.position.z - position.z) > 12) {
+      const declined = pendingId ? MISSIONS.find((item) => item.id === pendingId) : undefined;
+      this.dialogue.abandon(); this.story.abandonOffer();
+      // A silent decline reads as "mission started but no marker" — say it out loud (owner playtest, Couch Run).
+      if (declined) this.ui.notify('Job declined', `You walked out on ${declined.contact}. The offer stands — go back and hear them out.`, false);
+    }
   }
 
   private tryMissionInteraction(): boolean {
@@ -2141,7 +2146,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore } : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

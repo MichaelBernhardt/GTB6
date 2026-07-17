@@ -1,5 +1,5 @@
 import { inebriationLabel, INEBRIATION_MAX } from '../core/DrinkRules';
-import { clampPercent, formatMoney, objectiveProgress, reputationLabel, type HudState } from './UIModels';
+import { clampPercent, dialogueAdvanceLabel, formatMoney, objectiveProgress, reputationLabel, type HudState } from './UIModels';
 import { PHASE_COLORS, ProfileGraph } from './ProfileGraph';
 
 const required = <T extends Element>(root: ParentNode, selector: string): T => {
@@ -137,7 +137,7 @@ export class HudView {
       setText(this.objectiveMeta, bits.join(' · ')); const progress = objectiveProgress(state.objective); setWidth(this.objectiveFill, `${progress ?? 0}%`); setHidden(this.objectiveTrack, progress === undefined); setAttribute(this.objectiveTrack, 'aria-valuenow', String(progress ?? 0));
     }
     setHidden(this.dialogue, !state.dialogue);
-    if (state.dialogue) { setText(this.dialogueSpeaker, state.dialogue.speaker); setText(this.dialogueText, state.dialogue.text); setText(this.dialogueMore, state.dialogue.more ? 'E  MORE' : 'E  DONE'); }
+    if (state.dialogue) { setText(this.dialogueSpeaker, state.dialogue.speaker); setText(this.dialogueText, state.dialogue.text); setText(this.dialogueMore, dialogueAdvanceLabel(state.dialogue)); }
     setText(this.prompt, state.prompt); setHidden(this.prompt, !state.prompt);
     setHidden(this.vehicle, !state.vehicle);
     if (state.vehicle) {
