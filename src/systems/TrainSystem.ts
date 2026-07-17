@@ -250,6 +250,22 @@ export class TrainSystem {
   get atCab(): boolean { const ride = this.ride; return Boolean(ride && !ride.driving && cabAt(ride.s, ride.train.trainLength, CAB_ZONE) !== 0); }
   get rideSpeedKph(): number { const ride = this.ride; return ride ? Math.abs(ride.driving ? ride.v : ride.train.state.speed * ride.train.state.direction) * 3.6 : 0; }
 
+  /** Station the ridden train is currently stopped at (dwelling, or player-driven to a stand-still
+   *  within platform reach), if any. Mission surface: "ride to X" objectives key on this. */
+  get currentStationName(): string | undefined {
+    const ride = this.ride; if (!ride) return undefined;
+    const speed = Math.abs(ride.driving ? ride.v : ride.train.state.speed);
+    if (speed > 0.5) return undefined;
+    const nose = poseAt(ride.train.points, ride.train.cum, ride.train.state.s);
+    const mid = poseAt(ride.train.points, ride.train.cum, ride.train.state.s - ride.train.trainLength / 2);
+    let best: string | undefined; let bestDistance = 45; // a stopped consist spans the platform: accept either the nose or the midpoint being close
+    for (const station of STATIONS) {
+      const d = Math.min(Math.hypot(nose.x - station.x, nose.z - station.z), Math.hypot(mid.x - station.x, mid.z - station.z));
+      if (d < bestDistance) { bestDistance = d; best = station.name; }
+    }
+    return best;
+  }
+
   /** World heading the occupied cab faces (chase camera anchor); undefined off the controls. */
   get driveHeading(): number | undefined {
     const ride = this.ride; if (!ride?.driving) return undefined;

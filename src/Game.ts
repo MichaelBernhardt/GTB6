@@ -35,6 +35,14 @@ import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
+import { StoryDirector } from './systems/StoryDirector';
+import { DialogueSystem } from './systems/DialogueSystem';
+import { introScript } from './story/dialogues';
+import { MISSION_SCRIPTS } from './story/scripts';
+import { DIARY_STASH_NOTE, DIARY_STASH_REWARD, DIARY_TEXTS, DIARY_WORLD_PAGES } from './story/diaries';
+import { DEPOT_DARK_THRESHOLD, DepotSecurity, depotDark, guardSees } from './systems/DepotSecurity';
+import { KELVIN_FENCE_RADIUS, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } from './world/placements';
+import { buildKelvinYard } from './world/KelvinYard';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
@@ -55,13 +63,13 @@ import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADI
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
-import type { BaseQuality, CheatSettings, GameMode, GameSettings, Inventory, SavedGame, WorldTarget } from './types';
+import type { BaseQuality, CheatSettings, GameMode, GameSettings, GameSnapshot, Inventory, SavedGame, WorldTarget } from './types';
 import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
 import { City } from './world/City';
-import { COURIER_DEPOT, DELIVERY_STOPS, GTI_SPOT, POLICE_STATION, PORTIA_CAR_SPOT } from './world/placements';
+import { COURIER_DEPOT, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
@@ -110,6 +118,19 @@ export class Game {
   private police: PoliceSystem;
   private trains: TrainSystem;
   private missions = new MissionSystem();
+  private story = new StoryDirector();
+  private dialogue = new DialogueSystem();
+  /** Mission-script overlay merged into every engine snapshot (detection verdicts, escort/follow state). */
+  private missionContext: Partial<GameSnapshot> = {};
+  private focusSpeed = 0;
+  private lastFocus?: THREE.Vector3;
+  /** Scripted tail target (follow missions): spawned/parked/removed by mission beats. */
+  private quarry?: Vehicle;
+  private quarryArrived = false;
+  private depotSecurity = new DepotSecurity();
+  private depotWasSpotted = false;
+  private depotClock = 0; // sweeps the Kelvin Yard guards' torch cones
+  private yardGuards: Pedestrian[] = [];
   private loadShedding = new LoadSheddingSystem();
   private torch: TorchSystem;
   private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
@@ -196,6 +217,7 @@ export class Game {
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.baseQuality(), this.save.timeOfDay);
     this.torch = new TorchSystem(this.scene);
     this.shops = new ShopSystem(this.scene, this.city);
+    buildKelvinYard(this.scene, this.city);
     this.safehouses = new SafehouseSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.position)); // resume where the last save actually left off (Continue); New Game repositions to spawn in startGame
     this.player.group.position.y = this.restoreY(this.save.position[0], this.save.position[2], this.save.position[1]); // keep saved elevation (rooftop/overpass), else sit on the ground
@@ -203,6 +225,8 @@ export class Game {
     this.cameraController = new CameraController(this.camera);
     this.cameraController.yaw = this.save.heading + Math.PI; // camera parked behind, looking the way the player faces
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
+    // Guards need the population roster: this spawn must stay AFTER the PopulationSystem line above.
+    this.yardGuards = [0, Math.PI].map((angle) => this.population.spawnYardGuard(KELVIN_OFFICE_SPOT.x + Math.sin(angle) * 12, KELVIN_OFFICE_SPOT.z + Math.cos(angle) * 12));
     this.lifecycle = new LifecycleSystem(this.city, this.population);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene, (x, z) => this.city.surfaceHeightAt(x, z));
@@ -219,6 +243,7 @@ export class Game {
     this.input = new InputManager(this.renderer.domElement);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
+    this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
     this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
     if (import.meta.env.DEV) Object.assign(window, { __game: this });
@@ -545,7 +570,7 @@ export class Game {
   private startGame(fresh: boolean): void {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
     this.player.setDead(false); this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
@@ -856,9 +881,11 @@ export class Game {
     this.player.setWeapon(this.combat.current);
     if (this.input.consume('KeyF')) this.tryMugOrMelee();
     if (this.input.consume('KeyE')) {
-      const collectTarget = this.missions.objective?.kind === 'collect' ? this.currentTarget() : undefined;
+      if (this.advanceDialogue()) return;
+      const collectTarget = this.missions.objective?.kind === 'collect' ? this.missionTargetRaw() : undefined;
       if (collectTarget && collectTarget.position.distanceTo(this.player.group.position) < 8) { this.collectedItem = true; return; }
       if (this.tryMissionInteraction()) return;
+      if (this.tryDiaryPickup()) return;
       const vehicle = this.population.nearestEnterable(this.player.group.position);
       const cruiser = this.police.stealableNear(this.player.group.position);
       const shop = this.shops.shopNear(this.player.group.position);
@@ -1444,23 +1471,158 @@ export class Game {
   }
 
   private updateMission(dt: number): void {
+    this.updateDialogueAbandon();
     const objective = this.missions.objective;
     if (this.missions.state === 'active' && objective?.vehicleColor) {
       const requiredVehicle = this.population.vehicles.find((vehicle) => vehicle.spec.color === objective.vehicleColor);
       if (requiredVehicle?.disabled) { this.processMissionUpdate(this.missions.fail(`${requiredVehicle.spec.name} was destroyed`)); return; }
     }
-    if (objective?.kind === 'defeat') this.population.spawnHostiles();
+    this.updateQuarry();
+    this.updateDepot(dt);
     if (this.missions.active?.id === 'hot-property' && objective?.kind === 'enter-kind' && this.activeVehicle?.spec.kind === 'sport' && this.activeVehicle.spec.color === 0xd83a40) this.forceWanted(2);
-    const target = this.currentTarget(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
-    const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.kind === 'escape' ? 12 : 8));
-    if (objective?.kind === 'checkpoints' && reached) { const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1; this.processMissionUpdate(result); }
-    const result = this.missions.update(dt, {
-      playerPosition: focus, inVehicle: Boolean(this.activeVehicle), vehicleKind: this.activeVehicle?.spec.kind,
-      wantedLevel: this.wanted.level, shotsFired: this.combat.shotsFired, hostileDefeated: this.hostileDefeated, collectedItem: this.collectedItem, vehicleColor: this.activeVehicle?.spec.color,
-    }, reached);
+    const target = this.missionTargetRaw(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    if (dt > 0 && this.lastFocus) this.focusSpeed = Math.min(80, Math.hypot(focus.x - this.lastFocus.x, focus.z - this.lastFocus.z) / dt);
+    (this.lastFocus ??= new THREE.Vector3()).copy(focus);
+    const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
+    if (objective?.kind === 'checkpoints' && reached) {
+      const stopIndex = this.deliveryIndex;
+      const stopObjective = this.missions.objectiveIndex; // captured BEFORE the register: the final stop advances the index
+      const missionId = this.missions.active?.id ?? '';
+      const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1;
+      for (const wave of MISSION_SCRIPTS[missionId]?.waves ?? []) if (wave.objective === stopObjective && wave.checkpoint === stopIndex) this.population.spawnHostileWave(wave.spots);
+      this.processMissionUpdate(result);
+    }
+    const result = this.missions.update(dt, this.buildMissionSnapshot(focus), reached);
     this.processMissionUpdate(result);
     const current = `${this.missions.active?.id ?? ''}:${this.missions.objectiveIndex}`;
-    if (current !== this.previousObjective) { this.previousObjective = current; if (this.missions.objective) this.ui.notify('Objective updated', this.missions.objective.text); }
+    if (current !== this.previousObjective) {
+      this.previousObjective = current;
+      this.hostileDefeated = 0; // defeat counters are per-objective, not per-mission
+      this.collectedItem = false;
+      this.runObjectiveBeats();
+      if (this.missions.objective) this.ui.notify('Objective updated', this.missions.objective.text);
+    }
+  }
+
+  /** Scripted events keyed to the objective the mission just entered (waves, quarry spawn/departure). */
+  private runObjectiveBeats(): void {
+    const mission = this.missions.active;
+    if (!mission || this.missions.state !== 'active') return;
+    const script = MISSION_SCRIPTS[mission.id];
+    const index = this.missions.objectiveIndex;
+    for (const wave of script?.waves ?? []) if (wave.objective === index && wave.checkpoint === undefined) this.population.spawnHostileWave(wave.spots);
+    if (script?.forceBlackout === index && !this.loadShedding.active) this.applyEskom(this.loadShedding.force());
+    if (script?.wanted?.objective === index) this.forceWanted(script.wanted.level);
+    if (script?.grantParachute === index) this.inventory.parachutes = Math.max(1, this.inventory.parachutes);
+    for (const beat of script?.radio ?? []) if (beat.objective === index) this.ui.notify(beat.title, beat.detail, true, 'radio');
+    if (script?.alarm && script.alarm.objective === index) {
+      // Evaluated once, diegetically: mains up means the showroom screams; a blackout means it can't.
+      const dead = this.dayNight.blackoutDarkness >= DEPOT_DARK_THRESHOLD;
+      if (dead) this.ui.notify(script.alarm.silentTitle, script.alarm.silentDetail, true, 'reputation');
+      else { this.forceWanted(script.alarm.level); this.ui.notify(script.alarm.title, script.alarm.detail, false); }
+    }
+    const quarry = script?.quarry;
+    if (!quarry) return;
+    if (index >= quarry.spawnObjective && !this.quarry) {
+      this.quarry = this.population.spawnScriptVehicle(quarry.kind as VehicleKind, quarry.spawn.x, quarry.spawn.z, quarry.spawn.heading, quarry.color);
+      this.quarryArrived = false;
+    }
+    if (quarry.departObjective !== undefined && index >= quarry.departObjective && quarry.destination && this.quarry && !this.quarryArrived) this.population.routeVehicleTo(this.quarry, quarry.destination.x, quarry.destination.z);
+    if (quarry.igniteObjective === index && this.quarry && !this.quarry.onFire) this.quarry.ignite();
+  }
+
+  /** Kelvin Yard security tick (Dark House): the pure DepotSecurity verdict feeds the mission snapshot. */
+  private updateDepot(dt: number): void {
+    const script = MISSION_SCRIPTS[this.missions.active?.id ?? ''];
+    if (!script?.depot || this.missions.state !== 'active') { this.depotWasSpotted = false; return; }
+    this.depotClock += dt;
+    const focus = this.player.group.position;
+    const insideFence = Math.hypot(focus.x - KELVIN_YARD_CENTER.x, focus.z - KELVIN_YARD_CENTER.z) < KELVIN_FENCE_RADIUS;
+    const dark = depotDark(this.dayNight.blackoutFactor, nightFactor(this.dayNight.hour) > 0.5);
+    // The two posted guards sweep their torches like slow turrets; a downed guard sweeps nothing.
+    const guards = this.yardGuards.filter((guard) => guard.state !== 'down').map((guard, index) => {
+      const base = Math.atan2(KELVIN_OFFICE_SPOT.x - guard.group.position.x, KELVIN_OFFICE_SPOT.z - guard.group.position.z) + Math.PI; // face outward from the office
+      const heading = base + Math.sin(this.depotClock * 0.5 + index * 2.1) * 1.2;
+      guard.group.rotation.y = heading;
+      return { x: guard.group.position.x, z: guard.group.position.z, heading };
+    });
+    const seen = dark && guards.some((guard) => guardSees(guard, focus.x, focus.z));
+    const cone = (vehicle: Vehicle) => vehicle.headlightsOn && inHeadlightCone(vehicle.group.position.x, vehicle.group.position.z, vehicle.heading, focus.x, focus.z);
+    const verdict = this.depotSecurity.update(dt, {
+      insideFence, playerX: focus.x, playerZ: focus.z,
+      blackout: this.dayNight.blackoutFactor, isNight: nightFactor(this.dayNight.hour) > 0.5,
+      torchOn: this.torch.on, muzzleFlash: this.muzzleFlash,
+      headlights: [...this.population.vehicles, ...this.police.vehicles].filter(cone).map((vehicle) => ({ x: vehicle.group.position.x, z: vehicle.group.position.z, heading: vehicle.heading })),
+      guardSees: seen,
+    });
+    const spotted = verdict === 'spotted';
+    this.missionContext.detected = spotted;
+    if (spotted && !this.depotWasSpotted) {
+      this.audio.ui(false);
+      if (!dark) { this.forceWanted(4); this.ui.notify('Kelvin Yard', 'Klaxons. Every floodlight in the yard finds you at once.', false); }
+      else this.ui.notify('Kelvin Yard', 'A torch beam stops dead on you. Then the shouting starts.', false);
+      this.forceWanted(Math.max(2, this.wanted.level));
+    }
+    this.depotWasSpotted = spotted;
+  }
+
+  /** Per-frame follow feed: distance to the quarry, arrival at its mark, and whether it survives. */
+  private updateQuarry(): void {
+    const quarry = this.quarry;
+    const script = MISSION_SCRIPTS[this.missions.active?.id ?? '']?.quarry;
+    if (!quarry || !script || this.missions.state !== 'active') return;
+    const position = quarry.group.position;
+    if (!this.quarryArrived && script.destination && Math.hypot(position.x - script.destination.x, position.z - script.destination.z) < (script.arriveRadius ?? 20)) {
+      this.quarryArrived = true;
+      this.population.parkScriptVehicle(quarry);
+    }
+    if (this.missions.objective?.kind !== 'follow') return;
+    this.missionContext.escortAlive = !quarry.disabled;
+    const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    this.missionContext.followDistance = Math.hypot(position.x - focus.x, position.z - focus.z);
+    this.missionContext.followArrived = this.quarryArrived;
+  }
+
+  /** Snapshot for the pure mission engine: combat/vehicle facts plus story context and any script overlay. */
+  private buildMissionSnapshot(focus: THREE.Vector3): GameSnapshot {
+    const objective = this.missions.objective;
+    const requiredVehicle = objective?.vehicleColor ? this.population.vehicles.find((vehicle) => vehicle.spec.color === objective.vehicleColor) : undefined;
+    const missionVehicle = requiredVehicle ?? this.activeVehicle;
+    return {
+      playerPosition: focus, inVehicle: Boolean(this.activeVehicle), vehicleKind: this.activeVehicle?.spec.kind, vehicleColor: this.activeVehicle?.spec.color,
+      wantedLevel: this.wanted.level, shotsFired: this.combat.shotsFired, hostileDefeated: this.hostileDefeated, collectedItem: this.collectedItem,
+      hour: this.dayNight.hour, blackout: this.dayNight.blackoutFactor, isNight: nightFactor(this.dayNight.hour) > 0.5,
+      onTrain: this.trains.riding, drivingTrain: this.trains.driving, trainSpeed: this.trains.rideSpeedKph / 3.6, stationName: this.trains.currentStationName,
+      inPlane: Boolean(this.activePlane),
+      altitude: this.activePlane ? Math.max(0, this.activePlane.group.position.y - this.city.surfaceHeightAt(this.activePlane.group.position.x, this.activePlane.group.position.z))
+        : this.airborne ? Math.max(0, this.player.group.position.y - this.city.supportHeight(focus.x, focus.z, this.player.group.position.y)) : undefined,
+      parachuted: this.airborne ? this.airborne.mode === 'parachute' : undefined,
+      playerSpeed: this.trains.driving ? this.trains.rideSpeedKph / 3.6 : this.activeVehicle ? Math.abs(this.activeVehicle.speed) : this.focusSpeed,
+      vehicleHealthPct: missionVehicle ? missionVehicle.health / missionVehicle.maxHealth : undefined,
+      torchOn: this.torch.on,
+      ...this.missionContext,
+    };
+  }
+
+  /** E while a dialogue card shows: step it; finishing an intro exchange accepts the offered mission. */
+  private advanceDialogue(): boolean {
+    if (!this.dialogue.active) return false;
+    if (this.dialogue.advance() === 'finished') {
+      const offered = this.story.acceptOffer();
+      if (offered) { this.resetMissionRuntime(); this.missions.start(offered); }
+    }
+    this.audio.ui(true);
+    return true;
+  }
+
+  /** Walking away from the contact mid-exchange declines the offer (or drops a re-stated riddle). */
+  private updateDialogueAbandon(): void {
+    if (!this.dialogue.active) return;
+    const pendingId = this.story.pendingOffer;
+    const anchor = pendingId ? MISSIONS.find((item) => item.id === pendingId)?.start : this.missions.active?.start;
+    if (!anchor) return;
+    const position = this.player.group.position;
+    if (Math.hypot(anchor.position.x - position.x, anchor.position.z - position.z) > 12) { this.dialogue.abandon(); this.story.abandonOffer(); }
   }
 
   private tryMissionInteraction(): boolean {
@@ -1470,9 +1632,20 @@ export class Game {
       this.mode = 'paused'; document.exitPointerLock(); this.ui.showMissionChoice(this.missions.active?.name ?? 'Choose', this.missions.objective.choices ?? []); return true;
     }
     const position = this.player.group.position;
-    const mission = MISSIONS.find((item) => !this.missions.completed.has(item.id) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
-    if (!mission || this.missions.active) return false;
-    this.resetMissionRuntime(); this.missions.start(mission.id); this.ui.notify(mission.name, `${mission.contact}: ${mission.intro}`); return true;
+    if (this.missions.active) {
+      // Riddle missions: the contact re-states the current clue on demand (owner steer).
+      const active = this.missions.active;
+      if (this.missions.objective?.hidden && Math.hypot(active.start.position.x - position.x, active.start.position.z - position.z) < 7) {
+        this.dialogue.start({ id: `${active.id}:restate`, lines: [{ speaker: active.contact, text: this.missions.objective.text }] });
+        return true;
+      }
+      return false;
+    }
+    const mission = MISSIONS.find((item) => !this.missions.completed.has(item.id) && this.story.isUnlocked(item, this.missions.completed) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
+    if (!mission) return false;
+    this.story.beginOffer(mission.id);
+    this.dialogue.start(introScript(mission));
+    return true;
   }
 
   private tryMugOrMelee(): void {
@@ -1702,27 +1875,88 @@ export class Game {
   private processMissionUpdate(update: MissionUpdate): void {
     if (update.failed) { this.audio.ui(false); this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false); }
     if (update.choice) {
-      const protectedShop = update.choice.choice.id === 'protect';
-      this.livingCity.apply({ kind: protectedShop ? 'mission-protected' : 'mission-robbed', district: CBD });
-      this.economy.earn(update.choice.choice.reward);
-      if (!protectedShop) { this.combat.addAmmo(); this.combat.addAmmo(); this.forceWanted(2); }
-      this.audio.ui(true); this.ui.notify('The CBD will remember', protectedShop
-        ? `Jozi Arms is safe · trusted status · 20% discount · +R${update.choice.choice.reward.toLocaleString()}`
-        : `Shipment taken · notorious status · ammo secured · +R${update.choice.choice.reward.toLocaleString()}`, protectedShop);
+      const { missionId, choice } = update.choice;
+      this.story.onChoice(missionId, choice.id);
+      if (missionId === 'arms-deal') {
+        const protectedShop = choice.id === 'protect';
+        this.livingCity.apply({ kind: protectedShop ? 'mission-protected' : 'mission-robbed', district: CBD });
+        this.economy.earn(choice.reward);
+        if (!protectedShop) { this.combat.addAmmo(); this.combat.addAmmo(); this.forceWanted(2); }
+        this.audio.ui(true); this.ui.notify('The CBD will remember', protectedShop
+          ? `Jozi Arms is safe · trusted status · 20% discount · +R${choice.reward.toLocaleString()}`
+          : `Shipment taken · notorious status · ammo secured · +R${choice.reward.toLocaleString()}`, protectedShop);
+      } else {
+        this.economy.earn(choice.reward);
+        this.audio.ui(true); this.ui.notify('The word is given', `${choice.label} · +R${choice.reward.toLocaleString()}`);
+      }
     } else if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); }
-    if (update.completed) this.persist();
+    if (update.completed) {
+      for (const flag of this.story.onMissionCompleted(update.completed)) if (flag.startsWith('act')) this.ui.notify('Word travels', 'New contacts will hear your name now.', true, 'reputation');
+      const page = MISSION_SCRIPTS[update.completed.id]?.diaryPage;
+      if (page !== undefined && this.story.collectDiaryPage(page)) this.ui.notify('Grid Diary', `Page ${page} of 12 — someone planned all of this.`, true, 'reputation');
+      this.quarry = undefined; this.quarryArrived = false; // a parked quarry stays where it arrived
+      if (update.completed.id === 'the-switch') this.settleStageSix();
+      this.persist();
+    }
+  }
+
+  /** Finale epilogue: the branch decides what the city remembers about the grid — and about you. */
+  private settleStageSix(): void {
+    const throne = this.story.flags.has('choice:two-fires:solly');
+    this.livingCity.apply({ kind: throne ? 'grid-sold' : 'grid-defended', district: CBD });
+    this.dialogue.start({ id: 'stage-six-epilogue', lines: throne ? [
+      { speaker: 'Lieutenant Mo', text: 'The feeder holds. The Genny King is a story taxi drivers tell. Long live the King.' },
+      { speaker: 'You', text: 'Get the gennies on the trucks. The city still needs light — and light still needs a salesman.' },
+    ] : [
+      { speaker: 'Sindi', text: 'The feeder holds. The docket is filed. The cartel is a carcass, and you got fat off it.' },
+      { speaker: 'You', text: 'And the lights stay on.' },
+      { speaker: 'Sindi', text: 'Until the next chancer reads the fault logs. Keep the burner charged.' },
+    ] });
   }
 
   private resetMissionRuntime(): void {
-    this.deliveryIndex = 0; this.collectedItem = false; this.hostileDefeated = 0; this.previousObjective = '';
-    const missionId = this.missions.active?.id;
-    const vehicle = this.population.vehicles.find((item) => missionId === 'delivery-run' ? item.spec.color === 0xf1c232 : missionId === 'hot-property' ? item.spec.color === 0xd83a40 : false);
-    if (vehicle) {
-      const spot = missionId === 'delivery-run' ? PORTIA_CAR_SPOT : GTI_SPOT;
-      vehicle.restore();
-      vehicle.heading = spot.heading;
-      vehicle.reset(new THREE.Vector3(spot.x, 0, spot.z), this.city);
+    this.deliveryIndex = 0; this.collectedItem = false; this.hostileDefeated = 0; this.previousObjective = ''; this.missionContext = {};
+    const script = MISSION_SCRIPTS[this.missions.active?.id ?? ''];
+    if (script?.vehicle) {
+      const vehicle = this.population.vehicles.find((item) => item.spec.color === script.vehicle!.color);
+      if (vehicle) {
+        vehicle.restore();
+        vehicle.heading = script.vehicle.spot.heading;
+        vehicle.reset(new THREE.Vector3(script.vehicle.spot.x, 0, script.vehicle.spot.z), this.city);
+      }
     }
+    if (this.quarry) { this.population.removeVehicle(this.quarry); this.quarry = undefined; this.quarryArrived = false; }
+    this.depotSecurity.reset(); this.depotWasSpotted = false;
+  }
+
+  /** The nearest uncollected Grid Diary page within reach of the player, if any. */
+  private nearbyDiaryPage(): { page: number; x: number; z: number } | undefined {
+    const position = this.player.group.position;
+    return DIARY_WORLD_PAGES.find((entry) => !this.story.diaryPages.has(entry.page) && Math.hypot(entry.x - position.x, entry.z - position.z) < 5);
+  }
+
+  /** E on a torn page: pocket it, show its line of the planner's story, pay the stash when the set completes. */
+  private tryDiaryPickup(): boolean {
+    const entry = this.nearbyDiaryPage();
+    if (!entry || !this.story.collectDiaryPage(entry.page)) return false;
+    this.audio.ui(true);
+    this.ui.notify(`Grid Diary — page ${entry.page} of 12`, DIARY_TEXTS[entry.page] ?? '', true, 'reputation');
+    if (this.story.diaryComplete) { this.economy.earn(DIARY_STASH_REWARD); this.ui.notify('The planner\'s stash', `${DIARY_STASH_NOTE} +R${DIARY_STASH_REWARD.toLocaleString()}`); }
+    this.persist();
+    return true;
+  }
+
+  /** The active objective's real-world target, blip or not — hidden riddles still need reach checks. */
+  private missionTargetRaw(): WorldTarget | undefined {
+    const objective = this.missions.objective;
+    if (!objective) return undefined;
+    if (objective.kind === 'checkpoints') {
+      const stops = MISSION_SCRIPTS[this.missions.active?.id ?? '']?.stops ?? [];
+      const stop = stops[Math.min(this.deliveryIndex, stops.length - 1)];
+      return stop ? { position: new THREE.Vector3(stop.x, this.city.roadHeightAt(stop.x, stop.z), stop.z), label: `Stop ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
+    }
+    if (objective.target) { const position = objective.target.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...objective.target, position }; }
+    return undefined;
   }
 
   private currentTarget(): WorldTarget | undefined {
@@ -1730,15 +1964,14 @@ export class Game {
     if (this.courierJob.phase === 'collecting') return { position: new THREE.Vector3(COURIER_DEPOT.x, this.city.roadHeightAt(COURIER_DEPOT.x, COURIER_DEPOT.z), COURIER_DEPOT.z), label: 'Sixty-Sekonds dispatch', color: '#84f01c' };
     if (this.courierDestination) return { position: this.courierDestination, label: `Order ${this.courierJob.completed + 1}`, color: '#84f01c' };
     const objective = this.missions.objective;
-    if (objective?.kind === 'checkpoints') {
-      const stop = DELIVERY_STOPS[Math.min(this.deliveryIndex, DELIVERY_STOPS.length - 1)];
-      return stop ? { position: new THREE.Vector3(stop.x, this.city.roadHeightAt(stop.x, stop.z), stop.z), label: `Delivery ${this.deliveryIndex + 1}`, color: '#f5c451' } : undefined;
-    }
-    if (objective?.target) { const position = objective.target.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...objective.target, position }; }
+    if (objective?.hidden) return undefined; // riddle objectives: the text is the only guide
+    if (objective?.kind === 'follow' && this.quarry) return { position: this.quarry.group.position, label: 'The bakkie', color: '#e8a13d' };
+    const raw = this.missionTargetRaw();
+    if (raw) return raw;
     if (!this.missions.active) {
       let nearest: (typeof MISSIONS)[number] | undefined; let nearestDistance = Infinity;
       for (const mission of MISSIONS) {
-        if (this.missions.completed.has(mission.id)) continue;
+        if (this.missions.completed.has(mission.id) || !this.story.isUnlocked(mission, this.missions.completed)) continue;
         const distance = (mission.start.position.x - this.player.group.position.x) ** 2 + (mission.start.position.z - this.player.group.position.z) ** 2;
         if (distance < nearestDistance) { nearest = mission; nearestDistance = distance; }
       }
@@ -1873,16 +2106,17 @@ export class Game {
       }
       else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  V  Camera  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
-      else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = 'E  Grab the route permit';
+      else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
-      else if (this.missions.objective?.kind === 'choice') prompt = 'E  Decide the fate of Jozi Arms';
-      else if (MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && Math.hypot(mission.start.position.x - focus.x, mission.start.position.z - focus.z) < 7)) prompt = 'E  Speak to contact';
+      else if (this.missions.objective?.kind === 'choice') prompt = `E  ${this.missions.objective.text}`;
+      else if (!this.dialogue.active && MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && this.story.isUnlocked(mission, this.missions.completed) && Math.hypot(mission.start.position.x - focus.x, mission.start.position.z - focus.z) < 7)) prompt = 'E  Speak to contact';
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
       else if (shop?.kind === 'bottle') prompt = `E  Browse ${shop.name}`;
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.trains.boardable(focus)) { const wait = this.trains.boardCountdown(focus); prompt = wait === undefined ? 'E  Board the train' : `E  Board · departs in ${formatCountdown(wait)}`; }
+      else if (this.nearbyDiaryPage()) prompt = 'E  Take the torn page';
       else if (this.coverAvailable) prompt = 'Q  Take cover';
       else if (this.nearestPlane()) prompt = 'E  Enter plane';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
@@ -1907,7 +2141,7 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore } : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles
@@ -1956,6 +2190,7 @@ export class Game {
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current);
     this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.missions.completed = new Set(this.save.completedMissions);
+    this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.dayNight.hour = this.save.timeOfDay;
     this.player.heal();
     this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice();
@@ -2011,7 +2246,7 @@ export class Game {
   private persist(): void {
     const at = this.activeVehicle?.group.position ?? this.player.group.position; // live location (the vehicle is the player while driving)
     const heading = this.activeVehicle?.heading ?? this.player.heading;
-    this.save = { version: 2, money: this.economy.balance, completedMissions: [...this.missions.completed], spawn: this.save.spawn, position: [at.x, at.y, at.z], heading, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } };
+    this.save = { version: 3, money: this.economy.balance, completedMissions: [...this.missions.completed], storyFlags: this.story.serializeFlags(), diaryPages: this.story.serializeDiaryPages(), spawn: this.save.spawn, position: [at.x, at.y, at.z], heading, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } };
     this.saveManager.save(this.save);
   }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
