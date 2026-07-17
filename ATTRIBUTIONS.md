@@ -35,8 +35,10 @@ San Cordova does not ship third-party art or audio assets.
 
 ## Optional authoring sources
 
-The reproducible Blender workflow is configured for MPFB 2.0.16, CC0-only MakeHuman asset packs, and the Quaternius
-Universal Animation Library (CC0). These upstream authoring packages are not redistributed in this repository; their
-URLs, versions and license constraints are recorded in `art/character/sources.lock.json` and `art/npcs/sources.lock.json`.
+The reproducible Blender workflow is configured for MPFB 2.0.16, CC0-only MakeHuman asset packs, and walk/sprint
+cycles retargeted from the [CMU Graphics Lab Motion Capture Database](https://mocap.cs.cmu.edu/) (subjects 08 and 09,
+BVH conversion by Bruce Hahne). The CMU data is free for all uses; the database was created with funding from
+NSF EIA-0196217. These upstream authoring packages are not redistributed in this repository; their URLs, versions,
+checksums and license constraints are recorded in `art/character/sources.lock.json` and `art/npcs/sources.lock.json`.
 
 No Grand Theft Auto maps, logos, characters, dialogue, music, sound effects, or other copyrighted assets are included.

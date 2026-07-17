@@ -94,7 +94,20 @@ for (const character of selectedCharacters) {
   const clipNames = (json.animations ?? []).map((clip) => clip.name).sort();
   invariant(JSON.stringify(clipNames) === JSON.stringify([...requiredClips].sort()), `${character.id}: animation clip set is not exact`);
   for (const animation of json.animations) for (const [channelIndex, channel] of animation.channels.entries()) {
-    invariant(channel.target.path !== 'translation', `${character.id}: ${animation.name} contains root translation`);
+    if (channel.target.path === 'translation') {
+      // Locomotion may carry a zero-mean pelvis bob/sway; the root must stay in place.
+      invariant(json.nodes[channel.target.node]?.name === 'Hips', `${character.id}: ${animation.name} contains root translation`);
+      const rest = json.nodes[channel.target.node].translation ?? [0, 0, 0];
+      const values = accessorValues(json, bin, animation.samplers[channel.sampler].output);
+      const mean = [0, 0, 0]; const count = values.length / 3;
+      for (let i = 0; i < values.length; i += 3) for (let axis = 0; axis < 3; axis++) mean[axis] += (values[i + axis] - rest[axis]) / count;
+      for (let i = 0; i < values.length; i += 3) for (let axis = 0; axis < 3; axis++) {
+        invariant(Math.abs(values[i + axis] - rest[axis]) < 0.09, `${character.id}: ${animation.name} pelvis offset exceeds the in-place bound`);
+      }
+      for (let axis = 0; axis < 3; axis++) invariant(Math.abs(mean[axis]) < 0.01, `${character.id}: ${animation.name} pelvis translation drifts off centre`);
+      const closure = Math.hypot(values[0] - values[values.length - 3], values[1] - values[values.length - 2], values[2] - values[values.length - 1]);
+      invariant(closure < 0.002, `${character.id}: ${animation.name} pelvis translation does not close its loop`);
+    }
     const times = accessorValues(json, bin, animation.samplers[channel.sampler].input);
     for (let index = 1; index < times.length; index++) invariant(Math.abs((times[index] - times[index - 1]) - 1 / 30) < 0.00002, `${character.id}: ${animation.name} track ${channelIndex} is not baked at 30 fps`);
   }

@@ -13,7 +13,7 @@ import os
 import sys
 
 import bpy
-from mathutils import Euler, Quaternion, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 from bl_ext.blender_org.mpfb.services import HumanService, LocationService
 
@@ -23,7 +23,8 @@ def arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--preview")
-    parser.add_argument("--animation-source", required=True)
+    parser.add_argument("--walk-bvh", required=True)
+    parser.add_argument("--run-bvh", required=True)
     return parser.parse_args(raw)
 
 
@@ -443,138 +444,343 @@ def create_animation_contract(rig):
         raise RuntimeError("Generated animation set does not match the 24-clip contract")
 
 
-def retarget_quaternius_locomotion(rig, animation_source):
-    """Bake Quaternius' CC0 walk/sprint legs onto the shaped MPFB game rig.
+CMU_FRAME_TIME = 1.0 / 120.0
+# target bone -> CMU bone whose armature-space delta-from-rest drives it. Both
+# skeletons rest upright facing -Y, so torso/head/feet transfer as deltas.
+CMU_DELTA_BONES = {
+    "Hips": "Hips",
+    "Spine": "Spine",
+    "Chest": "Spine1",
+    "Head": "Head",
+    "Foot_L": "LeftFoot",
+    "Foot_R": "RightFoot",
+}
+# Limb segments transfer by absolute world direction + hinge-plane normal
+# instead: the CMU rest is a T-pose while the MPFB game rig rests in an
+# A-pose with pre-bent elbows, so delta-from-rest would fold the arms across
+# the body.
+CMU_LIMBS = [
+    ("UpperArm_L", "LowerArm_L", "LeftArm", "LeftForeArm"),
+    ("UpperArm_R", "LowerArm_R", "RightArm", "RightForeArm"),
+    ("UpperLeg_L", "LowerLeg_L", "LeftUpLeg", "LeftLeg"),
+    ("UpperLeg_R", "LowerLeg_R", "RightUpLeg", "RightLeg"),
+]
+CMU_CLIP_TUNING = {
+    # (upper-arm damp, forearm damp, constant local offsets). The walk's arm
+    # swing is eased off slightly and the elbows relaxed so the reach reads
+    # casual instead of power-walking; both clips look ahead for gameplay.
+    "walk": (0.84, 0.92, {"Head": (0.14, 0.0, 0.0), "LowerArm_L": (-0.10, 0.0, 0.0), "LowerArm_R": (-0.10, 0.0, 0.0)}),
+    "sprint": (1.0, 1.0, {"Head": (0.14, 0.0, 0.0)}),
+}
 
-    Both rigs share the MakeHuman game-rig bone names, but their rest-pose arm
-    rolls differ. Lower-body rotations transfer cleanly; the upper body is
-    authored against this character's own rest pose to avoid crossed arms.
-    Root and pelvis translation are intentionally excluded so both cycles stay
-    in place for gameplay movement.
+
+def import_cmu_bvh(path):
+    if not os.path.isfile(path):
+        raise RuntimeError(f"CMU BVH source is not installed: {path}")
+    before = set(bpy.data.objects)
+    bpy.ops.import_anim.bvh(filepath=path, rotate_mode="QUATERNION", global_scale=1.0,
+                            frame_start=1, use_fps_scale=False, update_scene_fps=False,
+                            update_scene_duration=False)
+    return next(obj for obj in set(bpy.data.objects) - before if obj.type == "ARMATURE")
+
+
+def world_rest_quaternion(armature, bone):
+    return (armature.matrix_world @ bone.matrix_local).to_quaternion().normalized()
+
+
+class CmuSampler:
+    """World-space (rotation, position, bone direction) samples of a BVH rig."""
+
+    def __init__(self, armature):
+        self.armature = armature
+        action = armature.animation_data.action
+        self.first = int(action.frame_range[0])
+        self.last = int(action.frame_range[1])
+        self.rest_world = {bone.name: world_rest_quaternion(armature, bone) for bone in armature.data.bones}
+        self.cache = {}
+
+    def sample(self, frame):
+        key = round(frame, 4)
+        cached = self.cache.get(key)
+        if cached is not None:
+            return cached
+        base = int(math.floor(frame))
+        bpy.context.scene.frame_set(base, subframe=frame - base)
+        data = {}
+        for pose_bone in self.armature.pose.bones:
+            matrix = self.armature.matrix_world @ pose_bone.matrix
+            data[pose_bone.name] = (
+                matrix.to_quaternion().normalized(),
+                matrix.translation.copy(),
+                matrix.col[1].to_3d().normalized(),
+            )
+        self.cache[key] = data
+        return data
+
+
+def detect_gait_cycle(sampler):
+    """Locate one clean cycle: (start frame, period frames) via left-thigh swing."""
+    frames = list(range(sampler.first, sampler.last + 1))
+    angles = []
+    for frame in frames:
+        direction = sampler.sample(float(frame))["LeftUpLeg"][2]
+        angles.append(math.atan2(-direction.y, -direction.z))
+    mean = sum(angles) / len(angles)
+    centered = [angle - mean for angle in angles]
+    best_period, best_score = None, -math.inf
+    for period in range(40, 220):
+        overlap = len(centered) - period
+        if overlap < period // 2:
+            continue
+        score = sum(centered[index] * centered[index + period] for index in range(overlap)) / overlap
+        if score > best_score:
+            best_score, best_period = score, period
+    if best_period is None:
+        raise RuntimeError("BVH clip is too short to contain a full gait cycle")
+    low = best_period + 2
+    high = len(centered) - best_period - 2
+    if high <= low:
+        low, high = 2, len(centered) - best_period - 1
+    start = max(range(low, high), key=lambda index: centered[index]) + frames[0]
+    return float(start), float(best_period)
+
+
+def orthonormal_quaternion(direction, normal):
+    aligned = direction.normalized()
+    planar = normal - aligned * normal.dot(aligned)
+    if planar.length < 1e-6:
+        planar = aligned.orthogonal()
+    planar = planar.normalized()
+    return Matrix((aligned, planar, aligned.cross(planar))).transposed().to_quaternion().normalized()
+
+
+def hinge_normal(upper_direction, lower_direction, previous):
+    cross = upper_direction.cross(lower_direction)
+    if cross.length < 0.03:
+        return previous
+    return cross.normalized()
+
+
+class CmuRetargeter:
+    def __init__(self, rig, sampler, arm_damp, forearm_damp):
+        self.rig = rig
+        self.sampler = sampler
+        self.arm_damp = arm_damp
+        self.forearm_damp = forearm_damp
+        self.rest_world = {bone.name: world_rest_quaternion(rig, bone) for bone in rig.data.bones}
+        self.rest_direction = {}
+        for bone in rig.data.bones:
+            head = rig.matrix_world @ bone.head_local
+            tail = rig.matrix_world @ bone.tail_local
+            self.rest_direction[bone.name] = (tail - head).normalized()
+        self.parent = {bone.name: bone.parent.name if bone.parent else None for bone in rig.data.bones}
+        self.local_offset = {}
+        for bone in rig.data.bones:
+            offset = bone.parent.matrix_local.inverted() @ bone.matrix_local if bone.parent else bone.matrix_local
+            self.local_offset[bone.name] = offset.to_quaternion().normalized()
+        self.armature_world = rig.matrix_world.to_quaternion().normalized()
+        self.rest_normal = {}
+        for upper, lower, _s_upper, _s_lower in CMU_LIMBS:
+            self.rest_normal[upper] = hinge_normal(self.rest_direction[upper], self.rest_direction[lower], Vector((1.0, 0.0, 0.0)))
+        self.previous_normals = {}
+
+    def solve(self, data):
+        """Local rotations for every animated bone from one sampled BVH frame."""
+        desired = {}
+        for target, source in CMU_DELTA_BONES.items():
+            delta = data[source][0] @ self.sampler.rest_world[source].inverted()
+            desired[target] = (delta @ self.rest_world[target]).normalized()
+        for upper, lower, source_upper, source_lower in CMU_LIMBS:
+            upper_direction = data[source_upper][2]
+            lower_direction = data[source_lower][2]
+            normal = hinge_normal(upper_direction, lower_direction, self.previous_normals.get(upper, self.rest_normal[upper]))
+            self.previous_normals[upper] = normal
+            upper_delta = orthonormal_quaternion(upper_direction, normal) @ orthonormal_quaternion(self.rest_direction[upper], self.rest_normal[upper]).inverted()
+            lower_delta = orthonormal_quaternion(lower_direction, normal) @ orthonormal_quaternion(self.rest_direction[lower], self.rest_normal[upper]).inverted()
+            if upper.startswith("UpperArm"):
+                upper_delta = Quaternion().slerp(upper_delta, self.arm_damp)
+                lower_delta = Quaternion().slerp(lower_delta, self.forearm_damp)
+            desired[upper] = (upper_delta @ self.rest_world[upper]).normalized()
+            desired[lower] = (lower_delta @ self.rest_world[lower]).normalized()
+
+        locals_ = {}
+        world = {}
+
+        def world_of(name):
+            cached = world.get(name)
+            if cached is not None:
+                return cached
+            parent = self.parent[name]
+            parent_world = self.armature_world if parent is None else world_of(parent)
+            target = desired.get(name)
+            if target is None:
+                local = Quaternion()
+            else:
+                local = ((parent_world @ self.local_offset[name]).inverted() @ target).normalized()
+            locals_[name] = local
+            world[name] = (parent_world @ self.local_offset[name] @ local).normalized()
+            return world[name]
+
+        for name in ANIMATED_BONES:
+            world_of(name)
+        return locals_
+
+
+def retarget_cmu_locomotion(rig, walk_bvh, run_bvh):
+    """Bake looping in-place walk/sprint cycles from real CMU mocap.
+
+    One clean cycle is auto-detected in each BVH, resampled to 30 fps and
+    seam-blended so the loop closes exactly. Forward root progression is
+    stripped (gameplay drives locomotion); the pelvis keeps its zero-mean
+    lateral sway and vertical bob as a Hips location channel.
     """
-    if not os.path.isfile(animation_source):
-        raise RuntimeError(f"Quaternius animation source is not installed: {animation_source}")
-    before_objects = set(bpy.data.objects)
-    before_actions = set(bpy.data.actions)
-    bpy.ops.import_scene.gltf(filepath=animation_source)
-    imported_objects = [obj for obj in bpy.data.objects if obj not in before_objects]
-    imported_actions = [action for action in bpy.data.actions if action not in before_actions]
-    source_rigs = [obj for obj in imported_objects if obj.type == "ARMATURE"]
-    if len(source_rigs) != 1:
-        raise RuntimeError("Quaternius Standard GLB must contain exactly one armature")
-    source_rig = source_rigs[0]
-    source_rig.animation_data_create()
-    source_actions = {action.name: action for action in imported_actions}
-    required = {"Walk_Loop", "Sprint_Loop"}
-    if not required.issubset(source_actions):
-        raise RuntimeError(f"Quaternius Standard GLB is missing {sorted(required - set(source_actions))}")
-
-    lower_body = {
-        "Hips": "pelvis",
-        "UpperLeg_L": "thigh_l", "LowerLeg_L": "calf_l", "Foot_L": "foot_l",
-        "UpperLeg_R": "thigh_r", "LowerLeg_R": "calf_r", "Foot_R": "foot_r",
-    }
-    rest_orientations = {}
-    for target_name, source_name in lower_body.items():
-        target_rest = rig.data.bones[target_name].matrix_local.to_quaternion()
-        source_rest = source_rig.data.bones[source_name].matrix_local.to_quaternion()
-        rest_orientations[target_name] = (target_rest, source_rest)
-    settings = {
-        "walk": (source_actions["Walk_Loop"], 0.14, -0.045),
-        "sprint": (source_actions["Sprint_Loop"], 0.34, -0.18),
-    }
-    rig.animation_data_create()
-    for target_name, (source_action, arm_swing, lean) in settings.items():
-        old_action = bpy.data.actions.get(target_name)
-        if old_action:
-            bpy.data.actions.remove(old_action)
-        target_action = bpy.data.actions.new(target_name)
-        target_action.use_fake_user = True
-        source_rig.animation_data.action = source_action
-        rig.animation_data.action = target_action
-        last_frame = int(round(source_action.frame_range[1]))
-        for frame in range(last_frame + 1):
-            bpy.context.scene.frame_set(frame)
-            # The source cycle reaches foot contact at frames 0 and halfway
-            # through the clip. Arm opposition must peak at those contacts,
-            # not at the intervening passing poses.
-            cycle = frame / last_frame * math.tau
-            phase = math.cos(cycle)
-            passing = math.sin(cycle)
-            step_bob = math.cos(cycle * 2.0)
-            walk = target_name == "walk"
-            authored = {
-                # No translation is introduced: alternating hip roll plus a
-                # small double-step pitch produces readable pelvis bob while
-                # preserving the in-place/root-motion contract.
-                "Hips": (step_bob * (0.018 if walk else 0.028), passing * 0.018, phase * (0.045 if walk else 0.065)),
-                "Spine": (lean * 0.42 - step_bob * 0.010, 0.0, -phase * (0.020 if walk else 0.030)),
-                "Chest": (lean * 0.58, 0.0, -phase * (0.042 if walk else 0.060)),
-                "Head": (-lean * 0.12, 0.0, phase * 0.012),
-                "UpperArm_L": (-phase * arm_swing, 0.0, -0.72),
-                "UpperArm_R": (phase * arm_swing, 0.0, 0.72),
-                "LowerArm_L": (-0.16 if walk else -0.28, 0.0, 0.0),
-                "LowerArm_R": (-0.16 if walk else -0.28, 0.0, 0.0),
-                # The passing leg flexes at the knee and the contacting foot
-                # rolls heel-to-toe instead of sliding flat through the arc.
-                "LowerLeg_L": (max(0.0, -passing) * (0.16 if walk else 0.22), 0.0, 0.0),
-                "LowerLeg_R": (max(0.0, passing) * (0.16 if walk else 0.22), 0.0, 0.0),
-                "Foot_L": (-phase * (0.10 if walk else 0.14), 0.0, 0.0),
-                "Foot_R": (phase * (0.10 if walk else 0.14), 0.0, 0.0),
-            }
-            for bone_name in ANIMATED_BONES:
-                bone = rig.pose.bones[bone_name]
-                bone.rotation_mode = "QUATERNION"
-                source_name = lower_body.get(bone_name)
-                if source_name:
-                    # Retain the source knee/ankle timing while shortening its
-                    # stylised stride for this character's gameplay velocity.
-                    if bone_name == "Hips":
-                        stride_scale = 0.44 if walk else 0.38
-                    elif bone_name.startswith("Foot"):
-                        stride_scale = 0.68 if walk else 0.48
-                    else:
-                        stride_scale = 0.70 if walk else 0.46
-                    target_rest, source_rest = rest_orientations[bone_name]
-                    source_rotation = source_rig.pose.bones[source_name].rotation_quaternion
-                    armature_delta = source_rest @ source_rotation @ source_rest.inverted()
-                    if bone_name != "Hips":
-                        # Locomotion is in the sagittal plane. The source's
-                        # stylised hip roll is amplified by this mesh's longer
-                        # game-rig legs, so retain only a small amount of
-                        # lateral roll/twist and keep the forward knee arc.
-                        sagittal = armature_delta.to_euler("XYZ")
-                        sagittal.y *= 0.25
-                        sagittal.z *= 0.25
-                        armature_delta = sagittal.to_quaternion()
-                    retargeted = target_rest.inverted() @ armature_delta @ target_rest
-                    bone.rotation_quaternion = Quaternion().slerp(retargeted, stride_scale)
-                    bone.rotation_quaternion @= Euler(authored.get(bone_name, (0.0, 0.0, 0.0)), "XYZ").to_quaternion()
-                else:
-                    bone.rotation_quaternion = Euler(authored.get(bone_name, (0.0, 0.0, 0.0)), "XYZ").to_quaternion()
-                bone.keyframe_insert(data_path="rotation_quaternion", frame=frame, group=bone_name)
-
-        foot_samples = {"Foot_L": [], "Foot_R": []}
-        for frame in range(last_frame + 1):
-            bpy.context.scene.frame_set(frame)
-            for foot_name in foot_samples:
-                foot_samples[foot_name].append(rig.pose.bones[foot_name].head.copy())
-        for foot_name, samples in foot_samples.items():
-            forward_travel = max(point.y for point in samples) - min(point.y for point in samples)
-            lateral_drift = max(point.x for point in samples) - min(point.x for point in samples)
-            lift = max(point.z for point in samples) - min(point.z for point in samples)
-            if forward_travel < 0.25 or forward_travel < lateral_drift * 3 or lift < 0.04:
-                raise RuntimeError(
-                    f"{target_name} {foot_name} is not a forward locomotion arc "
-                    f"(forward={forward_travel:.3f}, lateral={lateral_drift:.3f}, lift={lift:.3f})"
-                )
-
-    for obj in imported_objects:
-        bpy.data.objects.remove(obj, do_unlink=True)
-    for action in imported_actions:
-        bpy.data.actions.remove(action)
+    diagnostics = {}
+    for clip_name, path in (("walk", walk_bvh), ("sprint", run_bvh)):
+        source = import_cmu_bvh(path)
+        try:
+            diagnostics[clip_name] = bake_cmu_clip(rig, source, clip_name)
+        finally:
+            source_action = source.animation_data.action if source.animation_data else None
+            bpy.data.objects.remove(source, do_unlink=True)
+            if source_action:
+                bpy.data.actions.remove(source_action)
     rig.animation_data.action = bpy.data.actions["idle"]
     bpy.context.scene.frame_set(0)
+    print("MPFB_GAIT", diagnostics)
+    return diagnostics
+
+
+def bake_cmu_clip(rig, source, clip_name):
+    sampler = CmuSampler(source)
+    start, period = detect_gait_cycle(sampler)
+    arm_damp, forearm_damp, constant_offsets = CMU_CLIP_TUNING[clip_name]
+    retargeter = CmuRetargeter(rig, sampler, arm_damp, forearm_damp)
+    frame_count = max(12, round(period * CMU_FRAME_TIME * 30))
+
+    source_hips_height = sampler.sample(start)["Hips"][1].z
+    target_hips_height = (rig.matrix_world @ rig.data.bones["Hips"].head_local).z
+    translation_scale = target_hips_height / source_hips_height
+
+    hips_start = sampler.sample(start)["Hips"][1]
+    hips_end = sampler.sample(start + period)["Hips"][1]
+    drift = hips_end - hips_start
+    travel = Vector((drift.x, drift.y, 0.0))
+    travel_direction = travel.normalized() if travel.length > 1e-6 else Vector((0.0, -1.0, 0.0))
+
+    seam = 0.82
+    samples = []
+    for index in range(frame_count):
+        phase = index / frame_count
+        frame = start + phase * period
+        data = dict(sampler.sample(frame))
+        if phase > seam:
+            blend = (phase - seam) / (1.0 - seam)
+            blend = blend * blend * (3.0 - 2.0 * blend)
+            wrapped = sampler.sample(frame - period)
+            data = {
+                name: (
+                    data[name][0].slerp(wrapped[name][0], blend),
+                    data[name][1].lerp(wrapped[name][1] + drift, blend),
+                    data[name][2].lerp(wrapped[name][2], blend).normalized(),
+                )
+                for name in data
+            }
+        samples.append(data)
+
+    solved = [retargeter.solve(data) for data in samples]
+    for bone_name, offset in constant_offsets.items():
+        constant = Euler(offset, "XYZ").to_quaternion()
+        for locals_ in solved:
+            locals_[bone_name] = locals_.get(bone_name, Quaternion()) @ constant
+    # hemisphere continuity so fcurve interpolation never spins the long way
+    for bone_name in ANIMATED_BONES:
+        previous = None
+        for locals_ in solved:
+            rotation = locals_.get(bone_name, Quaternion())
+            if previous is not None and previous.dot(rotation) < 0.0:
+                rotation.negate()
+            locals_[bone_name] = rotation
+            previous = rotation
+
+    pelvis_track = []
+    for index, data in enumerate(samples):
+        pelvis_track.append(data["Hips"][1] - drift * (index / frame_count))
+    mean = Vector((0.0, 0.0, 0.0))
+    for point in pelvis_track:
+        mean += point
+    mean /= len(pelvis_track)
+    pelvis_offsets = []
+    for point in pelvis_track:
+        offset = point - mean
+        offset -= travel_direction * offset.dot(travel_direction)
+        pelvis_offsets.append(offset * translation_scale)
+
+    old_action = bpy.data.actions.get(clip_name)
+    if old_action:
+        bpy.data.actions.remove(old_action)
+    action = bpy.data.actions.new(clip_name)
+    action.use_fake_user = True
+    rig.animation_data_create()
+    rig.animation_data.action = action
+    hips_rest_rotation = (rig.matrix_world @ rig.data.bones["Hips"].matrix_local).to_quaternion().normalized()
+    for frame in range(frame_count + 1):
+        locals_ = solved[frame % frame_count]
+        offset = pelvis_offsets[frame % frame_count]
+        for bone_name in ANIMATED_BONES:
+            pose_bone = rig.pose.bones[bone_name]
+            pose_bone.rotation_mode = "QUATERNION"
+            pose_bone.rotation_quaternion = locals_.get(bone_name, Quaternion())
+            pose_bone.keyframe_insert(data_path="rotation_quaternion", frame=frame, group=bone_name)
+            if bone_name == "Hips":
+                pose_bone.location = hips_rest_rotation.inverted() @ offset
+                pose_bone.keyframe_insert(data_path="location", frame=frame, group=bone_name)
+    for layer in action.layers:
+        for strip in layer.strips:
+            channel_bag = strip.channelbag(action.slots[0], ensure=False)
+            if channel_bag:
+                for curve in channel_bag.fcurves:
+                    for keyframe in curve.keyframe_points:
+                        keyframe.interpolation = "LINEAR"
+
+    return validate_gait_clip(rig, clip_name, {
+        "frames": frame_count,
+        "natural_speed": round(drift.length * translation_scale / (period * CMU_FRAME_TIME), 3),
+        "bob": round((max(point.z for point in pelvis_offsets) - min(point.z for point in pelvis_offsets)), 3),
+    })
+
+
+def validate_gait_clip(rig, clip_name, diagnostics):
+    """Fail the build if a baked cycle is not an obviously sane locomotion loop."""
+    rig.animation_data.action = bpy.data.actions[clip_name]
+    frame_count = int(bpy.data.actions[clip_name].frame_range[1])
+    feet = {"Foot_L": [], "Foot_R": []}
+    knees = {"LowerLeg_L": [], "LowerLeg_R": []}
+    rolls = {"Foot_L": [], "Foot_R": []}
+    for frame in range(frame_count + 1):
+        bpy.context.scene.frame_set(frame)
+        for name in feet:
+            feet[name].append((rig.matrix_world @ rig.pose.bones[name].matrix).translation.copy())
+            rolls[name].append(rig.pose.bones[name].rotation_quaternion.copy())
+        for name in knees:
+            knees[name].append(rig.pose.bones[name].rotation_quaternion.copy())
+    for name, points in feet.items():
+        forward = max(point.y for point in points) - min(point.y for point in points)
+        lateral = max(point.x for point in points) - min(point.x for point in points)
+        lift = max(point.z for point in points) - min(point.z for point in points)
+        if forward < 0.35 or lateral > 0.16 or lift < 0.08:
+            raise RuntimeError(
+                f"{clip_name} {name} is not a forward locomotion arc "
+                f"(forward={forward:.3f}, lateral={lateral:.3f}, lift={lift:.3f})"
+            )
+        diagnostics[f"{name}_stride"] = round(forward, 3)
+    excursion = lambda quaternions: max(a.rotation_difference(b).angle for a in quaternions for b in quaternions)
+    for name, quaternions in knees.items():
+        if excursion(quaternions) < 0.7:
+            raise RuntimeError(f"{clip_name} {name} has insufficient knee flexion")
+    for name, quaternions in rolls.items():
+        if excursion(quaternions) < 0.35:
+            raise RuntimeError(f"{clip_name} {name} has no heel-to-toe roll")
+    return diagnostics
 
 
 def visible_bounds(objects):
@@ -632,7 +838,10 @@ def look_at(camera, target):
 
 def render_preview(path, meshes):
     scene = bpy.context.scene
-    scene.render.engine = "BLENDER_EEVEE"
+    # Blender 5 calls the engine BLENDER_EEVEE again; 4.2-4.5 LTS use _NEXT.
+    eevee_names = {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"}
+    available = {item.identifier for item in scene.render.bl_rna.properties["engine"].enum_items}
+    scene.render.engine = next(name for name in eevee_names if name in available)
     scene.render.resolution_x = 720
     scene.render.resolution_y = 900
     scene.render.resolution_percentage = 100
@@ -690,7 +899,7 @@ def main():
         "fps": 30,
     }
     create_animation_contract(rig)
-    retarget_quaternius_locomotion(rig, args.animation_source)
+    retarget_cmu_locomotion(rig, args.walk_bvh, args.run_bvh)
     minimum, maximum = visible_bounds(meshes)
     for obj in meshes:
         obj.data.calc_loop_triangles()

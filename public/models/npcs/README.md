@@ -1,7 +1,7 @@
 # Rigged NPC cast asset contract
 
 `npm run npc:build` creates all sixteen MPFB sources, blends the generated textile tiles into the garments' real UV
-textures, retargets the locked Quaternius locomotion source, renders preview/contact sheets, exports ignored FBX/Blend
+textures, retargets the locked CMU mocap walk/sprint cycles, renders preview/contact sheets, exports ignored FBX/Blend
 sources, installs optimized GLBs, and runs `npm run npc:validate`.
 
 Each shipped NPC is positive-Z facing with feet at the origin, 12,000–30,000 triangles, no more than five opaque skinned

@@ -24,21 +24,28 @@
       "vendored": false
     },
     {
-      "name": "Quaternius Universal Animation Library",
-      "version": "2.1 Standard (June 2026)",
-      "url": "https://quaternius.com/packs/universalanimationlibrary.html",
-      "license": "CC0-1.0",
-      "archiveSha256": "cc73fc4e495b82958207316596317a3f40b9fa38065bde1027937452da537724",
-      "selectedFile": "Unreal-Godot/UAL1_Standard.glb",
-      "selectedFileSha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
-      "use": "Walk_Loop and Sprint_Loop lower-body retarget",
+      "name": "CMU Graphics Lab Motion Capture Database (BVH conversion)",
+      "url": "https://github.com/una-dinosauria/cmu-mocap",
+      "license": "Free for all uses (mocap.cs.cmu.edu); database created with funding from NSF EIA-0196217",
+      "selectedFiles": [
+        {
+          "path": "data/008/08_02.bvh",
+          "use": "walk cycle full-body retarget",
+          "sha256": "fa3908bdd8d1842e4c9efd2c91ee94d76d82ebd4049d9468435ce82245bd11a0"
+        },
+        {
+          "path": "data/009/09_02.bvh",
+          "use": "sprint cycle full-body retarget",
+          "sha256": "96cc613c494a44d593c97e3dd475d10d768eb7fc7ea8c4c6eee813ae69922cb8"
+        }
+      ],
       "vendored": false
     }
   ],
   "committedArtifacts": [
     {
       "path": "public/models/characters/protagonist.glb",
-      "sha256": "144d006e300ec12afff33208cdd05fbaf73c8f780c46a8b386282749920d0882"
+      "sha256": "12b0be8d32438e40f6e808b7895597d06597c85e5ba4f08d9a526d4d5b394700"
     },
     {
       "path": "art/character/references/protagonist-face.jpg",
@@ -58,19 +65,19 @@
     },
     {
       "path": "public/textures/character/protagonist-jacket-basecolor.jpg",
-      "sha256": "96749d7b58b2e8ba227e4dc3175399988e44150d6410d4f290643d8d45cca370"
+      "sha256": "f6ea406d95e0df93a0802d4326b76e469d34607a183362743a5b723973920dce"
     },
     {
       "path": "public/textures/character/protagonist-denim-basecolor.jpg",
-      "sha256": "59d0185462f2442e2cb22107f4dede11437ca07451a6ce5a23174ad4005c1a50"
+      "sha256": "553325539bc2238ffe44875c5ab297584e11d5357e6eac8d8a1a852f1618dae4"
     },
     {
       "path": "public/textures/character/protagonist-skin-basecolor.jpg",
-      "sha256": "9efacc8ae939e558cd74150a9913fac30f6ab1cbf148c42c0a45d9973bbb0626"
+      "sha256": "7f306c4af60d84a07780a237ac390cb0c56680d2f0440ac30abb20d53bf804ff"
     },
     {
       "path": "public/textures/character/protagonist-hair-shoes-basecolor.jpg",
-      "sha256": "3a6a386a1a9dd70c4003d3ca485a765bdd3d7e9150dca457256d2060e922e61b"
+      "sha256": "be5ae1af097346382249106407fbe11c4414dcb207edc7403f23b6d156229d37"
     },
     {
       "path": "art/character/materials/skin-normal-roughness.png",

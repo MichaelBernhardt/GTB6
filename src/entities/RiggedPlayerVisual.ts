@@ -157,7 +157,9 @@ export function validatePlayerGltf(gltf: GLTF): ValidatedPlayerGltf {
   }
   const box = new THREE.Box3().setFromObject(gltf.scene); const height = box.max.y - box.min.y;
   if (Math.abs(height - 1.8) > 0.01 || Math.abs(box.min.y) > 0.015) throw new PlayerCharacterError(`Character scale/origin is invalid (${height.toFixed(3)} m high, feet y=${box.min.y.toFixed(3)}).`);
-  for (const clip of gltf.animations) if (clip.tracks.some((track) => track.name.endsWith('.position'))) throw new PlayerCharacterError(`${clip.name} contains root translation.`);
+  // Locomotion clips may carry a zero-mean pelvis bob/sway on the Hips bone;
+  // any other translation track would fight the code-driven root motion.
+  for (const clip of gltf.animations) if (clip.tracks.some((track) => track.name.endsWith('.position') && !track.name.startsWith('Hips.'))) throw new PlayerCharacterError(`${clip.name} contains root translation.`);
   return { bones, clips };
 }
 

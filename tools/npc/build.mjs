@@ -17,8 +17,12 @@ const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const selected = process.env.NPC_ID ? manifest.characters.filter((character) => character.id === process.env.NPC_ID) : manifest.characters;
 if (!selected.length) { console.error(`Unknown NPC_ID: ${process.env.NPC_ID}`); process.exit(1); }
 const buildDir = resolve('build/npcs'); const workDir = resolve('art/npcs/work'); const previewDir = resolve('art/npcs/previews');
-const animations = resolve(process.env.QUATERNIUS_ANIMATIONS ?? `${homedir()}/Library/Application Support/GTATHREEJS/character/UAL1_Standard.glb`);
-if (!existsSync(animations)) { console.error(`Quaternius animation GLB not found: ${animations}`); process.exit(1); }
+const mocapDir = `${homedir()}/Library/Application Support/GTATHREEJS/character/cmu`;
+const walkBvh = resolve(process.env.CMU_WALK_BVH ?? `${mocapDir}/08_02.bvh`);
+const runBvh = resolve(process.env.CMU_RUN_BVH ?? `${mocapDir}/09_02.bvh`);
+for (const bvh of [walkBvh, runBvh]) {
+  if (!existsSync(bvh)) { console.error(`CMU mocap BVH not found: ${bvh}. Download the cycles pinned in art/npcs/sources.lock.json or set CMU_WALK_BVH/CMU_RUN_BVH.`); process.exit(1); }
+}
 await Promise.all([mkdir(buildDir, { recursive: true }), mkdir(workDir, { recursive: true }), mkdir(previewDir, { recursive: true }), mkdir(resolve('public/models/npcs'), { recursive: true }), mkdir(resolve('public/textures/npcs'), { recursive: true })]);
 
 for (const character of selected) {
@@ -27,7 +31,7 @@ for (const character of selected) {
   await Promise.all([rm(source, { force: true }), rm(fbx, { force: true }), rm(rawGlb, { force: true })]);
   const create = spawnSync(blender, [
     '--background', '--python', resolve('tools/npc/create-source.py'), '--',
-    '--manifest', manifestPath, '--id', character.id, '--output', source, '--animation-source', animations,
+    '--manifest', manifestPath, '--id', character.id, '--output', source, '--walk-bvh', walkBvh, '--run-bvh', runBvh,
   ], { stdio: 'inherit' });
   if (create.status !== 0 || !existsSync(source)) process.exit(create.status || 1);
   const turnaround = resolve(previewDir, `${character.id}-turnaround.jpg`);

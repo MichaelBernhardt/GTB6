@@ -26,7 +26,8 @@ def arguments():
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--id", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--animation-source", required=True)
+    parser.add_argument("--walk-bvh", required=True)
+    parser.add_argument("--run-bvh", required=True)
     return parser.parse_args(raw)
 
 
@@ -204,13 +205,13 @@ def normalize_height(rig, meshes, height):
     rig.location.z -= minimum.z
 
 
-def create_animation_contract(rig, animation_source):
+def create_animation_contract(rig, walk_bvh, run_bvh):
     common.create_animation_contract(rig)
     keep = {"idle", "walk", "sprint", "punch_right", "death"}
     for action in list(bpy.data.actions):
         if action.name not in keep:
             bpy.data.actions.remove(action)
-    common.retarget_quaternius_locomotion(rig, animation_source)
+    common.retarget_cmu_locomotion(rig, walk_bvh, run_bvh)
     if {action.name for action in bpy.data.actions} != keep:
         raise RuntimeError("Generated animation set does not match the five-clip NPC contract")
 
@@ -231,7 +232,7 @@ def main():
         "feetAtOrigin": True,
         "fps": 30,
     }
-    create_animation_contract(rig, args.animation_source)
+    create_animation_contract(rig, args.walk_bvh, args.run_bvh)
     minimum, maximum = common.visible_bounds(meshes)
     for obj in meshes:
         obj.data.calc_loop_triangles()

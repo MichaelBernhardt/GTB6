@@ -2,7 +2,8 @@
 
 The preferred CHARACTER_SOURCE is the artist-owned .blend generated with MPFB 2.0.16 and the locked
 CC0 system pack in sources.lock.json. A source FBX or GLB is also accepted for artist overrides.
-All animation is baked to 30 fps and all object/root translation curves are removed.
+All animation is baked to 30 fps. Translation curves are removed except the pelvis: locomotion
+clips carry a zero-mean Hips bob/sway channel while the root stays in place for gameplay movement.
 """
 
 import argparse
@@ -61,9 +62,12 @@ def validate_and_clean(recipe):
         action.use_fake_user = True
         # Blender 5 stores curves in layered channel bags rather than exposing
         # Action.fcurves, so clean both APIs when an artist supplies a source.
+        def is_root_translation(curve):
+            return curve.data_path.endswith("location") and curve.data_path != 'pose.bones["Hips"].location'
+
         if hasattr(action, "fcurves"):
             for curve in list(action.fcurves):
-                if curve.data_path.endswith("location"):
+                if is_root_translation(curve):
                     action.fcurves.remove(curve)
         else:
             for slot in action.slots:
@@ -72,7 +76,7 @@ def validate_and_clean(recipe):
                         channel_bag = strip.channelbag(slot, ensure=False)
                         if channel_bag:
                             for curve in list(channel_bag.fcurves):
-                                if curve.data_path.endswith("location"):
+                                if is_root_translation(curve):
                                     channel_bag.fcurves.remove(curve)
     for obj in bpy.data.objects:
         if obj.type != "MESH":
