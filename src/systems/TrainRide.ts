@@ -11,6 +11,42 @@ export interface RailDir { dirX: number; dirZ: number }
 
 const clamp = (value: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, value));
 
+/**
+ * Stitch rail polylines whose ENDS meet (or nearly meet, within `tolerance`) into continuous
+ * lines, so a junction like the Main Line / airport spur joint is drivable straight through
+ * (owner: "allow small discontinuities"). Greedy end-to-end joining with reversal as needed;
+ * exactly-coincident joint points dedupe, small gaps become an ordinary bridging segment.
+ * Branches meeting the MIDDLE of another line stay separate — this is a coupler, not a switch.
+ */
+export function stitchRailPaths<P extends { x: number; z: number }>(paths: P[][], tolerance = 6): P[][] {
+  const lines = paths.filter((path) => path.length >= 2).map((path) => [...path]);
+  const gap = (a: P, b: P): number => Math.hypot(a.x - b.x, a.z - b.z);
+  for (let joined = true; joined;) {
+    joined = false;
+    outer: for (let i = 0; i < lines.length; i++) {
+      for (let j = i + 1; j < lines.length; j++) {
+        const a = lines[i]!; const b = lines[j]!;
+        const joins: Array<{ d: number; make: () => P[] }> = [
+          { d: gap(a[a.length - 1]!, b[0]!), make: () => [...a, ...b] },
+          { d: gap(a[a.length - 1]!, b[b.length - 1]!), make: () => [...a, ...[...b].reverse()] },
+          { d: gap(a[0]!, b[0]!), make: () => [...[...a].reverse(), ...b] },
+          { d: gap(a[0]!, b[b.length - 1]!), make: () => [...b, ...a] },
+        ];
+        const best = joins.reduce((lo, entry) => (entry.d < lo.d ? entry : lo));
+        if (best.d > tolerance) continue;
+        const merged = best.make();
+        // Dedupe near-coincident consecutive vertices so the arc table gets no zero-length segment.
+        const clean = merged.filter((point, index) => index === 0 || gap(point, merged[index - 1]!) > 0.5);
+        lines[i] = clean.length >= 2 ? clean : merged;
+        lines.splice(j, 1);
+        joined = true;
+        break outer;
+      }
+    }
+  }
+  return lines;
+}
+
 /** Closest arc position to (px, pz) within [sMin, sMax]: coarse 1u walk, then a 0.1u refine. */
 export function nearestArcOnSpan(sample: (s: number) => { x: number; z: number }, sMin: number, sMax: number, px: number, pz: number): { s: number; dist: number } {
   let bestS = sMin; let bestD = Infinity;

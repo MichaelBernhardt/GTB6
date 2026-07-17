@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { moveSpeed } from '../core/GameRules';
 import type { City } from '../world/City';
-import { cabAt, nearestArcOnSpan, stepAboard, stepDrive } from './TrainRide';
+import { cabAt, nearestArcOnSpan, stepAboard, stepDrive, stitchRailPaths } from './TrainRide';
 
 /**
  * Passenger trains shuttling back and forth along the generated rail lines (City.railPaths).
@@ -133,7 +133,9 @@ export class TrainSystem {
   private riderPoseValue?: RiderPose;
 
   constructor(scene: THREE.Scene, private city: City) {
-    const lines = [...this.city.railPaths]
+    // End-to-end joints (e.g. the Main Line / airport spur junction) stitch into one drivable
+    // line, so driving straight through a joint just works — no dead stop at a shared vertex.
+    const lines = stitchRailPaths(this.city.railPaths)
       .map((points) => ({ points, cum: cumulativeArc(points) }))
       .filter((line) => line.cum[line.cum.length - 1]! >= MIN_LINE_LENGTH)
       .sort((a, b) => b.cum[b.cum.length - 1]! - a.cum[a.cum.length - 1]!)
