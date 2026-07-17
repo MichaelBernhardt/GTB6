@@ -531,6 +531,7 @@ const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
 };
 
 const GENERIC_AREA_NAMES = new Set(['park', 'grass', 'forest', 'wood', 'scrub', 'golf_course', 'nature_reserve', 'green', 'water', 'brownfield', 'mine_dump']);
+const PARK_TREE_SPECIES = ['shade-tree', 'jacaranda', 'shade-tree', 'gum', 'pine'] as const;
 
 export class City {
   group = new THREE.Group();
@@ -2091,14 +2092,19 @@ export class City {
     for (const px of [-3, 3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 8), new THREE.MeshStandardMaterial({ color: 0x343b3d, metalness: 0.7 })); post.position.set(x + px, h + 1.5, z + d / 2); this.target.add(post); }
   }
 
-  private addParkTree(x: number, z: number, variant: number): void {
+  private addParkTree(x: number, z: number, seed: number): void {
     if (this.isOnRoad(x, z, 2.4)) return; // parks can overlap roads: no trunks on the tar
-    this.props.register('tree', x, z, 0.5, 5.1);
-    const tree = new THREE.Group(); tree.position.set(x, terrainHeightAt(x, z), z); // sit on the terrain, not the flat plane
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.55, 5.1, 16), new THREE.MeshStandardMaterial({ color: 0x60442f, roughness: 0.95 })); trunk.position.y = 2.55; trunk.castShadow = true; tree.add(trunk);
-    const colors = [0x326d43, 0x3d7c49, 0x4b8650];
-    const clusters: Array<[number, number, number, number]> = [[0, 6.2, 0, 2.2], [-1.35, 5.7, 0.25, 1.7], [1.2, 5.75, -0.2, 1.8], [0.2, 5.7, 1.1, 1.55]];
-    clusters.forEach(([ox, oy, oz, scale], index) => { const crown = new THREE.Mesh(new THREE.SphereGeometry(scale, 20, 14), new THREE.MeshStandardMaterial({ color: colors[(variant + index) % colors.length], roughness: 0.9 })); crown.scale.y = 0.82; crown.position.set(ox, oy, oz); crown.castShadow = true; crown.receiveShadow = true; tree.add(crown); }); this.group.add(tree);
+    const species = PARK_TREE_SPECIES[Math.abs(Math.trunc(seed)) % PARK_TREE_SPECIES.length]!;
+    const built = buildModel(species, seed);
+    const trunk = built.tiers[0]!;
+    this.props.register(
+      'tree', x, z,
+      Math.max(trunk.maxX - trunk.minX, trunk.maxZ - trunk.minZ) / 2,
+      trunk.y1 - trunk.y0,
+    );
+    built.group.position.set(x, terrainHeightAt(x, z), z); // sit on the terrain, not the flat plane
+    built.group.rotation.y = seed * 2.399963229728653;
+    this.group.add(built.group); // the constructor's static merge bakes these into the normal world chunks
   }
 
   // ---- Airport (see world/Airport.ts) ----------------------------------------
