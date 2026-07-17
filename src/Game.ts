@@ -218,7 +218,6 @@ export class Game {
     this.torch = new TorchSystem(this.scene);
     this.shops = new ShopSystem(this.scene, this.city);
     buildKelvinYard(this.scene, this.city);
-    this.yardGuards = [0, Math.PI].map((angle) => this.population.spawnYardGuard(KELVIN_OFFICE_SPOT.x + Math.sin(angle) * 12, KELVIN_OFFICE_SPOT.z + Math.cos(angle) * 12));
     this.safehouses = new SafehouseSystem(this.scene, this.city);
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.position)); // resume where the last save actually left off (Continue); New Game repositions to spawn in startGame
     this.player.group.position.y = this.restoreY(this.save.position[0], this.save.position[2], this.save.position[1]); // keep saved elevation (rooftop/overpass), else sit on the ground
@@ -226,6 +225,8 @@ export class Game {
     this.cameraController = new CameraController(this.camera);
     this.cameraController.yaw = this.save.heading + Math.PI; // camera parked behind, looking the way the player faces
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
+    // Guards need the population roster: this spawn must stay AFTER the PopulationSystem line above.
+    this.yardGuards = [0, Math.PI].map((angle) => this.population.spawnYardGuard(KELVIN_OFFICE_SPOT.x + Math.sin(angle) * 12, KELVIN_OFFICE_SPOT.z + Math.cos(angle) * 12));
     this.lifecycle = new LifecycleSystem(this.city, this.population);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene, (x, z) => this.city.surfaceHeightAt(x, z));
