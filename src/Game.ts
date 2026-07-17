@@ -822,7 +822,7 @@ export class Game {
       else this.combat.cycle(scroll > 0 ? 1 : -1);
     }
     this.footstepTimer -= dt;
-    if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { const running = this.input.down('ShiftLeft'); this.audio.footstep(running, this.city.isPark(this.player.group.position.x, this.player.group.position.z)); this.footstepTimer = running ? 0.24 : 0.38; }
+    if (this.player.onGround && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((key) => this.input.down(key)) && this.footstepTimer <= 0) { const running = this.input.down('ShiftLeft'); this.audio.footstep(running, this.city.isPark(this.player.group.position.x, this.player.group.position.z)); this.footstepTimer = running ? 0.24 : this.input.down('AltLeft') ? 0.56 : 0.38; }
     const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
     if (shot.fired && shot.melee) {
       this.player.punch();

@@ -90,6 +90,8 @@ describe('cheat multipliers', () => {
   it('scales walk and sprint speed with the fast run cheat', () => {
     expect(moveSpeed(false, false)).toBe(PLAYER.walkSpeed);
     expect(moveSpeed(true, false)).toBe(PLAYER.sprintSpeed);
+    expect(moveSpeed(false, false, false, true)).toBe(PLAYER.strollSpeed);
+    expect(moveSpeed(true, false, false, true)).toBe(PLAYER.sprintSpeed);
     expect(moveSpeed(false, true)).toBeCloseTo(PLAYER.walkSpeed * CHEATS.runMultiplier);
     expect(moveSpeed(true, true)).toBeCloseTo(PLAYER.sprintSpeed * CHEATS.runMultiplier);
     expect(CHEATS.runMultiplier).toBeCloseTo(1.8);

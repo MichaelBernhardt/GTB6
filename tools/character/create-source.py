@@ -635,15 +635,36 @@ def retarget_cmu_locomotion(rig, walk_bvh, run_bvh):
     lateral sway and vertical bob as a Hips location channel.
     """
     diagnostics = {}
+    arm_hang = None
     for clip_name, path in (("walk", walk_bvh), ("sprint", run_bvh)):
         source = import_cmu_bvh(path)
         try:
-            diagnostics[clip_name] = bake_cmu_clip(rig, source, clip_name)
+            diagnostics[clip_name], clip_arm_hang = bake_cmu_clip(rig, source, clip_name)
+            if clip_name == "walk":
+                arm_hang = clip_arm_hang
         finally:
             source_action = source.animation_data.action if source.animation_data else None
             bpy.data.objects.remove(source, do_unlink=True)
             if source_action:
                 bpy.data.actions.remove(source_action)
+    # The walk cycle's average arm pose is a natural relaxed hang. Reuse it to
+    # repair the authored idle, whose hand-set Euler guess wings the arms out.
+    rig.animation_data.action = bpy.data.actions["idle"]
+    idle = bpy.data.actions["idle"]
+    idle_frames = int(idle.frame_range[1])
+    for frame in range(idle_frames + 1):
+        for bone_name, rotation in arm_hang.items():
+            pose_bone = rig.pose.bones[bone_name]
+            pose_bone.rotation_mode = "QUATERNION"
+            pose_bone.rotation_quaternion = rotation
+            pose_bone.keyframe_insert(data_path="rotation_quaternion", frame=frame, group=bone_name)
+    for layer in idle.layers:
+        for strip in layer.strips:
+            channel_bag = strip.channelbag(idle.slots[0], ensure=False)
+            if channel_bag:
+                for curve in channel_bag.fcurves:
+                    for keyframe in curve.keyframe_points:
+                        keyframe.interpolation = "LINEAR"
     rig.animation_data.action = bpy.data.actions["idle"]
     bpy.context.scene.frame_set(0)
     print("MPFB_GAIT", diagnostics)
@@ -667,20 +688,37 @@ def bake_cmu_clip(rig, source, clip_name):
     travel = Vector((drift.x, drift.y, 0.0))
     travel_direction = travel.normalized() if travel.length > 1e-6 else Vector((0.0, -1.0, 0.0))
 
-    seam = 0.82
+    # Loop closure blends one cycle toward its neighbour. Prefer blending the
+    # tail toward the PREVIOUS cycle; short captures (like the 09_02 run, only
+    # ~1.5 cycles) have no previous cycle, so blend the head toward the NEXT
+    # one instead. Sampling outside the capture would silently clamp to a
+    # non-periodic entry pose and snap the whole body once per loop.
+    seam_span = 0.18
+    tail_available = start - period >= sampler.first
+    head_available = start + (1.0 + seam_span) * period <= sampler.last
+    if not tail_available and not head_available:
+        raise RuntimeError(f"{clip_name} capture is too short to close a loop (start={start}, period={period})")
+
     samples = []
     for index in range(frame_count):
         phase = index / frame_count
         frame = start + phase * period
         data = dict(sampler.sample(frame))
-        if phase > seam:
-            blend = (phase - seam) / (1.0 - seam)
-            blend = blend * blend * (3.0 - 2.0 * blend)
+        blend, wrapped, drift_sign = 0.0, None, 0.0
+        if tail_available and phase > 1.0 - seam_span:
+            blend = (phase - (1.0 - seam_span)) / seam_span
             wrapped = sampler.sample(frame - period)
+            drift_sign = 1.0
+        elif not tail_available and phase < seam_span:
+            blend = (seam_span - phase) / seam_span
+            wrapped = sampler.sample(frame + period)
+            drift_sign = -1.0
+        if wrapped is not None and blend > 0.0:
+            blend = blend * blend * (3.0 - 2.0 * blend)
             data = {
                 name: (
                     data[name][0].slerp(wrapped[name][0], blend),
-                    data[name][1].lerp(wrapped[name][1] + drift, blend),
+                    data[name][1].lerp(wrapped[name][1] + drift * drift_sign, blend),
                     data[name][2].lerp(wrapped[name][2], blend).normalized(),
                 )
                 for name in data
@@ -692,6 +730,23 @@ def bake_cmu_clip(rig, source, clip_name):
         constant = Euler(offset, "XYZ").to_quaternion()
         for locals_ in solved:
             locals_[bone_name] = locals_.get(bone_name, Quaternion()) @ constant
+    arm_hang = {}
+    for bone_name in ("UpperArm_L", "LowerArm_L", "UpperArm_R", "LowerArm_R"):
+        # component sum + renormalise = mean of a tight quaternion cluster.
+        # (Quaternion.normalize, NOT 4D Vector.normalize — the latter leaves
+        # the fourth component untouched by design.)
+        total = Quaternion((0.0, 0.0, 0.0, 0.0))
+        reference = solved[0][bone_name]
+        for locals_ in solved:
+            rotation = locals_[bone_name]
+            if reference.dot(rotation) < 0.0:
+                rotation = -rotation
+            total.w += rotation.w
+            total.x += rotation.x
+            total.y += rotation.y
+            total.z += rotation.z
+        total.normalize()
+        arm_hang[bone_name] = total
     # hemisphere continuity so fcurve interpolation never spins the long way
     for bone_name in ANIMATED_BONES:
         previous = None
@@ -742,11 +797,12 @@ def bake_cmu_clip(rig, source, clip_name):
                     for keyframe in curve.keyframe_points:
                         keyframe.interpolation = "LINEAR"
 
-    return validate_gait_clip(rig, clip_name, {
+    diagnostics = validate_gait_clip(rig, clip_name, {
         "frames": frame_count,
         "natural_speed": round(drift.length * translation_scale / (period * CMU_FRAME_TIME), 3),
         "bob": round((max(point.z for point in pelvis_offsets) - min(point.z for point in pelvis_offsets)), 3),
     })
+    return diagnostics, arm_hang
 
 
 def validate_gait_clip(rig, clip_name, diagnostics):
@@ -756,6 +812,7 @@ def validate_gait_clip(rig, clip_name, diagnostics):
     feet = {"Foot_L": [], "Foot_R": []}
     knees = {"LowerLeg_L": [], "LowerLeg_R": []}
     rolls = {"Foot_L": [], "Foot_R": []}
+    rotations = {name: [] for name in ANIMATED_BONES}
     for frame in range(frame_count + 1):
         bpy.context.scene.frame_set(frame)
         for name in feet:
@@ -763,6 +820,16 @@ def validate_gait_clip(rig, clip_name, diagnostics):
             rolls[name].append(rig.pose.bones[name].rotation_quaternion.copy())
         for name in knees:
             knees[name].append(rig.pose.bones[name].rotation_quaternion.copy())
+        for name in rotations:
+            rotations[name].append(rig.pose.bones[name].rotation_quaternion.copy())
+    # No bone may snap between consecutive 30 fps frames (including the wrap):
+    # a violent one-frame delta means a seam or retarget defect, not motion.
+    for name, quaternions in rotations.items():
+        for index in range(1, len(quaternions)):
+            step = quaternions[index - 1].rotation_difference(quaternions[index]).angle
+            step = min(step, math.tau - step)
+            if step > 0.5:
+                raise RuntimeError(f"{clip_name} {name} snaps {step:.2f} rad at frame {index}")
     for name, points in feet.items():
         forward = max(point.y for point in points) - min(point.y for point in points)
         lateral = max(point.x for point in points) - min(point.x for point in points)

@@ -185,6 +185,17 @@ for (const animation of [idle, walk]) for (const channel of animation.channels) 
   invariant(samples[0].angleTo(samples.at(-1)) < 0.001, `${animation.name} does not close on ${json.nodes[channel.target.node].name}`);
 }
 
+// No bone may snap between consecutive 30 fps frames — a violent one-frame
+// delta is a seam or retarget defect, not motion.
+for (const animation of [walk, animationByName.get('sprint')]) for (const channel of animation.channels) {
+  if (channel.target.path !== 'rotation') continue;
+  const samples = quaternionSamples(json, bin, animation, channel.target.node);
+  for (let i = 1; i < samples.length; i++) {
+    const step = samples[i - 1].angleTo(samples[i]);
+    invariant(step < 0.5, `${animation.name} ${json.nodes[channel.target.node].name} snaps ${step.toFixed(2)} rad at frame ${i}`);
+  }
+}
+
 const aimPose = poseSampler(json, bin, aim, parentByNode); const aimRight = aimPose.point(nodeByName.get('Hand_R'), 0); const aimLeft = aimPose.point(nodeByName.get('Hand_L'), 0); const aimChest = aimPose.point(nodeByName.get('Chest'), 0);
 invariant(aimRight.z - aimChest.z > 0.42 && aimRight.y - aimChest.y > 0.18 && Math.abs(aimRight.x) < 0.2, `aim firing hand is not forward at chest height (${aimRight.toArray().map((value) => value.toFixed(3)).join(', ')})`);
 invariant(aimLeft.z - aimChest.z > 0.40 && aimLeft.distanceTo(aimRight) < 0.28, 'aim off-hand does not support the raised weapon');

@@ -22,6 +22,7 @@ export function resolveFrozen(frozen: boolean, distanceSq: number, freeze = AI_F
   return distanceSq > (frozen ? thaw * thaw : freeze * freeze);
 }
 export const PLAYER = {
+  strollSpeed: 3,
   walkSpeed: 8,
   sprintSpeed: 13,
   jumpSpeed: 10,
