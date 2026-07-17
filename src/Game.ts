@@ -128,7 +128,6 @@ export class Game {
   private quarry?: Vehicle;
   private quarryArrived = false;
   private contactCullTimer = 0;
-  private promptContactAction?: ReturnType<Game['contactAction']>;
   private depotSecurity = new DepotSecurity();
   private depotWasSpotted = false;
   private depotClock = 0; // sweeps the Kelvin Yard guards' torch cones
@@ -1652,13 +1651,15 @@ export class Game {
   }
 
   /** What E would actually do at the player's position — the prompt and the key MUST agree
-   *  (owner playtest: "E Speak to contact" showed during an active mission and E did nothing). */
-  private contactAction(): { kind: 'offer'; mission: MissionDefinition } | { kind: 'restate' } | undefined {
+   *  (owner playtest: "E Speak to contact" showed during an active mission and E did nothing).
+   *  During their own active mission the contact re-briefs: the intro replays plus the current
+   *  objective, "in case you need reminding what you were supposed to do" (owner amendment). */
+  private contactAction(): { kind: 'offer'; mission: MissionDefinition } | { kind: 'rebrief'; mission: MissionDefinition } | undefined {
     if (this.dialogue.active) return undefined;
     const position = this.player.group.position;
     if (this.missions.active) {
       const active = this.missions.active;
-      if (this.missions.state === 'active' && this.missions.objective?.hidden && Math.hypot(active.start.position.x - position.x, active.start.position.z - position.z) < 7) return { kind: 'restate' };
+      if (this.missions.state === 'active' && Math.hypot(active.start.position.x - position.x, active.start.position.z - position.z) < 7) return { kind: 'rebrief', mission: active };
       return undefined;
     }
     const mission = MISSIONS.find((item) => !this.missions.completed.has(item.id) && this.story.isUnlocked(item, this.missions.completed) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
@@ -1673,9 +1674,13 @@ export class Game {
     }
     const action = this.contactAction();
     if (!action) return false;
-    if (action.kind === 'restate') {
-      const active = this.missions.active!;
-      this.dialogue.start({ id: `${active.id}:restate`, lines: [{ speaker: active.contact, text: this.missions.objective!.text }] });
+    if (action.kind === 'rebrief') {
+      // Same lines as the briefing, ending on the live objective; no offer is pending, so
+      // finishing (or walking away from) the replay arms nothing and pays nothing.
+      const objective = this.missions.objective;
+      const lines = [...introScript(action.mission).lines];
+      if (objective) lines.push({ speaker: action.mission.contact, text: objective.text });
+      this.dialogue.start({ id: `${action.mission.id}:rebrief`, lines });
       return true;
     }
     this.story.beginOffer(action.mission.id);
@@ -2145,7 +2150,7 @@ export class Game {
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (this.missions.objective?.kind === 'choice') prompt = `E  ${this.missions.objective.text}`;
-      else if ((this.promptContactAction = this.contactAction())) prompt = this.promptContactAction.kind === 'restate' ? 'E  Ask for the riddle again' : 'E  Speak to contact';
+      else if (this.contactAction()) prompt = 'E  Speak to contact'; // truthful for offers and re-briefs alike
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
       else if (shop?.kind === 'bottle') prompt = `E  Browse ${shop.name}`;
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
