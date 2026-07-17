@@ -1666,6 +1666,14 @@ export class Game {
     return mission ? { kind: 'offer', mission } : undefined;
   }
 
+  /** Prompt copy for whatever E would do at a contact: a fresh offer, a riddle re-state, or a job re-brief. */
+  private contactPrompt(): string | undefined {
+    const action = this.contactAction();
+    if (!action) return undefined;
+    if (action.kind === 'offer') return 'E  Speak to contact';
+    return this.missions.objective?.hidden ? 'E  Ask for the riddle again' : 'E  Ask about the job';
+  }
+
   private tryMissionInteraction(): boolean {
     if (this.missions.state === 'failed' && this.missions.active) { this.resetMissionRuntime(); this.missions.restart(); this.ui.notify('Mission restarted', this.missions.active?.name ?? ''); return true; }
     if (this.missions.objective?.kind === 'collect') return false;
@@ -2129,6 +2137,7 @@ export class Game {
     if (this.mode === 'playing' && !this.transition) {
       const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
+      const contactPrompt = this.contactPrompt(); // offer / riddle re-state / job re-brief — undefined when E would do nothing
       if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat' : 'E  Enter nearby vehicle  ·  ENTER  Global chat  ·  Open PvP';
       else if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
       else if (this.activePlane) prompt = planeHint(this.activePlane.state);
@@ -2150,7 +2159,7 @@ export class Game {
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (this.missions.objective?.kind === 'choice') prompt = `E  ${this.missions.objective.text}`;
-      else if (this.contactAction()) prompt = 'E  Speak to contact'; // truthful for offers and re-briefs alike
+      else if (contactPrompt) prompt = contactPrompt;
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
       else if (shop?.kind === 'bottle') prompt = `E  Browse ${shop.name}`;
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
