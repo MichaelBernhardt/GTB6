@@ -138,6 +138,8 @@ export class DayNightSystem {
   private headPool: THREE.SpotLight[] = [];
   private facades: THREE.MeshStandardMaterial[];
   private blackout = 0; // eased 0..1 toward "grid down"; with nightFactor it kills the ambient city glow
+  /** Story/mission surface: the eased grid-down factor (0 = grid up, 1 = full load-shedding dark). */
+  get blackoutFactor(): number { return this.blackout; }
   private candidates: Vehicle[] = [];
   private candidateXZ = new Float32Array(64);
   private candidateIndices: number[] = []; private candidateDistances: number[] = [];
