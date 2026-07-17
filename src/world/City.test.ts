@@ -3,7 +3,7 @@ import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PLAYER } from '../config';
 import { fallDamage, jumpVelocity, stepVertical, type VerticalMotion } from '../core/GameRules';
 import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, RAILWAY_NETWORK, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
-import { CBD_CENTER, districtCenter, MAP_WORLD_SIZE, ridgeMetresAt } from './mapData';
+import { CBD_CENTER, distanceToRailwayCorridor, districtCenter, MAP_WORLD_SIZE, RAILWAY_CORRIDOR_HALF_WIDTH, RAILWAY_STATIONS, RAILWAY_STATION_SITES, ridgeMetresAt } from './mapData';
 import { CITY_JUNCTIONS, signalCornerOffset } from './UrbanInfrastructure';
 
 describe('generated Joburg road topology', () => {
@@ -43,6 +43,20 @@ describe('generated Joburg road topology', () => {
     const length = (points: { x: number; z: number }[]): number =>
       points.reduce((sum, point, index) => index ? sum + Math.hypot(point.x - points[index - 1]!.x, point.z - points[index - 1]!.z) : 0, 0);
     expect(RAILWAY_NETWORK.every((line) => length(line.points) >= 1200)).toBe(true);
+  });
+
+  it('projects every generated passenger station onto a real railway corridor', () => {
+    // Sites now come from the pipeline's full `stations` coverage — a superset of the old
+    // station-kind landmarks (the real Gautrain trio is still represented by its OSM stations).
+    expect(RAILWAY_STATION_SITES.length).toBeGreaterThanOrEqual(Math.max(RAILWAY_STATIONS.length, 15));
+    for (const key of ['Park', 'Sandton', 'Rosebank']) {
+      expect(RAILWAY_STATION_SITES.some((station) => station.name.includes(key)), key).toBe(true);
+    }
+    for (const station of RAILWAY_STATION_SITES) {
+      expect(station.sourceDistance, station.name).toBeLessThan(150);
+      expect(Math.hypot(station.dirX, station.dirZ), station.name).toBeCloseTo(1);
+      expect(distanceToRailwayCorridor(station.x, station.z), station.name).toBeCloseTo(-RAILWAY_CORRIDOR_HALF_WIDTH, 5);
+    }
   });
 
   it('defines named, phased signalized intersections at major crossings', () => {

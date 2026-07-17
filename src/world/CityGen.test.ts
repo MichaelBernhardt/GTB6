@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintRailClearance, footprintRoadClearance, generateCell, type GeneratedBuilding } from './CityGen';
+import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintRailwayClearance, footprintRoadClearance, generateCell, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, type GeneratedBuilding } from './CityGen';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
-import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_WORLD_SIZE, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
+import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_WORLD_SIZE, RAILWAY_STATION_SITES, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 
 const HALF = MAP_WORLD_SIZE / 2;
@@ -91,18 +91,19 @@ describe('citywide parcel layout', () => {
     expect(worst).toBeGreaterThanOrEqual(1.0);
   });
 
-  it('never places a building footprint over a rail corridor (the road rule, on rails)', () => {
-    // Owner: "ensure buildings and clutter aren't placed on tracks". Every footprint must clear the
-    // ballast bed + margin — checked over the whole rotated W×D rectangle, exactly like the road scan.
-    let onBallast = 0; let worst = Infinity;
-    for (const b of all) {
-      const clr = footprintRailClearance(b.x, b.z, b.width, b.depth, b.heading);
-      if (clr < worst) worst = clr;
-      if (clr < 0) onBallast++;
+  it('keeps every complete building footprint out of railway corridors and station sites', () => {
+    let worst = Infinity;
+    for (const building of all) {
+      const clearance = footprintRailwayClearance(building.x, building.z, building.width, building.depth, building.heading);
+      worst = Math.min(worst, clearance);
+      expect(clearance, `${building.style} covers railway at ${building.x.toFixed(1)},${building.z.toFixed(1)}`).toBeGreaterThanOrEqual(RAILWAY_BUILDING_CLEARANCE - 1e-6);
     }
-    expect(onBallast, `${onBallast} buildings overlap the rail ballast`).toBe(0);
-    expect(worst).toBeGreaterThanOrEqual(1.0);
-  }, 30_000);
+    expect(worst).toBeLessThan(10); // the guard is exercised by real parcels near the railway belt
+    for (const station of RAILWAY_STATION_SITES) {
+      const nearestFootprint = Math.min(...all.map((building) => Math.hypot(building.x - station.x, building.z - station.z) - Math.hypot(building.width, building.depth) / 2));
+      expect(nearestFootprint, station.name).toBeGreaterThanOrEqual(RAILWAY_STATION_CLEARANCE);
+    }
+  });
 
   it('keeps the road-corridor guarantee in the tight CBD grid AND a low-density suburb', () => {
     // Representative sample from both ends of the density range: the highrise CBD (thin blocks, big

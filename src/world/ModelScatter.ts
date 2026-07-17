@@ -33,6 +33,7 @@ import {
   MAP_WORLD_SIZE,
   pointInPolygon,
   pointInAnyPolygon,
+  RAILWAY_STATION_SITES,
   WATER_POLYGONS,
   type GeneratedRoad,
   type MapPolygon,
@@ -41,7 +42,7 @@ import { classifyZone, type Zone } from './data/zoning';
 import { RESERVED_PADS } from './placements';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 import { MODEL_INDEX } from './models/catalog';
-import { CELL_SIZE, allBuildings, footprintRailClearance, footprintRoadClearance } from './CityGen';
+import { CELL_SIZE, RAILWAY_STATION_CLEARANCE, allBuildings, footprintRailwayClearance, footprintRoadClearance } from './CityGen';
 
 /** One placed model: which catalog builder to run, where, and the seed/variant it builds from. */
 export interface ScatteredModel {
@@ -279,6 +280,10 @@ function craftedBlocks(x: number, z: number, radius: number): boolean {
   return false;
 }
 
+function stationBlocks(x: number, z: number, radius: number): boolean {
+  return RAILWAY_STATION_SITES.some((station) => (station.x - x) ** 2 + (station.z - z) ** 2 < (RAILWAY_STATION_CLEARANCE + radius) ** 2);
+}
+
 /** Spatial grid over the procedural CityGen building footprints so scatter never lands on one. */
 class BuildingIndex {
   private cells = new Map<string, Array<{ x: number; z: number; r: number }>>();
@@ -336,13 +341,13 @@ function tryPlace(
   const w = def.maxFootprint.w; const d = def.maxFootprint.d;
   if (Math.abs(x) > HALF_WORLD - 20 || Math.abs(z) > HALF_WORLD - 20) return false;
   // The decision context is read at the frontage/grid point, but the model lands here — so re-check
-  // the hard exclusions (water, runway, road corridor) at the actual centre, where a set-back could
+  // the hard exclusions (water, runway, road/rail corridors) at the actual centre, where a set-back could
   // otherwise drift a mass off the buildable ground.
   if (pointInAnyPolygon(WATER_POLYGONS, x, z) || pointInAnyPolygon(AERODROME_POLYGONS, x, z)) return false;
   if (footprintRoadClearance(x, z, w, d, heading) < roadClear) return false;
-  // The rail corridor is as off-limits as the carriageway: same margins (structures 2.5, foliage 0.7).
-  if (footprintRailClearance(x, z, w, d, heading) < roadClear) return false;
+  if (footprintRailwayClearance(x, z, w, d, heading) < roadClear) return false;
   const footR = Math.hypot(w, d) / 2;
+  if (stationBlocks(x, z, footR)) return false;
   if (craftedBlocks(x, z, footR * 0.7)) return false;
   if (buildings.blocks(x, z, footR)) return false;
   if (!occ.free(x, z, footR, def.spacing, name)) return false;

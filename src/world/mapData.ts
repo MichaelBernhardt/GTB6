@@ -20,6 +20,11 @@ export interface GeneratedRoad {
 
 export interface GeneratedTrack extends GeneratedRoad { unpaved: true; }
 
+export interface GeneratedRailway {
+  name: string;
+  points: MapPt[];
+}
+
 export interface DistrictCenter {
   name: District;
   x: number;
@@ -194,17 +199,45 @@ export const GENERATED_TRACKS: GeneratedTrack[] = MAP.tracks
   .map((track) => ({ name: track.name, width: track.width, kind: track.kind, unpaved: true as const, points: toPts(track.points) }));
 
 /** Passenger rail lines (thinned by the pipeline): rendered as ballast + rails, never driveable. */
-export const GENERATED_RAILWAYS: Array<{ name: string; points: MapPt[] }> =
-  (MAP.railways ?? []).map((line) => ({ name: line.name, points: toPts(line.points) }));
+export const GENERATED_RAILWAYS: GeneratedRailway[] = (MAP.railways ?? [])
+  .map((line) => ({ name: line.name, points: toPts(line.points) }))
+  .filter((line) => line.points.length >= 2);
+
+export interface RailwaySpot {
+  x: number;
+  z: number;
+  /** Unit tangent of the railway at the projected point. */
+  dirX: number;
+  dirZ: number;
+  railway: GeneratedRailway;
+}
+
+/** Exact nearest point on any generated railway segment (not merely its nearest source vertex). */
+export function nearestRailwaySpot(x: number, z: number): RailwaySpot | undefined {
+  let best: RailwaySpot | undefined; let bestDistanceSq = Infinity;
+  for (const railway of GENERATED_RAILWAYS) {
+    for (let index = 0; index < railway.points.length - 1; index++) {
+      const a = railway.points[index]!; const b = railway.points[index + 1]!;
+      const dx = b.x - a.x; const dz = b.z - a.z; const lengthSq = dx * dx + dz * dz;
+      if (lengthSq < 1e-8) continue;
+      const t = Math.min(1, Math.max(0, ((x - a.x) * dx + (z - a.z) * dz) / lengthSq));
+      const px = a.x + dx * t; const pz = a.z + dz * t;
+      const distanceSq = (px - x) ** 2 + (pz - z) ** 2;
+      if (distanceSq < bestDistanceSq) {
+        const length = Math.sqrt(lengthSq);
+        bestDistanceSq = distanceSq;
+        best = { x: px, z: pz, dirX: dx / length, dirZ: dz / length, railway };
+      }
+    }
+  }
+  return best;
+}
 
 /** A passenger stop on a rail line: trains dwell here, the world builds a platform here. */
 export interface MapStation { name: string; line: string; x: number; z: number; source: 'osm' | 'synthetic'; }
 
 /** Every generated rail station (both line ends + OSM/synthesized intermediate stops). */
 export const STATIONS: MapStation[] = MAP.stations ?? [];
-
-/** Gravel ballast bed width (u) — the rail corridor every placement rule must keep clear of. */
-export const RAIL_BALLAST_WIDTH = 5.2;
 
 // ---- Districts -------------------------------------------------------------
 
@@ -365,6 +398,44 @@ export function landmark(name: string): MapLandmark | undefined {
   return LANDMARKS.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
 }
 
+/** Named passenger stations supplied by the map pipeline. */
+export const RAILWAY_STATIONS: MapLandmark[] = LANDMARKS.filter((entry) => entry.kind === 'station');
+
+export interface RailwayStationSite extends MapLandmark {
+  dirX: number;
+  dirZ: number;
+  railway: GeneratedRailway;
+  /** Offset from the source landmark to its rendered, track-aligned site. */
+  sourceDistance: number;
+}
+
+/** Station architecture is snapped to real track so platforms can never float beside or cross the line.
+ *  Sites come from the pipeline's full `stations` coverage (a stop at every line end + 2.5–5 km spacing),
+ *  deduped at shared-interchange points; the station-kind landmarks are the fallback on older maps.
+ *  The Lughawe Halt is excluded — Airport.ts builds its own bespoke platform beside the apron. */
+export const RAILWAY_STATION_SITES: RailwayStationSite[] = (() => {
+  const sources: Array<{ name: string; x: number; z: number }> = STATIONS.length > 0
+    ? STATIONS.filter((station) => !/^lughawe halt$/i.test(station.name))
+    : RAILWAY_STATIONS;
+  const sites: RailwayStationSite[] = [];
+  for (const station of sources) {
+    if (sites.some((prior) => (prior.x - station.x) ** 2 + (prior.z - station.z) ** 2 < 40 ** 2)) continue; // one physical interchange, one site
+    const spot = nearestRailwaySpot(station.x, station.z);
+    if (!spot) continue;
+    sites.push({
+      name: station.name,
+      kind: 'station',
+      x: spot.x,
+      z: spot.z,
+      dirX: spot.dirX,
+      dirZ: spot.dirZ,
+      railway: spot.railway,
+      sourceDistance: Math.hypot(spot.x - station.x, spot.z - station.z),
+    });
+  }
+  return sites;
+})();
+
 // ---- Road spot helpers (data-driven anchor placement) -------------------------
 
 export interface RoadSpot {
@@ -459,26 +530,24 @@ export function distanceToRoadEdge(x: number, z: number): number {
   return distanceToEdge(edgeGrid, x, z, ROAD_EDGE_CAP);
 }
 
-// ---- Rail-corridor distance grid -------------------------------------------------
+// ---- Railway-corridor distance grid -----------------------------------------
 
-/** How far beyond the ballast edge the rail grid can measure accurately. */
-export const RAIL_EDGE_CAP = 14;
+/** Half-width of the rendered ballast bed. Placement code protects this exact shared corridor. */
+export const RAILWAY_CORRIDOR_HALF_WIDTH = 2.6;
+/** How far beyond the ballast edge the railway grid measures accurately. */
+export const RAILWAY_EDGE_CAP = 18;
 
-const railEdgeGrid = new Map<string, EdgeSegment[]>();
-for (const line of GENERATED_RAILWAYS) {
-  for (let index = 0; index < line.points.length - 1; index++) {
-    const a = line.points[index]!; const b = line.points[index + 1]!;
-    insertEdgeSegment(railEdgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: RAIL_BALLAST_WIDTH / 2 }, RAIL_EDGE_CAP);
+const railwayEdgeGrid = new Map<string, EdgeSegment[]>();
+for (const railway of GENERATED_RAILWAYS) {
+  for (let index = 0; index < railway.points.length - 1; index++) {
+    const a = railway.points[index]!; const b = railway.points[index + 1]!;
+    insertEdgeSegment(railwayEdgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: RAILWAY_CORRIDOR_HALF_WIDTH }, RAILWAY_EDGE_CAP);
   }
 }
 
-/**
- * Distance from a point to the nearest rail BALLAST edge (negative when on the rail bed),
- * clamped to RAIL_EDGE_CAP — the road-corridor rule's twin, so buildings and scatter keep
- * off the tracks exactly the way they keep off the streets.
- */
-export function distanceToRailEdge(x: number, z: number): number {
-  return distanceToEdge(railEdgeGrid, x, z, RAIL_EDGE_CAP);
+/** Distance to the nearest ballast edge (negative on the railway bed), capped for cheap bulk placement. */
+export function distanceToRailwayCorridor(x: number, z: number): number {
+  return distanceToEdge(railwayEdgeGrid, x, z, RAILWAY_EDGE_CAP);
 }
 
 // ---- Signalised junctions -----------------------------------------------------

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PLATFORM_OFFSET, PLATFORM_WIDTH, pickPlatformSide, trackDirectionAt, uniqueStationSites } from './RailStations';
-import { GENERATED_RAILWAYS, RAIL_BALLAST_WIDTH, STATIONS, type MapPt } from './mapData';
+import { GENERATED_RAILWAYS, RAILWAY_STATION_SITES, STATIONS, type MapPt } from './mapData';
 
 const arcAndDistance = (points: MapPt[], x: number, z: number): { s: number; dist: number } => {
   let bestS = 0; let bestD = Infinity; let acc = 0;
@@ -49,46 +48,26 @@ describe('generated station data (owner guarantees)', () => {
     }
   });
 
-  it("shares interchange names but never duplicates a name across distant stops", () => {
+  it('shares interchange names but never duplicates a name across distant stops', () => {
     const byName = new Map<string, Array<{ x: number; z: number }>>();
-    for (const station of STATIONS) (byName.get(station.name) ?? byName.set(station.name, []).get(station.name)!).push(station);
+    for (const station of STATIONS) {
+      const bucket = byName.get(station.name) ?? [];
+      bucket.push(station); byName.set(station.name, bucket);
+    }
     for (const [name, sites] of byName) {
       for (const a of sites) for (const b of sites) {
         expect(Math.hypot(a.x - b.x, a.z - b.z), name).toBeLessThan(450); // same physical interchange
       }
     }
   });
-});
 
-describe('station build helpers', () => {
-  const LINE: MapPt[] = [{ x: 0, z: 0 }, { x: 100, z: 0 }, { x: 100, z: 100 }];
-
-  it('reads the track direction at the nearest segment', () => {
-    expect(trackDirectionAt(LINE, 50, 5)).toMatchObject({ ux: 1, uz: 0 });
-    expect(trackDirectionAt(LINE, 95, 60)).toMatchObject({ ux: 0, uz: 1 });
-  });
-
-  it('puts the platform on the side with more room to the nearest road', () => {
-    const roadOnPlus = (_x: number, z: number): number => (z > 0 ? 1 : 10); // road hugs the +z side
-    expect(pickPlatformSide(50, 0, 1, 0, roadOnPlus)).toBe(-1);
-    const roadOnMinus = (_x: number, z: number): number => (z < 0 ? 1 : 10);
-    expect(pickPlatformSide(50, 0, 1, 0, roadOnMinus)).toBe(1);
-    const open = (): number => 14;
-    expect(pickPlatformSide(50, 0, 1, 0, open)).toBe(1); // tie breaks deterministically
-  });
-
-  it('keeps the platform clear of the loading gauge', () => {
-    // Inner platform edge must sit beyond the ballast half-width (the consist body is narrower still).
-    expect(PLATFORM_OFFSET - PLATFORM_WIDTH / 2).toBeGreaterThan(RAIL_BALLAST_WIDTH / 2);
-  });
-
-  it('collapses shared interchange entries to one physical site and skips the aerodrome halt', () => {
-    const sites = uniqueStationSites();
-    for (const a of sites) {
-      expect(sites.filter((b) => Math.hypot(a.x - b.x, a.z - b.z) < 40)).toHaveLength(1);
+  it('collapses shared interchange entries to one build site and leaves the airport halt to Airport.ts', () => {
+    for (const a of RAILWAY_STATION_SITES) {
+      expect(RAILWAY_STATION_SITES.filter((b) => Math.hypot(a.x - b.x, a.z - b.z) < 40)).toHaveLength(1);
     }
-    // The Lughawe Halt is built by Airport.ts — the generic builder must leave it alone.
-    expect(sites.some((site) => /lughawe/i.test(site.name))).toBe(false);
-    expect(STATIONS.some((station) => /lughawe/i.test(station.name))).toBe(true); // but the schedule still stops there
+    // The Lughawe Halt keeps its bespoke platform beside the apron — no generic double-up...
+    expect(RAILWAY_STATION_SITES.some((site) => /lughawe/i.test(site.name))).toBe(false);
+    // ...but the schedule still stops there (the spur end station stays in the stop list).
+    expect(STATIONS.some((station) => /lughawe/i.test(station.name))).toBe(true);
   });
 });
