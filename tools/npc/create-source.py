@@ -117,6 +117,9 @@ def make_eye_texture(output):
 def make_outfit_texture(config, output):
     original = load_pixels(asset("clothes", config["outfit"], f'{config["outfit"]}_diffuse.png'))
     textile = load_pixels(os.path.join(PROJECT_ROOT, config["materialSource"]))
+    # Optional RGBA overlay in the outfit's UV space: uniform markings (hi-vis panels, lettering,
+    # badges, per-piece recolours) composite over the tinted fabric wherever alpha > 0.
+    overlay = load_pixels(os.path.join(PROJECT_ROOT, config["outfitOverlay"])) if config.get("outfitOverlay") else None
     result = array("f", [0.0]) * len(original)
     for index in range(0, len(original), 4):
         red, green, blue = original[index], original[index + 1], original[index + 2]
@@ -129,6 +132,17 @@ def make_outfit_texture(config, output):
         result[index + 1] = min(1.0, source[1] * shade)
         result[index + 2] = min(1.0, source[2] * shade)
         result[index + 3] = 1.0
+    if overlay is not None:
+        for index in range(0, len(result), 4):
+            alpha = overlay[index + 3]
+            if alpha <= 0.004:
+                continue
+            red, green, blue = original[index], original[index + 1], original[index + 2]
+            luminance = red * 0.22 + green * 0.68 + blue * 0.10
+            marking_shade = 0.62 + luminance * 0.5  # markings inherit a softened cloth shading so they sit IN the fabric
+            for channel in range(3):
+                value = min(1.0, overlay[index + channel] * marking_shade)
+                result[index + channel] = result[index + channel] * (1.0 - alpha) + value * alpha
     save_pixels(output, result)
 
 

@@ -52,7 +52,7 @@
   "committedArtifacts": [
     {
       "path": "art/npcs/manifest.json",
-      "sha256": "ef6d511d612d34127a2c06ac1b45ddff071e9384d2fa5e44f22c0d0b6781e9f8"
+      "sha256": "80f0ac0f6539242b6ae3b6e50fc71ab673be570fbcc88d6d2187bf3cb623e0bc"
     },
     {
       "path": "art/npcs/materials/auntie-portia-berry-knit-source.png",
@@ -168,11 +168,11 @@
     },
     {
       "path": "art/npcs/previews/jmpd-patrol-officer-animations.jpg",
-      "sha256": "dfd35e5e913ef39aa47b5b96dfe70429e694366fb119445fcbec5fb1eb9bc285"
+      "sha256": "9cf3ddb0cec50fbca1e6bc3563a9708fd325ef9f7c11310bc21a8e5abbc97205"
     },
     {
       "path": "art/npcs/previews/jmpd-patrol-officer-turnaround.jpg",
-      "sha256": "9c65e850e2aaed1d0e1d99a4ce4e87f0aeb6251dd61ef5ccbd67fddffdef7224"
+      "sha256": "a011c949fdf593f48fd042930cbdad942b6b9441537c9d40d633c6adbf8c9845"
     },
     {
       "path": "art/npcs/previews/joburg-driver-animations.jpg",
@@ -480,7 +480,7 @@
     },
     {
       "path": "public/textures/npcs/jmpd-patrol-officer-outfit-basecolor.jpg",
-      "sha256": "c9445949b505e3da33ab556c2c22597fe152d66fca3270d45a3344ac843981fa"
+      "sha256": "f4438a0bd270bfb7976d1cba0d55d426d4d6b9b13bb052660d79e43d8758ce2f"
     },
     {
       "path": "public/textures/npcs/jmpd-patrol-officer-skin-basecolor.jpg",
