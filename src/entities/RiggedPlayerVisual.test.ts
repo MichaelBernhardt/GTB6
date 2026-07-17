@@ -150,6 +150,24 @@ describe('rigged player runtime transitions and firearm poses', () => {
     expect(internals.actions.get('walk')!.getEffectiveWeight()).toBe(0);
   });
 
+  it('carries weapons muzzle-down-forward and aims them along the facing for every ranged weapon', async () => {
+    const visual = await loadVisual();
+    for (const weapon of ['pistol', 'smg', 'shotgun', 'sniper', 'rpg'] as const) {
+      visual.setWeapon(weapon); visual.setState(initialPlayerVisualState()); stepVisual(visual, 0.6);
+      visual.group.updateMatrixWorld(true);
+      const mesh = visual.group.getObjectByName(`RiggedWeapon:${weapon}`)!;
+      const muzzle = () => new THREE.Vector3(0, -1, 0).applyQuaternion(mesh.getWorldQuaternion(new THREE.Quaternion()));
+      const carry = muzzle();
+      expect(carry.y, `${weapon} carry points down`).toBeLessThan(-0.55);
+      expect(carry.z, `${weapon} carry points forward, not backwards`).toBeGreaterThan(0.4);
+      expect(Math.abs(carry.x), `${weapon} carry stays in the sagittal plane`).toBeLessThan(0.25);
+      visual.setState({ ...initialPlayerVisualState(), aiming: true }); stepVisual(visual, 0.6);
+      visual.group.updateMatrixWorld(true);
+      const aim = muzzle();
+      expect(aim.z, `${weapon} aims along the facing`).toBeGreaterThan(0.97);
+    }
+  });
+
   it('raises every ranged weapon on unaimed fire and supports long guns with the off-hand', async () => {
     const visual = await loadVisual();
     for (const weapon of ['pistol', 'smg', 'shotgun', 'sniper', 'rpg'] as const) {

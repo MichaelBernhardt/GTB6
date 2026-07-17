@@ -6,6 +6,7 @@ import { Pedestrian } from '../entities/Pedestrian';
 import { WORLD_SIZE } from '../config';
 import { buildCityNavPaths, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN, type City } from '../world/City';
 import { SPAWN_POINT } from '../world/placements';
+import { BLACKOUT_SIGHT_RADIUS } from './BlackoutStealth';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
 import { PoliceKnowledge, ROAM_RADIUS, SIGHT_RADIUS } from './PoliceKnowledge';
 import { maxInterceptors, PoliceSystem } from './PoliceSystem';
@@ -181,5 +182,29 @@ describe('ai intentions simulation', () => {
     expect(knowledge.lastKnown).toMatchObject({ x: scene.x, z: scene.z }); // knowledge never advanced past the scene — no cheating onto the live position
     expect(farthestWhileHot).toBeGreaterThan(ROAM_RADIUS); // the search drifts outward from the scene, not orbiting it
     expect(wanted.isWanted).toBe(false); // unseen decay ended the alert
+  });
+
+  it('cannot visually acquire a concealed player in a blackout beyond whites-of-eyes range, until a light gives them away', () => {
+    const police = new PoliceSystem(new THREE.Scene(), makeCity(), audio);
+    const wanted = new WantedSystem(); wanted.addCrime(40);
+    let sightings = 0; wanted.reportSeen = () => { sightings++; }; // count acquisitions without the decay clock muddying things
+    const player = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z);
+    const knowledge = new PoliceKnowledge(); knowledge.copWitness(player.x + 40, player.z); // dispatch holds a cold scene a block over
+    police.update(1 / 30, player, false, wanted, knowledge, () => {}, 0, undefined, false, true); // spawns the first unit, far away
+    const unit = police.vehicles[0]!;
+    // Concealed: a cruiser 20u out (well inside the normal SIGHT_RADIUS, LOS clear in this harness) sees nothing.
+    unit.group.position.set(player.x + 20, 0, player.z);
+    police.update(1 / 30, player, false, wanted, knowledge, () => {}, 0, undefined, false, true);
+    expect(sightings).toBe(0);
+    expect(knowledge.lastKnown).toMatchObject({ x: player.x + 40, z: player.z }); // knowledge stayed parked on the cold scene
+    // Whites of eyes: even pitch dark, standing almost on the cop is a sighting.
+    unit.group.position.set(player.x + BLACKOUT_SIGHT_RADIUS - 1, 0, player.z);
+    police.update(1 / 30, player, false, wanted, knowledge, () => {}, 0, undefined, false, true);
+    expect(sightings).toBe(1);
+    // Lit up (torch/muzzle flash/headlight cone → not concealed): the same 20u cruiser acquires immediately.
+    unit.group.position.set(player.x + 20, 0, player.z);
+    police.update(1 / 30, player, false, wanted, knowledge, () => {}, 0, undefined, false, false);
+    expect(sightings).toBe(2);
+    expect(knowledge.lastKnown).toMatchObject({ x: player.x, z: player.z }); // eyes on: knowledge snaps to the live position
   });
 });

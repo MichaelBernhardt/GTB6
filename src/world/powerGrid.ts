@@ -1,7 +1,7 @@
 import type * as THREE from 'three';
 
 interface PoweredEntry {
-  material: THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
+  material: THREE.MeshBasicMaterial | THREE.MeshLambertMaterial | THREE.MeshStandardMaterial;
   onColor: number;
   offColor: number;
   onEmissiveIntensity?: number;

@@ -192,9 +192,10 @@ export class Pedestrian {
   }
 
   makeCarGuard(): void {
+    // The hi-vis vest is painted into the car-guard's outfit texture now (outfitOverlay —
+    // body-conforming and light-responsive, so it goes dark in a blackout like everything else);
+    // the old emissive RoundedBox glowed through the night from any distance.
     this.carGuard = true; this.contact = true; this.group.name = 'Car Guard';
-    const vest = new THREE.Mesh(new RoundedBoxGeometry(0.52, 0.5, 0.34, 3, 0.06), new THREE.MeshStandardMaterial({ color: 0xb6f22e, emissive: 0x86c010, emissiveIntensity: 0.55, roughness: 0.6 }));
-    vest.position.y = 1.08; vest.castShadow = true; this.group.add(vest);
   }
 
   /** Flags the player's taxi down: freeze at the curb with an arm out until picked up or released. */

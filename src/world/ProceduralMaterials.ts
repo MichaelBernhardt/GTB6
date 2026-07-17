@@ -350,7 +350,7 @@ const SIGN_ATLAS = { width: 2048, height: 4096, slotW: 256, slotH: 64 };
 interface SignSlot { u0: number; v0: number; u1: number; v1: number; }
 let signAtlas: { context: CanvasRenderingContext2D; texture: THREE.CanvasTexture; next: number } | undefined;
 const signSlots = new Map<string, SignSlot>();
-const signMaterials = new Map<string, THREE.MeshBasicMaterial>();
+const signMaterials = new Map<string, THREE.MeshLambertMaterial>();
 
 /** Column/row layout of the sign atlas; capacity is the last-usable index (one slot reserved for overflow). */
 export function signAtlasLayout(): { columns: number; rows: number; capacity: number } {
@@ -396,9 +396,32 @@ export function createSignMesh(geometry: THREE.BufferGeometry, text: string, acc
   const materialKey = `${options.doubleSide ? 'double' : 'front'}-${options.powered ? 'powered' : 'plain'}`;
   let material = signMaterials.get(materialKey);
   if (!material) {
-    material = new THREE.MeshBasicMaterial({ map: signAtlas!.texture, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide });
+    material = new THREE.MeshLambertMaterial({ map: signAtlas!.texture, emissive: 0xffffff, emissiveMap: signAtlas!.texture, emissiveIntensity: 0, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide });
     if (options.powered) registerPowered(material, 0xffffff, 0x2a2d2f);
     signMaterials.set(materialKey, material);
   }
   return new THREE.Mesh(geometry, material);
+}
+
+/** Signs are painted boards, not lamps (BUG: they were unlit MeshBasic — full-bright through load shedding
+ *  at any distance, and torch/headlight beams couldn't touch them). Now a Lambert face carries the atlas as
+ *  BOTH diffuse and emissive: the emissive keeps night text readable exactly like the old look, and DayNight
+ *  sinks it each frame with the same eased blackout the sky/facades ride, leaving a light-responsive surface
+ *  the torch can pick out of the dark. */
+export const SIGN_NIGHT_EMISSIVE = 1; // full atlas brightness — matches the old always-unlit night look on a healthy grid
+export const SIGN_RETRO_BOOST = 0.6; // blackout-only diffuse over-response: beams pop off boards like glass-bead paint
+
+/** Emissive drive for every sign face: 0 by day (the sun lights them), full night glow on a healthy grid, sunk to 0 by the blackout ramp. */
+export function signEmissiveIntensity(night: number, blackout: number): number { return night * (1 - blackout) * SIGN_NIGHT_EMISSIVE; }
+
+/** Diffuse scale (1 = untouched): boosted only while blacked out at night — the cheap retro-reflective feel under a beam. */
+export function signDiffuseScale(night: number, blackout: number): number { return 1 + night * blackout * SIGN_RETRO_BOOST; }
+
+export function setSignGlow(night: number, blackout: number): void {
+  const emissive = signEmissiveIntensity(night, blackout);
+  const scale = signDiffuseScale(night, blackout);
+  for (const [key, material] of signMaterials) {
+    material.emissiveIntensity = emissive;
+    if (!key.includes('powered')) material.color.setScalar(scale); // powered boards' colour belongs to the power grid (its instant on/off flip)
+  }
 }

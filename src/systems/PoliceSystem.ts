@@ -4,6 +4,7 @@ import { JMPD_PATROL_NPC_ID } from '../entities/NpcCatalog';
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import type { City } from '../world/City';
+import { policeSightRadius } from './BlackoutStealth';
 import { ProgressWatchdog, replanInterval, RoutePlanner, type NavPoint } from './NavGraph';
 import { ARRIVE_RADIUS, pickRoamGoal, ROAM_MIN_LEG, ROAM_RADIUS, SIGHT_RADIUS, type KnownPosition, type PoliceKnowledge } from './PoliceKnowledge';
 import type { WantedSystem } from './WantedSystem';
@@ -200,8 +201,9 @@ export class PoliceSystem {
     return count;
   }
 
-  update(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, knowledge: PoliceKnowledge<unknown>, damagePlayer: (amount: number) => void, reinforcementModifier = 0, damageVehicle?: (amount: number) => void, playerSirenOn = false): void {
+  update(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, knowledge: PoliceKnowledge<unknown>, damagePlayer: (amount: number) => void, reinforcementModifier = 0, damageVehicle?: (amount: number) => void, playerSirenOn = false, concealed = false): void {
     const damageCar = damageVehicle ?? damagePlayer;
+    const sightRange = policeSightRadius(concealed); // blackout stealth: an unlit player in a blackout shrinks every visual-acquisition check to whites-of-eyes range
     this.planner.beginFrame();
     this.spawnCooldown -= dt;
     const desired = maxInterceptors(wanted.level, reinforcementModifier);
@@ -209,14 +211,14 @@ export class PoliceSystem {
     const known = knowledge.lastKnown;
     const dispatchAt = known ? new THREE.Vector3(known.x, 0, known.z) : playerPosition;
     while (active.length < desired && this.spawnCooldown <= 0) { this.spawnUnit(dispatchAt); this.spawnCooldown = 4; const spawned = this.vehicles[this.vehicles.length - 1]; if (spawned) active.push(spawned); }
-    const sighted = wanted.isWanted && active.some((vehicle) => vehicle.group.position.distanceTo(playerPosition) < SIGHT_RADIUS && this.hasLineOfSight(vehicle.group.position, playerPosition));
+    const sighted = wanted.isWanted && active.some((vehicle) => vehicle.group.position.distanceTo(playerPosition) < sightRange && this.hasLineOfSight(vehicle.group.position, playerPosition));
     if (sighted) { knowledge.sight(playerPosition.x, playerPosition.z); wanted.reportSeen(); }
     const target = wanted.isWanted ? knowledge.lastKnown : null;
     for (const vehicle of active) {
       const brain = this.brainOf(vehicle);
       brain.shootIn -= dt; brain.contactIn -= dt; brain.bumpIn -= dt;
       const distance = vehicle.group.position.distanceTo(playerPosition);
-      const seen = sighted && distance < SIGHT_RADIUS && this.hasLineOfSight(vehicle.group.position, playerPosition);
+      const seen = sighted && distance < sightRange && this.hasLineOfSight(vehicle.group.position, playerPosition);
       if (brain.mode !== 'arrest') {
         brain.mode = target ? nextUnitMode(brain.mode, { sighted: seen, playerInVehicle, distance, speed: vehicle.speed, crewOut: false }) : 'drive';
         if (brain.mode === 'arrest') this.deployCrew(vehicle);
@@ -243,7 +245,7 @@ export class PoliceSystem {
       }
     }
     this.separateUnits(dt, active, playerPosition);
-    this.updateOfficers(dt, playerPosition, playerInVehicle, wanted, known, damagePlayer, damageCar);
+    this.updateOfficers(dt, playerPosition, playerInVehicle, wanted, known, damagePlayer, damageCar, sightRange);
     const alive = this.vehicles.filter((vehicle) => !vehicle.wrecked);
     const nearest = alive.reduce<Vehicle | undefined>((best, vehicle) => !best || vehicle.group.position.distanceToSquared(playerPosition) < best.group.position.distanceToSquared(playerPosition) ? vehicle : best, undefined);
     this.audio.setSiren(playerSirenOn || Boolean(wanted.isWanted && nearest), playerSirenOn ? playerPosition.x : nearest?.group.position.x, playerSirenOn ? playerPosition.z : nearest?.group.position.z);
@@ -415,7 +417,7 @@ export class PoliceSystem {
 
   /** Foot officers: crouch in cover at the car doors or run the suspect down (on belief — live position only
    *  with their own line of sight). Two stars releases hitscan fire with distance falloff and cooldowns. */
-  private updateOfficers(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, known: KnownPosition | null, damagePlayer: (amount: number) => void, damageCar: (amount: number) => void): void {
+  private updateOfficers(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, known: KnownPosition | null, damagePlayer: (amount: number) => void, damageCar: (amount: number) => void, sightRange = SIGHT_RADIUS): void {
     for (let index = this.officers.length - 1; index >= 0; index--) {
       const officer = this.officers[index]; if (!officer) continue;
       const ped = officer.ped;
@@ -438,13 +440,13 @@ export class PoliceSystem {
         else { ped.state = 'idle'; ped.idleTime = 6; ped.takeCover(); ped.group.rotation.y = Math.atan2(playerPosition.x - position.x, playerPosition.z - position.z); }
       } else {
         ped.state = 'hostile';
-        if (position.distanceTo(playerPosition) < SIGHT_RADIUS && this.hasLineOfSight(position, playerPosition)) { ped.destination.copy(playerPosition); ped.destination.x += officer.side * 0.9; } // shoulder-width apart, not one dogpile point
+        if (position.distanceTo(playerPosition) < sightRange && this.hasLineOfSight(position, playerPosition)) { ped.destination.copy(playerPosition); ped.destination.x += officer.side * 0.9; } // shoulder-width apart, not one dogpile point
         else if (known) ped.destination.set(known.x, 0, known.z);
       }
       officer.shootIn -= dt;
       if (wanted.level >= SHOOT_MIN_WANTED && officer.shootIn <= 0) {
         const distance = position.distanceTo(playerPosition);
-        if (distance > 2.4 && distance < 44 && this.hasLineOfSight(position, playerPosition)) {
+        if (distance > 2.4 && distance < Math.min(44, sightRange) && this.hasLineOfSight(position, playerPosition)) { // concealed-in-blackout: no live fire at a suspect they can't make out
           officer.shootIn = 0.9 + Math.random() * 0.9;
           this.audio.copGunshot(position.x, position.z);
           if (Math.random() < copHitChance(distance)) { if (playerInVehicle) damageCar(4); else damagePlayer(4 + wanted.level); }

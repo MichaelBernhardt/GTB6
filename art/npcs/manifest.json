@@ -803,7 +803,8 @@
    ],
    "secondaryBelow": 0.48,
    "materialSource": "art/npcs/materials/car-guard-navy-drill-source.png",
-   "turnaround": "art/npcs/references/yeoville-car-guard-turnaround.png"
+   "turnaround": "art/npcs/references/yeoville-car-guard-turnaround.png",
+   "outfitOverlay": "art/npcs/materials/car-guard-vest-overlay.png"
   },
   {
    "id": "joburg-driver",
