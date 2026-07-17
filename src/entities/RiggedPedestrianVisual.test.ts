@@ -192,6 +192,37 @@ describe('cached rigged pedestrian instances', () => {
     expect(visuals[MAX_ACTIVE_RAGDOLLS].ragdollBody!.frozen).toBe(false); // the fresh death simulates
   });
 
+  it('releases its registry slot when a ragdolling ped is disposed (lifecycle culling)', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const visuals: RiggedPedestrianVisual[] = [];
+    for (let index = 0; index < MAX_ACTIVE_RAGDOLLS; index++) visuals.push(new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 }));
+    await Promise.all(visuals.map((visual) => visual.load()));
+    for (const visual of visuals) { visual.setState(state({ state: 'down', dead: true })); visual.update(1 / 30, env); }
+    expect(activeRagdollCount()).toBe(MAX_ACTIVE_RAGDOLLS);
+    visuals[3].dispose(); // corpse culled mid-simulation
+    expect(activeRagdollCount()).toBe(MAX_ACTIVE_RAGDOLLS - 1); // no leaked slot pinning the cap
+    const fresh = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    await fresh.load();
+    fresh.setState(state({ state: 'down', dead: true })); fresh.update(1 / 30, env);
+    expect(activeRagdollCount()).toBe(MAX_ACTIVE_RAGDOLLS); // freed slot reused...
+    expect(visuals[0].ragdollBody!.frozen).toBe(false); // ...without evicting the oldest survivor
+  });
+
+  it('a settled corpse shrugs off another hit: late impacts neither crash nor restart the ragdoll', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    await visual.load();
+    visual.setState(state({ state: 'down', dead: true }));
+    for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
+    const body = visual.ragdollBody!;
+    expect(body.frozen).toBe(true);
+    visual.primeRagdollImpact(1, 0); // Pedestrian.takeDamage early-returns for down peds, but even a stray prime must be inert
+    for (let frame = 0; frame < 10; frame++) visual.update(1 / 30, env);
+    expect(visual.ragdollBody).toBe(body); // same body, still frozen — no re-seed, no re-kick
+    expect(body.frozen).toBe(true);
+    expect(activeRagdollCount()).toBe(0);
+  });
+
   it('replaces a placeholder asynchronously and remains fail-open when loading fails', async () => {
     const parent = new THREE.Group(); const placeholder = new THREE.Group(); parent.add(placeholder);
     let resolve!: (gltf: GLTF) => void; const deferred = new Promise<GLTF>((accept) => { resolve = accept; });

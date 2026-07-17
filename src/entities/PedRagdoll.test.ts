@@ -88,6 +88,17 @@ describe('VerletRagdoll', () => {
     for (let particle = 0; particle < RAGDOLL_PARTICLE_COUNT; particle++) expect(particleX(body, particle)).toBeLessThanOrEqual(1.05);
   });
 
+  it('one-sided hinge limits recover a grotesquely backward-bent knee without steering valid bends', () => {
+    const body = new VerletRagdoll(standingSeed());
+    // Hyperextend the left knee: ankle thrown far forward so the shin bends the wrong way.
+    body.positions[P.ankleL * 3 + 2] = body.positions[P.kneeL * 3 + 2] + 0.4;
+    body.positions[P.ankleL * 3 + 1] = body.positions[P.kneeL * 3 + 1];
+    const before = body.hingeViolation(0);
+    expect(before).toBeGreaterThan(0.3); // clearly wrong-way
+    simulate(body, flat, RAGDOLL_TIMEOUT);
+    for (let hinge = 0; hinge < body.hingeCount; hinge++) expect(body.hingeViolation(hinge)).toBeLessThan(0.25); // settled inside the loose limit
+  });
+
   it('is deterministic for identical seeds and kicks', () => {
     const first = new VerletRagdoll(standingSeed()); const second = new VerletRagdoll(standingSeed());
     first.kick(0.7, -0.7, 3); second.kick(0.7, -0.7, 3);

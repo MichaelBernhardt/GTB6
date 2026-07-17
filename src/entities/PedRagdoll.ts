@@ -62,6 +62,20 @@ const SPACERS: ReadonlyArray<readonly [number, number, number]> = [
   [P.hipL, P.ankleL, P.kneeL], [P.hipR, P.ankleR, P.kneeR],
 ];
 
+/** One-sided hinge limits (owner call: limbs go limp, physics does the rest — these never steer
+ *  toward a pose, they only stop knees/elbows bending grotesquely backwards). The bend side is the
+ *  sign of (root→joint × joint→end)·bodyRightAxis; a wrong-way bend beyond the tolerance nudges the
+ *  joint back toward the straight line, and the rods re-settle around it. */
+const HINGES: ReadonlyArray<{ root: number; joint: number; end: number; axisA: number; axisB: number; sign: number }> = [
+  { root: P.hipL, joint: P.kneeL, end: P.ankleL, axisA: P.hipL, axisB: P.hipR, sign: 1 },
+  { root: P.hipR, joint: P.kneeR, end: P.ankleR, axisA: P.hipL, axisB: P.hipR, sign: 1 },
+  { root: P.shoulderL, joint: P.elbowL, end: P.wristL, axisA: P.shoulderL, axisB: P.shoulderR, sign: -1 },
+  { root: P.shoulderR, joint: P.elbowR, end: P.wristR, axisA: P.shoulderL, axisB: P.shoulderR, sign: -1 },
+];
+const HINGE_TOLERANCE = 0.15; // sin of the allowed wrong-way bend (~8.6°) — loose, per the owner
+const HINGE_STRENGTH = 0.15; // metres of correction per unit violation per substep — soft, so it can't inject energy
+const HINGE_MAX_STEP = 0.02;
+
 /** How much of an impact kick each particle takes: the upper body whips away while the feet stay
  *  planted, so the corpse topples over its own legs instead of translating sideways. */
 const KICK_WEIGHTS = new Float32Array([
@@ -150,6 +164,7 @@ export class VerletRagdoll {
       for (let rod = 0; rod < RODS.length; rod++) this.solvePair(RODS[rod][0], RODS[rod][1], this.rodRest[rod], false);
       for (let spacer = 0; spacer < SPACERS.length; spacer++) this.solvePair(SPACERS[spacer][0], SPACERS[spacer][1], this.spacerMin[spacer], true);
     }
+    for (let hinge = 0; hinge < HINGES.length; hinge++) this.limitHinge(hinge);
     for (let i = 0; i < RAGDOLL_PARTICLE_COUNT; i++) {
       const ix = i * 3; const iy = ix + 1; const iz = ix + 2;
       if (env.blockedAt) { // coarse wall slide: clamp each horizontal axis independently, like City.clampMove
@@ -175,6 +190,43 @@ export class VerletRagdoll {
     this.stillSteps = maxSq < RAGDOLL_REST_DISTANCE * RAGDOLL_REST_DISTANCE ? this.stillSteps + 1 : 0;
     this.elapsed += RAGDOLL_STEP;
     if (this.stillSteps >= RAGDOLL_REST_STEPS || this.elapsed >= RAGDOLL_TIMEOUT) this.frozen = true;
+  }
+
+  /** Signed wrong-way bend of a hinge: positive means the joint is bent beyond straight to the
+   *  anatomically impossible side, as the sin of the bend angle. Exposed for tests. */
+  hingeViolation(index: number): number {
+    const { root, joint, end, axisA, axisB, sign } = HINGES[index];
+    const p = this.positions;
+    let ax = p[axisB * 3] - p[axisA * 3]; let ay = p[axisB * 3 + 1] - p[axisA * 3 + 1]; let az = p[axisB * 3 + 2] - p[axisA * 3 + 2];
+    const axisLength = Math.hypot(ax, ay, az);
+    if (axisLength < 1e-6) return 0;
+    ax /= axisLength; ay /= axisLength; az /= axisLength;
+    const tx = p[joint * 3] - p[root * 3]; const ty = p[joint * 3 + 1] - p[root * 3 + 1]; const tz = p[joint * 3 + 2] - p[root * 3 + 2];
+    const sx = p[end * 3] - p[joint * 3]; const sy = p[end * 3 + 1] - p[joint * 3 + 1]; const sz = p[end * 3 + 2] - p[joint * 3 + 2];
+    const norm = Math.hypot(tx, ty, tz) * Math.hypot(sx, sy, sz);
+    if (norm < 1e-6) return 0;
+    const bend = (ty * sz - tz * sy) * ax + (tz * sx - tx * sz) * ay + (tx * sy - ty * sx) * az; // (T×S)·axis
+    return -sign * bend / norm;
+  }
+
+  get hingeCount(): number { return HINGES.length; }
+
+  private limitHinge(index: number): void {
+    const violation = this.hingeViolation(index);
+    if (violation <= HINGE_TOLERANCE) return;
+    const { root, joint, end, axisA, axisB, sign } = HINGES[index];
+    const p = this.positions;
+    let ax = p[axisB * 3] - p[axisA * 3]; let ay = p[axisB * 3 + 1] - p[axisA * 3 + 1]; let az = p[axisB * 3 + 2] - p[axisA * 3 + 2];
+    const axisLength = Math.hypot(ax, ay, az); if (axisLength < 1e-6) return;
+    ax /= axisLength; ay /= axisLength; az /= axisLength;
+    // Gradient of the bend measure w.r.t. the joint is (end−root)×axis: pushing the joint along it
+    // (times `sign`) reduces the wrong-way bend without any target pose.
+    const lx = p[end * 3] - p[root * 3]; const ly = p[end * 3 + 1] - p[root * 3 + 1]; const lz = p[end * 3 + 2] - p[root * 3 + 2];
+    let gx = ly * az - lz * ay; let gy = lz * ax - lx * az; let gz = lx * ay - ly * ax;
+    const gradientLength = Math.hypot(gx, gy, gz); if (gradientLength < 1e-6) return;
+    const push = sign * Math.min(HINGE_MAX_STEP, (violation - HINGE_TOLERANCE) * HINGE_STRENGTH) / gradientLength;
+    gx *= push; gy *= push; gz *= push;
+    p[joint * 3] += gx; p[joint * 3 + 1] += gy; p[joint * 3 + 2] += gz;
   }
 
   private solvePair(a: number, b: number, rest: number, pushOnly: boolean): void {
