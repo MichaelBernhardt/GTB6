@@ -15,6 +15,8 @@ the procedural path; there is intentionally no procedural tree fallback.
   transparency path; the library has no texture, skin, animation, light, or camera dependencies.
 - Per-asset metadata records species, variant, maximum footprint, and slim trunk collider. Runtime adds only a seeded
   0.84–1.0 uniform scale and clones geometry so streamed cell baking can safely dispose each source instance.
+- Roadside and park trees use the same library: roadside trees retain shared source geometry for per-chunk instancing,
+  while park trees follow the normal static world merge. Runtime-generated trunk-and-sphere trees are not permitted.
 - Startup waits for both the protagonist and tree GLBs. Missing, malformed, or incomplete tree assets keep the city
   closed and expose Retry; a procedural substitute is not permitted.
 

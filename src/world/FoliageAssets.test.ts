@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { buildTreeAsset, installTreeLibrary, loadTreeLibrary, resetTreeLibraryForTests, TREE_LIBRARY_URL, TreeLibraryError } from './FoliageAssets';
+import { buildTreeAsset, buildTreeInstance, installTreeLibrary, loadTreeLibrary, resetTreeLibraryForTests, TREE_LIBRARY_URL, TreeLibraryError } from './FoliageAssets';
 
 async function actualLibrary() {
   const file = await readFile(resolve('public/models/foliage/joburg-trees.glb'));
@@ -29,6 +29,13 @@ describe('required Blender tree library', () => {
     expect(first.group.userData.treeVariant).toBe(second.group.userData.treeVariant);
     expect(first.group.scale.toArray()).toEqual(second.group.scale.toArray());
     expect(first.footprint).toEqual(second.footprint);
+
+    const instanced = buildTreeInstance('shade-tree', 42);
+    expect(instanced.variant).toBe(first.group.userData.treeVariant);
+    expect(instanced.scale).toBe(first.group.scale.x);
+    expect(instanced.parts.length).toBeGreaterThan(0);
+    expect(instanced.parts.every((part) => part.geometry.getAttribute('position').count > 0)).toBe(true);
+    expect(buildTreeInstance('shade-tree', 42).parts[0]!.geometry).toBe(instanced.parts[0]!.geometry);
   });
 
   it('rejects an incomplete library instead of partially installing it', async () => {
