@@ -15,6 +15,7 @@
  * Pure data + pure functions (no three.js) so tests and the headless perf script consume it freely.
  */
 import {
+  distanceToRailwayCorridor,
   distanceToRoadEdge,
   GENERATED_ROADS,
   METRES_PER_UNIT,
@@ -26,6 +27,7 @@ import {
   WATER_POLYGONS,
   nearestDistrict,
   pointInAnyPolygon,
+  RAILWAY_STATION_SITES,
   type GeneratedRoad,
 } from './mapData';
 import { classifyZone, type Zone } from './data/zoning';
@@ -53,6 +55,10 @@ const WALK_STEP = 8;
  * so a building fronting its own road is never rejected by its own frontage.
  */
 const ROAD_CLEARANCE = 2.5;
+/** Extra breathing room beyond the ballast edge: no facade, foundation, or overhang enters railway land. */
+export const RAILWAY_BUILDING_CLEARANCE = 2.5;
+/** Circular crafted-site claim around each track-aligned station (Park's long platforms span about 32u). */
+export const RAILWAY_STATION_CLEARANCE = 34;
 /** Footprint sampling pitch (units) for the road-corridor test — quarter-snapped AABBs sample exactly. */
 const FOOTPRINT_SAMPLE_STEP = 3;
 /** Shrink schedule for a mass that overhangs a road: multiply w&d per attempt, up to this many tries. */
@@ -91,7 +97,10 @@ function seeded(x: number, z: number, salt = 0): number {
  * centre. Uses the shared road-edge grid, so it is pure, deterministic and cheap. Exported so tests
  * can assert the citywide guarantee (no footprint intersects a road corridor).
  */
-export function footprintRoadClearance(cx: number, cz: number, width: number, depth: number, heading: number): number {
+function footprintClearance(
+  cx: number, cz: number, width: number, depth: number, heading: number,
+  distanceAt: (x: number, z: number) => number,
+): number {
   const c = Math.cos(heading); const s = Math.sin(heading);
   const hx = width / 2; const hz = depth / 2;
   const nx = Math.max(1, Math.ceil(width / FOOTPRINT_SAMPLE_STEP));
@@ -104,11 +113,21 @@ export function footprintRoadClearance(cx: number, cz: number, width: number, de
       // Same rotation City uses to place the collider, so the sampled rectangle IS the collider footprint.
       const wx = cx + lx * c + lz * s;
       const wz = cz - lx * s + lz * c;
-      const d = distanceToRoadEdge(wx, wz);
+      const d = distanceAt(wx, wz);
       if (d < min) min = d;
     }
   }
   return min;
+}
+
+export function footprintRoadClearance(cx: number, cz: number, width: number, depth: number, heading: number): number {
+  return footprintClearance(cx, cz, width, depth, heading, distanceToRoadEdge);
+}
+
+/** Minimum footprint distance to the edge of any railway ballast corridor. Negative means the mass
+ *  actually covers track; positive clearance protects foundations and facade detail as well. */
+export function footprintRailwayClearance(cx: number, cz: number, width: number, depth: number, heading: number): number {
+  return footprintClearance(cx, cz, width, depth, heading, distanceToRailwayCorridor);
 }
 
 interface ZoneShape {
@@ -166,6 +185,12 @@ function isBlocked(x: number, z: number, radius: number): boolean {
   for (const pad of RESERVED_PADS) if ((pad.x - x) ** 2 + (pad.z - z) ** 2 < (pad.radius + radius) ** 2) return true;
   for (const site of MANICURED_FOOTPRINTS) if ((site.x - x) ** 2 + (site.z - z) ** 2 < (site.radius + radius) ** 2) return true;
   return false;
+}
+
+/** Stations need the complete circumscribed footprint radius, unlike the looser visual spacing used by
+ *  generic anchor pads, because a platform corner hidden under a building would recreate the reported bug. */
+function stationBlocks(x: number, z: number, radius: number): boolean {
+  return RAILWAY_STATION_SITES.some((station) => (station.x - x) ** 2 + (station.z - z) ** 2 < (RAILWAY_STATION_CLEARANCE + radius) ** 2);
 }
 
 /** Coarse occupancy grid so parcels from different roads don't stack at intersections. */
@@ -231,7 +256,9 @@ function fitFootprint(
   let width = width0; let depth = depth0;
   for (let attempt = 0; attempt <= SHRINK_ATTEMPTS; attempt++) {
     const x = faceX + nX * (depth / 2); const z = faceZ + nZ * (depth / 2);
-    if (footprintRoadClearance(x, z, width, depth, heading) >= ROAD_CLEARANCE) return { x, z, width, depth };
+    const clearsRoads = footprintRoadClearance(x, z, width, depth, heading) >= ROAD_CLEARANCE;
+    const clearsRailways = footprintRailwayClearance(x, z, width, depth, heading) >= RAILWAY_BUILDING_CLEARANCE;
+    if (clearsRoads && clearsRailways) return { x, z, width, depth };
     if (Math.min(width, depth) * SHRINK_FACTOR < MIN_FOOTPRINT) break;
     width *= SHRINK_FACTOR; depth *= SHRINK_FACTOR;
   }
@@ -252,7 +279,7 @@ function commitBuilding(
     if (UNBUILT_POLYGON_GROUPS.some((polygons) => pointInAnyPolygon(polygons, sampleX, sampleZ))) return false;
   }
   const radius = Math.hypot(width, depth) / 2;
-  if (isBlocked(x, z, radius * 0.6) || !occ.free(x, z, radius)) return false;
+  if (isBlocked(x, z, radius * 0.6) || stationBlocks(x, z, radius) || !occ.free(x, z, radius)) return false;
   occ.add(x, z, radius);
   out.push({
     x, z, heading, width, depth,

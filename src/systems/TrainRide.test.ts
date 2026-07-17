@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cumulativeArc, poseAt } from './TrainSystem';
-import { cabAt, nearestArcOnSpan, stepAboard, stepDrive, type AboardBounds, type DriveParams } from './TrainRide';
+import { cabAt, nearestArcOnSpan, stepAboard, stepDrive, stitchRailPaths, type AboardBounds, type DriveParams } from './TrainRide';
 
 const LINE = [{ x: 0, z: 0 }, { x: 1000, z: 0 }, { x: 1000, z: 1000 }];
 const CUM = cumulativeArc(LINE);
@@ -108,5 +108,48 @@ describe('stepDrive', () => {
   it('coasts down to a stop with no input', () => {
     const state = run({ s: 500, v: 3 }, 0, 1, 30);
     expect(state.v).toBeCloseTo(0, 5);
+  });
+});
+
+describe('stitchRailPaths (junction coupling)', () => {
+  const P = (x: number, z: number) => ({ x, z });
+
+  it('joins two lines sharing an exact endpoint into one, deduping the joint vertex', () => {
+    // The real case: the airport spur STARTS at the Main Line's start vertex.
+    const spur = [P(-4659.3, 6113.6), P(-5079.1, 5917.9), P(-5826, 5571)];
+    const main = [P(-4659.3, 6113.6), P(-2362.4, 6700.2), P(7780, 7000)];
+    const out = stitchRailPaths([spur, main]);
+    expect(out).toHaveLength(1);
+    const line = out[0]!;
+    expect(line.length).toBe(5); // 3 + 3 minus the duplicated joint
+    // Continuous: no zero-length or near-zero segment anywhere.
+    for (let i = 1; i < line.length; i++) expect(Math.hypot(line[i]!.x - line[i - 1]!.x, line[i]!.z - line[i - 1]!.z)).toBeGreaterThan(0.5);
+    // Ends are the airport halt and the far east end.
+    const ends = [line[0]!, line[line.length - 1]!].map((p) => `${Math.round(p.x)}`).sort();
+    expect(ends).toEqual(['-5826', '7780']);
+  });
+
+  it('bridges a small gap (within tolerance) with an ordinary segment', () => {
+    const a = [P(0, 0), P(100, 0)];
+    const b = [P(104, 0), P(200, 0)]; // 4 u discontinuity
+    const out = stitchRailPaths([a, b]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.length).toBe(4); // gap kept as a real (short) segment, nothing deduped
+  });
+
+  it('leaves genuinely separate lines and mid-line branches alone', () => {
+    const main = [P(0, 0), P(500, 0), P(1000, 0)];
+    const branch = [P(500, 0), P(500, 400)]; // meets the MIDDLE of main: a switch, not a coupler
+    const far = [P(0, 3000), P(1000, 3000)];
+    const out = stitchRailPaths([main, branch, far]);
+    expect(out).toHaveLength(3); // the branch touches main's MIDDLE vertex — that's a switch, not an end joint
+  });
+
+  it('reverses as needed for tail-to-tail and head-to-head joins', () => {
+    const a = [P(0, 0), P(100, 0)];
+    const b = [P(300, 0), P(100, 0)]; // b's TAIL meets a's tail
+    const out = stitchRailPaths([a, b]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.map((p) => p.x)).toEqual([0, 100, 300]);
   });
 });

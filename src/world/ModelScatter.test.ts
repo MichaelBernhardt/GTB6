@@ -9,9 +9,9 @@ import {
   FOLIAGE_ROAD_CLEARANCE,
   type ScatteredModel,
 } from './ModelScatter';
-import { CELL_SIZE, allBuildings, footprintRoadClearance, type GeneratedBuilding } from './CityGen';
+import { CELL_SIZE, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, allBuildings, footprintRailwayClearance, footprintRoadClearance, type GeneratedBuilding } from './CityGen';
 import { MODEL_INDEX } from './models/catalog';
-import { MAP_WORLD_SIZE, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, pointInAnyPolygon } from './mapData';
+import { MAP_WORLD_SIZE, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, RAILWAY_STATION_SITES, pointInAnyPolygon } from './mapData';
 import { classifyZone } from './data/zoning';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 
@@ -68,6 +68,23 @@ describe('citywide model scatter', () => {
       expect(clr, `${m.name} on the tar`).toBeGreaterThanOrEqual(FOLIAGE_ROAD_CLEARANCE - 1e-6);
     }
   }, 30_000); // full-city scan across ~41k scattered models (post-density-increase) needs more than the 5 s default
+
+  it('keeps structures, foliage, and station approaches clear of railway land', () => {
+    const verge = new Set(['billboard', 'cell-tower']);
+    for (const model of all) {
+      const def = MODEL_INDEX.get(model.name)!;
+      const clearance = footprintRailwayClearance(model.x, model.z, def.maxFootprint.w, def.maxFootprint.d, model.heading);
+      const minimum = isFoliage(model.name) || verge.has(model.name) ? FOLIAGE_ROAD_CLEARANCE : RAILWAY_BUILDING_CLEARANCE;
+      expect(clearance, `${model.name} covers railway at ${model.x.toFixed(1)},${model.z.toFixed(1)}`).toBeGreaterThanOrEqual(minimum - 1e-6);
+    }
+    for (const station of RAILWAY_STATION_SITES) {
+      const nearestFootprint = Math.min(...all.map((model) => {
+        const def = MODEL_INDEX.get(model.name)!;
+        return Math.hypot(model.x - station.x, model.z - station.z) - Math.hypot(def.maxFootprint.w, def.maxFootprint.d) / 2;
+      }));
+      expect(nearestFootprint, station.name).toBeGreaterThanOrEqual(RAILWAY_STATION_CLEARANCE);
+    }
+  });
 
   it('respects the crafted-first contract: nothing overlaps a manicured site claim', () => {
     for (const site of MANICURED_FOOTPRINTS) {

@@ -5,6 +5,7 @@ import { BuildingArchitecture, foundationTiers, type BuildingStyle } from './Bui
 import {
   COASTLINE,
   COAST_CORRIDOR,
+  distanceToRailwayCorridor,
   districtAt as generatedDistrictAt,
   baseMetresAt,
   regionalMetresAt,
@@ -22,6 +23,8 @@ import {
   METRES_PER_UNIT,
   OCEAN_POLYGON,
   pointInPolygon,
+  RAILWAY_CORRIDOR_HALF_WIDTH,
+  RAILWAY_STATION_SITES,
   WATER_POLYGONS,
   type MapPolygon,
   type MapPt,
@@ -31,7 +34,7 @@ import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
-import { CELL_SIZE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
+import { CELL_SIZE, RAILWAY_STATION_CLEARANCE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
 import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
@@ -255,7 +258,7 @@ export const RAILWAY_NETWORK: Array<{ name: string; points: RoadPoint[] }> =
 /** Rail-to-rail centre spacing (u) — reads as SA cape gauge at game scale. */
 export const RAIL_GAUGE = 1.6;
 /** Gravel ballast bed width (u). */
-export const RAIL_BALLAST_WIDTH = 5.2;
+export const RAIL_BALLAST_WIDTH = RAILWAY_CORRIDOR_HALF_WIDTH * 2;
 
 const seeded = (x: number, z: number, salt = 0): number => {
   const value = Math.sin(x * 12.9898 + z * 78.233 + salt * 41.17) * 43758.5453;
@@ -611,7 +614,8 @@ export class City {
       this.detailStore,
       this.roadsidePoints,
       this.streetlampPoints,
-      (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius),
+      (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius)
+        || distanceToRailwayCorridor(x, z) < radius + 0.6,
       (x, z, margin) => this.isOnRoad(x, z, margin),
       this.props,
       (x, z) => this.sidewalkHeightAt(x, z),
@@ -713,7 +717,8 @@ export class City {
 
   /** Anchor pads (spawn, shops, mission markers…) that procedural placement must keep clear. */
   isReserved(x: number, z: number, radius: number): boolean {
-    return RESERVED_PADS.some((pad) => (pad.x - x) ** 2 + (pad.z - z) ** 2 < (pad.radius + radius) ** 2);
+    return RESERVED_PADS.some((pad) => (pad.x - x) ** 2 + (pad.z - z) ** 2 < (pad.radius + radius) ** 2)
+      || RAILWAY_STATION_SITES.some((station) => (station.x - x) ** 2 + (station.z - z) ** 2 < (RAILWAY_STATION_CLEARANCE + radius) ** 2);
   }
 
   /** Ground-band test kept for peds/vehicles/nav: identical to the flat-world behaviour for anything rooted at street level. */
@@ -1021,6 +1026,92 @@ export class City {
     const box = new THREE.BoxGeometry(1, 1, 1);
     this.addInstanced(box, railMat, railTransforms, { receive: true });
     this.addInstanced(box, sleeperMat, sleeperTransforms, { receive: true });
+
+    const platformMaterials = {
+      concrete: new THREE.MeshStandardMaterial({ color: 0xb8b7ae, map: this.concrete, roughness: 0.94 }),
+      tactile: new THREE.MeshStandardMaterial({ color: 0xe0b72f, roughness: 0.78 }),
+      metal: new THREE.MeshStandardMaterial({ color: 0x2f3a3e, metalness: 0.72, roughness: 0.38 }),
+      roof: new THREE.MeshStandardMaterial({ color: 0x3c6772, metalness: 0.38, roughness: 0.5 }),
+      seat: new THREE.MeshStandardMaterial({ color: 0x7a3f2e, roughness: 0.72 }),
+      glass: new THREE.MeshPhysicalMaterial({ color: 0x83aeb6, transparent: true, opacity: 0.42, roughness: 0.18, metalness: 0.08 }),
+      lamp: new THREE.MeshStandardMaterial({ color: 0xffe6a3, emissive: 0xffd66f, emissiveIntensity: 1.7, roughness: 0.28 }),
+    };
+    registerPowered(platformMaterials.lamp, 0xffd66f, 0x292b2b);
+    for (const station of RAILWAY_STATION_SITES) this.buildRailwayStation(station, platformMaterials);
+  }
+
+  /** Two level, walkable platforms with tactile edges, shelters, benches, lights, and station signs.
+   *  Sites are projected onto a real rail segment in mapData, keeping every platform track-aligned. */
+  private buildRailwayStation(
+    station: (typeof RAILWAY_STATION_SITES)[number],
+    materials: {
+      concrete: THREE.Material; tactile: THREE.Material; metal: THREE.Material; roof: THREE.Material;
+      seat: THREE.Material; glass: THREE.Material; lamp: THREE.Material;
+    },
+  ): void {
+    const heading = Math.atan2(station.dirX, station.dirZ);
+    const c = Math.cos(heading); const s = Math.sin(heading);
+    const length = station.name === 'Park Station' ? 58 : 46;
+    const width = 3.6; const offset = RAILWAY_CORRIDOR_HALF_WIDTH + width / 2 + 0.25;
+    const toWorld = (lx: number, lz: number): RoadPoint => ({
+      x: station.x + lx * c + lz * s,
+      z: station.z - lx * s + lz * c,
+    });
+    let hMin = Infinity; let hMax = -Infinity;
+    for (const side of [-1, 1]) {
+      for (const lx of [side * (offset - width / 2), side * (offset + width / 2)]) {
+        for (const lz of [-length / 2, 0, length / 2]) {
+          const point = toWorld(lx, lz); const height = terrainHeightAt(point.x, point.z);
+          hMin = Math.min(hMin, height); hMax = Math.max(hMax, height);
+        }
+      }
+    }
+    const baseY = hMax + 0.03; const platformTop = 0.32;
+    const platformBottom = hMin - baseY - 0.14; const platformHeight = platformTop - platformBottom;
+    const group = new THREE.Group(); group.name = station.name;
+    group.position.set(station.x, baseY, station.z); group.rotation.y = heading;
+
+    for (const side of [-1, 1]) {
+      const platformX = side * offset;
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(width, platformHeight, length), materials.concrete);
+      slab.position.set(platformX, (platformTop + platformBottom) / 2, 0); slab.receiveShadow = true; group.add(slab);
+      const edgeX = side * (offset - width / 2 + 0.16);
+      const tactile = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.045, length - 1), materials.tactile);
+      tactile.position.set(edgeX, platformTop + 0.025, 0); tactile.receiveShadow = true; group.add(tactile);
+
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(width - 0.55, 0.2, 21), materials.roof);
+      roof.position.set(platformX, 3.45, 0); roof.castShadow = true; group.add(roof);
+      for (const z of [-8.5, 0, 8.5]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.13, 3.15, 0.13), materials.metal);
+        post.position.set(platformX, 1.8, z); post.castShadow = true; group.add(post);
+      }
+      for (const z of [-6.2, 6.2]) {
+        const pane = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.05, 4.2), materials.glass);
+        pane.position.set(side * (offset + width / 2 - 0.18), 1.42, z); group.add(pane);
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.14, 2.2), materials.seat);
+        seat.position.set(platformX, 0.86, z); seat.castShadow = true; group.add(seat);
+        const back = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.82, 2.2), materials.seat);
+        back.position.set(side * (offset + 0.34), 1.2, z); back.castShadow = true; group.add(back);
+      }
+
+      const nameBoard = createSignMesh(
+        new THREE.PlaneGeometry(5.8, 1.25), station.name.toUpperCase(), '#e0b72f',
+        { background: '#183b46', doubleSide: true, powered: true },
+      );
+      nameBoard.position.set(platformX, 2.45, -7.5); nameBoard.rotation.y = Math.PI / 2; group.add(nameBoard);
+      for (const z of [-length / 2 + 4, length / 2 - 4]) {
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 3.6, 10), materials.metal);
+        pole.position.set(platformX, 2.1, z); pole.castShadow = true; group.add(pole);
+        const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), materials.lamp);
+        lamp.position.set(platformX, 3.93, z); group.add(lamp);
+      }
+
+      this.colliders.push(this.tierToWorldCollider(
+        { minX: platformX - width / 2, maxX: platformX + width / 2, minZ: -length / 2, maxZ: length / 2, y0: platformBottom, y1: platformTop },
+        station.x, station.z, heading, baseY,
+      ));
+    }
+    this.group.add(group);
   }
 
   /** Paves every real crossing (T / cross / multi-way) with a filled asphalt disc laid just over the
