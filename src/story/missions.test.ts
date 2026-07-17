@@ -155,3 +155,46 @@ describe('Kelvin Yard geometry', () => {
     expect(officeDistance).toBeLessThan(KELVIN_FENCE_RADIUS); // the ledger is only reachable inside the ring
   });
 });
+
+describe('mission flow audit: every objective is locatable or intentionally location-free', () => {
+  // Mirrors Game.currentTarget's marker pipeline: a non-hidden objective must resolve to a world
+  // marker (target / parked vehicle / scripted quarry / checkpoint stops) or be a kind that
+  // legitimately has no place (lose-wanted, survive, choice). Owner playtest: "no clue on the
+  // minimap about what to go to" — this keeps every future mission honest.
+  it('audits all missions', async () => {
+    const { PARKED_VEHICLES } = await import('../world/placements');
+    for (const mission of MISSIONS) {
+      const script = MISSION_SCRIPTS[mission.id];
+      mission.objectives.forEach((objective, index) => {
+        const label = `${mission.id}[${index}] ${objective.kind}`;
+        if (objective.hidden) { expect(objective.target, `${label}: hidden riddles still need a real reach target`).toBeDefined(); return; }
+        switch (objective.kind) {
+          case 'reach': case 'escape':
+            expect(Boolean(objective.target) || Boolean(objective.conditionsOnly && objective.conditions), `${label}: needs a target (marker) or be conditionsOnly`).toBe(true);
+            break;
+          case 'collect':
+            expect(objective.target, `${label}: collect needs a target (reach check + marker)`).toBeDefined();
+            break;
+          case 'checkpoints':
+            expect((script?.stops?.length ?? 0) >= (objective.required ?? 1), `${label}: needs ${objective.required} stops in MISSION_SCRIPTS`).toBe(true);
+            break;
+          case 'enter-kind': {
+            const parked = PARKED_VEHICLES.some((entry) => entry.kind === objective.vehicleKind && (!objective.vehicleColor || entry.color === objective.vehicleColor));
+            expect(parked, `${label}: no parked ${objective.vehicleKind} (colour ${objective.vehicleColor?.toString(16)}) exists for the blip`).toBe(true);
+            break;
+          }
+          case 'follow':
+            expect(script?.quarry?.destination, `${label}: follow needs a scripted quarry with a destination`).toBeDefined();
+            break;
+          case 'defeat': {
+            const covered = (script?.waves ?? []).some((wave) => wave.objective === index || (wave.checkpoint !== undefined && wave.objective === index - 1));
+            expect(covered, `${label}: defeat needs a hostile wave at this objective (or the checkpoint before it)`).toBe(true);
+            break;
+          }
+          case 'lose-wanted': case 'survive': case 'choice':
+            break; // legitimately location-free
+        }
+      });
+    }
+  });
+});

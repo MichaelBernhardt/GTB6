@@ -34,7 +34,7 @@ import { COURIER_MIN_TRIP_DISTANCE, COURIER_STOP_RADIUS, COURIER_STOP_SPEED, Cou
 import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
-import { MISSIONS, MissionSystem, type MissionUpdate } from './systems/MissionSystem';
+import { MISSIONS, MissionSystem, type MissionDefinition, type MissionUpdate } from './systems/MissionSystem';
 import { StoryDirector } from './systems/StoryDirector';
 import { DialogueSystem } from './systems/DialogueSystem';
 import { introScript } from './story/dialogues';
@@ -127,6 +127,8 @@ export class Game {
   /** Scripted tail target (follow missions): spawned/parked/removed by mission beats. */
   private quarry?: Vehicle;
   private quarryArrived = false;
+  private contactCullTimer = 0;
+  private promptContactAction?: ReturnType<Game['contactAction']>;
   private depotSecurity = new DepotSecurity();
   private depotWasSpotted = false;
   private depotClock = 0; // sweeps the Kelvin Yard guards' torch cones
@@ -1472,6 +1474,7 @@ export class Game {
 
   private updateMission(dt: number): void {
     this.updateDialogueAbandon();
+    this.updateContactPresence(dt);
     const objective = this.missions.objective;
     if (this.missions.state === 'active' && objective?.vehicleColor) {
       const requiredVehicle = this.population.vehicles.find((vehicle) => vehicle.spec.color === objective.vehicleColor);
@@ -1502,6 +1505,10 @@ export class Game {
       this.runObjectiveBeats();
       if (this.missions.objective) this.ui.notify('Objective updated', this.missions.objective.text);
     }
+    // Marker truth lives in the sim step, not the render loop: the frame a mission starts or an
+    // objective advances, the gold marker and minimap blip already point at the new target
+    // (owner playtest: accepting Couch Run left the marker on Portia instead of the Golf).
+    this.markerTarget = this.currentTarget();
   }
 
   /** Scripted events keyed to the objective the mission just entered (waves, quarry spawn/departure). */
@@ -1630,26 +1637,49 @@ export class Game {
     }
   }
 
+  /** A contact with nothing left to offer leaves the corner (owner steer: "if it's done, she
+   *  probably shouldn't even be there any more"). Locked-but-pending missions keep them around;
+   *  visibility flips back if a fresh game resets completions. Cheap 1.5s cadence. */
+  private updateContactPresence(dt: number): void {
+    this.contactCullTimer -= dt;
+    if (this.contactCullTimer > 0) return;
+    this.contactCullTimer = 1.5;
+    for (const ped of this.population.pedestrians) {
+      if (!ped.contact || ped.carGuard) continue; // car guards and yard security are contact-flagged but not mission givers
+      const name = ped.group.name;
+      ped.group.visible = MISSIONS.some((mission) => mission.contact === name && !this.missions.completed.has(mission.id));
+    }
+  }
+
+  /** What E would actually do at the player's position — the prompt and the key MUST agree
+   *  (owner playtest: "E Speak to contact" showed during an active mission and E did nothing). */
+  private contactAction(): { kind: 'offer'; mission: MissionDefinition } | { kind: 'restate' } | undefined {
+    if (this.dialogue.active) return undefined;
+    const position = this.player.group.position;
+    if (this.missions.active) {
+      const active = this.missions.active;
+      if (this.missions.state === 'active' && this.missions.objective?.hidden && Math.hypot(active.start.position.x - position.x, active.start.position.z - position.z) < 7) return { kind: 'restate' };
+      return undefined;
+    }
+    const mission = MISSIONS.find((item) => !this.missions.completed.has(item.id) && this.story.isUnlocked(item, this.missions.completed) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
+    return mission ? { kind: 'offer', mission } : undefined;
+  }
+
   private tryMissionInteraction(): boolean {
     if (this.missions.state === 'failed' && this.missions.active) { this.resetMissionRuntime(); this.missions.restart(); this.ui.notify('Mission restarted', this.missions.active?.name ?? ''); return true; }
     if (this.missions.objective?.kind === 'collect') return false;
     if (this.missions.objective?.kind === 'choice') {
       this.mode = 'paused'; document.exitPointerLock(); this.ui.showMissionChoice(this.missions.active?.name ?? 'Choose', this.missions.objective.choices ?? []); return true;
     }
-    const position = this.player.group.position;
-    if (this.missions.active) {
-      // Riddle missions: the contact re-states the current clue on demand (owner steer).
-      const active = this.missions.active;
-      if (this.missions.objective?.hidden && Math.hypot(active.start.position.x - position.x, active.start.position.z - position.z) < 7) {
-        this.dialogue.start({ id: `${active.id}:restate`, lines: [{ speaker: active.contact, text: this.missions.objective.text }] });
-        return true;
-      }
-      return false;
+    const action = this.contactAction();
+    if (!action) return false;
+    if (action.kind === 'restate') {
+      const active = this.missions.active!;
+      this.dialogue.start({ id: `${active.id}:restate`, lines: [{ speaker: active.contact, text: this.missions.objective!.text }] });
+      return true;
     }
-    const mission = MISSIONS.find((item) => !this.missions.completed.has(item.id) && this.story.isUnlocked(item, this.missions.completed) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
-    if (!mission) return false;
-    this.story.beginOffer(mission.id);
-    this.dialogue.start(introScript(mission));
+    this.story.beginOffer(action.mission.id);
+    this.dialogue.start(introScript(action.mission));
     return true;
   }
 
@@ -2043,7 +2073,8 @@ export class Game {
   }
 
   private updateMarker(dt: number): void {
-    this.markerTarget = this.currentTarget(); this.marker.visible = Boolean(this.markerTarget);
+    if (this.mode !== 'playing') this.markerTarget = this.currentTarget(); // menus/backdrop: no sim step refreshes it
+    this.marker.visible = Boolean(this.markerTarget);
     if (!this.markerTarget) return;
     this.marker.position.copy(this.markerTarget.position); this.markerPhase += dt; this.marker.rotation.y += dt * 0.7; this.marker.position.y += 0.2 + Math.sin(this.markerPhase * 2) * 0.15;
     const color = this.markerTarget.color ?? '#f5c542';
@@ -2114,7 +2145,7 @@ export class Game {
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
       else if (this.missions.state === 'failed') prompt = 'E  Restart mission';
       else if (this.missions.objective?.kind === 'choice') prompt = `E  ${this.missions.objective.text}`;
-      else if (!this.dialogue.active && MISSIONS.some((mission) => !this.missions.completed.has(mission.id) && this.story.isUnlocked(mission, this.missions.completed) && Math.hypot(mission.start.position.x - focus.x, mission.start.position.z - focus.z) < 7)) prompt = 'E  Speak to contact';
+      else if ((this.promptContactAction = this.contactAction())) prompt = this.promptContactAction.kind === 'restate' ? 'E  Ask for the riddle again' : 'E  Speak to contact';
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
       else if (shop?.kind === 'bottle') prompt = `E  Browse ${shop.name}`;
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
