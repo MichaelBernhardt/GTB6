@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeInventory, sanitizeSafehouses, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
 import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import type { CheatSettings, GameSettings, Inventory, SavedVehicle, SavedWeapons } from '../types';
 
@@ -252,7 +252,7 @@ describe('SaveManager', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ ...DEFAULT_SAVE, version: 1, money: 4321, completedMissions: ['hot-property'], livingCity: undefined }));
     const loaded = manager.load();
-    expect(loaded.version).toBe(2); expect(loaded.money).toBe(4321); expect(loaded.completedMissions).toEqual(['hot-property']);
+    expect(loaded.version).toBe(3); expect(loaded.money).toBe(4321); expect(loaded.completedMissions).toEqual(['hot-property']);
     expect(loaded.livingCity.districts['Joburg CBD']).toEqual({ communityStanding: 0, policePressure: 0 });
   });
 
@@ -263,5 +263,36 @@ describe('SaveManager', () => {
     storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ ...save, livingCity: { districts: { 'Joburg CBD': { communityStanding: -999, policePressure: 'high' } }, joziArmsResolution: 'invalid' } }));
     expect(manager.load().livingCity.districts['Joburg CBD']).toEqual({ communityStanding: -100, policePressure: 0 });
     expect(manager.load().livingCity.joziArmsResolution).toBeNull();
+  });
+});
+
+describe('save v3: story flags and diary pages', () => {
+  it('round trips story flags and diary pages', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, storyFlags: ['act1', 'choice:two-fires:sindi'], diaryPages: [3, 7] });
+    const loaded = manager.load();
+    expect(loaded.version).toBe(3);
+    expect(loaded.storyFlags).toEqual(['act1', 'choice:two-fires:sindi']);
+    expect(loaded.diaryPages).toEqual([3, 7]);
+  });
+
+  it('migrates v2 saves: no flags, no pages, everything else intact', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    const v2 = JSON.parse(JSON.stringify({ ...DEFAULT_SAVE, money: 4200, completedMissions: ['arms-deal'] })) as Record<string, unknown>;
+    v2.version = 2; delete v2.storyFlags; delete v2.diaryPages;
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify(v2));
+    const loaded = manager.load();
+    expect(loaded.version).toBe(3);
+    expect(loaded.money).toBe(4200);
+    expect(loaded.completedMissions).toEqual(['arms-deal']);
+    expect(loaded.storyFlags).toEqual([]);
+    expect(loaded.diaryPages).toEqual([]);
+  });
+
+  it('sanitizes junk flags and pages', () => {
+    expect(sanitizeStoryFlags(['act1', 'act1', 'UPPER', 'ok-flag:x', 42, '', 'a'.repeat(65)])).toEqual(['act1', 'ok-flag:x']);
+    expect(sanitizeStoryFlags('not-an-array')).toEqual([]);
+    expect(sanitizeDiaryPages([1, 1, 12, 13, 0, 2.5, 'x'])).toEqual([1, 12]);
+    expect(sanitizeDiaryPages(undefined)).toEqual([]);
   });
 });

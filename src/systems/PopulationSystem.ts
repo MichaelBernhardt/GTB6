@@ -384,7 +384,49 @@ export class PopulationSystem {
 
   spawnHostiles(): void {
     if (this.hostiles.some((ped) => ped.state !== 'down')) return;
-    HOSTILE_SPOTS.forEach(({ x, z }, index) => { const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), index + 30, true, false, this.nextSpecialNpcVariant(RANK_ENFORCER_NPC_ID)); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
+    this.spawnHostileWave(HOSTILE_SPOTS);
+  }
+
+  /** Story missions: replace the current hostile crew with a fresh wave at the given spots. */
+  spawnHostileWave(spots: ReadonlyArray<{ x: number; z: number }>): void {
+    for (const ped of this.hostiles) this.removePedestrian(ped);
+    this.hostiles.length = 0;
+    spots.forEach(({ x, z }, index) => { const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), index + 30, true, false, this.nextSpecialNpcVariant(RANK_ENFORCER_NPC_ID)); ped.destination.set(x, 0, z); this.pedestrians.push(ped); this.hostiles.push(ped); });
+  }
+
+  /** Story: a hi-vis security guard standing a post (Kelvin Yard); the mission director sweeps his torch. */
+  spawnYardGuard(x: number, z: number): Pedestrian {
+    const guard = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++ + 90, false, false, this.nextSpecialNpcVariant(CAR_GUARD_NPC_ID));
+    guard.state = 'idle'; guard.idleTime = 999999; guard.makeCarGuard(); guard.group.name = 'Yard Security';
+    this.pedestrians.push(guard);
+    return guard;
+  }
+
+  /** Story missions: a scripted vehicle parked at a kerb, driven only once routed somewhere. */
+  spawnScriptVehicle(kind: VehicleKind, x: number, z: number, heading: number, color?: number): Vehicle {
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.surfaceHeightAt(x, z), z), color);
+    vehicle.heading = heading; vehicle.group.rotation.y = heading;
+    this.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  /** Put a scripted vehicle on the road toward a specific destination (nearest lane node to it). */
+  routeVehicleTo(vehicle: Vehicle, x: number, z: number): boolean {
+    const goal = this.vehiclePlanner.nearest(x, z);
+    const points = this.vehiclePlanner.plan(vehicle.group.position.x, vehicle.group.position.z, goal);
+    if (!points?.length) return false;
+    vehicle.occupied = true;
+    if (!this.traffic.includes(vehicle)) this.traffic.push(vehicle);
+    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });
+    const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);
+    return true;
+  }
+
+  /** A scripted vehicle reached its mark: pull it off the road so ambient routing never claims it. */
+  parkScriptVehicle(vehicle: Vehicle): void {
+    const index = this.traffic.indexOf(vehicle); if (index >= 0) this.traffic.splice(index, 1);
+    this.trafficPlans.delete(vehicle);
+    vehicle.occupied = false; vehicle.speed = 0;
   }
 
   nearestEnterable(position: THREE.Vector3, maxDistance = 4.2): Vehicle | undefined {
@@ -407,7 +449,8 @@ export class PopulationSystem {
   riggedPedestrianCount(): number { return this.pedestrians.filter((ped) => ped.visualVariant !== undefined).length; }
 
   ambientRiggedPedestrianCount(): number {
-    return this.pedestrians.filter((ped) => ped.visualVariant !== undefined && NPC_CATALOG[ped.visualVariant].role === 'ambient').length;
+    // Story contacts may reuse ambient bodies (Solly, Sindi, Sipho): the contact flag keeps them out of the crowd census.
+    return this.pedestrians.filter((ped) => ped.visualVariant !== undefined && !ped.contact && NPC_CATALOG[ped.visualVariant].role === 'ambient').length;
   }
 
   private nextAmbientNpcVariant(): NpcCharacterId {
@@ -496,9 +539,12 @@ export class PopulationSystem {
       const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
       const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant()); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
     }
+    const seenContacts = new Set<string>(); // one body per contact, at their first-listed mission's spot
     MISSIONS.forEach((mission, index) => {
+      if (seenContacts.has(mission.contact)) return; seenContacts.add(mission.contact);
+      const variant = MISSION_CONTACT_NPC_IDS[mission.id]; if (!variant) return;
       const contactPosition = mission.start.position.clone(); contactPosition.y = this.city.surfaceHeightAt(contactPosition.x, contactPosition.z);
-      const contact = new Pedestrian(this.scene, contactPosition, index + 70, false, false, this.nextSpecialNpcVariant(MISSION_CONTACT_NPC_IDS[mission.id]!));
+      const contact = new Pedestrian(this.scene, contactPosition, index + 70, false, false, this.nextSpecialNpcVariant(variant));
       contact.state = 'idle'; contact.idleTime = 999999; contact.contact = true; contact.group.name = mission.contact; this.pedestrians.push(contact);
     });
     this.parkedSpots.slice(0, 4).forEach(([x, z], index) => {

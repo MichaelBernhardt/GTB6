@@ -15,9 +15,11 @@ export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerabl
 export interface Inventory { armour: number; stims: number; parachutes: number; }
 export interface SavedVehicle { kind: VehicleKind; color: number; health: number; }
 export interface SavedGame {
-  version: 2;
+  version: 3;
   money: number;
   completedMissions: string[];
+  storyFlags: string[]; // StoryDirector flags: act gates, choice:<mission>:<option>, taught hints
+  diaryPages: number[]; // collected Grid Diary pages (1..12)
   spawn: [number, number, number]; // death/wasted respawn anchor (last safehouse, or the default)
   position: [number, number, number]; // where the player actually was at the last save (x, y, z) — Continue resumes here
   heading: number; // the direction the player was facing at the last save — restored with position
@@ -53,4 +55,23 @@ export interface GameSnapshot {
   shotsFired: number;
   hostileDefeated: number;
   collectedItem: boolean;
+  // Story-mission context (all optional: absent means "not applicable this frame").
+  hour?: number;
+  blackout?: number; // eased 0..1 grid-down factor (DayNight); 1 = full load-shedding dark
+  isNight?: boolean;
+  onTrain?: boolean;
+  drivingTrain?: boolean;
+  trainSpeed?: number;
+  stationName?: string; // station the ridden train is currently dwelling at, if any
+  inPlane?: boolean;
+  altitude?: number; // metres above ground while airborne/flying
+  parachuted?: boolean; // canopy deployed during the current airborne state
+  playerSpeed?: number;
+  vehicleHealthPct?: number; // 0..1 health of the current/required mission vehicle
+  torchOn?: boolean;
+  district?: string;
+  detected?: boolean; // mission-owned detection verdict (e.g. depot security)
+  escortAlive?: boolean; // false the frame a protected NPC/vehicle dies
+  followDistance?: number; // distance to the current follow quarry
+  followArrived?: boolean; // quarry reached its scripted destination
 }

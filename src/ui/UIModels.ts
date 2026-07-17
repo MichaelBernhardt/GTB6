@@ -8,7 +8,13 @@ export type MenuScreen = 'none' | 'loading' | 'asset-failed' | 'main' | 'pause' 
 export interface TaxiTelemetry { text: string; available: boolean; }
 export interface CourierTelemetry { text: string; available: boolean; }
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; taxi?: TaxiTelemetry; courier?: CourierTelemetry; radio?: string; }
-export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; }
+export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; failed?: string; }
+export interface DialogueView { speaker: string; text: string; more: boolean; offer?: boolean; }
+
+/** Advance-key affordance on the dialogue card. A job offer must end on an explicit accept — players
+ *  used to instant E-to-start missions read a bare "DONE" as already-hired and wander off (which
+ *  silently declines). */
+export const dialogueAdvanceLabel = (view: DialogueView): string => view.more ? 'E  MORE' : view.offer ? 'E  TAKE THE JOB' : 'E  DONE';
 
 export interface HudState {
   health: number;
@@ -32,6 +38,7 @@ export interface HudState {
   scope?: { zoom: string };
   vehicle?: VehicleTelemetry;
   objective?: ObjectiveView;
+  dialogue?: DialogueView; // face-to-face exchange card: E advances, walking away abandons
   fps: number;
   loopTotalPct: number; // whole game-loop CPU cost as a % of the 60fps frame budget (100% = one 60fps frame)
   loopSample: { name: string; pct: number }[]; // this frame's raw per-phase split in stable order — one column of the scrolling chart
