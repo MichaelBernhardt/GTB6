@@ -5,6 +5,7 @@ import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, F
 import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
 import type { NpcCharacterId } from './NpcCatalog';
+import type { RagdollEnvironment } from './PedRagdoll';
 import { RiggedPedestrianVisual } from './RiggedPedestrianVisual';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
@@ -51,6 +52,12 @@ export class Pedestrian {
   readonly riggedVisual?: RiggedPedestrianVisual;
   private direction = new THREE.Vector3();
   private desired = new THREE.Vector3();
+  private ragdollCity?: City;
+  /** Built once; the ragdoll queries ground/walls through it every step without per-frame closures. */
+  private readonly ragdollEnv: RagdollEnvironment = {
+    heightAt: (x, z) => this.ragdollCity ? this.ragdollCity.surfaceHeightAt(x, z) : this.groundY,
+    blockedAt: (x, z, radius) => this.ragdollCity ? this.ragdollCity.collides(x, z, radius) : false,
+  };
 
   constructor(scene: THREE.Scene, position: THREE.Vector3, index: number, hostile = false, police = false, readonly visualVariant?: NpcCharacterId) {
     this.group.position.copy(position); this.groundY = position.y; this.hostile = hostile; this.police = police; this.state = hostile ? 'hostile' : 'walk';
@@ -72,6 +79,7 @@ export class Pedestrian {
   }
 
   update(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
+    this.ragdollCity = city;
     try { this.updateMotion(dt, city, choices, player); } finally { this.updateRiggedVisual(dt); }
   }
 
@@ -148,13 +156,14 @@ export class Pedestrian {
     }
     visual.setState({
       state: this.state,
+      dead: this.state === 'down' && this.health === 0,
       punching: this.punchTimer > 0,
       hailing: this.hailing,
       covering: this.covering,
       stumbling: this.stumbleTimer > 0,
       stumbleAmount: THREE.MathUtils.clamp(this.stumbleTimer / STUMBLE_DURATION, 0, 1),
     });
-    visual.update(dt);
+    visual.update(dt, this.ragdollEnv);
     this.covering = false;
   }
 
@@ -171,8 +180,22 @@ export class Pedestrian {
     if (this.state === 'down' || this.contact) return false;
     this.health = Math.max(0, this.health - amount); this.fear = FEAR_MAX; this.enraged = this.aggressive && this.health > 0;
     this.state = this.health === 0 ? 'down' : this.aggressive ? 'hostile' : 'flee';
-    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36; this.beginDeathSpin(origin); }
+    if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36; this.beginDeathFall(origin); }
     return this.health === 0;
+  }
+
+  /** A kill starts either the ragdoll (rigged ragdoll-fated peds — the sim gets the impact as a
+   *  kick, and yawing the group would drag the whole particle frame) or the pose path's yaw whip. */
+  private beginDeathFall(origin?: THREE.Vector3): void {
+    const visual = this.riggedVisual;
+    if (visual?.ready && visual.deathStyle === 'ragdoll') {
+      visual.primeRagdollImpact(
+        origin ? this.group.position.x - origin.x : undefined,
+        origin ? this.group.position.z - origin.z : undefined,
+      );
+      return;
+    }
+    this.beginDeathSpin(origin);
   }
 
   /** Impact theatre for a kill: pick how far the dropping body whips around, torqued away from the
@@ -201,7 +224,7 @@ export class Pedestrian {
     this.health = outcome.health; this.downTimer = outcome.downTime; this.threat.copy(origin);
     this.fear = accumulateFear(this.fear, FEAR_EVENTS.assault.base); this.stumbleTimer = 0; this.state = 'down';
     this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36;
-    if (outcome.killed) { this.enraged = false; this.beginDeathSpin(origin); }
+    if (outcome.killed) { this.enraged = false; this.beginDeathFall(origin); }
     return outcome.killed;
   }
 

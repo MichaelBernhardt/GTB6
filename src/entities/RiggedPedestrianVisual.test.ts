@@ -3,8 +3,10 @@ import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { NPC_CHARACTER_IDS } from './NpcCatalog';
+import { RAGDOLL_TIMEOUT, type RagdollEnvironment } from './PedRagdoll';
 import {
-  cachedNpcTemplateCount, clearNpcTemplateCache, NPC_ANIMATIONS, RiggedPedestrianVisual,
+  activeRagdollCount, cachedNpcTemplateCount, clearNpcTemplateCache, MAX_ACTIVE_RAGDOLLS,
+  NPC_ANIMATIONS, resetActiveRagdolls, RiggedPedestrianVisual,
   selectNpcAnimation, validateNpcGltf, type RiggedPedestrianState,
 } from './RiggedPedestrianVisual';
 
@@ -20,7 +22,7 @@ beforeAll(() => {
   Object.defineProperty(globalThis, 'self', { value: globalThis, configurable: true });
   Object.defineProperty(globalThis, 'document', { value: { createElementNS: () => new FakeImage() }, configurable: true });
 });
-beforeEach(() => { clearNpcTemplateCache(); THREE.Cache.clear(); });
+beforeEach(() => { clearNpcTemplateCache(); resetActiveRagdolls(); THREE.Cache.clear(); });
 
 const loadNpc = async (id = 'braamfontein-creative'): Promise<GLTF> => {
   const file = await readFile(`public/models/npcs/${id}.glb`);
@@ -28,8 +30,20 @@ const loadNpc = async (id = 'braamfontein-creative'): Promise<GLTF> => {
   return new GLTFLoader().parseAsync(buffer, '/models/npcs/');
 };
 const state = (overrides: Partial<RiggedPedestrianState> = {}): RiggedPedestrianState => ({
-  state: 'idle', punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0, ...overrides,
+  state: 'idle', dead: false, punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0, ...overrides,
 });
+
+/** World-space min skinned-vertex y — measured from the scene root so the ped's own transform counts. */
+const skinnedFloorOf = (root: THREE.Object3D): number => {
+  root.updateMatrixWorld(true);
+  let floor = Infinity; const box = new THREE.Box3();
+  root.traverse((object) => {
+    if (!(object instanceof THREE.SkinnedMesh)) return;
+    object.computeBoundingBox();
+    floor = Math.min(floor, box.copy(object.boundingBox!).applyMatrix4(object.matrixWorld).min.y);
+  });
+  return floor;
+};
 
 describe('NPC cast asset contract', () => {
   it('validates every unique rig, clip set, material, texture, scale and geometry budget', async () => {
@@ -112,32 +126,70 @@ describe('cached rigged pedestrian instances', () => {
     expect(late).toBeGreaterThan(early * 1.15); // and accelerating — gravity wins, the body slams
   });
 
-  it('crumples half the cast into a procedural heap on the ground, and hands bones back on rising', async () => {
-    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 }); // 0.25 < heap chance
+  it('ragdolls half the cast: the body settles on the ground in a non-standing pose, then freezes', async () => {
+    const parent = new THREE.Group();
+    const visual = new RiggedPedestrianVisual(parent, 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 }); // 0.25 < ragdoll chance
     await visual.load();
-    expect(visual.deathStyle).toBe('heap');
-    const skinnedFloor = (): number => {
-      visual.group.updateMatrixWorld(true);
-      let floor = Infinity; const box = new THREE.Box3();
-      visual.group.traverse((object) => {
-        if (!(object instanceof THREE.SkinnedMesh)) return;
-        object.computeBoundingBox();
-        floor = Math.min(floor, box.copy(object.boundingBox!).applyMatrix4(object.matrixWorld).min.y);
-      });
-      return floor;
-    };
-    visual.setState(state({ state: 'down' }));
-    for (let frame = 0; frame < 15; frame++) { // through the crumple: dropping, never deep-buried
-      visual.update(1 / 30);
-      expect(skinnedFloor()).toBeGreaterThan(-0.45);
+    expect(visual.deathStyle).toBe('ragdoll');
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    visual.setState(state({ state: 'down', dead: true }));
+    for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) { // ≤ ~10 simulated seconds
+      visual.update(1 / 30, env);
+      expect(skinnedFloorOf(parent)).toBeGreaterThan(-0.45); // never punched through the road mid-fall
     }
-    expect(visual.activeAnimation).toBeUndefined(); // the mixer is frozen — this is a procedural collapse
-    const settled = skinnedFloor();
-    expect(settled).toBeLessThan(0.02); expect(settled).toBeGreaterThan(-0.4); // in the ground's grip, not hovering
-    const knee = visual.group.getObjectByName('LowerLeg_L')!.rotation.x;
-    expect(Math.abs(knee)).toBeGreaterThan(1); // legs folded under, not a standing statue
+    expect(visual.activeAnimation).toBeUndefined(); // the mixer is frozen — this death is physical
+    expect(visual.ragdollBody!.frozen).toBe(true);
+    expect(visual.ragdollBody!.elapsed).toBeLessThan(RAGDOLL_TIMEOUT); // came to genuine rest, not the timeout backstop
+    const settled = skinnedFloorOf(parent);
+    expect(settled).toBeGreaterThan(-0.25); expect(settled).toBeLessThan(0.05); // resting on the ground, not hovering or buried
+    parent.updateMatrixWorld(true);
+    const head = new THREE.Vector3(); visual.group.getObjectByName('Head')!.getWorldPosition(head);
+    expect(head.y).toBeLessThan(0.6); // collapsed, not a standing statue
+    expect(activeRagdollCount()).toBe(0); // frozen corpses cost nothing
+    const hipsBefore = visual.group.getObjectByName('Hips')!.quaternion.clone();
+    for (let frame = 0; frame < 30; frame++) visual.update(1 / 30, env);
+    expect(visual.group.getObjectByName('Hips')!.quaternion.equals(hipsBefore)).toBe(true); // frozen means frozen
+  });
+
+  it('regression: settles on the ground even when the ped stands far from the origin, yaw-rotated', async () => {
+    // The old heap floated in production because its floor measurement was only correct with the ped
+    // group at the origin — exactly what its test exercised. This pins the displaced + rotated case.
+    const parent = new THREE.Group();
+    parent.position.set(500, 12, -300); parent.rotation.y = 2.1;
+    const visual = new RiggedPedestrianVisual(parent, 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    await visual.load();
+    const env: RagdollEnvironment = { heightAt: () => 12 };
+    visual.setState(state({ state: 'down', dead: true }));
+    for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
+    expect(visual.ragdollBody!.frozen).toBe(true);
+    const settled = skinnedFloorOf(parent) - 12;
+    expect(settled).toBeGreaterThan(-0.25); expect(settled).toBeLessThan(0.05);
+    parent.updateMatrixWorld(true);
+    const hips = new THREE.Vector3(); visual.group.getObjectByName('Hips')!.getWorldPosition(hips);
+    expect(Math.abs(hips.x - 500)).toBeLessThan(3); expect(Math.abs(hips.z + 300)).toBeLessThan(3); // the body stayed where the ped died
+  });
+
+  it('knockdown survivors never ragdoll and recover cleanly to animation', async () => {
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 }); // ragdoll-fated ped
+    await visual.load();
+    visual.setState(state({ state: 'down', dead: false })); // floored but alive: downTimer is running
+    for (let frame = 0; frame < 30; frame++) visual.update(1 / 30);
+    expect(visual.activeAnimation).toBe('death'); // the pose path plays; no physics took over
+    expect(visual.ragdollBody).toBeUndefined();
+    expect(activeRagdollCount()).toBe(0);
     visual.setState(state({ state: 'walk' })); visual.update(1 / 30);
-    expect(visual.activeAnimation).toBe('walk'); // knockdown survivor: animation resumes cleanly
+    expect(visual.activeAnimation).toBe('walk'); // back on their feet, mixer in charge
+  });
+
+  it('caps concurrent ragdolls: the oldest freezes where it is when one more death starts', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const visuals: RiggedPedestrianVisual[] = [];
+    for (let index = 0; index <= MAX_ACTIVE_RAGDOLLS; index++) visuals.push(new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 }));
+    await Promise.all(visuals.map((visual) => visual.load()));
+    for (const visual of visuals) { visual.setState(state({ state: 'down', dead: true })); visual.update(1 / 30, env); }
+    expect(activeRagdollCount()).toBe(MAX_ACTIVE_RAGDOLLS);
+    expect(visuals[0].ragdollBody!.frozen).toBe(true); // oldest gave up its slot
+    expect(visuals[MAX_ACTIVE_RAGDOLLS].ragdollBody!.frozen).toBe(false); // the fresh death simulates
   });
 
   it('replaces a placeholder asynchronously and remains fail-open when loading fails', async () => {
