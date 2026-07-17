@@ -77,12 +77,13 @@ export class Player {
     const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
     const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
     const move = new THREE.Vector3(side, 0, -forward); const moving = move.lengthSq() > 0; const sprinting = moving && input.down('ShiftLeft');
+    const strolling = moving && !sprinting && input.down('AltLeft');
     this.moving = moving; this.sprinting = sprinting;
     const drunk = inebriationFraction(this.inebriation); const stagger = this.updateStagger(dt, drunk); let speed = 0;
     if (moving) {
       move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
       if (stagger) move.applyAxisAngle(new THREE.Vector3(0, 1, 0), stagger);
-      speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld) * (1 - 0.28 * drunk);
+      speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld, strolling) * (1 - 0.28 * drunk);
       const desired = this.group.position.clone().addScaledVector(move, speed * dt);
       this.group.position.copy(city.clampMoveAt(this.group.position, desired, PLAYER.radius));
       this.turnToward(aimHeld ? cameraYaw + Math.PI : Math.atan2(move.x, move.z), dt, aimHeld ? 13 : sprinting ? 15 : 11);

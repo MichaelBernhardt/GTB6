@@ -327,7 +327,9 @@ export class RiggedPlayerVisual {
 
   private setPlaybackRate(name: PlayerAnimationName): void {
     if (!this.current) return;
-    if (name === 'walk') this.current.setEffectiveTimeScale(THREE.MathUtils.clamp(this.state.locomotionSpeed / 4.6, 0.45, 1.8));
+    // The mocap walk cycle covers ~1.7 u/s at timeScale 1; /3.0 puts the Alt
+    // stroll (3 u/s) at its authored cadence and lets faster blends speed up.
+    if (name === 'walk') this.current.setEffectiveTimeScale(THREE.MathUtils.clamp(this.state.locomotionSpeed / 3.0, 0.55, 1.8));
     else if (name === 'sprint') this.current.setEffectiveTimeScale(THREE.MathUtils.clamp(this.state.locomotionSpeed / 8.2, 0.65, 1.6));
     else if (name === 'ride_bicycle') this.current.setEffectiveTimeScale(THREE.MathUtils.clamp(Math.abs(this.state.rideSpeed) / 6, 0.2, 2.5));
     else this.current.setEffectiveTimeScale(1);

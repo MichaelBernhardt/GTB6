@@ -110,6 +110,15 @@ for (const character of selectedCharacters) {
     }
     const times = accessorValues(json, bin, animation.samplers[channel.sampler].input);
     for (let index = 1; index < times.length; index++) invariant(Math.abs((times[index] - times[index - 1]) - 1 / 30) < 0.00002, `${character.id}: ${animation.name} track ${channelIndex} is not baked at 30 fps`);
+    if (channel.target.path === 'rotation' && (animation.name === 'walk' || animation.name === 'sprint')) {
+      // No bone may snap between consecutive frames — that is a seam defect, not motion.
+      const values = accessorValues(json, bin, animation.samplers[channel.sampler].output);
+      for (let index = 4; index < values.length; index += 4) {
+        const dot = Math.abs(values[index] * values[index - 4] + values[index + 1] * values[index - 3] + values[index + 2] * values[index - 2] + values[index + 3] * values[index - 1]);
+        const step = 2 * Math.acos(Math.min(1, dot));
+        invariant(step < 0.5, `${character.id}: ${animation.name} ${json.nodes[channel.target.node].name} snaps ${step.toFixed(2)} rad at frame ${index / 4}`);
+      }
+    }
   }
   reports.push(`${character.id}: ${(transfer / 1024 / 1024).toFixed(2)} MiB, ${triangles} triangles`);
 }

@@ -59,8 +59,10 @@ export function outOfAmmo(spec: WeaponSpec, ammo: number, reserve: number): bool
 export const AIM_SPEED_MULTIPLIER = 0.5;
 export const DRIVEBY_COOLDOWN_SCALE = 1.5; // one-handed out the window: slower than planted feet
 
-export function moveSpeed(sprinting: boolean, fastRun: boolean, aiming = false): number {
-  return (sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed) * (fastRun ? CHEATS.runMultiplier : 1) * (aiming ? AIM_SPEED_MULTIPLIER : 1);
+export function moveSpeed(sprinting: boolean, fastRun: boolean, aiming = false, strolling = false): number {
+  // GTA-style tiers: W is a run, Shift sprints, held Alt drops to a walk.
+  const base = sprinting ? PLAYER.sprintSpeed : strolling ? PLAYER.strollSpeed : PLAYER.walkSpeed;
+  return base * (fastRun ? CHEATS.runMultiplier : 1) * (aiming ? AIM_SPEED_MULTIPLIER : 1);
 }
 
 export function crosshairVisible(aiming: boolean, melee: boolean): boolean { return aiming && !melee; }

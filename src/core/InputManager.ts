@@ -15,7 +15,7 @@ export class InputManager {
       if (this.suspended) return;
       if (!this.held.has(event.code)) this.pressed.add(event.code);
       this.held.add(event.code);
-      if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Tab', 'PageUp', 'PageDown'].includes(event.code)) event.preventDefault();
+      if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Tab', 'PageUp', 'PageDown', 'AltLeft'].includes(event.code)) event.preventDefault();
     });
     window.addEventListener('keyup', (event) => this.held.delete(event.code));
     window.addEventListener('blur', () => { this.held.clear(); this.firing = false; });
