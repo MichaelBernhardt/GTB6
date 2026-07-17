@@ -154,6 +154,10 @@ export class DayNightSystem {
 
   get clockText(): string { return formatClock(this.hour); }
 
+  /** Night-gated blackout darkness (eased blackout × nightFactor): 1 = shedding in the dead of night,
+   *  0 = grid up or broad daylight. The same product that sinks the sky — blackout stealth keys off it. */
+  get blackoutDarkness(): number { return this.blackout * nightFactor(this.hour); }
+
   setQuality(quality: BaseQuality): void { this.buildPools(quality); }
 
   private buildPools(quality: BaseQuality): void {
