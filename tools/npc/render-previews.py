@@ -25,7 +25,10 @@ def look_at(obj, target):
 
 def setup_scene():
     scene = bpy.context.scene
-    scene.render.engine = "BLENDER_EEVEE"
+    # Blender 5 calls the engine BLENDER_EEVEE again; 4.2-4.5 LTS use _NEXT.
+    eevee_names = {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"}
+    available = {item.identifier for item in scene.render.bl_rna.properties["engine"].enum_items}
+    scene.render.engine = next(name for name in eevee_names if name in available)
     scene.render.resolution_x = 360
     scene.render.resolution_y = 540
     scene.render.resolution_percentage = 100

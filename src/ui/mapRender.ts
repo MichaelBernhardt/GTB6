@@ -17,7 +17,7 @@
  */
 
 /** Bump when the drawing contract changes. Embedded verbatim into the emitted preview. */
-export const MAP_RENDER_VERSION = '1.3.0'; // 1.2.0 was claimed twice: corridor-tint removal + snowy hillshade
+export const MAP_RENDER_VERSION = '1.4.0'; // 1.4.0: rail station ticks + high-zoom station names
 
 /** Raw composite metres ASL where the hillshade turns snowy (matches City.SNOWLINE_METRES — the
  *  in-game ground shader whitens the same tops; a unit test keeps the two constants equal). */
@@ -30,6 +30,7 @@ export interface RenderMapData {
   roads: Array<{ name: string; width: number; kind: string; points: Poly2 }>;
   tracks: Array<{ name: string; width: number; kind: string; points: Poly2 }>;
   railways: Array<{ name: string; points: Poly2 }>;
+  stations?: Array<{ name: string; line: string; x: number; z: number }>;
   water: Array<{ name: string; points: Poly2 }>;
   landuse: Array<{ name: string; kind: string; points: Poly2 }>;
   districts: Array<{ name: string; x: number; z: number }>;
@@ -348,6 +349,12 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
   if (layers.railways && g.railPath) {
     ctx.strokeStyle = '#5c6b7c'; ctx.lineWidth = Math.max(2, 1.5 / zoom); ctx.setLineDash([12, 8]);
     ctx.stroke(g.railPath); ctx.setLineDash([]);
+    // Station ticks: subtle squares riding the line, sized to stay small at any zoom.
+    for (const station of map.stations ?? []) {
+      const r = Math.max(3.2, 2.2 / zoom);
+      ctx.fillStyle = '#8fa3b8'; ctx.fillRect(station.x - r, station.z - r, r * 2, r * 2);
+      ctx.strokeStyle = '#2b3644'; ctx.lineWidth = Math.max(0.8, 0.5 / zoom); ctx.strokeRect(station.x - r, station.z - r, r * 2, r * 2);
+    }
   }
   if (layers.tracks) {
     for (const { kind, width, path } of g.trackPaths) {
@@ -374,6 +381,18 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
       const w = ctx.measureText(label).width;
       ctx.fillStyle = 'rgba(16,21,28,0.65)'; ctx.fillRect(sx - w / 2 - 3, sy - 9, w + 6, 13);
       ctx.fillStyle = DISTRICT_COLOR; ctx.fillText(label, sx, sy + 1);
+    }
+  }
+  if (layers.railways && zoom > 0.45) {
+    // Station names only when zoomed right in — at city scale the ticks alone mark the stops.
+    ctx.font = '10px system-ui, sans-serif'; ctx.textAlign = 'left';
+    for (const station of map.stations ?? []) {
+      const { sx, sy, onScreen } = markerScreen(station, cam, 60);
+      if (!onScreen) continue;
+      ctx.fillStyle = 'rgba(16,21,28,0.65)';
+      const w = ctx.measureText(station.name).width;
+      ctx.fillRect(sx + 6, sy - 8, w + 5, 12);
+      ctx.fillStyle = '#a9bccf'; ctx.fillText(station.name, sx + 8, sy + 2);
     }
   }
   if (layers.landmarks) {

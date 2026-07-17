@@ -26,6 +26,7 @@ export class HudView {
   private items: HTMLElement;
   private stims: HTMLElement;
   private chutes: HTMLElement;
+  private torch: HTMLElement;
   private cash: HTMLElement;
   private weaponName: HTMLElement;
   private ammo: HTMLElement;
@@ -81,7 +82,7 @@ export class HudView {
       </section>
       <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em><i class="hud-radio" data-hud="radio" role="status"></i><i class="hud-taxi" data-hud="taxi" role="status"></i></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
-      <div class="hud-items" data-hud="items" aria-label="Carried items" hidden><i data-hud="stims" hidden></i><i data-hud="chutes" hidden></i></div>
+      <div class="hud-items" data-hud="items" aria-label="Carried items" hidden><i data-hud="stims" hidden></i><i data-hud="chutes" hidden></i><i data-hud="torch" hidden></i></div>
       <div class="hud-fps" data-hud="fps"></div>
       <div class="hud-perf" data-hud="perf" hidden><canvas class="hud-perf__graph" data-hud="perf-graph" width="200" height="60"></canvas><div class="hud-perf__legend" data-hud="perf-legend"></div></div>
       <div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
@@ -90,7 +91,7 @@ export class HudView {
     this.health = required(root, '[data-hud="health"]'); this.healthFill = required(root, '[data-hud="health-fill"]'); this.cash = required(root, '[data-hud="cash"]');
     this.healthBox = required(root, '.hud-health');
     this.armourBox = required(root, '[data-hud="armour-box"]'); this.armour = required(root, '[data-hud="armour"]'); this.armourFill = required(root, '[data-hud="armour-fill"]');
-    this.items = required(root, '[data-hud="items"]'); this.stims = required(root, '[data-hud="stims"]'); this.chutes = required(root, '[data-hud="chutes"]');
+    this.items = required(root, '[data-hud="items"]'); this.stims = required(root, '[data-hud="stims"]'); this.chutes = required(root, '[data-hud="chutes"]'); this.torch = required(root, '[data-hud="torch"]');
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i'));
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
@@ -115,7 +116,8 @@ export class HudView {
     }
     setHidden(this.stims, state.stims <= 0); if (state.stims > 0) setText(this.stims, `STIM ×${state.stims} · H`);
     setHidden(this.chutes, state.parachutes <= 0); if (state.parachutes > 0) setText(this.chutes, `CHUTE ×${state.parachutes}`);
-    setHidden(this.items, state.stims <= 0 && state.parachutes <= 0);
+    setHidden(this.torch, !state.torch); if (state.torch) setText(this.torch, 'TORCH · L');
+    setHidden(this.items, state.stims <= 0 && state.parachutes <= 0 && !state.torch);
     setText(this.cash, formatMoney(state.money)); setText(this.weaponName, state.weaponName);
     setText(this.ammo, state.melee ? '—' : String(state.ammo)); setText(this.reserve, state.melee ? '' : `/ ${state.reserve}`); setHidden(this.reload, !state.reloading);
     this.wanted.forEach((star, index) => star.classList.toggle('is-hot', index < state.wanted)); setAttribute(this.wantedContainer, 'aria-label', `Wanted level ${state.wanted} of 5`);

@@ -1,408 +1,860 @@
 {
-  "schema": 1,
-  "contract": {
-    "forwardAxis": "+Z",
-    "feetAtOrigin": true,
-    "triangleRange": [12000, 30000],
-    "maxSkinnedMaterials": 5,
-    "maxBoneInfluences": 4,
-    "textureSize": 1024,
-    "fps": 30,
-    "clips": ["idle", "walk", "sprint", "punch_right", "death"],
-    "perCharacterTransferBytes": 3145728,
-    "castTransferBytes": 33554432
-  },
-  "characters": [
-    {
-      "id": "braamfontein-creative",
-      "sex": "female",
-      "role": "ambient",
-      "displayName": "Lerato",
-      "age": 27,
-      "district": "Braamfontein",
-      "archetype": "creative",
-      "description": "Black South African creative in fitted rust streetwear, dark teal trousers and braids.",
-      "heightMetres": 1.72,
-      "phenotype": { "age": 0.43, "muscle": 0.52, "weight": 0.49, "proportions": 0.52, "height": 0.49, "cupsize": 0.54, "firmness": 0.68, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "young_african_female",
-      "skinDiffuse": "young_darkskinned_female_diffuse.png",
-      "skinTint": [0.9, 0.82, 0.76],
-      "hairTint": [0.32, 0.27, 0.24],
-      "shoeTint": [0.24, 0.24, 0.25],
-      "hair": "braid01",
-      "outfit": "female_casualsuit01",
-      "shoes": "shoes02",
-      "secondaryColor": [0.055, 0.13, 0.14],
-      "secondaryBelow": 0.54,
-      "materialSource": "art/npcs/materials/braamfontein-rust-canvas-source.png",
-      "turnaround": "art/npcs/references/braamfontein-creative-turnaround.png"
-    },
-    {
-      "id": "sandton-professional",
-      "sex": "female",
-      "role": "ambient",
-      "displayName": "Priya",
-      "age": 30,
-      "district": "Sandton",
-      "archetype": "professional",
-      "description": "South African Indian professional in deep-plum office-glam tailoring and long hair.",
-      "heightMetres": 1.7,
-      "phenotype": { "age": 0.48, "muscle": 0.42, "weight": 0.44, "proportions": 0.57, "height": 0.48, "cupsize": 0.48, "firmness": 0.62, "race": { "asian": 0.65, "caucasian": 0.35, "african": 0 } },
-      "skin": "young_asian_female",
-      "skinDiffuse": "young_lightskinned_female_diffuse3.png",
-      "skinTint": [0.78, 0.58, 0.43],
-      "hairTint": [0.42, 0.3, 0.25],
-      "shoeTint": [0.48, 0.3, 0.24],
-      "hair": "long01",
-      "outfit": "female_elegantsuit01",
-      "shoes": "toigo_ankle_boots_female",
-      "shoeDiffuse": "BootsAnkle.png",
-      "materialSource": "art/npcs/materials/sandton-plum-suiting-source.png",
-      "turnaround": "art/npcs/references/sandton-professional-turnaround.png"
-    },
-    {
-      "id": "rosebank-athlete",
-      "sex": "female",
-      "role": "ambient",
-      "displayName": "Mia",
-      "age": 25,
-      "district": "Rosebank",
-      "archetype": "athlete",
-      "description": "Coloured South African athlete in fitted coral and graphite sportswear with a ponytail.",
-      "heightMetres": 1.68,
-      "phenotype": { "age": 0.4, "muscle": 0.69, "weight": 0.51, "proportions": 0.55, "height": 0.47, "cupsize": 0.5, "firmness": 0.74, "race": { "asian": 0.1, "caucasian": 0.45, "african": 0.45 } },
-      "skin": "young_caucasian_female2",
-      "skinDiffuse": "young_lightskinned_female_diffuse2.png",
-      "skinTint": [0.78, 0.59, 0.46],
-      "hairTint": [0.38, 0.29, 0.24],
-      "shoeTint": [0.92, 0.9, 0.82],
-      "hair": "ponytail01",
-      "outfit": "female_sportsuit01",
-      "shoes": "shoes03",
-      "secondaryColor": [0.08, 0.085, 0.1],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/rosebank-coral-knit-source.png",
-      "turnaround": "art/npcs/references/rosebank-athlete-turnaround.png"
-    },
-    {
-      "id": "melville-creative",
-      "sex": "female",
-      "role": "ambient",
-      "displayName": "Hannah",
-      "age": 29,
-      "district": "Melville",
-      "archetype": "creative",
-      "description": "White South African creative in an ochre weekend top, dark denim and a chestnut bob.",
-      "heightMetres": 1.74,
-      "phenotype": { "age": 0.46, "muscle": 0.46, "weight": 0.56, "proportions": 0.54, "height": 0.52, "cupsize": 0.56, "firmness": 0.64, "race": { "asian": 0, "caucasian": 1, "african": 0 } },
-      "skin": "young_caucasian_female",
-      "skinDiffuse": "young_lightskinned_female_diffuse.png",
-      "skinTint": [1, 0.92, 0.86],
-      "hairTint": [0.72, 0.45, 0.31],
-      "shoeTint": [0.5, 0.22, 0.16],
-      "hair": "bob01",
-      "outfit": "female_casualsuit02",
-      "shoes": "toigo_ankle_boots_female",
-      "shoeDiffuse": "BootsAnkle.png",
-      "secondaryColor": [0.035, 0.065, 0.11],
-      "secondaryBelow": 0.52,
-      "materialSource": "art/npcs/materials/melville-ochre-knit-source.png",
-      "turnaround": "art/npcs/references/melville-creative-turnaround.png"
-    },
-    {
-      "id": "newtown-producer",
-      "sex": "male",
-      "role": "ambient",
-      "displayName": "Thabo Maseko",
-      "age": 28,
-      "district": "Newtown",
-      "archetype": "producer",
-      "description": "Black South African Newtown music producer in indigo workwear and charcoal chinos.",
-      "heightMetres": 1.8,
-      "phenotype": { "age": 0.44, "muscle": 0.56, "weight": 0.48, "proportions": 0.56, "height": 0.57, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "young_african_male",
-      "skinDiffuse": "young_darkskinned_male_diffuse.png",
-      "skinTint": [0.9, 0.82, 0.76],
-      "hairTint": [0.26, 0.24, 0.22],
-      "shoeTint": [0.9, 0.88, 0.82],
-      "hair": "afro01",
-      "hairDiffuse": "afro_diffuse.png",
-      "outfit": "male_casualsuit05",
-      "shoes": "shoes02",
-      "secondaryColor": [0.045, 0.05, 0.065],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/newtown-indigo-twill-source.png",
-      "turnaround": "art/npcs/references/newtown-producer-turnaround.png"
-    },
-    {
-      "id": "fordsburg-restaurateur",
-      "sex": "male",
-      "role": "ambient",
-      "displayName": "Imraan Patel",
-      "age": 31,
-      "district": "Fordsburg",
-      "archetype": "restaurateur",
-      "description": "South African Indian Fordsburg restaurateur in olive smart-casual tailoring.",
-      "heightMetres": 1.77,
-      "phenotype": { "age": 0.48, "muscle": 0.5, "weight": 0.52, "proportions": 0.55, "height": 0.53, "race": { "asian": 0.68, "caucasian": 0.32, "african": 0 } },
-      "skin": "young_asian_male",
-      "skinDiffuse": "young_lightskinned_male_diffuse3.png",
-      "skinTint": [0.78, 0.59, 0.44],
-      "hairTint": [0.32, 0.27, 0.24],
-      "shoeTint": [0.48, 0.35, 0.27],
-      "hair": "short03",
-      "outfit": "male_casualsuit03",
-      "shoes": "toigo_ankle_boots_male",
-      "shoeDiffuse": "BootsAnkleM.png",
-      "secondaryColor": [0.24, 0.25, 0.24],
-      "secondaryBelow": 0.51,
-      "materialSource": "art/npcs/materials/fordsburg-olive-shirting-source.png",
-      "turnaround": "art/npcs/references/fordsburg-restaurateur-turnaround.png"
-    },
-    {
-      "id": "maboneng-courier",
-      "sex": "male",
-      "role": "ambient",
-      "displayName": "Kabelo Nkosi",
-      "age": 24,
-      "district": "Maboneng",
-      "archetype": "courier",
-      "description": "Black South African Maboneng bicycle courier in cobalt and graphite sportswear.",
-      "heightMetres": 1.83,
-      "phenotype": { "age": 0.39, "muscle": 0.68, "weight": 0.47, "proportions": 0.58, "height": 0.61, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "young_african_male",
-      "skinDiffuse": "young_darkskinned_male_diffuse.png",
-      "skinTint": [0.88, 0.78, 0.7],
-      "hairTint": [0.22, 0.21, 0.2],
-      "shoeTint": [0.84, 0.82, 0.75],
-      "hair": "short01",
-      "outfit": "male_casualsuit02",
-      "shoes": "shoes03",
-      "secondaryColor": [0.055, 0.06, 0.075],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/maboneng-cobalt-knit-source.png",
-      "turnaround": "art/npcs/references/maboneng-courier-turnaround.png"
-    },
-    {
-      "id": "parkhurst-architect",
-      "sex": "male",
-      "role": "ambient",
-      "displayName": "Daniel van Wyk",
-      "age": 32,
-      "district": "Parkhurst",
-      "archetype": "architect",
-      "description": "White South African Parkhurst architect in sand fieldwear and dark denim.",
-      "heightMetres": 1.84,
-      "phenotype": { "age": 0.49, "muscle": 0.52, "weight": 0.5, "proportions": 0.58, "height": 0.63, "race": { "asian": 0, "caucasian": 1, "african": 0 } },
-      "skin": "young_caucasian_male",
-      "skinDiffuse": "young_lightskinned_male_diffuse.png",
-      "skinTint": [0.98, 0.91, 0.84],
-      "hairTint": [0.66, 0.46, 0.34],
-      "shoeTint": [0.48, 0.26, 0.19],
-      "hair": "short04",
-      "outfit": "male_casualsuit05",
-      "shoes": "toigo_ankle_boots_male",
-      "shoeDiffuse": "BootsAnkleM.png",
-      "secondaryColor": [0.035, 0.055, 0.09],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/parkhurst-sand-canvas-source.png",
-      "turnaround": "art/npcs/references/parkhurst-architect-turnaround.png"
-    },
-    {
-      "id": "auntie-portia",
-      "sex": "female",
-      "role": "contact",
-      "displayName": "Auntie Portia Mokoena",
-      "age": 55,
-      "district": "Johannesburg South",
-      "archetype": "mission-contact",
-      "description": "Warm, formidable delivery-job contact in a berry cardigan and charcoal trousers.",
-      "heightMetres": 1.65,
-      "phenotype": { "age": 0.66, "muscle": 0.4, "weight": 0.64, "proportions": 0.5, "height": 0.44, "cupsize": 0.56, "firmness": 0.42, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "middleage_african_female",
-      "skinDiffuse": "middleage_darkskinned_female_diffuse.png",
-      "skinTint": [0.9, 0.82, 0.77],
-      "hairTint": [0.72, 0.7, 0.68],
-      "shoeTint": [0.3, 0.28, 0.26],
-      "hair": "bob02",
-      "outfit": "female_casualsuit02",
-      "shoes": "shoes01",
-      "secondaryColor": [0.09, 0.085, 0.085],
-      "secondaryBelow": 0.52,
-      "materialSource": "art/npcs/materials/auntie-portia-berry-knit-source.png",
-      "turnaround": "art/npcs/references/auntie-portia-turnaround.png"
-    },
-    {
-      "id": "bra-vusi",
-      "sex": "male",
-      "role": "contact",
-      "displayName": "Bra Vusi Mthembu",
-      "age": 44,
-      "district": "Braamfontein",
-      "archetype": "mission-contact",
-      "description": "Streetwise lock-up owner in a muted teal-and-rust micro-check shirt.",
-      "heightMetres": 1.79,
-      "phenotype": { "age": 0.59, "muscle": 0.56, "weight": 0.57, "proportions": 0.55, "height": 0.55, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "middleage_african_male",
-      "skinDiffuse": "middleage_darkskinned_male_diffuse.png",
-      "skinTint": [0.9, 0.82, 0.76],
-      "hairTint": [0.55, 0.53, 0.5],
-      "shoeTint": [0.28, 0.27, 0.26],
-      "hair": "short01",
-      "outfit": "male_casualsuit03",
-      "shoes": "toigo_ankle_boots_male",
-      "shoeDiffuse": "BootsAnkleM.png",
-      "secondaryColor": [0.045, 0.055, 0.075],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/bra-vusi-microcheck-source.png",
-      "turnaround": "art/npcs/references/bra-vusi-turnaround.png"
-    },
-    {
-      "id": "candice-boksburg",
-      "sex": "female",
-      "role": "contact",
-      "displayName": "Candice Jacobs",
-      "age": 34,
-      "district": "Boksburg",
-      "archetype": "mission-contact",
-      "description": "Determined taxi-route organizer in bottle-green utility streetwear.",
-      "heightMetres": 1.71,
-      "phenotype": { "age": 0.51, "muscle": 0.57, "weight": 0.52, "proportions": 0.54, "height": 0.49, "cupsize": 0.5, "firmness": 0.6, "race": { "asian": 0, "caucasian": 1, "african": 0 } },
-      "skin": "young_caucasian_female2",
-      "skinDiffuse": "young_lightskinned_female_diffuse2.png",
-      "skinTint": [1, 0.93, 0.87],
-      "hairTint": [0.84, 0.68, 0.47],
-      "shoeTint": [0.9, 0.86, 0.76],
-      "hair": "ponytail01",
-      "outfit": "female_casualsuit01",
-      "shoes": "shoes03",
-      "secondaryColor": [0.025, 0.03, 0.035],
-      "secondaryBelow": 0.52,
-      "materialSource": "art/npcs/materials/candice-bottle-twill-source.png",
-      "turnaround": "art/npcs/references/candice-boksburg-turnaround.png"
-    },
-    {
-      "id": "thandi-arms",
-      "sex": "female",
-      "role": "contact",
-      "displayName": "Thandi Ndlovu",
-      "age": 38,
-      "district": "Joburg CBD",
-      "archetype": "mission-contact",
-      "description": "Authoritative independent shop manager in graphite and olive workwear.",
-      "heightMetres": 1.73,
-      "phenotype": { "age": 0.55, "muscle": 0.63, "weight": 0.52, "proportions": 0.55, "height": 0.51, "cupsize": 0.49, "firmness": 0.62, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "young_african_female",
-      "skinDiffuse": "young_darkskinned_female_diffuse.png",
-      "skinTint": [0.88, 0.78, 0.7],
-      "hairTint": [0.24, 0.22, 0.2],
-      "shoeTint": [0.25, 0.24, 0.23],
-      "hair": "short02",
-      "outfit": "female_sportsuit01",
-      "shoes": "toigo_ankle_boots_female",
-      "shoeDiffuse": "BootsAnkle.png",
-      "secondaryColor": [0.13, 0.14, 0.1],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/thandi-graphite-workweave-source.png",
-      "turnaround": "art/npcs/references/thandi-arms-turnaround.png"
-    },
-    {
-      "id": "jmpd-patrol-officer",
-      "sex": "male",
-      "role": "police",
-      "displayName": "Sergeant Themba Dlamini",
-      "age": 36,
-      "district": "Joburg CBD",
-      "archetype": "patrol-officer",
-      "description": "Fictional metropolitan foot-patrol officer in blank dark-navy service uniform.",
-      "heightMetres": 1.82,
-      "phenotype": { "age": 0.53, "muscle": 0.66, "weight": 0.51, "proportions": 0.58, "height": 0.6, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "young_african_male",
-      "skinDiffuse": "young_darkskinned_male_diffuse.png",
-      "skinTint": [0.88, 0.79, 0.72],
-      "hairTint": [0.2, 0.19, 0.18],
-      "shoeTint": [0.22, 0.22, 0.22],
-      "hair": "short01",
-      "outfit": "male_casualsuit05",
-      "shoes": "toigo_ankle_boots_male",
-      "shoeDiffuse": "BootsAnkleM.png",
-      "secondaryColor": [0.025, 0.035, 0.055],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/jmpd-navy-twill-source.png",
-      "turnaround": "art/npcs/references/jmpd-patrol-officer-turnaround.png"
-    },
-    {
-      "id": "bree-rank-enforcer",
-      "sex": "male",
-      "role": "hostile",
-      "displayName": "Sizwe Khumalo",
-      "age": 33,
-      "district": "Bree",
-      "archetype": "rank-enforcer",
-      "description": "Imposing taxi-rank enforcer in a charcoal work jacket and dark denim.",
-      "heightMetres": 1.86,
-      "phenotype": { "age": 0.5, "muscle": 0.74, "weight": 0.58, "proportions": 0.6, "height": 0.66, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "young_african_male",
-      "skinDiffuse": "young_darkskinned_male_diffuse.png",
-      "skinTint": [0.86, 0.76, 0.69],
-      "hairTint": [0.22, 0.2, 0.19],
-      "shoeTint": [0.2, 0.2, 0.2],
-      "hair": "short02",
-      "outfit": "male_casualsuit05",
-      "shoes": "toigo_ankle_boots_male",
-      "shoeDiffuse": "BootsAnkleM.png",
-      "secondaryColor": [0.11, 0.035, 0.045],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/rank-charcoal-shell-source.png",
-      "turnaround": "art/npcs/references/bree-rank-enforcer-turnaround.png"
-    },
-    {
-      "id": "yeoville-car-guard",
-      "sex": "male",
-      "role": "guard",
-      "displayName": "Uncle Jabu Maseko",
-      "age": 52,
-      "district": "Yeoville",
-      "archetype": "car-guard",
-      "description": "Personable curbside car guard in worn navy workwear and a high-visibility vest.",
-      "heightMetres": 1.74,
-      "phenotype": { "age": 0.64, "muscle": 0.46, "weight": 0.48, "proportions": 0.52, "height": 0.5, "race": { "asian": 0, "caucasian": 0, "african": 1 } },
-      "skin": "middleage_african_male",
-      "skinDiffuse": "middleage_darkskinned_male_diffuse.png",
-      "skinTint": [0.9, 0.82, 0.76],
-      "hairTint": [0.66, 0.64, 0.61],
-      "shoeTint": [0.28, 0.27, 0.25],
-      "hair": "short04",
-      "outfit": "male_worksuit01",
-      "shoes": "shoes01",
-      "secondaryColor": [0.035, 0.04, 0.045],
-      "secondaryBelow": 0.48,
-      "materialSource": "art/npcs/materials/car-guard-navy-drill-source.png",
-      "turnaround": "art/npcs/references/yeoville-car-guard-turnaround.png"
-    },
-    {
-      "id": "joburg-driver",
-      "sex": "male",
-      "role": "driver",
-      "displayName": "Zane Daniels",
-      "age": 39,
-      "district": "Johannesburg",
-      "archetype": "commuter-driver",
-      "description": "Everyday Coloured South African commuter in a dusty-blue T-shirt and charcoal jeans.",
-      "heightMetres": 1.78,
-      "phenotype": { "age": 0.55, "muscle": 0.56, "weight": 0.52, "proportions": 0.55, "height": 0.54, "race": { "asian": 0.05, "caucasian": 0.48, "african": 0.47 } },
-      "skin": "young_caucasian_male2",
-      "skinDiffuse": "young_lightskinned_male_diffuse2.png",
-      "skinTint": [0.76, 0.58, 0.45],
-      "hairTint": [0.28, 0.24, 0.22],
-      "shoeTint": [0.52, 0.51, 0.49],
-      "hair": "short03",
-      "outfit": "male_casualsuit06",
-      "shoes": "shoes03",
-      "secondaryColor": [0.075, 0.075, 0.08],
-      "secondaryBelow": 0.5,
-      "materialSource": "art/npcs/materials/driver-steel-jersey-source.png",
-      "turnaround": "art/npcs/references/joburg-driver-turnaround.png"
+ "schema": 1,
+ "contract": {
+  "forwardAxis": "+Z",
+  "feetAtOrigin": true,
+  "triangleRange": [
+   12000,
+   30000
+  ],
+  "maxSkinnedMaterials": 5,
+  "maxBoneInfluences": 4,
+  "textureSize": 1024,
+  "fps": 30,
+  "clips": [
+   "idle",
+   "walk",
+   "sprint",
+   "punch_right",
+   "death"
+  ],
+  "perCharacterTransferBytes": 3145728,
+  "castTransferBytes": 33554432
+ },
+ "characters": [
+  {
+   "id": "braamfontein-creative",
+   "sex": "female",
+   "role": "ambient",
+   "displayName": "Lerato",
+   "age": 27,
+   "district": "Braamfontein",
+   "archetype": "creative",
+   "description": "Black South African creative in fitted rust streetwear, dark teal trousers and braids.",
+   "heightMetres": 1.72,
+   "phenotype": {
+    "age": 0.43,
+    "muscle": 0.52,
+    "weight": 0.49,
+    "proportions": 0.52,
+    "height": 0.49,
+    "cupsize": 0.54,
+    "firmness": 0.68,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
     }
-  ]
+   },
+   "skin": "young_african_female",
+   "skinDiffuse": "young_darkskinned_female_diffuse.png",
+   "skinTint": [
+    0.9,
+    0.82,
+    0.76
+   ],
+   "hairTint": [
+    0.32,
+    0.27,
+    0.24
+   ],
+   "shoeTint": [
+    0.24,
+    0.24,
+    0.25
+   ],
+   "hair": "braid01",
+   "outfit": "female_casualsuit01",
+   "shoes": "shoes02",
+   "secondaryColor": [
+    0.055,
+    0.13,
+    0.14
+   ],
+   "secondaryBelow": 0.54,
+   "materialSource": "art/npcs/materials/braamfontein-rust-canvas-source.png",
+   "turnaround": "art/npcs/references/braamfontein-creative-turnaround.png"
+  },
+  {
+   "id": "sandton-professional",
+   "sex": "female",
+   "role": "ambient",
+   "displayName": "Priya",
+   "age": 30,
+   "district": "Sandton",
+   "archetype": "professional",
+   "description": "South African Indian professional in deep-plum office-glam tailoring and long hair.",
+   "heightMetres": 1.7,
+   "phenotype": {
+    "age": 0.48,
+    "muscle": 0.42,
+    "weight": 0.44,
+    "proportions": 0.57,
+    "height": 0.48,
+    "cupsize": 0.48,
+    "firmness": 0.62,
+    "race": {
+     "asian": 0.65,
+     "caucasian": 0.35,
+     "african": 0
+    }
+   },
+   "skin": "young_asian_female",
+   "skinDiffuse": "young_lightskinned_female_diffuse3.png",
+   "skinTint": [
+    0.78,
+    0.58,
+    0.43
+   ],
+   "hairTint": [
+    0.42,
+    0.3,
+    0.25
+   ],
+   "shoeTint": [
+    0.48,
+    0.3,
+    0.24
+   ],
+   "hair": "long01",
+   "outfit": "female_elegantsuit01",
+   "shoes": "toigo_ankle_boots_female",
+   "shoeDiffuse": "BootsAnkle.png",
+   "materialSource": "art/npcs/materials/sandton-plum-suiting-source.png",
+   "turnaround": "art/npcs/references/sandton-professional-turnaround.png"
+  },
+  {
+   "id": "rosebank-athlete",
+   "sex": "female",
+   "role": "ambient",
+   "displayName": "Mia",
+   "age": 25,
+   "district": "Rosebank",
+   "archetype": "athlete",
+   "description": "Coloured South African athlete in fitted coral and graphite sportswear with a ponytail.",
+   "heightMetres": 1.68,
+   "phenotype": {
+    "age": 0.4,
+    "muscle": 0.69,
+    "weight": 0.51,
+    "proportions": 0.55,
+    "height": 0.47,
+    "cupsize": 0.5,
+    "firmness": 0.74,
+    "race": {
+     "asian": 0.1,
+     "caucasian": 0.45,
+     "african": 0.45
+    }
+   },
+   "skin": "young_caucasian_female2",
+   "skinDiffuse": "young_lightskinned_female_diffuse2.png",
+   "skinTint": [
+    0.78,
+    0.59,
+    0.46
+   ],
+   "hairTint": [
+    0.38,
+    0.29,
+    0.24
+   ],
+   "shoeTint": [
+    0.92,
+    0.9,
+    0.82
+   ],
+   "hair": "ponytail01",
+   "outfit": "female_sportsuit01",
+   "shoes": "shoes03",
+   "secondaryColor": [
+    0.08,
+    0.085,
+    0.1
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/rosebank-coral-knit-source.png",
+   "turnaround": "art/npcs/references/rosebank-athlete-turnaround.png"
+  },
+  {
+   "id": "melville-creative",
+   "sex": "female",
+   "role": "ambient",
+   "displayName": "Hannah",
+   "age": 29,
+   "district": "Melville",
+   "archetype": "creative",
+   "description": "White South African creative in an ochre weekend top, dark denim and a chestnut bob.",
+   "heightMetres": 1.74,
+   "phenotype": {
+    "age": 0.46,
+    "muscle": 0.46,
+    "weight": 0.56,
+    "proportions": 0.54,
+    "height": 0.52,
+    "cupsize": 0.56,
+    "firmness": 0.64,
+    "race": {
+     "asian": 0,
+     "caucasian": 1,
+     "african": 0
+    }
+   },
+   "skin": "young_caucasian_female",
+   "skinDiffuse": "young_lightskinned_female_diffuse.png",
+   "skinTint": [
+    1,
+    0.92,
+    0.86
+   ],
+   "hairTint": [
+    0.72,
+    0.45,
+    0.31
+   ],
+   "shoeTint": [
+    0.5,
+    0.22,
+    0.16
+   ],
+   "hair": "bob01",
+   "outfit": "female_casualsuit02",
+   "shoes": "toigo_ankle_boots_female",
+   "shoeDiffuse": "BootsAnkle.png",
+   "secondaryColor": [
+    0.035,
+    0.065,
+    0.11
+   ],
+   "secondaryBelow": 0.52,
+   "materialSource": "art/npcs/materials/melville-ochre-knit-source.png",
+   "turnaround": "art/npcs/references/melville-creative-turnaround.png"
+  },
+  {
+   "id": "newtown-producer",
+   "sex": "male",
+   "role": "ambient",
+   "displayName": "Thabo Maseko",
+   "age": 28,
+   "district": "Newtown",
+   "archetype": "producer",
+   "description": "Black South African Newtown music producer in indigo workwear and charcoal chinos.",
+   "heightMetres": 1.8,
+   "phenotype": {
+    "age": 0.44,
+    "muscle": 0.56,
+    "weight": 0.48,
+    "proportions": 0.56,
+    "height": 0.57,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
+    }
+   },
+   "skin": "young_african_male",
+   "skinDiffuse": "young_darkskinned_male_diffuse.png",
+   "skinTint": [
+    0.9,
+    0.82,
+    0.76
+   ],
+   "hairTint": [
+    0.26,
+    0.24,
+    0.22
+   ],
+   "shoeTint": [
+    0.9,
+    0.88,
+    0.82
+   ],
+   "hair": "afro01",
+   "hairDiffuse": "afro_diffuse.png",
+   "outfit": "male_casualsuit05",
+   "shoes": "shoes02",
+   "secondaryColor": [
+    0.045,
+    0.05,
+    0.065
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/newtown-indigo-twill-source.png",
+   "turnaround": "art/npcs/references/newtown-producer-turnaround.png"
+  },
+  {
+   "id": "fordsburg-restaurateur",
+   "sex": "male",
+   "role": "ambient",
+   "displayName": "Imraan Patel",
+   "age": 31,
+   "district": "Fordsburg",
+   "archetype": "restaurateur",
+   "description": "South African Indian Fordsburg restaurateur in olive smart-casual tailoring.",
+   "heightMetres": 1.77,
+   "phenotype": {
+    "age": 0.48,
+    "muscle": 0.5,
+    "weight": 0.52,
+    "proportions": 0.55,
+    "height": 0.53,
+    "race": {
+     "asian": 0.68,
+     "caucasian": 0.32,
+     "african": 0
+    }
+   },
+   "skin": "young_asian_male",
+   "skinDiffuse": "young_lightskinned_male_diffuse3.png",
+   "skinTint": [
+    0.78,
+    0.59,
+    0.44
+   ],
+   "hairTint": [
+    0.32,
+    0.27,
+    0.24
+   ],
+   "shoeTint": [
+    0.48,
+    0.35,
+    0.27
+   ],
+   "hair": "short03",
+   "outfit": "male_casualsuit03",
+   "shoes": "toigo_ankle_boots_male",
+   "shoeDiffuse": "BootsAnkleM.png",
+   "secondaryColor": [
+    0.24,
+    0.25,
+    0.24
+   ],
+   "secondaryBelow": 0.51,
+   "materialSource": "art/npcs/materials/fordsburg-olive-shirting-source.png",
+   "turnaround": "art/npcs/references/fordsburg-restaurateur-turnaround.png"
+  },
+  {
+   "id": "maboneng-courier",
+   "sex": "male",
+   "role": "ambient",
+   "displayName": "Kabelo Nkosi",
+   "age": 24,
+   "district": "Maboneng",
+   "archetype": "courier",
+   "description": "Black South African Maboneng bicycle courier in cobalt and graphite sportswear.",
+   "heightMetres": 1.83,
+   "phenotype": {
+    "age": 0.39,
+    "muscle": 0.68,
+    "weight": 0.47,
+    "proportions": 0.58,
+    "height": 0.61,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
+    }
+   },
+   "skin": "young_african_male",
+   "skinDiffuse": "young_darkskinned_male_diffuse.png",
+   "skinTint": [
+    0.88,
+    0.78,
+    0.7
+   ],
+   "hairTint": [
+    0.22,
+    0.21,
+    0.2
+   ],
+   "shoeTint": [
+    0.84,
+    0.82,
+    0.75
+   ],
+   "hair": "short01",
+   "outfit": "male_casualsuit02",
+   "shoes": "shoes03",
+   "secondaryColor": [
+    0.055,
+    0.06,
+    0.075
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/maboneng-cobalt-knit-source.png",
+   "turnaround": "art/npcs/references/maboneng-courier-turnaround.png"
+  },
+  {
+   "id": "parkhurst-architect",
+   "sex": "male",
+   "role": "ambient",
+   "displayName": "Daniel van Wyk",
+   "age": 32,
+   "district": "Parkhurst",
+   "archetype": "architect",
+   "description": "White South African Parkhurst architect in sand fieldwear and dark denim.",
+   "heightMetres": 1.84,
+   "phenotype": {
+    "age": 0.49,
+    "muscle": 0.52,
+    "weight": 0.5,
+    "proportions": 0.58,
+    "height": 0.63,
+    "race": {
+     "asian": 0,
+     "caucasian": 1,
+     "african": 0
+    }
+   },
+   "skin": "young_caucasian_male",
+   "skinDiffuse": "young_lightskinned_male_diffuse.png",
+   "skinTint": [
+    0.98,
+    0.91,
+    0.84
+   ],
+   "hairTint": [
+    0.66,
+    0.46,
+    0.34
+   ],
+   "shoeTint": [
+    0.48,
+    0.26,
+    0.19
+   ],
+   "hair": "short04",
+   "outfit": "male_casualsuit05",
+   "shoes": "toigo_ankle_boots_male",
+   "shoeDiffuse": "BootsAnkleM.png",
+   "secondaryColor": [
+    0.035,
+    0.055,
+    0.09
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/parkhurst-sand-canvas-source.png",
+   "turnaround": "art/npcs/references/parkhurst-architect-turnaround.png"
+  },
+  {
+   "id": "auntie-portia",
+   "sex": "female",
+   "role": "contact",
+   "displayName": "Auntie Portia Mokoena",
+   "age": 55,
+   "district": "Johannesburg South",
+   "archetype": "mission-contact",
+   "description": "Warm, formidable delivery-job contact in a berry cardigan and charcoal trousers.",
+   "heightMetres": 1.65,
+   "phenotype": {
+    "age": 0.66,
+    "muscle": 0.4,
+    "weight": 0.64,
+    "proportions": 0.5,
+    "height": 0.44,
+    "cupsize": 0.56,
+    "firmness": 0.42,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
+    }
+   },
+   "skin": "middleage_african_female",
+   "skinDiffuse": "middleage_darkskinned_female_diffuse.png",
+   "skinTint": [
+    0.9,
+    0.82,
+    0.77
+   ],
+   "hairTint": [
+    0.72,
+    0.7,
+    0.68
+   ],
+   "shoeTint": [
+    0.3,
+    0.28,
+    0.26
+   ],
+   "hair": "bob02",
+   "outfit": "female_casualsuit02",
+   "shoes": "shoes01",
+   "secondaryColor": [
+    0.09,
+    0.085,
+    0.085
+   ],
+   "secondaryBelow": 0.52,
+   "materialSource": "art/npcs/materials/auntie-portia-berry-knit-source.png",
+   "turnaround": "art/npcs/references/auntie-portia-turnaround.png"
+  },
+  {
+   "id": "bra-vusi",
+   "sex": "male",
+   "role": "contact",
+   "displayName": "Bra Vusi Mthembu",
+   "age": 44,
+   "district": "Braamfontein",
+   "archetype": "mission-contact",
+   "description": "Streetwise lock-up owner in a muted teal-and-rust micro-check shirt.",
+   "heightMetres": 1.79,
+   "phenotype": {
+    "age": 0.59,
+    "muscle": 0.56,
+    "weight": 0.57,
+    "proportions": 0.55,
+    "height": 0.55,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
+    }
+   },
+   "skin": "middleage_african_male",
+   "skinDiffuse": "middleage_darkskinned_male_diffuse.png",
+   "skinTint": [
+    0.9,
+    0.82,
+    0.76
+   ],
+   "hairTint": [
+    0.55,
+    0.53,
+    0.5
+   ],
+   "shoeTint": [
+    0.28,
+    0.27,
+    0.26
+   ],
+   "hair": "short01",
+   "outfit": "male_casualsuit03",
+   "shoes": "toigo_ankle_boots_male",
+   "shoeDiffuse": "BootsAnkleM.png",
+   "secondaryColor": [
+    0.045,
+    0.055,
+    0.075
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/bra-vusi-microcheck-source.png",
+   "turnaround": "art/npcs/references/bra-vusi-turnaround.png"
+  },
+  {
+   "id": "candice-boksburg",
+   "sex": "female",
+   "role": "contact",
+   "displayName": "Candice Jacobs",
+   "age": 34,
+   "district": "Boksburg",
+   "archetype": "mission-contact",
+   "description": "Determined taxi-route organizer in bottle-green utility streetwear.",
+   "heightMetres": 1.71,
+   "phenotype": {
+    "age": 0.51,
+    "muscle": 0.57,
+    "weight": 0.52,
+    "proportions": 0.54,
+    "height": 0.49,
+    "cupsize": 0.5,
+    "firmness": 0.6,
+    "race": {
+     "asian": 0,
+     "caucasian": 1,
+     "african": 0
+    }
+   },
+   "skin": "young_caucasian_female2",
+   "skinDiffuse": "young_lightskinned_female_diffuse2.png",
+   "skinTint": [
+    1,
+    0.93,
+    0.87
+   ],
+   "hairTint": [
+    0.84,
+    0.68,
+    0.47
+   ],
+   "shoeTint": [
+    0.9,
+    0.86,
+    0.76
+   ],
+   "hair": "ponytail01",
+   "outfit": "female_casualsuit01",
+   "shoes": "shoes03",
+   "secondaryColor": [
+    0.025,
+    0.03,
+    0.035
+   ],
+   "secondaryBelow": 0.52,
+   "materialSource": "art/npcs/materials/candice-bottle-twill-source.png",
+   "turnaround": "art/npcs/references/candice-boksburg-turnaround.png"
+  },
+  {
+   "id": "thandi-arms",
+   "sex": "female",
+   "role": "contact",
+   "displayName": "Thandi Ndlovu",
+   "age": 38,
+   "district": "Joburg CBD",
+   "archetype": "mission-contact",
+   "description": "Authoritative independent shop manager in graphite and olive workwear.",
+   "heightMetres": 1.73,
+   "phenotype": {
+    "age": 0.55,
+    "muscle": 0.63,
+    "weight": 0.52,
+    "proportions": 0.55,
+    "height": 0.51,
+    "cupsize": 0.49,
+    "firmness": 0.62,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
+    }
+   },
+   "skin": "young_african_female",
+   "skinDiffuse": "young_darkskinned_female_diffuse.png",
+   "skinTint": [
+    0.88,
+    0.78,
+    0.7
+   ],
+   "hairTint": [
+    0.24,
+    0.22,
+    0.2
+   ],
+   "shoeTint": [
+    0.25,
+    0.24,
+    0.23
+   ],
+   "hair": "short02",
+   "outfit": "female_sportsuit01",
+   "shoes": "toigo_ankle_boots_female",
+   "shoeDiffuse": "BootsAnkle.png",
+   "secondaryColor": [
+    0.13,
+    0.14,
+    0.1
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/thandi-graphite-workweave-source.png",
+   "turnaround": "art/npcs/references/thandi-arms-turnaround.png"
+  },
+  {
+   "id": "jmpd-patrol-officer",
+   "sex": "male",
+   "role": "police",
+   "displayName": "Sergeant Themba Dlamini",
+   "age": 36,
+   "district": "Joburg CBD",
+   "archetype": "patrol-officer",
+   "description": "Fictional metropolitan foot-patrol officer in blank dark-navy service uniform.",
+   "heightMetres": 1.82,
+   "phenotype": {
+    "age": 0.53,
+    "muscle": 0.66,
+    "weight": 0.51,
+    "proportions": 0.58,
+    "height": 0.6,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
+    }
+   },
+   "skin": "young_african_male",
+   "skinDiffuse": "young_darkskinned_male_diffuse.png",
+   "skinTint": [
+    0.88,
+    0.79,
+    0.72
+   ],
+   "hairTint": [
+    0.2,
+    0.19,
+    0.18
+   ],
+   "shoeTint": [
+    0.22,
+    0.22,
+    0.22
+   ],
+   "hair": "short01",
+   "outfit": "male_casualsuit05",
+   "shoes": "toigo_ankle_boots_male",
+   "shoeDiffuse": "BootsAnkleM.png",
+   "secondaryColor": [
+    0.025,
+    0.035,
+    0.055
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/jmpd-navy-twill-source.png",
+   "turnaround": "art/npcs/references/jmpd-patrol-officer-turnaround.png",
+   "outfitOverlay": "art/npcs/materials/jmpd-police-overlay.png"
+  },
+  {
+   "id": "bree-rank-enforcer",
+   "sex": "male",
+   "role": "hostile",
+   "displayName": "Sizwe Khumalo",
+   "age": 33,
+   "district": "Bree",
+   "archetype": "rank-enforcer",
+   "description": "Imposing taxi-rank enforcer in a charcoal work jacket and dark denim.",
+   "heightMetres": 1.86,
+   "phenotype": {
+    "age": 0.5,
+    "muscle": 0.74,
+    "weight": 0.58,
+    "proportions": 0.6,
+    "height": 0.66,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
+    }
+   },
+   "skin": "young_african_male",
+   "skinDiffuse": "young_darkskinned_male_diffuse.png",
+   "skinTint": [
+    0.86,
+    0.76,
+    0.69
+   ],
+   "hairTint": [
+    0.22,
+    0.2,
+    0.19
+   ],
+   "shoeTint": [
+    0.2,
+    0.2,
+    0.2
+   ],
+   "hair": "short02",
+   "outfit": "male_casualsuit05",
+   "shoes": "toigo_ankle_boots_male",
+   "shoeDiffuse": "BootsAnkleM.png",
+   "secondaryColor": [
+    0.11,
+    0.035,
+    0.045
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/rank-charcoal-shell-source.png",
+   "turnaround": "art/npcs/references/bree-rank-enforcer-turnaround.png"
+  },
+  {
+   "id": "yeoville-car-guard",
+   "sex": "male",
+   "role": "guard",
+   "displayName": "Uncle Jabu Maseko",
+   "age": 52,
+   "district": "Yeoville",
+   "archetype": "car-guard",
+   "description": "Personable curbside car guard in worn navy workwear and a high-visibility vest.",
+   "heightMetres": 1.74,
+   "phenotype": {
+    "age": 0.64,
+    "muscle": 0.46,
+    "weight": 0.48,
+    "proportions": 0.52,
+    "height": 0.5,
+    "race": {
+     "asian": 0,
+     "caucasian": 0,
+     "african": 1
+    }
+   },
+   "skin": "middleage_african_male",
+   "skinDiffuse": "middleage_darkskinned_male_diffuse.png",
+   "skinTint": [
+    0.9,
+    0.82,
+    0.76
+   ],
+   "hairTint": [
+    0.66,
+    0.64,
+    0.61
+   ],
+   "shoeTint": [
+    0.28,
+    0.27,
+    0.25
+   ],
+   "hair": "short04",
+   "outfit": "male_worksuit01",
+   "shoes": "shoes01",
+   "secondaryColor": [
+    0.035,
+    0.04,
+    0.045
+   ],
+   "secondaryBelow": 0.48,
+   "materialSource": "art/npcs/materials/car-guard-navy-drill-source.png",
+   "turnaround": "art/npcs/references/yeoville-car-guard-turnaround.png"
+  },
+  {
+   "id": "joburg-driver",
+   "sex": "male",
+   "role": "driver",
+   "displayName": "Zane Daniels",
+   "age": 39,
+   "district": "Johannesburg",
+   "archetype": "commuter-driver",
+   "description": "Everyday Coloured South African commuter in a dusty-blue T-shirt and charcoal jeans.",
+   "heightMetres": 1.78,
+   "phenotype": {
+    "age": 0.55,
+    "muscle": 0.56,
+    "weight": 0.52,
+    "proportions": 0.55,
+    "height": 0.54,
+    "race": {
+     "asian": 0.05,
+     "caucasian": 0.48,
+     "african": 0.47
+    }
+   },
+   "skin": "young_caucasian_male2",
+   "skinDiffuse": "young_lightskinned_male_diffuse2.png",
+   "skinTint": [
+    0.76,
+    0.58,
+    0.45
+   ],
+   "hairTint": [
+    0.28,
+    0.24,
+    0.22
+   ],
+   "shoeTint": [
+    0.52,
+    0.51,
+    0.49
+   ],
+   "hair": "short03",
+   "outfit": "male_casualsuit06",
+   "shoes": "shoes03",
+   "secondaryColor": [
+    0.075,
+    0.075,
+    0.08
+   ],
+   "secondaryBelow": 0.5,
+   "materialSource": "art/npcs/materials/driver-steel-jersey-source.png",
+   "turnaround": "art/npcs/references/joburg-driver-turnaround.png"
+  }
+ ]
 }

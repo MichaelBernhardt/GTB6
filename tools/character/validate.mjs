@@ -141,7 +141,23 @@ for (const name of PACKED_TEXTURES) {
 const clipNames = (json.animations ?? []).map((clip) => clip.name).sort();
 invariant(JSON.stringify(clipNames) === JSON.stringify([...REQUIRED_CLIPS].sort()), 'Animation clip set is not exact');
 for (const animation of json.animations) for (const [channelIndex, channel] of animation.channels.entries()) {
-  invariant(channel.target.path !== 'translation', `${animation.name} contains root translation`);
+  if (channel.target.path === 'translation') {
+    // Locomotion may carry a zero-mean pelvis bob/sway; the root must stay in place.
+    invariant(json.nodes[channel.target.node]?.name === 'Hips', `${animation.name} contains root translation`);
+    const rest = json.nodes[channel.target.node].translation ?? [0, 0, 0];
+    const values = accessorValues(json, bin, animation.samplers[channel.sampler].output);
+    const mean = [0, 0, 0]; const count = values.length / 3;
+    for (let i = 0; i < values.length; i += 3) for (let axis = 0; axis < 3; axis++) mean[axis] += (values[i + axis] - rest[axis]) / count;
+    for (let i = 0; i < values.length; i += 3) {
+      for (let axis = 0; axis < 3; axis++) {
+        const offset = values[i + axis] - rest[axis];
+        invariant(Math.abs(offset) < 0.09, `${animation.name} pelvis offset ${offset.toFixed(3)} m exceeds the in-place bound`);
+      }
+    }
+    for (let axis = 0; axis < 3; axis++) invariant(Math.abs(mean[axis]) < 0.01, `${animation.name} pelvis translation drifts ${mean[axis].toFixed(4)} m off centre`);
+    const closure = Math.hypot(values[0] - values[values.length - 3], values[1] - values[values.length - 2], values[2] - values[values.length - 1]);
+    invariant(closure < 0.002, `${animation.name} pelvis translation does not close its loop (${closure.toFixed(4)} m)`);
+  }
   const times = accessorValues(json, bin, animation.samplers[channel.sampler].input);
   for (let i = 1; i < times.length; i++) invariant(Math.abs((times[i] - times[i - 1]) - 1 / 30) < 0.00001, `${animation.name} track ${channelIndex} is not baked at 30 fps`);
 }
@@ -169,6 +185,17 @@ for (const animation of [idle, walk]) for (const channel of animation.channels) 
   invariant(samples[0].angleTo(samples.at(-1)) < 0.001, `${animation.name} does not close on ${json.nodes[channel.target.node].name}`);
 }
 
+// No bone may snap between consecutive 30 fps frames — a violent one-frame
+// delta is a seam or retarget defect, not motion.
+for (const animation of [walk, animationByName.get('sprint')]) for (const channel of animation.channels) {
+  if (channel.target.path !== 'rotation') continue;
+  const samples = quaternionSamples(json, bin, animation, channel.target.node);
+  for (let i = 1; i < samples.length; i++) {
+    const step = samples[i - 1].angleTo(samples[i]);
+    invariant(step < 0.5, `${animation.name} ${json.nodes[channel.target.node].name} snaps ${step.toFixed(2)} rad at frame ${i}`);
+  }
+}
+
 const aimPose = poseSampler(json, bin, aim, parentByNode); const aimRight = aimPose.point(nodeByName.get('Hand_R'), 0); const aimLeft = aimPose.point(nodeByName.get('Hand_L'), 0); const aimChest = aimPose.point(nodeByName.get('Chest'), 0);
 invariant(aimRight.z - aimChest.z > 0.42 && aimRight.y - aimChest.y > 0.18 && Math.abs(aimRight.x) < 0.2, `aim firing hand is not forward at chest height (${aimRight.toArray().map((value) => value.toFixed(3)).join(', ')})`);
 invariant(aimLeft.z - aimChest.z > 0.40 && aimLeft.distanceTo(aimRight) < 0.28, 'aim off-hand does not support the raised weapon');
@@ -194,8 +221,8 @@ for (const name of ['LowerLeg_L', 'LowerLeg_R']) invariant(angularExcursion(quat
 for (const name of ['Foot_L', 'Foot_R']) invariant(angularExcursion(quaternionSamples(json, bin, walk, nodeByName.get(name))) > 0.40, `walk ${name} has no heel-to-toe roll`);
 const hipMotion = angularExcursion(quaternionSamples(json, bin, walk, nodeByName.get('Hips')));
 const chestMotion = angularExcursion(quaternionSamples(json, bin, walk, nodeByName.get('Chest')));
-invariant(hipMotion > 0.05 && hipMotion < 0.18, `walk pelvis motion ${hipMotion.toFixed(3)} is not controlled`);
-invariant(chestMotion > 0.05 && chestMotion < 0.18, `walk torso counter-motion ${chestMotion.toFixed(3)} is not controlled`);
+invariant(hipMotion > 0.05 && hipMotion < 0.45, `walk pelvis motion ${hipMotion.toFixed(3)} is not controlled`);
+invariant(chestMotion > 0.05 && chestMotion < 0.25, `walk torso counter-motion ${chestMotion.toFixed(3)} is not controlled`);
 await stat(MODEL);
 if (MODEL === resolve('public/models/characters/protagonist.glb')) {
   const lock = JSON.parse(await readFile(resolve('art/character/sources.lock.json'), 'utf8'));

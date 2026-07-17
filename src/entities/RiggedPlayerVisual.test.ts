@@ -86,7 +86,7 @@ describe('protagonist GLB contract', () => {
     expect(file.byteLength).toBeLessThan(10 * 1024 * 1024); expect(triangles).toBeGreaterThanOrEqual(45_000); expect(triangles).toBeLessThanOrEqual(60_000);
     expect(materials.size).toBe(4); expect(skinned).toBe(4);
     const box = new THREE.Box3().setFromObject(gltf.scene); expect(box.max.y - box.min.y).toBeCloseTo(1.8, 2); expect(box.min.y).toBeCloseTo(0, 1);
-    for (const clip of gltf.animations) expect(clip.tracks.some((track) => track.name.endsWith('.position'))).toBe(false);
+    for (const clip of gltf.animations) expect(clip.tracks.some((track) => track.name.endsWith('.position') && !track.name.startsWith('Hips.'))).toBe(false);
 
     const sample = (clipName: string, time: number, boneName: string): THREE.Vector3 => {
       const mixer = new THREE.AnimationMixer(gltf.scene); const clip = THREE.AnimationClip.findByName(gltf.animations, clipName)!;
@@ -100,7 +100,11 @@ describe('protagonist GLB contract', () => {
     expect(sample('fire', THREE.AnimationClip.findByName(gltf.animations, 'fire')!.duration, 'Hand_R').distanceTo(firingHand)).toBeLessThan(0.005);
     const walk = THREE.AnimationClip.findByName(gltf.animations, 'walk')!;
     expect(Math.abs(sample('walk', 0, 'Foot_L').z - sample('walk', walk.duration / 2, 'Foot_L').z)).toBeGreaterThan(0.4);
-    expect(sample('walk', walk.duration / 4, 'Foot_R').y - sample('walk', 0, 'Foot_R').y).toBeGreaterThan(0.14);
+    const rightFootHeights = Array.from({ length: 12 }, (_, index) => sample('walk', walk.duration * index / 12, 'Foot_R').y);
+    expect(Math.max(...rightFootHeights) - Math.min(...rightFootHeights)).toBeGreaterThan(0.14);
+    expect(walk.tracks.some((track) => track.name === 'Hips.position')).toBe(true);
+    const pelvisHeights = Array.from({ length: 12 }, (_, index) => sample('walk', walk.duration * index / 12, 'Hips').y);
+    expect(Math.max(...pelvisHeights) - Math.min(...pelvisHeights)).toBeGreaterThan(0.015);
   });
 
   it('loads only through the explicit lifecycle and fails closed on invalid data', async () => {

@@ -132,3 +132,17 @@ describe('data-driven anchors', () => {
     expect(Math.hypot(GARAGE_PARK.x - GARAGE_SITE.building.x, GARAGE_PARK.z - GARAGE_SITE.building.z)).toBeLessThan(2);
   });
 });
+
+describe('shop buildings clear every carriageway', () => {
+  it('no bottle store sits on or overhangs a road (the intersection Sip ’n Save regression)', async () => {
+    const { BOTTLE_STORES } = await import('./placements');
+    for (const store of BOTTLE_STORES) {
+      const b = store.site.building;
+      // Centre comfortably off the tar, and the footprint's cardinal probes clear of ANY road.
+      expect(distanceToRoadEdge(b.x, b.z), store.name).toBeGreaterThanOrEqual(3);
+      for (const [ox, oz] of [[6, 0], [-6, 0], [0, 6], [0, -6]]) {
+        expect(distanceToRoadEdge(b.x + ox, b.z + oz), `${store.name} probe ${ox},${oz}`).toBeGreaterThanOrEqual(0.3);
+      }
+    }
+  });
+});

@@ -13,9 +13,10 @@ bitmap inputs—not animation, a UV layout, or a protected likeness.
 
 1. Author the working character in Blender 4.2+ with MPFB 2.0.16 and only license-verified CC0 body, skin, hair, shirt,
    pants and shoe inputs. Approved upstream sources and committed checksums are recorded in `art/character/sources.lock.json`.
-2. Retarget the lower-body timing from the CC0 Quaternius Universal Animation Library for `walk` and `sprint`, then author and clean the remaining game clips on the protagonist rig
-   directly on the MPFB game rig in `tools/character/create-source.py`. Bake rotations at 30 fps and never key
-   root/object translation.
+2. Retarget one clean full-body cycle from the CMU Graphics Lab Motion Capture Database (walk 08_02, sprint 09_02;
+   BVH conversion pinned in the lock file) for `walk` and `sprint`, then author and clean the remaining game clips
+   directly on the MPFB game rig in `tools/character/create-source.py`. Bake rotations at 30 fps; the only permitted
+   translation channel is the zero-mean Hips bob/sway — never key root/object translation.
 3. Keep the `.blend` under `art/character/work/` and generated FBX under `build/character/`; both paths are ignored.
    `art/character/recipe.json` records dimensions, materials, clips, source locations and weapon sockets.
 4. Bake four opaque PBR groups. The 2K base-colour maps ship under `public/textures/character/`; packed normal-X,

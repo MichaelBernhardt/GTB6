@@ -45,9 +45,13 @@ describe('generated Joburg road topology', () => {
     expect(RAILWAY_NETWORK.every((line) => length(line.points) >= 1200)).toBe(true);
   });
 
-  it('projects every named passenger station onto a real railway corridor', () => {
-    expect(RAILWAY_STATION_SITES).toHaveLength(RAILWAY_STATIONS.length);
-    expect(RAILWAY_STATION_SITES.map((station) => station.name)).toEqual(expect.arrayContaining(['Park Station', 'Sandton', 'Rosebank']));
+  it('projects every generated passenger station onto a real railway corridor', () => {
+    // Sites now come from the pipeline's full `stations` coverage — a superset of the old
+    // station-kind landmarks (the real Gautrain trio is still represented by its OSM stations).
+    expect(RAILWAY_STATION_SITES.length).toBeGreaterThanOrEqual(Math.max(RAILWAY_STATIONS.length, 15));
+    for (const key of ['Park', 'Sandton', 'Rosebank']) {
+      expect(RAILWAY_STATION_SITES.some((station) => station.name.includes(key)), key).toBe(true);
+    }
     for (const station of RAILWAY_STATION_SITES) {
       expect(station.sourceDistance, station.name).toBeLessThan(150);
       expect(Math.hypot(station.dirX, station.dirZ), station.name).toBeCloseTo(1);

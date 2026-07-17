@@ -54,11 +54,15 @@ def validate_and_clean(config):
     action_names = {action.name for action in bpy.data.actions}
     if action_names != REQUIRED_CLIPS:
         raise RuntimeError(f"Animation contract mismatch; found={sorted(action_names)}")
+    def is_root_translation(curve):
+        # The zero-mean Hips bob/sway channel survives; the root stays in place.
+        return curve.data_path.endswith("location") and curve.data_path != 'pose.bones["Hips"].location'
+
     for action in bpy.data.actions:
         action.use_fake_user = True
         if hasattr(action, "fcurves"):
             for curve in list(action.fcurves):
-                if curve.data_path.endswith("location"):
+                if is_root_translation(curve):
                     action.fcurves.remove(curve)
         else:
             for slot in action.slots:
@@ -67,7 +71,7 @@ def validate_and_clean(config):
                         bag = strip.channelbag(slot, ensure=False)
                         if bag:
                             for curve in list(bag.fcurves):
-                                if curve.data_path.endswith("location"):
+                                if is_root_translation(curve):
                                     bag.fcurves.remove(curve)
     meshes = [obj for obj in bpy.data.objects if obj.type == "MESH"]
     if len(meshes) > 5:

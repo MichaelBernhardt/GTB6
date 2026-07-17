@@ -26,7 +26,8 @@ def arguments():
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--id", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--animation-source", required=True)
+    parser.add_argument("--walk-bvh", required=True)
+    parser.add_argument("--run-bvh", required=True)
     return parser.parse_args(raw)
 
 
@@ -116,6 +117,9 @@ def make_eye_texture(output):
 def make_outfit_texture(config, output):
     original = load_pixels(asset("clothes", config["outfit"], f'{config["outfit"]}_diffuse.png'))
     textile = load_pixels(os.path.join(PROJECT_ROOT, config["materialSource"]))
+    # Optional RGBA overlay in the outfit's UV space: uniform markings (hi-vis panels, lettering,
+    # badges, per-piece recolours) composite over the tinted fabric wherever alpha > 0.
+    overlay = load_pixels(os.path.join(PROJECT_ROOT, config["outfitOverlay"])) if config.get("outfitOverlay") else None
     result = array("f", [0.0]) * len(original)
     for index in range(0, len(original), 4):
         red, green, blue = original[index], original[index + 1], original[index + 2]
@@ -128,6 +132,17 @@ def make_outfit_texture(config, output):
         result[index + 1] = min(1.0, source[1] * shade)
         result[index + 2] = min(1.0, source[2] * shade)
         result[index + 3] = 1.0
+    if overlay is not None:
+        for index in range(0, len(result), 4):
+            alpha = overlay[index + 3]
+            if alpha <= 0.004:
+                continue
+            red, green, blue = original[index], original[index + 1], original[index + 2]
+            luminance = red * 0.22 + green * 0.68 + blue * 0.10
+            marking_shade = 0.62 + luminance * 0.5  # markings inherit a softened cloth shading so they sit IN the fabric
+            for channel in range(3):
+                value = min(1.0, overlay[index + channel] * marking_shade)
+                result[index + channel] = result[index + channel] * (1.0 - alpha) + value * alpha
     save_pixels(output, result)
 
 
@@ -204,13 +219,13 @@ def normalize_height(rig, meshes, height):
     rig.location.z -= minimum.z
 
 
-def create_animation_contract(rig, animation_source):
+def create_animation_contract(rig, walk_bvh, run_bvh):
     common.create_animation_contract(rig)
     keep = {"idle", "walk", "sprint", "punch_right", "death"}
     for action in list(bpy.data.actions):
         if action.name not in keep:
             bpy.data.actions.remove(action)
-    common.retarget_quaternius_locomotion(rig, animation_source)
+    common.retarget_cmu_locomotion(rig, walk_bvh, run_bvh)
     if {action.name for action in bpy.data.actions} != keep:
         raise RuntimeError("Generated animation set does not match the five-clip NPC contract")
 
@@ -231,7 +246,7 @@ def main():
         "feetAtOrigin": True,
         "fps": 30,
     }
-    create_animation_contract(rig, args.animation_source)
+    create_animation_contract(rig, args.walk_bvh, args.run_bvh)
     minimum, maximum = common.visible_bounds(meshes)
     for obj in meshes:
         obj.data.calc_loop_triangles()

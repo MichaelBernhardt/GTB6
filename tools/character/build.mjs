@@ -17,19 +17,23 @@ if (!blender) {
 
 const buildDir = resolve('build/character');
 const source = resolve(process.env.CHARACTER_SOURCE ?? 'art/character/work/protagonist-source.blend');
-const animations = resolve(process.env.QUATERNIUS_ANIMATIONS ?? `${homedir()}/Library/Application Support/GTATHREEJS/character/UAL1_Standard.glb`);
+const mocapDir = `${homedir()}/Library/Application Support/GTATHREEJS/character/cmu`;
+const walkBvh = resolve(process.env.CMU_WALK_BVH ?? `${mocapDir}/08_02.bvh`);
+const runBvh = resolve(process.env.CMU_RUN_BVH ?? `${mocapDir}/09_02.bvh`);
 const fbx = resolve(buildDir, 'protagonist.fbx'); const glb = resolve(buildDir, 'protagonist.glb');
 await mkdir(buildDir, { recursive: true });
 if (!process.env.CHARACTER_SOURCE) {
-  if (!existsSync(animations)) {
-    console.error(`Quaternius Standard animation GLB not found: ${animations}. Set QUATERNIUS_ANIMATIONS=/path/to/UAL1_Standard.glb.`);
-    process.exit(1);
+  for (const bvh of [walkBvh, runBvh]) {
+    if (!existsSync(bvh)) {
+      console.error(`CMU mocap BVH not found: ${bvh}. Download the cycles pinned in art/character/sources.lock.json or set CMU_WALK_BVH/CMU_RUN_BVH.`);
+      process.exit(1);
+    }
   }
   await mkdir(resolve('art/character/work'), { recursive: true });
   await rm(source, { force: true });
   const sourceBuild = spawnSync(blender, [
     '--background', '--python', resolve('tools/character/create-source.py'), '--',
-    '--output', source, '--animation-source', animations,
+    '--output', source, '--walk-bvh', walkBvh, '--run-bvh', runBvh,
   ], { stdio: 'inherit' });
   if (sourceBuild.status !== 0 || !existsSync(source)) {
     console.error('Blender did not produce the editable character source.');

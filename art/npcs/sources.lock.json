@@ -31,21 +31,28 @@
       "vendored": false
     },
     {
-      "name": "Quaternius Universal Animation Library",
-      "version": "2.1 Standard (June 2026)",
-      "url": "https://quaternius.com/packs/universalanimationlibrary.html",
-      "license": "CC0-1.0",
-      "archiveSha256": "cc73fc4e495b82958207316596317a3f40b9fa38065bde1027937452da537724",
-      "selectedFile": "Unreal-Godot/UAL1_Standard.glb",
-      "selectedFileSha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
-      "use": "Walk_Loop and Sprint_Loop lower-body retarget",
+      "name": "CMU Graphics Lab Motion Capture Database (BVH conversion)",
+      "url": "https://github.com/una-dinosauria/cmu-mocap",
+      "license": "Free for all uses (mocap.cs.cmu.edu); database created with funding from NSF EIA-0196217",
+      "selectedFiles": [
+        {
+          "path": "data/008/08_02.bvh",
+          "use": "walk cycle full-body retarget",
+          "sha256": "fa3908bdd8d1842e4c9efd2c91ee94d76d82ebd4049d9468435ce82245bd11a0"
+        },
+        {
+          "path": "data/009/09_02.bvh",
+          "use": "sprint cycle full-body retarget",
+          "sha256": "96cc613c494a44d593c97e3dd475d10d768eb7fc7ea8c4c6eee813ae69922cb8"
+        }
+      ],
       "vendored": false
     }
   ],
   "committedArtifacts": [
     {
       "path": "art/npcs/manifest.json",
-      "sha256": "ef6d511d612d34127a2c06ac1b45ddff071e9384d2fa5e44f22c0d0b6781e9f8"
+      "sha256": "80f0ac0f6539242b6ae3b6e50fc71ab673be570fbcc88d6d2187bf3cb623e0bc"
     },
     {
       "path": "art/npcs/materials/auntie-portia-berry-knit-source.png",
@@ -113,131 +120,131 @@
     },
     {
       "path": "art/npcs/previews/auntie-portia-animations.jpg",
-      "sha256": "c263bcf1e29abdb3264887c2ca30ff775e9ffa3f8a83b66a2ecef53b0f7258bc"
+      "sha256": "55c883d5f6bb9d3f679c0067bf6665d037c4d3329915d60fc6e51bad24b0d273"
     },
     {
       "path": "art/npcs/previews/auntie-portia-turnaround.jpg",
-      "sha256": "f6528c9eccbb8bc43c5e8ae668cac11d8501ecf8c82404c8bb9138d894cbab5f"
+      "sha256": "fe6fcee7ad6af660865eb661663f3f79b039818cd09459445a0df8a7419231b5"
     },
     {
       "path": "art/npcs/previews/bra-vusi-animations.jpg",
-      "sha256": "b34860ea7e2d3cff39845fd38ed1d336e4d77e09d08cb94b9be65fac9305f326"
+      "sha256": "7d6cd059b58e8912b17d0b3845e7679267d91c6c7d928e4f67320fb518891bbc"
     },
     {
       "path": "art/npcs/previews/bra-vusi-turnaround.jpg",
-      "sha256": "2792459112ad7e5f67297f386fa8dd02686a863a02002c1be10318c8feabcaa7"
+      "sha256": "726394873295d55ba36c61c7f144f874fa1ce34996e21020049923e3ff068dbb"
     },
     {
       "path": "art/npcs/previews/braamfontein-creative-animations.jpg",
-      "sha256": "7cf67aa0027bdf8efbcfe719c4370d34164457dca2dd337b3412c9fcba397617"
+      "sha256": "50af6280310e4d93670b03b4d8ea2ae5d2631a1392b1637991f5ddea21fab343"
     },
     {
       "path": "art/npcs/previews/braamfontein-creative-turnaround.jpg",
-      "sha256": "28cb3e77690bf443d8895e3d8a19b1d2b55200904aa69e19a45970b02142817a"
+      "sha256": "b3b6926347700d1e8304f8e353468520de44fa823a19fc8f376431d429ccefdd"
     },
     {
       "path": "art/npcs/previews/bree-rank-enforcer-animations.jpg",
-      "sha256": "8431a44ce0ac19a79b246d86d81eb9d6c2d17119ae4320f7f45a0e7b7987df3d"
+      "sha256": "6a7fd7b4f1340dc3381b5845316967727358ddcf92cc68c811e47d3b760eaaf7"
     },
     {
       "path": "art/npcs/previews/bree-rank-enforcer-turnaround.jpg",
-      "sha256": "0e964d340cbf55649867f25d5acda9786d29c206dd01d62a74ab9f2b648928dd"
+      "sha256": "ddbdfa95843c4b8faf32c1dbf662a16c1120ecb72a7e4bb5ad13dd36946b4532"
     },
     {
       "path": "art/npcs/previews/candice-boksburg-animations.jpg",
-      "sha256": "288ee2fbc97af6e19c29acbe34f1e9425a2665230891c06e0ce2110de3907195"
+      "sha256": "0bee4d37c67ea7cb2605674761834d97f9e4ee11949b5279c79c85b067d55be0"
     },
     {
       "path": "art/npcs/previews/candice-boksburg-turnaround.jpg",
-      "sha256": "f6f3bc2df23bb1f26193139abbfe2dfb26fea0288e30ebbab6ce755a2c7de668"
+      "sha256": "cd2fb462437b9713889a034d4e1ef634c234141fd68b2e68819eb384fa4a134a"
     },
     {
       "path": "art/npcs/previews/fordsburg-restaurateur-animations.jpg",
-      "sha256": "7a35f22844583d576c1c82879104a5de0a5f497c0694eeb626b83bcf0fa4260f"
+      "sha256": "97839c0d3a8dcf52f533274636fa110bb4164cb0cffbb640c4c4de7c65fc2240"
     },
     {
       "path": "art/npcs/previews/fordsburg-restaurateur-turnaround.jpg",
-      "sha256": "28c244f6540f88c4469059982af6a48d75e4d2356ed8786e65d4a223f32623ee"
+      "sha256": "41684d56e006006cf45bbeef76b171d66e8c840d13028c111c531a79718ab3dc"
     },
     {
       "path": "art/npcs/previews/jmpd-patrol-officer-animations.jpg",
-      "sha256": "6473c8df59e707ac3a8b206cb8325815389bb97055a70f7011a5ab6d941c498c"
+      "sha256": "0184b5f89afe0bb5a5102a49e5d0a61c2680e364c204cecdb7cd4dad8772e076"
     },
     {
       "path": "art/npcs/previews/jmpd-patrol-officer-turnaround.jpg",
-      "sha256": "037e1fdcc213c10287b15e1550e20c3a42e9d34444ae005f35420d55cd1eae1d"
+      "sha256": "3dd9acfdb7c59f5c7b6b0e6ff2d4d3caa7c0e7550f27381ab0f6d2b7407f8daa"
     },
     {
       "path": "art/npcs/previews/joburg-driver-animations.jpg",
-      "sha256": "4562477257f6c847faef90c51e327d42984ff8959b816643e6edd5b100706428"
+      "sha256": "bb0455b0e8d7db16c5585de2ccf9c9463d505dcc07efd2ae7021b0e089c20ebd"
     },
     {
       "path": "art/npcs/previews/joburg-driver-turnaround.jpg",
-      "sha256": "9a088a5d6f01aa777124cbaeca989c2898a88f241ab7d8fd5884903157e49494"
+      "sha256": "c666e970b009a77ec16a5b962bf9e6eb0938801452d79857e391bce055899815"
     },
     {
       "path": "art/npcs/previews/maboneng-courier-animations.jpg",
-      "sha256": "5e44da00da28db9da5a8d74fcb89f89e5b7dd138cf148b28078618ce9e108d7d"
+      "sha256": "288151e33f493005e84ff1bfe6b94c53c291696426ee30e0935c4ad6cfdecbe6"
     },
     {
       "path": "art/npcs/previews/maboneng-courier-turnaround.jpg",
-      "sha256": "0dc57d74c29bba420f8d1d90cfe16f19f28f745400c4e9c15d585639b0b3257e"
+      "sha256": "7e71a8970a8c43085ec8f66c7dda371836570e41b86750ac7ba9bf0600064985"
     },
     {
       "path": "art/npcs/previews/melville-creative-animations.jpg",
-      "sha256": "01a0d4550cd8fbd96eb22bedf58be84e75044fecbf1217d1100dd4fc144bc77f"
+      "sha256": "4d1fb8ef2f89d5f9de2bd57b770c5b117066887eb45d0243be5b7c3f981e7869"
     },
     {
       "path": "art/npcs/previews/melville-creative-turnaround.jpg",
-      "sha256": "50992dd2ba01921d47727ac5fcecd327f309e46718d3ab23ea17e9e90ec3a5b6"
+      "sha256": "ac04c1ca3f261ef4b31d4a2f808179d8d1c914d206c9f5923c7fc823d1ec2ab7"
     },
     {
       "path": "art/npcs/previews/newtown-producer-animations.jpg",
-      "sha256": "0a22f0b0af9e5505d6205fe72842509cf4340527bab2f0148e630700fe9d41fc"
+      "sha256": "2a0cac14599fe06881ccc4cf4ed58c829b13614700f1fb94eacfc98788b1c8df"
     },
     {
       "path": "art/npcs/previews/newtown-producer-turnaround.jpg",
-      "sha256": "44e90992e76922b0fad21a7c1063c2b80cdb7829bad9a9e391bad873423de8eb"
+      "sha256": "a2af89b691914dc9d92d6aef4ebf6442b9b6d2da4eb3881550d9b7fad00261d7"
     },
     {
       "path": "art/npcs/previews/parkhurst-architect-animations.jpg",
-      "sha256": "72d0c8ed3a96a3624afd45f59bd1d4380c5b5aff04b04f63412e22bf0d985871"
+      "sha256": "eb720726e88f5d94e85b90859e672f4339ef4f01cd916c2bf5e25427ac3db700"
     },
     {
       "path": "art/npcs/previews/parkhurst-architect-turnaround.jpg",
-      "sha256": "30c0686145d78cc1e616b9c2410b86d25a3bfe1781c431734b02d948f90a34e5"
+      "sha256": "4103ae8168c219fffd4c41a93a70423d76e3e8a168189a7b8697c81ef5f66bac"
     },
     {
       "path": "art/npcs/previews/rosebank-athlete-animations.jpg",
-      "sha256": "003d4a6ee40ff26527727181a556635f02a2afdc75d00e88f0ba5c40e31e6db2"
+      "sha256": "45c8ed871b7dd3279bdf149abde16ada5e796154081a99ce0d00b607b97d7da8"
     },
     {
       "path": "art/npcs/previews/rosebank-athlete-turnaround.jpg",
-      "sha256": "3c23d34402b3aed073c5b7114e2bc1a285cf330a8640aa660f25fcb2a1bde439"
+      "sha256": "333e45795eb231d8af309bef9daccc8e46752da53584ac2093224f34ee8c06a2"
     },
     {
       "path": "art/npcs/previews/sandton-professional-animations.jpg",
-      "sha256": "f8dcf5113af3eb8a8e4d086644bdfef15ab011eb5200220934d80d8f812d38db"
+      "sha256": "e261d98b9203c2711be124535563dc0e8dd54f1f5aac48182675df9a04176bc5"
     },
     {
       "path": "art/npcs/previews/sandton-professional-turnaround.jpg",
-      "sha256": "993889807dead25a46e6f65e171094018baa78b0daea4ed118825bf975efed17"
+      "sha256": "d45d8d53c9fdb1b4caa62db07f7f39a0d56cb17ede8bbd0f3b2bd20d34d4b9a7"
     },
     {
       "path": "art/npcs/previews/thandi-arms-animations.jpg",
-      "sha256": "20b6d3c9f5b6538f05a6944bf1f18ace9da617597c85ff673571359ef9ce9365"
+      "sha256": "f883264fa03446892a40ff08fc43b27bc92e265de7c8a0400e3c757ea22a6bbc"
     },
     {
       "path": "art/npcs/previews/thandi-arms-turnaround.jpg",
-      "sha256": "67b433bbb7d612adff7022339b75d0bf8b57ba2898d6a8ab4231bd572c065c62"
+      "sha256": "5349b23367542b9654bd65b56008a125e548492cd8d4278d812115bca2592262"
     },
     {
       "path": "art/npcs/previews/yeoville-car-guard-animations.jpg",
-      "sha256": "cbc0ad7937675aa73ff8a321349193e66ca1fe90266be38509d83e52021cc5c4"
+      "sha256": "46f450a28262b92e0ba39a60b6e5a06b1bf85aa19e3f1b8d1ff6f340a2ea3538"
     },
     {
       "path": "art/npcs/previews/yeoville-car-guard-turnaround.jpg",
-      "sha256": "e8aea3458f91ea859f0dd5cc9fdff69719f6763bf3a9920b97b00ce1cadf3ed8"
+      "sha256": "0bf34bd175fb2b5c54b576cebc1e91b5fdfacb82ab6d831a776b0dbcbf8bdc4e"
     },
     {
       "path": "art/npcs/references/auntie-portia-turnaround.png",
@@ -305,323 +312,323 @@
     },
     {
       "path": "public/models/npcs/auntie-portia.glb",
-      "sha256": "af19d6ffe0a02565312ed83747b263fb62c10de200458d313c0c99d17a35d629"
+      "sha256": "41c054863ce6abcce445334c6c1185ffccff43822777cfe5f638155ebf0a81fa"
     },
     {
       "path": "public/models/npcs/bra-vusi.glb",
-      "sha256": "75d7e8a0d4ab0504f271aac30700bd216baaabea24bc883f18ad04c4eaa81be3"
+      "sha256": "a6bfb70ab8a64d8df7567a16073aa094377e840a2f460ba58aa9dc45c2335887"
     },
     {
       "path": "public/models/npcs/braamfontein-creative.glb",
-      "sha256": "a6e76e05fdbee9c03bb7784b4590a6bc6e323fa6dcb5bfd61e1418534a8cc947"
+      "sha256": "8c450e95142f40886a8c2e444a074ec4d0b84b054bef879a1596ae0150db90c9"
     },
     {
       "path": "public/models/npcs/bree-rank-enforcer.glb",
-      "sha256": "b905b24fa24ef161d7052a66f9cc4d24fe0ed07cf6379c6dc90a2ec9c21bb484"
+      "sha256": "b5647febdd254ddab3205f712b00bc4d6ddd3da429ef22fefc362d84cf833c56"
     },
     {
       "path": "public/models/npcs/candice-boksburg.glb",
-      "sha256": "a7dc0fe163cbeb0284699435e31f1bc2d873ac610db0801feb9b4aa630b60440"
+      "sha256": "a7b840000c76fefb42ea4f5509d4e51112dce542e95e92033ef8dc4df60a9c6b"
     },
     {
       "path": "public/models/npcs/fordsburg-restaurateur.glb",
-      "sha256": "0647f37d1f9c02569dcf9a6568abaa16ab2d925fdb954af95f86ab3ba65a6efb"
+      "sha256": "797b876fab2b76ed22b1941e70bd5686a6d4a9ee97d38ac4565c31b64d4b3e02"
     },
     {
       "path": "public/models/npcs/jmpd-patrol-officer.glb",
-      "sha256": "40e3a2508641e0500867fae97d13494952ab7c7515c71a967dcd4c352c621578"
+      "sha256": "1db964926af9389f28cc22be0e81542f2f77e39299901c9a2aa3517670878ffc"
     },
     {
       "path": "public/models/npcs/joburg-driver.glb",
-      "sha256": "2069591d16c581fcbc44fb21e56d3d965f01cf38b59f4aa154c07707ce2416e2"
+      "sha256": "30f783cecfad9b7eac859bcb6e337242cb9c4499e847d68da75f243fd5da22f2"
     },
     {
       "path": "public/models/npcs/maboneng-courier.glb",
-      "sha256": "7de13cbb4ea15a1e150c17b109190e1a73d4410ae5964987e9b680ffd4115330"
+      "sha256": "12a6397948dfb245cd0ac96a4948f7b5231d268c01927aa1b36a92d43720018e"
     },
     {
       "path": "public/models/npcs/melville-creative.glb",
-      "sha256": "c30414ae32423f3199e28a57d2b29efc42a64403f53ef13f287c5758dbd4b59a"
+      "sha256": "41310473798b2ce1227b84df7f4cf3d3adb541458088e546e96fbcdd6e620c2c"
     },
     {
       "path": "public/models/npcs/newtown-producer.glb",
-      "sha256": "ee0ca8f0f2d715077fef169ef228ff81acde768f13fed8670086996832d8fcd0"
+      "sha256": "1f2eed2138ec812c139f35f760f260b85cb52b5d50a76d51c84145b9d09d0983"
     },
     {
       "path": "public/models/npcs/parkhurst-architect.glb",
-      "sha256": "337b36faec9f4498db0432cd3028d7b46cb96038c155d7b7c3001b3961e1799f"
+      "sha256": "8c29754aac0fc2644daf4f399532bbfdbd0c2c39a688780d346eac11b40e09eb"
     },
     {
       "path": "public/models/npcs/rosebank-athlete.glb",
-      "sha256": "b83995033607be11a46a689a43397fd9485a989e5260fb650c6e0e067ad436f6"
+      "sha256": "23c46eda49474258c3890acc10977e9762ba227d93b454f3c86e8d7ffa04f375"
     },
     {
       "path": "public/models/npcs/sandton-professional.glb",
-      "sha256": "79ccbabc2787fadae65890f745542528247c614b879aedef2d3739e144116fbd"
+      "sha256": "1d9a6200a68255f2c4eb3ff3b10d406a3436e6fe983a580a8fa53faf49a0157a"
     },
     {
       "path": "public/models/npcs/thandi-arms.glb",
-      "sha256": "6b03e388b096ec7cbc6528be2446bcae8fedb4a4fb2a99b4d53b903c79b48b38"
+      "sha256": "77eb2a3edf23091d6898e75aed506f21250eb1e46dda8ebfc773b9b53d6c5ac9"
     },
     {
       "path": "public/models/npcs/yeoville-car-guard.glb",
-      "sha256": "c4e9021a23d507875e9208b98dc980bd2bd7e8e2d61b522e8872f024d632ab05"
+      "sha256": "9e407a9f4161f5f7baf7eff86468a509fd7bf4e0f8165085fb0455f1d51dc558"
     },
     {
       "path": "public/textures/npcs/auntie-portia-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/auntie-portia-hair-shoes-basecolor.jpg",
-      "sha256": "474f7aa41c28b1a4510d5e92b89ebb1fa7b16a441e4f0f91238a46b7f5729317"
+      "sha256": "db8afaa08c29e69e72b4fdb5bd408838f9601f66d68cd1f5189afd919bccabca"
     },
     {
       "path": "public/textures/npcs/auntie-portia-outfit-basecolor.jpg",
-      "sha256": "c3cd76412443c3612ad3661e325a1beb0e5da5d6b50f0c7183a0715e6d11e145"
+      "sha256": "70846509fbc119c1e2b25b6761ce44e356e423924bc56459003f85d729a0be67"
     },
     {
       "path": "public/textures/npcs/auntie-portia-skin-basecolor.jpg",
-      "sha256": "23a9a275af7d309ccdb3be43d2c7a78c31b3e1e69dc29367143812544b5e7f62"
+      "sha256": "fb2d3ba02dbb75b06f29a9fec71add2b51c75e66ab0ba67b4d07277b5ec61c11"
     },
     {
       "path": "public/textures/npcs/bra-vusi-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/bra-vusi-hair-shoes-basecolor.jpg",
-      "sha256": "5c791ca748b1035ebc00abb63eb0b94581d68248bee5b006fa4f4730e570bdd7"
+      "sha256": "8884a5d4604461409726047f7a7b2854663d6843badc57b5371e372bdbad3e0b"
     },
     {
       "path": "public/textures/npcs/bra-vusi-outfit-basecolor.jpg",
-      "sha256": "d0043ed92f0fc1227a3622eda4ffba926d1e271911f3be67063b847a1fb04e44"
+      "sha256": "59f70ca4e2f48392c0b174de581bc62f3285e52a82ee22c7b2257357f94a93ff"
     },
     {
       "path": "public/textures/npcs/bra-vusi-skin-basecolor.jpg",
-      "sha256": "36ebd474b007b472fb6489466a5298473c0ca9b14d44d53a05b1678e74081b27"
+      "sha256": "d0324e4011edd0dc76640f17673d1c0ac243ac0f26c5809795fcd4e6d349f9e5"
     },
     {
       "path": "public/textures/npcs/braamfontein-creative-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/braamfontein-creative-hair-shoes-basecolor.jpg",
-      "sha256": "265b7c414cb95691325762e1f14c4499db6da48d5fdedf4bed3f46ce585bc0e3"
+      "sha256": "e3d275020df6318f7c70bf15a2ad4e90b2833d1e1c4bcaaa393f9c138d39f3ae"
     },
     {
       "path": "public/textures/npcs/braamfontein-creative-outfit-basecolor.jpg",
-      "sha256": "0f338a6dc0fb7ca93f639928978c22d340c2d36162221037b968d4999fe383f0"
+      "sha256": "79eb9ba8e5c4b8475801f970b47ef3db6fcf04894e9fa4b0d682b70d0d5433e4"
     },
     {
       "path": "public/textures/npcs/braamfontein-creative-skin-basecolor.jpg",
-      "sha256": "990b5fad5276474936902eaa4e981d97d3b31c790aaaf91bd48b22a75c6ac534"
+      "sha256": "bb9842486b35a3e114478a76d29093fc075fcb5cf549da1a5cf79a5c991469ee"
     },
     {
       "path": "public/textures/npcs/bree-rank-enforcer-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/bree-rank-enforcer-hair-shoes-basecolor.jpg",
-      "sha256": "ade016ee2e00d64f16aad9e2bbe59ebda9d03ff56058a660d2a1ce583cd1ff26"
+      "sha256": "9fdc1c074ef79aa96f721df4e3fe1c543dcac36f56a2e259546003cb1d0724c2"
     },
     {
       "path": "public/textures/npcs/bree-rank-enforcer-outfit-basecolor.jpg",
-      "sha256": "d5e8c219342638fbe68e106218357b2bfc1c9764fd2f879b8e52117ac5494a3b"
+      "sha256": "64dfbaaa608012a20397c49d31e1732206b6887727c86fb3997495299aacb1cb"
     },
     {
       "path": "public/textures/npcs/bree-rank-enforcer-skin-basecolor.jpg",
-      "sha256": "aaf575f51f0e8876ff019078651b962d0de6864b3f567e20ba739c33b0665b0b"
+      "sha256": "aa27a7d97b560aeeecac4658334a9bf5f9d86e65b6febbdd6a4a671eff6115de"
     },
     {
       "path": "public/textures/npcs/candice-boksburg-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/candice-boksburg-hair-shoes-basecolor.jpg",
-      "sha256": "9fc32566d130c58d772d7b9511e0e76f45d41eb900ea6a8bd22f7428fa829bc6"
+      "sha256": "1c40d5d1a4921adaa2069314b9961e41a3bcb6dc9ba4df8249aba22836943885"
     },
     {
       "path": "public/textures/npcs/candice-boksburg-outfit-basecolor.jpg",
-      "sha256": "48684a01aa6317411e1d1a9a1aac3b46beec0482e7fa3545edc44e44d01cc0a3"
+      "sha256": "a9bc9e54d9ff9dffdb401f4626b7ea563f7573ea3b670ae5130ca9b7c7f8ceab"
     },
     {
       "path": "public/textures/npcs/candice-boksburg-skin-basecolor.jpg",
-      "sha256": "575d3e1ce258becdf137752364ecd9bc6ef87f0651bfcbdab44935d3ec2c6d0b"
+      "sha256": "85c3390d92ef7e129884fcea5ee07451e820cf9fe23d4e9f9544141abbb60038"
     },
     {
       "path": "public/textures/npcs/fordsburg-restaurateur-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/fordsburg-restaurateur-hair-shoes-basecolor.jpg",
-      "sha256": "4766b4f3dc28ea82d9682acbbb454a5fe4c4e93cf417ff5b9ad96ca9ae56bb0c"
+      "sha256": "f15c2348cd59fb35a7799305fd5c287920cc59c2989a4a11db629e703fcf0de8"
     },
     {
       "path": "public/textures/npcs/fordsburg-restaurateur-outfit-basecolor.jpg",
-      "sha256": "462a908648407755975aecaf93925162bfd9c16c3c68f36dd464db3ec0658192"
+      "sha256": "b51c4025225faa9d2fac56f1ed5e6c1b8cabd9a6ae83e07d469acc97084123d8"
     },
     {
       "path": "public/textures/npcs/fordsburg-restaurateur-skin-basecolor.jpg",
-      "sha256": "9205e66d4cfcc63539b831691569192f6403d51a19307ca22b1b633d26b03fa9"
+      "sha256": "42c0e088eefd9305dc1746756bf4f3226deaf61eebd7605381c5078bbdf946bb"
     },
     {
       "path": "public/textures/npcs/jmpd-patrol-officer-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/jmpd-patrol-officer-hair-shoes-basecolor.jpg",
-      "sha256": "cc20c849fec4731eb620356fa31b9bf4c42ec58d8d2c81703c898de44a22bd73"
+      "sha256": "6d20f2d7b023c79641ce0183608510fd6f815651a378ade21e04fb59b6d3cef1"
     },
     {
       "path": "public/textures/npcs/jmpd-patrol-officer-outfit-basecolor.jpg",
-      "sha256": "3d759afa720391176e95f46283da978e435414a98271feadaf6ed158f4485161"
+      "sha256": "f4438a0bd270bfb7976d1cba0d55d426d4d6b9b13bb052660d79e43d8758ce2f"
     },
     {
       "path": "public/textures/npcs/jmpd-patrol-officer-skin-basecolor.jpg",
-      "sha256": "b67a9f05b58832933b6612b85196f73b5791d8da4cc917ca279a4c4eff8ab47e"
+      "sha256": "653f7ac7b4c84ac65e0a9a7c9a16152600e9b52e27a70704228e6d8b6cc9afe7"
     },
     {
       "path": "public/textures/npcs/joburg-driver-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/joburg-driver-hair-shoes-basecolor.jpg",
-      "sha256": "45e10cef635bd0d510d651ff04ace03e67685a8ae5c5f04211f362885589b4b6"
+      "sha256": "4f9a2abb1e62e1a582a8ef8f802681817184eaf4ff424a271793a36e85aa4359"
     },
     {
       "path": "public/textures/npcs/joburg-driver-outfit-basecolor.jpg",
-      "sha256": "ff3cf00750eb53b971487893fe7bf697c41232823de6c0865aaae6ec17cd9e8a"
+      "sha256": "f672cb5bbd340a176883cfa01abc6a429e824b8e5a7aa1e710aed00ee17ca46e"
     },
     {
       "path": "public/textures/npcs/joburg-driver-skin-basecolor.jpg",
-      "sha256": "8e377d3f3fc20f552a94dbc7ca8c23dcc77b4f50169131f4a2d5b9665bc7b25a"
+      "sha256": "6e257ec82dceccff27f6e16f801ac4a481d3ab5a45f901e204c2684a91948841"
     },
     {
       "path": "public/textures/npcs/maboneng-courier-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/maboneng-courier-hair-shoes-basecolor.jpg",
-      "sha256": "4a1d21820569a5e288a790e962951b5b33b1356c26f06b4020dab92f4c47804a"
+      "sha256": "b337900a4f0ab6c81c382fa5ed107ad26589cba66d6e15fa559fcababd2d6a0f"
     },
     {
       "path": "public/textures/npcs/maboneng-courier-outfit-basecolor.jpg",
-      "sha256": "7e5f9296c2ad0c5d9d3f6887b1f1fbc34a822d3063bbfb6af0219f5fd65cfd79"
+      "sha256": "4b0857fa6abb0c264ae53e4ec6819c80d717796f0e32a2557288fd7b15cc2232"
     },
     {
       "path": "public/textures/npcs/maboneng-courier-skin-basecolor.jpg",
-      "sha256": "3ea62ed05c1b78ee00760b6aec625233c1cf2c0570428ee6dea6359aa06b7024"
+      "sha256": "fd0e556c0dc7360bfea03b368cc896128e5b498a6b4960ccacd8aa1cedee81b2"
     },
     {
       "path": "public/textures/npcs/melville-creative-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/melville-creative-hair-shoes-basecolor.jpg",
-      "sha256": "e27a80af03e83fcb4468a8d8495d79074e9503c4ee675e8413e17fc86821f87c"
+      "sha256": "dc0c2ed6a26edb6455f80a5375cdfa56fbe39c2cb42a0295c01af5f9e3329127"
     },
     {
       "path": "public/textures/npcs/melville-creative-outfit-basecolor.jpg",
-      "sha256": "eb56c74b4ddbf138046b86089658081c8f38d4390a9d39dbe9d74802e11c66c1"
+      "sha256": "cc3407403c3e9ac641387991c0ec99be0e0210a41a865065d202c152a16d79fe"
     },
     {
       "path": "public/textures/npcs/melville-creative-skin-basecolor.jpg",
-      "sha256": "65d30c17495e5411f52eba8a98a358ab3423c32490659bf8a4d38a6d72fba085"
+      "sha256": "694ed68ca9f42a13e8e0b529acb768fdba360b6d9c2e72968b50196921303bd8"
     },
     {
       "path": "public/textures/npcs/newtown-producer-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/newtown-producer-hair-shoes-basecolor.jpg",
-      "sha256": "97b1618d5f902dffc1700fd3c637be59d1b243c6b2b01686ae25d02c54110c7d"
+      "sha256": "d7d92e6bfd68f6152d3305bbf3c0dde2ed6d0c960f1e8859b3d2f8d6150d01c9"
     },
     {
       "path": "public/textures/npcs/newtown-producer-outfit-basecolor.jpg",
-      "sha256": "adca18f53301e1a8adbf5f1e1dd583297207293241ce5d53f0402b5b7228466f"
+      "sha256": "9b7e2daa2f394a5d0291b92b6d3fd033c6ba5b6f429b3e708b5c6f8ec63cd517"
     },
     {
       "path": "public/textures/npcs/newtown-producer-skin-basecolor.jpg",
-      "sha256": "b01552295d1c71fa567c33e018543356c4347bfba37465270ff2082d42db7b08"
+      "sha256": "d9169e8727f559979c247ebc1cddea688e3bb22afc2265ac2bf40eaf7c65755d"
     },
     {
       "path": "public/textures/npcs/parkhurst-architect-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/parkhurst-architect-hair-shoes-basecolor.jpg",
-      "sha256": "9b84c8f47919ab2dbda07bbfaaade65d873e0560c6ed6a5d7a0875bdda5ec8f2"
+      "sha256": "bf88a907463abe0f2ffb145f661ba836f7c1be3ad2985a3fc849bdd57e8bc026"
     },
     {
       "path": "public/textures/npcs/parkhurst-architect-outfit-basecolor.jpg",
-      "sha256": "a7d2ffd867a0f4868ff13d1122b587f18875371ba2b3db8d1fa07b52bad3fb02"
+      "sha256": "dfb1c9cd395ed3c1f995a368cfa78074eccc3934da785b038e2a3384a511848a"
     },
     {
       "path": "public/textures/npcs/parkhurst-architect-skin-basecolor.jpg",
-      "sha256": "8270e347d4c62489a4fe7696fcd698acd44d2fdc397b280ced0cebf0884dd6ba"
+      "sha256": "3d3b4b5bf79317714bc6689cfa13f47b9ebd27ee82be080222f04216cc4e8f45"
     },
     {
       "path": "public/textures/npcs/rosebank-athlete-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/rosebank-athlete-hair-shoes-basecolor.jpg",
-      "sha256": "7c00b3368ffc9137b2af30dee86c893f41e114b44aeba73e04272a2ffc2aabcc"
+      "sha256": "2ad09ed730caf7407435759d8b2968029e95958178b7a9b59e0c928788b61439"
     },
     {
       "path": "public/textures/npcs/rosebank-athlete-outfit-basecolor.jpg",
-      "sha256": "50e07ec48d65532b39ec679f77b3a5998bb6e324d00564f2d521880a2f8be0a5"
+      "sha256": "136455d9f56fd60fa5cb119b957df737e14911f73976a329ecc0a9bc8ad57983"
     },
     {
       "path": "public/textures/npcs/rosebank-athlete-skin-basecolor.jpg",
-      "sha256": "79eeec4f62003d07da7549d7d644a6af8e60fc9b6740b6c4640d4c1dc852e4ea"
+      "sha256": "3de0563e5ae80a692a9af246719758ea48f9ef52d57f0e117c2d4e0490bde009"
     },
     {
       "path": "public/textures/npcs/sandton-professional-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/sandton-professional-hair-shoes-basecolor.jpg",
-      "sha256": "a6b820dc2daedec99f8d893ab7603701eaeffe4665788deba9d7d1be2abc8a2c"
+      "sha256": "8752a38bfcdc505dd97a5f2e6d96144d9d9b03e010cf81ced95bbf03a2ad5184"
     },
     {
       "path": "public/textures/npcs/sandton-professional-outfit-basecolor.jpg",
-      "sha256": "e45d014b85ab5742d32dd35869d051340078d354dd9bfa955e3d7244d96bc8ae"
+      "sha256": "7a722dc178a0c3467a53e5e644febbb67cb9a567b6d21e763c4486241c092ae3"
     },
     {
       "path": "public/textures/npcs/sandton-professional-skin-basecolor.jpg",
-      "sha256": "dfb7dc055ce0c0c1929f08dc9357c702bb92bb94d1b23cc207af66fceb276fef"
+      "sha256": "ff25ece0c4dc3697bccf6d4b8e36dfa4d93a35fa0189fe1e458671952e8e6632"
     },
     {
       "path": "public/textures/npcs/thandi-arms-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/thandi-arms-hair-shoes-basecolor.jpg",
-      "sha256": "d2b7c3ec1e3ee0ec1c01fac51b9682f8cf20ec3496a0ad7025504930740ecd05"
+      "sha256": "114324620e2052b5ffa64a2b83a68f9445785cad017282fb947684c12dc8be23"
     },
     {
       "path": "public/textures/npcs/thandi-arms-outfit-basecolor.jpg",
-      "sha256": "c5d96e8c685ee71d8d1769f25e4b37ba09b2518c4083a1ec053629f5e357fd43"
+      "sha256": "a4d6c6e9a8f01ca3a4fb93bfa3df28ce9480be287c8061ad271adc2489ea871d"
     },
     {
       "path": "public/textures/npcs/thandi-arms-skin-basecolor.jpg",
-      "sha256": "cf5bff70d9fb5fcb638443706701a47158760ad853f3d3b90ed73d0d0349d19d"
+      "sha256": "8f8b19d04c4689950d1f3619aec06fb935d862aba3063144e2cf25ad3b88fdb0"
     },
     {
       "path": "public/textures/npcs/yeoville-car-guard-eyes-basecolor.jpg",
-      "sha256": "4c033b38b0036026bc5314b3dd447c588d585b97e2dfce3112bc10e662317ed4"
+      "sha256": "59a8c560f23f7847db4ab4a59020227bdaddb8539e799724f5046f5dea74e7df"
     },
     {
       "path": "public/textures/npcs/yeoville-car-guard-hair-shoes-basecolor.jpg",
-      "sha256": "bc7db194d14df3097c09e160e6d39386fad781d86c3b9f05f56801d0dd4ce49b"
+      "sha256": "ca10f870eefa091f4deceb7b070616c2c3a5ff7afdffb54500fcdcd957d2544c"
     },
     {
       "path": "public/textures/npcs/yeoville-car-guard-outfit-basecolor.jpg",
-      "sha256": "117ccf6d2f1a12508d126b4103a87e9c84ae6f95899a25b6dd8f9587630ca7fb"
+      "sha256": "d042d08c7f79585fd405604ef6498baa5536e153fac1f086bd48ab6c048a40d2"
     },
     {
       "path": "public/textures/npcs/yeoville-car-guard-skin-basecolor.jpg",
-      "sha256": "36ebd474b007b472fb6489466a5298473c0ca9b14d44d53a05b1678e74081b27"
+      "sha256": "d0324e4011edd0dc76640f17673d1c0ac243ac0f26c5809795fcd4e6d349f9e5"
     }
   ]
 }

@@ -70,7 +70,9 @@ export function validateNpcGltf(gltf: GLTF, expectedId?: NpcCharacterId): Valida
   const box = new THREE.Box3().setFromObject(gltf.scene); const height = box.max.y - box.min.y;
   const expectedHeight = Number(contract.heightMetres);
   if (!Number.isFinite(expectedHeight) || Math.abs(height - expectedHeight) > 0.02 || Math.abs(box.min.y) > 0.02) throw new NpcCharacterError(`NPC scale/origin is invalid (${height.toFixed(3)} m high, feet y=${box.min.y.toFixed(3)}).`);
-  for (const clip of gltf.animations) if (clip.tracks.some((track) => track.name.endsWith('.position'))) throw new NpcCharacterError(`${clip.name} contains root translation.`);
+  // Locomotion clips may carry a zero-mean pelvis bob/sway on the Hips bone;
+  // any other translation track would fight the code-driven root motion.
+  for (const clip of gltf.animations) if (clip.tracks.some((track) => track.name.endsWith('.position') && !track.name.startsWith('Hips.'))) throw new NpcCharacterError(`${clip.name} contains root translation.`);
   return { clips: new Map(NPC_ANIMATIONS.map((name) => [name, gltf.animations.find((clip) => clip.name === name)!])) };
 }
 

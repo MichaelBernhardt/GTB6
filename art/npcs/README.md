@@ -326,7 +326,8 @@ garment silhouette, neckline, seams, stitching, folds, lighting, logos, text, wa
 - MakeHuman system bodies, female skins, high-poly eyes, `braid01`, `long01`, `ponytail01`, `bob01`, the four selected
   female outfits, male and middle-age skins, the selected short/afro hairstyles, male/female outfits, and footwear are
   CC0-1.0 authoring inputs. Their derived geometry/textures are shipped.
-- Quaternius Universal Animation Library 2.1 Standard is CC0-1.0; `Walk_Loop` and `Sprint_Loop` provide lower-body
-  locomotion timing. The remaining constrained clips are authored on the MPFB rig by the build script.
+- Walk and sprint cycles are retargeted from the CMU Graphics Lab Motion Capture Database (subjects 08 and 09, BVH
+  conversion; free for all uses, database funded by NSF EIA-0196217). The remaining constrained clips are authored on
+  the MPFB rig by the build script.
 - Blender 4.2+ produces the ignored editable and interchange files; the committed optimized GLBs contain four opaque
   skinned materials, four 1K base-colour textures, and no more than four influences per vertex.
