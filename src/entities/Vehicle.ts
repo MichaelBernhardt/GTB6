@@ -195,6 +195,10 @@ export class Vehicle {
   /** Kept for the public driving API; the uniform minibus fleet has no roof-mounted duty light. */
   setTaxiLight(available: boolean): void { void available; /* taxi duty remains visible in the HUD */ }
 
+  /** Are this vehicle's headlights actually throwing light? Night glow past half, not a wreck, and not a
+   *  bicycle (no lamp — the same exclusion DayNight's beam pool applies). Blackout stealth reads this. */
+  get headlightsOn(): boolean { return !this.wrecked && this.headlightFactor > 0.5 && this.spec.kind !== 'bicycle'; }
+
   /** 0 = day (subtle lens glow), 1 = night: headlight lenses go HDR-bright so they bloom. Brake lights are untouched. */
   setHeadlightGlow(factor: number): void {
     this.headlightFactor = factor;

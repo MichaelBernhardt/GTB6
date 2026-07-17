@@ -52,7 +52,7 @@
   "committedArtifacts": [
     {
       "path": "art/npcs/manifest.json",
-      "sha256": "80f0ac0f6539242b6ae3b6e50fc71ab673be570fbcc88d6d2187bf3cb623e0bc"
+      "sha256": "857a5cf253d8401e763398053620c99fa799b4f483fd3d9f56fbe9a01c3af090"
     },
     {
       "path": "art/npcs/materials/auntie-portia-berry-knit-source.png",
@@ -240,11 +240,11 @@
     },
     {
       "path": "art/npcs/previews/yeoville-car-guard-animations.jpg",
-      "sha256": "46f450a28262b92e0ba39a60b6e5a06b1bf85aa19e3f1b8d1ff6f340a2ea3538"
+      "sha256": "d72d37e95d0337b238af00bb2c0dc60b626ced86e9747b674a5816bc5d91a817"
     },
     {
       "path": "art/npcs/previews/yeoville-car-guard-turnaround.jpg",
-      "sha256": "0bf34bd175fb2b5c54b576cebc1e91b5fdfacb82ab6d831a776b0dbcbf8bdc4e"
+      "sha256": "51bdd501546657799a647550dab6d8b940b50f482962b64bd3336e1f17f96103"
     },
     {
       "path": "art/npcs/references/auntie-portia-turnaround.png",
@@ -624,7 +624,7 @@
     },
     {
       "path": "public/textures/npcs/yeoville-car-guard-outfit-basecolor.jpg",
-      "sha256": "d042d08c7f79585fd405604ef6498baa5536e153fac1f086bd48ab6c048a40d2"
+      "sha256": "450c0b5cc92415abda44d5fd7936aa499182c52859bc168331eb15679b1fb465"
     },
     {
       "path": "public/textures/npcs/yeoville-car-guard-skin-basecolor.jpg",

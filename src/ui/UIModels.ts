@@ -24,6 +24,7 @@ export interface HudState {
   reserve: number;
   reloading: boolean;
   wanted: number;
+  unseen?: boolean; // blackout stealth: heat is active but JMPD can't see you in the dark — the wanted row dims and shows UNSEEN
   district: string;
   clock: string;
   reputation?: string;

@@ -3,6 +3,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import type { WeaponId } from '../config';
 import { buildWeaponModel } from './WeaponModels';
+import {
+  AIM_MUZZLE_DIR, AIM_TOP_DIR, CARRY_MUZZLE_DIR, CARRY_TOP_DIR,
+  sampleBoneModelQuaternion, weaponAttachQuaternion, type AdditiveRotation,
+} from './WeaponGrip';
 
 export const PLAYER_MODEL_URL = '/models/characters/protagonist.glb';
 
@@ -169,12 +173,14 @@ export interface RiggedPlayerVisualOptions {
   onStatus?: (status: CharacterLoadStatus, error?: PlayerCharacterError) => void;
 }
 
-const WEAPON_SOCKET: Partial<Record<WeaponId, { position: [number, number, number]; rotation: [number, number, number]; scale?: number }>> = {
-  pistol: { position: [0, 0, 0.018], rotation: [-Math.PI / 2, 0, Math.PI] },
-  smg: { position: [0, 0, 0.025], rotation: [-Math.PI / 2, 0, Math.PI] },
-  shotgun: { position: [0, 0, 0.03], rotation: [-Math.PI / 2, 0, Math.PI] },
-  sniper: { position: [0, 0, 0.035], rotation: [-Math.PI / 2, 0, Math.PI] },
-  rpg: { position: [0, 0, 0.035], rotation: [-Math.PI / 2, 0, Math.PI], scale: 0.94 },
+/** Grip position in hand-bone space (bone +Y runs wrist→knuckles); orientation is derived from the
+ * bone's actual axes at install time, so only where the grip sits in the palm is authored here. */
+const WEAPON_SOCKET: Partial<Record<WeaponId, { position: [number, number, number]; scale?: number }>> = {
+  pistol: { position: [0, 0.05, 0.02] },
+  smg: { position: [0, 0.05, 0.02] },
+  shotgun: { position: [0, 0.05, 0.02] },
+  sniper: { position: [0, 0.05, 0.02] },
+  rpg: { position: [0, 0.05, 0.02], scale: 0.94 },
 };
 
 const WEAPON_GRIP_OFFSET: Partial<Record<WeaponId, number>> = {
@@ -228,6 +234,8 @@ export class RiggedPlayerVisual {
   private currentName?: PlayerAnimationName;
   private weapon: WeaponId = 'pistol';
   private weaponMeshes = new Map<WeaponId, THREE.Group>();
+  private gripFrames = new Map<WeaponId, { carry: THREE.Quaternion; aim: THREE.Quaternion }>();
+  private weaponRaise = 0;
   private elapsed = 0;
   private pedalPhase = 0;
   private handledShotSequence = 0;
@@ -289,7 +297,7 @@ export class RiggedPlayerVisual {
       this.actions.set(name, action);
     }
     this.handledShotSequence = this.state.shotSequence; this.recoilAge = Number.POSITIVE_INFINITY;
-    this.buildWeapons(); this.setWeapon(this.weapon);
+    this.buildWeapons(gltf.scene, clips); this.setWeapon(this.weapon);
     this.transitionTo('idle', 0); this.mixer.update(0); this.captureMixedPose();
     this.group.add(gltf.scene); this.group.visible = true; this.setStatus('ready');
   }
@@ -300,7 +308,7 @@ export class RiggedPlayerVisual {
 
   private resetInstalledModel(): void {
     this.mixer?.stopAllAction(); this.group.clear(); this.group.visible = false; this.mixer = undefined; this.bones = undefined;
-    this.actions.clear(); this.fadingActions.clear(); this.mixedRotations.clear(); this.weaponMeshes.clear(); this.current = undefined; this.currentName = undefined;
+    this.actions.clear(); this.fadingActions.clear(); this.mixedRotations.clear(); this.weaponMeshes.clear(); this.gripFrames.clear(); this.current = undefined; this.currentName = undefined;
     if (this.status !== 'loading') { this.status = 'idle'; this.error = undefined; }
   }
 
@@ -362,6 +370,9 @@ export class RiggedPlayerVisual {
       const pulse = Math.sin(Math.PI * this.recoilAge / recoil.duration) * recoil.strength;
       bones.rightUpperArm.rotation.x += pulse; bones.rightLowerArm.rotation.x -= pulse * 0.34; bones.chest.rotation.x -= pulse * 0.42;
     }
+    this.weaponRaise = THREE.MathUtils.clamp(this.weaponRaise + (weaponRaised ? dt : -dt) / 0.16, 0, 1);
+    const frames = this.gripFrames.get(this.weapon); const weaponMesh = this.weaponMeshes.get(this.weapon);
+    if (frames && weaponMesh) weaponMesh.quaternion.slerpQuaternions(frames.carry, frames.aim, THREE.MathUtils.smoothstep(this.weaponRaise, 0, 1));
     if (this.state.airMode !== 'none') {
       this.group.rotation.x = this.state.airMode === 'freefall' ? THREE.MathUtils.clamp(1.22 + this.state.airPitch * 0.28, 0.5, Math.PI / 2 - 0.06) : 0.08 + this.state.airPitch * 0.14;
       this.group.rotation.z = -this.state.airBank * 0.55;
@@ -388,13 +399,21 @@ export class RiggedPlayerVisual {
     }
   }
 
-  private buildWeapons(): void {
+  /** Attach orientations are derived from the hand bone's actual axes in the authored idle/aim
+   * poses (the rig's bone basis is mocap-derived, not axis-aligned), so a rig rebuild cannot
+   * silently break the grip again. Aim frames bake in each weapon's post-mix pose corrections. */
+  private buildWeapons(model: THREE.Object3D, clips: Map<PlayerAnimationName, THREE.AnimationClip>): void {
     const bones = this.bones; if (!bones) return;
+    const carryHand = sampleBoneModelQuaternion(model, clips.get('idle')!, BONE_NAMES.rightHand, 0);
+    const carry = weaponAttachQuaternion(carryHand, CARRY_MUZZLE_DIR, CARRY_TOP_DIR);
     for (const id of ['pistol', 'smg', 'shotgun', 'sniper', 'rpg'] as const) {
       const mesh = buildWeaponModel(id); const socket = WEAPON_SOCKET[id]; if (!mesh || !socket) continue;
       const gripOffset = WEAPON_GRIP_OFFSET[id] ?? 0;
       for (const part of mesh.children) part.position.y += gripOffset;
-      mesh.name = `RiggedWeapon:${id}`; mesh.position.set(...socket.position); mesh.rotation.set(...socket.rotation); if (socket.scale) mesh.scale.setScalar(socket.scale);
+      const additive = (Object.entries(WEAPON_POSES[id] ?? {}) as [keyof UpperBodyPose, [number, number, number]][]).map(([name, rotation]): AdditiveRotation => [bones[name], rotation]);
+      const aimHand = sampleBoneModelQuaternion(model, clips.get('aim')!, BONE_NAMES.rightHand, 0, additive);
+      this.gripFrames.set(id, { carry: carry.clone(), aim: weaponAttachQuaternion(aimHand, AIM_MUZZLE_DIR, AIM_TOP_DIR) });
+      mesh.name = `RiggedWeapon:${id}`; mesh.position.set(...socket.position); mesh.quaternion.copy(carry); if (socket.scale) mesh.scale.setScalar(socket.scale);
       bones.rightHand.add(mesh); this.weaponMeshes.set(id, mesh);
     }
   }

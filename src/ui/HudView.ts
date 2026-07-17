@@ -34,6 +34,7 @@ export class HudView {
   private reload: HTMLElement;
   private wantedContainer: HTMLElement;
   private wanted: HTMLElement[];
+  private unseen: HTMLElement;
   private objective: HTMLElement;
   private objectiveName: HTMLElement;
   private objectiveText: HTMLElement;
@@ -73,7 +74,7 @@ export class HudView {
         <div class="hud-location"><span data-hud="district"></span><b data-hud="clock"></b><em data-hud="reputation"></em></div>
       </header>
       <section class="hud-status" aria-label="Player status">
-        <div class="hud-wanted" data-hud="wanted" aria-label="Wanted level 0 of 5">${Array.from({ length: 5 }, () => '<i aria-hidden="true">★</i>').join('')}</div>
+        <div class="hud-wanted" data-hud="wanted" aria-label="Wanted level 0 of 5"><em data-hud="unseen" hidden>UNSEEN</em>${Array.from({ length: 5 }, () => '<i aria-hidden="true">★</i>').join('')}</div>
         <div class="hud-health" role="progressbar" aria-label="Health" aria-valuemin="0" aria-valuemax="100"><span data-hud="health-fill"></span><b data-hud="health"></b></div>
         <div class="hud-cash"><small>ON HAND</small><b data-hud="cash"></b></div>
         <div class="hud-armour" data-hud="armour-box" role="progressbar" aria-label="Armour" aria-valuemin="0" aria-valuemax="100" hidden><span data-hud="armour-fill"></span><b data-hud="armour"></b></div>
@@ -98,7 +99,7 @@ export class HudView {
     this.armourBox = required(root, '[data-hud="armour-box"]'); this.armour = required(root, '[data-hud="armour"]'); this.armourFill = required(root, '[data-hud="armour-fill"]');
     this.items = required(root, '[data-hud="items"]'); this.stims = required(root, '[data-hud="stims"]'); this.chutes = required(root, '[data-hud="chutes"]'); this.torch = required(root, '[data-hud="torch"]');
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
-    this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i'));
+    this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i')); this.unseen = required(root, '[data-hud="unseen"]');
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
     this.prompt = required(root, '[data-hud="prompt"]'); this.dialogue = required(root, '[data-hud="dialogue"]'); this.dialogueSpeaker = required(root, '[data-hud="dialogue-speaker"]'); this.dialogueText = required(root, '[data-hud="dialogue-text"]'); this.dialogueMore = required(root, '[data-hud="dialogue-more"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.radio = required(root, '[data-hud="radio"]'); this.taxi = required(root, '[data-hud="taxi"]');
     this.fps = required(root, '[data-hud="fps"]'); this.perf = required(root, '[data-hud="perf"]'); this.perfLegend = required(root, '[data-hud="perf-legend"]');
@@ -125,7 +126,8 @@ export class HudView {
     setHidden(this.items, state.stims <= 0 && state.parachutes <= 0 && !state.torch);
     setText(this.cash, formatMoney(state.money)); setText(this.weaponName, state.weaponName);
     setText(this.ammo, state.melee ? '—' : String(state.ammo)); setText(this.reserve, state.melee ? '' : `/ ${state.reserve}`); setHidden(this.reload, !state.reloading);
-    this.wanted.forEach((star, index) => star.classList.toggle('is-hot', index < state.wanted)); setAttribute(this.wantedContainer, 'aria-label', `Wanted level ${state.wanted} of 5`);
+    this.wanted.forEach((star, index) => star.classList.toggle('is-hot', index < state.wanted)); const unseen = Boolean(state.unseen);
+    this.wantedContainer.classList.toggle('is-unseen', unseen); setHidden(this.unseen, !unseen); setAttribute(this.wantedContainer, 'aria-label', `Wanted level ${state.wanted} of 5${unseen ? ', unseen in the blackout' : ''}`);
     setHidden(this.objective, !state.objective);
     if (state.objective) {
       setText(this.objectiveName, state.objective.missionName); setText(this.objectiveText, state.objective.text);
