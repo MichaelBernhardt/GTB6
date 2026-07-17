@@ -64,7 +64,7 @@ describe('cached rigged pedestrian instances', () => {
   });
 
   it('maps pedestrian behavior to locomotion and one-shot animations', async () => {
-    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.7 }); // 0.7: the mocap-pose death path
     await visual.load();
     const transitions: Array<[Partial<RiggedPedestrianState>, string]> = [
       [{ state: 'walk' }, 'walk'], [{ state: 'flee' }, 'sprint'], [{ state: 'hostile' }, 'sprint'],
@@ -89,25 +89,55 @@ describe('cached rigged pedestrian instances', () => {
     };
     visual.setState(state({ state: 'down' })); visual.update(1 / 30);
     expect(visual.group.position.y).toBeGreaterThan(-0.05); // the just-shot body hasn't fallen yet — no early sink through the road
-    for (let frame = 0; frame < 45; frame++) { // through the fall AND at rest: in ground contact, never hovering or buried
+    for (let frame = 0; frame < 45; frame++) { // through the fall AND at rest: never hovering, never buried deeper than the deliberate sink
       visual.update(1 / 30);
-      expect(Math.abs(skinnedFloor())).toBeLessThan(0.08);
+      const floor = skinnedFloor();
+      expect(floor).toBeLessThan(0.08); expect(floor).toBeGreaterThan(-0.3);
     }
     visual.update(10); // fully clamped at the clip end
-    expect(skinnedFloor()).toBeCloseTo(0, 1); // the settled corpse lies ON the ground, not floating above it
+    expect(skinnedFloor()).toBeCloseTo(-0.2, 1); // the settled corpse presses INTO the ground by the deliberate sink, not floating above it
   });
 
   it('slams the death fall: playback accelerates instead of floating down at capture speed', async () => {
-    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.7 });
     await visual.load();
+    expect(visual.deathStyle).toBe('pose');
     visual.setState(state({ state: 'down' })); visual.update(1 / 30);
     const start = visual.animationTime('death')!;
-    for (let frame = 0; frame < 6; frame++) visual.update(1 / 30);
+    for (let frame = 0; frame < 3; frame++) visual.update(1 / 30);
     const early = visual.animationTime('death')! - start;
-    for (let frame = 0; frame < 6; frame++) visual.update(1 / 30);
+    for (let frame = 0; frame < 3; frame++) visual.update(1 / 30);
     const late = visual.animationTime('death')! - start - early;
-    expect(early).toBeGreaterThan(6 / 30); // faster than the raw capture from the first frames
+    expect(early).toBeGreaterThan(2 * 3 / 30); // at least double capture speed from the first frames
     expect(late).toBeGreaterThan(early * 1.15); // and accelerating — gravity wins, the body slams
+  });
+
+  it('crumples half the cast into a procedural heap on the ground, and hands bones back on rising', async () => {
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 }); // 0.25 < heap chance
+    await visual.load();
+    expect(visual.deathStyle).toBe('heap');
+    const skinnedFloor = (): number => {
+      visual.group.updateMatrixWorld(true);
+      let floor = Infinity; const box = new THREE.Box3();
+      visual.group.traverse((object) => {
+        if (!(object instanceof THREE.SkinnedMesh)) return;
+        object.computeBoundingBox();
+        floor = Math.min(floor, box.copy(object.boundingBox!).applyMatrix4(object.matrixWorld).min.y);
+      });
+      return floor;
+    };
+    visual.setState(state({ state: 'down' }));
+    for (let frame = 0; frame < 15; frame++) { // through the crumple: dropping, never deep-buried
+      visual.update(1 / 30);
+      expect(skinnedFloor()).toBeGreaterThan(-0.45);
+    }
+    expect(visual.activeAnimation).toBeUndefined(); // the mixer is frozen — this is a procedural collapse
+    const settled = skinnedFloor();
+    expect(settled).toBeLessThan(0.02); expect(settled).toBeGreaterThan(-0.4); // in the ground's grip, not hovering
+    const knee = visual.group.getObjectByName('LowerLeg_L')!.rotation.x;
+    expect(Math.abs(knee)).toBeGreaterThan(1); // legs folded under, not a standing statue
+    visual.setState(state({ state: 'walk' })); visual.update(1 / 30);
+    expect(visual.activeAnimation).toBe('walk'); // knockdown survivor: animation resumes cleanly
   });
 
   it('replaces a placeholder asynchronously and remains fail-open when loading fails', async () => {

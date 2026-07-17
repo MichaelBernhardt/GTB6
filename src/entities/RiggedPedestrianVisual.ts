@@ -82,6 +82,11 @@ const templateCache = new Map<string, Promise<NpcTemplate>>();
 export const DEATH_FLOOR_SAMPLE_STEP = 0.1;
 export interface DeathFloorCurve { step: number; floors: number[]; }
 
+export const DEATH_EXTRA_SINK = 0.2; // owner call: corpses aren't limp, so stiff limbs read as floating — bury the body slightly
+export const HEAP_DEATH_CHANCE = 0.5; // owner call: half the cast dies in a procedural crumple instead of the mocap pose
+const HEAP_DURATION = 0.3; // seconds for the crumple — a body dropping, not a bow
+const HEAP_BONE_NAMES = ['spine', 'chest', 'head', 'leftUpperArm', 'rightUpperArm', 'leftLowerArm', 'rightLowerArm', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg'] as const;
+
 /** Floor (min skinned-vertex y, model space) of this rig's death pose, sampled across the clip.
  *  The retargeted capture keeps the hips near standing height while the body tips over, so the pose's
  *  lowest point climbs 0 → ~0.65 through the clip (varying per character) — played raw, corpses end up
@@ -148,6 +153,10 @@ export class RiggedPedestrianVisual {
   private currentName?: NpcAnimationName;
   private state: RiggedPedestrianState = { state: 'idle', punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
   private deathFloor: DeathFloorCurve = { step: DEATH_FLOOR_SAMPLE_STEP, floors: [] };
+  private heapDeath = false;
+  private heapJitter: number[] = [];
+  private heapU = -1; // <0: not collapsing
+  private heapBase?: Map<THREE.Bone, THREE.Euler>;
   private disposed = false;
 
   constructor(private parent: THREE.Object3D, readonly characterId: NpcCharacterId, private options: RiggedPedestrianVisualOptions = {}) {
@@ -155,6 +164,7 @@ export class RiggedPedestrianVisual {
   }
 
   get ready(): boolean { return this.status === 'ready'; }
+  get deathStyle(): 'heap' | 'pose' { return this.heapDeath ? 'heap' : 'pose'; }
   get failed(): boolean { return this.status === 'failed'; }
   get activeAnimation(): NpcAnimationName | undefined { return this.currentName; }
   animationTime(name: NpcAnimationName): number | undefined { return this.actions.get(name)?.time; }
@@ -180,8 +190,62 @@ export class RiggedPedestrianVisual {
   update(dt: number): void {
     if (!this.ready || !this.mixer || !this.bones) return;
     this.group.position.set(0, 0, 0); this.group.rotation.set(0, 0, 0); this.group.scale.set(1, 1, 1);
+    if (this.state.state === 'down' && this.heapDeath) { this.collapseHeap(Math.max(0, dt)); return; }
+    if (this.heapU >= 0) this.endHeap(); // knocked-down ped is back up: hand the bones back to the mixer
     const animation = selectNpcAnimation(this.state); this.transitionTo(animation); this.setPlaybackRate(animation);
     this.mixer.update(Math.max(0, dt)); this.applyAdditivePose();
+  }
+
+  /** Ragdoll-flavoured death: the mixer is frozen where the ped was hit and the body crumples
+   *  procedurally — legs fold under, torso and head slump with per-ped jitter, the root drops and tips
+   *  into a heap. Accelerating (u²) so it reads as gravity, not a bow. */
+  private collapseHeap(dt: number): void {
+    const bones = this.bones!;
+    if (this.heapU < 0) {
+      this.mixer!.stopAllAction(); this.current = undefined; this.currentName = undefined;
+      this.heapBase = new Map(HEAP_BONE_NAMES.map((name) => [bones[name], bones[name].rotation.clone()]));
+      this.heapU = 0;
+    }
+    this.heapU = Math.min(1, this.heapU + dt / HEAP_DURATION);
+    const u = this.heapU * this.heapU;
+    const [r0 = 0.5, r1 = 0.5, r2 = 0.5, r3 = 0.5, r4 = 0.5, r5 = 0.5] = this.heapJitter;
+    for (const [bone, base] of this.heapBase!) bone.rotation.copy(base);
+    bones.leftUpperLeg.rotation.x -= (1.7 + r0 * 0.5) * u; bones.rightUpperLeg.rotation.x -= (1.5 + r1 * 0.6) * u;
+    bones.leftLowerLeg.rotation.x += (2.0 + r1 * 0.5) * u; bones.rightLowerLeg.rotation.x += (2.1 + r0 * 0.5) * u;
+    bones.spine.rotation.x += (0.8 + r2 * 0.4) * u; bones.spine.rotation.y += (r3 - 0.5) * 0.8 * u;
+    bones.chest.rotation.x += (0.55 + r3 * 0.3) * u;
+    bones.head.rotation.x += (0.5 + r4 * 0.4) * u; bones.head.rotation.z += (r4 - 0.5) * 0.7 * u;
+    bones.leftUpperArm.rotation.x -= (0.2 + r5 * 0.6) * u; bones.rightUpperArm.rotation.x -= (0.2 + r2 * 0.6) * u;
+    bones.leftUpperArm.rotation.z += (0.5 + r3 * 0.4) * u; bones.rightUpperArm.rotation.z -= (0.5 + r4 * 0.4) * u;
+    bones.leftLowerArm.rotation.x -= r2 * 0.7 * u; bones.rightLowerArm.rotation.x -= r5 * 0.7 * u;
+    const side = r5 < 0.5 ? -1 : 1;
+    this.group.rotation.z = side * (0.9 + r0 * 0.5) * u; // tips over sideways into the heap
+    this.group.rotation.x = (r1 - 0.5) * 0.6 * u;
+    // Ground the evolving heap: pin the measured floor of the CURRENT crumple pose just under the
+    // road (the deliberate sink eases in with the fall). Measuring beats any parametric drop — the
+    // folding limbs sweep unpredictably, and this window only lasts HEAP_DURATION per death.
+    this.group.position.y = -DEATH_EXTRA_SINK * u - this.heapFloor();
+  }
+
+  /** Min skinned-vertex y of the current pose in the visual group's frame (rotation included,
+   *  translation excluded) — computed from local chains so a ped standing anywhere in the world
+   *  measures identically. */
+  private heapFloor(): number {
+    const model = this.model!; model.updateMatrixWorld(true);
+    let floor = Infinity; const box = new THREE.Box3(); const matrix = new THREE.Matrix4(); const rotation = new THREE.Matrix4().makeRotationFromEuler(this.group.rotation);
+    model.traverse((object) => {
+      if (!(object instanceof THREE.SkinnedMesh)) return;
+      object.computeBoundingBox(); // skinning-aware
+      matrix.identity();
+      for (let node: THREE.Object3D | null = object; node && node !== this.group; node = node.parent) matrix.premultiply(node.matrix);
+      floor = Math.min(floor, box.copy(object.boundingBox!).applyMatrix4(matrix.premultiply(rotation)).min.y);
+    });
+    return Number.isFinite(floor) ? floor : 0;
+  }
+
+  private endHeap(): void {
+    if (this.heapBase) for (const [bone, base] of this.heapBase) bone.rotation.copy(base);
+    this.heapBase = undefined; this.heapU = -1;
   }
 
   dispose(): void {
@@ -199,6 +263,8 @@ export class RiggedPedestrianVisual {
     model.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.receiveShadow = true; object.frustumCulled = false; } });
     this.model = model; this.bones = bones; this.mixer = new THREE.AnimationMixer(model); this.deathFloor = template.deathFloor;
     const random = this.options.random ?? Math.random;
+    this.heapDeath = random() < HEAP_DEATH_CHANCE;
+    this.heapJitter = [random(), random(), random(), random(), random(), random()];
     for (const [name, clip] of template.validated.clips) {
       const action = this.mixer.clipAction(clip); action.time = random() * Math.max(0, clip.duration);
       if (name === 'punch_right' || name === 'death') { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
@@ -218,11 +284,12 @@ export class RiggedPedestrianVisual {
   private setPlaybackRate(name: NpcAnimationName): void {
     if (!this.current) return;
     if (name === 'death') {
-      // The capture is a gentle 1.2s tip-over; a shot body should collapse and SLAM (owner call).
-      // Accelerating playback reads as gravity taking over: ~1.1× at the hit, ~3.6× at the ground.
+      // The capture is a gentle 1.2s tip-over; a shot body should collapse and SLAM (owner call —
+      // "faster faster"). Accelerating playback reads as gravity taking over: 2× at the hit, 7× at
+      // the ground, ~0.3s total.
       const clip = this.current.getClip();
       const progress = clip.duration > 0 ? THREE.MathUtils.clamp(this.current.time / clip.duration, 0, 1) : 1;
-      this.current.setEffectiveTimeScale(1.1 + 2.5 * progress);
+      this.current.setEffectiveTimeScale(2 + 5 * progress);
       return;
     }
     this.current.setEffectiveTimeScale(name === 'walk' ? 0.92 : name === 'sprint' ? 1.08 : 1);
@@ -251,7 +318,10 @@ export class RiggedPedestrianVisual {
       // Keep the collapsing body in ground contact: sink by the measured floor of the CURRENT death
       // pose, so the fall lands as fast as the clip plays and the corpse rests on the road, never
       // hovering (the capture tips over at standing hip height) nor clipping through mid-fall.
-      this.group.position.y -= deathFloorAt(this.deathFloor, this.actions.get('death')?.time ?? 0);
+      // The extra sink eases in with the fall and buries the stiff pose slightly (limbs aren't limp).
+      const death = this.actions.get('death'); const duration = death?.getClip().duration ?? 0;
+      const progress = duration > 0 ? THREE.MathUtils.clamp((death?.time ?? 0) / duration, 0, 1) : 1;
+      this.group.position.y -= deathFloorAt(this.deathFloor, death?.time ?? 0) + DEATH_EXTRA_SINK * progress;
     }
   }
 }

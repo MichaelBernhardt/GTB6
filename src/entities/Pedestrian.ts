@@ -8,7 +8,7 @@ import type { NpcCharacterId } from './NpcCatalog';
 import { RiggedPedestrianVisual } from './RiggedPedestrianVisual';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
-export const DEATH_SPIN_DURATION = 0.55; // seconds of impact whip as the body drops
+export const DEATH_SPIN_DURATION = 0.38; // seconds of impact whip as the body drops — matched to the ~0.3s slam
 const skinColors = [0x613e30, 0x8b5b43, 0xb77a58, 0xd2a078];
 const shirtColors = [0x375e70, 0x9d5d55, 0xd1a343, 0x536f4a, 0x725887];
 
