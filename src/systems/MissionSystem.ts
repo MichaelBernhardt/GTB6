@@ -138,6 +138,15 @@ export class MissionSystem {
     return true;
   }
 
+  /** Console/testing: arm mission #index (1-based, catalogue order) unconditionally — abandons any
+   *  active mission and un-completes the target so it can be replayed and iterated on. */
+  forceStart(index: number): MissionDefinition | undefined {
+    const mission = this.missions[index - 1];
+    if (!mission) return undefined;
+    this.active = undefined; this.state = 'available'; this.completed.delete(mission.id);
+    return this.start(mission.id) ? mission : undefined;
+  }
+
   fail(reason: string): MissionUpdate { this.state = 'failed'; this.failReason = reason; return { failed: reason }; }
 
   update(dt: number, snapshot: GameSnapshot, reachedTarget: boolean): MissionUpdate {
