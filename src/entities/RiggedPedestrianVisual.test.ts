@@ -141,7 +141,7 @@ describe('cached rigged pedestrian instances', () => {
     expect(visual.ragdollBody!.frozen).toBe(true);
     expect(visual.ragdollBody!.elapsed).toBeLessThan(RAGDOLL_TIMEOUT); // came to genuine rest, not the timeout backstop
     const settled = skinnedFloorOf(parent);
-    expect(settled).toBeGreaterThan(-0.25); expect(settled).toBeLessThan(0.05); // resting on the ground, not hovering or buried
+    expect(settled).toBeGreaterThan(-0.05); expect(settled).toBeLessThan(0.05); // skin ON the surface — never buried (owner call), never hovering
     parent.updateMatrixWorld(true);
     const head = new THREE.Vector3(); visual.group.getObjectByName('Head')!.getWorldPosition(head);
     expect(head.y).toBeLessThan(0.6); // collapsed, not a standing statue
@@ -163,7 +163,7 @@ describe('cached rigged pedestrian instances', () => {
     for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
     expect(visual.ragdollBody!.frozen).toBe(true);
     const settled = skinnedFloorOf(parent) - 12;
-    expect(settled).toBeGreaterThan(-0.25); expect(settled).toBeLessThan(0.05);
+    expect(settled).toBeGreaterThan(-0.05); expect(settled).toBeLessThan(0.05);
     parent.updateMatrixWorld(true);
     const hips = new THREE.Vector3(); visual.group.getObjectByName('Hips')!.getWorldPosition(hips);
     expect(Math.abs(hips.x - 500)).toBeLessThan(3); expect(Math.abs(hips.z + 300)).toBeLessThan(3); // the body stayed where the ped died
@@ -227,6 +227,31 @@ describe('cached rigged pedestrian instances', () => {
     expect(visual.ragdollBody).toBe(body); // same body, still frozen — no re-seed, no re-kick
     expect(body.frozen).toBe(true);
     expect(activeRagdollCount()).toBe(0);
+  });
+
+  it('rests the whole cast ON the road surface: settled skin within ±0.05 across characters and falls', async () => {
+    // Owner call: pose deaths sink deliberately (DEATH_EXTRA_SINK), ragdolls must NOT — they rest by
+    // physics. Ball-of-foot particles + calibrated flesh radii keep toes, calves and torso out of the
+    // tar whatever the fall; this sweeps several rigs and impact directions to hold that band.
+    for (const id of ['sandton-professional', 'rosebank-athlete'] as const) {
+      for (const jitter of [0.25, 0.85]) {
+        clearNpcTemplateCache(); resetActiveRagdolls(); THREE.Cache.clear();
+        const parent = new THREE.Group();
+        const visual = new RiggedPedestrianVisual(parent, id, { load: () => loadNpc(id), random: () => jitter });
+        await visual.load();
+        visual.setState(state({ state: 'walk' }));
+        for (let frame = 0; frame < 20; frame++) visual.update(1 / 30); // die mid-stride, not from bind pose
+        visual.primeRagdollImpact(Math.cos(jitter * 7), Math.sin(jitter * 7), 2 + jitter * 5);
+        visual.setState(state({ state: 'down', dead: true }));
+        const env: RagdollEnvironment = { heightAt: () => 0 };
+        for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
+        expect(visual.ragdollBody!.frozen).toBe(true);
+        const settled = skinnedFloorOf(parent);
+        expect(settled, `${id} jitter=${jitter}`).toBeGreaterThan(-0.05);
+        expect(settled, `${id} jitter=${jitter}`).toBeLessThan(0.05);
+        visual.dispose();
+      }
+    }
   });
 
   it('replaces a placeholder asynchronously and remains fail-open when loading fails', async () => {
