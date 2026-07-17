@@ -225,6 +225,17 @@ window.__qa = (() => {
         }
         if (g.missions.state === 'failed') return 'failed:' + state.lastFail;
         if (o.kind === 'collect' && !advanced()) { key('KeyE'); step(3); if (!advanced()) { g.collectedItem = true; step(3); note('shortcut: forced collectedItem after E failed'); finding('warn', `collect E-press did not register at "${o.text}"`); } }
+        // Two-wheeler reaches: teleport-driving can trip a knockOff, dropping the rider off the bike
+        // mid-route. If the objective needs a vehicle and we lost it, re-mount it at the marker.
+        if (!advanced() && o.vehicleKind && !g.activeVehicle) {
+          const veh = g.population.vehicles.find((v) => v.spec.kind === o.vehicleKind && (!o.vehicleColor || v.spec.color === o.vehicleColor) && !v.wrecked);
+          if (veh) {
+            veh.restore?.(); veh.group.position.set(marker.position.x, g.city.roadHeightAt(marker.position.x, marker.position.z), marker.position.z);
+            g.player.group.position.set(marker.position.x + 1.5, surface(marker.position.x + 1.5, marker.position.z), marker.position.z);
+            step(3, 1 / 30); g.beginEnter(veh); step(24, 1 / 30);
+            note(`re-mounted the ${o.vehicleKind} after a mid-route knock-off`);
+          }
+        }
         if (sim === -1 && o.kind === 'checkpoints') return 'stuck:checkpoint-not-registering';
         step(5);
         return advanced() ? 'ok' : 'stuck:arrived-but-not-advanced';
