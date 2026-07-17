@@ -75,21 +75,22 @@ describe('all-Blender NPC population policy', () => {
   });
 });
 
-  it('credits defeated hostiles by DEATH STATE, not by kill path — any way of downing one counts', () => {
-    // Regression: Rank Cold War stuck at 0/3 because kill crediting was coupled to the shot handler,
-    // so melee/vehicle/ragdoll deaths never incremented the counter. defeatedHostiles() reads the
-    // population's own down-state, so every death path credits.
+  it('derives defeat credit from ROSTER TRUTH (spawned - standing) — every kill path counts', () => {
+    // Regression: Rank Cold War stuck at 0/3 when heavies were run over — vehicle kills never
+    // reached the shot-handler counter. defeatedHostiles() = spawned - still-standing, so ANY way of
+    // downing a hostile (bullet, melee, vehicle, explosion, ragdoll) credits, and a despawned one
+    // counts too — the "red dots gone but 0/N" contradiction is impossible.
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     population.spawnHostileWave([{ x: 0, z: 0 }, { x: 4, z: 0 }, { x: 8, z: 0 }]);
     expect(population.hostiles).toHaveLength(3);
     expect(population.defeatedHostiles()).toBe(0);
-    // kill each directly through the ped's own damage path (NOT via any Game shot handler)
-    population.hostiles[0]!.takeDamage(1000);
+    population.hostiles[0]!.takeDamage(1000);           // killed via the ped's own damage path
     expect(population.defeatedHostiles()).toBe(1);
-    population.hostiles[1]!.takeDamage(1000);
-    population.hostiles[2]!.takeDamage(1000);
+    population.hostiles[1]!.knockdown(new THREE.Vector3()); // knocked down (state 'down') — red dot gone → counts
+    expect(population.defeatedHostiles()).toBe(2);
+    population.removePedestrian(population.hostiles[2]!);   // despawned entirely — also counts as defeated
     expect(population.defeatedHostiles()).toBe(3);
-    // a fresh wave clears the dead crew — the count resets for the next objective
+    // a fresh wave resets the roster size — the count starts over for the next objective
     population.spawnHostileWave([{ x: 0, z: 0 }]);
     expect(population.defeatedHostiles()).toBe(0);
   });

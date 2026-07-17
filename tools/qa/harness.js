@@ -246,13 +246,35 @@ window.__qa = (() => {
         if (capacity < need) { finding('fail', `defeat needs ${need} hostiles but the wave only holds ${capacity}`); return 'stuck:defeat-short-wave'; }
         const startIdx = g.missions.objectiveIndex; // stop the moment THIS defeat objective advances —
         let guard = 0;                              // a following objective's fresh wave must not get farmed
+        let usedVehicleKill = false;
         while (g.population.defeatedHostiles() < need && g.missions.state === 'active' && g.missions.objectiveIndex === startIdx && guard++ < 20) {
           const alive = g.population.hostiles.filter((ped) => ped.state !== 'down');
           if (!alive.length) break;
+          const target = alive[0];
           const before = g.population.defeatedHostiles();
-          alive[0].takeDamage(1000, g.player.group.position); // a real death, same path bullets/melee call
-          step(3);
-          if (g.population.defeatedHostiles() <= before && g.missions.objectiveIndex === startIdx) finding('fail', `killing a mission hostile did not credit the defeat counter (${alive[0].group.name})`);
+          // Kill the FIRST hostile by a REAL vehicle impact (the owner's exact case): drop a car on it
+          // at lethal speed so handleVehiclePedestrianImpacts fires — no direct takeDamage, no API credit.
+          // Use a throwaway NON-mission vehicle so ramming doesn't wreck a mission-critical van.
+          const car = !usedVehicleKill ? g.population.vehicles.find((v) => v !== g.activeVehicle && !v.disabled && !v.wrecked && v.spec.kind !== 'van') : null;
+          if (car) {
+            usedVehicleKill = true;
+            // Re-assert the car on the ped at lethal speed each step until it goes down — the driving
+            // update decelerates the car, so a single step can drop it below the kill threshold.
+            let vg = 0;
+            while (target.state !== 'down' && vg++ < 8) {
+              const tp = target.group.position;
+              car.group.position.set(tp.x, g.city.roadHeightAt(tp.x, tp.z), tp.z);
+              car.speed = 30; // |speed| * 2.8 well over ped health — a kill, not a knockdown
+              g.update(STEP);
+            }
+            step(2);
+            if (g.population.defeatedHostiles() <= before) finding('fail', `VEHICLE kill of a mission hostile did not credit (${target.group.name}) — the owner's exact bug`);
+            else note('killed a wave member by REAL vehicle impact — credited');
+          } else {
+            target.takeDamage(1000, g.player.group.position); // rest via the ped's own damage path
+            step(3);
+            if (g.population.defeatedHostiles() <= before && g.missions.objectiveIndex === startIdx) finding('fail', `killing a mission hostile did not credit the defeat counter (${target.group.name})`);
+          }
         }
         step(5);
         if (!advanced() && g.missions.state === 'active') finding('fail', `defeat did not advance after ${g.population.defeatedHostiles()}/${need} real kills`);
