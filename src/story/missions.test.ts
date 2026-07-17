@@ -145,3 +145,13 @@ describe('act gating end-to-end', () => {
     expect(unlocked()).toContain('rank-cold-war');
   });
 });
+
+describe('Kelvin Yard geometry', () => {
+  it('keeps the gate kerb (casing spot) outside the detection ring and the office inside it', async () => {
+    const { KELVIN_FENCE_RADIUS, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } = await import('../world/placements');
+    const gateDistance = Math.hypot(KELVIN_GATE_SPOT.x - KELVIN_YARD_CENTER.x, KELVIN_GATE_SPOT.z - KELVIN_YARD_CENTER.z);
+    const officeDistance = Math.hypot(KELVIN_OFFICE_SPOT.x - KELVIN_YARD_CENTER.x, KELVIN_OFFICE_SPOT.z - KELVIN_YARD_CENTER.z);
+    expect(gateDistance).toBeGreaterThan(KELVIN_FENCE_RADIUS); // casing the gate must not count as a breach
+    expect(officeDistance).toBeLessThan(KELVIN_FENCE_RADIUS); // the ledger is only reachable inside the ring
+  });
+});

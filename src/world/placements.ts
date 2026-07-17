@@ -354,12 +354,14 @@ const landmarkPoint = (name: string, fallback: MapPt): MapPt => {
 
 /** Solly holds court at a plastic table by the Kelvin Yard gate. */
 export const SOLLY_START = walkSpotNear(KELVIN_GATE_SPOT, 3.4, 5);
-/** Kelvin Yard interior: gate kerb extended away from the road (records office at the back). */
+/** Kelvin Yard interior: gate kerb extended away from the road (records office at the back).
+ *  The ring must NOT reach the road: centre sits 30u in, radius 26, so the gate kerb (and the
+ *  casing objective) stay safely outside the fence while the office sits deep behind it. */
 const kelvinIn = (() => { const dx = kelvinKerb.x - kelvinKerb.roadX; const dz = kelvinKerb.z - kelvinKerb.roadZ; const len = Math.hypot(dx, dz) || 1; return { x: dx / len, z: dz / len }; })();
-export const KELVIN_YARD_CENTER: MapPt = { x: kelvinKerb.x + kelvinIn.x * 16, z: kelvinKerb.z + kelvinIn.z * 16 };
-export const KELVIN_OFFICE_SPOT: MapPt = { x: kelvinKerb.x + kelvinIn.x * 26, z: kelvinKerb.z + kelvinIn.z * 26 };
+export const KELVIN_YARD_CENTER: MapPt = { x: kelvinKerb.x + kelvinIn.x * 30, z: kelvinKerb.z + kelvinIn.z * 30 };
+export const KELVIN_OFFICE_SPOT: MapPt = { x: kelvinKerb.x + kelvinIn.x * 42, z: kelvinKerb.z + kelvinIn.z * 42 };
 /** Crossing this ring around the yard centre counts as being inside the fence. */
-export const KELVIN_FENCE_RADIUS = 34;
+export const KELVIN_FENCE_RADIUS = 26;
 
 /** The CBD feeder substation lives in the Ophirton industrial belt; Sindi works its night shift. */
 const ophirton = districtCenter('Ophirton') ?? CBD_CENTER;
