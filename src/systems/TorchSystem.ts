@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /** Handheld torch (SA for flashlight): a steady warm-white beam that follows free-look — centre screen is where it points. */
-export const TORCH_COLOR = 0xffe9c2; export const TORCH_INTENSITY = 150; export const TORCH_RANGE = 55; export const TORCH_DECAY = 2;
+export const TORCH_COLOR = 0xffe9c2; export const TORCH_INTENSITY = 260; export const TORCH_RANGE = 62; export const TORCH_DECAY = 2; // owner-tuned: brighter, slightly longer throw
 export const TORCH_INNER_DEG = 12; export const TORCH_OUTER_DEG = 22;
 export const TORCH_PENUMBRA = 1 - TORCH_INNER_DEG / TORCH_OUTER_DEG; // three's penumbra is the softened fraction of the cone, so this yields a ~12° hot core inside the 22° cone
 export const TORCH_CHEST_HEIGHT = 1.35; // beam origin above the carrier's feet in third person — reads as held at the chest/hand
