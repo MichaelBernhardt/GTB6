@@ -3,7 +3,7 @@ import type { MissionDefinition } from '../systems/MissionSystem';
 import type { WorldTarget } from '../types';
 import {
   CANDICE_START, CON_HILL_SPOT, ESCAPE_SPOT, EVIDENCE_VAN_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
-  CROWN_STATION, KIOSK_SPOT, LOCKUP_SPOT, LUGHAWE_DROP, LUGHAWE_HALT, PADSTAL_SPOT, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
+  AIRPORT_APRON, CROWN_STATION, KIOSK_SPOT, LOCKUP_SPOT, PADSTAL_SPOT, PAPER_DROP, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
   CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_PLATFORM, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
   SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START,
 } from '../world/placements';
@@ -154,8 +154,8 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['pull-the-plug'] },
     intro: 'I read the fault logs. That trip pattern was manual — a hand on a breaker. Your hand. Let\'s see if you can read too: "FOR SALE: one-way ticket. Collect where the Halt serves the sky."',
     start: spot(SINDI_START, 'Sindi'), objectives: [
-      { kind: 'reach', hidden: true, text: '"Collect at the rail halt whose name is Afrikaans for the place aeroplanes live."', target: spot(LUGHAWE_DROP, 'The dead drop') },
-      { kind: 'collect', text: 'Take the dossier from the drop', target: spot(LUGHAWE_DROP, 'Dossier'), checkpoint: true },
+      { kind: 'reach', hidden: true, text: '"Collect where the whole city changes trains — the big station, platform lockers."', target: spot(PAPER_DROP, 'The dead drop') },
+      { kind: 'collect', text: 'Take the dossier from the locker', target: spot(PAPER_DROP, 'Dossier'), checkpoint: true },
       { kind: 'reach', text: 'Bring the dossier back to Sindi', target: spot(SINDI_START, 'Sindi'), checkpoint: true },
     ],
   },
@@ -174,7 +174,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['genny-round'] },
     intro: 'Solly\'s "spare parts" fly tonight and my licence doesn\'t. Kite\'s fuelled on the apron. Get high over Ponte — the drop is the roof of the city — and don\'t bend my aeroplane.',
     start: spot(SIPHO_START, 'Skywise Sipho'), objectives: [
-      { kind: 'reach', conditionsOnly: true, conditions: { inPlane: true, altitudeAbove: 40 }, text: 'Get a Karoo Kite in the air', target: spot(LUGHAWE_HALT, 'O.R. Tambourine apron') },
+      { kind: 'reach', conditionsOnly: true, conditions: { inPlane: true, altitudeAbove: 40 }, text: 'Get a Karoo Kite in the air', target: spot(AIRPORT_APRON, 'O.R. Tambourine apron') },
       { kind: 'reach', radius: 260, conditions: { inPlane: true, altitudeAbove: 150 }, text: 'Bring the parts high over Ponte Tower', target: spot(PONTE_POINT, 'Over Ponte'), checkpoint: true },
       { kind: 'reach', timeLimit: 150, text: 'Get down to the Ponte forecourt drop — quickly', target: spot(PONTE_FORECOURT, 'Forecourt drop'), checkpoint: true },
     ],

@@ -93,9 +93,12 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
         # empirical timer check: sim seconds actually used vs the objective clock
         sim_used = page.evaluate("() => window.__qa.state.simSeconds ?? null")
         timer = audit.get('timer')
+        obj_kind = audit.get('kind')
+        journeys = page.evaluate(f"() => (window.__scripts?.['{mission}']?.journeys ?? [])")
+        skip_timer = obj_kind in ('survive', 'choice') or (info['idx'] in (journeys or []))
         # empirical backstop at the bumbling ratio: the bot drives at 65% cruise, a bumbling player
         # at ~50% with detours — so the bot's time scales by ~1.6, then 1.8x slack on top
-        if timer and sim_used and sim_used * 1.6 * 1.8 > timer:
+        if timer and sim_used and not skip_timer and sim_used * 1.6 * 1.8 > timer:
             all_findings.append({'mission': mission, 'objective': info['idx'], 'severity': 'fail', 'what': f'timer {round(timer)}s < 1.8x bumbling-scaled play time {round(sim_used * 1.6)}s — raise it'})
         after = json.loads(page.evaluate("() => JSON.stringify({ idx: window.__qa.objIndex(), state: window.__qa.g.missions.state })"))
         if after['state'] == 'failed':

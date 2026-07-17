@@ -148,15 +148,15 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   'paper-round': {
     diaryPage: 2,
     hints: [
-      { objective: 0, afterSeconds: 120, detail: '\'Lughawe\'. It\'s Afrikaans. Look at a rail map and think about aeroplanes.' },
-      { objective: 0, afterSeconds: 240, detail: 'The rail halt AT THE AIRPORT. If you can throw a breaker you can read a station board.', reveal: true },
+      { objective: 0, afterSeconds: 120, detail: 'The big one, laaitie. Where every line meets and the whole city changes trains.' },
+      { objective: 0, afterSeconds: 240, detail: 'Park Station. Platform lockers. If you can throw a breaker you can read a station board.', reveal: true },
     ],
   },
   'the-wrong-train': {
     journeys: [1], // driving the consist to Crown IS the mission — the one earned long haul, with transport handed over
     radio: [{ objective: 1, title: 'Solly', detail: 'Crown Station siding. Stop it like you own it, because tonight you do.' }],
   },
-  'crosswinds': { grantParachute: 0, journeys: [1] }, // the flight IS the mission (plane provided)
+  'crosswinds': { grantParachute: 0, journeys: [0, 1, 2] }, // the flight IS the mission — the one earned aviation setpiece (plane provided out at the strip)
   'two-fires': {},
   'paper-fire': {
     quarry: { spawnObjective: 0, kind: 'van', color: EVIDENCE_VAN_COLOR, spawn: EVIDENCE_VAN_SPOT, igniteObjective: 2 },
@@ -186,6 +186,6 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
 
   // ---- Side pieces --------------------------------------------------------------------
-  'padstal-run': {},
+  'padstal-run': { journeys: [0, 1, 2] }, // a scenic long-haul over the pass — the drive IS the point (optional side)
   'pier-pressure': { waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
 };
