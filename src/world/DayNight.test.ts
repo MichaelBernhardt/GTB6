@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { advanceHour, createSkySample, DAY_CYCLE_SECONDS, DAWN_END, DAWN_START, DUSK_END, DUSK_START, formatClock, nightFactor, sampleSky, selectNearest, SKY_KEYFRAMES, sunDirection, wrapHour } from './DayNight';
+import { advanceBlackout, advanceHour, applyBlackout, BLACKOUT_FADE_SECONDS, createSkySample, DAY_CYCLE_SECONDS, DAWN_END, DAWN_START, DUSK_END, DUSK_START, formatClock, nightFactor, sampleSky, selectNearest, SKY_KEYFRAMES, sunDirection, wrapHour } from './DayNight';
 
 describe('day/night clock', () => {
   it('advances in game hours and wraps at midnight', () => {
@@ -70,6 +70,32 @@ describe('night factor', () => {
     expect(nightFactor((DUSK_START + DUSK_END) / 2)).toBeCloseTo(0.5);
     const early = nightFactor(DUSK_START + 0.2); const late = nightFactor(DUSK_END - 0.2);
     expect(early).toBeGreaterThan(0); expect(late).toBeLessThan(1); expect(late).toBeGreaterThan(early);
+  });
+});
+
+describe('load-shedding blackout', () => {
+  it('eases toward the target over the fade window and clamps at the ends', () => {
+    expect(advanceBlackout(0, 1, BLACKOUT_FADE_SECONDS / 2)).toBeCloseTo(0.5);
+    expect(advanceBlackout(0.5, 1, BLACKOUT_FADE_SECONDS)).toBe(1); // never overshoots
+    expect(advanceBlackout(1, 0, BLACKOUT_FADE_SECONDS / 4)).toBeCloseTo(0.75); // power back: same ramp in reverse
+    expect(advanceBlackout(0, 1, Infinity)).toBe(1); // the constructor's first apply snaps straight to the grid state
+    expect(advanceBlackout(0.4, 0.4, 10)).toBeCloseTo(0.4);
+  });
+
+  it('sinks the night sky to near-black at full darkness', () => {
+    const lit = sampleSky(23, createSkySample()); const dark = applyBlackout(sampleSky(23, createSkySample()), 1);
+    expect(dark.ambientIntensity).toBeLessThan(lit.ambientIntensity * 0.1);
+    expect(dark.hemiIntensity).toBeLessThan(lit.hemiIntensity * 0.1);
+    expect(dark.sunIntensity).toBeLessThan(lit.sunIntensity * 0.2); // moonless-ish: silhouettes only
+    expect(dark.sky.getHex()).toBeLessThan(0x050505); // no urban glow left on the sky dome
+    expect(dark.fog.getHex()).toBeLessThan(0x050505);
+    expect(dark.ambientIntensity).toBeGreaterThan(0); // not a literal void — shapes stay barely readable
+  });
+
+  it('leaves an unaffected sample untouched at zero darkness', () => {
+    const lit = sampleSky(12, createSkySample()); const same = applyBlackout(sampleSky(12, createSkySample()), 0);
+    expect(same.hemiIntensity).toBe(lit.hemiIntensity);
+    expect(same.sky.getHex()).toBe(lit.sky.getHex());
   });
 });
 

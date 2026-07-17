@@ -15,6 +15,7 @@ export interface HudState {
   armour: number;
   stims: number;
   parachutes: number;
+  torch: boolean; // handheld torch lit — shown in the carried-items strip
   money: number;
   weaponName: string;
   melee: boolean;
