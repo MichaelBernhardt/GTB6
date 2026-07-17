@@ -39,6 +39,9 @@ import { StoryDirector } from './systems/StoryDirector';
 import { DialogueSystem } from './systems/DialogueSystem';
 import { introScript } from './story/dialogues';
 import { MISSION_SCRIPTS } from './story/scripts';
+import { DIARY_STASH_NOTE, DIARY_STASH_REWARD, DIARY_TEXTS, DIARY_WORLD_PAGES } from './story/diaries';
+import { DEPOT_DARK_THRESHOLD, DepotSecurity, depotDark, guardSees } from './systems/DepotSecurity';
+import { KELVIN_FENCE_RADIUS, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } from './world/placements';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
@@ -123,6 +126,9 @@ export class Game {
   /** Scripted tail target (follow missions): spawned/parked/removed by mission beats. */
   private quarry?: Vehicle;
   private quarryArrived = false;
+  private depotSecurity = new DepotSecurity();
+  private depotWasSpotted = false;
+  private depotClock = 0; // drives the Kelvin Yard guard patrol orbits
   private loadShedding = new LoadSheddingSystem();
   private torch: TorchSystem;
   private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
@@ -873,6 +879,7 @@ export class Game {
       const collectTarget = this.missions.objective?.kind === 'collect' ? this.missionTargetRaw() : undefined;
       if (collectTarget && collectTarget.position.distanceTo(this.player.group.position) < 8) { this.collectedItem = true; return; }
       if (this.tryMissionInteraction()) return;
+      if (this.tryDiaryPickup()) return;
       const vehicle = this.population.nearestEnterable(this.player.group.position);
       const cruiser = this.police.stealableNear(this.player.group.position);
       const shop = this.shops.shopNear(this.player.group.position);
@@ -1465,11 +1472,12 @@ export class Game {
       if (requiredVehicle?.disabled) { this.processMissionUpdate(this.missions.fail(`${requiredVehicle.spec.name} was destroyed`)); return; }
     }
     this.updateQuarry();
+    this.updateDepot(dt);
     if (this.missions.active?.id === 'hot-property' && objective?.kind === 'enter-kind' && this.activeVehicle?.spec.kind === 'sport' && this.activeVehicle.spec.color === 0xd83a40) this.forceWanted(2);
     const target = this.missionTargetRaw(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     if (dt > 0 && this.lastFocus) this.focusSpeed = Math.min(80, Math.hypot(focus.x - this.lastFocus.x, focus.z - this.lastFocus.z) / dt);
     (this.lastFocus ??= new THREE.Vector3()).copy(focus);
-    const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8));
+    const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
     if (objective?.kind === 'checkpoints' && reached) {
       const stopIndex = this.deliveryIndex;
       const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1;
@@ -1496,13 +1504,57 @@ export class Game {
     const script = MISSION_SCRIPTS[mission.id];
     const index = this.missions.objectiveIndex;
     for (const wave of script?.waves ?? []) if (wave.objective === index && wave.checkpoint === undefined) this.population.spawnHostileWave(wave.spots);
+    if (script?.forceBlackout === index && !this.loadShedding.active) this.applyEskom(this.loadShedding.force());
+    if (script?.wanted?.objective === index) this.forceWanted(script.wanted.level);
+    if (script?.grantParachute === index) this.inventory.parachutes = Math.max(1, this.inventory.parachutes);
+    for (const beat of script?.radio ?? []) if (beat.objective === index) this.ui.notify(beat.title, beat.detail, true, 'radio');
+    if (script?.alarm && script.alarm.objective === index) {
+      // Evaluated once, diegetically: mains up means the showroom screams; a blackout means it can't.
+      const dead = this.dayNight.blackoutDarkness >= DEPOT_DARK_THRESHOLD;
+      if (dead) this.ui.notify(script.alarm.silentTitle, script.alarm.silentDetail, true, 'reputation');
+      else { this.forceWanted(script.alarm.level); this.ui.notify(script.alarm.title, script.alarm.detail, false); }
+    }
     const quarry = script?.quarry;
     if (!quarry) return;
     if (index >= quarry.spawnObjective && !this.quarry) {
       this.quarry = this.population.spawnScriptVehicle(quarry.kind as VehicleKind, quarry.spawn.x, quarry.spawn.z, quarry.spawn.heading, quarry.color);
       this.quarryArrived = false;
     }
-    if (index >= quarry.departObjective && this.quarry && !this.quarryArrived) this.population.routeVehicleTo(this.quarry, quarry.destination.x, quarry.destination.z);
+    if (quarry.departObjective !== undefined && index >= quarry.departObjective && quarry.destination && this.quarry && !this.quarryArrived) this.population.routeVehicleTo(this.quarry, quarry.destination.x, quarry.destination.z);
+    if (quarry.igniteObjective === index && this.quarry && !this.quarry.onFire) this.quarry.ignite();
+  }
+
+  /** Kelvin Yard security tick (Dark House): the pure DepotSecurity verdict feeds the mission snapshot. */
+  private updateDepot(dt: number): void {
+    const script = MISSION_SCRIPTS[this.missions.active?.id ?? ''];
+    if (!script?.depot || this.missions.state !== 'active') { this.depotWasSpotted = false; return; }
+    this.depotClock += dt;
+    const focus = this.player.group.position;
+    const insideFence = Math.hypot(focus.x - KELVIN_YARD_CENTER.x, focus.z - KELVIN_YARD_CENTER.z) < KELVIN_FENCE_RADIUS;
+    const dark = depotDark(this.dayNight.blackoutFactor, nightFactor(this.dayNight.hour) > 0.5);
+    // Two torch guards orbit the records office in opposite directions, facing along their walk.
+    const guards = [0, Math.PI].map((phase, index) => {
+      const angle = phase + this.depotClock * 0.18 * (index === 0 ? 1 : -1);
+      return { x: KELVIN_OFFICE_SPOT.x + Math.sin(angle) * 12, z: KELVIN_OFFICE_SPOT.z + Math.cos(angle) * 12, heading: angle + (index === 0 ? Math.PI / 2 : -Math.PI / 2) };
+    });
+    const seen = dark && guards.some((guard) => guardSees(guard, focus.x, focus.z));
+    const cone = (vehicle: Vehicle) => vehicle.headlightsOn && inHeadlightCone(vehicle.group.position.x, vehicle.group.position.z, vehicle.heading, focus.x, focus.z);
+    const verdict = this.depotSecurity.update(dt, {
+      insideFence, playerX: focus.x, playerZ: focus.z,
+      blackout: this.dayNight.blackoutFactor, isNight: nightFactor(this.dayNight.hour) > 0.5,
+      torchOn: this.torch.on, muzzleFlash: this.muzzleFlash,
+      headlights: [...this.population.vehicles, ...this.police.vehicles].filter(cone).map((vehicle) => ({ x: vehicle.group.position.x, z: vehicle.group.position.z, heading: vehicle.heading })),
+      guardSees: seen,
+    });
+    const spotted = verdict === 'spotted';
+    this.missionContext.detected = spotted;
+    if (spotted && !this.depotWasSpotted) {
+      this.audio.ui(false);
+      if (!dark) { this.forceWanted(4); this.ui.notify('Kelvin Yard', 'Klaxons. Every floodlight in the yard finds you at once.', false); }
+      else this.ui.notify('Kelvin Yard', 'A torch beam stops dead on you. Then the shouting starts.', false);
+      this.forceWanted(Math.max(2, this.wanted.level));
+    }
+    this.depotWasSpotted = spotted;
   }
 
   /** Per-frame follow feed: distance to the quarry, arrival at its mark, and whether it survives. */
@@ -1511,7 +1563,7 @@ export class Game {
     const script = MISSION_SCRIPTS[this.missions.active?.id ?? '']?.quarry;
     if (!quarry || !script || this.missions.state !== 'active') return;
     const position = quarry.group.position;
-    if (!this.quarryArrived && Math.hypot(position.x - script.destination.x, position.z - script.destination.z) < script.arriveRadius) {
+    if (!this.quarryArrived && script.destination && Math.hypot(position.x - script.destination.x, position.z - script.destination.z) < (script.arriveRadius ?? 20)) {
       this.quarryArrived = true;
       this.population.parkScriptVehicle(quarry);
     }
@@ -1814,21 +1866,43 @@ export class Game {
   private processMissionUpdate(update: MissionUpdate): void {
     if (update.failed) { this.audio.ui(false); this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false); }
     if (update.choice) {
-      const protectedShop = update.choice.choice.id === 'protect';
-      this.livingCity.apply({ kind: protectedShop ? 'mission-protected' : 'mission-robbed', district: CBD });
-      this.economy.earn(update.choice.choice.reward);
-      if (!protectedShop) { this.combat.addAmmo(); this.combat.addAmmo(); this.forceWanted(2); }
-      this.audio.ui(true); this.ui.notify('The CBD will remember', protectedShop
-        ? `Jozi Arms is safe · trusted status · 20% discount · +R${update.choice.choice.reward.toLocaleString()}`
-        : `Shipment taken · notorious status · ammo secured · +R${update.choice.choice.reward.toLocaleString()}`, protectedShop);
+      const { missionId, choice } = update.choice;
+      this.story.onChoice(missionId, choice.id);
+      if (missionId === 'arms-deal') {
+        const protectedShop = choice.id === 'protect';
+        this.livingCity.apply({ kind: protectedShop ? 'mission-protected' : 'mission-robbed', district: CBD });
+        this.economy.earn(choice.reward);
+        if (!protectedShop) { this.combat.addAmmo(); this.combat.addAmmo(); this.forceWanted(2); }
+        this.audio.ui(true); this.ui.notify('The CBD will remember', protectedShop
+          ? `Jozi Arms is safe · trusted status · 20% discount · +R${choice.reward.toLocaleString()}`
+          : `Shipment taken · notorious status · ammo secured · +R${choice.reward.toLocaleString()}`, protectedShop);
+      } else {
+        this.economy.earn(choice.reward);
+        this.audio.ui(true); this.ui.notify('The word is given', `${choice.label} · +R${choice.reward.toLocaleString()}`);
+      }
     } else if (update.completed) { this.economy.earn(update.completed.reward); this.audio.ui(true); this.ui.notify('Mission complete', `+R${update.completed.reward.toLocaleString()} ${update.completed.name}`); }
     if (update.completed) {
       for (const flag of this.story.onMissionCompleted(update.completed)) if (flag.startsWith('act')) this.ui.notify('Word travels', 'New contacts will hear your name now.', true, 'reputation');
       const page = MISSION_SCRIPTS[update.completed.id]?.diaryPage;
       if (page !== undefined && this.story.collectDiaryPage(page)) this.ui.notify('Grid Diary', `Page ${page} of 12 — someone planned all of this.`, true, 'reputation');
       this.quarry = undefined; this.quarryArrived = false; // a parked quarry stays where it arrived
+      if (update.completed.id === 'the-switch') this.settleStageSix();
       this.persist();
     }
+  }
+
+  /** Finale epilogue: the branch decides what the city remembers about the grid — and about you. */
+  private settleStageSix(): void {
+    const throne = this.story.flags.has('choice:two-fires:solly');
+    this.livingCity.apply({ kind: throne ? 'grid-sold' : 'grid-defended', district: CBD });
+    this.dialogue.start({ id: 'stage-six-epilogue', lines: throne ? [
+      { speaker: 'Lieutenant Mo', text: 'The feeder holds. The Genny King is a story taxi drivers tell. Long live the King.' },
+      { speaker: 'You', text: 'Get the gennies on the trucks. The city still needs light — and light still needs a salesman.' },
+    ] : [
+      { speaker: 'Sindi', text: 'The feeder holds. The docket is filed. The cartel is a carcass, and you got fat off it.' },
+      { speaker: 'You', text: 'And the lights stay on.' },
+      { speaker: 'Sindi', text: 'Until the next chancer reads the fault logs. Keep the burner charged.' },
+    ] });
   }
 
   private resetMissionRuntime(): void {
@@ -1843,6 +1917,24 @@ export class Game {
       }
     }
     if (this.quarry) { this.population.removeVehicle(this.quarry); this.quarry = undefined; this.quarryArrived = false; }
+    this.depotSecurity.reset(); this.depotWasSpotted = false;
+  }
+
+  /** The nearest uncollected Grid Diary page within reach of the player, if any. */
+  private nearbyDiaryPage(): { page: number; x: number; z: number } | undefined {
+    const position = this.player.group.position;
+    return DIARY_WORLD_PAGES.find((entry) => !this.story.diaryPages.has(entry.page) && Math.hypot(entry.x - position.x, entry.z - position.z) < 5);
+  }
+
+  /** E on a torn page: pocket it, show its line of the planner's story, pay the stash when the set completes. */
+  private tryDiaryPickup(): boolean {
+    const entry = this.nearbyDiaryPage();
+    if (!entry || !this.story.collectDiaryPage(entry.page)) return false;
+    this.audio.ui(true);
+    this.ui.notify(`Grid Diary — page ${entry.page} of 12`, DIARY_TEXTS[entry.page] ?? '', true, 'reputation');
+    if (this.story.diaryComplete) { this.economy.earn(DIARY_STASH_REWARD); this.ui.notify('The planner\'s stash', `${DIARY_STASH_NOTE} +R${DIARY_STASH_REWARD.toLocaleString()}`); }
+    this.persist();
+    return true;
   }
 
   /** The active objective's real-world target, blip or not — hidden riddles still need reach checks. */
@@ -2015,6 +2107,7 @@ export class Game {
       else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.trains.boardable(focus)) { const wait = this.trains.boardCountdown(focus); prompt = wait === undefined ? 'E  Board the train' : `E  Board · departs in ${formatCountdown(wait)}`; }
+      else if (this.nearbyDiaryPage()) prompt = 'E  Take the torn page';
       else if (this.coverAvailable) prompt = 'Q  Take cover';
       else if (this.nearestPlane()) prompt = 'E  Enter plane';
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';

@@ -14,7 +14,8 @@ describe('mission content sanity', () => {
       expect(ids.has(id), `script for unknown mission ${id}`).toBe(true);
       for (const stop of script.stops ?? []) { expect(Number.isFinite(stop.x)).toBe(true); expect(Number.isFinite(stop.z)).toBe(true); }
       for (const wave of script.waves ?? []) for (const spot of wave.spots) { expect(Number.isFinite(spot.x)).toBe(true); expect(Number.isFinite(spot.z)).toBe(true); }
-      if (script.quarry) { expect(Number.isFinite(script.quarry.destination.x)).toBe(true); expect(script.quarry.departObjective).toBeGreaterThanOrEqual(script.quarry.spawnObjective); }
+      if (script.quarry?.destination) expect(Number.isFinite(script.quarry.destination.x)).toBe(true);
+      if (script.quarry?.departObjective !== undefined) expect(script.quarry.departObjective).toBeGreaterThanOrEqual(script.quarry.spawnObjective);
     }
   });
 

@@ -345,6 +345,88 @@ export const RANK_STOPS: MapPt[] = [
   walkSpotNear({ x: newtown.x - 14 * P, z: newtown.z + 10 * P }, 3.4, 5),
 ];
 
+// ---- Story arc (Acts 2-3): the cartel, the engineer, the sky, the yard ----------------
+
+const landmarkPoint = (name: string, fallback: MapPt): MapPt => {
+  const entry = landmark(name);
+  return entry ? { x: entry.x, z: entry.z } : fallback;
+};
+
+/** Solly holds court at a plastic table by the Kelvin Yard gate. */
+export const SOLLY_START = walkSpotNear(KELVIN_GATE_SPOT, 3.4, 5);
+/** Kelvin Yard interior: gate kerb extended away from the road (records office at the back). */
+const kelvinIn = (() => { const dx = kelvinKerb.x - kelvinKerb.roadX; const dz = kelvinKerb.z - kelvinKerb.roadZ; const len = Math.hypot(dx, dz) || 1; return { x: dx / len, z: dz / len }; })();
+export const KELVIN_YARD_CENTER: MapPt = { x: kelvinKerb.x + kelvinIn.x * 16, z: kelvinKerb.z + kelvinIn.z * 16 };
+export const KELVIN_OFFICE_SPOT: MapPt = { x: kelvinKerb.x + kelvinIn.x * 26, z: kelvinKerb.z + kelvinIn.z * 26 };
+/** Crossing this ring around the yard centre counts as being inside the fence. */
+export const KELVIN_FENCE_RADIUS = 34;
+
+/** The CBD feeder substation lives in the Ophirton industrial belt; Sindi works its night shift. */
+const ophirton = districtCenter('Ophirton') ?? CBD_CENTER;
+export const SUBSTATION_SPOT = walkSpotNear({ x: ophirton.x, z: ophirton.z }, 4, 6);
+export const SUBSTATION_BREAKER: MapPt = { x: SUBSTATION_SPOT.x + 6, z: SUBSTATION_SPOT.z + 4 };
+export const SINDI_START = walkSpotNear({ x: ophirton.x + 12 * P, z: ophirton.z - 10 * P }, 3, 5);
+
+/** Generator-subscription collections: three CBD businesses behind on payments. */
+export const GENNY_ROUND_STOPS: MapPt[] = [
+  walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 48 * P, z: CBD_CENTER.z + 105 * P }, 3, 5),
+  walkSpot('Risk-It Street', { x: CBD_CENTER.x + 5 * P, z: CBD_CENTER.z - 50 * P }, 3, 5),
+  walkSpot('Anderson Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 20 * P }, 3, 5),
+];
+
+/** Crown Station: where the misplaced diesel consist must stop (The Wrong Train). */
+export const CROWN_STATION = stationPoint('Crown Station');
+
+/** The airport halt: Sindi's classified-ad dead drop, and where Skywise Sipho loiters. */
+export const LUGHAWE_HALT = stationPoint('Lughawe Halt');
+export const LUGHAWE_DROP: MapPt = { x: LUGHAWE_HALT.x + 10, z: LUGHAWE_HALT.z + 6 };
+export const SIPHO_START: MapPt = { x: LUGHAWE_HALT.x + 16, z: LUGHAWE_HALT.z - 4 };
+
+/** Ponte Tower forecourt: Crosswinds' drop after the skydive. */
+export const PONTE_POINT = landmarkPoint('Ponte Tower', { x: CBD_CENTER.x, z: CBD_CENTER.z });
+export const PONTE_FORECOURT = walkSpotNear(PONTE_POINT, 3, 5);
+
+/** Constitution Hill handover (Carcass) and the coastal pier (Pier Pressure). */
+export const CON_HILL_SPOT = walkSpotNear(landmarkPoint('Constitution Hill', { x: hillbrow.x, z: hillbrow.z }), 3, 5);
+export const PIER_POINT = landmarkPoint('Seepunt Pier', { x: CBD_CENTER.x, z: CBD_CENTER.z });
+export const PIER_SPOT: MapPt = { x: PIER_POINT.x, z: PIER_POINT.z };
+/** Ouma se Padstal doorstep (long-haul side run). */
+export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
+export const PADSTAL_SPOT: MapPt = { x: PADSTAL_POINT.x + 6, z: PADSTAL_POINT.z };
+
+/** Sindi's evidence van (Paper Fire target) parked below Braamfontein. */
+export const EVIDENCE_VAN_SPOT = kerbVehicleSpot('Jan Smuts Avenue', { x: braamfontein.x + 20 * P, z: braamfontein.z - 15 * P });
+/** The cartel's diesel tanker on the industrial belt (The Audition). */
+export const TANKER_SPOT = kerbVehicleSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 125 * P });
+
+/** Cartel stash sweep (Carcass): three lock-ups across the belt. */
+export const STASH_SPOTS: MapPt[] = [
+  walkSpot('Commissioner Street', { x: CBD_CENTER.x + 70 * P, z: CBD_CENTER.z - 50 * P }, 3, 5),
+  walkSpotNear({ x: braamfontein.x - 25 * P, z: braamfontein.z + 28 * P }, 3, 5),
+  walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 60 * P, z: CBD_CENTER.z + 130 * P }, 3, 5),
+];
+
+/** Grid Diary pages 3-12 scattered at the city's proudest places (pages 1-2 are mission rewards). */
+export const DIARY_SPOTS: Array<{ page: number; x: number; z: number }> = (() => {
+  const tower = landmarkPoint('Hillbrow tower', { x: hillbrow.x, z: hillbrow.z });
+  const conHill = landmarkPoint('Constitution Hill', { x: hillbrow.x, z: hillbrow.z });
+  const parkStation = landmarkPoint('Park Station', { x: CBD_CENTER.x, z: CBD_CENTER.z });
+  const airportPt = landmarkPoint('O.R. Tambourine Regional', LUGHAWE_HALT);
+  const sandtonStation = stationPoint('Sandton Station');
+  return [
+    { page: 3, x: tower.x + 8, z: tower.z + 5 },
+    { page: 4, x: conHill.x - 7, z: conHill.z + 6 },
+    { page: 5, x: PONTE_POINT.x - 9, z: PONTE_POINT.z - 4 },
+    { page: 6, x: parkStation.x + 12, z: parkStation.z - 8 },
+    { page: 7, x: KIOSK_SPOT.x + 5, z: KIOSK_SPOT.z + 4 },
+    { page: 8, x: PADSTAL_POINT.x - 5, z: PADSTAL_POINT.z + 7 },
+    { page: 9, x: PIER_POINT.x + 4, z: PIER_POINT.z - 6 },
+    { page: 10, x: airportPt.x + 15, z: airportPt.z + 10 },
+    { page: 11, x: sandtonStation.x - 10, z: sandtonStation.z + 7 },
+    { page: 12, x: KELVIN_GATE_SPOT.x - 8, z: KELVIN_GATE_SPOT.z + 10 },
+  ];
+})();
+
 // ---- Parked vehicles ----------------------------------------------------------------
 
 export interface ParkedVehicleSpot { kind: string; x: number; z: number; heading: number; color?: number; }
@@ -360,6 +442,8 @@ export const GTI_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x
 export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('compact', PORTIA_CAR_SPOT, 0xf1c232),
   parkedEntry('van', CANDICE_VAN_SPOT, 0x2e8b57), // Candice's route van (Rank Cold War)
+  parkedEntry('van', TANKER_SPOT, 0xb8621b), // the diesel tanker (The Audition)
+  parkedEntry('van', EVIDENCE_VAN_SPOT, 0xdfe3e6), // Sindi's evidence van (Paper Fire)
   parkedEntry('sport', GTI_SPOT, 0xd83a40),
   parkedEntry('van', kerbVehicleSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 150 * P, z: CBD_CENTER.z - 45 * P })),
   parkedEntry('compact', kerbVehicleSpot('Hairyson Street', { x: CBD_CENTER.x - 35 * P, z: CBD_CENTER.z - 60 * P })),

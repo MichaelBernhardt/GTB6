@@ -34,6 +34,21 @@ export const MISSION_CONTACT_NPC_IDS: Readonly<Record<string, NpcCharacterId>> =
   'copper-wire-blues': 'bra-vusi',
   'rank-cold-war': 'candice-boksburg',
   'reading-signs': 'joburg-driver', // Oupa Jakes
+  'the-audition': 'fordsburg-restaurateur', // Solly the Genny King
+  'pull-the-plug': 'fordsburg-restaurateur',
+  'stage-fright': 'fordsburg-restaurateur',
+  'genny-round': 'fordsburg-restaurateur',
+  'the-wrong-train': 'fordsburg-restaurateur',
+  'two-fires': 'fordsburg-restaurateur',
+  'paper-fire': 'fordsburg-restaurateur',
+  'paper-round': 'sandton-professional', // Sindi Mokoena
+  'catch-them-cutting': 'sandton-professional',
+  'carcass': 'sandton-professional',
+  'the-switch': 'sandton-professional',
+  'crosswinds': 'maboneng-courier', // Skywise Sipho
+  'padstal-run': 'auntie-portia',
+  'pier-pressure': 'candice-boksburg',
+  // 'dark-house' and 'long-live-the-king' have no walking contact: a burner phone and a yard gate.
 };
 export const JMPD_PATROL_NPC_ID: NpcCharacterId = 'jmpd-patrol-officer';
 export const RANK_ENFORCER_NPC_ID: NpcCharacterId = 'bree-rank-enforcer';

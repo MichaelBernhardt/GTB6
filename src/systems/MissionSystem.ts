@@ -11,6 +11,7 @@ export interface ObjectiveConditions {
   inPlane?: boolean;
   onFoot?: boolean; // not in a vehicle, train, or plane
   parachuted?: boolean;
+  atNight?: boolean;
   speedBelow?: number;
   altitudeAbove?: number;
   blackoutAbove?: number;
@@ -39,6 +40,8 @@ export interface MissionObjective {
   choices?: MissionChoice[];
   conditions?: ObjectiveConditions;
   failIf?: FailCondition[];
+  /** Reach radius override (default 8; escapes 12; hidden riddles 20). Sky objectives need hundreds. */
+  radius?: number;
   /** Riddle objectives: no blip, no breadcrumb — the text is the only guide. */
   hidden?: boolean;
   /** The conditions ARE the objective: a target (if any) is just the blip, not a reach check. */
@@ -78,6 +81,7 @@ function conditionsMet(conditions: ObjectiveConditions | undefined, snapshot: Ga
   if (conditions.inPlane !== undefined && Boolean(snapshot.inPlane) !== conditions.inPlane) return false;
   if (conditions.onFoot && (snapshot.inVehicle || snapshot.onTrain || snapshot.inPlane)) return false;
   if (conditions.parachuted !== undefined && Boolean(snapshot.parachuted) !== conditions.parachuted) return false;
+  if (conditions.atNight !== undefined && Boolean(snapshot.isNight) !== conditions.atNight) return false;
   if (conditions.speedBelow !== undefined && (snapshot.playerSpeed ?? Infinity) >= conditions.speedBelow) return false;
   if (conditions.altitudeAbove !== undefined && (snapshot.altitude ?? 0) < conditions.altitudeAbove) return false;
   if (conditions.blackoutAbove !== undefined && (snapshot.blackout ?? 0) < conditions.blackoutAbove) return false;

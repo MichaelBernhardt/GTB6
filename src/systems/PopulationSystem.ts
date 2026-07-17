@@ -441,7 +441,8 @@ export class PopulationSystem {
   riggedPedestrianCount(): number { return this.pedestrians.filter((ped) => ped.visualVariant !== undefined).length; }
 
   ambientRiggedPedestrianCount(): number {
-    return this.pedestrians.filter((ped) => ped.visualVariant !== undefined && NPC_CATALOG[ped.visualVariant].role === 'ambient').length;
+    // Story contacts may reuse ambient bodies (Solly, Sindi, Sipho): the contact flag keeps them out of the crowd census.
+    return this.pedestrians.filter((ped) => ped.visualVariant !== undefined && !ped.contact && NPC_CATALOG[ped.visualVariant].role === 'ambient').length;
   }
 
   private nextAmbientNpcVariant(): NpcCharacterId {

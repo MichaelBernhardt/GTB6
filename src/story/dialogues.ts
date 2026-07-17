@@ -49,6 +49,83 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Oupa Jakes', text: 'Because you look like someone who reads. Three riddles. No map. The streets of this city confess everything if you read their signs. Come back when you\'ve stood in all three places.' },
     { speaker: 'Oupa Jakes', text: 'Ask me again if you forget the words. My memory is the last thing still working.' },
   ] },
+  'the-audition': { id: 'the-audition:intro', lines: [
+    { speaker: 'Solly', text: 'So this is Vusi\'s quiet driver. You found my yard by following one of my bakkies. That was either very good or very stupid.' },
+    { speaker: 'You', text: 'Can\'t it be both?' },
+    { speaker: 'Solly', text: 'Hah! Both pays double. There\'s a diesel tanker on Wemmer Jubilee that forgot who it belongs to. Bring it home without a scratch and you\'re on the payroll, my laaitie.' },
+  ] },
+  'pull-the-plug': { id: 'pull-the-plug:intro', lines: [
+    { speaker: 'Solly', text: 'You know what sells generators? Not adverts. Darkness sells generators. Tonight you\'re my salesman.' },
+    { speaker: 'You', text: 'And Eskom takes the blame.' },
+    { speaker: 'Solly', text: 'Eskom built the blame, I just rent it. The Ophirton feeder, after dark. One breaker. Throw it and walk. Don\'t run — running looks guilty.' },
+  ] },
+  'stage-fright': { id: 'stage-fright:intro', lines: [
+    { speaker: 'Solly', text: 'A friend of mine dreams about a superbike in a Sandton showroom window. Glass, floodlights, a very rude alarm.' },
+    { speaker: 'You', text: 'And I fetch it when?' },
+    { speaker: 'Solly', text: 'Tonight. However loud Sandton gets — the bike arrives at my yard. How you keep it quiet is your business.' },
+  ] },
+  'genny-round': { id: 'genny-round:intro', lines: [
+    { speaker: 'Solly', text: 'Three businesses are behind on their generator subscriptions. Terrible thing, being behind. Anything could happen to a fridge.' },
+    { speaker: 'Solly', text: 'Visit all three. The last one has opinions and muscle — bring better ones. My money comes back with you.' },
+  ] },
+  'paper-round': { id: 'paper-round:intro', lines: [
+    { speaker: 'Sindi', text: 'I pulled the Ophirton fault logs. Breakers don\'t trip in that pattern by themselves. That was a hand. Your hand.' },
+    { speaker: 'You', text: 'Careful, engineer. Accusations need paper.' },
+    { speaker: 'Sindi', text: 'I HAVE paper. More than your boss knows. Test first, though — see if you can read. The classifieds this morning: "FOR SALE: one-way ticket. Collect where the Halt serves the sky."' },
+    { speaker: 'Sindi', text: 'Bring my dossier back and we\'ll talk about what it\'s worth. To either side.' },
+  ] },
+  'the-wrong-train': { id: 'the-wrong-train:intro', lines: [
+    { speaker: 'Solly', text: 'Transnet misplaced a consist tonight. Tragic. It moves my diesel now — but a train needs a driver with no timetable.' },
+    { speaker: 'You', text: 'I\'ve always wanted a train set.' },
+    { speaker: 'Solly', text: 'Then drive yours to the Crown Station siding and stop it DEAD. Not near. Dead. My people take it from there.' },
+  ] },
+  'crosswinds': { id: 'crosswinds:intro', lines: [
+    { speaker: 'Skywise Sipho', text: 'You\'re Solly\'s new hands? Lucky you. His "spare parts" fly tonight and my licence, tragically, does not.' },
+    { speaker: 'You', text: 'So I fly the parts.' },
+    { speaker: 'Skywise Sipho', text: 'The Kite\'s fuelled on the apron. Get HIGH over Ponte — the drop is at the roof of the city, and the fast way down is under your seat. Don\'t bend my aeroplane.' },
+  ] },
+  'two-fires': { id: 'two-fires:intro', lines: [
+    { speaker: 'Solly', text: 'The engineer has a van full of paper with my name in every line. Tonight the van burns.' },
+    { speaker: 'Solly', text: 'Unless… you\'ve been reading her paper too, my laaitie. I hear things. I always hear things.' },
+    { speaker: 'Solly', text: 'So choose. Right here, at my table, with my coffee going cold. Choose.' },
+  ] },
+  'paper-fire': { id: 'paper-fire:intro', lines: [
+    { speaker: 'Solly', text: 'Good. Her van sleeps under the Jan Smuts lamps below Braamfontein. Paper burns lekker in this dry air.' },
+    { speaker: 'Solly', text: 'Before the shift changes. And laaitie — after tonight, you\'re not staff. You\'re family.' },
+  ] },
+  'catch-them-cutting': { id: 'catch-them-cutting:intro', lines: [
+    { speaker: 'Sindi', text: 'You came. Good — because they cut the Ophirton feeder again tonight. Your old crew, your old ladder, your old life.' },
+    { speaker: 'You', text: 'And you want them stopped, or filmed?' },
+    { speaker: 'Sindi', text: 'Both. Rig on camera, cutters on the ground. After that, everything Solly owns starts belonging to the case file. And case files… leak value. You follow me.' },
+  ] },
+  'dark-house': { id: 'dark-house:intro', lines: [
+    { speaker: 'Burner phone', text: 'One job stands between you and the rest of it.' },
+    { speaker: 'Burner phone', text: 'The black ledger sleeps in the records office at Kelvin Yard. Every rand, every name, every breaker. Security answers to nobody — not even Solly.' },
+    { speaker: 'Burner phone', text: 'Figure it out.' },
+  ] },
+  'long-live-the-king': { id: 'long-live-the-king:intro', lines: [
+    { speaker: 'Lieutenant Mo', text: 'We read the ledger. Every rand he skimmed off US, every name he sold. The lieutenants are yours.' },
+    { speaker: 'Lieutenant Mo', text: 'But his loyal ones are coming for the yard tonight. Hold it, and nobody argues about who sits at the plastic table.' },
+  ] },
+  'carcass': { id: 'carcass:intro', lines: [
+    { speaker: 'Sindi', text: 'The handover is at Constitution Hill. My people are waiting — and Solly\'s people are hunting. You have the only copy.' },
+    { speaker: 'You', text: 'And after the paper lands?' },
+    { speaker: 'Sindi', text: 'After that, everything the cartel owns is evidence. And evidence goes missing all the time. I\'ll be looking at my paperwork very, very hard.' },
+  ] },
+  'the-switch': { id: 'the-switch:intro', lines: [
+    { speaker: 'Sindi', text: 'Listen to me very carefully. The Ophirton feeder is rigged to blow. Not a trip — a permanent Stage Six. The grid on its knees for years.' },
+    { speaker: 'You', text: 'Why would anyone burn the thing they milk?' },
+    { speaker: 'Sindi', text: 'Spite. Insurance. A throne someone lost. It doesn\'t matter — whatever you are now, your city dies with that substation. GO.' },
+  ] },
+  'padstal-run': { id: 'padstal-run:intro', lines: [
+    { speaker: 'Auntie Portia', text: 'The stokvel ordered from Ouma se Padstal. Koeksisters, biltong, the works. It\'s a DRIVE, boet — over the mountain and gone.' },
+    { speaker: 'Auntie Portia', text: 'Take something with a working radio and don\'t eat the order. I counted the koeksisters. I always count.' },
+  ] },
+  'pier-pressure': { id: 'pier-pressure:intro', lines: [
+    { speaker: 'Candice', text: 'A fare ran on Ricardo. Airport run, coastal tolls, waiting time — a BIG fare. Now he\'s bragging at Seepunt Pier before his boat leaves.' },
+    { speaker: 'You', text: 'And the interest rate?' },
+    { speaker: 'Candice', text: 'Whatever his face can afford. Go collect, sweetie.' },
+  ] },
 };
 
 export function introScript(mission: MissionDefinition): DialogueScript {

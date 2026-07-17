@@ -45,7 +45,7 @@ describe('all-Blender NPC population policy', () => {
     const spawned = Array.from({ length: 132 }, (_, index) => population.spawnAmbientPedestrian(points[index % points.length]!.x, points[index % points.length]!.z));
     expect(spawned.every((ped) => ped.visualVariant !== undefined)).toBe(true);
     expect(population.ambientRiggedPedestrianCount()).toBe(160);
-    expect(AMBIENT_NPC_CHARACTER_IDS.map((id) => population.pedestrians.filter((ped) => ped.visualVariant === id).length)).toEqual(Array(8).fill(20));
+    expect(AMBIENT_NPC_CHARACTER_IDS.map((id) => population.pedestrians.filter((ped) => ped.visualVariant === id && !ped.contact).length)).toEqual(Array(8).fill(20)); // contacts reuse ambient bodies but sit outside the crowd rotation
 
     const removed = population.pedestrians.find((ped) => ped.visualVariant === AMBIENT_NPC_CHARACTER_IDS[0])!;
     population.removePedestrian(removed);

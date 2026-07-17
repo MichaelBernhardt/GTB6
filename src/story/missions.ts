@@ -1,8 +1,17 @@
 import { Vector3 } from 'three';
 import type { MissionDefinition } from '../systems/MissionSystem';
 import type { WorldTarget } from '../types';
-import { CANDICE_START, ESCAPE_SPOT, KELVIN_GATE_SPOT, KIOSK_SPOT, LOCKUP_SPOT, PARK_STATION_SPOT, PERMIT_SPOT, PORTIA_START, QUARRY_SPAWN, RIDDLE_SPOTS, SANDTON_BAG_SPOT, SANDTON_PLATFORM, TERMINAL_SPOT, THANDI_START, VUSI_START } from '../world/placements';
-import { CANDICE_VAN_COLOR } from './scripts';
+import {
+  CANDICE_START, CON_HILL_SPOT, ESCAPE_SPOT, EVIDENCE_VAN_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
+  CROWN_STATION, KIOSK_SPOT, LOCKUP_SPOT, LUGHAWE_DROP, LUGHAWE_HALT, PADSTAL_SPOT, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
+  PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RIDDLE_SPOTS, SAFEHOUSE_SITE, SANDTON_BAG_SPOT, SANDTON_PLATFORM, SINDI_START, SIPHO_START,
+  SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START,
+} from '../world/placements';
+import { CANDICE_VAN_COLOR, TANKER_COLOR } from './scripts';
+
+const SOLLY = 'Solly the Genny King';
+const SINDI = 'Sindi Mokoena';
+const SPOTTED = { kind: 'detected', reason: 'Floodlights slam on. The whole yard saw you.' } as const;
 
 /** Candice's van dying ends the mission at any stage. */
 const VAN_DOWN = { kind: 'vehicle-health-below', value: 0.35, reason: 'Candice\'s van is finished — and so is her route' } as const;
@@ -96,6 +105,175 @@ export const MISSIONS: MissionDefinition[] = [
       { kind: 'reach', hidden: true, text: '"Stand where the lights never stay."', target: spot(RIDDLE_SPOTS[1]!, 'Loadshed Lane'), checkpoint: true },
       { kind: 'reach', hidden: true, text: '"Stand where the city still sends paper."', target: spot(RIDDLE_SPOTS[2]!, 'Fax Street'), checkpoint: true },
       { kind: 'reach', text: 'Tell Oupa Jakes what you saw', target: spot(PARK_STATION_SPOT, 'Oupa Jakes') },
+    ],
+  },
+
+  // ---- Act 2: "The Payroll" — inside the cartel -------------------------------------
+  {
+    id: 'the-audition', name: 'The Audition', contact: SOLLY, reward: 3000, act: 'payroll',
+    prerequisites: { missions: ['copper-wire-blues'] },
+    intro: 'Vusi says you can drive and you can keep quiet. Prove half of that: there\'s a diesel tanker on Wemmer Jubilee Road that forgot who it belongs to. Bring it home without a scratch.',
+    start: spot(SOLLY_START, 'Solly'), objectives: [
+      { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Take the diesel tanker from Wemmer Jubilee Road' },
+      { kind: 'reach', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Bring the tanker to Kelvin Yard — gently', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, failIf: [
+        { kind: 'vehicle-health-below', value: 0.6, reason: 'The tanker is bleeding diesel — Solly\'s money burns with it' },
+      ] },
+    ],
+  },
+  {
+    id: 'pull-the-plug', name: 'Pull the Plug', contact: SOLLY, reward: 4200, act: 'payroll',
+    prerequisites: { missions: ['the-audition'] },
+    intro: 'Ophirton feeder substation. After dark. There\'s a main breaker inside with nobody\'s name on it. Throw it, walk away, and let the city remember who sells light in this town.',
+    start: spot(SOLLY_START, 'Solly'), objectives: [
+      { kind: 'reach', conditions: { atNight: true }, text: 'Get to the Ophirton feeder substation after dark', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
+      { kind: 'collect', text: 'Throw the main breaker', target: spot(SUBSTATION_BREAKER, 'Main breaker'), checkpoint: true },
+      { kind: 'lose-wanted', text: 'Get clear of the JMPD response' },
+    ],
+  },
+  {
+    id: 'stage-fright', name: 'Stage Fright', contact: SOLLY, reward: 5000, act: 'payroll',
+    prerequisites: { missions: ['pull-the-plug'] },
+    intro: 'There\'s a superbike in a Sandton showroom that a friend of mine keeps dreaming about. Fetch it tonight. However loud it gets — it arrives.',
+    start: spot(SOLLY_START, 'Solly'), objectives: [
+      { kind: 'enter-kind', vehicleKind: 'superbike', text: 'Take the showroom superbike in Sandton' },
+      { kind: 'reach', vehicleKind: 'superbike', text: 'Bring it to Kelvin Yard', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12 },
+    ],
+  },
+  {
+    id: 'genny-round', name: 'The Genny Round', contact: SOLLY, reward: 3600, act: 'payroll',
+    prerequisites: { missions: ['the-audition'] },
+    intro: 'Three businesses think a generator subscription is optional. Visit all three. The last one has opinions — bring better ones.',
+    start: spot(SOLLY_START, 'Solly'), objectives: [
+      { kind: 'checkpoints', required: 3, text: 'Collect the generator subscriptions — three doors, no receipts' },
+      { kind: 'defeat', required: 2, text: 'The holdout\'s muscle wants a discount. Correct them.', checkpoint: true },
+      { kind: 'reach', text: 'Bring Solly his money', target: spot(SOLLY_START, 'Solly') },
+    ],
+  },
+  {
+    id: 'paper-round', name: 'Paper Round', contact: SINDI, reward: 2800, act: 'payroll',
+    prerequisites: { missions: ['pull-the-plug'] },
+    intro: 'I read the fault logs. That trip pattern was manual — a hand on a breaker. Your hand. Let\'s see if you can read too: "FOR SALE: one-way ticket. Collect where the Halt serves the sky."',
+    start: spot(SINDI_START, 'Sindi'), objectives: [
+      { kind: 'reach', hidden: true, text: '"Collect where the Halt serves the sky."', target: spot(LUGHAWE_DROP, 'The dead drop') },
+      { kind: 'collect', text: 'Take the dossier from the drop', target: spot(LUGHAWE_DROP, 'Dossier'), checkpoint: true },
+      { kind: 'reach', text: 'Bring the dossier back to Sindi', target: spot(SINDI_START, 'Sindi') },
+    ],
+  },
+  {
+    id: 'the-wrong-train', name: 'The Wrong Train', contact: SOLLY, reward: 5500, act: 'payroll',
+    prerequisites: { missions: ['the-audition'] },
+    intro: 'Transnet lost a consist tonight — misplaced it, hey. It moves my diesel now. Take the controls and stop it dead at the Crown Station siding. My people do the rest.',
+    start: spot(SOLLY_START, 'Solly'), objectives: [
+      { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true }, text: 'Take the controls of a consist', target: spot(PARK_STATION_SPOT, 'Park Station') },
+      { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true, stationName: 'Crown Station' }, text: 'Stop the train dead at the Crown Station siding', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
+      { kind: 'reach', text: 'Walk away and let the crew unload', target: spot(SOLLY_START, 'Solly') },
+    ],
+  },
+  {
+    id: 'crosswinds', name: 'Crosswinds', contact: 'Skywise Sipho', reward: 6000, act: 'payroll',
+    prerequisites: { missions: ['genny-round'] },
+    intro: 'Solly\'s "spare parts" fly tonight and my licence doesn\'t. Kite\'s fuelled on the apron. Get high over Ponte — the drop is the roof of the city — and don\'t bend my aeroplane.',
+    start: spot(SIPHO_START, 'Skywise Sipho'), objectives: [
+      { kind: 'reach', conditionsOnly: true, conditions: { inPlane: true, altitudeAbove: 40 }, text: 'Get a Karoo Kite in the air', target: spot(LUGHAWE_HALT, 'O.R. Tambourine apron') },
+      { kind: 'reach', radius: 260, conditions: { inPlane: true, altitudeAbove: 150 }, text: 'Bring the parts high over Ponte Tower', target: spot(PONTE_POINT, 'Over Ponte'), checkpoint: true },
+      { kind: 'reach', timeLimit: 90, text: 'Get down to the Ponte forecourt drop — quickly', target: spot(PONTE_FORECOURT, 'Forecourt drop') },
+    ],
+  },
+  {
+    id: 'two-fires', name: 'Two Fires', contact: SOLLY, reward: 0, act: 'payroll',
+    prerequisites: { missions: ['stage-fright', 'paper-round'] },
+    intro: 'The engineer has a van full of paper with my name in it. Tonight the van burns. Unless, of course, you\'ve been reading her paper too. Choose, my laaitie.',
+    start: spot(SOLLY_START, 'Solly'), objectives: [
+      { kind: 'choice', text: 'Solly wants Sindi\'s evidence burning tonight', choices: [
+        { id: 'solly', label: 'Burn the van', detail: 'Stay loyal. The right hand of the Genny King wants for nothing — except friends.', reward: 1000 },
+        { id: 'sindi', label: 'Warn Sindi', detail: 'Sell the cartel to the engineer. Her case fund pays — and a dying cartel drops its wallet.', reward: 1000 },
+      ] },
+    ],
+  },
+  {
+    id: 'paper-fire', name: 'Paper Fire', contact: SOLLY, reward: 4500, act: 'payroll',
+    prerequisites: { flags: ['choice:two-fires:solly'] },
+    intro: 'Her van sleeps under the Jan Smuts lamps below Braamfontein. Paper burns lekker. Go before the shift changes.',
+    start: spot(SOLLY_START, 'Solly'), setFlags: ['act3'], objectives: [
+      { kind: 'reach', timeLimit: 240, text: 'Find Sindi\'s evidence van below Braamfontein', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van') },
+      { kind: 'collect', text: 'Douse the van and strike the match', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van'), checkpoint: true },
+      { kind: 'lose-wanted', text: 'Vanish before JMPD boxes the block' },
+    ],
+  },
+  {
+    id: 'catch-them-cutting', name: 'Catch Them Cutting', contact: SINDI, reward: 4500, act: 'payroll',
+    prerequisites: { flags: ['choice:two-fires:sindi'] },
+    intro: 'They cut the Ophirton feeder again tonight — your old crew. Be there when they clock in. I need the rig on camera and the cutters on the ground.',
+    start: spot(SINDI_START, 'Sindi'), setFlags: ['act3'], objectives: [
+      { kind: 'reach', conditions: { atNight: true }, text: 'Be at the Ophirton feeder after dark', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
+      { kind: 'defeat', required: 3, text: 'Drop the cutting crew before they finish the job', checkpoint: true },
+      { kind: 'collect', text: 'Photograph the cutting rig', target: spot(SUBSTATION_BREAKER, 'Cutting rig') },
+      { kind: 'reach', text: 'Bring Sindi the proof', target: spot(SINDI_START, 'Sindi') },
+    ],
+  },
+
+  // ---- Act 3: "Stage Six" -------------------------------------------------------------
+  {
+    id: 'dark-house', name: 'Dark House', contact: 'A burner phone', reward: 8000, act: 'stage-six',
+    prerequisites: { flags: ['act3'] },
+    intro: 'The black ledger sleeps in the records office at Kelvin Yard. Security answers to nobody — not even Solly. Figure it out.',
+    start: spot(SAFEHOUSE_SITE.pad, 'The burner phone'), setFlags: ['ledger'], objectives: [
+      { kind: 'reach', radius: 14, text: 'Case Kelvin Yard', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard') },
+      { kind: 'reach', radius: 6, conditions: { undetected: true }, failIf: [SPOTTED], checkpoint: true, text: 'Get into the records office. Figure it out.', target: spot(KELVIN_OFFICE_SPOT, 'Records office') },
+      { kind: 'collect', conditions: { undetected: true }, failIf: [SPOTTED], text: 'Take the black ledger', target: spot(KELVIN_OFFICE_SPOT, 'Black ledger') },
+      { kind: 'escape', radius: 12, failIf: [SPOTTED], text: 'Get out of the yard, unseen', target: spot(KELVIN_GATE_SPOT, 'Out the gate') },
+    ],
+  },
+  {
+    id: 'long-live-the-king', name: 'Long Live the King', contact: 'Lieutenant Mo', reward: 12000, act: 'stage-six',
+    prerequisites: { flags: ['choice:two-fires:solly'], missions: ['dark-house'] },
+    intro: 'The lieutenants read the ledger. Every skimmed rand, every name Solly sold. They\'re yours — if you can hold the yard when his loyal ones come to take it back.',
+    start: spot(SOLLY_START, 'Kelvin Yard gate'), setFlags: ['endgame'], objectives: [
+      { kind: 'reach', radius: 14, text: 'Stand in Kelvin Yard as the word goes out', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard') },
+      { kind: 'survive', timeLimit: 60, text: 'Hold the yard — Solly\'s loyalists want it back', checkpoint: true },
+      { kind: 'defeat', required: 4, text: 'Break the last of the loyalists' },
+    ],
+  },
+  {
+    id: 'carcass', name: 'Carcass', contact: SINDI, reward: 12000, act: 'stage-six',
+    prerequisites: { flags: ['choice:two-fires:sindi'], missions: ['dark-house'] },
+    intro: 'The ledger goes to the Constitution Hill handover — and the cartel knows you have it. After that, everything they own is evidence. Evidence goes missing all the time.',
+    start: spot(SINDI_START, 'Sindi'), setFlags: ['endgame'], objectives: [
+      { kind: 'reach', timeLimit: 240, text: 'Run the ledger to the Constitution Hill handover', target: spot(CON_HILL_SPOT, 'Handover') },
+      { kind: 'lose-wanted', text: 'Shake the heat', checkpoint: true },
+      { kind: 'checkpoints', required: 3, timeLimit: 420, text: 'Pick the carcass: three cartel stashes before SAPS seals them' },
+    ],
+  },
+  {
+    id: 'the-switch', name: 'The Switch', contact: SINDI, reward: 20000, act: 'stage-six',
+    prerequisites: { flags: ['endgame'] },
+    intro: 'Listen to me. The Ophirton feeder is rigged to blow — a permanent Stage Six, the whole grid on its knees. Whatever you are now, your city dies with that substation. Go.',
+    start: spot(SINDI_START, 'Sindi'), setFlags: ['stage-six-over'], objectives: [
+      { kind: 'reach', timeLimit: 240, text: 'Get to the Ophirton feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
+      { kind: 'defeat', required: 4, text: 'Put the wreckers down', checkpoint: true },
+      { kind: 'survive', timeLimit: 90, text: 'Hold the substation until the relief crew arrives' },
+    ],
+  },
+
+  // ---- Side pieces ----------------------------------------------------------------------
+  {
+    id: 'padstal-run', name: 'Ouma se Padstal Run', contact: 'Auntie Portia', reward: 4000, act: 'side',
+    prerequisites: { missions: ['last-coach-home'] },
+    intro: 'The stokvel ordered from Ouma se Padstal — koeksisters, biltong, the works. It\'s a DRIVE, boet. Take something with a working radio.',
+    start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
+      { kind: 'reach', radius: 10, timeLimit: 600, text: 'Take the stokvel order out to Ouma se Padstal', target: spot(PADSTAL_SPOT, 'Ouma se Padstal') },
+      { kind: 'collect', text: 'Load Ouma\'s koeksisters', target: spot(PADSTAL_SPOT, 'The order'), checkpoint: true },
+      { kind: 'reach', timeLimit: 600, text: 'Home again before the tea goes cold', target: spot(PORTIA_START, 'Auntie Portia') },
+    ],
+  },
+  {
+    id: 'pier-pressure', name: 'Pier Pressure', contact: 'Candice from Boksburg', reward: 3000, act: 'side',
+    prerequisites: { missions: ['rank-cold-war'] },
+    intro: 'A fare ran on Ricardo — a BIG fare, airport run, coastal toll, the lot. He\'s bragging at Seepunt Pier before his boat leaves. Go collect. With interest.',
+    start: spot(CANDICE_START, 'Candice'), objectives: [
+      { kind: 'reach', radius: 12, timeLimit: 300, text: 'Catch the fare-skipper before his boat leaves Seepunt Pier', target: spot(PIER_SPOT, 'Seepunt Pier') },
+      { kind: 'defeat', required: 1, text: 'Convince him', checkpoint: true },
+      { kind: 'collect', text: 'Take what he owes — plus interest', target: spot(PIER_SPOT, 'The fare') },
     ],
   },
 ];
