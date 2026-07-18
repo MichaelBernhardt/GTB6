@@ -69,7 +69,7 @@ import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
 import { City, ROAD_NETWORK } from './world/City';
-import { COURIER_DEPOT, POLICE_STATION } from './world/placements';
+import { COURIER_DEPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
@@ -220,7 +220,9 @@ export class Game {
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.setupRenderer(); this.setupScene();
+    this.ui.showLoading({ progress: 18, label: 'Building Johannesburg', detail: 'Laying out roads, terrain, water and landmarks.' });
     this.city = new City(this.scene, this.baseQuality());
+    this.ui.showLoading({ progress: 46, label: 'City foundations ready', detail: 'Starting the people, traffic and game systems.' });
     this.districtTargets = districtAnchors((x, z) => this.city.districtAt(x, z));
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.baseQuality(), this.save.timeOfDay);
     this.torch = new TorchSystem(this.scene);
@@ -258,13 +260,35 @@ export class Game {
   }
 
   private async prepareAssets(retry = false): Promise<void> {
-    const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading'; this.ui.showLoading();
+    const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading';
+    this.ui.showLoading({ progress: 52, label: retry ? 'Retrying required models' : 'Loading required models', detail: 'Player, taxis and trees · 0 of 3 ready.' });
+    let completed = 0; let failed = false;
+    const track = (name: string, task: Promise<void>): Promise<void> => task.then(() => {
+      completed++;
+      if (failed || attempt !== this.assetLoadAttempt) return;
+      this.ui.showLoading({ progress: 52 + completed * 10, label: `${name} ready`, detail: `Player, taxis and trees · ${completed} of 3 ready.` });
+    });
     try {
-      await Promise.all([retry ? this.player.retryCharacter() : this.player.loadCharacter(), loadTreeLibrary(), loadTaxiLibrary()]);
+      await Promise.all([
+        track('Player and moves', retry ? this.player.retryCharacter() : this.player.loadCharacter()),
+        track('Joburg trees', loadTreeLibrary()),
+        track('Quantum taxis', loadTaxiLibrary()),
+      ]);
       if (attempt !== this.assetLoadAttempt) return;
+      this.ui.showLoading({ progress: 85, label: 'Planting the city', detail: 'Installing authored trees and preparing nearby streets.' });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       this.city.installTreeAssets();
+      await this.city.warmInitialBuildings(this.player.group.position, (complete, total) => {
+        if (attempt !== this.assetLoadAttempt) return;
+        const fraction = total > 0 ? complete / total : 1;
+        this.ui.showLoading({ progress: 86 + fraction * 13, label: 'Opening your neighbourhood', detail: `Nearby building blocks · ${complete} of ${total} ready.` });
+      });
+      if (attempt !== this.assetLoadAttempt) return;
+      this.ui.showLoading({ progress: 100, label: 'Joburg is ready', detail: 'Welcome to the city.' });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       this.requiredAssetsReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
     } catch (error) {
+      failed = true;
       if (attempt !== this.assetLoadAttempt) return;
       console.error('[assets] A required 3D asset failed to load.', error);
       this.ui.showAssetFailure(() => { void this.prepareAssets(true); });
@@ -377,7 +401,13 @@ export class Game {
     };
   }
   private mapMarkers(): MapMarker[] {
-    if (this.online) return this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const }));
+    if (this.online) {
+      const target = this.online.objective?.target;
+      return [
+        ...this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const })),
+        ...(target ? [{ x: target.x, z: target.z, color: target.color, objective: true }] : []),
+      ];
+    }
     return [
       ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
       ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true }] : []),
@@ -603,8 +633,9 @@ export class Game {
     this.endTaxiShift(); this.endCourierShift(); this.online?.close(); this.trains.endRide();
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
     this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose(); this.releasePlane();
-    this.player.group.position.set(2050, 0, 3850); this.player.group.position.y = this.city.surfaceHeightAt(2050, 3850);
+    this.player.group.position.set(...PLAYER_SPAWN); this.player.group.position.y = this.city.surfaceHeightAt(PLAYER_SPAWN[0], PLAYER_SPAWN[2]);
     this.player.setDead(false); this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
+    this.markerTarget = undefined;
     this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
     void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Global world', 'Open PvP is active. Press Enter to chat.');
@@ -774,7 +805,12 @@ export class Game {
     if (this.input.consume('KeyE')) online.interact();
     if (!stateBefore?.dead && !stateBefore?.vehicleId) {
       this.player.setVisible(true); this.player.update(dt, this.input, this.cameraController.yaw, this.city);
-      this.combat.tryReload(this.input); this.combat.update(dt);
+      if (stateBefore) {
+        this.combat.loadout.pistol.ammo = stateBefore.ammo; this.combat.loadout.pistol.reserve = stateBefore.reserve;
+        this.combat.reloading = stateBefore.reloading ? Math.max(this.combat.reloading, 0.1) : 0;
+      }
+      if (this.input.consume('KeyR')) { online.reload(); if (stateBefore && !stateBefore.reloading && stateBefore.ammo < 12 && stateBefore.reserve > 0) this.audio.reload(); }
+      this.combat.update(dt);
       const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
       if (shot.fired && !shot.melee) { this.player.registerShot(); online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize()); }
     }
@@ -796,6 +832,7 @@ export class Game {
     this.player.health = state.health; this.player.setVisible(!state.dead && !state.vehicleId);
     if (state.dead && !this.onlineWasDead) { this.ui.notify('EISH', 'You were eliminated. Respawning in three seconds.', false); this.audio.setFire(false); }
     this.onlineWasDead = state.dead;
+    this.markerTarget = this.currentTarget();
   }
 
   private applyEskom(event: 'start' | 'end' | undefined): void {
@@ -2139,6 +2176,10 @@ export class Game {
   }
 
   private currentTarget(): WorldTarget | undefined {
+    if (this.online) {
+      const onlineTarget = this.online.objective?.target;
+      return onlineTarget ? { position: new THREE.Vector3(onlineTarget.x, this.city.surfaceHeightAt(onlineTarget.x, onlineTarget.z), onlineTarget.z), label: onlineTarget.label, color: onlineTarget.color } : undefined;
+    }
     if (this.missions.state === 'failed' && this.missions.active) {
       // The failure card says "find the gold beacon to retry" — the beacon must therefore lead home.
       const start = this.missions.active.start;
@@ -2316,12 +2357,19 @@ export class Game {
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
     const riddleHunt = this.missions.objective?.hidden && !this.riddleRevealed; // the search circle is up
-    const objective = !this.online && this.missions.objective ? {
+    const objective = this.online ? this.online.objective ? {
+      missionName: this.online.objective.missionName, text: this.online.objective.text, progress: this.online.objective.progress,
+      required: this.online.objective.required, remainingSeconds: this.online.objective.remainingSeconds,
+    } : undefined : this.missions.objective ? {
       missionName: this.missions.active?.name ?? '', text: this.missions.objective.text + (riddleHunt ? ' — search inside the circle on your map' : '') + this.trainRideHint(), progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
-      failed: this.missions.state === 'failed' ? this.missions.failReason ?? 'Mission failed' : undefined,
+      failed: !this.online && this.missions.state === 'failed' ? this.missions.failReason ?? 'Mission failed' : undefined,
     } : undefined;
-    const vehicle = this.activePlane ? {
+    const onlineVehicle = this.online?.vehicleStates.find((entry) => entry.id === this.online?.localState?.vehicleId);
+    const vehicle = onlineVehicle ? {
+      name: onlineVehicle.isHot ? 'HOT BAKKIE' : onlineVehicle.kind === 'bakkie' ? 'Hilux Bakkie' : onlineVehicle.kind === 'sport' ? 'Golf GTI' : 'Citi Golf',
+      speedKph: Math.abs(onlineVehicle.speed) * 3.6, health: onlineVehicle.health,
+    } : this.activePlane ? {
       name: `${this.activePlane.name} · ${Math.max(0, Math.round(this.activePlane.group.position.y - this.city.surfaceHeightAt(this.activePlane.group.position.x, this.activePlane.group.position.z)))}m`,
       speedKph: this.activePlane.state.speed * 3.6, health: this.activePlane.wrecked ? 0 : 100,
     } : this.activeVehicle ? {
@@ -2332,7 +2380,8 @@ export class Game {
     } : undefined;
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: ammoState.ammo, reserve: ammoState.reserve, reloading: this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle: this.online ? undefined : vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    const onlineState = this.online?.localState;
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

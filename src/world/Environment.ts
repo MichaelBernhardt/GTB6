@@ -1,10 +1,14 @@
 import * as THREE from 'three';
+import { createAmbientSkyTraffic, type AmbientSkyTrafficHandle } from './AmbientSkyTraffic';
+import { createAtmosphericSky, type AtmosphericSkyHandle } from './AtmosphericSky';
 
 export interface EnvironmentHandle {
   sun: THREE.DirectionalLight;
   hemisphere: THREE.HemisphereLight;
   ambient: THREE.AmbientLight;
   sunDisc: THREE.Mesh;
+  sky: AtmosphericSkyHandle;
+  skyTraffic: AmbientSkyTrafficHandle;
   updateShadowFocus(focus: THREE.Vector3): void;
   setSunDirection(direction: THREE.Vector3): void;
 }
@@ -14,8 +18,11 @@ const SUN_DISTANCE = 240;
 
 export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'medium' | 'high'): EnvironmentHandle {
   const shadows = quality !== 'low';
-  scene.background = new THREE.Color(0x6fa8dd);
+  scene.background = new THREE.Color(0x6fa8dd); // clear-colour fallback behind the atmospheric dome
   scene.fog = new THREE.FogExp2(0xc4b48c, quality === 'low' ? 0.00032 : 0.00025); // player-relative, tuned with chunk culling (~2500u radius) and camera far 8000: the CBD skyline reads clear well past its ~1100u radius, the chunk boundary sits in a solid haze band, and the horizon is near-opaque by the far plane so it reads hazy, never clipped
+
+  const sky = createAtmosphericSky(quality); scene.add(sky.mesh);
+  const skyTraffic = createAmbientSkyTraffic(quality); scene.add(skyTraffic.group);
 
   const hemisphere = new THREE.HemisphereLight(0xcfe4f5, 0x8a7c4d, 1.6); scene.add(hemisphere);
   const ambient = new THREE.AmbientLight(0xffead0, 0.28); scene.add(ambient);
@@ -34,11 +41,12 @@ export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'medium' |
     snapped.set(Math.round(focus.x / texel) * texel, 0, Math.round(focus.z / texel) * texel);
     sun.position.copy(snapped).add(sunOffset);
     sun.target.position.copy(snapped);
+    sky.mesh.position.copy(focus); // the dome follows the player so its horizon can never be reached
   };
   const setSunDirection = (direction: THREE.Vector3): void => {
     sunOffset.copy(direction).normalize().multiplyScalar(SUN_DISTANCE);
     sun.position.copy(snapped).add(sunOffset); // keep the shadow frustum on the last focus until the next updateShadowFocus
   };
   updateShadowFocus(new THREE.Vector3());
-  return { sun, hemisphere, ambient, sunDisc, updateShadowFocus, setSunDirection };
+  return { sun, hemisphere, ambient, sunDisc, sky, skyTraffic, updateShadowFocus, setSunDirection };
 }

@@ -8,7 +8,7 @@ import { HudView } from './HudView';
 import { MapView, type MapViewFrame } from './MapView';
 import { MenuView } from './MenuView';
 import { MinimapView, type MapMarker, type MapPoint } from './MinimapView';
-import type { CheatWeaponEntry, DrinkCatalogEntry, HudState, MainMenuSummary, NotificationTone, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
+import type { CheatWeaponEntry, DrinkCatalogEntry, HudState, LoadingState, MainMenuSummary, NotificationTone, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
 
 export type { CheatWeaponEntry, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
 
@@ -102,7 +102,7 @@ export class UIManager {
     return false;
   }
 
-  showLoading(): void { this.menuView.loading(); }
+  showLoading(state: LoadingState = { progress: 0, label: 'Starting city systems', detail: 'Preparing the renderer and Johannesburg map.' }): void { this.menuView.loading(state); }
   showAssetFailure(retry: () => void): void { this.menuView.assetFailed(retry); }
   showMainMenu(summary?: MainMenuSummary): void {
     if (summary) this.mainSummary = summary;
