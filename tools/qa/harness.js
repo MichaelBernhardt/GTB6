@@ -596,13 +596,17 @@ window.__qa = (() => {
     // brief so no self-ending-outage frame catches the player still inside the fence.
     keepDark();
     let dsim = 0; while (g.dayNight.blackoutFactor < 0.78 && dsim < 30) { g.update(STEP); dsim += STEP; }
-    for (const guard of g.yardGuards ?? []) if (guard.state !== 'down') guard.takeDamage?.(1000);
     const gate = g.markerTarget ?? g.missionTargetRaw?.();
     if (!gate) return 'stuck:no-gate-target';
-    let guard = 0;
-    while (g.missions.state === 'active' && guard++ < 200) {
+    let guard = 0; let last = Infinity; let stall = 0;
+    while (g.missions.state === 'active' && guard++ < 400) {
       keepDark();
-      walkToward(gate.position.x, gate.position.z, 8, STEP); g.update(STEP);
+      for (const yg of g.yardGuards ?? []) if (yg.state !== 'down') yg.takeDamage?.(1000); // keep every cone dead the whole walk out
+      const r = walkToward(gate.position.x, gate.position.z, 8, STEP); g.update(STEP);
+      // collision can snag the straight line to the gate; if we stop closing, sidestep along the fence
+      const d = Math.hypot(gate.position.x - g.player.group.position.x, gate.position.z - g.player.group.position.z);
+      if (r === 'blocked' || d > last - 0.05) { if (++stall > 8) { const a = guard * 0.7; g.player.group.position.x += Math.cos(a) * 1.5; g.player.group.position.z += Math.sin(a) * 1.5; g.update(STEP); stall = 0; } } else stall = 0;
+      last = d;
       if (!g.missions.active || g.missions.state !== 'active') break;
     }
     step(6);
