@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, type BuildingProfile, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
+import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeZAt, type BuildingProfile, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
 import { GeometryBaker } from './StaticGeometry';
 
 const facade = new THREE.MeshStandardMaterial({ color: 0x99a4a9, roughness: 0.72 });
@@ -81,6 +81,36 @@ describe('cylindrical downtown architecture', () => {
     const first = bakedPositions(); const regenerated = bakedPositions();
     expect(first.length).toBeGreaterThan(0);
     expect(regenerated).toEqual(first);
+  });
+});
+
+describe('planar downtown facade details', () => {
+  it('keeps bands and mullions attached to the real front plane of every box massing', () => {
+    for (let massing = 0; massing < ARCHITECTURE_VARIANTS.downtown; massing++) {
+      if (massing === 4) continue; // the elliptical tower has the separate curved-facade contract above
+      // Adding 11 preserves an odd massing id while selecting the even detail pass.
+      const variant = massing % 2 === 0 ? massing : massing + ARCHITECTURE_VARIANTS.downtown;
+      const group = new THREE.Group(); const architecture = new BuildingArchitecture(group);
+      const buildingSpec = { ...spec, variant }; const profile = architecture.build(buildingSpec); group.updateWorldMatrix(true, true);
+      const details: THREE.Mesh[] = [];
+      group.traverse((object) => { if (object instanceof THREE.Mesh && object.userData.planarFacadeDetail) details.push(object); });
+      expect(details.some((mesh) => mesh.userData.planarFacadeDetail === 'mullion'), `massing ${massing} mullions`).toBe(true);
+      expect(details.some((mesh) => mesh.userData.planarFacadeDetail === 'band'), `massing ${massing} bands`).toBe(true);
+
+      for (const detail of details) {
+        const bounds = new THREE.Box3().setFromObject(detail);
+        const samples = detail.userData.planarFacadeDetail === 'band'
+          ? [bounds.min.x + 1e-3, (bounds.min.x + bounds.max.x) / 2, bounds.max.x - 1e-3]
+          : [detail.position.x];
+        for (const x of samples) {
+          const front = frontFacadeZAt(profile.tiers, x, detail.position.y, detail.userData.planarFacadeDetail === 'mullion' ? 0.08 : 0);
+          expect(front, `${detail.name} on massing ${massing}`).toBeDefined();
+          expect(bounds.min.z, `${detail.name} back on massing ${massing}`).toBeLessThanOrEqual(front! + 1e-3);
+          expect(bounds.max.z - front!, `${detail.name} projection on massing ${massing}`).toBeLessThanOrEqual(0.121);
+          expect(bounds.max.z, `${detail.name} visibility on massing ${massing}`).toBeGreaterThan(front!);
+        }
+      }
+    }
   });
 });
 
