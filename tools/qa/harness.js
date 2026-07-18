@@ -149,16 +149,19 @@ window.__qa = (() => {
         // Prefer the REAL game trigger (Game.onNamedStreet) so we assert what actually fires; fall back
         // to the same corridor geometry if it isn't exposed.
         const onStreet = (x, z, name) => typeof g.onNamedStreet === 'function' ? g.onNamedStreet(name, x, z) : (window.__roads ?? []).some((r) => r.name === name && r.points.some((p, i) => i > 0 && segDist(x, z, r.points[i - 1], p) <= 14));
-        const own = (window.__roads ?? []).filter((r) => r.name === o.streetName).flatMap((r) => r.points);
-        if (!own.length) finding('fail', `street-answer riddle names "${o.streetName}" but no such road exists in the network`);
+        // The mapgen REUSES street names across unrelated scattered roads (Fax Street = 9 distinct
+        // roads over ~3km), so sample ONE midpoint per same-named road and assert every instance fires.
+        const ownRoads = (window.__roads ?? []).filter((r) => r.name === o.streetName && r.points.length);
+        if (!ownRoads.length) finding('fail', `street-answer riddle names "${o.streetName}" but no such road exists in the network`);
         else {
-          const samples = [own[0], own[Math.floor(own.length / 2)], own[own.length - 1]];
+          const samples = ownRoads.map((r) => r.points[Math.floor(r.points.length / 2)]);
           const hitOwn = samples.filter((p) => onStreet(p.x, p.z, o.streetName)).length;
-          if (hitOwn < samples.length) finding('fail', `street-corridor trigger for "${o.streetName}" fires at only ${hitOwn}/${samples.length} points along its own polyline (owner: whole street must trigger, not a dot)`);
-          const mid = own[Math.floor(own.length / 2)];
-          const other = (window.__roads ?? []).find((r) => r.name && r.name !== o.streetName && r.points.length && Math.hypot(r.points[0].x - mid.x, r.points[0].z - mid.z) < 400);
-          if (other) { const om = other.points[Math.floor(other.points.length / 2)]; if (onStreet(om.x, om.z, o.streetName)) finding('warn', `a nearby street (${other.name}) reads inside the "${o.streetName}" corridor — trigger not tight enough`); }
-          if (hitOwn === samples.length) note(`street corridor "${o.streetName}": all ${samples.length} own-polyline samples trigger`);
+          if (hitOwn < samples.length) finding('fail', `street-corridor trigger for "${o.streetName}" fires at only ${hitOwn}/${samples.length} of its same-named road segments (owner: any road with the name must trigger)`);
+          // Riddle honesty (owner: name reuse means the clue points at MANY places — the CIRCLE
+          // disambiguates): the search circle must contain at least one qualifying same-named road.
+          const area = g.riddleSearchArea?.();
+          if (area) { const inCircle = ownRoads.some((r) => r.points.some((p) => Math.hypot(p.x - area.x, p.z - area.z) <= area.radius)); if (!inCircle) finding('fail', `riddle circle for "${o.streetName}" contains no qualifying same-named road — with ${ownRoads.length} scattered "${o.streetName}"s the circle must pin which one`); }
+          if (hitOwn === samples.length) note(`street corridor "${o.streetName}": all ${samples.length} same-named road segments trigger (name reused ${ownRoads.length}x)`);
         }
       }
     } else if (['reach', 'escape', 'collect', 'checkpoints', 'enter-kind', 'follow'].includes(o.kind)) {

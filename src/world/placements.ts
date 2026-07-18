@@ -417,7 +417,7 @@ export const PADSTAL_SPOT: MapPt = walkSpot('Houghton Drive', { x: 4896, z: 1149
  *  raw Braamfontein-edge point sat in a road-sparse block that snapped 1.4km off-target. */
 export const EVIDENCE_VAN_SPOT = kerbVehicleSpot(undefined, { x: CBD_CENTER.x - 10 * P, z: CBD_CENTER.z - 45 * P });
 /** The cartel's diesel tanker on the industrial belt (The Audition). */
-export const TANKER_SPOT = kerbVehicleSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 125 * P });
+export const TANKER_SPOT = kerbVehicleSpot('De Villiers Street', { x: 2985, z: 4403 }); // ~1.5km careful haul from Kelvin Yard (the audition is the drive)
 
 /** Cartel stash sweep (Carcass): three lock-ups across the belt. */
 export const STASH_SPOTS: MapPt[] = [

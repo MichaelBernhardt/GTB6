@@ -126,7 +126,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
 
   // ---- Act 2: "The Payroll" ---------------------------------------------------------
-  'the-audition': { tier: 'standard',
+  'the-audition': { tier: 'substantial',
     vehicle: { color: TANKER_COLOR, spot: TANKER_SPOT },
     radio: [{ objective: 1, title: 'Solly', detail: 'Gently, my laaitie. That tanker is worth more than you are. For now.' }],
     outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the truck, it\'s cartel property, which means it\'s yours until it isn\'t.' }],

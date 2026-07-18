@@ -52,7 +52,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'the-audition': { id: 'the-audition:intro', lines: [
     { speaker: 'Solly', text: 'So this is Vusi\'s quiet driver. You found my yard by following one of my pickups. That was either very good or very stupid.' },
     { speaker: 'You', text: 'Can\'t it be both?' },
-    { speaker: 'Solly', text: 'Hah! Both pays double. There\'s a diesel tanker on Wemmer Jubilee that forgot who it belongs to. Bring it home without a scratch and you\'re on the payroll, my laaitie.' },
+    { speaker: 'Solly', text: 'Hah! Both pays double. There\'s a diesel tanker over on De Villiers Street that forgot who it belongs to. Bring it all the way home without a scratch and you\'re on the payroll, my laaitie.' },
   ] },
   'pull-the-plug': { id: 'pull-the-plug:intro', lines: [
     { speaker: 'Solly', text: 'You know what sells generators? Not adverts. Darkness sells generators. Tonight you\'re my salesman.' },

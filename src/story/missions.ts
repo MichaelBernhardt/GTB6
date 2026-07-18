@@ -112,9 +112,9 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'the-audition', name: 'The Audition', contact: SOLLY, reward: 3000, act: 'payroll',
     prerequisites: { missions: ['copper-wire-blues'] },
-    intro: 'Vusi says you can drive and you can keep quiet. Prove half of that: there\'s a diesel tanker on Wemmer Jubilee Road that forgot who it belongs to. Bring it home without a scratch.',
+    intro: 'Vusi says you can drive and you can keep quiet. Prove half of that: there\'s a diesel tanker parked over on De Villiers Street that forgot who it belongs to. Bring it all the way home to Kelvin Yard without a scratch.',
     start: spot(SOLLY_START, 'Solly'), objectives: [
-      { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Take the diesel tanker from Wemmer Jubilee Road' },
+      { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Take the diesel tanker from De Villiers Street' },
       { kind: 'reach', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Bring the tanker to Kelvin Yard — gently', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, checkpoint: true, failIf: [
         { kind: 'vehicle-health-below', value: 0.3, reason: 'The tanker is bleeding diesel — Solly\'s money burns with it' },
       ] },
