@@ -45,7 +45,7 @@
   "committedArtifacts": [
     {
       "path": "public/models/characters/protagonist.glb",
-      "sha256": "4e323033e6f7fcc4b3da9779bec3829c970264af238a4e08122405a71e7be035"
+      "sha256": "56df459a0bfa04bcc3833f39f198a7c9f6d8c642e09247eed639673501b51da7"
     },
     {
       "path": "art/character/references/protagonist-face.jpg",
