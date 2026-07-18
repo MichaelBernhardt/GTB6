@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { InputManager } from '../core/InputManager';
 import type { City } from '../world/City';
+import { installRoadVehicleLibrary, ROAD_VEHICLE_CONTRACTS, ROAD_VEHICLE_KINDS } from './RoadVehicleAssets';
 import { installTaxiLibrary } from './TaxiAsset';
 import { bikeLeanTarget, MAX_BIKE_LEAN, Vehicle } from './Vehicle';
 
@@ -22,6 +23,11 @@ beforeAll(async () => {
   const file = await readFile('public/models/vehicles/quantum-express.glb');
   const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
   installTaxiLibrary(await new GLTFLoader().parseAsync(buffer, '/models/vehicles/'));
+  for (const kind of ROAD_VEHICLE_KINDS) {
+    const roadFile = await readFile(`public${ROAD_VEHICLE_CONTRACTS[kind].url}`);
+    const roadBuffer = roadFile.buffer.slice(roadFile.byteOffset, roadFile.byteOffset + roadFile.byteLength);
+    installRoadVehicleLibrary(kind, await new GLTFLoader().parseAsync(roadBuffer, '/models/vehicles/'));
+  }
   if (originalDocument === undefined) delete (globalThis as { document?: Document }).document;
   else Object.defineProperty(globalThis, 'document', { value: originalDocument, configurable: true });
 });
@@ -89,6 +95,26 @@ describe('first-person view clears the taxi driver line of sight', () => {
     expect(cabin!.visible).toBe(false); expect(livery!.visible).toBe(true);
     taxi.setFirstPerson(false);
     expect(cabin!.visible).toBe(true);
+  });
+});
+
+describe('authored road-car fleet', () => {
+  it('mounts the Blender hierarchy and preserves mission paint overrides on every road car', () => {
+    for (const kind of ROAD_VEHICLE_KINDS) {
+      const car = new Vehicle(new THREE.Scene(), kind, new THREE.Vector3(), 0x6a35c8);
+      expect(car.group.getObjectByName(ROAD_VEHICLE_CONTRACTS[kind].root)?.userData.assetSource).toBe('blender');
+      expect(car.group.getObjectByName('road-car-loading-placeholder')).toBeUndefined();
+      const body = car.group.getObjectByName('body') as THREE.Mesh;
+      expect((body.material as THREE.MeshStandardMaterial).color.getHex()).toBe(0x6a35c8);
+      expect(car.group.getObjectByName('wheel_fl')).toBeDefined();
+    }
+  });
+
+  it('hides only the authored cabin in first person', () => {
+    const bakkie = new Vehicle(new THREE.Scene(), 'van', new THREE.Vector3());
+    const cabin = bakkie.group.getObjectByName('cabin')!; const bed = bakkie.group.getObjectByName('bakkie-bed')!;
+    bakkie.setFirstPerson(true); expect(cabin.visible).toBe(false); expect(bed.visible).toBe(true);
+    bakkie.setFirstPerson(false); expect(cabin.visible).toBe(true);
   });
 });
 

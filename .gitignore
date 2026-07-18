@@ -16,6 +16,6 @@ tools/mapgen/cache/
 /art/npcs/work/
 __pycache__/
 *.blend
-!art/vehicles/work/quantum-express-source.blend
+!art/vehicles/work/*-source.blend
 *.fbx
 .claude/worktrees/

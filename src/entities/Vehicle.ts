@@ -7,6 +7,7 @@ import { KNOCKOVER_SPEED_KEEP, knockoverDamage, solidImpactDamage, type PropRegi
 import { rollBurnDuration } from '../systems/VehicleFireSystem';
 import type { City } from '../world/City';
 import { createSignMesh } from '../world/ProceduralMaterials';
+import { instantiateRoadVehicleModel, isRoadVehicleKind, onRoadVehicleLibraryReady, type RoadVehicleModelInstance } from './RoadVehicleAssets';
 import { instantiateTaxiModel, onTaxiLibraryReady, type TaxiModelInstance } from './TaxiAsset';
 
 type VehicleMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial | THREE.MeshBasicMaterial;
@@ -59,6 +60,10 @@ export class Vehicle {
   private taxiReadyUnsubscribe?: () => void;
   private taxiSharedGeometries = new Set<THREE.BufferGeometry>();
   private taxiOwnedMaterials = new Set<THREE.Material>();
+  private roadPlaceholder?: THREE.Group;
+  private roadReadyUnsubscribe?: () => void;
+  private roadSharedGeometries = new Set<THREE.BufferGeometry>();
+  private roadOwnedMaterials = new Set<THREE.Material>();
   private firstPerson = false;
   private headlightFactor = 0;
   private braking = false;
@@ -71,16 +76,17 @@ export class Vehicle {
     scene.add(this.group); this.buildModel();
   }
 
-  /** Free only per-vehicle resources. Taxi geometry/textures belong to the session cache and survive traffic churn. */
+  /** Free only per-vehicle resources. Authored fleet geometry/textures stay in the session cache across traffic churn. */
   dispose(): void {
     if (this.disposed) return;
-    this.disposed = true; this.taxiReadyUnsubscribe?.();
+    this.disposed = true; this.taxiReadyUnsubscribe?.(); this.roadReadyUnsubscribe?.();
     const disposedMaterials = new Set<THREE.Material>();
     this.group.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
-      if (!this.taxiSharedGeometries.has(object.geometry)) object.geometry.dispose();
+      const shared = this.taxiSharedGeometries.has(object.geometry) || this.roadSharedGeometries.has(object.geometry);
+      if (!shared) object.geometry.dispose();
       for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
-        const owned = this.spec.kind === 'taxi' ? this.taxiOwnedMaterials.has(material) : true;
+        const owned = !shared || this.taxiOwnedMaterials.has(material) || this.roadOwnedMaterials.has(material);
         if (owned && !disposedMaterials.has(material)) { disposedMaterials.add(material); material.dispose(); }
       }
     });
@@ -332,9 +338,37 @@ export class Vehicle {
     });
   }
 
+  private releaseRoadPlaceholder(): void {
+    const placeholder = this.roadPlaceholder; if (!placeholder) return;
+    const geometries = new Set<THREE.BufferGeometry>(); const materials = new Set<THREE.Material>();
+    placeholder.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      geometries.add(object.geometry);
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
+    });
+    for (const geometry of geometries) geometry.dispose(); for (const material of materials) material.dispose();
+    placeholder.removeFromParent(); this.roadPlaceholder = undefined;
+  }
+
+  private mountRoadModel(instance: RoadVehicleModelInstance): void {
+    if (this.disposed) return;
+    this.releaseRoadPlaceholder();
+    this.wheels = [...instance.wheels]; this.headLights = [...instance.headLights]; this.brakeLights = [...instance.brakeLights]; this.cabinParts = [...instance.cabinParts];
+    this.wheels[0]!.rotation.order = 'YXZ'; this.wheels[1]!.rotation.order = 'YXZ';
+    this.roadSharedGeometries = new Set(instance.sharedGeometries); this.roadOwnedMaterials = new Set(instance.ownedMaterials);
+    this.group.add(instance.root); instance.root.userData.vehicleVisual = this.spec.kind;
+    this.setFirstPerson(this.firstPerson); this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
+    if (this.wrecked) this.applyWreckAppearance();
+  }
+
   private buildModel(): void {
     if (this.spec.twoWheeler) { this.buildTwoWheeler(); return; }
     if (this.spec.kind === 'taxi') { this.buildTaxiModel(); return; }
+    if (!isRoadVehicleKind(this.spec.kind)) return;
+    const kind = this.spec.kind;
+    const authored = instantiateRoadVehicleModel(kind, this.spec.color);
+    if (authored) { this.mountRoadModel(authored); return; }
+    const placeholder = new THREE.Group(); placeholder.name = 'road-car-loading-placeholder'; this.roadPlaceholder = placeholder;
     const [width, height, length] = this.spec.size;
     const sport = this.spec.kind === 'sport'; const van = this.spec.kind === 'van';
     const bodyMat = new THREE.MeshPhysicalMaterial({ color: this.spec.color, metalness: 0.32, roughness: 0.24, clearcoat: 1, clearcoatRoughness: 0.13 });
@@ -342,7 +376,7 @@ export class Vehicle {
     const chrome = new THREE.MeshStandardMaterial({ color: 0xa9b0b0, metalness: 0.9, roughness: 0.18 });
     const glass = new THREE.MeshPhysicalMaterial({ color: this.police ? 0x263e4a : 0x213e49, roughness: 0.08, metalness: 0.22, clearcoat: 1, clearcoatRoughness: 0.05 });
     const bodyHeight = height * (van ? 0.32 : sport ? 0.42 : 0.5);
-    const body = new THREE.Mesh(new RoundedBoxGeometry(width, bodyHeight, length, 4, Math.min(0.18, bodyHeight * 0.28)), bodyMat); body.position.y = 0.38 + bodyHeight / 2; body.castShadow = true; body.receiveShadow = true;
+    const body = new THREE.Mesh(new RoundedBoxGeometry(width, bodyHeight, length, 4, Math.min(0.18, bodyHeight * 0.28)), bodyMat); body.name = 'body'; body.position.y = 0.38 + bodyHeight / 2; body.castShadow = true; body.receiveShadow = true;
     const hoodLength = van ? length * 0.24 : length * 0.34;
     const hood = new THREE.Mesh(new RoundedBoxGeometry(width * 0.94, van ? 0.42 : sport ? 0.24 : 0.34, hoodLength, 3, 0.09), bodyMat); hood.position.set(0, body.position.y + bodyHeight * 0.45, van ? length * 0.37 : length * 0.34); hood.castShadow = true;
     const cabinHeight = van ? height * 0.58 : height * (sport ? 0.48 : 0.56);
@@ -353,7 +387,7 @@ export class Vehicle {
     const rearBumper = frontBumper.clone(); rearBumper.position.z = -length / 2 - 0.08;
     const grille = new THREE.Mesh(new THREE.BoxGeometry(width * 0.42, 0.25, 0.035), trimMat); grille.position.set(0, 0.64, length / 2 + 0.095);
     const lowerGrille = new THREE.Mesh(new THREE.BoxGeometry(width * 0.28, 0.07, 0.042), chrome); lowerGrille.position.set(0, 0.63, length / 2 + 0.116);
-    this.group.add(body, hood, cabin, roof, frontBumper, rearBumper, grille, lowerGrille);
+    placeholder.add(body, hood, cabin, roof, frontBumper, rearBumper, grille, lowerGrille);
     this.cabinParts.push(cabin, roof);
     if (van) {
       const bed = new THREE.Group(); bed.name = 'bakkie-bed'; bed.position.z = -length * 0.29;
@@ -364,11 +398,11 @@ export class Vehicle {
       for (const side of [-1, 1]) {
         const rail = new THREE.Mesh(new RoundedBoxGeometry(0.13, 0.54, length * 0.39, 2, 0.035), bodyMat); rail.position.set(side * width * 0.43, 1.04, 0); bed.add(rail);
       }
-      this.group.add(bed);
+      placeholder.add(bed);
     }
     for (const side of [-1, 1]) {
-      const skirt = new THREE.Mesh(new RoundedBoxGeometry(0.1, 0.15, length * 0.68, 2, 0.04), trimMat); skirt.position.set(side * width * 0.49, 0.4, 0); this.group.add(skirt);
-      const mirror = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.15, 0.34, 3, 0.07), bodyMat); mirror.position.set(side * width * 0.56, cabin.position.y + 0.08, cabin.position.z + cabinLength * 0.32); mirror.castShadow = true; this.group.add(mirror);
+      const skirt = new THREE.Mesh(new RoundedBoxGeometry(0.1, 0.15, length * 0.68, 2, 0.04), trimMat); skirt.position.set(side * width * 0.49, 0.4, 0); placeholder.add(skirt);
+      const mirror = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.15, 0.34, 3, 0.07), bodyMat); mirror.position.set(side * width * 0.56, cabin.position.y + 0.08, cabin.position.z + cabinLength * 0.32); mirror.castShadow = true; placeholder.add(mirror);
     }
     const wheelRadius = van ? 0.41 : sport ? 0.38 : 0.37;
     const wheelGeo = new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.27, 24); wheelGeo.rotateZ(Math.PI / 2);
@@ -378,24 +412,29 @@ export class Vehicle {
       const assembly = new THREE.Group(); assembly.position.set(x, wheelRadius, z);
       if (z > 0) assembly.rotation.order = 'YXZ'; // front (steered) wheels: apply steer (Y) before roll (X) so the roll spins about the steered axle — default XYZ rolls about the original axle and the turned wheel wobbles
       const wheel = new THREE.Mesh(wheelGeo, wheelMat); wheel.castShadow = true;
-      const rim = new THREE.Mesh(rimGeo, chrome); assembly.add(wheel, rim); this.group.add(assembly); this.wheels.push(assembly);
+      const rim = new THREE.Mesh(rimGeo, chrome); assembly.add(wheel, rim); placeholder.add(assembly); this.wheels.push(assembly);
     }
     const lightGeo = new RoundedBoxGeometry(0.38, 0.17, 0.07, 2, 0.03);
     for (const x of [-width * 0.29, width * 0.29]) {
-      const rear = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0x5b0808, emissive: 0x390000, emissiveIntensity: 1.8, roughness: 0.22 })); rear.position.set(x, 0.65, -length / 2 - 0.1); this.group.add(rear); this.brakeLights.push(rear);
-      const front = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 })); front.position.set(x, 0.65, length / 2 + 0.1); this.group.add(front); this.headLights.push(front);
+      const rear = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0x5b0808, emissive: 0x390000, emissiveIntensity: 1.8, roughness: 0.22 })); rear.position.set(x, 0.65, -length / 2 - 0.1); placeholder.add(rear); this.brakeLights.push(rear);
+      const front = new THREE.Mesh(lightGeo, new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 })); front.position.set(x, 0.65, length / 2 + 0.1); placeholder.add(front); this.headLights.push(front);
     }
     const plateMaterial = new THREE.MeshStandardMaterial({ color: 0xe7e4cf, roughness: 0.5 });
     const frontPlate = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.18, 0.035), plateMaterial); frontPlate.position.set(0, 0.39, length / 2 + 0.18);
-    const rearPlate = frontPlate.clone(); rearPlate.position.z = -length / 2 - 0.18; this.group.add(frontPlate, rearPlate);
-    if (sport) { const spoiler = new THREE.Mesh(new RoundedBoxGeometry(width * 0.62, 0.09, 0.2, 2, 0.03), bodyMat); spoiler.position.set(0, 1.02, -length * 0.43); this.group.add(spoiler); }
+    const rearPlate = frontPlate.clone(); rearPlate.position.z = -length / 2 - 0.18; placeholder.add(frontPlate, rearPlate);
+    if (sport) { const spoiler = new THREE.Mesh(new RoundedBoxGeometry(width * 0.62, 0.09, 0.2, 2, 0.03), bodyMat); spoiler.position.set(0, 1.02, -length * 0.43); placeholder.add(spoiler); }
     if (this.police) {
       const bar = new THREE.Group(); bar.name = 'lightbar'; bar.position.y = roof.position.y + 0.17;
       const mount = new THREE.Mesh(new RoundedBoxGeometry(0.98, 0.07, 0.17, 2, 0.02), trimMat); bar.add(mount);
       for (const [x, color] of [[-0.28, 0x226dff], [0.28, 0xff3028]] as const) { const light = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.14, 0.18, 2, 0.03), new THREE.MeshBasicMaterial({ color })); light.position.x = x; bar.add(light); }
-      this.group.add(bar); this.cabinParts.push(bar);
+      placeholder.add(bar); this.cabinParts.push(bar);
     }
-    this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; } }); // frustumCulled left default (true): an off-screen bakkie must not render in the main AND shadow pass
+    placeholder.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; } }); // frustumCulled left default (true): an off-screen bakkie must not render in the main AND shadow pass
+    this.group.add(placeholder);
+    this.roadReadyUnsubscribe = onRoadVehicleLibraryReady(kind, () => {
+      const loaded = instantiateRoadVehicleModel(kind, this.spec.color); if (loaded) this.mountRoadModel(loaded);
+      this.roadReadyUnsubscribe = undefined;
+    });
   }
 
   /** Frame tubes and spoked wheels; the whole front assembly (fork, bars, front wheel) yaws in steerGroup.
