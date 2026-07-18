@@ -27,7 +27,7 @@ interface DrivePlan { points: NavPoint[]; index: number; watchdog: ProgressWatch
 interface TaxiState { stopTimer: number; dwell: number; hootTimer: number; }
 interface Holdup { held: number; honkAt: number; giveUpAt: number; dodge: number; side: number; holding: boolean; clearFor: number; } // one blocked-by-the-player driver's patience
 export interface PlayerBump { ped: Pedestrian; position: THREE.Vector3; knockdown: boolean; killed: boolean; assault: boolean; }
-export interface PlayerVehicleHit { speed: number; damage: number; knockdown: boolean; }
+export interface PlayerVehicleHit { speed: number; damage: number; knockdown: boolean; dirX: number; dirZ: number; } // dir = the car's travel direction (the way the body gets thrown)
 
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
@@ -305,7 +305,7 @@ export class PopulationSystem {
         if (impact > 0.8 && this.playerHitCooldown <= 0) {
           this.playerHitCooldown = HIT_COOLDOWN;
           const damage = vehicleHitDamage(impact);
-          this.playerVehicleHits.push({ speed: impact, damage, knockdown: damage > 0 });
+          this.playerVehicleHits.push({ speed: impact, damage, knockdown: damage > 0, dirX: forward.x * Math.sign(vehicle.speed || 1), dirZ: forward.z * Math.sign(vehicle.speed || 1) });
           if (damage > 0) { vehicle.speed *= HIT_SPEED_KEEP; this.audio.collision(impact); } // the body costs the car some momentum
         }
       }
@@ -640,7 +640,10 @@ export class PopulationSystem {
         if (ped.state === 'down' || (this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
         const distanceSq = vehicle.group.position.distanceToSquared(ped.group.position);
         if (distanceSq < 5) {
-          const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8, vehicle.group.position); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
+          // Unified with the sprint-bump path: a survivable car hit floors the ped into the knockdown
+          // ragdoll (direction-correct, speed-scaled kick) instead of an instant standing flee; a fatal
+          // one flows into the same down-dead state knockdownOutcome reports.
+          const killed = ped.knockdown(vehicle.group.position, Math.abs(vehicle.speed) * 2.8); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
           this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
           this.pedestrianImpactCooldown.set(ped, 1);
           if (!vehicle.playerControlled) this.requestCollisionReplan(vehicle); // NPC that just hit someone: try a fresh way through

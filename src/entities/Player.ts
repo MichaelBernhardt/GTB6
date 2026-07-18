@@ -5,6 +5,7 @@ import { fallDamage, jumpVelocity, moveSpeed, stepVertical } from '../core/GameR
 import { inebriationFraction } from '../core/DrinkRules';
 import type { CheatSettings } from '../types';
 import type { City } from '../world/City';
+import { landingDownSpeed, type RagdollEnvironment } from './PedRagdoll';
 import {
   initialPlayerVisualState, RiggedPlayerVisual, type CharacterLoadStatus, type PlayerVisualState,
   type RiggedPlayerVisualOptions, type RideMode,
@@ -20,6 +21,11 @@ export const FREEFALL_TIP_RANGE = 0.28;
 /** Ghost (free-fly) test mode tuning. */
 export const GHOST_RUN_SPEED = 168;
 export const GHOST_WHEEL_STEP = 4;
+
+/** Knockdown window: rise as soon as the ragdoll rests (but never before the fall has read), and
+ *  never lie there past the max — knockdowns are spectacle, not punishment. */
+export const KNOCKDOWN_RISE_MIN = 1.1;
+export const KNOCKDOWN_RISE_MAX = 2.2;
 
 export class Player {
   group = new THREE.Group();
@@ -54,6 +60,13 @@ export class Player {
   private bodyRoll = 0;
   private visualState: PlayerVisualState = initialPlayerVisualState();
   private riggedVisual: RiggedPlayerVisual;
+  private knockdownElapsed = -1; // <0 = on their feet
+  private ragdollCity?: City;
+  /** Built once; the knockdown ragdoll queries ground/walls through it every visual tick. */
+  private readonly ragdollEnv: RagdollEnvironment = {
+    heightAt: (x, z) => this.ragdollCity ? this.ragdollCity.surfaceHeightAt(x, z) : this.group.position.y,
+    blockedAt: (x, z, radius) => this.ragdollCity?.collides?.(x, z, radius) ?? false, // optional-called: test stub cities carry only the movement surface
+  };
 
   constructor(scene: THREE.Scene, position = new THREE.Vector3(0, 0, 260), visualOptions: RiggedPlayerVisualOptions = {}) {
     this.group.position.copy(position); this.heading = Math.PI; this.group.rotation.y = this.heading; this.group.name = 'Player'; scene.add(this.group);
@@ -70,6 +83,8 @@ export class Player {
     if (this.inVehicle || this.health <= 0) return;
     this.landingTimer = Math.max(0, this.landingTimer - dt);
     if (this.ghost) { this.updateGhost(dt, input, cameraYaw); return; }
+    this.ragdollCity = city;
+    if (this.knockedDown) { this.updateKnockdown(dt, city); return; }
     if (this.tumbleTimer > 0) { this.applyTumble(dt); this.setVisualState({ tumbleProgress: this.tumbleProgress, tumbleDirection: this.tumbleDir, onGround: true }); return; }
     const aimHeld = input.aiming && this.weapon !== 'fists';
     const aiming = aimHeld || (input.firing && this.weapon !== 'fists');
@@ -98,7 +113,13 @@ export class Player {
     this.group.position.y = motion.y; this.velocityY = motion.velocityY; this.onGround = motion.onGround; this.fallOriginY = motion.fallOriginY;
     if (landing.landed) {
       const damage = fallDamage(landing.drop); this.landingTimer = 0.18;
-      if (damage > 0) { this.pendingFallDamage += damage; this.tumble(); }
+      if (damage > 0) {
+        this.pendingFallDamage += damage;
+        // Hard landing: go ragdoll carrying the fall in — run momentum forward, drop momentum down.
+        const dirX = moving ? move.x : Math.sin(this.heading); const dirZ = moving ? move.z : Math.cos(this.heading);
+        this.knockdown(dirX, dirZ, Math.min(4, 1.5 + speed * 0.4), landingDownSpeed(landing.drop), city);
+        return;
+      }
     }
     this.setVisualState({
       locomotionSpeed: speed, aiming, firing: input.firing, moveSide: side, moveForward: forward,
@@ -136,7 +157,50 @@ export class Player {
   }
 
   takeDamage(amount: number): void { this.health = Math.max(0, this.health - Math.max(0, amount)); }
-  heal(): void { this.health = this.maxHealth; this.inebriation = 0; this.setDead(false); }
+  heal(): void { this.health = this.maxHealth; this.inebriation = 0; this.knockdownElapsed = -1; this.visualState.ragdoll = false; this.setDead(false); }
+
+  /** Impact knockdown: the verlet ragdoll takes the body (kicked away from the impact, input locked)
+   *  for a normal down window, then the player stands up wherever the body settled. A lethal hit in
+   *  the same frame keeps the body down — Game's death flow runs over the live ragdoll. */
+  knockdown(directionX: number, directionZ: number, kickSpeed: number, downSpeed = 0, city?: City): void {
+    if (this.knockedDown || this.visualState.dead) return;
+    if (city) this.ragdollCity = city;
+    this.knockdownElapsed = 0;
+    this.tumbleTimer = 0; this.punchTimer = 0; this.landingTimer = 0;
+    this.velocityY = 0; this.onGround = true; this.bodyPitch = 0; this.bodyRoll = 0;
+    this.group.rotation.x = 0; this.group.rotation.z = 0;
+    if (this.canopy) this.canopy.visible = false;
+    this.riggedVisual.primeRagdollImpact(directionX, directionZ, kickSpeed, downSpeed);
+    this.setVisualState({ locomotionSpeed: 0, aiming: false, firing: false, onGround: true, velocityY: 0 });
+    this.visualState.ragdoll = true; this.visualState.attack = undefined;
+  }
+
+  get knockedDown(): boolean { return this.knockdownElapsed >= 0; }
+
+  private updateKnockdown(dt: number, city: City): void {
+    this.knockdownElapsed += dt;
+    const rested = this.riggedVisual.ragdollBody?.frozen ?? false;
+    if (this.knockdownElapsed < KNOCKDOWN_RISE_MAX && !(rested && this.knockdownElapsed >= KNOCKDOWN_RISE_MIN)) {
+      this.setVisualState({ locomotionSpeed: 0, aiming: false, firing: false, onGround: true, velocityY: 0 });
+      return;
+    }
+    this.riseFromKnockdown(city);
+  }
+
+  /** Back on their feet — AT the body, not back at the impact point: the carried momentum is real. */
+  private riseFromKnockdown(city: City): void {
+    const hips = new THREE.Vector3();
+    if (this.riggedVisual.ragdollHips(hips)) {
+      const target = new THREE.Vector3(hips.x, this.group.position.y, hips.z);
+      this.group.position.copy(city.clampMoveAt(this.group.position, target, PLAYER.radius));
+      this.group.position.y = city.surfaceHeightAt(this.group.position.x, this.group.position.z);
+    }
+    this.knockdownElapsed = -1;
+    this.visualState.ragdoll = false;
+    this.onGround = true; this.velocityY = 0; this.fallOriginY = this.group.position.y;
+    this.landingTimer = 0.22; // the brief 'land' crouch reads as the get-up beat
+    this.setVisualState({ locomotionSpeed: 0, aiming: false, firing: false, onGround: true, velocityY: 0 });
+  }
   setVisible(visible: boolean): void { this.group.visible = visible; }
   setWeapon(id: WeaponId): void { if (id === this.weapon) return; this.weapon = id; this.riggedVisual.setWeapon(id); }
   /** Report one ranged shot accepted by CombatSystem so visual recoil can retrigger independently of the held trigger. */
@@ -148,7 +212,7 @@ export class Player {
     if (dead) Object.assign(this.visualState, { coverMode: 'none', rideMode: 'none', airMode: 'none', tumbleProgress: 0, firing: false });
   }
 
-  updateVisual(dt: number): void { this.riggedVisual.setState(this.visualState); this.riggedVisual.update(dt); }
+  updateVisual(dt: number): void { this.riggedVisual.setState(this.visualState); this.riggedVisual.update(dt, this.ragdollEnv); }
   setHeading(heading: number): void { this.heading = heading; this.group.rotation.y = heading; }
   tumble(duration = 1.15): void { this.tumbleTimer = duration; this.tumbleDuration = duration; this.tumbleDir = Math.random() < 0.5 ? -1 : 1; this.tumbleBaseY = this.group.position.y; this.velocityY = 0; this.onGround = true; }
   get tumbling(): boolean { return this.tumbleTimer > 0; }
