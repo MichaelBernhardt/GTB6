@@ -371,9 +371,10 @@ export const KELVIN_OFFICE_SPOT: MapPt = { x: kelvinKerb.x + kelvinIn.x * 42, z:
 /** Crossing this ring around the yard centre counts as being inside the fence. */
 export const KELVIN_FENCE_RADIUS = 26;
 
-/** The Ophirton feeder substation Sindi works — a SUBSTANTIAL ~2.2km night run (Pull the Plug,
- *  Catch Them Cutting, The Switch all key off it). */
-export const SUBSTATION_SPOT = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 10 * P, z: CBD_CENTER.z + 150 * P }, 4, 6);
+/** The Ophirton feeder substation Sindi works (Pull the Plug, Catch Them Cutting, The Switch all key
+ *  off it). Sited so it's a real ~1-1.3km night drive from BOTH Solly (SE) and Sindi (NW) — above the
+ *  standard floor for all three, not the ~260m collapse a Solly-adjacent spot gave Pull the Plug. */
+export const SUBSTATION_SPOT = walkSpotNear({ x: 2424, z: 5314 }, 4, 6);
 export const SUBSTATION_BREAKER: MapPt = { x: SUBSTATION_SPOT.x + 6, z: SUBSTATION_SPOT.z + 4 };
 /** Sindi's flat on the Braamfontein edge (~0.7km, central to her three jobs: the Park Station drop,
  *  the Ophirton feeder, and the Constitution Hill handover). */

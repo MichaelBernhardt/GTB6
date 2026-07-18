@@ -134,7 +134,13 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
         routed = [m['roadDistance'] for m in all_measurements
                   if m['mission'] == mission and m.get('roadDistance') and m['objective'] not in journeys]
         floor = FLOOR.get(tier, 700)
-        if routed and floor and max(routed) < floor:
+        # The floor is about DRIVES doing real work — exempt missions whose substance is a non-road
+        # modality the floor can't see: a tail (follow), a train/plane ride (carrier), a riddle (hidden
+        # first objective), a stealth infiltration (undetected — the challenge is not being seen), or a
+        # mission that already carries a sanctioned journey leg (a long drive by construction).
+        objs = page.evaluate(f"() => (window.__qa.g.missions.missions.find(m => m.id === '{mission}')?.objectives ?? []).map(o => ({{ kind: o.kind, hidden: !!o.hidden, carrier: !!(o.conditions && (o.conditions.onTrain || o.conditions.drivingTrain || o.conditions.inPlane)), stealth: !!(o.conditions && o.conditions.undetected) }}))") or []
+        non_drive = bool(journeys) or any(o['kind'] == 'follow' or o['carrier'] or o['stealth'] for o in objs) or (bool(objs) and objs[0]['hidden'])
+        if routed and floor and max(routed) < floor and not non_drive:
             all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail',
                 'what': f'tier floor: longest routed leg is {max(routed)}u but the {tier} floor is {floor}u — the mission collapsed below its band (make the drive do real work)'})
 

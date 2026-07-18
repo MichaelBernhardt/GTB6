@@ -162,7 +162,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
   'crosswinds': { tier: 'journey', grantParachute: 0, journeys: [0, 1, 2] }, // the flight IS the mission — the one earned aviation setpiece (plane provided out at the strip)
   'two-fires': {},
-  'paper-fire': { tier: 'substantial',
+  'paper-fire': { tier: 'standard',
     quarry: { spawnObjective: 0, kind: 'van', color: EVIDENCE_VAN_COLOR, spawn: EVIDENCE_VAN_SPOT, igniteObjective: 2 },
     wanted: { objective: 2, level: 2 },
   },
