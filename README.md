@@ -4,6 +4,8 @@ An original open-world Jozi misadventure built with Three.js and TypeScript. Wal
 
 **Play the production build:** [groottheftbakkie.com](https://www.groottheftbakkie.com/)
 
+**Join the development discussion:** [Groot Theft Bakkie on Telegram](https://t.me/+suGQnCqen_E2MzZl)
+
 The city combines OpenStreetMap-derived Johannesburg roads with procedural buildings, vegetation, traffic, pedestrians, shops, missions, a day/night cycle, and a deliberately impossible strip of coast. Cape Town kept the mountain, so Jozi borrowed the sea.
 
 ![Groot Theft Bakkie gameplay in Johannesburg](screenshots/groot-theft-bakkie-competition.png)
