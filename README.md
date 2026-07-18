@@ -47,7 +47,9 @@ npm run dev:multiplayer-server
 
 ## Multiplayer
 
-Choose **Enter global world** on the main menu and supply a display name. Every online player joins the same 16-player world automatically—there are no rooms or matchmaking. Movement and pistol damage are server-authoritative, PvP is open, deaths respawn after three seconds, remote players appear on the minimap, and the scoreboard tracks kills and deaths. Press `Enter` for rate-limited global text chat.
+Choose **Enter global world** on the main menu and supply a display name. Every online player joins the same 16-player world automatically—there are no rooms or matchmaking. The shard continuously runs **Hot Bakkie Run**: after a short countdown, claim the marked Hilux, drive its three checkpoints in order, then stop gently in the final drop. Kill the carrier or catch an abandoned bakkie to steal the run before the three-minute clock expires.
+
+Movement, vehicles, checkpoint order, pistol damage, ammo, and reloads are server-authoritative. PvP stays open, deaths respawn after three seconds, and authored animated Jozi characters represent remote players. The scoreboard ranks persistent run wins first, then kills and deaths, and tags the current carrier. Your guest token restores runs and K/D after reconnecting. Press `Enter` for rate-limited global text chat; use `E` to enter or abandon the bakkie and `R` to reload the online pistol.
 
 Solo missions, money, wanted level, shops, jobs, saves, cheats, and reputation stay in the separate solo mode.
 
@@ -61,7 +63,7 @@ Solo missions, money, wanted level, shops, jobs, saves, cheats, and reputation s
 | `Ctrl` / right mouse | Aim or fire a drive-by weapon |
 | Left mouse | Fire or punch |
 | `Space` | Jump, handbrake, or deploy/flare a parachute |
-| `E` | Interact, enter/exit a vehicle, collect, shop, or use a safehouse |
+| `E` | Interact, enter/exit a vehicle, claim/abandon the Hot Bakkie, collect, shop, or use a safehouse |
 | `Q` | Enter/leave cover in third-person view |
 | `F` | Mug/melee, recover a vehicle, or deploy a parachute |
 | `Tab` | Hold for the weapon wheel |
@@ -152,7 +154,7 @@ npm run build
 PORT=4173 npm start
 ```
 
-The same web process owns the global multiplayer shard. Attach Heroku Postgres and expose its standard `DATABASE_URL` to persist guest names and kill/death statistics. Without a database the server falls back to in-memory profiles, which reset on restart. Keep the app at one web dyno because live world state is process-local.
+The same web process owns the global multiplayer shard. Attach Heroku Postgres and expose its standard `DATABASE_URL` to persist guest names, run wins, and kill/death statistics. Startup applies the additive `runs` column migration automatically. Without a database the server falls back to in-memory profiles, which reset on restart. Keep the app at one web dyno because live world state is process-local.
 
 Pull requests into protected `main` must pass the production verification check. A merged push installs dependencies,
 runs lint, tests, character/NPC/foliage asset validation, and the production build before deploying the verified commit

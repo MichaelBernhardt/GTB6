@@ -246,6 +246,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .multiplayer-scoreboard > strong { color: #e0b54a; font-size: .72rem; letter-spacing: .08em; margin-bottom: .25rem; }
 .multiplayer-scoreboard > span { display: flex; justify-content: space-between; gap: .5rem; font-size: .76rem; }
 .multiplayer-scoreboard > span.is-self { color: #76ebc6; }
+.multiplayer-scoreboard > span.is-carrier { text-shadow: 0 0 .7rem rgba(255, 134, 48, .8); }
+.multiplayer-scoreboard > span.is-carrier small { color: #ffb45f; opacity: 1; }
 .multiplayer-scoreboard small { opacity: .72; }
 .multiplayer-feed { position: absolute; top: 7rem; left: 50%; translate: -50% 0; text-align: center; }
 .multiplayer-feed p { margin: .2rem; padding: .35rem .65rem; background: rgba(20,5,5,.72); color: #ffb3a6; font-weight: 700; }
