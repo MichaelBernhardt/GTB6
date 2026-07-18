@@ -286,6 +286,25 @@ describe('cached rigged pedestrian instances', () => {
     expect(activeRagdollCount()).toBe(0);
   });
 
+  it('overkill survives repeated re-hits without leaking registry slots or duplicating entries', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const parent = new THREE.Group();
+    const visual = new RiggedPedestrianVisual(parent, 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    await visual.load();
+    visual.setState(state({ state: 'down', dead: true }));
+    for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
+    for (let round = 0; round < 3; round++) {
+      visual.reviveRagdollImpact(round % 2 ? 1 : -1, 0, 6);
+      visual.reviveRagdollImpact(1, 0, 6); // double-tap in the same frame folds in, never double-registers
+      expect(activeRagdollCount()).toBe(1);
+      for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
+      expect(visual.ragdollBody!.frozen).toBe(true);
+      expect(activeRagdollCount()).toBe(0); // slot released every time
+      const settled = skinnedFloorOf(parent);
+      expect(settled).toBeGreaterThan(-0.05); expect(settled).toBeLessThan(0.05);
+    }
+  });
+
   it('overkill respects the cap by skipping: a corpse re-hit never evicts a fresh death', async () => {
     const env: RagdollEnvironment = { heightAt: () => 0 };
     const corpse = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
