@@ -29,9 +29,9 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Thandi', text: 'Someone is FARMING this city. Either way, the CBD will remember what you do tonight.' },
   ] },
   'last-coach-home': { id: 'last-coach-home:intro', lines: [
-    { speaker: 'Auntie Portia', text: 'Boet! Disaster. My nephew fell asleep on the Sandton train and got off without my rent bag.' },
+    { speaker: 'Auntie Portia', text: 'Boet! Disaster. My nephew fell asleep on the train and got off without my rent bag — left it on the platform at Park Station.' },
     { speaker: 'You', text: 'Your rent was riding the train?' },
-    { speaker: 'Auntie Portia', text: 'The vetkoek lady by Sandton Station is holding it. Ride out there — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home.' },
+    { speaker: 'Auntie Portia', text: 'The vetkoek lady on the platform is holding it. Hop a train out — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home.' },
   ] },
   'copper-wire-blues': { id: 'copper-wire-blues:intro', lines: [
     { speaker: 'Bra Vusi', text: 'That cable from the GTI? The buyer paid cash, no name, no yard. A man like that is worth knowing better.' },
@@ -60,9 +60,9 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Solly', text: 'Eskom built the blame, I just rent it. The Ophirton feeder, after dark. One breaker. Throw it and walk. Don\'t run — running looks guilty.' },
   ] },
   'stage-fright': { id: 'stage-fright:intro', lines: [
-    { speaker: 'Solly', text: 'A friend of mine dreams about a superbike in a Sandton showroom window. Glass, floodlights, a very rude alarm.' },
+    { speaker: 'Solly', text: 'A friend of mine dreams about a superbike in a showroom window up in the northern suburbs. Glass, floodlights, a very rude alarm.' },
     { speaker: 'You', text: 'And I fetch it when?' },
-    { speaker: 'Solly', text: 'Tonight. However loud Sandton gets — the bike arrives at my yard. How you keep it quiet is your business.' },
+    { speaker: 'Solly', text: 'Tonight. However loud that street gets — the bike arrives at my yard. How you keep it quiet is your business.' },
   ] },
   'genny-round': { id: 'genny-round:intro', lines: [
     { speaker: 'Solly', text: 'Three businesses are behind on their generator subscriptions. Terrible thing, being behind. Anything could happen to a fridge.' },
@@ -71,7 +71,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'paper-round': { id: 'paper-round:intro', lines: [
     { speaker: 'Sindi', text: 'I pulled the Ophirton fault logs. Breakers don\'t trip in that pattern by themselves. That was a hand. Your hand.' },
     { speaker: 'You', text: 'Careful, engineer. Accusations need paper.' },
-    { speaker: 'Sindi', text: 'I HAVE paper. More than your boss knows. Test first, though — see if you can read. The classifieds this morning: "FOR SALE: one-way ticket. Collect where the Halt serves the sky."' },
+    { speaker: 'Sindi', text: 'I HAVE paper. More than your boss knows. Test first, though — see if you can read. The classifieds this morning: "FOR SALE: one-way ticket. Collect where the whole city changes trains."' },
     { speaker: 'Sindi', text: 'Bring my dossier back and we\'ll talk about what it\'s worth. To either side.' },
   ] },
   'the-wrong-train': { id: 'the-wrong-train:intro', lines: [

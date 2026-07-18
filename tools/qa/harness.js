@@ -145,15 +145,18 @@ window.__qa = (() => {
       if (!pts?.length) finding('fail', `no road route from player to "${destination.label}"`);
       else {
         result.roadDistance = Math.round(routeLength(pts));
-        // Distance cap (owner: missions must not be sized to the 1:1 map). Default <=1200u; a declared
-        // journey (the-wrong-train drive, Crosswinds flight) may reach further, hard cap 2000u; act 1
-        // may never declare a journey.
-        const journeys = window.__scripts?.[g.missions.active?.id]?.journeys ?? [];
+        // Distance TIERS (owner: effort must scale with the perceived goal — not one flat cap that
+        // makes every job feel like the end of a short street). Per-mission band; a declared journey
+        // objective is exempt (the sanctioned long hauls). Numbers are road distance ceilings.
+        const script = window.__scripts?.[g.missions.active?.id] ?? {};
+        const journeys = script.journeys ?? [];
         const isJourney = journeys.includes(objIndex());
-        const isAct1 = (g.missions.active?.act === 'hustle');
-        if (isJourney) { /* a rare earned long haul with transport — exempt, but logged */ note(`journey objective: ${result.roadDistance}u to "${destination.label}"`); }
-        else if (isAct1 && result.roadDistance > 1200) finding('fail', `act-1 objective routes ${result.roadDistance}u — act 1 allows no long journeys`);
-        else if (result.roadDistance > 1200) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u (>1200u) and not a declared journey — re-anchor near the contact`);
+        const tier = script.tier ?? 'standard';
+        const CEIL = { favour: 1000, standard: 1800, substantial: 2800, journey: 99999 };
+        const ceil = CEIL[tier] ?? 1800;
+        if (isJourney || tier === 'journey') { note(`journey objective: ${result.roadDistance}u to "${destination.label}"`); }
+        else if (result.roadDistance > ceil) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u — over the ${tier} tier ceiling (${ceil}u); re-anchor or re-tier`);
+        result.tier = tier;
         if (o.timeLimit && !isJourney) {
           // Bumbling pace (owner): 50% of cruise, with a 1.25x wrong-turn detour on the route.
           const bumbleSpeed = (g.activeVehicle?.spec.maxSpeed ?? 34) * 0.5;
@@ -203,6 +206,17 @@ window.__qa = (() => {
         }
         if (o.conditions?.atNight && !(g.dayNight.hour > 19 || g.dayNight.hour < 5)) { g.dayNight.hour = 22; note('shortcut: set hour 22 for atNight'); }
         if (o.conditions?.blackoutAbove && g.dayNight.blackoutFactor < o.conditions.blackoutAbove) return 'needs:blackout';
+        // NEGATIVE VERB ASSERTION (owner: the re-anchor once gutted a train mission so it completed
+        // without boarding). Before doing the real verb, prove the objective does NOT complete at the
+        // target WITHOUT the verb — stand the player on foot on the marker and confirm no advance.
+        if ((o.conditions?.onTrain || o.conditions?.drivingTrain || o.conditions?.inPlane) && marker) {
+          const before = `${objIndex()}:${g.missions.progress}`;
+          g.player.group.position.set(marker.position.x, surface(marker.position.x, marker.position.z), marker.position.z);
+          if (g.activeVehicle) g.activeVehicle.speed = 0;
+          step(6);
+          if (`${objIndex()}:${g.missions.progress}` !== before || !g.missions.active) finding('fail', `verb not enforced: "${o.text}" completed at the target WITHOUT the required ${o.conditions.drivingTrain ? 'drivingTrain' : o.conditions.onTrain ? 'onTrain' : 'inPlane'} verb`);
+          else note(`verb enforced: no advance at the target without the ${o.conditions.drivingTrain ? 'drivingTrain' : o.conditions.onTrain ? 'onTrain' : 'inPlane'} verb`);
+        }
         if (o.conditions?.drivingTrain || o.conditions?.onTrain) return 'needs:train';
         if (o.conditions?.inPlane) return 'needs:plane';
         if (!marker) return 'stuck:no-target';

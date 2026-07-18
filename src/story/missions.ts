@@ -4,7 +4,7 @@ import type { WorldTarget } from '../types';
 import {
   CANDICE_START, CON_HILL_SPOT, ESCAPE_SPOT, EVIDENCE_VAN_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
   AIRPORT_APRON, CROWN_STATION, KIOSK_SPOT, LOCKUP_SPOT, PADSTAL_SPOT, PAPER_DROP, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
-  CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
+  CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_PLATFORM, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
   SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START,
 } from '../world/placements';
 import { CANDICE_VAN_COLOR, TANKER_COLOR } from './scripts';
@@ -23,7 +23,7 @@ export const spot = (place: { x: number; z: number }, label: string): WorldTarge
 export const MISSIONS: MissionDefinition[] = [
   {
     id: 'delivery-run', name: 'Couch Run', contact: 'Auntie Portia', reward: 900, act: 'hustle',
-    intro: 'Howzit boet. Sold the couch on Marketplace but eish, the bakkie is gone. Take my yellow Citi Golf — three drops, sharp sharp. The couch fits, I promise.',
+    intro: 'Howzit boet. Sold the couch on Marketplace but eish, the bakkie is gone. Take my yellow Citi Golf — two drops round the corner, sharp sharp. The couch fits, I promise.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Enter Auntie Portia\'s yellow Citi Golf' },
       { kind: 'checkpoints', text: 'Make the two drops (now now, not just now)', required: 2, checkpoint: true },
@@ -41,13 +41,13 @@ export const MISSIONS: MissionDefinition[] = [
   },
   {
     id: 'dockside-signal', name: 'Rank Business', contact: 'Candice from Boksburg', reward: 2200, act: 'hustle',
-    intro: 'Ag no man. The Wemmer crew stole our taxi route permit. Go moer them, grab the permit, and bring it to the braai kiosk at Zoo Lake. Sharp?',
+    intro: 'Ag no man. The Wemmer crew stole our taxi route permit. Go moer them at their terminal, grab the permit, and bring it to my braai kiosk here at the Newtown rank. Sharp?',
     start: spot(CANDICE_START, 'Candice'), objectives: [
       { kind: 'reach', text: 'Travel to the Wemmer taxi terminal', target: spot(TERMINAL_SPOT, 'Wemmer terminal') },
       { kind: 'defeat', text: 'Moer the rank enforcers', required: 3, checkpoint: true },
       { kind: 'collect', text: 'Grab the route permit', target: spot(PERMIT_SPOT, 'Route permit'), checkpoint: true },
       { kind: 'escape', text: 'Escape the terminal perimeter', target: spot(ESCAPE_SPOT, 'Safe route'), checkpoint: true },
-      { kind: 'reach', text: 'Bring it to Candice at Zoo Lake', target: spot(KIOSK_SPOT, 'Braai kiosk'), checkpoint: true },
+      { kind: 'reach', text: 'Bring it to Candice at the Newtown rank', target: spot(KIOSK_SPOT, 'Braai kiosk'), checkpoint: true },
     ],
   },
   {
@@ -65,10 +65,10 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'last-coach-home', name: 'Last Coach Home', contact: 'Auntie Portia', reward: 1100, act: 'hustle',
     prerequisites: { missions: ['delivery-run'] },
-    intro: 'My nephew left my rent bag at the taxi rank round the corner — fell asleep waiting, the dof child. Go fetch it before someone honest finds it, boet.',
+    intro: 'My nephew fell asleep on the train and left my rent bag on the platform at Park Station, the dof child. Hop a train out and fetch it before someone honest finds it, boet.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
-      { kind: 'reach', text: 'Get to the taxi rank', target: spot(RENT_BAG_SPOT, 'The taxi rank') },
-      { kind: 'collect', text: 'Fetch the rent bag from the vetkoek stand', target: spot(RENT_BAG_SPOT, 'Rent bag'), checkpoint: true },
+      { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Johannesburg Park Station' }, text: 'Ride a train out to Park Station', target: spot(RENT_BAG_PLATFORM, 'Park Station') },
+      { kind: 'collect', text: 'Fetch the rent bag from the platform vetkoek stand', target: spot(RENT_BAG_SPOT, 'Rent bag'), checkpoint: true },
       { kind: 'reach', text: 'Bring the bag back to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
   },
@@ -93,7 +93,7 @@ export const MISSIONS: MissionDefinition[] = [
       { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: CANDICE_VAN_COLOR, text: 'Take the wheel of Candice\'s route van' },
       { kind: 'checkpoints', required: 2, vehicleColor: CANDICE_VAN_COLOR, text: 'Show the flag at both contested ranks', failIf: [VAN_DOWN] },
       { kind: 'defeat', required: 3, vehicleColor: CANDICE_VAN_COLOR, text: 'Moer the Wemmer heavies off the van', checkpoint: true, failIf: [VAN_DOWN] },
-      { kind: 'reach', vehicleKind: 'van', vehicleColor: CANDICE_VAN_COLOR, text: 'Get the van back to Zoo Lake in one piece', target: spot(CANDICE_START, 'Zoo Lake rank'), checkpoint: true, failIf: [VAN_DOWN] },
+      { kind: 'reach', vehicleKind: 'van', vehicleColor: CANDICE_VAN_COLOR, text: 'Get the van back to the Newtown rank in one piece', target: spot(CANDICE_START, 'Newtown rank'), checkpoint: true, failIf: [VAN_DOWN] },
     ],
   },
   {
@@ -133,9 +133,9 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'stage-fright', name: 'Stage Fright', contact: SOLLY, reward: 5000, act: 'payroll',
     prerequisites: { missions: ['pull-the-plug'] },
-    intro: 'There\'s a superbike in a Sandton showroom that a friend of mine keeps dreaming about. Fetch it tonight. However loud it gets — it arrives.',
+    intro: 'There\'s a superbike in a showroom up in the northern suburbs that a friend of mine keeps dreaming about. Fetch it tonight. However loud it gets — it arrives.',
     start: spot(SOLLY_START, 'Solly'), objectives: [
-      { kind: 'enter-kind', vehicleKind: 'superbike', text: 'Take the showroom superbike in Sandton' },
+      { kind: 'enter-kind', vehicleKind: 'superbike', text: 'Take the showroom superbike up north' },
       { kind: 'reach', vehicleKind: 'superbike', text: 'Bring it to Kelvin Yard', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, checkpoint: true },
     ],
   },
@@ -152,7 +152,7 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'paper-round', name: 'Paper Round', contact: SINDI, reward: 2800, act: 'payroll',
     prerequisites: { missions: ['pull-the-plug'] },
-    intro: 'I read the fault logs. That trip pattern was manual — a hand on a breaker. Your hand. Let\'s see if you can read too: "FOR SALE: one-way ticket. Collect where the Halt serves the sky."',
+    intro: 'I read the fault logs. That trip pattern was manual — a hand on a breaker. Your hand. Let\'s see if you can read too: "FOR SALE: one-way ticket. Collect where the whole city changes trains."',
     start: spot(SINDI_START, 'Sindi'), objectives: [
       { kind: 'reach', hidden: true, text: '"Collect where the whole city changes trains — the big station, platform lockers."', target: spot(PAPER_DROP, 'The dead drop') },
       { kind: 'collect', text: 'Take the dossier from the locker', target: spot(PAPER_DROP, 'Dossier'), checkpoint: true },
@@ -249,7 +249,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['endgame'] },
     intro: 'Listen to me. The Ophirton feeder is rigged to blow — a permanent Stage Six, the whole grid on its knees. Whatever you are now, your city dies with that substation. Go.',
     start: spot(SINDI_START, 'Sindi'), setFlags: ['stage-six-over'], objectives: [
-      { kind: 'reach', timeLimit: 400, text: 'Get to the CBD feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'CBD feeder') },
+      { kind: 'reach', timeLimit: 400, text: 'Get to the Ophirton feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
       { kind: 'defeat', required: 4, text: 'Put the wreckers down', checkpoint: true },
       { kind: 'survive', timeLimit: 90, text: 'Hold the substation until the relief crew arrives', checkpoint: true },
     ],
