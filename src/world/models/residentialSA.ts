@@ -195,10 +195,10 @@ export function buildWalkUpFlats(seed: number, options: BuildOptions = {}): Buil
   for (let floor = 1; floor <= floors; floor++) {
     const y = floor * floorH - 0.4;
     kit.box(M.concrete, w * 0.58, 0.14, 1.15, 0, y, d * 0.02, { collide: true, cast: false });
-    kit.box(M.darkMetal, w * 0.58, 0.65, 0.06, 0, y + 0.15, d * 0.58, { cast: false });
+    kit.box(M.darkMetal, w * 0.58, 0.65, 0.06, 0, y + 0.15, d * 0.02 + 0.545, { cast: false }); // rail on the walkway's front lip, not adrift in the court
   }
   kit.box(M.concrete, 2.6, h + 1.8, 2.8, -w * 0.34, 0, -d * 0.02, { collide: true });
-  kit.sign(kit.pick(6, ['THUTHUKA COURT', 'MADIBA MANSIONS', 'JACARANDA WALK']), '#e5d5a5', 4.2, 0.7, 0, 3.6, d * 0.04, { background: '#38433f' });
+  kit.sign(kit.pick(6, ['THUTHUKA COURT', 'MADIBA MANSIONS', 'JACARANDA WALK']), '#e5d5a5', 4.2, 0.7, 0, 3.6, -d * 0.06 + 0.07, { background: '#38433f' }); // flush on the court block's street face
   return kit.done();
 }
 
