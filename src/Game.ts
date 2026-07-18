@@ -842,6 +842,12 @@ export class Game {
       this.ui.notify('Load shedding: Stage 4', hint ? 'Eskom sends regards. Pitch dark out there — L for torch.' : 'Eskom sends regards. The robots are out.', false);
     }
     else if (event === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
+    // The start-of-stage hint only fires if the blackout LANDS in darkness — when shedding begins in
+    // daylight and carries into night, teach the key the moment it actually gets dark instead.
+    if (!this.torchHintShown && !this.torch.on && this.dayNight.blackoutDarkness > 0.5) {
+      this.torchHintShown = true;
+      this.ui.notify('Pitch dark', 'No street lights tonight. L for torch.', false);
+    }
   }
 
   private updateVehicleFires(dt: number, focus: THREE.Vector3): void {
