@@ -141,6 +141,26 @@ window.__qa = (() => {
       const hints = (window.__scripts?.[g.missions.active?.id]?.hints ?? []).filter((h) => h.objective === objIndex());
       if (!hints.length) finding('fail', `riddle "${o.text}" has no progressive hints`);
       else if (!hints.some((h) => h.reveal)) finding('fail', `riddle "${o.text}" hints never escalate to a real blip`);
+      // Street-answer riddles (owner: "I'm walking all over Fax Street and it doesn't trigger"): the
+      // trigger must be the whole road corridor, not a dot. Assert MULTIPLE points along the answer
+      // street's own polyline trigger, and that a different street's midpoint does NOT.
+      if (o.streetName) {
+        const segDist = (x, z, a, b) => { const dx = b.x - a.x, dz = b.z - a.z; const l2 = dx * dx + dz * dz; const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / l2)) : 0; return Math.hypot(x - (a.x + t * dx), z - (a.z + t * dz)); };
+        // Prefer the REAL game trigger (Game.onNamedStreet) so we assert what actually fires; fall back
+        // to the same corridor geometry if it isn't exposed.
+        const onStreet = (x, z, name) => typeof g.onNamedStreet === 'function' ? g.onNamedStreet(name, x, z) : (window.__roads ?? []).some((r) => r.name === name && r.points.some((p, i) => i > 0 && segDist(x, z, r.points[i - 1], p) <= 14));
+        const own = (window.__roads ?? []).filter((r) => r.name === o.streetName).flatMap((r) => r.points);
+        if (!own.length) finding('fail', `street-answer riddle names "${o.streetName}" but no such road exists in the network`);
+        else {
+          const samples = [own[0], own[Math.floor(own.length / 2)], own[own.length - 1]];
+          const hitOwn = samples.filter((p) => onStreet(p.x, p.z, o.streetName)).length;
+          if (hitOwn < samples.length) finding('fail', `street-corridor trigger for "${o.streetName}" fires at only ${hitOwn}/${samples.length} points along its own polyline (owner: whole street must trigger, not a dot)`);
+          const mid = own[Math.floor(own.length / 2)];
+          const other = (window.__roads ?? []).find((r) => r.name && r.name !== o.streetName && r.points.length && Math.hypot(r.points[0].x - mid.x, r.points[0].z - mid.z) < 400);
+          if (other) { const om = other.points[Math.floor(other.points.length / 2)]; if (onStreet(om.x, om.z, o.streetName)) finding('warn', `a nearby street (${other.name}) reads inside the "${o.streetName}" corridor — trigger not tight enough`); }
+          if (hitOwn === samples.length) note(`street corridor "${o.streetName}": all ${samples.length} own-polyline samples trigger`);
+        }
+      }
     } else if (['reach', 'escape', 'collect', 'checkpoints', 'enter-kind', 'follow'].includes(o.kind)) {
       if (!marker) finding(o.conditionsOnly && !o.target ? 'warn' : 'fail', `no world marker for located objective "${o.text}"`);
       if (marker) {

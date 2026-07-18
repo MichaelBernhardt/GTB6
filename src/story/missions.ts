@@ -101,9 +101,9 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['delivery-run'] },
     intro: 'Thirty years I called the trains at Park Station. Now I call the streets. Three riddles — I\'ll ring each block on your map, but no arrows: read the signs inside the circle like we used to.',
     start: spot(PARK_STATION_SPOT, 'Oupa Jakes'), objectives: [
-      { kind: 'reach', hidden: true, text: '"Stand where the street sign admits what broke your suspension."', target: spot(RIDDLE_SPOTS[0]!, 'Pothole Street') },
-      { kind: 'reach', hidden: true, text: '"Stand in the lane they named after the dark — Eskom\'s favourite address."', target: spot(RIDDLE_SPOTS[1]!, 'Loadshed Lane'), checkpoint: true },
-      { kind: 'reach', hidden: true, text: '"Stand in the street named for what offices sent before email."', target: spot(RIDDLE_SPOTS[2]!, 'Fax Street'), checkpoint: true },
+      { kind: 'reach', hidden: true, streetName: 'Pothole Street', text: '"Stand where the street sign admits what broke your suspension."', target: spot(RIDDLE_SPOTS[0]!, 'Pothole Street') },
+      { kind: 'reach', hidden: true, streetName: 'Loadshed Lane', text: '"Stand in the lane they named after the dark — Eskom\'s favourite address."', target: spot(RIDDLE_SPOTS[1]!, 'Loadshed Lane'), checkpoint: true },
+      { kind: 'reach', hidden: true, streetName: 'Fax Street', text: '"Stand in the street named for what offices sent before email."', target: spot(RIDDLE_SPOTS[2]!, 'Fax Street'), checkpoint: true },
       { kind: 'reach', text: 'Tell Oupa Jakes what you saw', target: spot(PARK_STATION_SPOT, 'Oupa Jakes') },
     ],
   },

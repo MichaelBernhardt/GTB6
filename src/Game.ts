@@ -1507,7 +1507,9 @@ export class Game {
     const target = this.missionTargetRaw(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     if (dt > 0 && this.lastFocus) this.focusSpeed = Math.min(80, Math.hypot(focus.x - this.lastFocus.x, focus.z - this.lastFocus.z) / dt);
     (this.lastFocus ??= new THREE.Vector3()).copy(focus);
-    const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
+    const reached = objective?.streetName
+      ? this.onNamedStreet(objective.streetName, focus.x, focus.z) // street-answer riddle: the whole road corridor triggers
+      : Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
     if (objective?.kind === 'checkpoints' && reached) {
       const stopIndex = this.deliveryIndex;
       const stopObjective = this.missions.objectiveIndex; // captured BEFORE the register: the final stop advances the index
@@ -1554,6 +1556,23 @@ export class Game {
     if (guide.toDest != null && shortDest) return ` — Next stop: ${guide.next ?? shortDest}. ${shortDest} in ${guide.toDest} stop${guide.toDest > 1 ? 's' : ''}`;
     if (guide.next) return ` — Next stop: ${guide.next}. Stay aboard`;
     return ' — Arriving: this is your stop';
+  }
+
+  /** Is (x,z) within a lane's width of the named street's road polyline? The trigger for a riddle
+   *  whose answer is a whole street — the owner walked all over Fax Street and a single dot never fired.
+   *  Same name source as the generated street signs, so the sign the player reads IS the trigger. */
+  private onNamedStreet(name: string, x: number, z: number, tol = 14): boolean {
+    for (const road of ROAD_NETWORK) {
+      if (road.name !== name) continue;
+      const pts = road.points;
+      for (let i = 1; i < pts.length; i++) {
+        const ax = pts[i - 1]!.x, az = pts[i - 1]!.z, bx = pts[i]!.x, bz = pts[i]!.z;
+        const dx = bx - ax, dz = bz - az; const len2 = dx * dx + dz * dz;
+        const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / len2)) : 0;
+        if (Math.hypot(x - (ax + t * dx), z - (az + t * dz)) <= tol) return true;
+      }
+    }
+    return false;
   }
 
   private riddleSearchArea(): { x: number; z: number; radius: number } | undefined {
