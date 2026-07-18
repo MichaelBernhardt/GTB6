@@ -86,7 +86,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     ],
     rewards: { weapon: 'smg', note: 'Bra Vusi throws in a Micro SMG' },
   },
-  'dockside-signal': { tier: 'standard',
+  'dockside-signal': { tier: 'substantial',
     waves: [{ objective: 1, spots: HOSTILE_SPOTS }],
     rewards: { weapon: 'shotgun', standing: 6, note: 'Candice arms her new enforcer — a pump shotgun, and the ranks know your name' },
     radio: [{ objective: 3, title: 'Candice', detail: 'What did you grab exactly? Ricardo says there\'s a paper stapled to my permit… a DIESEL roster. Wemmer moves fuel for somebody big.' }],

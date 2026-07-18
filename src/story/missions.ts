@@ -125,7 +125,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['the-audition'] },
     intro: 'Ophirton feeder substation. After dark. There\'s a main breaker inside with nobody\'s name on it. Throw it, walk away, and let the city remember who sells light in this town.',
     start: spot(SOLLY_START, 'Solly'), objectives: [
-      { kind: 'reach', conditions: { atNight: true }, text: 'Get to the Ophirton feeder substation after dark', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
+      { kind: 'reach', radius: 16, conditions: { atNight: true }, text: 'Get to the Ophirton feeder substation after dark', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
       { kind: 'collect', text: 'Throw the main breaker', target: spot(SUBSTATION_BREAKER, 'Main breaker'), checkpoint: true },
       { kind: 'lose-wanted', text: 'Get clear of the JMPD response', checkpoint: true },
     ],
@@ -205,7 +205,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['choice:two-fires:sindi'] },
     intro: 'They cut the Ophirton feeder again tonight — your old crew. Be there when they clock in. I need the rig on camera and the cutters on the ground.',
     start: spot(SINDI_START, 'Sindi'), setFlags: ['act3'], objectives: [
-      { kind: 'reach', conditions: { atNight: true }, text: 'Be at the Ophirton feeder after dark', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
+      { kind: 'reach', radius: 16, conditions: { atNight: true }, text: 'Be at the Ophirton feeder after dark', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
       { kind: 'defeat', required: 3, text: 'Drop the cutting crew before they finish the job', checkpoint: true },
       { kind: 'collect', text: 'Photograph the cutting rig', target: spot(SUBSTATION_BREAKER, 'Cutting rig'), checkpoint: true },
       { kind: 'reach', text: 'Bring Sindi the proof', target: spot(SINDI_START, 'Sindi'), checkpoint: true },
@@ -239,9 +239,9 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['choice:two-fires:sindi'], missions: ['dark-house'] },
     intro: 'The ledger goes to the Constitution Hill handover — and the cartel knows you have it. After that, everything they own is evidence. Evidence goes missing all the time.',
     start: spot(SINDI_START, 'Sindi'), setFlags: ['endgame'], objectives: [
-      { kind: 'reach', timeLimit: 400, text: 'Run the ledger to the Constitution Hill handover', target: spot(CON_HILL_SPOT, 'Handover') },
+      { kind: 'reach', radius: 14, timeLimit: 600, text: 'Run the ledger to the Constitution Hill handover', target: spot(CON_HILL_SPOT, 'Handover') },
       { kind: 'lose-wanted', text: 'Shake the heat', checkpoint: true },
-      { kind: 'checkpoints', required: 3, timeLimit: 600, text: 'Pick the carcass: three cartel stashes before SAPS seals them', checkpoint: true },
+      { kind: 'checkpoints', required: 3, timeLimit: 1000, text: 'Pick the carcass: three cartel stashes before SAPS seals them', checkpoint: true },
     ],
   },
   {
@@ -249,7 +249,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['endgame'] },
     intro: 'Listen to me. The Ophirton feeder is rigged to blow — a permanent Stage Six, the whole grid on its knees. Whatever you are now, your city dies with that substation. Go.',
     start: spot(SINDI_START, 'Sindi'), setFlags: ['stage-six-over'], objectives: [
-      { kind: 'reach', timeLimit: 400, text: 'Get to the Ophirton feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
+      { kind: 'reach', radius: 16, timeLimit: 600, text: 'Get to the Ophirton feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
       { kind: 'defeat', required: 4, text: 'Put the wreckers down', checkpoint: true },
       { kind: 'survive', timeLimit: 90, text: 'Hold the substation until the relief crew arrives', checkpoint: true },
     ],
