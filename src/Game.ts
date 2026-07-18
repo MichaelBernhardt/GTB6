@@ -220,7 +220,9 @@ export class Game {
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.setupRenderer(); this.setupScene();
+    this.ui.showLoading({ progress: 18, label: 'Building Johannesburg', detail: 'Laying out roads, terrain, water and landmarks.' });
     this.city = new City(this.scene, this.baseQuality());
+    this.ui.showLoading({ progress: 46, label: 'City foundations ready', detail: 'Starting the people, traffic and game systems.' });
     this.districtTargets = districtAnchors((x, z) => this.city.districtAt(x, z));
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.baseQuality(), this.save.timeOfDay);
     this.torch = new TorchSystem(this.scene);
@@ -258,13 +260,35 @@ export class Game {
   }
 
   private async prepareAssets(retry = false): Promise<void> {
-    const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading'; this.ui.showLoading();
+    const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading';
+    this.ui.showLoading({ progress: 52, label: retry ? 'Retrying required models' : 'Loading required models', detail: 'Player, taxis and trees · 0 of 3 ready.' });
+    let completed = 0; let failed = false;
+    const track = (name: string, task: Promise<void>): Promise<void> => task.then(() => {
+      completed++;
+      if (failed || attempt !== this.assetLoadAttempt) return;
+      this.ui.showLoading({ progress: 52 + completed * 10, label: `${name} ready`, detail: `Player, taxis and trees · ${completed} of 3 ready.` });
+    });
     try {
-      await Promise.all([retry ? this.player.retryCharacter() : this.player.loadCharacter(), loadTreeLibrary(), loadTaxiLibrary()]);
+      await Promise.all([
+        track('Player and moves', retry ? this.player.retryCharacter() : this.player.loadCharacter()),
+        track('Joburg trees', loadTreeLibrary()),
+        track('Quantum taxis', loadTaxiLibrary()),
+      ]);
       if (attempt !== this.assetLoadAttempt) return;
+      this.ui.showLoading({ progress: 85, label: 'Planting the city', detail: 'Installing authored trees and preparing nearby streets.' });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       this.city.installTreeAssets();
+      await this.city.warmInitialBuildings(this.player.group.position, (complete, total) => {
+        if (attempt !== this.assetLoadAttempt) return;
+        const fraction = total > 0 ? complete / total : 1;
+        this.ui.showLoading({ progress: 86 + fraction * 13, label: 'Opening your neighbourhood', detail: `Nearby building blocks · ${complete} of ${total} ready.` });
+      });
+      if (attempt !== this.assetLoadAttempt) return;
+      this.ui.showLoading({ progress: 100, label: 'Joburg is ready', detail: 'Welcome to the city.' });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       this.requiredAssetsReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
     } catch (error) {
+      failed = true;
       if (attempt !== this.assetLoadAttempt) return;
       console.error('[assets] A required 3D asset failed to load.', error);
       this.ui.showAssetFailure(() => { void this.prepareAssets(true); });

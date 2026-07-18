@@ -2,7 +2,7 @@
 
 An original open-world Jozi misadventure built with Three.js and TypeScript. Walk, drive, take questionable freelance work, annoy the JMPD, and try to keep the bakkie facing mostly forwards.
 
-**Play the production build:** [groot-theft-bakkie-6-18059d9a06b8.herokuapp.com](https://groot-theft-bakkie-6-18059d9a06b8.herokuapp.com/)
+**Play the production build:** [groottheftbakkie.com](https://www.groottheftbakkie.com/)
 
 The city combines OpenStreetMap-derived Johannesburg roads with procedural buildings, vegetation, traffic, pedestrians, shops, missions, a day/night cycle, and a deliberately impossible strip of coast. Cape Town kept the mountain, so Jozi borrowed the sea.
 
@@ -141,7 +141,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for runtime ownership and data flow, and 
 
 ## Production and Heroku
 
-The live production game is available at [https://groot-theft-bakkie-6-18059d9a06b8.herokuapp.com/](https://groot-theft-bakkie-6-18059d9a06b8.herokuapp.com/).
+The live production game is available at [https://www.groottheftbakkie.com/](https://www.groottheftbakkie.com/).
 
 The production command serves the Vite bundle from a small Node HTTP server with compression, asset caching, SPA fallback, and a `/healthz` endpoint.
 

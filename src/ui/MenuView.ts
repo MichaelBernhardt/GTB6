@@ -1,6 +1,6 @@
 import type { MissionChoice } from '../systems/MissionSystem';
 import type { CheatSettings, GameSettings } from '../types';
-import { formatMoney, reputationLabel, type CheatWeaponEntry, type DrinkCatalogEntry, type MainMenuSummary, type MenuScreen, type ShopArmourEntry, type ShopCatalogEntry } from './UIModels';
+import { clampPercent, formatMoney, reputationLabel, type CheatWeaponEntry, type DrinkCatalogEntry, type LoadingState, type MainMenuSummary, type MenuScreen, type ShopArmourEntry, type ShopCatalogEntry } from './UIModels';
 import { inebriationLabel, INEBRIATION_MAX } from '../core/DrinkRules';
 
 export class MenuView {
@@ -9,8 +9,17 @@ export class MenuView {
 
   hide(): void { this.root.classList.remove('is-visible'); this.root.setAttribute('aria-hidden', 'true'); this.screen = 'none'; }
 
-  loading(): void {
-    this.set('loading', `<section class="menu-card menu-card--loading"><p class="eyebrow">CITY SERVICES</p><h2>Getting Joburg ready</h2><div class="loading-stripe" aria-label="Loading required 3D assets"></div><small>Checking the player, taxis, trees and moves.</small></section>`);
+  loading(state: LoadingState): void {
+    if (this.screen !== 'loading') {
+      this.set('loading', `<section class="menu-card menu-card--loading" aria-busy="true"><p class="eyebrow">CITY SERVICES</p><h2>Getting Joburg ready</h2><div class="loading-progress" role="progressbar" aria-label="Loading game" aria-valuemin="0" aria-valuemax="100"><i data-loading-bar></i></div><div class="loading-progress__status"><strong data-loading-label></strong><output data-loading-percent></output></div><small data-loading-detail></small></section>`);
+    }
+    const progress = clampPercent(state.progress);
+    const meter = this.root.querySelector<HTMLElement>('.loading-progress');
+    meter?.setAttribute('aria-valuenow', String(progress)); meter?.setAttribute('aria-valuetext', `${state.label}, ${progress}%`);
+    const bar = this.root.querySelector<HTMLElement>('[data-loading-bar]'); if (bar) bar.style.width = `${progress}%`;
+    const label = this.root.querySelector<HTMLElement>('[data-loading-label]'); if (label) label.textContent = state.label;
+    const percent = this.root.querySelector<HTMLOutputElement>('[data-loading-percent]'); if (percent) percent.textContent = `${progress}%`;
+    const detail = this.root.querySelector<HTMLElement>('[data-loading-detail]'); if (detail) detail.textContent = state.detail;
   }
 
   assetFailed(retry: () => void): void {

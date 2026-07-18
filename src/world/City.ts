@@ -702,6 +702,25 @@ export class City {
     if (streamModels) this.updateBuildingChunks(focus.x, focus.z);
   }
 
+  /** Build the player's immediate neighbourhood before play begins. The wider city keeps streaming under
+   *  the normal frame budget, but these closest cells are ready before the loading gate opens. */
+  async warmInitialBuildings(focus: THREE.Vector3, onProgress: (complete: number, total: number) => void): Promise<void> {
+    const range = MERGE_CHUNK_SIZE * 0.8;
+    const minX = Math.floor((focus.x - range) / MERGE_CHUNK_SIZE); const maxX = Math.floor((focus.x + range) / MERGE_CHUNK_SIZE);
+    const minZ = Math.floor((focus.z - range) / MERGE_CHUNK_SIZE); const maxZ = Math.floor((focus.z + range) / MERGE_CHUNK_SIZE);
+    const targets: string[] = [];
+    for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
+      if (cellDistance(focus.x, focus.z, cx, cz, MERGE_CHUNK_SIZE) <= range) targets.push(`${cx},${cz}`);
+    }
+    const readyCount = (): number => targets.reduce((count, key) => count + Number(this.buildingCells.has(key)), 0);
+    let complete = readyCount(); onProgress(complete, targets.length);
+    while (complete < targets.length) {
+      this.updateBuildingChunks(focus.x, focus.z);
+      complete = readyCount(); onProgress(complete, targets.length);
+      if (complete < targets.length) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+  }
+
   /** (Re)builds every water surface for the given quality tier; safe to call live from the pause menu.
    *  The old handle disposes its geometries, materials, and the planar mirror's render target. */
   setWaterQuality(quality: BaseQuality): void {
