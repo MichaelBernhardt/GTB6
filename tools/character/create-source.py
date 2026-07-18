@@ -376,12 +376,34 @@ def create_animation_contract(rig):
         "UpperArm_L": (1.10, 0.0, -0.80), "LowerArm_L": (-0.35, 0.0, -0.40),
         "UpperArm_R": (1.10, 0.0, 0.80), "LowerArm_R": (-0.35, 0.0, 0.40),
     }
+    # Riding poses share the aim pose's sign rule: positive Spine/Chest/UpperArm X
+    # pitches/reaches forward on this rig. The original negative values leaned the
+    # rider ~18-45 degrees backward with both hands trailing behind the shoulders
+    # ("blown off the back"); values below are tuned against bone world positions
+    # sampled from the built GLB (torso forward of vertical, hands forward of the
+    # shoulders at handlebar height). Head pitches up so the rider watches the road.
     bicycle = {
-        "Spine": (-0.28, 0.0, 0.0), "Chest": (-0.18, 0.0, 0.0),
-        "UpperArm_L": (-0.55, 0.0, 0.40), "LowerArm_L": (-0.76, 0.0, -0.12),
-        "UpperArm_R": (-0.55, 0.0, -0.40), "LowerArm_R": (-0.76, 0.0, 0.12),
+        "Spine": (0.18, 0.0, 0.0), "Chest": (0.12, 0.0, 0.0), "Head": (-0.22, 0.0, 0.0),
+        "UpperArm_L": (0.55, 0.0, -0.55), "LowerArm_L": (-0.25, 0.0, -0.12),
+        "UpperArm_R": (0.55, 0.0, 0.55), "LowerArm_R": (-0.25, 0.0, 0.12),
         "UpperLeg_L": (-0.78, 0.0, 0.0), "LowerLeg_L": (1.25, 0.0, 0.0),
         "UpperLeg_R": (-0.28, 0.0, 0.0), "LowerLeg_R": (0.72, 0.0, 0.0),
+    }
+    # Motorbikes get their own poses instead of bicycle deltas: both feet sit
+    # symmetrically on the pegs (the bicycle's split pedal stance reads wrong).
+    motorbike = {
+        "Spine": (0.10, 0.0, 0.0), "Chest": (0.08, 0.0, 0.0), "Head": (-0.14, 0.0, 0.0),
+        "UpperArm_L": (0.62, 0.0, -0.50), "LowerArm_L": (-0.20, 0.0, -0.12),
+        "UpperArm_R": (0.62, 0.0, 0.50), "LowerArm_R": (-0.20, 0.0, 0.12),
+        "UpperLeg_L": (-0.54, 0.0, 0.0), "LowerLeg_L": (1.00, 0.0, 0.0),
+        "UpperLeg_R": (-0.54, 0.0, 0.0), "LowerLeg_R": (1.00, 0.0, 0.0),
+    }
+    superbike = {
+        "Spine": (0.34, 0.0, 0.0), "Chest": (0.24, 0.0, 0.0), "Head": (-0.46, 0.0, 0.0),
+        "UpperArm_L": (0.78, 0.0, -0.55), "LowerArm_L": (-0.35, 0.0, -0.12),
+        "UpperArm_R": (0.78, 0.0, 0.55), "LowerArm_R": (-0.35, 0.0, 0.12),
+        "UpperLeg_L": (-0.42, 0.0, 0.0), "LowerLeg_L": (1.15, 0.0, 0.0),
+        "UpperLeg_R": (-0.42, 0.0, 0.0), "LowerLeg_R": (1.15, 0.0, 0.0),
     }
     specs = {
         "idle": [(0, combined_pose(relaxed, {"Chest": (0.006, 0, 0)})), (30, combined_pose(relaxed, {"Chest": (-0.006, 0, 0), "Head": (0.004, 0, 0)})), (60, combined_pose(relaxed, {"Chest": (0.006, 0, 0)}))],
@@ -404,8 +426,8 @@ def create_animation_contract(rig):
         "cover_move": [(0, combined_pose(mirrored_stride(0.22, -0.18), {"Chest": (0, 0, -0.18)})), (15, combined_pose(mirrored_stride(-0.22, -0.18), {"Chest": (0, 0, -0.18)})), (30, combined_pose(mirrored_stride(0.22, -0.18), {"Chest": (0, 0, -0.18)}))],
         "cover_aim": [(0, combined_pose(aim, {"Spine": (-0.14, 0, 0), "Chest": (0, 0, -0.20)})), (30, combined_pose(aim, {"Spine": (-0.14, 0, 0), "Chest": (0, 0, -0.20)}))],
         "ride_bicycle": [(0, bicycle), (15, combined_pose(bicycle, {"UpperLeg_L": (0.42, 0, 0), "LowerLeg_L": (-0.60, 0, 0), "UpperLeg_R": (-0.42, 0, 0), "LowerLeg_R": (0.58, 0, 0)})), (30, bicycle)],
-        "ride_motorbike": [(0, combined_pose(bicycle, {"Spine": (-0.08, 0, 0), "UpperLeg_L": (0.24, 0, 0), "UpperLeg_R": (0.24, 0, 0)})), (30, combined_pose(bicycle, {"Spine": (-0.08, 0, 0), "UpperLeg_L": (0.24, 0, 0), "UpperLeg_R": (0.24, 0, 0)}))],
-        "ride_superbike": [(0, combined_pose(bicycle, {"Spine": (-0.30, 0, 0), "Chest": (-0.26, 0, 0), "UpperLeg_L": (0.36, 0, 0), "UpperLeg_R": (0.36, 0, 0)})), (30, combined_pose(bicycle, {"Spine": (-0.30, 0, 0), "Chest": (-0.26, 0, 0), "UpperLeg_L": (0.36, 0, 0), "UpperLeg_R": (0.36, 0, 0)}))],
+        "ride_motorbike": [(0, motorbike), (30, motorbike)],
+        "ride_superbike": [(0, superbike), (30, superbike)],
         "freefall": [(0, {"Spine": (-0.12, 0, 0), "UpperArm_L": (-0.18, 0, 1.18), "UpperArm_R": (-0.18, 0, -1.18), "LowerArm_L": (-0.18, 0, 0), "LowerArm_R": (-0.18, 0, 0), "UpperLeg_L": (0.12, 0, 0.18), "UpperLeg_R": (0.12, 0, -0.18)}), (30, {"Spine": (-0.16, 0, 0), "UpperArm_L": (-0.22, 0, 1.12), "UpperArm_R": (-0.22, 0, -1.12), "LowerArm_L": (-0.12, 0, 0), "LowerArm_R": (-0.12, 0, 0), "UpperLeg_L": (-0.10, 0, 0.16), "UpperLeg_R": (-0.10, 0, -0.16)})],
         "parachute": [(0, {"Spine": (0.08, 0, 0), "UpperArm_L": (-0.48, 0, 1.02), "UpperArm_R": (-0.48, 0, -1.02), "LowerArm_L": (-0.72, 0, 0), "LowerArm_R": (-0.72, 0, 0), "UpperLeg_L": (-0.12, 0, 0.12), "UpperLeg_R": (-0.12, 0, -0.12)}), (30, {"Spine": (0.06, 0, 0), "UpperArm_L": (-0.44, 0, 1.00), "UpperArm_R": (-0.44, 0, -1.00), "LowerArm_L": (-0.68, 0, 0), "LowerArm_R": (-0.68, 0, 0), "UpperLeg_L": (0.08, 0, 0.12), "UpperLeg_R": (0.08, 0, -0.12)})],
     }

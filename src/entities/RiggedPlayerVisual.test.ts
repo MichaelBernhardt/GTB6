@@ -107,6 +107,33 @@ describe('protagonist GLB contract', () => {
     expect(Math.max(...pelvisHeights) - Math.min(...pelvisHeights)).toBeGreaterThan(0.015);
   });
 
+  it('rides leaning forward with the hands reaching toward the bars, never blown back', async () => {
+    // Regression for the "blown back by a rush of air" rider: the source poses used
+    // negative Spine/Chest/UpperArm X for "forward" but this rig pitches forward on
+    // positive X, so every ride clip leaned the torso 18-45 degrees BACKWARD with the
+    // hands trailing behind the shoulders. Measure the shipped GLB, don't trust eulers.
+    const gltf = await loadProtagonist();
+    const sample = (clipName: string, boneName: string): THREE.Vector3 => {
+      const mixer = new THREE.AnimationMixer(gltf.scene); const clip = THREE.AnimationClip.findByName(gltf.animations, clipName)!;
+      mixer.clipAction(clip).play(); mixer.setTime(0); gltf.scene.updateMatrixWorld(true);
+      const point = gltf.scene.getObjectByName(boneName)!.getWorldPosition(new THREE.Vector3()); mixer.stopAllAction(); return point;
+    };
+    for (const clip of ['ride_bicycle', 'ride_motorbike', 'ride_superbike']) {
+      const hips = sample(clip, 'Hips'); const head = sample(clip, 'Head');
+      const torsoPitch = Math.atan2(head.z - hips.z, head.y - hips.y); // +Z forward; positive = leaning forward
+      expect(torsoPitch, `${clip} torso must pitch forward of vertical`).toBeGreaterThan(0.1);
+      expect(torsoPitch, `${clip} torso lean stays riding, not planking`).toBeLessThan(0.9);
+      for (const side of ['L', 'R']) {
+        const hand = sample(clip, `Hand_${side}`); const shoulder = sample(clip, `UpperArm_${side}`);
+        expect(hand.z - shoulder.z, `${clip} Hand_${side} must reach forward of the shoulder`).toBeGreaterThan(0.15);
+        expect(hand.y, `${clip} Hand_${side} sits at handlebar height, not raised to the chest`).toBeLessThan(1.1);
+      }
+    }
+    // Bicycle keeps the split pedal stance; motorbikes plant both feet level on the pegs.
+    expect(Math.abs(sample('ride_bicycle', 'Foot_L').y - sample('ride_bicycle', 'Foot_R').y)).toBeGreaterThan(0.1);
+    expect(Math.abs(sample('ride_motorbike', 'Foot_L').y - sample('ride_motorbike', 'Foot_R').y)).toBeLessThan(0.02);
+  });
+
   it('loads only through the explicit lifecycle and fails closed on invalid data', async () => {
     const parent = new THREE.Group(); const valid = new RiggedPlayerVisual(parent, { load: async () => loadProtagonist() });
     expect(valid.status).toBe('idle'); expect(valid.group.visible).toBe(false); expect(parent.children).toEqual([valid.group]);
