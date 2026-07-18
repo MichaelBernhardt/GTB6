@@ -265,7 +265,6 @@ export const COURIER_DEPOT = walkSpot('Commissioner Street', { x: CBD_CENTER.x +
 const braamfontein = districtCenter('Braamfontein') ?? CBD_CENTER;
 const newtown = districtCenter('Newtown') ?? CBD_CENTER;
 const hillbrow = districtCenter('Hillbrow') ?? CBD_CENTER;
-const ophirton = districtCenter('Ophirton') ?? CBD_CENTER;
 const sandton = districtCenter('Sandton') ?? CBD_CENTER;
 const zooLake = WATER_POLYGONS.find((water) => /zoo/i.test(water.name));
 const zooLakeCenter: MapPt = zooLake ? { x: zooLake.cx, z: zooLake.cz } : { x: braamfontein.x, z: braamfontein.z };
@@ -374,7 +373,7 @@ export const KELVIN_FENCE_RADIUS = 26;
 
 /** The Ophirton feeder substation Sindi works — a SUBSTANTIAL ~2.2km night run (Pull the Plug,
  *  Catch Them Cutting, The Switch all key off it). */
-export const SUBSTATION_SPOT = walkSpotNear(ophirton, 4, 6);
+export const SUBSTATION_SPOT = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 10 * P, z: CBD_CENTER.z + 150 * P }, 4, 6);
 export const SUBSTATION_BREAKER: MapPt = { x: SUBSTATION_SPOT.x + 6, z: SUBSTATION_SPOT.z + 4 };
 /** Sindi's flat on the Braamfontein edge (~0.7km, central to her three jobs: the Park Station drop,
  *  the Ophirton feeder, and the Constitution Hill handover). */
@@ -417,9 +416,9 @@ export const TANKER_SPOT = kerbVehicleSpot('Wemmer Jubilee Road', { x: CBD_CENTE
 
 /** Cartel stash sweep (Carcass): three lock-ups across the belt. */
 export const STASH_SPOTS: MapPt[] = [
-  walkSpotNear(toward(braamfontein, 0.55), 3, 5),                        // a Braamfontein lock-up
-  walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z + 110 * P }, 3, 5), // the industrial belt
-  walkSpotNear(toward(ophirton, 0.5), 3, 5),                            // out toward the feeder
+  walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 35 * P, z: CBD_CENTER.z + 120 * P }, 3, 5), // the industrial belt
+  walkSpot('Risk-It Street', { x: CBD_CENTER.x + 15 * P, z: CBD_CENTER.z + 70 * P }, 3, 5),       // a CBD-edge lock-up
+  walkSpot('Commissioner Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z + 55 * P }, 3, 5),  // west-side yard
 ];
 
 /** Grid Diary pages 3-12 scattered at the city's proudest places (pages 1-2 are mission rewards). */

@@ -251,6 +251,10 @@ window.__qa = (() => {
           }
         }
         if (sim === -1 && o.kind === 'checkpoints') return 'stuck:checkpoint-not-registering';
+        // Hold night across our own teleport-drive: driveRoute() advances the game clock at game-rate
+        // per sim-step, so a long night run can roll past dawn and defeat the hour we set before driving.
+        // A real player covering ~1km never burns whole game-hours; re-assert night at the advance check.
+        if (o.conditions?.atNight && !(g.dayNight.hour > 19 || g.dayNight.hour < 5)) { g.dayNight.hour = 22; note('shortcut: re-set hour 22 after drive for atNight'); }
         step(5);
         return advanced() ? 'ok' : 'stuck:arrived-but-not-advanced';
       }

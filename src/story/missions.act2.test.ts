@@ -211,7 +211,7 @@ describe('Act 3 tails and finale', () => {
     const system = sim(); system.start('carcass');
     expect(system.update(1, base, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, wantedLevel: 0 }, false).advanced).toBe(true);
-    expect(system.remainingTime).toBe(1000);
+    expect(system.remainingTime).toBe(1200);
     system.registerCheckpoint(); system.registerCheckpoint();
     const done = system.registerCheckpoint();
     expect(done.completed?.reward).toBe(12000);
@@ -227,7 +227,7 @@ describe('Act 3 tails and finale', () => {
 
   it('missing the finale timer fails and restarts from the top', () => {
     const system = sim(); system.start('the-switch');
-    expect(system.update(601, base, false).failed).toBe('Time expired');
+    expect(system.update(801, base, false).failed).toBe('Time expired');
     system.restart();
     expect(system.objectiveIndex).toBe(0);
   });

@@ -132,7 +132,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the bakkie, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
     rewards: { armour: 100, note: 'The crew kits you out — full body armour on Solly\'s tab' },
   },
-  'pull-the-plug': { tier: 'substantial',
+  'pull-the-plug': { tier: 'standard',
     forceBlackout: 2, // the breaker goes over: the grid dies around you
     wanted: { objective: 2, level: 2 },
     radio: [{ objective: 2, title: 'The city goes dark', detail: 'Every light you can see just died. Somewhere, a control room phone is ringing.' }],
@@ -166,7 +166,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     quarry: { spawnObjective: 0, kind: 'van', color: EVIDENCE_VAN_COLOR, spawn: EVIDENCE_VAN_SPOT, igniteObjective: 2 },
     wanted: { objective: 2, level: 2 },
   },
-  'catch-them-cutting': { tier: 'substantial',
+  'catch-them-cutting': { tier: 'standard',
     waves: [{ objective: 1, spots: around(SUBSTATION_SPOT, [[7, 5], [-6, 4], [5, -6]]) }],
   },
 
@@ -178,11 +178,11 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
       { objective: 2, spots: around(KELVIN_GATE_SPOT, [[10, 4], [-8, -6], [5, 9], [-4, 10]]) },
     ],
   },
-  'carcass': { tier: 'substantial',
+  'carcass': { tier: 'substantial', journeys: [2], // the endgame loot sweep is a sanctioned late-arc loop
     stops: STASH_SPOTS,
     wanted: { objective: 0, level: 2 },
   },
-  'the-switch': { tier: 'substantial',
+  'the-switch': { tier: 'standard',
     waves: [
       { objective: 1, spots: around(SUBSTATION_SPOT, [[8, 5], [-7, 6], [6, -6], [-5, -7]]) },
       { objective: 2, spots: around(SUBSTATION_SPOT, [[9, 3], [-8, 5], [4, 9]]) },

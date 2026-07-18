@@ -241,7 +241,7 @@ export const MISSIONS: MissionDefinition[] = [
     start: spot(SINDI_START, 'Sindi'), setFlags: ['endgame'], objectives: [
       { kind: 'reach', radius: 14, timeLimit: 600, text: 'Run the ledger to the Constitution Hill handover', target: spot(CON_HILL_SPOT, 'Handover') },
       { kind: 'lose-wanted', text: 'Shake the heat', checkpoint: true },
-      { kind: 'checkpoints', required: 3, timeLimit: 1000, text: 'Pick the carcass: three cartel stashes before SAPS seals them', checkpoint: true },
+      { kind: 'checkpoints', required: 3, timeLimit: 1200, text: 'Pick the carcass: three cartel stashes before SAPS seals them', checkpoint: true },
     ],
   },
   {
@@ -249,7 +249,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { flags: ['endgame'] },
     intro: 'Listen to me. The Ophirton feeder is rigged to blow — a permanent Stage Six, the whole grid on its knees. Whatever you are now, your city dies with that substation. Go.',
     start: spot(SINDI_START, 'Sindi'), setFlags: ['stage-six-over'], objectives: [
-      { kind: 'reach', radius: 16, timeLimit: 600, text: 'Get to the Ophirton feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
+      { kind: 'reach', radius: 16, timeLimit: 800, text: 'Get to the Ophirton feeder before the wreckers finish', target: spot(SUBSTATION_SPOT, 'Ophirton feeder') },
       { kind: 'defeat', required: 4, text: 'Put the wreckers down', checkpoint: true },
       { kind: 'survive', timeLimit: 90, text: 'Hold the substation until the relief crew arrives', checkpoint: true },
     ],
