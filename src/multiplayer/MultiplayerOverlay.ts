@@ -1,4 +1,5 @@
 import type { NetPlayer } from './protocol';
+import { rankOnlinePlayers } from './presentation';
 
 export class MultiplayerOverlay {
   root = document.createElement('section');
@@ -24,16 +25,16 @@ export class MultiplayerOverlay {
   show(): void { this.root.hidden = false; }
   hide(): void { this.root.hidden = true; }
   setStatus(text: string, danger = false): void { this.status.textContent = text; this.status.classList.toggle('is-danger', danger); }
-  setPlayers(players: NetPlayer[], selfId?: string): void {
-    const ordered = [...players].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-    const signature = JSON.stringify(ordered.map((player) => [player.id, player.name, player.kills, player.deaths, player.id === selfId]));
+  setPlayers(players: NetPlayer[], selfId?: string, carrierId?: string): void {
+    const ordered = rankOnlinePlayers(players);
+    const signature = JSON.stringify(ordered.map((player) => [player.id, player.name, player.runs, player.kills, player.deaths, player.id === selfId, player.id === carrierId]));
     if (signature === this.playerListSignature) return;
     this.playerListSignature = signature;
     this.scoreboard.replaceChildren();
     const title = document.createElement('strong'); title.textContent = `ONLINE · ${players.length}/16`; this.scoreboard.append(title);
     for (const player of ordered) {
-      const row = document.createElement('span'); row.className = player.id === selfId ? 'is-self' : '';
-      const name = document.createElement('b'); name.textContent = player.name; const stats = document.createElement('small'); stats.textContent = `${player.kills} K · ${player.deaths} D`;
+      const row = document.createElement('span'); row.classList.toggle('is-self', player.id === selfId); row.classList.toggle('is-carrier', player.id === carrierId);
+      const name = document.createElement('b'); name.textContent = `${player.id === carrierId ? '🔥 ' : ''}${player.name}`; const stats = document.createElement('small'); stats.textContent = `${player.runs} R · ${player.kills} K · ${player.deaths} D`;
       row.append(name, stats); this.scoreboard.append(row);
     }
   }

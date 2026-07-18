@@ -79,7 +79,10 @@ export class Vehicle {
     this.group.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
       if (!this.taxiSharedGeometries.has(object.geometry)) object.geometry.dispose();
-      for (const material of Array.isArray(object.material) ? object.material : [object.material]) if (this.taxiOwnedMaterials.has(material) && !disposedMaterials.has(material)) { disposedMaterials.add(material); material.dispose(); }
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+        const owned = this.spec.kind === 'taxi' ? this.taxiOwnedMaterials.has(material) : true;
+        if (owned && !disposedMaterials.has(material)) { disposedMaterials.add(material); material.dispose(); }
+      }
     });
   }
 
@@ -213,6 +216,10 @@ export class Vehicle {
     this.group.position.y = this.groundY; this.group.rotation.set(0, this.heading, 0); this.speed = 0;
   }
 
+  /** Network/replay presentation hook: animate the authored wheels, steering and lamps from an
+   *  authoritative pose without running local vehicle physics. */
+  updatePresentation(dt: number, braking: boolean): void { this.updateVisuals(dt, braking); }
+
   private move(dt: number, city: City): void {
     const old = this.group.position.clone();
     const next = old.clone(); next.x += Math.sin(this.heading) * this.speed * dt; next.z += Math.cos(this.heading) * this.speed * dt;
@@ -334,13 +341,13 @@ export class Vehicle {
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x151a1c, metalness: 0.52, roughness: 0.32 });
     const chrome = new THREE.MeshStandardMaterial({ color: 0xa9b0b0, metalness: 0.9, roughness: 0.18 });
     const glass = new THREE.MeshPhysicalMaterial({ color: this.police ? 0x263e4a : 0x213e49, roughness: 0.08, metalness: 0.22, clearcoat: 1, clearcoatRoughness: 0.05 });
-    const bodyHeight = height * (van ? 0.7 : sport ? 0.42 : 0.5);
+    const bodyHeight = height * (van ? 0.32 : sport ? 0.42 : 0.5);
     const body = new THREE.Mesh(new RoundedBoxGeometry(width, bodyHeight, length, 4, Math.min(0.18, bodyHeight * 0.28)), bodyMat); body.position.y = 0.38 + bodyHeight / 2; body.castShadow = true; body.receiveShadow = true;
-    const hoodLength = van ? length * 0.18 : length * 0.34;
-    const hood = new THREE.Mesh(new RoundedBoxGeometry(width * 0.94, sport ? 0.24 : 0.34, hoodLength, 3, 0.09), bodyMat); hood.position.set(0, body.position.y + bodyHeight * 0.45, length * 0.34); hood.castShadow = true;
-    const cabinHeight = van ? height * 0.72 : height * (sport ? 0.48 : 0.56);
-    const cabinLength = van ? length * 0.64 : length * 0.48;
-    const cabin = new THREE.Mesh(new RoundedBoxGeometry(width * 0.82, cabinHeight, cabinLength, 4, 0.14), glass); cabin.position.set(0, body.position.y + bodyHeight * 0.45 + cabinHeight / 2, van ? -length * 0.05 : -length * 0.05); cabin.castShadow = true;
+    const hoodLength = van ? length * 0.24 : length * 0.34;
+    const hood = new THREE.Mesh(new RoundedBoxGeometry(width * 0.94, van ? 0.42 : sport ? 0.24 : 0.34, hoodLength, 3, 0.09), bodyMat); hood.position.set(0, body.position.y + bodyHeight * 0.45, van ? length * 0.37 : length * 0.34); hood.castShadow = true;
+    const cabinHeight = van ? height * 0.58 : height * (sport ? 0.48 : 0.56);
+    const cabinLength = van ? length * 0.36 : length * 0.48;
+    const cabin = new THREE.Mesh(new RoundedBoxGeometry(width * 0.82, cabinHeight, cabinLength, 4, 0.14), glass); cabin.position.set(0, body.position.y + bodyHeight * 0.45 + cabinHeight / 2, van ? length * 0.1 : -length * 0.05); cabin.castShadow = true;
     const roof = new THREE.Mesh(new RoundedBoxGeometry(width * 0.84, 0.13, cabinLength * 0.9, 3, 0.05), bodyMat); roof.position.set(0, cabin.position.y + cabinHeight / 2 + 0.02, cabin.position.z); roof.castShadow = true;
     const frontBumper = new THREE.Mesh(new RoundedBoxGeometry(width * 0.9, 0.16, 0.16, 2, 0.05), trimMat); frontBumper.position.set(0, 0.43, length / 2 + 0.08);
     const rearBumper = frontBumper.clone(); rearBumper.position.z = -length / 2 - 0.08;
@@ -348,6 +355,17 @@ export class Vehicle {
     const lowerGrille = new THREE.Mesh(new THREE.BoxGeometry(width * 0.28, 0.07, 0.042), chrome); lowerGrille.position.set(0, 0.63, length / 2 + 0.116);
     this.group.add(body, hood, cabin, roof, frontBumper, rearBumper, grille, lowerGrille);
     this.cabinParts.push(cabin, roof);
+    if (van) {
+      const bed = new THREE.Group(); bed.name = 'bakkie-bed'; bed.position.z = -length * 0.29;
+      const floor = new THREE.Mesh(new RoundedBoxGeometry(width * 0.9, 0.14, length * 0.39, 2, 0.04), bodyMat); floor.position.y = 0.82;
+      const frontWall = new THREE.Mesh(new RoundedBoxGeometry(width * 0.9, 0.54, 0.12, 2, 0.035), bodyMat); frontWall.position.set(0, 1.04, length * 0.19);
+      const tailgate = frontWall.clone(); tailgate.position.z = -length * 0.19;
+      bed.add(floor, frontWall, tailgate);
+      for (const side of [-1, 1]) {
+        const rail = new THREE.Mesh(new RoundedBoxGeometry(0.13, 0.54, length * 0.39, 2, 0.035), bodyMat); rail.position.set(side * width * 0.43, 1.04, 0); bed.add(rail);
+      }
+      this.group.add(bed);
+    }
     for (const side of [-1, 1]) {
       const skirt = new THREE.Mesh(new RoundedBoxGeometry(0.1, 0.15, length * 0.68, 2, 0.04), trimMat); skirt.position.set(side * width * 0.49, 0.4, 0); this.group.add(skirt);
       const mirror = new THREE.Mesh(new RoundedBoxGeometry(0.22, 0.15, 0.34, 3, 0.07), bodyMat); mirror.position.set(side * width * 0.56, cabin.position.y + 0.08, cabin.position.z + cabinLength * 0.32); mirror.castShadow = true; this.group.add(mirror);
