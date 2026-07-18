@@ -1540,6 +1540,22 @@ export class Game {
   /** Riddle fail-softs: a generous minimap search circle around the answer (offset centre so the
    *  circle never pinpoints it), and hints that sharpen on a clock — the final hint drops a real
    *  blip (owner: markerless one-liners against a whole city are hostile; deduction stays, despair goes). */
+  /** Aboard-a-train guidance for the objective card (owner: "wtf am I supposed to do?" on a train).
+   *  Tells the rider the next stop, the stops-to-destination, or that they boarded the wrong way. */
+  private trainRideHint(): string {
+    if (this.online || !this.trains.riding) return '';
+    const objective = this.missions.objective;
+    if (!objective?.conditions?.onTrain && !objective?.conditions?.drivingTrain) return '';
+    const dest = objective.conditions?.stationName;
+    const guide = this.trains.rideGuidance(dest);
+    if (!guide) return '';
+    if (guide.wrong) return ' — Wrong way: get off at the next stop and catch one going back';
+    const shortDest = dest?.replace('Johannesburg ', '');
+    if (guide.toDest != null && shortDest) return ` — Next stop: ${guide.next ?? shortDest}. ${shortDest} in ${guide.toDest} stop${guide.toDest > 1 ? 's' : ''}`;
+    if (guide.next) return ` — Next stop: ${guide.next}. Stay aboard`;
+    return ' — Arriving: this is your stop';
+  }
+
   private riddleSearchArea(): { x: number; z: number; radius: number } | undefined {
     const objective = this.missions.objective;
     if (!objective?.hidden || !objective.target || this.missions.state !== 'active') return undefined;
@@ -2282,7 +2298,7 @@ export class Game {
     const district = this.city.districtAt(focus.x, focus.z);
     const riddleHunt = this.missions.objective?.hidden && !this.riddleRevealed; // the search circle is up
     const objective = !this.online && this.missions.objective ? {
-      missionName: this.missions.active?.name ?? '', text: this.missions.objective.text + (riddleHunt ? ' — search inside the circle on your map' : ''), progress: this.missions.objective.required ? this.missions.progress : undefined,
+      missionName: this.missions.active?.name ?? '', text: this.missions.objective.text + (riddleHunt ? ' — search inside the circle on your map' : '') + this.trainRideHint(), progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
       failed: this.missions.state === 'failed' ? this.missions.failReason ?? 'Mission failed' : undefined,
     } : undefined;

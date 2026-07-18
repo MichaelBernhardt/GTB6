@@ -432,6 +432,15 @@ window.__qa = (() => {
       }
       if (!boarded) { finding('fail', 'could not board the dwelling train anywhere along its span'); return 'stuck:board-failed'; }
     }
+    // Aboard-guidance (owner: "wtf am I supposed to do?" on a train). For a "ride to <station>"
+    // objective the game must, while riding, name the next stop / stops-to-destination or warn of a
+    // wrong-way boarding. Assert it surfaces here — before we teleport the consist to the platform.
+    { const dest = objective()?.conditions?.stationName;
+      if (dest) {
+        const guide = g.trains.rideGuidance(dest);
+        if (!guide || (!guide.next && !guide.wrong)) finding('fail', `aboard for "${objective().text}" but no ride guidance surfaced (next stop / stops-to-${dest} / wrong-way)`);
+        else note(`ride guidance aboard: ${guide.wrong ? 'wrong-way warning' : `next stop ${guide.next}, ${dest} in ${guide.toDest ?? '?'} stops`}`);
+      } }
     if (drive && !g.trains.driving) {
       // takeControls needs the rider standing in a cab zone (near the nose): seat them at s≈margin.
       if (g.trains.ride) g.trains.ride.s = 1.0;
