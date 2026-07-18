@@ -21,7 +21,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'dockside-signal': { id: 'dockside-signal:intro', lines: [
     { speaker: 'Candice', text: 'Ag no man. The Wemmer crew took our route permit. TOOK it. Off the seat of Ricardo\'s taxi.' },
     { speaker: 'You', text: 'And you want it back politely?' },
-    { speaker: 'Candice', text: 'I want it back TODAY. Go moer them, grab the permit, bring it here to the braai kiosk. I\'ll have a plate for you. Sharp?' },
+    { speaker: 'Candice', text: 'I want it back TODAY. Go moer them, grab the permit, bring it back to me here at the rank. I\'ll have a plate for you. Sharp?' },
   ] },
   'arms-deal': { id: 'arms-deal:intro', lines: [
     { speaker: 'Thandi', text: 'Two crews want tonight\'s shipment. I can pay you to keep the shop standing — or you take the stock and get rich. I won\'t pretend you haven\'t thought it.' },
@@ -31,7 +31,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'last-coach-home': { id: 'last-coach-home:intro', lines: [
     { speaker: 'Auntie Portia', text: 'Boet! Disaster. My nephew fell asleep on the train and got off without my rent bag — left it on the platform at Park Station.' },
     { speaker: 'You', text: 'Your rent was riding the train?' },
-    { speaker: 'Auntie Portia', text: 'The vetkoek lady on the platform is holding it. Hop a train out — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home.' },
+    { speaker: 'Auntie Portia', text: 'It\'s down beside the platform, right where the dof child left it. Hop a train out — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home before someone honest finds it.' },
   ] },
   'copper-wire-blues': { id: 'copper-wire-blues:intro', lines: [
     { speaker: 'Bra Vusi', text: 'That cable from the GTI? The buyer paid cash, no name, no yard. A man like that is worth knowing better.' },

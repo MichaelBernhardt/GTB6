@@ -41,13 +41,13 @@ export const MISSIONS: MissionDefinition[] = [
   },
   {
     id: 'dockside-signal', name: 'Rank Business', contact: 'Candice from Boksburg', reward: 2200, act: 'hustle',
-    intro: 'Ag no man. The Wemmer crew stole our taxi route permit. Go moer them at their terminal, grab the permit, and bring it to my braai kiosk here at the Newtown rank. Sharp?',
+    intro: 'Ag no man. The Wemmer crew stole our taxi route permit. Go moer them at their terminal, grab the permit, and bring it back to me here at the Newtown rank. Sharp?',
     start: spot(CANDICE_START, 'Candice'), objectives: [
       { kind: 'reach', text: 'Travel to the Wemmer taxi terminal', target: spot(TERMINAL_SPOT, 'Wemmer terminal') },
       { kind: 'defeat', text: 'Moer the rank enforcers', required: 3, checkpoint: true },
       { kind: 'collect', text: 'Grab the route permit', target: spot(PERMIT_SPOT, 'Route permit'), checkpoint: true },
       { kind: 'escape', text: 'Escape the terminal perimeter', target: spot(ESCAPE_SPOT, 'Safe route'), checkpoint: true },
-      { kind: 'reach', text: 'Bring it to Candice at the Newtown rank', target: spot(KIOSK_SPOT, 'Braai kiosk'), checkpoint: true },
+      { kind: 'reach', text: 'Bring it to Candice at the Newtown rank', target: spot(KIOSK_SPOT, 'Candice'), checkpoint: true },
     ],
   },
   {
@@ -68,7 +68,7 @@ export const MISSIONS: MissionDefinition[] = [
     intro: 'My nephew fell asleep on the train and left my rent bag on the platform at Park Station, the dof child. Hop a train out and fetch it before someone honest finds it, boet.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
       { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Johannesburg Park Station' }, text: 'Ride a train out to Park Station', target: spot(RENT_BAG_PLATFORM, 'Park Station') },
-      { kind: 'collect', text: 'Fetch the rent bag from the platform vetkoek stand', target: spot(RENT_BAG_SPOT, 'Rent bag'), checkpoint: true },
+      { kind: 'collect', text: 'Grab Portia\'s rent bag beside the Park Station platform', target: spot(RENT_BAG_SPOT, 'Rent bag'), checkpoint: true },
       { kind: 'reach', text: 'Bring the bag back to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
   },
@@ -154,8 +154,8 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['pull-the-plug'] },
     intro: 'I read the fault logs. That trip pattern was manual — a hand on a breaker. Your hand. Let\'s see if you can read too: "FOR SALE: one-way ticket. Collect where the whole city changes trains."',
     start: spot(SINDI_START, 'Sindi'), objectives: [
-      { kind: 'reach', hidden: true, text: '"Collect where the whole city changes trains — the big station, platform lockers."', target: spot(PAPER_DROP, 'The dead drop') },
-      { kind: 'collect', text: 'Take the dossier from the locker', target: spot(PAPER_DROP, 'Dossier'), checkpoint: true },
+      { kind: 'reach', hidden: true, text: '"Collect where the whole city changes trains — the big station, beside the platform."', target: spot(PAPER_DROP, 'The dead drop') },
+      { kind: 'collect', text: 'Take the dossier from beside the platform', target: spot(PAPER_DROP, 'Dossier'), checkpoint: true },
       { kind: 'reach', text: 'Bring the dossier back to Sindi', target: spot(SINDI_START, 'Sindi'), checkpoint: true },
     ],
   },

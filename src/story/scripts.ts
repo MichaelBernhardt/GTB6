@@ -153,7 +153,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     diaryPage: 2,
     hints: [
       { objective: 0, afterSeconds: 120, detail: 'The big one, laaitie. Where every line meets and the whole city changes trains.' },
-      { objective: 0, afterSeconds: 240, detail: 'Park Station. Platform lockers. If you can throw a breaker you can read a station board.', reveal: true },
+      { objective: 0, afterSeconds: 240, detail: 'Park Station. Right beside the platform. If you can throw a breaker you can read a station board.', reveal: true },
     ],
   },
   'the-wrong-train': { tier: 'journey',
