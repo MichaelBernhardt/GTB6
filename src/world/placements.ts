@@ -407,7 +407,10 @@ export const PIER_POINT = landmarkPoint('Seepunt Pier', { x: CBD_CENTER.x, z: CB
 export const PIER_SPOT: MapPt = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 65 * P, z: CBD_CENTER.z + 135 * P }, 3, 5);
 /** Ouma se Padstal doorstep (long-haul side run). */
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
-export const PADSTAL_SPOT: MapPt = walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 70 * P }, 3, 5);
+// The farm-stall run is the arc's one sanctioned SCENIC JOURNEY (optional side piece): a real drive
+// out over the northern ridge, ~6.6km each way, which the 900s timers and "over the mountain" copy
+// already describe. Round 2 crushed it to a block away (Eish-loff Street) — a promise/geometry lie.
+export const PADSTAL_SPOT: MapPt = walkSpot('Houghton Drive', { x: 4896, z: 1149 }, 3, 5);
 
 /** Sindi's evidence van, parked on a CBD-north side street just below Braamfontein (~0.9km from
  *  Solly). Road-agnostic kerb anchored in the dense grid: a named road detoured to 3.3km, and a

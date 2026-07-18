@@ -46,7 +46,15 @@ window.__qa = (() => {
   const pump = (x, z) => { let guard = 0; while ((g.city.buildQueue?.length || g.city.pending) && guard++ < 500) g.city.updateBuildingChunks(x, z); };
   const key = (code) => { window.dispatchEvent(new KeyboardEvent('keydown', { code })); g.update(1 / 60); window.dispatchEvent(new KeyboardEvent('keyup', { code })); };
   const planner = () => g.population.vehiclePlanner;
-  const roadRoute = (tx, tz) => { const p = focus(); return planner().plan(p.x, p.z, planner().nearest(tx, tz)); };
+  const roadRoute = (tx, tz) => {
+    const p = focus();
+    // A sanctioned journey (or any far destination) needs the citywide planner — plan()'s normal
+    // expansion cap can't reach across the map, which is fine for clustered reaches but fails a
+    // multi-km drive like the padstal run. planFar carries the citywide cap.
+    const journeyObj = (window.__scripts?.[g.missions.active?.id]?.journeys ?? []).includes(objIndex());
+    if (journeyObj || Math.hypot(tx - p.x, tz - p.z) > 2500) return planner().planFar(p.x, p.z, tx, tz);
+    return planner().plan(p.x, p.z, planner().nearest(tx, tz));
+  };
   const routeLength = (pts) => { let d = 0; for (let i = 1; i < pts.length; i++) d += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z); return d; };
   const cruise = () => (g.activeVehicle?.spec.maxSpeed ?? 34) * 0.65;
 
@@ -176,6 +184,17 @@ window.__qa = (() => {
           const need = (result.roadDistance * 1.25) / bumbleSpeed;
           result.timerNeed = Math.round(need);
           if (o.timeLimit < need * 1.8) finding('fail', `timer ${o.timeLimit}s < 1.8x bumbling ${Math.round(need)}s (route ${result.roadDistance}u, detour 1.25x @ ${bumbleSpeed.toFixed(0)}u/s) — set >= ${Math.ceil(need * 1.8 / 10) * 10}s`);
+          // PROMISE ↔ GEOMETRY (owner: padstal promised "over the mountain" with 900s timers but sat a
+          // block away — he walked it in a minute). The clean signal is a TRIVIALLY SHORT route wearing
+          // a journey-scale timer: the copy sells a trip the geometry doesn't deliver. (A generous timer
+          // on a genuinely long route isn't this defect, so key on absolute route length, not a ratio.)
+          if (result.roadDistance < 700 && o.timeLimit >= 400) finding('fail', `promise/geometry: "${o.text}" is a ${result.roadDistance}u hop but carries a ${o.timeLimit}s journey-scale timer — the copy promises a trip the geometry doesn't deliver; lengthen the drive (declare journeys[]) or cut the timer`);
+        }
+        // The other direction: a genuine journey-length drive with no timer and no en-route beat is a
+        // long empty haul. Declared journeys should carry a timer or a wave/beat to justify the distance.
+        if (isJourney && !o.timeLimit) {
+          const beat = (script.waves ?? []).some((w) => w.objective === objIndex()) || (script.quarry?.igniteObjective === objIndex());
+          if (!beat) finding('warn', `journey "${o.text}" (${result.roadDistance}u) has no timer and no en-route beat — a long empty drive; add a timer or a beat`);
         }
       }
     }
@@ -209,6 +228,9 @@ window.__qa = (() => {
           if (exit) { g.player.group.position.set(exit.x, exit.y, exit.z); g.player.onGround = true; step(3, 1 / 30); note('stepped off the train for an on-foot objective'); }
           else if (marker) { g.player.group.position.set(marker.position.x, surface(marker.position.x, marker.position.z), marker.position.z); g.player.onGround = true; g.trains.dismount(); step(3, 1 / 30); note('shortcut: placed on foot at the marker (no clear ground beside the siding)'); }
         }
+        // A collect is on-foot — you can't grab a pickup from the driver's seat. If we drove here (e.g.
+        // the padstal journey leaves us parked at the marker), step out so the walk + E-press path runs.
+        if (o.kind === 'collect' && g.activeVehicle) { g.beginExit(g.activeVehicle); step(24, 1 / 30); note('stepped out of the car to collect on foot'); }
         if (o.hidden && !g.riddleRevealed) {
           // Play the riddle the merciful way: walk the hint ladder (clock jumped to each threshold —
           // the hints still fire through the real updateRiddleHints path) until the reveal blip drops.
@@ -248,7 +270,21 @@ window.__qa = (() => {
         } else {
           const pts = roadRoute(marker.position.x, marker.position.z);
           if (!pts?.length) return 'stuck:no-route';
-          sim = driveRoute(pts, 600);
+          // Sanctioned journeys are genuinely long drives — give the teleport-drive a bigger budget so a
+          // multi-km scenic haul (padstal) actually reaches the marker instead of timing out mid-route.
+          const journeyObj = (window.__scripts?.[g.missions.active?.id]?.journeys ?? []).includes(objIndex());
+          // A journey is a DRIVE — a real player brings a car (the copy literally says "take a radio").
+          // Console-armed missions start on foot, so board a nearby vehicle first; otherwise the bot
+          // WALKS several km at 7u/s and the (correctly-sized) timer expires.
+          if (journeyObj && !g.activeVehicle) {
+            const veh = g.population.vehicles.find((v) => !v.wrecked && !v.spec.twoWheeler && v.spec.kind !== 'bicycle');
+            if (veh) {
+              const p = focus(); veh.restore?.(); veh.group.position.set(p.x + 2, g.city.roadHeightAt(p.x + 2, p.z), p.z);
+              step(3, 1 / 30); g.beginEnter(veh); step(24, 1 / 30);
+              note('boarded a car for the journey drive');
+            }
+          }
+          sim = driveRoute(pts, journeyObj ? 1400 : 600);
         }
         if (g.missions.state === 'failed') return 'failed:' + state.lastFail;
         if (o.kind === 'collect' && !advanced()) { key('KeyE'); step(3); if (!advanced()) { g.collectedItem = true; step(3); note('shortcut: forced collectedItem after E failed'); finding('warn', `collect E-press did not register at "${o.text}"`); } }

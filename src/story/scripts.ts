@@ -190,6 +190,6 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
 
   // ---- Side pieces --------------------------------------------------------------------
-  'padstal-run': { tier: 'substantial',},
+  'padstal-run': { tier: 'journey', journeys: [0, 2] }, // the scenic out-and-back drive is the point
   'pier-pressure': { tier: 'substantial', waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
 };

@@ -118,8 +118,8 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Sindi', text: 'Spite. Insurance. A throne someone lost. It doesn\'t matter — whatever you are now, your city dies with that substation. GO.' },
   ] },
   'padstal-run': { id: 'padstal-run:intro', lines: [
-    { speaker: 'Auntie Portia', text: 'The stokvel ordered from Ouma se Padstal. Koeksisters, biltong, the works. It\'s a DRIVE, boet — over the mountain and gone.' },
-    { speaker: 'Auntie Portia', text: 'Take something with a working radio and don\'t eat the order. I counted the koeksisters. I always count.' },
+    { speaker: 'Auntie Portia', text: 'The aunties\' savings club put in an order at Grandma\'s farm stall — pastries, dried meat, the works. It\'s a real drive, boet, over the ridge and gone.' },
+    { speaker: 'Auntie Portia', text: 'Take something with a working radio and don\'t eat the order. I counted every pastry. I always count.' },
   ] },
   'pier-pressure': { id: 'pier-pressure:intro', lines: [
     { speaker: 'Candice', text: 'A fare ran on Ricardo. Airport run, coastal tolls, waiting time — a BIG fare. Now he\'s bragging at Seepunt Pier before his boat leaves.' },

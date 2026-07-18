@@ -259,11 +259,11 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'padstal-run', name: 'Ouma se Padstal Run', contact: 'Auntie Portia', reward: 4000, act: 'side',
     prerequisites: { missions: ['last-coach-home'] },
-    intro: 'The stokvel ordered from Ouma se Padstal — koeksisters, biltong, the works. It\'s a DRIVE, boet. Take something with a working radio.',
+    intro: 'The aunties\' savings club ordered pastries and dried meat from Grandma\'s farm stall, out over the northern ridge. It\'s a proper drive, boet — take something with a working radio.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
-      { kind: 'reach', radius: 10, timeLimit: 900, text: 'Take the stokvel order out to Ouma se Padstal', target: spot(PADSTAL_SPOT, 'Ouma se Padstal') },
-      { kind: 'collect', text: 'Load Ouma\'s koeksisters', target: spot(PADSTAL_SPOT, 'The order'), checkpoint: true },
-      { kind: 'reach', timeLimit: 900, text: 'Home again before the tea goes cold', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
+      { kind: 'reach', radius: 10, timeLimit: 900, text: 'Drive the order out to the farm stall over the ridge', target: spot(PADSTAL_SPOT, 'Ouma se Padstal') },
+      { kind: 'collect', text: 'Load the club\'s order', target: spot(PADSTAL_SPOT, 'The order'), checkpoint: true },
+      { kind: 'reach', timeLimit: 900, text: 'Drive it all the way home before the tea goes cold', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
   },
   {
