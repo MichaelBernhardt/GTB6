@@ -3,6 +3,7 @@ import type { Vehicle } from '../entities/Vehicle';
 import type { BaseQuality } from '../types';
 import type { City } from './City';
 import type { EnvironmentHandle } from './Environment';
+import type { SkyMood } from './AtmosphericSky';
 import { powerOn } from './powerGrid';
 import { setSignGlow } from './ProceduralMaterials';
 
@@ -131,6 +132,8 @@ export class DayNightSystem {
   timeRate = 1; // clock speed multiplier: 0 freezes time, 1 = normal (console `set timerate`)
   private sample = createSkySample();
   private sunDir = new THREE.Vector3(); private moonDir = new THREE.Vector3();
+  private skyTime = 0;
+  private skyMood: SkyMood = { zenith: this.sample.sky, horizon: this.sample.fog, sunColor: this.sample.sun, sunDirection: this.sunDir, moonDirection: this.moonDir, night: 0, blackout: 0, time: 0 };
   private moon: THREE.Mesh;
   private lampXZ: Float32Array;
   private lampIndices: number[] = []; private lampDistances: number[] = [];
@@ -161,7 +164,7 @@ export class DayNightSystem {
    *  0 = grid up or broad daylight. The same product that sinks the sky — blackout stealth keys off it. */
   get blackoutDarkness(): number { return this.blackout * nightFactor(this.hour); }
 
-  setQuality(quality: BaseQuality): void { this.buildPools(quality); }
+  setQuality(quality: BaseQuality): void { this.buildPools(quality); this.environment.sky.setQuality(quality); }
 
   private buildPools(quality: BaseQuality): void {
     for (const light of this.streetPool) this.scene.remove(light);
@@ -182,6 +185,7 @@ export class DayNightSystem {
 
   private apply(focus: THREE.Vector3, traffic: readonly Vehicle[] = [], police: readonly Vehicle[] = [], playerVehicle?: Vehicle, dt = Infinity): void {
     const sky = sampleSky(this.hour, this.sample); const night = nightFactor(this.hour);
+    if (Number.isFinite(dt)) this.skyTime += dt;
     this.blackout = advanceBlackout(this.blackout, powerOn() ? 0 : 1, dt);
     applyBlackout(sky, this.blackout * night); // shedding at night: the generalised city glow is gone, silhouettes only
     const env = this.environment;
@@ -192,6 +196,8 @@ export class DayNightSystem {
     if (this.scene.fog) this.scene.fog.color.copy(sky.fog);
     this.scene.environmentIntensity = 0.32 * (1 - night * 0.72) * (1 - this.blackout * night * 0.9); // IBL ambience is city glow too
     sunDirection(this.hour, this.sunDir); sunDirection(this.hour + 12, this.moonDir);
+    this.skyMood.night = night; this.skyMood.blackout = this.blackout * night; this.skyMood.time = this.skyTime;
+    env.sky.setMood(this.skyMood);
     env.setSunDirection(this.sunDir.y >= this.moonDir.y ? this.sunDir : this.moonDir); // shadow light tracks whichever body is up
     env.sunDisc.position.copy(focus).addScaledVector(this.sunDir, DISC_DISTANCE); env.sunDisc.visible = this.sunDir.y > -0.05;
     (env.sunDisc.material as THREE.MeshBasicMaterial).color.copy(sky.sun);
