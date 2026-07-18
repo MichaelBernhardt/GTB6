@@ -266,6 +266,28 @@ export class TrainSystem {
     return best;
   }
 
+  /** Rider guidance for a "ride to <station>" objective (owner: aboard a train the game gave no hint
+   *  of what to do or which way it was going). Returns the next stop on this leg, how many stops to
+   *  the destination, and whether the destination is NOT ahead in the current direction (wrong way). */
+  rideGuidance(destName?: string): { next?: string; toDest?: number; wrong: boolean } | undefined {
+    const ride = this.ride; if (!ride) return undefined;
+    const train = ride.train; const { s, direction } = train.state;
+    const ahead = (train.stops ?? [])
+      .filter((stop) => (direction === 1 ? stop > s + 1 : stop < s - 1))
+      .sort((a, b) => (direction === 1 ? a - b : b - a));
+    const nameAt = (arc: number): string | undefined => {
+      const mid = poseAt(train.points, train.cum, arc - train.trainLength / 2); // stop arc is nose-centred; station sits half a consist back
+      let best: string | undefined; let bestDistance = 45;
+      for (const station of STATIONS) { const d = Math.hypot(mid.x - station.x, mid.z - station.z); if (d < bestDistance) { bestDistance = d; best = station.name; } }
+      return best;
+    };
+    const names = ahead.map(nameAt);
+    const next = names.find(Boolean);
+    if (!destName) return { next, wrong: false };
+    const idx = names.findIndex((name) => name === destName);
+    return idx >= 0 ? { next, toDest: idx + 1, wrong: false } : { next, wrong: true };
+  }
+
   /** World heading the occupied cab faces (chase camera anchor); undefined off the controls. */
   get driveHeading(): number | undefined {
     const ride = this.ride; if (!ride?.driving) return undefined;

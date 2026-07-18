@@ -54,13 +54,17 @@ export interface MissionScript {
   /** A deliberately long objective (the journey IS the mission): exempt from the ~1200u route cap.
    *  Rare and earned — never in act 1 (owner). */
   journeys?: number[];
+  /** Effort tier — the harness enforces a route-distance band per mission (owner: distance must scale
+   *  with the perceived goal). favour ~<=1000u, standard ~<=1800u, substantial ~<=2800u (event en
+   *  route), journey unbounded (the sanctioned long hauls). Default: standard. */
+  tier?: 'favour' | 'standard' | 'substantial' | 'journey';
 }
 
 const around = (point: MapPt, offsets: Array<[number, number]>): MapPt[] => offsets.map(([dx, dz]) => ({ x: point.x + dx, z: point.z + dz }));
 
 export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   // ---- On-ramp + Act 1 --------------------------------------------------------------
-  'delivery-run': {
+  'delivery-run': { tier: 'favour',
     stops: DELIVERY_STOPS,
     vehicle: { color: 0xf1c232, spot: PORTIA_CAR_SPOT },
     rewards: { armour: 50, note: 'Auntie Portia sends you off with cash and her late husband\'s body armour' },
@@ -70,11 +74,11 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
       { objective: 2, title: 'Auntie Portia', detail: 'Second buyer paid short — says his genny subscription is due. EVERYONE\'S genny subscription is due. Since when is light a subscription, boet?' },
     ],
     outro: [
-      { speaker: 'Auntie Portia', text: 'You drove through that blackout like a taxi man. Sharp sharp. Keep the Golf as long as you need it.' },
+      { speaker: 'Auntie Portia', text: 'You drove through that blackout like a taxi driver. Sharp. Keep the Golf as long as you need it.' },
       { speaker: 'Auntie Portia', text: 'And take this — my late Sipho\'s vest. Everyone in this city pays twice for light now, and Vusi says there\'s cash in that. Pothole Street. Don\'t sign anything.' },
     ],
   },
-  'hot-property': {
+  'hot-property': { tier: 'substantial',
     vehicle: { color: 0xd83a40, spot: GTI_SPOT },
     outro: [
       { speaker: 'Bra Vusi', text: 'Sweet. The buyer pays TRIPLE when the power\'s out, and never asks where cable comes from.' },
@@ -82,7 +86,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     ],
     rewards: { weapon: 'smg', note: 'Bra Vusi throws in a Micro SMG' },
   },
-  'dockside-signal': {
+  'dockside-signal': { tier: 'substantial',
     waves: [{ objective: 1, spots: HOSTILE_SPOTS }],
     rewards: { weapon: 'shotgun', standing: 6, note: 'Candice arms her new enforcer — a pump shotgun, and the ranks know your name' },
     radio: [{ objective: 3, title: 'Candice', detail: 'What did you grab exactly? Ricardo says there\'s a paper stapled to my permit… a DIESEL roster. Wemmer moves fuel for somebody big.' }],
@@ -91,12 +95,12 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
       { speaker: 'Candice', text: 'They call him the Genny King. If his diesel runs through MY ranks, I want to know everything. Keep your ears open.' },
     ],
   },
-  'copper-wire-blues': { quarry: {
+  'copper-wire-blues': { tier: 'standard', quarry: {
     spawnObjective: 0, departObjective: 1, kind: 'van', color: QUARRY_COLOR, spawn: QUARRY_SPAWN, destination: CABLE_YARD_SPOT, arriveRadius: 22,
     followCapSeconds: 45, // you tailed him, you didn't commute behind him
     followCapNote: { title: 'Bra Vusi', detail: 'He\'s turning into his yard up ahead — you clocked it? Pull in and have a look. Nice and easy.' },
   } },
-  'rank-cold-war': {
+  'rank-cold-war': { tier: 'standard',
     stops: RANK_STOPS,
     vehicle: { color: CANDICE_VAN_COLOR, spot: CANDICE_VAN_SPOT },
     rewards: { armour: 50, standing: 8, note: 'Candice\'s ranks are yours to move through — respect, and a vest for the road' },
@@ -105,15 +109,15 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
       { objective: 1, checkpoint: 1, spots: around(RANK_STOPS[1]!, [[6, -5], [-7, 4], [4, 8]]) },
     ],
   },
-  'last-coach-home': {
+  'last-coach-home': { tier: 'standard',
     radio: [{ objective: 0, title: 'Auntie Portia', detail: 'And if the rank boys give you attitude, tell them Portia sent you. They know me.' }],
   },
-  'reading-signs': {
+  'reading-signs': { tier: 'standard',
     diaryPage: 1,
     rewards: { standing: 4, note: 'Oupa Jakes nods — you can read this city now' },
     hints: [
       { objective: 0, afterSeconds: 90, detail: 'Think, laaitie. Which road ADMITS what broke your suspension?' },
-      { objective: 0, afterSeconds: 210, detail: 'Ag fine — Pothole Street, south side of the circle, by the dip that eats bakkies.', reveal: true },
+      { objective: 0, afterSeconds: 210, detail: 'Ag fine — Pothole Street, south side of the circle, by the dip that eats cars.', reveal: true },
       { objective: 1, afterSeconds: 90, detail: 'The lane is NAMED for the dark. The city put it on a green sign and everything.' },
       { objective: 1, afterSeconds: 210, detail: 'Loadshed Lane, two blocks on. I\'m old, not patient.', reveal: true },
       { objective: 2, afterSeconds: 90, detail: 'What did offices send before email? This city still sends it.' },
@@ -122,63 +126,63 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
 
   // ---- Act 2: "The Payroll" ---------------------------------------------------------
-  'the-audition': {
+  'the-audition': { tier: 'substantial',
     vehicle: { color: TANKER_COLOR, spot: TANKER_SPOT },
     radio: [{ objective: 1, title: 'Solly', detail: 'Gently, my laaitie. That tanker is worth more than you are. For now.' }],
-    outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the bakkie, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
+    outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the truck, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
     rewards: { armour: 100, note: 'The crew kits you out — full body armour on Solly\'s tab' },
   },
-  'pull-the-plug': {
+  'pull-the-plug': { tier: 'standard',
     forceBlackout: 2, // the breaker goes over: the grid dies around you
     wanted: { objective: 2, level: 2 },
     radio: [{ objective: 2, title: 'The city goes dark', detail: 'Every light you can see just died. Somewhere, a control room phone is ringing.' }],
   },
-  'stage-fright': {
+  'stage-fright': { tier: 'substantial',
     rewards: { grantVehicle: { kind: 'superbike', color: 0x1b1b1e }, note: 'Solly lets you keep a superbike off the showroom floor — pristine, in your garage, yours for good' },
     alarm: {
       objective: 1, level: 3,
-      title: 'Showroom alarm', detail: 'The forecourt floodlights snap to you. All of Sandton hears it.',
+      title: 'Showroom alarm', detail: 'The forecourt floodlights snap to you. The whole street hears it.',
       silentTitle: 'Dead quiet', silentDetail: 'The alarm pad is dark. Nothing squeals. Nothing sees.',
     },
   },
-  'genny-round': {
+  'genny-round': { tier: 'standard',
     stops: GENNY_ROUND_STOPS,
     waves: [{ objective: 0, checkpoint: 2, spots: around(GENNY_ROUND_STOPS[2]!, [[6, 4], [-5, 6]]) }],
   },
-  'paper-round': {
+  'paper-round': { tier: 'standard',
     diaryPage: 2,
     hints: [
       { objective: 0, afterSeconds: 120, detail: 'The big one, laaitie. Where every line meets and the whole city changes trains.' },
-      { objective: 0, afterSeconds: 240, detail: 'Park Station. Platform lockers. If you can throw a breaker you can read a station board.', reveal: true },
+      { objective: 0, afterSeconds: 240, detail: 'Park Station. Right beside the platform. If you can throw a breaker you can read a station board.', reveal: true },
     ],
   },
-  'the-wrong-train': {
+  'the-wrong-train': { tier: 'journey',
     journeys: [1], // driving the consist to Crown IS the mission — the one earned long haul, with transport handed over
     radio: [{ objective: 1, title: 'Solly', detail: 'Crown Station siding. Stop it like you own it, because tonight you do.' }],
   },
-  'crosswinds': { grantParachute: 0, journeys: [0, 1, 2] }, // the flight IS the mission — the one earned aviation setpiece (plane provided out at the strip)
+  'crosswinds': { tier: 'journey', grantParachute: 0, journeys: [0, 1, 2] }, // the flight IS the mission — the one earned aviation setpiece (plane provided out at the strip)
   'two-fires': {},
-  'paper-fire': {
+  'paper-fire': { tier: 'standard',
     quarry: { spawnObjective: 0, kind: 'van', color: EVIDENCE_VAN_COLOR, spawn: EVIDENCE_VAN_SPOT, igniteObjective: 2 },
     wanted: { objective: 2, level: 2 },
   },
-  'catch-them-cutting': {
+  'catch-them-cutting': { tier: 'standard',
     waves: [{ objective: 1, spots: around(SUBSTATION_SPOT, [[7, 5], [-6, 4], [5, -6]]) }],
   },
 
   // ---- Act 3: "Stage Six" -----------------------------------------------------------
-  'dark-house': { depot: true },
-  'long-live-the-king': {
+  'dark-house': { tier: 'substantial', depot: true },
+  'long-live-the-king': { tier: 'standard',
     waves: [
       { objective: 1, spots: around(KELVIN_GATE_SPOT, [[8, 6], [-7, 8], [6, -7]]) },
       { objective: 2, spots: around(KELVIN_GATE_SPOT, [[10, 4], [-8, -6], [5, 9], [-4, 10]]) },
     ],
   },
-  'carcass': {
+  'carcass': { tier: 'substantial', journeys: [2], // the endgame loot sweep is a sanctioned late-arc loop
     stops: STASH_SPOTS,
     wanted: { objective: 0, level: 2 },
   },
-  'the-switch': {
+  'the-switch': { tier: 'standard',
     waves: [
       { objective: 1, spots: around(SUBSTATION_SPOT, [[8, 5], [-7, 6], [6, -6], [-5, -7]]) },
       { objective: 2, spots: around(SUBSTATION_SPOT, [[9, 3], [-8, 5], [4, 9]]) },
@@ -186,6 +190,6 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
 
   // ---- Side pieces --------------------------------------------------------------------
-  'padstal-run': {},
-  'pier-pressure': { waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
+  'padstal-run': { tier: 'journey', journeys: [0, 2] }, // the scenic out-and-back drive is the point
+  'pier-pressure': { tier: 'substantial', waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
 };

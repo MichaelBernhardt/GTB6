@@ -74,3 +74,23 @@ describe('all-Blender NPC population policy', () => {
     expect(population.riggedPedestrianCount()).toBe(population.pedestrians.length);
   });
 });
+
+  it('derives defeat credit from ROSTER TRUTH (spawned - standing) — every kill path counts', () => {
+    // Regression: Rank Cold War stuck at 0/3 when heavies were run over — vehicle kills never
+    // reached the shot-handler counter. defeatedHostiles() = spawned - still-standing, so ANY way of
+    // downing a hostile (bullet, melee, vehicle, explosion, ragdoll) credits, and a despawned one
+    // counts too — the "red dots gone but 0/N" contradiction is impossible.
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    population.spawnHostileWave([{ x: 0, z: 0 }, { x: 4, z: 0 }, { x: 8, z: 0 }]);
+    expect(population.hostiles).toHaveLength(3);
+    expect(population.defeatedHostiles()).toBe(0);
+    population.hostiles[0]!.takeDamage(1000);           // killed via the ped's own damage path
+    expect(population.defeatedHostiles()).toBe(1);
+    population.hostiles[1]!.knockdown(new THREE.Vector3()); // knocked down (state 'down') — red dot gone → counts
+    expect(population.defeatedHostiles()).toBe(2);
+    population.removePedestrian(population.hostiles[2]!);   // despawned entirely — also counts as defeated
+    expect(population.defeatedHostiles()).toBe(3);
+    // a fresh wave resets the roster size — the count starts over for the next objective
+    population.spawnHostileWave([{ x: 0, z: 0 }]);
+    expect(population.defeatedHostiles()).toBe(0);
+  });

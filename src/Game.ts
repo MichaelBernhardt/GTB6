@@ -68,7 +68,7 @@ import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
-import { City } from './world/City';
+import { City, ROAD_NETWORK } from './world/City';
 import { COURIER_DEPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
@@ -256,7 +256,7 @@ export class Game {
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
     this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
-    if (import.meta.env.DEV) Object.assign(window, { __game: this, __scripts: MISSION_SCRIPTS });
+    if (import.meta.env.DEV) Object.assign(window, { __game: this, __scripts: MISSION_SCRIPTS, __roads: ROAD_NETWORK });
   }
 
   private async prepareAssets(retry = false): Promise<void> {
@@ -1544,7 +1544,9 @@ export class Game {
     const target = this.missionTargetRaw(); const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     if (dt > 0 && this.lastFocus) this.focusSpeed = Math.min(80, Math.hypot(focus.x - this.lastFocus.x, focus.z - this.lastFocus.z) / dt);
     (this.lastFocus ??= new THREE.Vector3()).copy(focus);
-    const reached = Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
+    const reached = objective?.streetName
+      ? this.onNamedStreet(objective.streetName, focus.x, focus.z) // street-answer riddle: the whole road corridor triggers
+      : Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
     if (objective?.kind === 'checkpoints' && reached) {
       const stopIndex = this.deliveryIndex;
       const stopObjective = this.missions.objectiveIndex; // captured BEFORE the register: the final stop advances the index
@@ -1577,6 +1579,39 @@ export class Game {
   /** Riddle fail-softs: a generous minimap search circle around the answer (offset centre so the
    *  circle never pinpoints it), and hints that sharpen on a clock — the final hint drops a real
    *  blip (owner: markerless one-liners against a whole city are hostile; deduction stays, despair goes). */
+  /** Aboard-a-train guidance for the objective card (owner: "wtf am I supposed to do?" on a train).
+   *  Tells the rider the next stop, the stops-to-destination, or that they boarded the wrong way. */
+  private trainRideHint(): string {
+    if (this.online || !this.trains.riding) return '';
+    const objective = this.missions.objective;
+    if (!objective?.conditions?.onTrain && !objective?.conditions?.drivingTrain) return '';
+    const dest = objective.conditions?.stationName;
+    const guide = this.trains.rideGuidance(dest);
+    if (!guide) return '';
+    if (guide.wrong) return ' — Wrong way: get off at the next stop and catch one going back';
+    const shortDest = dest?.replace('Johannesburg ', '');
+    if (guide.toDest != null && shortDest) return ` — Next stop: ${guide.next ?? shortDest}. ${shortDest} in ${guide.toDest} stop${guide.toDest > 1 ? 's' : ''}`;
+    if (guide.next) return ` — Next stop: ${guide.next}. Stay aboard`;
+    return ' — Arriving: this is your stop';
+  }
+
+  /** Is (x,z) within a lane's width of the named street's road polyline? The trigger for a riddle
+   *  whose answer is a whole street — the owner walked all over Fax Street and a single dot never fired.
+   *  Same name source as the generated street signs, so the sign the player reads IS the trigger. */
+  private onNamedStreet(name: string, x: number, z: number, tol = 14): boolean {
+    for (const road of ROAD_NETWORK) {
+      if (road.name !== name) continue;
+      const pts = road.points;
+      for (let i = 1; i < pts.length; i++) {
+        const ax = pts[i - 1]!.x, az = pts[i - 1]!.z, bx = pts[i]!.x, bz = pts[i]!.z;
+        const dx = bx - ax, dz = bz - az; const len2 = dx * dx + dz * dz;
+        const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / len2)) : 0;
+        if (Math.hypot(x - (ax + t * dx), z - (az + t * dz)) <= tol) return true;
+      }
+    }
+    return false;
+  }
+
   private riddleSearchArea(): { x: number; z: number; radius: number } | undefined {
     const objective = this.missions.objective;
     if (!objective?.hidden || !objective.target || this.missions.state !== 'active') return undefined;
@@ -1696,7 +1731,7 @@ export class Game {
     const missionVehicle = requiredVehicle ?? this.activeVehicle;
     return {
       playerPosition: focus, inVehicle: Boolean(this.activeVehicle), vehicleKind: this.activeVehicle?.spec.kind, vehicleColor: this.activeVehicle?.spec.color,
-      wantedLevel: this.wanted.level, shotsFired: this.combat.shotsFired, hostileDefeated: this.hostileDefeated, collectedItem: this.collectedItem,
+      wantedLevel: this.wanted.level, shotsFired: this.combat.shotsFired, hostileDefeated: this.population.defeatedHostiles(), collectedItem: this.collectedItem,
       hour: this.dayNight.hour, blackout: this.dayNight.blackoutFactor, isNight: nightFactor(this.dayNight.hour) > 0.5,
       onTrain: this.trains.riding, drivingTrain: this.trains.driving, trainSpeed: this.trains.rideSpeedKph / 3.6, stationName: this.trains.currentStationName,
       inPlane: Boolean(this.activePlane),
@@ -2321,11 +2356,12 @@ export class Game {
     if (this.mode === 'playing' && this.bustMeter > 0 && !this.activeVehicle && !this.transition) prompt = 'JMPD ON YOU — break away or get nicked!';
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
+    const riddleHunt = this.missions.objective?.hidden && !this.riddleRevealed; // the search circle is up
     const objective = this.online ? this.online.objective ? {
       missionName: this.online.objective.missionName, text: this.online.objective.text, progress: this.online.objective.progress,
       required: this.online.objective.required, remainingSeconds: this.online.objective.remainingSeconds,
     } : undefined : this.missions.objective ? {
-      missionName: this.missions.active?.name ?? '', text: this.missions.objective.text, progress: this.missions.objective.required ? this.missions.progress : undefined,
+      missionName: this.missions.active?.name ?? '', text: this.missions.objective.text + (riddleHunt ? ' — search inside the circle on your map' : '') + this.trainRideHint(), progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
       failed: !this.online && this.missions.state === 'failed' ? this.missions.failReason ?? 'Mission failed' : undefined,
     } : undefined;
