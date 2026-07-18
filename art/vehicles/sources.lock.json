@@ -1,7 +1,7 @@
 {
-  "version": 1,
+  "version": 2,
   "generatedBy": "Blender 5.1.2",
-  "generatedAt": "2026-07-15",
+  "generatedAt": "2026-07-18",
   "generatedRibbonProvider": "ChatGPT built-in image generator",
   "committedArtifacts": [
     {
@@ -20,14 +20,19 @@
       "bytes": 904
     },
     {
+      "path": "art/vehicles/road-cars.json",
+      "sha256": "08ead018c4e47dc38c2031c098538af8deda2640bb4d6841a9d94b9cea987a87",
+      "bytes": 2261
+    },
+    {
       "path": "art/vehicles/ATTRIBUTION.md",
-      "sha256": "e10b1957bf63ae62344cc4dd4888f7856d690873f7a9e2b49540f88d55d37884",
-      "bytes": 961
+      "sha256": "bf956b644df724c439c47464a5ac748ecc93ada79ae77bcb472bf8999417ef48",
+      "bytes": 1400
     },
     {
       "path": "art/vehicles/work/quantum-express-source.blend",
-      "sha256": "aaf00cbf45947b366eafb07c3c50ae833f86431e12ea94c79ce6a2d20fc1589c",
-      "bytes": 396551
+      "sha256": "26b07b8ddec12d2063575fa6559ecfcbc385f76f3fc17076c593ec7b82bf3be9",
+      "bytes": 396583
     },
     {
       "path": "art/vehicles/previews/quantum-express-turnaround.jpg",
@@ -41,8 +46,68 @@
     },
     {
       "path": "public/models/vehicles/quantum-express.glb",
-      "sha256": "5eb15b7562e9a04ceceff2c74ea61f9ae75e94f476fa349beae57184b00bd3f9",
+      "sha256": "15a16a45cef1e92134c0438086c6d1d65009cf3ea671d88ae439be88020d2ec8",
       "bytes": 1066992
+    },
+    {
+      "path": "art/vehicles/work/citi-golf-source.blend",
+      "sha256": "dbfb5354c82b6a5f40e7984cc7a369ac87519384b8fbb67e5dd56001f4ee3a9d",
+      "bytes": 191696
+    },
+    {
+      "path": "art/vehicles/previews/citi-golf-turnaround.jpg",
+      "sha256": "0052f78d6fef168f02c6d4a329b3a9c4d27f3e6ccc5e97d26b240009eaa8a708",
+      "bytes": 160256
+    },
+    {
+      "path": "public/models/vehicles/citi-golf.glb",
+      "sha256": "5984cb4c638b39e40a69e0d7c14ad8f4b64d7794835793c110aa0d5520a8b788",
+      "bytes": 409156
+    },
+    {
+      "path": "art/vehicles/work/vrrr-phaa-gti-source.blend",
+      "sha256": "335eb579f7e551a1a9143a62f903be9f6f7a1a1c4993f81361ecea31e8aa4259",
+      "bytes": 195809
+    },
+    {
+      "path": "art/vehicles/previews/vrrr-phaa-gti-turnaround.jpg",
+      "sha256": "976e63108dc77607faa9675c9a6451b84f8f7ebe20100ea5f930551aa400dbd5",
+      "bytes": 157069
+    },
+    {
+      "path": "public/models/vehicles/vrrr-phaa-gti.glb",
+      "sha256": "6247421e5eb2141b1bb7bf4b76f4a7a2fe44a6a450c4a6a8970ae5559921b8ec",
+      "bytes": 423912
+    },
+    {
+      "path": "art/vehicles/work/hilux-bakkie-source.blend",
+      "sha256": "f2b0ab225bc5a7b5d2c04473ce99e8b2651663a4f8afcb9fadceef21203645c6",
+      "bytes": 200597
+    },
+    {
+      "path": "art/vehicles/previews/hilux-bakkie-turnaround.jpg",
+      "sha256": "ed391d14fee8a50f092c0d96bc2aa4cbd2544b45e57bcc8c5e155dc5d645a4cc",
+      "bytes": 147477
+    },
+    {
+      "path": "public/models/vehicles/hilux-bakkie.glb",
+      "sha256": "3bb296c0653ce285116a47dc6875d26495d6e13288f0e85d1e92c5c8902b3fdf",
+      "bytes": 440640
+    },
+    {
+      "path": "art/vehicles/work/jmpd-interceptor-source.blend",
+      "sha256": "1883d494840a9722a2cff09acc7a1daa548cf44eefd4f5e529c9b02b43666436",
+      "bytes": 200548
+    },
+    {
+      "path": "art/vehicles/previews/jmpd-interceptor-turnaround.jpg",
+      "sha256": "85fa8a9a34fc9b99bb5a93acd245ceec63664631bfffaa4d6bbdd9473bc8ba98",
+      "bytes": 159257
+    },
+    {
+      "path": "public/models/vehicles/jmpd-interceptor.glb",
+      "sha256": "d094fae29c901ae0dccc205a5980e36490f3461bc13ba63057d46b219cab0fd9",
+      "bytes": 440392
     }
   ]
 }

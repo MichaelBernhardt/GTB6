@@ -124,6 +124,25 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
         base = page.evaluate(f"() => window.__qa.g.missions.missions.find(m => m.id === '{mission}')?.reward ?? 0")
         if base > 0 and not card:
             all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail', 'what': 'completion paid a reward but showed no MISSION PASSED card'})
+        # TIER FLOORS (owner: The Audition collapsed to ~20m and machine-passed — a tier is a BAND, both
+        # edges are law). A mission's longest routed leg must meet its tier floor; ceilings alone let a
+        # mission implode below its band. Applies per-mission (the longest leg), not per-objective, so
+        # short legs like "escape the perimeter" don't false-fail. Journeys are exempt (already long).
+        FLOOR = {'favour': 250, 'standard': 700, 'substantial': 1400, 'journey': 0}
+        tier = page.evaluate(f"() => window.__scripts?.['{mission}']?.tier ?? 'standard'")
+        journeys = page.evaluate(f"() => window.__scripts?.['{mission}']?.journeys ?? []") or []
+        routed = [m['roadDistance'] for m in all_measurements
+                  if m['mission'] == mission and m.get('roadDistance') and m['objective'] not in journeys]
+        floor = FLOOR.get(tier, 700)
+        # The floor is about DRIVES doing real work — exempt missions whose substance is a non-road
+        # modality the floor can't see: a tail (follow), a train/plane ride (carrier), a riddle (hidden
+        # first objective), a stealth infiltration (undetected — the challenge is not being seen), or a
+        # mission that already carries a sanctioned journey leg (a long drive by construction).
+        objs = page.evaluate(f"() => (window.__qa.g.missions.missions.find(m => m.id === '{mission}')?.objectives ?? []).map(o => ({{ kind: o.kind, hidden: !!o.hidden, carrier: !!(o.conditions && (o.conditions.onTrain || o.conditions.drivingTrain || o.conditions.inPlane)), stealth: !!(o.conditions && o.conditions.undetected) }}))") or []
+        non_drive = bool(journeys) or any(o['kind'] == 'follow' or o['carrier'] or o['stealth'] for o in objs) or (bool(objs) and objs[0]['hidden'])
+        if routed and floor and max(routed) < floor and not non_drive:
+            all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail',
+                'what': f'tier floor: longest routed leg is {max(routed)}u but the {tier} floor is {floor}u — the mission collapsed below its band (make the drive do real work)'})
 
 
 def run(port: int, out: Path, missions: list[str]) -> int:

@@ -77,13 +77,13 @@ describe('burnout transition', () => {
 
   it('leaves the wreck undriveable with charred paint', () => {
     const vehicle = new Vehicle(new THREE.Scene(), 'compact', new THREE.Vector3());
-    const body = vehicle.group.children.find((child): child is THREE.Mesh => child instanceof THREE.Mesh);
-    const originalColor = (body?.material as THREE.MeshPhysicalMaterial).color.getHex();
+    const body = vehicle.group.getObjectByName('body') as THREE.Mesh;
+    const originalColor = (body.material as THREE.MeshPhysicalMaterial).color.getHex();
     vehicle.occupied = true;
     vehicle.wreck();
     expect(vehicle.disabled).toBe(true);
     expect(vehicle.occupied).toBe(false);
-    expect((body?.material as THREE.MeshPhysicalMaterial).color.getHex()).toBeLessThan(originalColor);
+    expect((body.material as THREE.MeshPhysicalMaterial).color.getHex()).toBeLessThan(originalColor);
     expect(vehicle.updatePlayer(0.016, idleInput, openCity)).toBe(0);
     vehicle.takeDamage(500);
     expect(vehicle.onFire).toBe(false);
@@ -91,13 +91,13 @@ describe('burnout transition', () => {
 
   it('restores a wrecked mission vehicle for a clean retry', () => {
     const vehicle = new Vehicle(new THREE.Scene(), 'sport', new THREE.Vector3(), 0xd83a40);
-    const body = vehicle.group.children.find((child): child is THREE.Mesh => child instanceof THREE.Mesh);
+    const body = vehicle.group.getObjectByName('body') as THREE.Mesh;
     vehicle.ignite(); vehicle.wreck(); vehicle.restore();
     expect(vehicle.health).toBe(vehicle.maxHealth);
     expect(vehicle.wrecked).toBe(false);
     expect(vehicle.disabled).toBe(false);
     expect(vehicle.onFire).toBe(false);
-    expect((body?.material as THREE.MeshPhysicalMaterial).color.getHex()).toBe(0xd83a40);
+    expect((body.material as THREE.MeshPhysicalMaterial).color.getHex()).toBe(0xd83a40);
   });
 });
 

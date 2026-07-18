@@ -42,6 +42,9 @@ export interface MissionObjective {
   failIf?: FailCondition[];
   /** Reach radius override (default 8; escapes 12; hidden riddles 20). Sky objectives need hundreds. */
   radius?: number;
+  /** When the answer is a whole STREET (riddles), the trigger is the street's road corridor, not a
+   *  dot: reached = the player is within a lane's width of any point on this named road's polyline. */
+  streetName?: string;
   /** Riddle objectives: no blip, no breadcrumb — the text is the only guide. */
   hidden?: boolean;
   /** The conditions ARE the objective: a target (if any) is just the blip, not a reach check. */
