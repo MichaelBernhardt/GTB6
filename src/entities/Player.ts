@@ -141,7 +141,7 @@ export class Player {
   setWeapon(id: WeaponId): void { if (id === this.weapon) return; this.weapon = id; this.riggedVisual.setWeapon(id); }
   /** Report one ranged shot accepted by CombatSystem so visual recoil can retrigger independently of the held trigger. */
   registerShot(): void { if (this.weapon !== 'fists') this.visualState.shotSequence += 1; }
-  punch(): void { this.punchTimer = 0.4; this.punchLeft = !this.punchLeft; this.visualState.attack = this.punchLeft ? 'punch_left' : 'punch_right'; }
+  punch(): void { this.punchTimer = 0.6; this.punchLeft = !this.punchLeft; this.visualState.attack = this.punchLeft ? 'punch_left' : 'punch_right'; } // window matches the 0.6s punch clips, so a single swing plays out instead of cutting at two-thirds
 
   setDead(dead: boolean): void {
     this.visualState.dead = dead; this.visualState.attack = undefined;

@@ -30,7 +30,7 @@ const loadNpc = async (id = 'braamfontein-creative'): Promise<GLTF> => {
   return new GLTFLoader().parseAsync(buffer, '/models/npcs/');
 };
 const state = (overrides: Partial<RiggedPedestrianState> = {}): RiggedPedestrianState => ({
-  state: 'idle', dead: false, knockdown: false, punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0, ...overrides,
+  state: 'idle', dead: false, knockdown: false, punching: false, braced: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0, ...overrides,
 });
 
 /** World-space min skinned-vertex y — measured from the scene root so the ped's own transform counts. */

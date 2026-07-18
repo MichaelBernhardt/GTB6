@@ -19,6 +19,8 @@ export interface RiggedPedestrianState {
    *  draw; survivors hand back to animation when the down timer expires and they rise. */
   knockdown: boolean;
   punching: boolean;
+  /** Squared up at melee range: standing guard, not running — sprint-in-place reads as broken. */
+  braced: boolean;
   hailing: boolean;
   covering: boolean;
   stumbling: boolean;
@@ -28,6 +30,7 @@ export interface RiggedPedestrianState {
 export const selectNpcAnimation = (state: RiggedPedestrianState): NpcAnimationName => {
   if (state.state === 'down') return 'death';
   if (state.punching) return 'punch_right';
+  if (state.braced) return 'idle'; // holding ground at melee range: no combat-idle clip, but idle beats running on the spot
   if (state.state === 'flee' || state.state === 'hostile') return 'sprint';
   if (state.state === 'walk') return 'walk';
   return 'idle';
@@ -222,7 +225,7 @@ export class RiggedPedestrianVisual {
   private actions = new Map<NpcAnimationName, THREE.AnimationAction>();
   private current?: THREE.AnimationAction;
   private currentName?: NpcAnimationName;
-  private state: RiggedPedestrianState = { state: 'idle', dead: false, knockdown: false, punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
+  private state: RiggedPedestrianState = { state: 'idle', dead: false, knockdown: false, punching: false, braced: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
   private deathFloor: DeathFloorCurve = { step: DEATH_FLOOR_SAMPLE_STEP, floors: [] };
   private ragdollDeath = false;
   private ragdollJitter: number[] = [];
