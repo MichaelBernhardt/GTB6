@@ -116,7 +116,20 @@ window.__qa = (() => {
       if (marker && !g.riddleRevealed && raw && Math.hypot(marker.position.x - raw.position.x, marker.position.z - raw.position.z) < 2) finding('fail', `hidden objective leaks its marker: ${marker.label}`);
       const area = g.riddleSearchArea?.();
       if (!area) finding('fail', `riddle "${o.text}" has no search circle (owner: markerless one-liners are hostile)`);
-      else if (raw && Math.hypot(area.x - raw.position.x, area.z - raw.position.z) > area.radius - 10) finding('fail', `riddle search circle does not safely contain its answer (${Math.round(Math.hypot(area.x - raw.position.x, area.z - raw.position.z))}u vs r=${area.radius})`);
+      else if (raw) {
+        const off = Math.hypot(area.x - raw.position.x, area.z - raw.position.z);
+        if (off > area.radius - 10) finding('fail', `riddle search circle does not safely contain its answer (${Math.round(off)}u vs r=${area.radius})`);
+        // Owner: the answer must NOT sit at the bullseye (the circle would give it away), and the
+        // circle must hold >=2 notable objects so the clue does the disambiguating, not the ring.
+        if (off < 40) finding('fail', `riddle answer sits at the circle centre (${Math.round(off)}u) — offset it so the ring doesn't hand over the answer`);
+        const inCircle = (x, z) => Math.hypot(x - area.x, z - area.z) <= area.radius;
+        const roads = (window.__roads ?? []).filter((r) => r.name && r.points.some((p) => inCircle(p.x, p.z)));
+        const streetNames = new Set(roads.map((r) => r.name));
+        const shops = (g.shops?.mapIcons?.() ?? []).filter((s) => inCircle(s.x, s.z)).length;
+        const notable = streetNames.size + shops;
+        if (notable < 2) finding('fail', `riddle circle holds only ${notable} notable object(s) (${streetNames.size} named streets + ${shops} shops) — needs >=2 so the ring alone can't give it away`);
+        else note(`riddle circle: ${streetNames.size} named streets + ${shops} shops inside, answer ${Math.round(off)}u off-centre`);
+      }
       const hints = (window.__scripts?.[g.missions.active?.id]?.hints ?? []).filter((h) => h.objective === objIndex());
       if (!hints.length) finding('fail', `riddle "${o.text}" has no progressive hints`);
       else if (!hints.some((h) => h.reveal)) finding('fail', `riddle "${o.text}" hints never escalate to a real blip`);

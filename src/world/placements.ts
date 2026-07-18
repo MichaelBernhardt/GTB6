@@ -173,8 +173,8 @@ function shopSite(roadName: string, near: MapPt, buildingClearance: number, padC
 }
 
 /** Kerbside vehicle spot: parked just off the carriageway, nose along the road. */
-function kerbVehicleSpot(roadName: string, near: MapPt, clearance = 1.6): PlacedSite {
-  const spot = bestKerbSpot({ name: roadName, near, clearance, ownRadius: 3.4, minEdge: 0.1 });
+function kerbVehicleSpot(roadName: string | undefined, near: MapPt, clearance = 1.6): PlacedSite {
+  const spot = bestKerbSpot({ ...(roadName ? { name: roadName } : {}), near, clearance, ownRadius: 3.4, minEdge: 0.1 });
   return { x: spot.x, z: spot.z, heading: Math.atan2(spot.dirX, spot.dirZ) };
 }
 
@@ -409,8 +409,10 @@ export const PIER_SPOT: MapPt = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
 export const PADSTAL_SPOT: MapPt = walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 70 * P }, 3, 5);
 
-/** Sindi's evidence van parked under the Jan Smuts lamps below Braamfontein (~1.8km, substantial). */
-export const EVIDENCE_VAN_SPOT = kerbVehicleSpot('Jan Smuts Avenue', { x: braamfontein.x + 18 * P, z: braamfontein.z - 12 * P });
+/** Sindi's evidence van, parked on a CBD-north side street just below Braamfontein (~0.9km from
+ *  Solly). Road-agnostic kerb anchored in the dense grid: a named road detoured to 3.3km, and a
+ *  raw Braamfontein-edge point sat in a road-sparse block that snapped 1.4km off-target. */
+export const EVIDENCE_VAN_SPOT = kerbVehicleSpot(undefined, { x: CBD_CENTER.x - 10 * P, z: CBD_CENTER.z - 45 * P });
 /** The cartel's diesel tanker on the industrial belt (The Audition). */
 export const TANKER_SPOT = kerbVehicleSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 125 * P });
 

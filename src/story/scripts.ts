@@ -191,5 +191,5 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
 
   // ---- Side pieces --------------------------------------------------------------------
   'padstal-run': { tier: 'substantial',},
-  'pier-pressure': { tier: 'standard', waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
+  'pier-pressure': { tier: 'substantial', waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
 };

@@ -68,7 +68,7 @@ import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
 import { UIManager } from './ui/UIManager';
-import { City } from './world/City';
+import { City, ROAD_NETWORK } from './world/City';
 import { COURIER_DEPOT, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
 import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
@@ -254,7 +254,7 @@ export class Game {
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
     this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
-    if (import.meta.env.DEV) Object.assign(window, { __game: this, __scripts: MISSION_SCRIPTS });
+    if (import.meta.env.DEV) Object.assign(window, { __game: this, __scripts: MISSION_SCRIPTS, __roads: ROAD_NETWORK });
   }
 
   private async prepareAssets(retry = false): Promise<void> {
@@ -2280,8 +2280,9 @@ export class Game {
     if (this.mode === 'playing' && this.bustMeter > 0 && !this.activeVehicle && !this.transition) prompt = 'JMPD ON YOU — break away or get nicked!';
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
+    const riddleHunt = this.missions.objective?.hidden && !this.riddleRevealed; // the search circle is up
     const objective = !this.online && this.missions.objective ? {
-      missionName: this.missions.active?.name ?? '', text: this.missions.objective.text, progress: this.missions.objective.required ? this.missions.progress : undefined,
+      missionName: this.missions.active?.name ?? '', text: this.missions.objective.text + (riddleHunt ? ' — search inside the circle on your map' : ''), progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
       failed: this.missions.state === 'failed' ? this.missions.failReason ?? 'Mission failed' : undefined,
     } : undefined;

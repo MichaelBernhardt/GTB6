@@ -99,7 +99,7 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'reading-signs', name: 'The Reading of the Signs', contact: 'Oupa Jakes', reward: 1500, act: 'hustle',
     prerequisites: { missions: ['delivery-run'] },
-    intro: 'Thirty years I called the trains at Park Station. Now I call the streets. Three riddles, no map, no hand-holding — read the signs like we used to.',
+    intro: 'Thirty years I called the trains at Park Station. Now I call the streets. Three riddles — I\'ll ring each block on your map, but no arrows: read the signs inside the circle like we used to.',
     start: spot(PARK_STATION_SPOT, 'Oupa Jakes'), objectives: [
       { kind: 'reach', hidden: true, text: '"Stand where the street sign admits what broke your suspension."', target: spot(RIDDLE_SPOTS[0]!, 'Pothole Street') },
       { kind: 'reach', hidden: true, text: '"Stand in the lane they named after the dark — Eskom\'s favourite address."', target: spot(RIDDLE_SPOTS[1]!, 'Loadshed Lane'), checkpoint: true },
@@ -193,7 +193,7 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'paper-fire', name: 'Paper Fire', contact: SOLLY, reward: 4500, act: 'payroll',
     prerequisites: { flags: ['choice:two-fires:solly'] },
-    intro: 'Her van sleeps under the Jan Smuts lamps below Braamfontein. Paper burns lekker. Go before the shift changes.',
+    intro: 'Her van sleeps on a side street just below Braamfontein. Paper burns lekker. Go before the shift changes.',
     start: spot(SOLLY_START, 'Solly'), setFlags: ['act3'], objectives: [
       { kind: 'reach', timeLimit: 600, text: 'Find Sindi\'s evidence van', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van') },
       { kind: 'collect', text: 'Douse the van and strike the match', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van'), checkpoint: true },
@@ -271,7 +271,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['rank-cold-war'] },
     intro: 'A fare ran on Ricardo — a BIG fare, airport run, coastal toll, the lot. He\'s bragging at Seepunt Pier before his boat leaves. Go collect. With interest.',
     start: spot(CANDICE_START, 'Candice'), objectives: [
-      { kind: 'reach', radius: 12, timeLimit: 480, text: 'Catch the fare-skipper before his boat leaves Seepunt Pier', target: spot(PIER_SPOT, 'Seepunt Pier') },
+      { kind: 'reach', radius: 12, timeLimit: 960, text: 'Catch the fare-skipper before his boat leaves Seepunt Pier', target: spot(PIER_SPOT, 'Seepunt Pier') },
       { kind: 'defeat', required: 1, text: 'Convince him', checkpoint: true },
       { kind: 'collect', text: 'Take what he owes — plus interest', target: spot(PIER_SPOT, 'The fare'), checkpoint: true },
     ],

@@ -72,7 +72,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Sindi', text: 'I pulled the Ophirton fault logs. Breakers don\'t trip in that pattern by themselves. That was a hand. Your hand.' },
     { speaker: 'You', text: 'Careful, engineer. Accusations need paper.' },
     { speaker: 'Sindi', text: 'I HAVE paper. More than your boss knows. Test first, though — see if you can read. The classifieds this morning: "FOR SALE: one-way ticket. Collect where the whole city changes trains."' },
-    { speaker: 'Sindi', text: 'Bring my dossier back and we\'ll talk about what it\'s worth. To either side.' },
+    { speaker: 'Sindi', text: 'I\'ve ringed the district on your map — the dead drop\'s somewhere inside the circle, not on any pin. Read the station for yourself. Bring my dossier back and we\'ll talk about what it\'s worth. To either side.' },
   ] },
   'the-wrong-train': { id: 'the-wrong-train:intro', lines: [
     { speaker: 'Solly', text: 'Transnet misplaced a consist tonight. Tragic. It moves my diesel now — but a train needs a driver with no timetable.' },
