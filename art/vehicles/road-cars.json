@@ -1,0 +1,90 @@
+{
+  "contractVersion": 1,
+  "forwardAxis": "+Z",
+  "upAxis": "+Y",
+  "requiredNodes": [
+    "body",
+    "cabin",
+    "glass",
+    "roof",
+    "grille",
+    "bumper_front",
+    "bumper_rear",
+    "mirror_left",
+    "mirror_right",
+    "headlight_left",
+    "headlight_right",
+    "brakelight_left",
+    "brakelight_right",
+    "plate_front",
+    "plate_rear",
+    "wheel_fl",
+    "wheel_fr",
+    "wheel_rl",
+    "wheel_rr"
+  ],
+  "firstPersonHiddenNodes": ["cabin"],
+  "baseMaterials": [
+    "VehiclePaint",
+    "VehicleGlass",
+    "VehicleTrim",
+    "VehicleChrome",
+    "VehicleTire",
+    "VehicleLight",
+    "VehicleBrake",
+    "VehiclePlate"
+  ],
+  "cars": [
+    {
+      "kind": "compact",
+      "assetName": "Car_CitiGolf",
+      "fileStem": "citi-golf",
+      "dimensionsMetres": [1.8, 1.35, 3.7],
+      "wheelRadiusMetres": 0.37,
+      "wheelbaseMetres": 2.42,
+      "triangleRange": [9000, 30000],
+      "maxTransferBytes": 2097152,
+      "paintColour": [0.91, 0.57, 0.08],
+      "style": "compact"
+    },
+    {
+      "kind": "sport",
+      "assetName": "Car_VrrrPhaaGTI",
+      "fileStem": "vrrr-phaa-gti",
+      "dimensionsMetres": [1.9, 1.15, 4.15],
+      "wheelRadiusMetres": 0.38,
+      "wheelbaseMetres": 2.62,
+      "triangleRange": [9000, 32000],
+      "maxTransferBytes": 2097152,
+      "paintColour": [0.72, 0.03, 0.05],
+      "style": "sport"
+    },
+    {
+      "kind": "van",
+      "assetName": "Car_HiluxBakkie",
+      "fileStem": "hilux-bakkie",
+      "dimensionsMetres": [2.15, 2.15, 4.9],
+      "wheelRadiusMetres": 0.41,
+      "wheelbaseMetres": 3.12,
+      "triangleRange": [10000, 34000],
+      "maxTransferBytes": 2097152,
+      "paintColour": [0.12, 0.43, 0.36],
+      "style": "bakkie",
+      "requiredExtraNodes": ["bakkie-bed"]
+    },
+    {
+      "kind": "police",
+      "assetName": "Car_JMPDInterceptor",
+      "fileStem": "jmpd-interceptor",
+      "dimensionsMetres": [1.95, 1.4, 4.35],
+      "wheelRadiusMetres": 0.38,
+      "wheelbaseMetres": 2.74,
+      "triangleRange": [9000, 34000],
+      "maxTransferBytes": 2097152,
+      "paintColour": [0.045, 0.075, 0.11],
+      "style": "police",
+      "requiredExtraNodes": ["lightbar"],
+      "extraMaterials": ["VehicleLivery", "VehicleBlueLight", "VehicleRedLight"]
+    }
+  ]
+}

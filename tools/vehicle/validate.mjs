@@ -134,3 +134,75 @@ if (MODEL === resolve('public/models/vehicles/quantum-express.glb')) {
   }
 }
 console.log(`Taxi valid: ${(file.byteLength / 1024 / 1024).toFixed(2)} MiB, ${triangles} triangles, ${meshCount} meshes, ${size.x.toFixed(2)}x${size.y.toFixed(2)}x${size.z.toFixed(2)} m, one ${embeddedWidth}px texture.`);
+
+const roadCatalog = JSON.parse(await readFile(resolve('art/vehicles/road-cars.json'), 'utf8'));
+for (const car of roadCatalog.cars) {
+  const modelPath = resolve(`public/models/vehicles/${car.fileStem}.glb`);
+  const roadFile = await readFile(modelPath);
+  invariant(roadFile.byteLength <= car.maxTransferBytes, `${car.kind} GLB exceeds its transfer budget`);
+  const { json: roadJson } = parseGlb(roadFile);
+  invariant((roadJson.animations ?? []).length === 0 && (roadJson.skins ?? []).length === 0, `${car.kind} must be a static unskinned asset`);
+  const roadNodes = new Map(roadJson.nodes.map((node, index) => [node.name, { node, index }]));
+  const roadRoot = roadNodes.get(car.assetName);
+  invariant(roadRoot, `Missing ${car.assetName} root`);
+  const roadContract = roadRoot.node.extras?.vehicleContract;
+  invariant(roadContract?.version === roadCatalog.contractVersion && roadContract.kind === car.kind
+    && roadContract.units === 'metres' && roadContract.forwardAxis === '+Z' && roadContract.upAxis === '+Y' && roadContract.grounded === true,
+  `${car.kind} metadata contract is invalid`);
+  invariant(JSON.stringify(roadContract.boundsMetres) === JSON.stringify(car.dimensionsMetres), `${car.kind} bounds metadata drifted`);
+  invariant(roadContract.paintMaterial === 'VehiclePaint' && roadContract.sharedGeometry === true && roadContract.mutableMaterialsPerInstance === true,
+    `${car.kind} sharing/paint contract is invalid`);
+  invariant(JSON.stringify(roadContract.firstPersonHiddenNodes) === JSON.stringify(roadCatalog.firstPersonHiddenNodes), `${car.kind} first-person contract drifted`);
+  for (const name of [...roadCatalog.requiredNodes, ...(car.requiredExtraNodes ?? [])]) invariant(roadNodes.has(name), `Missing required ${car.kind} node: ${name}`);
+
+  const expectedMaterials = [...roadCatalog.baseMaterials, ...(car.extraMaterials ?? [])].sort();
+  const actualMaterials = (roadJson.materials ?? []).map((material) => material.name).sort();
+  invariant(JSON.stringify(actualMaterials) === JSON.stringify(expectedMaterials), `${car.kind} material set is invalid`);
+  invariant((roadJson.images ?? []).length === 0 && (roadJson.textures ?? []).length === 0, `${car.kind} must not carry redundant textures`);
+  for (const material of roadJson.materials ?? []) {
+    invariant((material.alphaMode ?? 'OPAQUE') === 'OPAQUE' && material.pbrMetallicRoughness, `${car.kind}/${material.name} must be opaque PBR`);
+    invariant(!material.extensions?.KHR_materials_transmission && !material.extensions?.KHR_materials_volume, `${car.kind}/${material.name} uses a transparent render extension`);
+  }
+
+  const matrices = new Map();
+  function visitRoad(index, parentMatrix = new THREE.Matrix4()) {
+    const matrix = parentMatrix.clone().multiply(localMatrix(roadJson.nodes[index]));
+    matrices.set(index, matrix);
+    for (const child of roadJson.nodes[index].children ?? []) visitRoad(child, matrix);
+  }
+  for (const rootIndex of roadJson.scenes[roadJson.scene ?? 0].nodes) visitRoad(rootIndex);
+  const roadBounds = new THREE.Box3();
+  let roadTriangles = 0; let roadMeshes = 0;
+  for (const [index, node] of roadJson.nodes.entries()) {
+    if (node.mesh === undefined) continue;
+    roadMeshes++;
+    const matrix = matrices.get(index); invariant(matrix, `${car.kind}/${node.name} is not in the active scene`);
+    for (const primitive of roadJson.meshes[node.mesh].primitives) {
+      invariant(primitive.mode === undefined || primitive.mode === 4, `${car.kind}/${node.name} is not triangle geometry`);
+      const position = roadJson.accessors[primitive.attributes.POSITION]; const normal = roadJson.accessors[primitive.attributes.NORMAL];
+      invariant(position?.count > 0 && normal?.count === position.count, `${car.kind}/${node.name} needs valid positions and normals`);
+      roadTriangles += (primitive.indices === undefined ? position.count : roadJson.accessors[primitive.indices].count) / 3;
+      invariant(position.min && position.max, `${car.kind}/${node.name} position accessor needs bounds`);
+      for (const x of [position.min[0], position.max[0]]) for (const y of [position.min[1], position.max[1]]) for (const z of [position.min[2], position.max[2]]) {
+        roadBounds.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(matrix));
+      }
+    }
+  }
+  invariant(Number.isInteger(roadTriangles) && roadTriangles >= car.triangleRange[0] && roadTriangles <= car.triangleRange[1],
+    `${car.kind} has ${roadTriangles} triangles; expected ${car.triangleRange.join('–')}`);
+  invariant(roadMeshes >= 60 && roadMeshes <= 120, `${car.kind} has ${roadMeshes} mesh nodes; expected 60–120`);
+  const roadSize = roadBounds.getSize(new THREE.Vector3()); const roadCenter = roadBounds.getCenter(new THREE.Vector3());
+  const [expectedWidth, expectedHeight, expectedLength] = car.dimensionsMetres;
+  invariant(roadBounds.min.y >= -0.015 && roadBounds.min.y <= 0.025, `${car.kind} is not grounded (min Y ${roadBounds.min.y.toFixed(3)})`);
+  invariant(Math.abs(roadCenter.x) < 0.04 && Math.abs(roadCenter.z) < 0.04, `${car.kind} is not centred on X/Z`);
+  invariant(Math.abs(roadSize.x - expectedWidth) < 0.08 && Math.abs(roadSize.y - expectedHeight) < 0.08 && Math.abs(roadSize.z - expectedLength) < 0.08,
+    `${car.kind} bounds ${roadSize.x.toFixed(3)}x${roadSize.y.toFixed(3)}x${roadSize.z.toFixed(3)} do not match the gameplay footprint`);
+  const roadTranslation = (name) => new THREE.Vector3().setFromMatrixPosition(matrices.get(roadNodes.get(name).index));
+  for (const name of ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr']) invariant((roadNodes.get(name).node.children ?? []).length >= 8, `${car.kind}/${name} lacks the authored wheel hierarchy`);
+  const roadFl = roadTranslation('wheel_fl'); const roadFr = roadTranslation('wheel_fr'); const roadRl = roadTranslation('wheel_rl'); const roadRr = roadTranslation('wheel_rr');
+  invariant(roadFl.x < 0 && roadFr.x > 0 && roadRl.x < 0 && roadRr.x > 0, `${car.kind} wheel left/right placement is invalid`);
+  invariant(roadFl.z > 0 && roadFr.z > 0 && roadRl.z < 0 && roadRr.z < 0, `${car.kind} wheel front/rear placement is invalid`);
+  invariant([roadFl, roadFr, roadRl, roadRr].every((point) => Math.abs(point.y - car.wheelRadiusMetres) < 0.015), `${car.kind} wheel radius contract drifted`);
+  invariant(roadTranslation('headlight_left').z > 0 && roadTranslation('brakelight_left').z < 0, `${car.kind} does not face +Z`);
+  console.log(`${car.kind} valid: ${(roadFile.byteLength / 1024).toFixed(0)} KiB, ${roadTriangles} triangles, ${roadMeshes} meshes, ${roadSize.x.toFixed(2)}x${roadSize.y.toFixed(2)}x${roadSize.z.toFixed(2)} m.`);
+}

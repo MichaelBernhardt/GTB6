@@ -24,7 +24,7 @@ import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
 import { functionalPlaneSpawns, Plane } from './entities/Plane';
 import { Vehicle } from './entities/Vehicle';
-import { loadTaxiLibrary } from './entities/TaxiAsset';
+import { loadVehicleLibraries } from './entities/VehicleAssets';
 import { BulletSystem } from './systems/BulletSystem';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
@@ -261,18 +261,18 @@ export class Game {
 
   private async prepareAssets(retry = false): Promise<void> {
     const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading';
-    this.ui.showLoading({ progress: 52, label: retry ? 'Retrying required models' : 'Loading required models', detail: 'Player, taxis and trees · 0 of 3 ready.' });
+    this.ui.showLoading({ progress: 52, label: retry ? 'Retrying required models' : 'Loading required models', detail: 'Player, vehicles and trees · 0 of 3 ready.' });
     let completed = 0; let failed = false;
     const track = (name: string, task: Promise<void>): Promise<void> => task.then(() => {
       completed++;
       if (failed || attempt !== this.assetLoadAttempt) return;
-      this.ui.showLoading({ progress: 52 + completed * 10, label: `${name} ready`, detail: `Player, taxis and trees · ${completed} of 3 ready.` });
+      this.ui.showLoading({ progress: 52 + completed * 10, label: `${name} ready`, detail: `Player, vehicles and trees · ${completed} of 3 ready.` });
     });
     try {
       await Promise.all([
         track('Player and moves', retry ? this.player.retryCharacter() : this.player.loadCharacter()),
         track('Joburg trees', loadTreeLibrary()),
-        track('Quantum taxis', loadTaxiLibrary()),
+        track('Joburg vehicle fleet', loadVehicleLibraries()),
       ]);
       if (attempt !== this.assetLoadAttempt) return;
       this.ui.showLoading({ progress: 85, label: 'Planting the city', detail: 'Installing authored trees and preparing nearby streets.' });

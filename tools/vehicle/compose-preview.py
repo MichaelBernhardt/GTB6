@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 parser = argparse.ArgumentParser()
 parser.add_argument("--input-dir", required=True)
 parser.add_argument("--output", required=True)
+parser.add_argument("--title", default="QUANTUM EXPRESS")
 args = parser.parse_args()
 
 source_dir = Path(args.input_dir)
@@ -25,7 +26,7 @@ except OSError:
     title_font = ImageFont.load_default(size=34)
     label_font = ImageFont.load_default(size=22)
 
-draw.text((40, 20), "QUANTUM EXPRESS  -  BLENDER TURNAROUND", font=title_font, fill=(242, 197, 33))
+draw.text((40, 20), f"{args.title.upper()}  -  BLENDER TURNAROUND", font=title_font, fill=(242, 197, 33))
 for index, path in enumerate(paths):
     image = Image.open(path).convert("RGB").resize((760, 428), Image.Resampling.LANCZOS)
     x = 40 + (index % 2) * 800
@@ -38,4 +39,4 @@ for index, path in enumerate(paths):
 output = Path(args.output)
 output.parent.mkdir(parents=True, exist_ok=True)
 canvas.save(output, "JPEG", quality=90, optimize=True, progressive=True)
-print(f"Composed taxi turnaround: {output}")
+print(f"Composed vehicle turnaround: {output}")
