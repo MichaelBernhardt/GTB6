@@ -13,9 +13,9 @@ const shooter = new THREE.Vector3(0, 0, 0);
 const muzzle = new THREE.Vector3(0, 1.5, 0);
 
 const makePed = (position: THREE.Vector3) => {
-  const ped = { police: false, hostile: false, state: 'walk', health: 100, received: [] as number[], group: new THREE.Group(), takeDamage(amount: number) { this.received.push(amount); this.health = Math.max(0, this.health - amount); if (this.health === 0) this.state = 'down'; return this.health === 0; } };
+  const ped = { police: false, hostile: false, state: 'walk', health: 100, received: [] as number[], jolts: [] as number[], group: new THREE.Group(), takeDamage(amount: number) { this.received.push(amount); this.health = Math.max(0, this.health - amount); if (this.health === 0) this.state = 'down'; return this.health === 0; }, corpseHit(_origin: THREE.Vector3, damage: number) { this.jolts.push(damage); } };
   ped.group.position.copy(position);
-  return ped as unknown as Pedestrian & { received: number[] };
+  return ped as unknown as Pedestrian & { received: number[]; jolts: number[] };
 };
 
 const makeVehicle = (position: THREE.Vector3, heading = 0) => {
@@ -124,6 +124,32 @@ describe('BulletSystem', () => {
     const outcome = flyUntilResolved(truck, population([], [van]));
     expect(outcome.resolution).toBeDefined();
     expect(van.hits).toBe(1); // pellets stop on the bodywork but only one damage tick per shot
+  });
+
+  it('overkill: rounds pass through a settled corpse — one jolt per trigger pull — and still hit the live target behind', () => {
+    const system = new BulletSystem(new THREE.Scene());
+    const corpse = makePed(new THREE.Vector3(0, 0, 36)); corpse.state = 'down'; corpse.health = 0;
+    const target = makePed(new THREE.Vector3(0, 0, 40));
+    const pop = population([corpse, target]);
+    system.spawnShot(shooter, muzzle, aimAt(new THREE.Vector3(0, 0, 40)), 1, WEAPON_BY_ID.pistol);
+    const { resolution } = flyUntilResolved(system, pop);
+    expect(resolution?.result.victim).toBe(target); // the corpse never shielded the live target
+    expect(target.received).toHaveLength(1);
+    expect(corpse.received).toHaveLength(0); // no damage path, no kill credit — just the jolt
+    expect(corpse.jolts).toHaveLength(1);
+    system.spawnShot(shooter, muzzle, aimAt(new THREE.Vector3(0, 0, 40)), 1, WEAPON_BY_ID.pistol);
+    flyUntilResolved(system, pop);
+    expect(corpse.jolts).toHaveLength(2); // a NEW trigger pull jolts again
+  });
+
+  it('overkill dedupe: every pellet of a shotgun blast over a corpse lands as a single jolt', () => {
+    const system = new BulletSystem(new THREE.Scene());
+    const corpse = makePed(new THREE.Vector3(0, 0, 12)); corpse.state = 'down'; corpse.health = 0;
+    const pop = population([corpse]);
+    const spec = WEAPON_BY_ID.shotgun;
+    system.spawnShot(shooter, muzzle, Array.from({ length: spec.pellets }, () => new THREE.Vector3(0, 0.1, 12).sub(muzzle).normalize()), spec.pellets, spec);
+    flyUntilResolved(system, pop);
+    expect(corpse.jolts).toHaveLength(1); // nine pellets, one kick
   });
 
   it('respects drive-by exclusion so your own bakkie never eats your rounds', () => {

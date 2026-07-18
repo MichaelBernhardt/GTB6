@@ -105,6 +105,14 @@ const KICK_LIFT = new Float32Array([
  *  so a point-blank shotgun doesn't fire the body across the street. */
 export function impactKickSpeed(damage: number): number { return Math.min(9, 2 + damage * 0.09); }
 
+/** Impact impulse from a crash speed-delta (two-wheeler knock-off, plane-in): the input is how much
+ *  velocity the hit stole, not a damage figure — same 9 m/s cap as impactKickSpeed. */
+export function crashKickSpeed(impact: number): number { return Math.min(9, 2 + Math.max(0, impact) * 0.35); }
+
+/** Downward carry for a hard landing: enough that the body slams flat instead of tipping over like a
+ *  pushed mannequin, capped well under terminal so the particles never punch through the road band. */
+export function landingDownSpeed(drop: number): number { return Math.min(6, 0.9 * Math.sqrt(Math.max(0, drop))); }
+
 export class VerletRagdoll {
   /** World-space particle positions, xyz-interleaved. Read-only outside the sim. */
   readonly positions: Float32Array;
@@ -140,17 +148,26 @@ export class VerletRagdoll {
   rodRestLength(index: number): number { return this.rodRest[index]; }
   get rodCount(): number { return RODS.length; }
 
-  /** Horizontal impact impulse, weighted heavy on the upper body so the corpse whips over its feet. */
-  kick(directionX: number, directionZ: number, speed: number): void {
+  /** Horizontal impact impulse, weighted heavy on the upper body so the corpse whips over its feet.
+   *  `downSpeed` (optional, m/s) adds a uniform downward carry — a hard landing arrives with the
+   *  fall's vertical momentum and should slam flat, not tip over like a pushed mannequin. */
+  kick(directionX: number, directionZ: number, speed: number, downSpeed = 0): void {
     const length = Math.hypot(directionX, directionZ);
-    if (length < 1e-6 || speed <= 0) return;
-    const dx = directionX / length; const dz = directionZ / length;
+    if (length < 1e-6 || (speed <= 0 && downSpeed <= 0)) return;
+    const dx = length < 1e-6 ? 0 : directionX / length; const dz = length < 1e-6 ? 0 : directionZ / length;
     for (let i = 0; i < RAGDOLL_PARTICLE_COUNT; i++) {
-      const pace = speed * KICK_WEIGHTS[i] * RAGDOLL_STEP;
+      const pace = Math.max(0, speed) * KICK_WEIGHTS[i] * RAGDOLL_STEP;
       this.previous[i * 3] -= dx * pace;
-      this.previous[i * 3 + 1] -= speed * KICK_LIFT[i] * RAGDOLL_STEP;
+      this.previous[i * 3 + 1] -= (Math.max(0, speed) * KICK_LIFT[i] - downSpeed) * RAGDOLL_STEP;
       this.previous[i * 3 + 2] -= dz * pace;
     }
+  }
+
+  /** Overkill re-hit: wake a settled body for another round of the same sim — fresh rest window and
+   *  timeout, so a revived corpse settles (and freezes) exactly like a first-time ragdoll. */
+  revive(): void {
+    this.frozen = false; this.stillSteps = 0; this.elapsed = 0; this.accumulator = 0;
+    this.previous.set(this.positions); // at rest: zero carried velocity, the new kick is the only impulse
   }
 
   step(dt: number, env: RagdollEnvironment): void {

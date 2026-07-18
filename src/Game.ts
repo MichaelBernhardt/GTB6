@@ -9,7 +9,8 @@ import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type We
 import { AudioManager } from './core/AudioManager';
 import { radioDial } from './core/RadioStations';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
-import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
+import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, KNOCKOFF_IMPACT_SPEED, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
+import { crashKickSpeed, impactKickSpeed, landingDownSpeed } from './entities/PedRagdoll';
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
 import { InputManager } from './core/InputManager';
 import { MultiplayerOverlay } from './multiplayer/MultiplayerOverlay';
@@ -719,7 +720,7 @@ export class Game {
     this.population.update(dt, focus, (amount) => { this.damagePlayer(amount); this.shake = Math.min(0.7, this.shake + 0.18); }, !this.activeVehicle && !this.transition && !this.airborne); // hostile punches land with a jolt, not just the damage flash
     for (const hit of this.population.consumePlayerVehicleHits()) { // civilian traffic vs the on-foot player: the driver is AI, the player the victim — no heat, just physics
       if (hit.damage > 0) this.damagePlayer(hit.damage);
-      if (hit.knockdown && !this.player.tumbling) { this.player.tumble(); this.shake = Math.min(0.7, this.shake + 0.3); }
+      if (hit.knockdown && !this.player.knockedDown) { this.player.knockdown(hit.dirX, hit.dirZ, impactKickSpeed(hit.damage), 0, this.city); this.shake = Math.min(0.7, this.shake + 0.3); }
     }
     this.profiler.mark('world');
     const forward = this.camera.getWorldDirection(this.cameraForward);
@@ -770,7 +771,7 @@ export class Game {
     if (this.activeVehicle?.spec.twoWheeler) { // genuine interceptor contact is exactly the kind of hit that unseats a rider
       const bike = this.activeVehicle;
       const rammer = this.police.vehicles.find((unit) => !unit.wrecked && Math.abs(unit.speed) > 8 && unit.group.position.distanceTo(focus) < 5);
-      if (rammer && shouldKnockOff(Math.abs(rammer.speed - bike.speed))) this.knockOff(bike);
+      if (rammer && shouldKnockOff(Math.abs(rammer.speed - bike.speed))) this.knockOff(bike, Math.abs(rammer.speed - bike.speed));
     }
     this.radioCooldown = Math.max(0, this.radioCooldown - dt);
     for (const report of this.knowledge.update(dt, (reporter) => reporter.state !== 'down')) { this.wanted.addCrime(report.heat); this.radioDispatch(report.label, report.x, report.z); }
@@ -904,6 +905,7 @@ export class Game {
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(2.2);
     this.player.group.position.copy(vehicle.group.position).add(side); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
     this.player.resetAirbornePose(); // a two-wheeler rider's group carries the bike's orientation; wipe it so a wreck-eject doesn't leave the player inverted
+    this.player.knockdown(side.x, side.z, crashKickSpeed(8), 0, this.city); // blown clear of the burning wreck
     this.audio.setEngine(false);
   }
 
@@ -911,6 +913,7 @@ export class Game {
     this.player.update(dt, this.input, this.cameraController.yaw, this.city, this.updateCoverState(dt));
     const fall = this.player.consumeFallDamage(); // hard landings billed through the usual damage path
     if (fall > 0) { this.damagePlayer(fall); this.shake = Math.min(0.7, this.shake + 0.25); this.audio.collision(10 + fall * 0.3); }
+    if (this.player.knockedDown) return; // floored: no bumps, weapons, or interactions until the body is back up (JMPD can still close in and collar)
     for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
       if (!bump.assault) continue;
       this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
@@ -1019,7 +1022,10 @@ export class Game {
     this.player.onGround = true; this.player.velocityY = 0;
     const damage = state.mode === 'parachute' ? chuteLandingDamage(descent) : fallDamage(state.fallOriginY - support);
     if (damage > 0) {
-      this.damagePlayer(damage); this.player.tumble();
+      this.damagePlayer(damage);
+      // A hot canopy landing is a stumble, not a crash; raw freefall arrives as a full ragdoll slam.
+      if (state.mode === 'parachute') this.player.tumble();
+      else this.player.knockdown(Math.sin(state.heading), Math.cos(state.heading), Math.min(4, 1.5 + damage * 0.025), landingDownSpeed(state.fallOriginY - support), this.city);
       this.shake = Math.min(0.7, this.shake + 0.3); this.audio.collision(10 + damage * 0.3);
     } else if (state.mode === 'parachute') this.ui.notify('Textbook landing', 'Two feet down, no paperwork.');
   }
@@ -1100,7 +1106,8 @@ export class Game {
     this.player.inVehicle = false; this.player.setVisible(true);
     const spot = safePlacement(at.x + 4, at.z, (px, pz) => this.city.collides(px, pz, PLAYER.radius));
     this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
-    this.player.velocityY = 0; this.player.onGround = true; this.player.resetAirbornePose(); this.player.tumble();
+    this.player.velocityY = 0; this.player.onGround = true; this.player.resetAirbornePose();
+    this.player.knockdown(this.player.group.position.x - at.x, this.player.group.position.z - at.z, crashKickSpeed(speed), 0, this.city); // thrown clear of the wreck
     this.damagePlayer(planeCrashDamage(sink, speed));
     this.ui.notify('Plane down', 'That was not a landing. The wreck gets towed back to the airfield just now.', false);
   }
@@ -1131,7 +1138,7 @@ export class Game {
    *  without stepping out. Game owns the cover position; Player only performs the pose. */
   private updateCoverState(dt: number): CoverPose | undefined {
     const position = this.player.group.position;
-    if (this.settings.cameraViewFoot === 0 || this.player.tumbling) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble knocks you out of cover
+    if (this.settings.cameraViewFoot === 0 || this.player.tumbling || this.player.knockedDown) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble or knockdown knocks you out of cover
     if (!this.cover) {
       const spot = nearestGroundedCoverSpot(position.x, position.z, this.player.onGround, this.city.colliders, COVER_ENTER_RANGE, position.y); // only faces that shield the player's elevation
       this.coverAvailable = Boolean(spot);
@@ -1237,7 +1244,7 @@ export class Game {
       this.player.animateRiding(dt, vehicle.spec.kind, speed, driveBy, driveBy && this.input.firing);
       const hit = vehicle.consumeRiderHit();
       if (hit.damage > 0) this.damagePlayer(hit.damage);
-      if (shouldKnockOff(hit.impact)) { this.knockOff(vehicle); return; }
+      if (shouldKnockOff(hit.impact)) { this.knockOff(vehicle, hit.impact); return; }
     }
     const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
     this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed, vehicle.spec.kind); // 'bicycle' routes to the freewheel/wind voice, everything else to an engine profile
@@ -1292,18 +1299,20 @@ export class Game {
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
   }
 
-  /** A hard hit on a two-wheeler throws the rider: the bike drops on the spot, the player tumbles beside it
-   *  (pedestrian down-pose machinery, no death) and stands back up. */
-  private knockOff(vehicle: Vehicle): void {
+  /** A hard hit on a two-wheeler throws the rider: the bike drops on the spot, the player ragdolls
+   *  beside it — kicked along the bike's line of travel, scaled by how much speed the hit stole —
+   *  and stands back up where the body slides to rest. */
+  private knockOff(vehicle: Vehicle, impact = KNOCKOFF_IMPACT_SPEED): void {
     if (vehicle.spec.kind === 'courier') this.endCourierShift(undefined, false);
+    const thrown = Math.sign(vehicle.speed || 1); // reversing into a wall throws you backward off the saddle
     vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.speed = 0;
     this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.5);
     const target = vehicle.group.position.clone().add(side);
     const spot = safePlacement(target.x, target.z, (px, pz) => this.city.collides(px, pz, PLAYER.radius)); // a hard crash into a wall can drop the side-offset inside the building; ring out to clear ground so the rider isn't trapped
     this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
-    this.player.resetAirbornePose(); // the rider's group inherited the bike's full orientation (incl. terrain pitch on rotation.x); wipe it before the tumble or the body lands inverted under the tar
-    this.player.tumble();
+    this.player.resetAirbornePose(); // the rider's group inherited the bike's full orientation (incl. terrain pitch on rotation.x); wipe it before the ragdoll seeds or the body lands inverted under the tar
+    this.player.knockdown(Math.sin(vehicle.heading) * thrown, Math.cos(vehicle.heading) * thrown, crashKickSpeed(impact), 0, this.city);
     this.audio.setEngine(false); this.audio.stopRadio(); this.shake = Math.min(0.7, this.shake + 0.35);
     this.ui.notify('Knocked off', 'Tar 1, rider 0. The bike is right there.', false);
   }
@@ -2311,7 +2320,7 @@ export class Game {
         const impact = Math.abs(driven.speed - other.speed);
         if (driven.spec.twoWheeler) this.damagePlayer(riderImpactDamage(impact)); else driven.takeDamage(impact * 0.35); // riders eat the hit themselves
         other.takeDamage(impact * 0.25); this.audio.collision(impact); this.taxiRide.recordCrash(impact); this.recordCourierCrash(impact); this.vehicleCollisionCooldown.set(driven, 0.8);
-        if (driven.spec.twoWheeler && shouldKnockOff(impact)) { this.knockOff(driven); return; }
+        if (driven.spec.twoWheeler && shouldKnockOff(impact)) { this.knockOff(driven, impact); return; }
       }
       driven.speed *= 0.6; other.speed *= 0.7;
     }
@@ -2320,7 +2329,7 @@ export class Game {
   private renderHUD(): void {
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     let prompt = '';
-    if (this.mode === 'playing' && !this.transition) {
+    if (this.mode === 'playing' && !this.transition && !this.player.knockedDown) { // a floored player gets no interaction prompts — nothing they could act on
       const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
       const contactPrompt = this.contactPrompt(); // offer / riddle re-state / job re-brief — undefined when E would do nothing

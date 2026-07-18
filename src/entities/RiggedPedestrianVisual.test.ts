@@ -265,6 +265,74 @@ describe('cached rigged pedestrian instances', () => {
     await expect(failed.load()).rejects.toThrow(/unable to load/i); expect(failed.failed).toBe(true); expect(failed.group.visible).toBe(false); expect(fallback.children).toContain(failed.group);
   });
 
+  it('overkill: a fresh hit revives a settled ragdoll corpse, which flops away and settles again', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const parent = new THREE.Group();
+    const visual = new RiggedPedestrianVisual(parent, 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    await visual.load();
+    visual.setState(state({ state: 'down', dead: true }));
+    for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
+    const body = visual.ragdollBody!;
+    expect(body.frozen).toBe(true);
+    const hipsBefore = body.positions[0];
+    visual.reviveRagdollImpact(1, 0, 7); // shotgun round into the corpse
+    expect(body.frozen).toBe(false); // same sim, woken
+    expect(activeRagdollCount()).toBe(1); // takes a slot like any ragdoll
+    for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
+    expect(body.frozen).toBe(true); // same settle logic re-froze it
+    expect(body.positions[0]).toBeGreaterThan(hipsBefore + 0.1); // the jolt carried it along the impact
+    const settled = skinnedFloorOf(parent);
+    expect(settled).toBeGreaterThan(-0.05); expect(settled).toBeLessThan(0.05); // and it rests back in the band
+    expect(activeRagdollCount()).toBe(0);
+  });
+
+  it('overkill respects the cap by skipping: a corpse re-hit never evicts a fresh death', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const corpse = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    await corpse.load();
+    corpse.setState(state({ state: 'down', dead: true }));
+    for (let frame = 0; frame < 305 && !corpse.ragdollBody?.frozen; frame++) corpse.update(1 / 30, env);
+    expect(corpse.ragdollBody!.frozen).toBe(true);
+    const fresh: RiggedPedestrianVisual[] = [];
+    for (let index = 0; index < MAX_ACTIVE_RAGDOLLS; index++) fresh.push(new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 }));
+    await Promise.all(fresh.map((visual) => visual.load()));
+    for (const visual of fresh) { visual.setState(state({ state: 'down', dead: true })); visual.update(1 / 30, env); }
+    expect(activeRagdollCount()).toBe(MAX_ACTIVE_RAGDOLLS);
+    corpse.reviveRagdollImpact(1, 0, 9);
+    expect(corpse.ragdollBody!.frozen).toBe(true); // skipped — stayed settled
+    expect(activeRagdollCount()).toBe(MAX_ACTIVE_RAGDOLLS);
+    expect(fresh[0].ragdollBody!.frozen).toBe(false); // and nobody got evicted for it
+  });
+
+  it('overkill converts a pose-death corpse: the re-hit seeds a ragdoll from the settled pose', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const parent = new THREE.Group();
+    const visual = new RiggedPedestrianVisual(parent, 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.95 }); // pose-fated
+    await visual.load();
+    expect(visual.deathStyle).toBe('pose');
+    visual.setState(state({ state: 'down', dead: true }));
+    for (let frame = 0; frame < 90; frame++) visual.update(1 / 30, env); // the capture finishes and clamps
+    expect(visual.ragdollBody).toBeUndefined();
+    visual.reviveRagdollImpact(0, 1, 6);
+    for (let frame = 0; frame < 305 && !visual.ragdollBody?.frozen; frame++) visual.update(1 / 30, env);
+    expect(visual.ragdollBody).toBeDefined(); // converted — physics owns this corpse now
+    expect(visual.ragdollBody!.frozen).toBe(true);
+    const settled = skinnedFloorOf(parent);
+    expect(settled).toBeGreaterThan(-0.05); expect(settled).toBeLessThan(0.05);
+  });
+
+  it('overkill never touches a knockdown survivor: revive is corpse-only', async () => {
+    const env: RagdollEnvironment = { heightAt: () => 0 };
+    const visual = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc(), random: () => 0.25 });
+    await visual.load();
+    visual.setState(state({ state: 'down', dead: false, knockdown: true }));
+    for (let frame = 0; frame < 10; frame++) visual.update(1 / 30, env);
+    const body = visual.ragdollBody!;
+    const before = Array.from(body.positions);
+    visual.reviveRagdollImpact(1, 0, 9); // stray corpse-path call must be inert for the living
+    expect(Array.from(body.positions)).toEqual(before);
+  });
+
   it('detaches safely when disposed during an outstanding shared load without disposing shared GPU data', async () => {
     const parent = new THREE.Group(); let resolve!: (gltf: GLTF) => void;
     const deferred = new Promise<GLTF>((accept) => { resolve = accept; });
