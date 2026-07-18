@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeZAt, type BuildingProfile, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
+import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeZAt, gableSurfaceAt, massingTopAt, type BuildingProfile, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
 import { GeometryBaker } from './StaticGeometry';
 
 const facade = new THREE.MeshStandardMaterial({ color: 0x99a4a9, roughness: 0.72 });
@@ -212,4 +212,83 @@ describe('procedural building families', () => {
       expect(second.roofY).toBe(first.roofY);
     });
   }
+});
+
+describe('roof dressing stays seated on the massing (no floating vents)', () => {
+  /** Meshes whose underside hangs in the air: not near the ground, not on/inside a massing tier,
+   *  not seated in a gable surface, and not touching any sibling mesh from below (facade-attached
+   *  ledges, rails and pipe racks lean on their host and pass). This is the defect class the owner
+   *  reported as "floating vents": dressing anchored at the building-wide roofY over a lower wing. */
+  const floatersOf = (style: BuildingStyle, variant: number, size = SIZES[style]): string[] => {
+    const parent = new THREE.Group();
+    const profile = new BuildingArchitecture(parent).build({ x: 0, z: 0, width: size.w, depth: size.d, height: size.h, style, variant, facade: familyFacade, roof: familyRoof });
+    parent.updateWorldMatrix(true, true);
+    const meshes: THREE.Mesh[] = [];
+    parent.traverse((object) => { if (object instanceof THREE.Mesh) meshes.push(object); });
+    const boxes = meshes.map((mesh) => new THREE.Box3().setFromObject(mesh));
+    const floaters: string[] = [];
+    meshes.forEach((mesh, index) => {
+      const bounds = boxes[index]!;
+      const bottom = bounds.min.y;
+      if (bottom <= 1.8) return; // grounded on the local base plane
+      const cx = (bounds.min.x + bounds.max.x) / 2; const cz = (bounds.min.z + bounds.max.z) / 2;
+      let supported = profile.tiers.some((tier) =>
+        cx >= tier.minX - 0.2 && cx <= tier.maxX + 0.2 && cz >= tier.minZ - 0.2 && cz <= tier.maxZ + 0.2 &&
+        tier.y0 <= bottom + 0.3 && tier.y1 >= bottom - 1.2);
+      if (!supported) {
+        const surface = gableSurfaceAt(profile.gables, cx, cz);
+        supported = surface !== undefined && surface >= bottom - 1.2;
+      }
+      if (!supported) supported = boxes.some((other, otherIndex) => otherIndex !== index &&
+        other.min.x <= bounds.max.x + 0.35 && other.max.x >= bounds.min.x - 0.35 &&
+        other.min.z <= bounds.max.z + 0.35 && other.max.z >= bounds.min.z - 0.35 &&
+        other.min.y <= bottom + 0.3 && other.max.y >= bottom - 1.2);
+      if (!supported) floaters.push(`${style}/v${variant} ${mesh.geometry.type} bottom ${bottom.toFixed(1)} at (${cx.toFixed(1)}, ${cz.toFixed(1)})`);
+    });
+    return floaters;
+  };
+
+  for (const style of Object.keys(ARCHITECTURE_VARIANTS) as BuildingStyle[]) {
+    it(`leaves no ${style} dressing hanging in mid-air (both variant parities)`, () => {
+      for (let variant = 0; variant < ARCHITECTURE_VARIANTS[style] * 2; variant++) {
+        expect(floatersOf(style, variant), `${style} variant ${variant}`).toEqual([]);
+      }
+    });
+  }
+
+  it('taller parcels stay seated too (setback towers, wings, walk-ups)', () => {
+    expect(floatersOf('downtown', 3, { w: 30, d: 22, h: 72 })).toEqual([]);
+    expect(floatersOf('mixed-use', 2, { w: 24, d: 18, h: 22 })).toEqual([]);
+    expect(floatersOf('dense-residential', 5, { w: 22, d: 14, h: 16 })).toEqual([]);
+    expect(floatersOf('suburban', 5, { w: 16, d: 11, h: 10 })).toEqual([]);
+  });
+
+  it('seats the dense-residential water tank exactly on the roof under it', () => {
+    for (let variant = 0; variant < ARCHITECTURE_VARIANTS['dense-residential']; variant++) {
+      const parent = new THREE.Group();
+      const { w, d, h } = SIZES['dense-residential'];
+      const profile = new BuildingArchitecture(parent).build({ x: 0, z: 0, width: w, depth: d, height: h, style: 'dense-residential', variant, facade: familyFacade, roof: familyRoof });
+      parent.updateWorldMatrix(true, true);
+      const tanks: THREE.Mesh[] = [];
+      parent.traverse((object) => {
+        if (object instanceof THREE.Mesh && object.geometry instanceof THREE.CylinderGeometry && (object.geometry.parameters as { radiusBottom: number }).radiusBottom === 0.8) tanks.push(object);
+      });
+      expect(tanks.length, `variant ${variant}`).toBe(1);
+      const bounds = new THREE.Box3().setFromObject(tanks[0]!);
+      const roof = massingTopAt(profile.tiers, tanks[0]!.position.x, tanks[0]!.position.z);
+      expect(roof, `variant ${variant}`).toBeDefined();
+      expect(Math.abs(bounds.min.y - roof!), `variant ${variant}`).toBeLessThan(0.05);
+    }
+  });
+
+  it('computes the pitched surface of a recorded gable exactly', () => {
+    const gable = { x: 4, z: -2, width: 10, depth: 8, y: 6, rise: 3, ry: 0 };
+    expect(gableSurfaceAt([gable], 4, -2)).toBeCloseTo(9, 5);       // ridge
+    expect(gableSurfaceAt([gable], 9, -2)).toBeCloseTo(6, 5);       // eaves edge
+    expect(gableSurfaceAt([gable], 6.5, 1)).toBeCloseTo(7.5, 5);    // half-way down the slope
+    expect(gableSurfaceAt([gable], 4, 3)).toBeUndefined();          // off the roof
+    const turned = { ...gable, ry: Math.PI / 2 };                   // ridge now runs along x
+    expect(gableSurfaceAt([turned], 4, -2)).toBeCloseTo(9, 5);
+    expect(gableSurfaceAt([turned], 4, 2)).toBeCloseTo(6 + 3 * (1 - 4 / 5), 5);
+  });
 });

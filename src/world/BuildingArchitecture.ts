@@ -41,6 +41,45 @@ export interface BuildingProfile {
   /** Every stacked box of the massing, bottom tier first — the collision registry mirrors these exactly.
    *  Gable roofs are left out: the player stands on the eaves plane beneath them. */
   tiers: MassingTier[];
+  /** Pitched roof volumes (decorative, no collider) so dressing can find the real surface under it. */
+  gables: GableSpec[];
+}
+
+/** A gable (or thatch) roof in building-local coordinates: ridge along local z at lx=0, apex `rise`
+ *  above the eaves plane `y`, optionally yawed by `ry` (only quarter turns are used). */
+export interface GableSpec { x: number; z: number; width: number; depth: number; y: number; rise: number; ry: number; }
+
+/** Top of the tallest massing box covering a local point — the flat roof surface there, if any. */
+export function massingTopAt(tiers: readonly MassingTier[], x: number, z: number): number | undefined {
+  const epsilon = 1e-4; let top: number | undefined;
+  for (const tier of tiers) {
+    if (x < tier.minX - epsilon || x > tier.maxX + epsilon || z < tier.minZ - epsilon || z > tier.maxZ + epsilon) continue;
+    if (top === undefined || tier.y1 > top) top = tier.y1;
+  }
+  return top;
+}
+
+/** Height of the highest pitched roof surface over a local point, if any gable covers it. */
+export function gableSurfaceAt(gables: readonly GableSpec[], x: number, z: number): number | undefined {
+  let top: number | undefined;
+  for (const gable of gables) {
+    const dx = x - gable.x; const dz = z - gable.z;
+    const c = Math.cos(gable.ry); const s = Math.sin(gable.ry);
+    const lx = dx * c - dz * s; const lz = dx * s + dz * c;
+    if (Math.abs(lx) > gable.width / 2 || Math.abs(lz) > gable.depth / 2) continue;
+    const surface = gable.y + gable.rise * (1 - Math.abs(lx) / (gable.width / 2));
+    if (top === undefined || surface > top) top = surface;
+  }
+  return top;
+}
+
+/** The actual roof surface (flat tier top or pitched gable) directly under a local point. Roof
+ *  dressing must anchor here, never at the building-wide roofY — on stepped or gabled massings
+ *  the tallest feature (stack, silo, ridge, tower) is far above the roof at most other spots. */
+export function roofSurfaceAt(tiers: readonly MassingTier[], gables: readonly GableSpec[], x: number, z: number): number | undefined {
+  const flat = massingTopAt(tiers, x, z); const pitched = gableSurfaceAt(gables, x, z);
+  if (flat === undefined) return pitched;
+  return pitched === undefined ? flat : Math.max(flat, pitched);
 }
 
 /** Extend only the building volumes that actually meet the ground down to a common foundation base.
@@ -122,6 +161,7 @@ export class BuildingArchitecture {
   private court = new THREE.MeshStandardMaterial({ color: 0x2f6a4e, roughness: 0.92 });
 
   private tiers: MassingTier[] = [];
+  private gables: GableSpec[] = [];
 
   constructor(private parent: THREE.Group) {}
 
@@ -131,6 +171,7 @@ export class BuildingArchitecture {
 
   build(spec: BuildingSpec): BuildingProfile {
     this.tiers = [];
+    this.gables = [];
     const massing = spec.variant % ARCHITECTURE_VARIANTS[spec.style];
     const roofY = spec.style === 'downtown' ? this.buildDowntown(spec, massing)
       : spec.style === 'mixed-use' ? this.buildMixedUse(spec, massing)
@@ -140,7 +181,7 @@ export class BuildingArchitecture {
               : spec.style === 'estate' ? this.buildEstate(spec, massing)
                 : this.buildRural(spec, massing);
     this.addStructuralDetail(spec, massing, roofY);
-    return { roofY, massing, tiers: this.tiers };
+    return { roofY, massing, tiers: this.tiers, gables: this.gables };
   }
 
   /** Every massing box doubles as a collision tier; decorative details are plain meshes and stay out of the registry. */
@@ -493,6 +534,7 @@ export class BuildingArchitecture {
       this.addBox(spec, mainW, h * 0.86, mainD, x - w * 0.02, h * 0.43 + 0.2, z - d * 0.04, true);
       const thatchRise = Math.max(roofRise * 1.7, h * 0.5);
       const thatchRoof = new THREE.Mesh(createGableGeometry(mainW + 0.8, mainD + 0.8, thatchRise), this.thatch); thatchRoof.position.set(x - w * 0.02, h * 0.86 + 0.2, z - d * 0.04); thatchRoof.castShadow = true; thatchRoof.receiveShadow = true; this.parent.add(thatchRoof);
+      this.gables.push({ x: x - w * 0.02, z: z - d * 0.04, width: mainW + 0.8, depth: mainD + 0.8, y: h * 0.86 + 0.2, rise: thatchRise, ry: 0 });
       const lapaR = Math.min(3.2, w * 0.12); const lx = x + w * 0.28; const lz = z + d * 0.18;
       const lapa = new THREE.Mesh(new THREE.CylinderGeometry(lapaR, lapaR, 2.4, 14), this.plaster); lapa.position.set(lx, 1.4, lz); lapa.castShadow = true; this.parent.add(lapa);
       this.tiers.push({ minX: lx - lapaR, maxX: lx + lapaR, minZ: lz - lapaR, maxZ: lz + lapaR, y0: 0.2, y1: 2.6 });
@@ -559,6 +601,7 @@ export class BuildingArchitecture {
   private addGableRoof(spec: BuildingSpec, x: number, z: number, width: number, depth: number, y: number, rise: number, ry = 0): void {
     const tiled = spec.style === 'suburban' || spec.style === 'estate';
     const roof = new THREE.Mesh(createGableGeometry(width, depth, rise), tiled ? this.terracotta : spec.roof); roof.position.set(x, y, z); roof.rotation.y = ry; roof.castShadow = true; roof.receiveShadow = true; this.parent.add(roof);
+    this.gables.push({ x, z, width, depth, y, rise, ry });
   }
 
   private addSetbackBand(x: number, z: number, width: number, depth: number, y: number): void {
@@ -568,9 +611,9 @@ export class BuildingArchitecture {
   private addStructuralDetail(spec: BuildingSpec, massing: number, roofY: number): void {
     if (spec.style === 'downtown') this.addDowntownDetail(spec, massing, roofY);
     else if (spec.style === 'mixed-use') this.addMixedUseDetail(spec, massing);
-    else if (spec.style === 'dense-residential') this.addDenseResidentialDetail(spec, massing, roofY);
-    else if (spec.style === 'suburban' || spec.style === 'rural') this.addResidentialDetail(spec, massing, roofY);
-    else if (spec.style === 'estate') this.addResidentialDetail(spec, massing, roofY); // villa porch/chimney/dormers
+    else if (spec.style === 'dense-residential') this.addDenseResidentialDetail(spec, massing);
+    else if (spec.style === 'suburban' || spec.style === 'rural') this.addResidentialDetail(spec, massing);
+    else if (spec.style === 'estate') this.addResidentialDetail(spec, massing); // villa porch/chimney/dormers
     else this.addIndustrialDetail(spec, massing, roofY);
   }
 
@@ -590,7 +633,7 @@ export class BuildingArchitecture {
     if (massing === 4) this.addSetbackBand(x, z, w * 0.7, d * 0.74, spec.height + 0.3);
   }
 
-  private addDenseResidentialDetail(spec: BuildingSpec, massing: number, roofY: number): void {
+  private addDenseResidentialDetail(spec: BuildingSpec, massing: number): void {
     const { x, z, width: w, depth: d, height: h } = spec;
     for (let y = 4; y < h - 1; y += 3.1) {
       const balconyX = x + (massing % 2 ? w * 0.08 : 0); const balconyW = w * 0.56;
@@ -598,7 +641,9 @@ export class BuildingArchitecture {
       const balcony = new THREE.Mesh(new THREE.BoxGeometry(balconyW, 0.14, 1.05), this.stone); balcony.position.set(balconyX, y, facadeZ + 0.45); balcony.castShadow = true; this.parent.add(balcony);
       const rail = new THREE.Mesh(new THREE.BoxGeometry(balconyW, 0.65, 0.06), this.darkMetal); rail.position.set(balconyX, y + 0.42, facadeZ + 0.95); this.parent.add(rail);
     }
-    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.8, 1.5, 14), this.darkMetal); tank.position.set(x - w * 0.25, roofY + 0.75, z - d * 0.18); tank.castShadow = true; this.parent.add(tank);
+    const tankX = x - w * 0.25; const tankZ = z - d * 0.18;
+    const tankBase = massingTopAt(this.tiers, tankX, tankZ); if (tankBase === undefined) return;
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.8, 1.5, 14), this.darkMetal); tank.position.set(tankX, tankBase + 0.75, tankZ); tank.castShadow = true; this.parent.add(tank);
   }
 
   private addDowntownDetail(spec: BuildingSpec, massing: number, roofY: number): void {
@@ -696,7 +741,7 @@ export class BuildingArchitecture {
     }
   }
 
-  private addResidentialDetail(spec: BuildingSpec, massing: number, roofY: number): void {
+  private addResidentialDetail(spec: BuildingSpec, massing: number): void {
     const { x, z, width: w, depth: d, height: h, variant } = spec;
     const porchW = w * 0.48; const facadeZ = frontFacadeZAt(this.tiers, x, 1.8, porchW / 2);
     if (facadeZ !== undefined) {
@@ -704,10 +749,20 @@ export class BuildingArchitecture {
       const porchRoof = new THREE.Mesh(new THREE.BoxGeometry(w * 0.56, 0.18, 2.55), variant % 2 ? this.terracotta : this.darkMetal); porchRoof.position.set(x, 3.15, facadeZ + 1); porchRoof.rotation.x = -0.08; porchRoof.castShadow = true; this.parent.add(porchRoof);
       for (const px of [-w * 0.2, w * 0.2]) { const column = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.15, 2.7, 14), this.stone); column.position.set(x + px, 1.8, facadeZ + 1.75); column.castShadow = true; this.parent.add(column); }
     }
-    const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.2, 0.9), this.terracotta); chimney.position.set(x - w * 0.25, roofY - 0.5, z - d * 0.18); chimney.castShadow = true; this.parent.add(chimney);
+    // Chimney rises out of the actual roof under it (pitched or flat) — never the building-wide roofY,
+    // which on winged massings is the tallest ridge, leaving a chimney over a lower wing hanging in air.
+    const chimneyX = x - w * 0.25; const chimneyZ = z - d * 0.18;
+    const chimneySurface = roofSurfaceAt(this.tiers, this.gables, chimneyX, chimneyZ);
+    if (chimneySurface !== undefined) {
+      const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.2, 0.9), this.terracotta); chimney.position.set(chimneyX, chimneySurface + 0.4, chimneyZ); chimney.castShadow = true; this.parent.add(chimney);
+    }
     if (massing !== 2 && h > 8) {
       for (const side of [-1, 1]) {
-        const dormer = new THREE.Mesh(new THREE.BoxGeometry(Math.min(2.4, w * 0.2), 1.75, 1.35), boxMaterials(spec.facade, spec.roof)); dormer.position.set(x + side * w * 0.22, h + 1.05, z + d * 0.28); dormer.castShadow = true; this.parent.add(dormer);
+        // Dormers belong on a pitched roof: seat each one in the gable surface at its own spot and
+        // skip spots no gable covers (flat-roof massings used to leave them floating beside the box).
+        const dormerX = x + side * w * 0.22; const dormerZ = z + d * 0.28;
+        const surface = gableSurfaceAt(this.gables, dormerX, dormerZ); if (surface === undefined) continue;
+        const dormer = new THREE.Mesh(new THREE.BoxGeometry(Math.min(2.4, w * 0.2), 1.75, 1.35), boxMaterials(spec.facade, spec.roof)); dormer.position.set(dormerX, surface + 0.5, dormerZ); dormer.castShadow = true; this.parent.add(dormer);
         const window = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.92), this.glass); window.position.set(dormer.position.x, dormer.position.y, dormer.position.z + 0.681); this.parent.add(window);
       }
     }

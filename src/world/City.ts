@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, type BuildingStyle, type MassingTier } from './BuildingArchitecture';
+import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
   COASTLINE,
   COAST_CORRIDOR,
@@ -1991,10 +1991,10 @@ export class City {
     this.addLedge(profile.tiers, Math.min(h - 0.5, 3.6));
     if (detailed) this.addEntrance(0, w, style, profile.tiers);
     if (detailed && style === 'dense-residential') this.addBalconies(0, w, h, profile.tiers);
-    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, profile.roofY, variant, profile.tiers);
+    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables);
     if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers);
-    this.addRoofEquipment(0, 0, w, d, h, profile.roofY, style, variant);
-    if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.roofY, variant);
+    this.addRoofEquipment(0, 0, w, d, h, profile.tiers, profile.gables, style, variant);
+    if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.tiers, profile.gables, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
     const colliders = profile.tiers.map((tier) => this.tierToWorldCollider(tier, spec.x, spec.z, spec.heading, baseY));
     // On a real slope the base is raised above the downhill ground; give the plinth a collider so you can't
@@ -2084,15 +2084,22 @@ export class City {
     }
   }
 
-  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, roofY: number, variant: number, tiers: readonly MassingTier[]): void {
+  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, variant: number, tiers: readonly MassingTier[], gables: readonly GableSpec[]): void {
     const shutterW = w * 0.42; const shutterH = Math.min(5, h * 0.48); const shutterZ = frontFacadeZAt(tiers, x, shutterH / 2 + 0.2, shutterW / 2);
     if (shutterZ !== undefined) { const shutter = new THREE.Mesh(new THREE.BoxGeometry(shutterW, shutterH, 0.14), new THREE.MeshStandardMaterial({ color: 0x5e6868, roughness: 0.52, metalness: 0.45 })); shutter.position.set(x, shutterH / 2 + 0.2, shutterZ + 0.03); this.target.add(shutter); }
-    for (const side of [-1, 1]) { const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.58, 1.7, 16), new THREE.MeshStandardMaterial({ color: 0x555e60, metalness: 0.6, roughness: 0.48 })); vent.position.set(x + side * w * 0.24, h + 1, z); this.target.add(vent); }
-    if (variant % 3 === 0) {
-      const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.05, Math.min(10, h * 0.7), 20), new THREE.MeshStandardMaterial({ color: 0x7a665d, roughness: 0.72, metalness: 0.16 })); stack.position.set(x - w * 0.28, h + Math.min(10, h * 0.7) / 2, z - d * 0.18); stack.castShadow = true; this.target.add(stack);
-      for (let band = 0; band < 3; band++) { const ring = new THREE.Mesh(new THREE.TorusGeometry(0.91 - band * 0.05, 0.08, 8, 20), new THREE.MeshStandardMaterial({ color: 0x363f42, metalness: 0.7, roughness: 0.38 })); ring.rotation.x = Math.PI / 2; ring.position.set(stack.position.x, h + 2.2 + band * 2.2, stack.position.z); this.target.add(ring); }
+    for (const side of [-1, 1]) {
+      // Whirlybird vents pierce the roof surface at their own spot (flat annex or gable slope alike).
+      const ventX = x + side * w * 0.24;
+      const surface = roofSurfaceAt(tiers, gables, ventX, z); if (surface === undefined) continue;
+      const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.58, 1.7, 16), new THREE.MeshStandardMaterial({ color: 0x555e60, metalness: 0.6, roughness: 0.48 })); vent.position.set(ventX, surface + 0.55, z); this.target.add(vent);
     }
-    if (variant % 4 === 0) this.addRoofSign(x, z, w, d, roofY, variant);
+    if (variant % 3 === 0) {
+      const stackX = x - w * 0.28; const stackZ = z - d * 0.18; const stackH = Math.min(10, h * 0.7);
+      const stackBase = (roofSurfaceAt(tiers, gables, stackX, stackZ) ?? h + 0.2) - 0.5; // sunk into the roof under it
+      const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.05, stackH, 20), new THREE.MeshStandardMaterial({ color: 0x7a665d, roughness: 0.72, metalness: 0.16 })); stack.position.set(stackX, stackBase + stackH / 2, stackZ); stack.castShadow = true; this.target.add(stack);
+      for (let band = 0; band < 3; band++) { const ring = new THREE.Mesh(new THREE.TorusGeometry(0.91 - band * 0.05, 0.08, 8, 20), new THREE.MeshStandardMaterial({ color: 0x363f42, metalness: 0.7, roughness: 0.38 })); ring.rotation.x = Math.PI / 2; ring.position.set(stack.position.x, stackBase + 1.2 + band * 2.2, stack.position.z); this.target.add(ring); }
+    }
+    if (variant % 4 === 0) this.addRoofSign(x, z, w, d, tiers, gables, variant);
   }
 
   private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[]): void {
@@ -2118,25 +2125,61 @@ export class City {
     }
   }
 
-  private addRoofEquipment(x: number, z: number, w: number, d: number, h: number, roofY: number, style: BuildingStyle, variant: number): void {
+  /** AC units, fans and the aerial mast sit on the flat roof directly under their own spot — anchoring
+   *  them at the building-wide roofY left them hovering high over lower wings of stepped massings
+   *  (roofY can be a stack, silo or ridge far above the roof at the unit's XZ). */
+  private addRoofEquipment(x: number, z: number, w: number, d: number, h: number, tiers: readonly MassingTier[], gables: readonly GableSpec[], style: BuildingStyle, variant: number): void {
     const metal = new THREE.MeshStandardMaterial({ color: 0x596467, metalness: 0.62, roughness: 0.46 });
     const units = style === 'downtown' ? 2 : style === 'mixed-use' || style === 'industrial' ? 1 : 0;
     for (let index = 0; index < units; index++) {
-      const unit = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.05, 1.35), metal); unit.position.set(x - w * 0.18 + index * 2.4, roofY + 0.52, z - d * 0.2); unit.castShadow = true; this.target.add(unit);
-      const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.06, 16), new THREE.MeshStandardMaterial({ color: 0x263033, metalness: 0.75, roughness: 0.35 })); fan.rotation.x = Math.PI / 2; fan.position.set(unit.position.x, roofY + 0.54, unit.position.z - 0.7); this.target.add(fan);
+      const ux = x - w * 0.18 + index * 2.4; const uz = z - d * 0.2;
+      const base = this.flatRoofUnder(tiers, gables, ux, uz, 0.85, 0.68); if (base === undefined) continue;
+      const unit = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.05, 1.35), metal); unit.position.set(ux, base + 0.525, uz); unit.castShadow = true; this.target.add(unit);
+      const fan = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.06, 16), new THREE.MeshStandardMaterial({ color: 0x263033, metalness: 0.75, roughness: 0.35 })); fan.rotation.x = Math.PI / 2; fan.position.set(unit.position.x, base + 0.545, unit.position.z - 0.7); this.target.add(fan);
     }
     if (h > 42 && variant % 3 === 1) {
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.1, 8, 10), metal); mast.position.set(x + w * 0.2, roofY + 4, z); this.target.add(mast);
-      const beaconMaterial = new THREE.MeshStandardMaterial({ color: 0xff4b3e, emissive: 0xff1f16, emissiveIntensity: 2 });
-      registerPowered(beaconMaterial, 0xff4b3e, 0x3a1a16);
-      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), beaconMaterial); beacon.position.set(mast.position.x, roofY + 8.05, z); this.target.add(beacon);
+      const mastBase = this.flatRoofUnder(tiers, gables, x + w * 0.2, z, 0.3, 0.3);
+      if (mastBase !== undefined) {
+        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.1, 8, 10), metal); mast.position.set(x + w * 0.2, mastBase + 4, z); this.target.add(mast);
+        const beaconMaterial = new THREE.MeshStandardMaterial({ color: 0xff4b3e, emissive: 0xff1f16, emissiveIntensity: 2 });
+        registerPowered(beaconMaterial, 0xff4b3e, 0x3a1a16);
+        const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 8), beaconMaterial); beacon.position.set(mast.position.x, mastBase + 8.05, z); this.target.add(beacon);
+      }
     }
   }
 
-  private addRoofSign(x: number, z: number, w: number, d: number, h: number, variant: number): void {
+  /** Flat roof height under a footprint (half-extents hw/hd around the spot), or undefined when the
+   *  spot hangs off the massing, straddles tiers of different heights, or is buried under a gable. */
+  private flatRoofUnder(tiers: readonly MassingTier[], gables: readonly GableSpec[], x: number, z: number, hw: number, hd: number): number | undefined {
+    let base: number | undefined;
+    for (const cx of [x - hw, x + hw]) for (const cz of [z - hd, z + hd]) {
+      const top = massingTopAt(tiers, cx, cz); if (top === undefined) return undefined;
+      if (base === undefined) base = top;
+      else if (Math.abs(top - base) > 0.25) return undefined;
+      else base = Math.max(base, top);
+    }
+    if (base === undefined) return undefined;
+    const pitched = gableSurfaceAt(gables, x, z);
+    if (pitched !== undefined && pitched > base + 0.1) return undefined;
+    return base;
+  }
+
+  /** Rooftop billboard standing on a real roof: hosted by the tallest tier wide enough to carry both
+   *  posts, at that tier's own front edge — placing it at the parcel edge at roofY left signs hanging
+   *  in the air beside setback towers and over podium edges. */
+  private addRoofSign(x: number, z: number, w: number, d: number, tiers: readonly MassingTier[], gables: readonly GableSpec[], variant: number): void {
+    let host: MassingTier | undefined;
+    for (const tier of tiers) {
+      if (tier.minX > x - 3.2 || tier.maxX < x + 3.2) continue;
+      if (!host || tier.y1 > host.y1) host = tier;
+    }
+    if (!host) return;
+    const frontZ = Math.min(host.maxZ, z + d / 2);
+    const postBase = (px: number) => Math.max(host!.y1, gableSurfaceAt(gables, px, frontZ - 0.2) ?? host!.y1);
+    const baseY = Math.max(postBase(x - 3), postBase(x + 3));
     const names = ['CHICKEN LEKKER', 'MR VRRR PHAA', 'PIK-A-PAY', 'DEBONERS']; const accent = variant % 2 ? '#72d8d2' : '#f0ae43';
-    const sign = createSignMesh(new THREE.PlaneGeometry(Math.min(12, w * 0.7), 3), names[variant % names.length] ?? 'CHICKEN LEKKER', accent, { powered: true }); sign.position.set(x, h + 3.2, z + d / 2 + 0.1); this.target.add(sign);
-    for (const px of [-3, 3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 8), new THREE.MeshStandardMaterial({ color: 0x343b3d, metalness: 0.7 })); post.position.set(x + px, h + 1.5, z + d / 2); this.target.add(post); }
+    const sign = createSignMesh(new THREE.PlaneGeometry(Math.min(12, w * 0.7), 3), names[variant % names.length] ?? 'CHICKEN LEKKER', accent, { powered: true }); sign.position.set(x, baseY + 3.2, frontZ + 0.1); this.target.add(sign);
+    for (const px of [-3, 3]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 8), new THREE.MeshStandardMaterial({ color: 0x343b3d, metalness: 0.7 })); post.position.set(x + px, baseY + 1.5, frontZ); this.target.add(post); }
   }
 
   private addParkTree(x: number, z: number, seed: number, target: THREE.Group): void {
