@@ -164,7 +164,7 @@ export class DayNightSystem {
    *  0 = grid up or broad daylight. The same product that sinks the sky — blackout stealth keys off it. */
   get blackoutDarkness(): number { return this.blackout * nightFactor(this.hour); }
 
-  setQuality(quality: BaseQuality): void { this.buildPools(quality); this.environment.sky.setQuality(quality); }
+  setQuality(quality: BaseQuality): void { this.buildPools(quality); this.environment.sky.setQuality(quality); this.environment.skyTraffic.setQuality(quality); }
 
   private buildPools(quality: BaseQuality): void {
     for (const light of this.streetPool) this.scene.remove(light);
@@ -198,6 +198,7 @@ export class DayNightSystem {
     sunDirection(this.hour, this.sunDir); sunDirection(this.hour + 12, this.moonDir);
     this.skyMood.night = night; this.skyMood.blackout = this.blackout * night; this.skyMood.time = this.skyTime;
     env.sky.setMood(this.skyMood);
+    env.skyTraffic.setMood(focus, this.skyTime, night, sky.sun);
     env.setSunDirection(this.sunDir.y >= this.moonDir.y ? this.sunDir : this.moonDir); // shadow light tracks whichever body is up
     env.sunDisc.position.copy(focus).addScaledVector(this.sunDir, DISC_DISTANCE); env.sunDisc.visible = this.sunDir.y > -0.05;
     (env.sunDisc.material as THREE.MeshBasicMaterial).color.copy(sky.sun);

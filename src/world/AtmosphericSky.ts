@@ -131,21 +131,37 @@ function fragmentShader(cloudOctaves: number): string {
       vec3 warmStar = vec3(1.0, 0.82, 0.62);
       color += mix(coolStar, warmStar, starTemperature) * star * twinkle * starVisibility;
 
-      // A wind-driven cloud sheet adds large-scale shape while staying cheap enough for the full-screen dome.
+      // A low cumulus deck: broad bodies, noisy edges, a cool underside and sun-warmed crowns.
       vec2 cloudPlane = direction.xz / max(direction.y + 0.13, 0.15);
       vec2 wind = vec2(uTime * 0.010, uTime * 0.0025);
-      float cloudShape = cloudNoise(cloudPlane * 1.18 + wind);
-      float cloud = smoothstep(0.47, 0.70, cloudShape) * smoothstep(0.025, 0.20, direction.y);
+      vec2 lowerUv = cloudPlane * 1.42 + wind;
+      vec2 lowerWarp = vec2(valueNoise(lowerUv * 0.44 + 31.7), valueNoise(lowerUv * 0.44 - 18.3)) - 0.5;
+      float lowerBase = cloudNoise(lowerUv + lowerWarp * 0.92);
+      float lowerDetail = valueNoise(lowerUv * 4.1 - wind * 1.8 + 23.4);
+      float lowerRipples = valueNoise(lowerUv * 9.3 + wind * 0.7 - 11.8);
+      float cloudShape = lowerBase + (lowerDetail - 0.5) * 0.25 + (lowerRipples - 0.5) * 0.08;
+      float cloudHorizonFade = smoothstep(0.025, 0.20, direction.y);
+      float cloud = smoothstep(0.47, 0.66, cloudShape) * cloudHorizonFade;
       float sunFacing = max(dot(normalize(vec3(direction.x, 0.32, direction.z)), normalize(uSunDirection)), 0.0);
-      vec3 dayCloud = mix(uHorizonColor, vec3(1.0), 0.68) * (0.74 + sunFacing * 0.24);
-      dayCloud = mix(dayCloud, uSunColor, sunFacing * 0.18);
-      dayCloud *= mix(0.72, 1.0, smoothstep(0.52, 0.76, cloudShape));
+      vec3 cloudShadow = mix(uZenithColor, uHorizonColor, 0.58) * 0.68;
+      vec3 cloudCrown = mix(vec3(1.0), uSunColor, 0.16) * (0.78 + sunFacing * 0.25);
+      vec3 dayCloud = mix(cloudShadow, cloudCrown, smoothstep(0.47, 0.64, cloudShape));
       vec3 nightCloud = mix(uZenithColor, uHorizonColor, 0.65) * mix(0.60, 0.34, uBlackout);
       vec3 cloudColor = mix(dayCloud, nightCloud, uNight);
-      float cloudCore = smoothstep(0.58, 0.76, cloudShape);
-      color *= 1.0 - cloudCore * mix(0.055, 0.12, uNight);
-      float cloudOpacity = cloud * mix(0.52, 0.25, uNight) * mix(1.0, 0.64, uBlackout);
+      float cloudCore = smoothstep(0.55, 0.72, cloudShape);
+      color *= 1.0 - cloudCore * mix(0.035, 0.12, uNight);
+      float cloudOpacity = cloud * mix(0.64, 0.24, uNight) * mix(1.0, 0.64, uBlackout);
       color = mix(color, cloudColor, cloudOpacity);
+
+      // A faster, stretched cirrus layer keeps clear gaps interesting without another expensive FBM pass.
+      vec2 cirrusUv = vec2(cloudPlane.x * 4.6 + cloudPlane.y * 1.15, cloudPlane.y * 1.45);
+      cirrusUv += vec2(-uTime * 0.018, uTime * 0.007);
+      float cirrusField = valueNoise(cirrusUv) + valueNoise(cirrusUv * 2.07 + 17.9) * 0.34;
+      float cirrus = smoothstep(0.82, 1.07, cirrusField) * cloudHorizonFade;
+      vec3 cirrusColor = mix(vec3(0.88, 0.93, 1.0), uSunColor, 0.14);
+      cirrusColor = mix(cirrusColor, nightCloud, uNight);
+      float cirrusOpacity = cirrus * mix(0.19, 0.06, uNight) * mix(1.0, 0.5, uBlackout);
+      color = mix(color, cirrusColor, cirrusOpacity);
 
       gl_FragColor = vec4(color, 1.0);
       #include <tonemapping_fragment>

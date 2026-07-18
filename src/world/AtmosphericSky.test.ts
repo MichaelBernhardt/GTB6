@@ -47,4 +47,11 @@ describe('atmospheric sky', () => {
     const sky = createAtmosphericSky('high'); sky.setQuality('low');
     expect(sky.material.fragmentShader).toContain('octave < 2');
   });
+
+  it('renders distinct dimensional cumulus and high cirrus layers', () => {
+    const shader = createAtmosphericSky('high').material.fragmentShader;
+    expect(shader).toContain('float lowerBase = cloudNoise');
+    expect(shader).toContain('vec3 cloudShadow');
+    expect(shader).toContain('float cirrusField');
+  });
 });
