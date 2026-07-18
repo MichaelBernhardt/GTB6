@@ -129,7 +129,13 @@ export class CombatSystem {
   private punch(spec: WeaponSpec, origin: THREE.Vector3, population: PopulationSystem): ShotResult {
     this.cooldown = spec.cooldown;
     const victim = population.nearestPedestrian(origin, spec.range);
-    if (!victim) { this.audio.whiff(); return { fired: true, melee: true }; }
+    if (!victim) {
+      // Overkill: no live target in reach — a settled corpse in range takes the swing as a jolt (no
+      // damage credit, no heat; kicking a body is spectacle, not assault).
+      const corpse = population.pedestrians.find((ped) => ped.state === 'down' && ped.health === 0 && ped.group.position.distanceToSquared(origin) <= spec.range * spec.range);
+      if (corpse) { corpse.corpseHit(origin, spec.damage); this.audio.melee(); return { fired: true, melee: true }; }
+      this.audio.whiff(); return { fired: true, melee: true };
+    }
     const killed = victim.takeDamage(spec.damage, origin);
     this.audio.melee();
     return { fired: true, melee: true, victim, killed, policeHit: victim.police, hitPoint: victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)) };

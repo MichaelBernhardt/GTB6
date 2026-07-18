@@ -637,7 +637,15 @@ export class PopulationSystem {
     for (const vehicle of this.vehicles) {
       if (Math.abs(vehicle.speed) < 7) continue;
       for (const ped of this.pedestrians) {
-        if (ped.state === 'down' || (this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
+        if ((this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
+        if (ped.state === 'down') {
+          // Overkill: rolling over a settled corpse re-kicks its ragdoll — no damage, heat, or replan.
+          if (ped.health === 0 && vehicle.group.position.distanceToSquared(ped.group.position) < 5) {
+            ped.corpseHit(vehicle.group.position, Math.abs(vehicle.speed) * 2.8);
+            this.pedestrianImpactCooldown.set(ped, 1);
+          }
+          continue;
+        }
         const distanceSq = vehicle.group.position.distanceToSquared(ped.group.position);
         if (distanceSq < 5) {
           // Unified with the sprint-bump path: a survivable car hit floors the ped into the knockdown

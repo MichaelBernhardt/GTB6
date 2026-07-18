@@ -240,14 +240,34 @@ export class RiggedPedestrianVisual {
     const body = this.ragdollDriver.begin(this.group, this.bones!);
     this.ragdollGroundY = this.group.getWorldPosition(new THREE.Vector3()).y;
     // Always kick — a perfectly balanced seed pose could otherwise settle standing upright.
+    this.applyImpactKick(body);
+    if (activeRagdolls.length >= MAX_ACTIVE_RAGDOLLS) activeRagdolls[0]?.haltRagdoll();
+    activeRagdolls.push(this);
+  }
+
+  /** Spend the primed impact (or the jittered fallback) as a kick on `body`. */
+  private applyImpactKick(body: VerletRagdoll): void {
     const [r0 = 0.5, r1 = 0.5, , , , r5 = 0.5] = this.ragdollJitter;
     let kickX = this.impactX ?? 0; let kickZ = this.impactZ ?? 0;
     if (kickX * kickX + kickZ * kickZ < 1e-6) { const angle = r5 * Math.PI * 2; kickX = Math.sin(angle); kickZ = Math.cos(angle); }
     const twist = (r1 - 0.5) * 0.5; const cos = Math.cos(twist); const sin = Math.sin(twist); // ±14°: same shot, different falls
     body.kick(kickX * cos - kickZ * sin, kickX * sin + kickZ * cos, this.impactSpeed ?? (2.6 + r0 * 1.6));
     this.impactX = undefined; this.impactZ = undefined; this.impactSpeed = undefined;
-    if (activeRagdolls.length >= MAX_ACTIVE_RAGDOLLS) activeRagdolls[0]?.haltRagdoll();
-    activeRagdolls.push(this);
+  }
+
+  /** Overkill: a fresh hit lands on a corpse — wake its ragdoll for another damage-scaled flop, same
+   *  sim and settle logic. Pure spectacle: no health/state side effects, and a settled corpse SKIPS
+   *  when the concurrency cap is full rather than evicting a fresh death. Pose-death corpses convert:
+   *  the next update seeds a ragdoll from their settled pose (the body may pop slightly as the sink
+   *  offset re-resolves — reads as the hit jolting it). */
+  reviveRagdollImpact(directionX?: number, directionZ?: number, speed?: number): void {
+    if (!this.ready || !this.state.dead || this.state.state !== 'down') return;
+    const body = this.ragdollDriver.body;
+    if (body && !body.frozen) { this.primeRagdollImpact(directionX, directionZ, speed); this.applyImpactKick(body); return; } // still tumbling: fold the impulse straight in
+    if (activeRagdolls.length >= MAX_ACTIVE_RAGDOLLS) return;
+    this.primeRagdollImpact(directionX, directionZ, speed);
+    if (body) { body.revive(); this.applyImpactKick(body); activeRagdolls.push(this); return; }
+    this.ragdollDeath = true; // pose corpse: beginRagdoll takes it from here on the next update
   }
 
   /** Concurrency cap: freeze this ragdoll wherever it is so a newer death can simulate. */

@@ -215,6 +215,17 @@ export class Pedestrian {
     this.deathSpinElapsed = 0;
   }
 
+  /** Overkill: damage landing on the settled corpse re-kicks its ragdoll — spectacle only, with no
+   *  health, state, or kill-credit side effects (dead stays dead, roster truth unchanged). */
+  corpseHit(origin: THREE.Vector3 | undefined, damage: number): void {
+    if (this.state !== 'down' || this.health > 0) return;
+    this.riggedVisual?.reviveRagdollImpact(
+      origin ? this.group.position.x - origin.x : undefined,
+      origin ? this.group.position.z - origin.z : undefined,
+      impactKickSpeed(damage),
+    );
+  }
+
   /** Soft player bump: a brief off-balance reaction, no state change. */
   stumble(origin: THREE.Vector3): void {
     if (this.state === 'down' || this.contact) return;

@@ -163,6 +163,13 @@ export class VerletRagdoll {
     }
   }
 
+  /** Overkill re-hit: wake a settled body for another round of the same sim — fresh rest window and
+   *  timeout, so a revived corpse settles (and freezes) exactly like a first-time ragdoll. */
+  revive(): void {
+    this.frozen = false; this.stillSteps = 0; this.elapsed = 0; this.accumulator = 0;
+    this.previous.set(this.positions); // at rest: zero carried velocity, the new kick is the only impulse
+  }
+
   step(dt: number, env: RagdollEnvironment): void {
     if (this.frozen) return;
     this.accumulator = Math.min(this.accumulator + Math.max(0, dt), MAX_SUBSTEPS * RAGDOLL_STEP);
