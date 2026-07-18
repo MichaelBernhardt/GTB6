@@ -35,10 +35,13 @@ describe('mission content sanity', () => {
 });
 
 describe('Last Coach Home walkthrough', () => {
-  it('completes: reach the rank, fetch the bag, return — a tight local fetch (no train)', () => {
+  it('completes: ride a train to Park Station, fetch the bag, return (train verb restored)', () => {
     const system = sim(); expect(system.start('last-coach-home')).toBe(true);
     expect(system.objective?.kind).toBe('reach');
-    expect(system.update(0.016, base, true).advanced).toBe(true); // reached the rank
+    // driving there in a car does NOT count — the objective requires being aboard AND at Park Station
+    expect(system.update(0.016, { ...base, inVehicle: true, vehicleKind: 'compact' }, true).advanced).toBeUndefined();
+    expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Crown Station' }, false).advanced).toBeUndefined();
+    expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Johannesburg Park Station' }, false).advanced).toBe(true);
     expect(system.objective?.kind).toBe('collect');
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
     const done = system.update(0.016, base, true);
@@ -63,14 +66,14 @@ describe('Copper Wire Blues walkthrough', () => {
 
   it('fails by straying and restarts at the tail (checkpoint), not the meet', () => {
     const system = sim(); toFollow(system);
-    expect(system.update(0.016, { ...base, followDistance: 200, escortAlive: true }, false).failed).toBe('You lost the bakkie in traffic');
+    expect(system.update(0.016, { ...base, followDistance: 200, escortAlive: true }, false).failed).toBe('You lost the pickup in traffic');
     expect(system.restart()).toBe(true);
     expect(system.objectiveIndex).toBe(1); // straight back to the follow
   });
 
   it('fails if the bakkie is wrecked', () => {
     const system = sim(); toFollow(system);
-    expect(system.update(0.016, { ...base, followDistance: 20, escortAlive: false }, false).failed).toBe('The bakkie is wrecked — no yard today');
+    expect(system.update(0.016, { ...base, followDistance: 20, escortAlive: false }, false).failed).toBe('The pickup is wrecked — no yard today');
   });
 });
 

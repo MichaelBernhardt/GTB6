@@ -111,6 +111,8 @@ npm run npc:validate       # Validate all 16 committed NPC rigs and transfer bud
 npm run npc:build          # Rebuild NPC GLBs, textures, and inspection sheets with Blender
 npm run foliage:validate   # Validate the committed Blender tree library
 npm run foliage:build      # Rebuild and install all 14 tree assets with Blender 4.2+
+npm run vehicle:validate  # Validate all five committed four-wheel vehicle assets
+npm run vehicle:build     # Rebuild vehicle Blend/GLB sources and inspection sheets
 ```
 
 `npm run map:build` uses the map-generation pipeline under `tools/mapgen/`. The generated map data is checked in, so ordinary development does not need to call Overpass or regenerate Johannesburg before breakfast.
@@ -120,6 +122,10 @@ npm run foliage:build      # Rebuild and install all 14 tree assets with Blender
 `npm run foliage:build` requires Blender 4.2+ but no add-ons or downloaded plant assets. It recreates the ignored
 editable Blend from the committed recipe/generator, exports the compact GLB, updates its checksum, and runs strict
 hierarchy, material, footprint, grounding, triangle, and transfer-size validation.
+
+`npm run vehicle:build` requires Blender 4.2+ and Python 3 with Pillow. It regenerates the five editable Blend files,
+runtime GLBs, inspection turnarounds, taxi atlas, and checksums. The road-car catalog keeps paint, wheel, lamp,
+first-person cabin, and model-specific bakkie/police hierarchies under runtime validation.
 
 ## Project structure
 
@@ -135,9 +141,11 @@ tools/mapgen/  OpenStreetMap processing and deterministic map generation
 tools/character/ Blender build and strict GLB validation
 tools/npc/     Blender NPC cast build, optimization, previews, and validation
 tools/foliage/ Blender tree generation, export, and strict GLB validation
+tools/vehicle/ Blender vehicle generation, preview export, and strict fleet validation
 art/character/ original concept, material sources, recipe, and source lock
 art/npcs/     original NPC turnarounds, textile sources, previews, recipes, and source lock
 art/foliage/ original tree recipe, workflow notes, and source lock
+art/vehicles/ original vehicle recipes, editable Blend sources, previews, and source lock
 server.mjs     production static server
 ```
 
