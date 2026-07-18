@@ -5,6 +5,12 @@ import type { CheatSettings, GameSettings } from '../types';
 export type NotificationTone = 'success' | 'danger' | 'reputation' | 'info' | 'radio' | 'music';
 export type MenuScreen = 'none' | 'loading' | 'asset-failed' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' | 'bottle' | 'choice' | 'safehouse';
 
+export interface LoadingState {
+  progress: number;
+  label: string;
+  detail: string;
+}
+
 export interface TaxiTelemetry { text: string; available: boolean; }
 export interface CourierTelemetry { text: string; available: boolean; }
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; taxi?: TaxiTelemetry; courier?: CourierTelemetry; radio?: string; }
