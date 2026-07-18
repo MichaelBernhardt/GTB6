@@ -270,10 +270,15 @@ export class BuildingArchitecture {
       const podiumH = Math.min(11, Math.max(6, h * 0.24));
       this.addBox(spec, w * 0.9, 3.4, d * 0.66, x, 1.7 + 0.2, z - d * 0.14);
       this.addBox(spec, w, podiumH - 3.4, d, x, 3.4 + (podiumH - 3.4) / 2 + 0.2, z);
+      // Arcade deck across the full footprint: the walkway and its columns get a real floor tier, and
+      // foundationTiers levels it downhill — columns used to hang over the slope on tilted parcels.
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(w, 0.3, d), this.stone);
+      deck.position.set(x, 0.35, z); deck.receiveShadow = true; this.parent.add(deck);
+      this.tiers.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, y0: 0.2, y1: 0.5 });
       const cols = Math.max(4, Math.min(8, Math.floor(w / 3.5)));
       for (let index = 0; index < cols; index++) {
         const px = x - w * 0.44 + index * (w * 0.88 / (cols - 1));
-        const column = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, 3.4, 12), this.stone); column.position.set(px, 1.9, z + d / 2 - 0.5); column.castShadow = true; this.parent.add(column);
+        const column = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, 3.4, 12), this.stone); column.position.set(px, 2.15, z + d / 2 - 0.5); column.castShadow = true; this.parent.add(column);
       }
       this.addBox(spec, w * 0.7, h - podiumH, d * 0.76, x, podiumH + (h - podiumH) / 2 + 0.2, z, true);
       this.addSetbackBand(x, z, w * 1.01, d * 1.01, podiumH + 0.22);
@@ -473,7 +478,9 @@ export class BuildingArchitecture {
         this.addGableRoof(spec, x + side * w * 0.29, z, w * 0.42, d + 0.5, h + 0.2, roofRise * 0.9);
       }
       for (const dz of [-0.32, 0.32]) {
-        for (const side of [-1, 1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, h + 1.6, 0.22), this.steel); post.position.set(x + side * w * 0.09, (h + 1.6) / 2 + 0.2, z + d * dz); post.castShadow = true; this.parent.add(post); }
+        // Posts run 3u below grade so the service-lane gantry still reaches the ground on the
+        // downhill side of a sloped parcel (the building itself sits on the highest corner).
+        for (const side of [-1, 1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, h + 4.6, 0.22), this.steel); post.position.set(x + side * w * 0.09, (h - 1) / 2, z + d * dz); post.castShadow = true; this.parent.add(post); }
         const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, 0.3, 0.3), this.steel); beam.position.set(x, h + 1.5, z + d * dz); beam.castShadow = true; this.parent.add(beam);
       }
       return h + roofRise + 0.2;
@@ -784,6 +791,9 @@ export class BuildingArchitecture {
     if (variant % 2 === 1) {
       const tank = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.25, Math.min(8, h * 0.65), 24), this.steel); tank.position.set(x + w * 0.28, Math.min(8, h * 0.65) / 2 + 0.25, z - d * 0.22); tank.castShadow = true; this.parent.add(tank);
       const dome = new THREE.Mesh(new THREE.SphereGeometry(2.1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), this.steel); dome.position.set(tank.position.x, tank.position.y + Math.min(8, h * 0.65) / 2, tank.position.z); dome.castShadow = true; this.parent.add(dome);
+      // Concrete ring foundation running 3u below grade: the yard tank stands outside the massing, so
+      // on a sloped parcel this fills the gap under its downhill rim instead of leaving it airborne.
+      const pad = new THREE.Mesh(new THREE.CylinderGeometry(2.35, 2.55, 3.2, 24), this.stone); pad.position.set(tank.position.x, -1.3, tank.position.z); pad.receiveShadow = true; this.parent.add(pad);
     }
     if (massing === 3) {
       const monitor = new THREE.Mesh(new THREE.BoxGeometry(w * 0.5, 1.5, d * 0.24), this.glass); monitor.position.set(x, roofY - 0.7, z); monitor.castShadow = true; this.parent.add(monitor);
