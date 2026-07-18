@@ -74,7 +74,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
       { objective: 2, title: 'Auntie Portia', detail: 'Second buyer paid short — says his genny subscription is due. EVERYONE\'S genny subscription is due. Since when is light a subscription, boet?' },
     ],
     outro: [
-      { speaker: 'Auntie Portia', text: 'You drove through that blackout like a taxi man. Sharp sharp. Keep the Golf as long as you need it.' },
+      { speaker: 'Auntie Portia', text: 'You drove through that blackout like a taxi driver. Sharp. Keep the Golf as long as you need it.' },
       { speaker: 'Auntie Portia', text: 'And take this — my late Sipho\'s vest. Everyone in this city pays twice for light now, and Vusi says there\'s cash in that. Pothole Street. Don\'t sign anything.' },
     ],
   },
@@ -117,7 +117,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     rewards: { standing: 4, note: 'Oupa Jakes nods — you can read this city now' },
     hints: [
       { objective: 0, afterSeconds: 90, detail: 'Think, laaitie. Which road ADMITS what broke your suspension?' },
-      { objective: 0, afterSeconds: 210, detail: 'Ag fine — Pothole Street, south side of the circle, by the dip that eats bakkies.', reveal: true },
+      { objective: 0, afterSeconds: 210, detail: 'Ag fine — Pothole Street, south side of the circle, by the dip that eats cars.', reveal: true },
       { objective: 1, afterSeconds: 90, detail: 'The lane is NAMED for the dark. The city put it on a green sign and everything.' },
       { objective: 1, afterSeconds: 210, detail: 'Loadshed Lane, two blocks on. I\'m old, not patient.', reveal: true },
       { objective: 2, afterSeconds: 90, detail: 'What did offices send before email? This city still sends it.' },
@@ -129,7 +129,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   'the-audition': { tier: 'standard',
     vehicle: { color: TANKER_COLOR, spot: TANKER_SPOT },
     radio: [{ objective: 1, title: 'Solly', detail: 'Gently, my laaitie. That tanker is worth more than you are. For now.' }],
-    outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the bakkie, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
+    outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the truck, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
     rewards: { armour: 100, note: 'The crew kits you out — full body armour on Solly\'s tab' },
   },
   'pull-the-plug': { tier: 'standard',

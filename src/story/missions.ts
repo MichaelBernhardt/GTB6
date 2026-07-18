@@ -23,16 +23,16 @@ export const spot = (place: { x: number; z: number }, label: string): WorldTarge
 export const MISSIONS: MissionDefinition[] = [
   {
     id: 'delivery-run', name: 'Couch Run', contact: 'Auntie Portia', reward: 900, act: 'hustle',
-    intro: 'Howzit boet. Sold the couch on Marketplace but eish, the bakkie is gone. Take my yellow Citi Golf — two drops round the corner, sharp sharp. The couch fits, I promise.',
+    intro: 'Howzit boet. I sold the couch online but my pickup is gone. Take my yellow Citi Golf — two drops round the corner. The couch fits, I promise.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Enter Auntie Portia\'s yellow Citi Golf' },
-      { kind: 'checkpoints', text: 'Make the two drops (now now, not just now)', required: 2, checkpoint: true },
+      { kind: 'checkpoints', text: 'Make the two drops quickly — no dawdling', required: 2, checkpoint: true },
       { kind: 'reach', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Return the Citi Golf to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia\'s driveway'), checkpoint: true },
     ],
   },
   {
     id: 'hot-property', name: 'Hot Copper', contact: 'Bra Vusi', reward: 1500, act: 'hustle',
-    intro: 'A red GTI is parked on Commissioner Street, boot full of municipal cable that fell off a substation, yoh. Bring it to my Braamfontein lock-up when the heat fades. Vrrr phaa, but gently.',
+    intro: 'A red GTI is parked on Commissioner Street, boot full of municipal cable that fell off a substation. Bring it to my Braamfontein lock-up when the heat fades — gently, hey.',
     start: spot(VUSI_START, 'Bra Vusi'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'sport', vehicleColor: 0xd83a40, text: 'Take the red GTI from the CBD' },
       { kind: 'lose-wanted', text: 'Lose the JMPD pursuit', checkpoint: true },
@@ -41,10 +41,10 @@ export const MISSIONS: MissionDefinition[] = [
   },
   {
     id: 'dockside-signal', name: 'Rank Business', contact: 'Candice from Boksburg', reward: 2200, act: 'hustle',
-    intro: 'Ag no man. The Wemmer crew stole our taxi route permit. Go moer them at their terminal, grab the permit, and bring it back to me here at the Newtown rank. Sharp?',
+    intro: 'Ag no man. The Wemmer crew stole our taxi route permit. Go deal with them at their terminal, grab the permit, and bring it back to me here at the Newtown rank. Deal?',
     start: spot(CANDICE_START, 'Candice'), objectives: [
       { kind: 'reach', text: 'Travel to the Wemmer taxi terminal', target: spot(TERMINAL_SPOT, 'Wemmer terminal') },
-      { kind: 'defeat', text: 'Moer the rank enforcers', required: 3, checkpoint: true },
+      { kind: 'defeat', text: 'Take down the rank enforcers', required: 3, checkpoint: true },
       { kind: 'collect', text: 'Grab the route permit', target: spot(PERMIT_SPOT, 'Route permit'), checkpoint: true },
       { kind: 'escape', text: 'Escape the terminal perimeter', target: spot(ESCAPE_SPOT, 'Safe route'), checkpoint: true },
       { kind: 'reach', text: 'Bring it to Candice at the Newtown rank', target: spot(KIOSK_SPOT, 'Candice'), checkpoint: true },
@@ -65,7 +65,7 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'last-coach-home', name: 'Last Coach Home', contact: 'Auntie Portia', reward: 1100, act: 'hustle',
     prerequisites: { missions: ['delivery-run'] },
-    intro: 'My nephew fell asleep on the train and left my rent bag on the platform at Park Station, the dof child. Hop a train out and fetch it before someone honest finds it, boet.',
+    intro: 'My nephew fell asleep on the train and left my rent bag on the platform at Park Station, the silly child. Hop a train out and fetch it before someone honest finds it, boet.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
       { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Johannesburg Park Station' }, text: 'Ride a train out to Park Station', target: spot(RENT_BAG_PLATFORM, 'Park Station') },
       { kind: 'collect', text: 'Grab Portia\'s rent bag beside the Park Station platform', target: spot(RENT_BAG_SPOT, 'Rent bag'), checkpoint: true },
@@ -75,12 +75,12 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'copper-wire-blues', name: 'Copper Wire Blues', contact: 'Bra Vusi', reward: 1800, act: 'hustle',
     prerequisites: { missions: ['hot-property'] },
-    intro: 'The cable buyer pays lekker but keeps his yard a secret. His bakkie is up the block. When it moves, you move — and don\'t let him see you sweat.',
+    intro: 'The cable buyer pays well but keeps his yard a secret. His pickup is up the block. When it moves, you move — and don\'t let him see you sweat.',
     start: spot(VUSI_START, 'Bra Vusi'), objectives: [
-      { kind: 'reach', text: 'Get near the buyer\'s bakkie — quietly', target: spot(QUARRY_SPAWN, 'The buyer\'s bakkie') },
-      { kind: 'follow', text: 'Tail the bakkie — stay with it, don\'t spook it', checkpoint: true, failIf: [
-        { kind: 'strayed', value: 150, reason: 'You lost the bakkie in traffic' },
-        { kind: 'escort-down', reason: 'The bakkie is wrecked — no yard today' },
+      { kind: 'reach', text: 'Get near the buyer\'s pickup — quietly', target: spot(QUARRY_SPAWN, 'The buyer\'s pickup') },
+      { kind: 'follow', text: 'Tail the pickup — stay with it, don\'t spook it', checkpoint: true, failIf: [
+        { kind: 'strayed', value: 150, reason: 'You lost the pickup in traffic' },
+        { kind: 'escort-down', reason: 'The pickup is wrecked — no yard today' },
       ] },
       { kind: 'reach', text: 'Get eyes on the buyer\'s cable yard', target: spot(CABLE_YARD_SPOT, 'The cable yard'), checkpoint: true },
     ],
@@ -88,11 +88,11 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'rank-cold-war', name: 'Rank Cold War', contact: 'Candice from Boksburg', reward: 2600, act: 'hustle',
     prerequisites: { missions: ['dockside-signal'] },
-    intro: 'The Wemmer crew is leaning on my ranks now. Drive my van down the route, show the flag, and if they want to make a point — moer the point right back.',
+    intro: 'The Wemmer crew is leaning on my ranks now. Drive my van down the route, show the flag, and if they want to make a point — make it right back at them, hard.',
     start: spot(CANDICE_START, 'Candice'), objectives: [
       { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: CANDICE_VAN_COLOR, text: 'Take the wheel of Candice\'s route van' },
       { kind: 'checkpoints', required: 2, vehicleColor: CANDICE_VAN_COLOR, text: 'Show the flag at both contested ranks', failIf: [VAN_DOWN] },
-      { kind: 'defeat', required: 3, vehicleColor: CANDICE_VAN_COLOR, text: 'Moer the Wemmer heavies off the van', checkpoint: true, failIf: [VAN_DOWN] },
+      { kind: 'defeat', required: 3, vehicleColor: CANDICE_VAN_COLOR, text: 'Drive the Wemmer heavies off the van', checkpoint: true, failIf: [VAN_DOWN] },
       { kind: 'reach', vehicleKind: 'van', vehicleColor: CANDICE_VAN_COLOR, text: 'Get the van back to the Newtown rank in one piece', target: spot(CANDICE_START, 'Newtown rank'), checkpoint: true, failIf: [VAN_DOWN] },
     ],
   },
@@ -193,7 +193,7 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'paper-fire', name: 'Paper Fire', contact: SOLLY, reward: 4500, act: 'payroll',
     prerequisites: { flags: ['choice:two-fires:solly'] },
-    intro: 'Her van sleeps on a side street just below Braamfontein. Paper burns lekker. Go before the shift changes.',
+    intro: 'Her van sleeps on a side street just below Braamfontein. Paper burns nicely. Go before the shift changes.',
     start: spot(SOLLY_START, 'Solly'), setFlags: ['act3'], objectives: [
       { kind: 'reach', timeLimit: 600, text: 'Find Sindi\'s evidence van', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van') },
       { kind: 'collect', text: 'Douse the van and strike the match', target: spot(EVIDENCE_VAN_SPOT, 'Evidence van'), checkpoint: true },

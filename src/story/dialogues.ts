@@ -8,20 +8,20 @@ import type { MissionDefinition } from '../systems/MissionSystem';
  */
 export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'delivery-run': { id: 'delivery-run:intro', lines: [
-    { speaker: 'Auntie Portia', text: 'Howzit boet. Sold the couch on Marketplace, but eish — the bakkie is gone. GONE.' },
+    { speaker: 'Auntie Portia', text: 'Howzit boet. Sold the couch online, but the pickup is gone. GONE.' },
     { speaker: 'You', text: 'A couch. In a Citi Golf?' },
-    { speaker: 'Auntie Portia', text: 'It FITS. Two drops, now now — not just now, NOW now. The buyers change their minds like robots change to red.' },
-    { speaker: 'Auntie Portia', text: 'And if the lights go while you drive, don\'t stop for the dead robots. Nobody else does.' },
+    { speaker: 'Auntie Portia', text: 'It FITS. Two drops, right away — not later, NOW. The buyers change their minds like traffic lights change to red.' },
+    { speaker: 'Auntie Portia', text: 'And if the lights go while you drive, don\'t stop at the dead traffic lights. Nobody else does.' },
   ] },
   'hot-property': { id: 'hot-property:intro', lines: [
     { speaker: 'Bra Vusi', text: 'Portia\'s driver! Perfect timing. There\'s a red GTI on Commissioner Street, boot FULL of municipal cable — the thick stuff, off the Ophirton feeder.' },
     { speaker: 'You', text: 'The feeder that keeps tripping?' },
-    { speaker: 'Bra Vusi', text: 'Keeps tripping, keeps getting stripped, keeps getting paid for. A beautiful circle, née? Bring the car to my Braamfontein lock-up when the heat fades. Vrrr phaa — but gently.' },
+    { speaker: 'Bra Vusi', text: 'Keeps tripping, keeps getting stripped, keeps getting paid for. A beautiful circle, née? Bring the car to my Braamfontein lock-up when the heat fades — but gently.' },
   ] },
   'dockside-signal': { id: 'dockside-signal:intro', lines: [
     { speaker: 'Candice', text: 'Ag no man. The Wemmer crew took our route permit. TOOK it. Off the seat of Ricardo\'s taxi.' },
     { speaker: 'You', text: 'And you want it back politely?' },
-    { speaker: 'Candice', text: 'I want it back TODAY. Go moer them, grab the permit, bring it back to me here at the rank. I\'ll have a plate for you. Sharp?' },
+    { speaker: 'Candice', text: 'I want it back TODAY. Go deal with them, grab the permit, bring it back to me here at the rank. I\'ll have a plate for you. Deal?' },
   ] },
   'arms-deal': { id: 'arms-deal:intro', lines: [
     { speaker: 'Thandi', text: 'Two crews want tonight\'s shipment. I can pay you to keep the shop standing — or you take the stock and get rich. I won\'t pretend you haven\'t thought it.' },
@@ -31,17 +31,17 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'last-coach-home': { id: 'last-coach-home:intro', lines: [
     { speaker: 'Auntie Portia', text: 'Boet! Disaster. My nephew fell asleep on the train and got off without my rent bag — left it on the platform at Park Station.' },
     { speaker: 'You', text: 'Your rent was riding the train?' },
-    { speaker: 'Auntie Portia', text: 'It\'s down beside the platform, right where the dof child left it. Hop a train out — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home before someone honest finds it.' },
+    { speaker: 'Auntie Portia', text: 'It\'s down beside the platform, right where the silly child left it. Hop a train out — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home before someone honest finds it.' },
   ] },
   'copper-wire-blues': { id: 'copper-wire-blues:intro', lines: [
     { speaker: 'Bra Vusi', text: 'That cable from the GTI? The buyer paid cash, no name, no yard. A man like that is worth knowing better.' },
     { speaker: 'You', text: 'So I go ask him nicely where he lives?' },
-    { speaker: 'Bra Vusi', text: 'You ask NOTHING. His bakkie is up the block. When it moves, you move. Stay close, stay boring. I want that yard\'s address, not a funeral.' },
+    { speaker: 'Bra Vusi', text: 'You ask NOTHING. His pickup is up the block. When it moves, you move. Stay close, stay boring. I want that yard\'s address, not a funeral.' },
   ] },
   'rank-cold-war': { id: 'rank-cold-war:intro', lines: [
     { speaker: 'Candice', text: 'The Wemmer crew is leaning on my ranks now. MY ranks. Two stops on my route think Candice has gone soft.' },
     { speaker: 'You', text: 'And I\'m the hard part?' },
-    { speaker: 'Candice', text: 'You\'re the van driver, sweetie. Drive my green van down the route, show the flag at both ranks, and if they get brave — moer them off my property. Bring my van back breathing.' },
+    { speaker: 'Candice', text: 'You\'re the van driver, sweetie. Drive my green van down the route, show the flag at both ranks, and if they get brave — drive them off my property. Bring my van back breathing.' },
   ] },
   'reading-signs': { id: 'reading-signs:intro', lines: [
     { speaker: 'Oupa Jakes', text: 'Thirty years I called the trains at Park Station. Platform two, the eight-fifteen, mind the gap. Now the city calls ME names. Hah.' },
@@ -50,7 +50,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Oupa Jakes', text: 'The lights people own this city now, laaitie, but the streets still tell the truth. Ask me again any time — the words get easier the longer you stand there looking lost.' },
   ] },
   'the-audition': { id: 'the-audition:intro', lines: [
-    { speaker: 'Solly', text: 'So this is Vusi\'s quiet driver. You found my yard by following one of my bakkies. That was either very good or very stupid.' },
+    { speaker: 'Solly', text: 'So this is Vusi\'s quiet driver. You found my yard by following one of my pickups. That was either very good or very stupid.' },
     { speaker: 'You', text: 'Can\'t it be both?' },
     { speaker: 'Solly', text: 'Hah! Both pays double. There\'s a diesel tanker on Wemmer Jubilee that forgot who it belongs to. Bring it home without a scratch and you\'re on the payroll, my laaitie.' },
   ] },
@@ -90,7 +90,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Solly', text: 'So choose. Right here, at my table, with my coffee going cold. Choose.' },
   ] },
   'paper-fire': { id: 'paper-fire:intro', lines: [
-    { speaker: 'Solly', text: 'Good. Her van sleeps under the Jan Smuts lamps below Braamfontein. Paper burns lekker in this dry air.' },
+    { speaker: 'Solly', text: 'Good. Her van sleeps on a side street below Braamfontein. Paper burns nicely in this dry air.' },
     { speaker: 'Solly', text: 'Before the shift changes. And laaitie — after tonight, you\'re not staff. You\'re family.' },
   ] },
   'catch-them-cutting': { id: 'catch-them-cutting:intro', lines: [

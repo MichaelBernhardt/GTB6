@@ -66,14 +66,14 @@ describe('Copper Wire Blues walkthrough', () => {
 
   it('fails by straying and restarts at the tail (checkpoint), not the meet', () => {
     const system = sim(); toFollow(system);
-    expect(system.update(0.016, { ...base, followDistance: 200, escortAlive: true }, false).failed).toBe('You lost the bakkie in traffic');
+    expect(system.update(0.016, { ...base, followDistance: 200, escortAlive: true }, false).failed).toBe('You lost the pickup in traffic');
     expect(system.restart()).toBe(true);
     expect(system.objectiveIndex).toBe(1); // straight back to the follow
   });
 
   it('fails if the bakkie is wrecked', () => {
     const system = sim(); toFollow(system);
-    expect(system.update(0.016, { ...base, followDistance: 20, escortAlive: false }, false).failed).toBe('The bakkie is wrecked — no yard today');
+    expect(system.update(0.016, { ...base, followDistance: 20, escortAlive: false }, false).failed).toBe('The pickup is wrecked — no yard today');
   });
 });
 
