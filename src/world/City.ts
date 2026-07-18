@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, type BuildingStyle } from './BuildingArchitecture';
+import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, type BuildingStyle, type MassingTier } from './BuildingArchitecture';
 import {
   COASTLINE,
   COAST_CORRIDOR,
@@ -1988,11 +1988,11 @@ export class City {
       mesh.receiveShadow = true; group.add(mesh);
     }
     const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
-    this.addLedge(0, 0, w * 1.025, d * 1.025, Math.min(h - 0.5, 3.6));
-    if (detailed) this.addEntrance(0, 0, w, d, style);
-    if (detailed && style === 'dense-residential') this.addBalconies(0, 0, w, d, h);
-    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, profile.roofY, variant);
-    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, 0, w, d, style, variant);
+    this.addLedge(profile.tiers, Math.min(h - 0.5, 3.6));
+    if (detailed) this.addEntrance(0, w, style, profile.tiers);
+    if (detailed && style === 'dense-residential') this.addBalconies(0, w, h, profile.tiers);
+    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, profile.roofY, variant, profile.tiers);
+    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers);
     this.addRoofEquipment(0, 0, w, d, h, profile.roofY, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.roofY, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
@@ -2057,27 +2057,36 @@ export class City {
     return box;
   }
 
-  private addLedge(x: number, z: number, w: number, d: number, y: number): void {
-    const ledge = new THREE.Mesh(new THREE.BoxGeometry(w, 0.24, d), new THREE.MeshStandardMaterial({ color: 0xd0cec1, roughness: 0.76 })); ledge.position.set(x, y, z); ledge.castShadow = true; this.target.add(ledge);
-  }
-
-  private addEntrance(x: number, z: number, w: number, d: number, style: BuildingStyle): void {
-    const glass = new THREE.MeshPhysicalMaterial({ color: style === 'industrial' ? 0x4a5353 : 0x3a6672, roughness: 0.16, metalness: 0.18, clearcoat: 0.6 });
-    const doorW = Math.min(5.5, w * 0.32); const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, 3.1, 0.12), glass); door.position.set(x, 1.72, z + d / 2 + 0.08); this.target.add(door);
-    const canopy = new THREE.Mesh(new THREE.BoxGeometry(doorW + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(x, 3.35, z + d / 2 + 0.72); canopy.castShadow = true; this.target.add(canopy);
-  }
-
-  private addBalconies(x: number, z: number, w: number, d: number, h: number): void {
-    const railMaterial = new THREE.MeshStandardMaterial({ color: 0x3c4546, metalness: 0.58, roughness: 0.4 });
-    for (let y = 4.4; y < h - 1; y += 3.2) {
-      const floor = new THREE.Mesh(new THREE.BoxGeometry(w * 0.38, 0.14, 1.35), new THREE.MeshStandardMaterial({ color: 0xbdb9aa, roughness: 0.85 })); floor.position.set(x + w * 0.22, y, z + d / 2 + 0.62); floor.castShadow = true; this.target.add(floor);
-      for (const px of [-w * 0.18, 0, w * 0.18]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.06), railMaterial); rail.position.set(x + w * 0.22 + px, y + 0.45, z + d / 2 + 1.16); this.target.add(rail); }
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(w * 0.4, 0.07, 0.07), railMaterial); bar.position.set(x + w * 0.22, y + 0.84, z + d / 2 + 1.16); this.target.add(bar);
+  private addLedge(tiers: readonly MassingTier[], y: number): void {
+    if (tiers.length === 0) return;
+    const material = new THREE.MeshStandardMaterial({ color: 0xd0cec1, roughness: 0.76 });
+    const minX = Math.min(...tiers.map((tier) => tier.minX)); const maxX = Math.max(...tiers.map((tier) => tier.maxX));
+    for (const span of frontFacadeSpansAt(tiers, y, minX, maxX)) {
+      const ledge = new THREE.Mesh(new THREE.BoxGeometry(span.maxX - span.minX, 0.24, 0.18), material);
+      ledge.position.set((span.minX + span.maxX) / 2, y, span.z + 0.04); ledge.castShadow = true; this.target.add(ledge);
     }
   }
 
-  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, roofY: number, variant: number): void {
-    const shutter = new THREE.Mesh(new THREE.BoxGeometry(w * 0.42, Math.min(5, h * 0.48), 0.14), new THREE.MeshStandardMaterial({ color: 0x5e6868, roughness: 0.52, metalness: 0.45 })); shutter.position.set(x, Math.min(5, h * 0.48) / 2 + 0.2, z + d / 2 + 0.09); this.target.add(shutter);
+  private addEntrance(x: number, w: number, style: BuildingStyle, tiers: readonly MassingTier[]): void {
+    const glass = new THREE.MeshPhysicalMaterial({ color: style === 'industrial' ? 0x4a5353 : 0x3a6672, roughness: 0.16, metalness: 0.18, clearcoat: 0.6 });
+    const doorW = Math.min(5.5, w * 0.32); const facadeZ = frontFacadeZAt(tiers, x, 1.72, doorW / 2); if (facadeZ === undefined) return;
+    const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, 3.1, 0.12), glass); door.position.set(x, 1.72, facadeZ + 0.02); this.target.add(door);
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(doorW + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(x, 3.35, facadeZ + 0.7); canopy.castShadow = true; this.target.add(canopy);
+  }
+
+  private addBalconies(x: number, w: number, h: number, tiers: readonly MassingTier[]): void {
+    const railMaterial = new THREE.MeshStandardMaterial({ color: 0x3c4546, metalness: 0.58, roughness: 0.4 });
+    for (let y = 4.4; y < h - 1; y += 3.2) {
+      const centreX = x + w * 0.22; const floorW = w * 0.38; const facadeZ = frontFacadeZAt(tiers, centreX, y, floorW / 2); if (facadeZ === undefined) continue;
+      const floor = new THREE.Mesh(new THREE.BoxGeometry(floorW, 0.14, 1.35), new THREE.MeshStandardMaterial({ color: 0xbdb9aa, roughness: 0.85 })); floor.position.set(centreX, y, facadeZ + 0.62); floor.castShadow = true; this.target.add(floor);
+      for (const px of [-w * 0.18, 0, w * 0.18]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.8, 0.06), railMaterial); rail.position.set(centreX + px, y + 0.45, facadeZ + 1.16); this.target.add(rail); }
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(w * 0.4, 0.07, 0.07), railMaterial); bar.position.set(centreX, y + 0.84, facadeZ + 1.16); this.target.add(bar);
+    }
+  }
+
+  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, roofY: number, variant: number, tiers: readonly MassingTier[]): void {
+    const shutterW = w * 0.42; const shutterH = Math.min(5, h * 0.48); const shutterZ = frontFacadeZAt(tiers, x, shutterH / 2 + 0.2, shutterW / 2);
+    if (shutterZ !== undefined) { const shutter = new THREE.Mesh(new THREE.BoxGeometry(shutterW, shutterH, 0.14), new THREE.MeshStandardMaterial({ color: 0x5e6868, roughness: 0.52, metalness: 0.45 })); shutter.position.set(x, shutterH / 2 + 0.2, shutterZ + 0.03); this.target.add(shutter); }
     for (const side of [-1, 1]) { const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.58, 1.7, 16), new THREE.MeshStandardMaterial({ color: 0x555e60, metalness: 0.6, roughness: 0.48 })); vent.position.set(x + side * w * 0.24, h + 1, z); this.target.add(vent); }
     if (variant % 3 === 0) {
       const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.05, Math.min(10, h * 0.7), 20), new THREE.MeshStandardMaterial({ color: 0x7a665d, roughness: 0.72, metalness: 0.16 })); stack.position.set(x - w * 0.28, h + Math.min(10, h * 0.7) / 2, z - d * 0.18); stack.castShadow = true; this.target.add(stack);
@@ -2086,7 +2095,7 @@ export class City {
     if (variant % 4 === 0) this.addRoofSign(x, z, w, d, roofY, variant);
   }
 
-  private addStreetLevelDetail(x: number, z: number, w: number, d: number, style: BuildingStyle, variant: number): void {
+  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[]): void {
     const frame = new THREE.MeshStandardMaterial({ color: 0x273235, metalness: 0.55, roughness: 0.38 });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x315f68, roughness: 0.12, metalness: 0.18, clearcoat: 0.7 });
     const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
@@ -2094,13 +2103,18 @@ export class City {
       const px = x - w * 0.39 + bay * (w * 0.78 / Math.max(1, bays - 1));
       if (Math.abs(px - x) < Math.min(3, w * 0.18)) continue;
       const commercial = style === 'downtown' || style === 'mixed-use';
-      const window = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.2, w / bays * 0.62), commercial ? 2.35 : 1.65, 0.09), glass); window.position.set(px, commercial ? 1.55 : 1.65, z + d / 2 + 0.075); this.target.add(window);
-      const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, z + d / 2 + 0.13); this.target.add(sill);
+      const windowW = Math.min(3.2, w / bays * 0.62); const windowY = commercial ? 1.55 : 1.65;
+      const facadeZ = frontFacadeZAt(tiers, px, windowY, windowW / 2); if (facadeZ === undefined) continue;
+      const window = new THREE.Mesh(new THREE.BoxGeometry(windowW, commercial ? 2.35 : 1.65, 0.09), glass); window.position.set(px, windowY, facadeZ + 0.025); this.target.add(window);
+      const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, facadeZ + 0.06); this.target.add(sill);
     }
     if (style === 'downtown' || style === 'mixed-use' || variant % 3 === 0) {
       const colors = [0xc8503f, 0x2f7774, 0xd4a438, 0x586f91];
-      const awning = new THREE.Mesh(new THREE.BoxGeometry(w * 0.46, 0.15, 1.25), new THREE.MeshStandardMaterial({ color: colors[variant % colors.length], roughness: 0.7 }));
-      awning.position.set(x + w * 0.22, 3.1, z + d / 2 + 0.58); awning.rotation.x = -0.12; awning.castShadow = true; this.target.add(awning);
+      const awningX = x + w * 0.22; const awningW = w * 0.46; const facadeZ = frontFacadeZAt(tiers, awningX, 3.1, awningW / 2);
+      if (facadeZ !== undefined) {
+        const awning = new THREE.Mesh(new THREE.BoxGeometry(awningW, 0.15, 1.25), new THREE.MeshStandardMaterial({ color: colors[variant % colors.length], roughness: 0.7 }));
+        awning.position.set(awningX, 3.1, facadeZ + 0.58); awning.rotation.x = -0.12; awning.castShadow = true; this.target.add(awning);
+      }
     }
   }
 
