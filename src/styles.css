@@ -311,8 +311,12 @@ body.is-touch .hud-vehicle { right: auto; left: 50%; bottom: 46px; width: 150px;
 .tc-rotate span { color: var(--paper-dim); font-size: 13px; }
 body.is-touch .tc-rotate { display: none; }
 @media (orientation: portrait) { body.is-touch .tc-rotate { display: grid; } }
-.map-view-close { display: none; position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); width: 52px; height: 52px; border: 2px solid var(--line); border-radius: 12px; background: rgba(23, 33, 31, .8); color: var(--paper); font: 800 20px Inter, sans-serif; }
+/* z-index 90: MUST paint above the filters panel (z-index 80), which shares the top-right corner —
+ * without it the panel swallows every tap on the ✕ and touch players cannot leave the map. */
+.map-view-close { display: none; position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); width: 52px; height: 52px; z-index: 90; border: 2px solid var(--line); border-radius: 12px; background: rgba(23, 33, 31, .8); color: var(--paper); font: 800 20px Inter, sans-serif; }
 body.is-touch .map-view-close { display: grid; place-items: center; }
+/* on touch the ✕ owns the corner: filters drop below it and scroll on short landscape screens */
+body.is-touch #map-view .map-view-filters { top: calc(76px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); max-height: calc(100dvh - 150px); overflow-y: auto; }
 body.is-touch .menu-card button, body.is-touch .menu-card .danger-link { min-height: 44px; } /* thumb-sized menu targets */
 /* swap-sides setting: mirror every cluster (movement right, look left, fire follows movement) */
 .tc.is-swapped .tc-zone-move { left: auto; right: 0; }

@@ -84,7 +84,7 @@ import { loadTreeLibrary } from './world/FoliageAssets';
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
 const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and downsamples — real supersampling AA. The floor bites hardest on LOW-dpi screens (a 1× monitor jumps to 2×, where aliasing shows most); HiDPI already renders dense, so it just stays at native.
 const ULTRA_MAX_SCALE = 3; // …but cap the buffer so a 4×-dpi panel doesn't blow up VRAM/fill
-const POTATO_RENDER_SCALE = 0.6; // potato renders at 0.6× CSS resolution and the canvas upscales — the single biggest lever on a weak GPU
+const POTATO_RENDER_SCALE = 0.5; // potato renders at HALF the CSS resolution and the canvas upscales 2× — the single biggest lever on a weak GPU (owner-endorsed; on a DPR-3 phone this is 1/6 of native device pixels)
 const POTATO_DENSITY_SCALE = 0.5; // potato halves the ambient ped/car census targets
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
