@@ -99,37 +99,19 @@ const JAB_SHOULDER = new THREE.Vector3(); const JAB_FWD = new THREE.Vector3(); c
 const JAB_TARGET = new THREE.Vector3(); const JAB_DIR = new THREE.Vector3(); const JAB_POLE = new THREE.Vector3();
 const JAB_A = new THREE.Vector3(); const JAB_B = new THREE.Vector3(); const JAB_C = new THREE.Vector3(); const JAB_D = new THREE.Vector3();
 
-/** Pose one arm as a boxing jab at `elapsed` seconds into the swing: two-bone IK (upper arm +
- *  elbow, law of cosines, pole down-and-slightly-out) placing the fist on the straight
- *  chamber→extension line, plus a palm-inward wrist roll. `mirror` is +1 for the right arm,
- *  -1 for the left. Full extension coincides exactly with MELEE_HIT_AT, the damage frame. */
-export function drivePunchArm(root: THREE.Object3D, upper: THREE.Object3D, lower: THREE.Object3D, hand: THREE.Object3D, elapsed: number, mirror = 1): void {
-  if (elapsed <= 0 || elapsed >= MELEE_SWING_SECONDS) return;
-  const windup = Math.min(1, elapsed / MELEE_HIT_AT);
-  const retract = elapsed <= MELEE_HIT_AT ? 0 : (elapsed - MELEE_HIT_AT) / (MELEE_SWING_SECONDS - MELEE_HIT_AT);
-  const weight = Math.min(1, windup / BLEND_IN) * Math.max(0, 1 - retract * RETRACT_RATE);
-  if (weight <= 0) return;
-  upper.updateWorldMatrix(true, false); lower.updateWorldMatrix(true, false); hand.updateWorldMatrix(true, false);
+/** Two-bone IK core: place the fist at `target` (world), elbow bent toward a down-and-out pole,
+ *  with the palm-inward wrist roll. Assumes upper/lower/hand world matrices are fresh and that
+ *  `forward`/`side` are the character's world frame. The caller owns JAB_TARGET/JAB_FWD/JAB_SIDE;
+ *  this consumes the other JAB_ scratches. */
+function solveArm(upper: THREE.Object3D, lower: THREE.Object3D, hand: THREE.Object3D, target: THREE.Vector3, forward: THREE.Vector3, side: THREE.Vector3, weight: number, mirror: number): void {
   const shoulder = JAB_SHOULDER.setFromMatrixPosition(upper.matrixWorld);
   const upperLength = JAB_A.setFromMatrixPosition(lower.matrixWorld).distanceTo(shoulder);
   const lowerLength = JAB_B.setFromMatrixPosition(hand.matrixWorld).distanceTo(JAB_A);
   if (upperLength < 1e-4 || lowerLength < 1e-4) return;
-  const forward = root.getWorldDirection(JAB_FWD);
-  const side = JAB_SIDE.set(forward.z, 0, -forward.x).multiplyScalar(mirror); // forward × up: the punching arm's own side of the body
-  // Fist waypoint on the straight jab line: chamber by the ribs → extension at face height on
-  // the facing ray. The quadratic ease keeps the fist (and so the elbow) coiled until late,
-  // covering half the distance in the last third of the drive — the snap.
-  const drive = windup <= CHAMBER_END ? 0 : ((windup - CHAMBER_END) / (1 - CHAMBER_END)) ** 2;
-  const reach = (upperLength + lowerLength) * EXTEND_REACH;
-  const target = JAB_TARGET.copy(shoulder)
-    .addScaledVector(forward, CHAMBER_FORWARD + (reach - CHAMBER_FORWARD) * drive)
-    .addScaledVector(side, CHAMBER_SIDE * (1 - drive));
-  target.y += -CHAMBER_DOWN + (CHAMBER_DOWN + reach * PUNCH_POSE.rise) * drive;
-  // Two-bone IK: clamp the span, solve the upper-arm angle, bend the elbow toward the pole.
   const span = THREE.MathUtils.clamp(shoulder.distanceTo(target), Math.abs(upperLength - lowerLength) + 0.01, upperLength + lowerLength - 0.005);
   const dir = JAB_DIR.copy(target).sub(shoulder).normalize();
   const cosUpper = THREE.MathUtils.clamp((upperLength * upperLength + span * span - lowerLength * lowerLength) / (2 * upperLength * span), -1, 1);
-  const pole = JAB_POLE.copy(side).multiplyScalar(0.4).addScaledVector(forward, -0.1); pole.y -= 0.9; // elbow hangs down, slightly out — a jab, not a chicken wing
+  const pole = JAB_POLE.copy(side).multiplyScalar(0.4).addScaledVector(forward, -0.1); pole.y -= 0.9; // elbow hangs down, slightly out — a jab guard, not a chicken wing
   pole.addScaledVector(dir, -pole.dot(dir));
   if (pole.lengthSq() < 1e-6) { pole.set(0, -1, 0); pole.addScaledVector(dir, -pole.dot(dir)); }
   pole.normalize();
@@ -153,6 +135,56 @@ export function drivePunchArm(root: THREE.Object3D, upper: THREE.Object3D, lower
     const parent = hand.parent;
     if (parent) { parent.getWorldQuaternion(PUNCH_Q2); hand.quaternion.copy(PUNCH_Q2.invert().multiply(PUNCH_Q1)); }
   }
+}
+
+/** Pose one arm as a boxing jab at `elapsed` seconds into the swing: the fist runs a straight
+ *  chamber→extension line with a quadratic ease, so the elbow stays coiled until the last third
+ *  and snaps straight exactly at MELEE_HIT_AT, the damage frame. `mirror` is +1 for the right
+ *  arm, -1 for the left. */
+export function drivePunchArm(root: THREE.Object3D, upper: THREE.Object3D, lower: THREE.Object3D, hand: THREE.Object3D, elapsed: number, mirror = 1): void {
+  const weight = punchArmWeight(elapsed);
+  if (weight <= 0) return;
+  upper.updateWorldMatrix(true, false); lower.updateWorldMatrix(true, false); hand.updateWorldMatrix(true, false);
+  const shoulder = JAB_SHOULDER.setFromMatrixPosition(upper.matrixWorld);
+  const upperLength = JAB_A.setFromMatrixPosition(lower.matrixWorld).distanceTo(shoulder);
+  const lowerLength = JAB_B.setFromMatrixPosition(hand.matrixWorld).distanceTo(JAB_A);
+  const forward = root.getWorldDirection(JAB_FWD);
+  const side = JAB_SIDE.set(forward.z, 0, -forward.x).multiplyScalar(mirror); // forward × up: the punching arm's own side of the body
+  const windup = Math.min(1, elapsed / MELEE_HIT_AT);
+  const drive = windup <= CHAMBER_END ? 0 : ((windup - CHAMBER_END) / (1 - CHAMBER_END)) ** 2;
+  const reach = (upperLength + lowerLength) * EXTEND_REACH;
+  const target = JAB_TARGET.copy(shoulder)
+    .addScaledVector(forward, CHAMBER_FORWARD + (reach - CHAMBER_FORWARD) * drive)
+    .addScaledVector(side, CHAMBER_SIDE * (1 - drive));
+  target.y += -CHAMBER_DOWN + (CHAMBER_DOWN + reach * PUNCH_POSE.rise) * drive;
+  solveArm(upper, lower, hand, target, forward, side, weight, mirror);
+}
+
+/** The swing's pose-blend envelope: fast in over the chamber, fast back out after the hit. */
+export function punchArmWeight(elapsed: number): number {
+  if (elapsed <= 0 || elapsed >= MELEE_SWING_SECONDS) return 0;
+  const windup = Math.min(1, elapsed / MELEE_HIT_AT);
+  const retract = elapsed <= MELEE_HIT_AT ? 0 : (elapsed - MELEE_HIT_AT) / (MELEE_SWING_SECONDS - MELEE_HIT_AT);
+  return Math.min(1, windup / BLEND_IN) * Math.max(0, 1 - retract * RETRACT_RATE);
+}
+
+/** Guard fist offsets from the shoulder: elbow bent, fist forward of the torso at chin height. */
+const GUARD_FORWARD = 0.16;
+const GUARD_SIDE = 0.04;
+const GUARD_DOWN = 0.13;
+
+/** Hold one arm in a boxing guard: elbow bent, fist forward of the torso at chin/chest height,
+ *  palm rolled inward. Used for both fists while braced and for the OFF-hand during a swing —
+ *  the base clips leave a relaxed arm that reads as hand-behind-the-back once the body leans in. */
+export function driveGuardArm(root: THREE.Object3D, upper: THREE.Object3D, lower: THREE.Object3D, hand: THREE.Object3D, weight: number, mirror = 1): void {
+  if (weight <= 0) return;
+  upper.updateWorldMatrix(true, false); lower.updateWorldMatrix(true, false); hand.updateWorldMatrix(true, false);
+  const shoulder = JAB_SHOULDER.setFromMatrixPosition(upper.matrixWorld);
+  const forward = root.getWorldDirection(JAB_FWD);
+  const side = JAB_SIDE.set(forward.z, 0, -forward.x).multiplyScalar(mirror);
+  const target = JAB_TARGET.copy(shoulder).addScaledVector(forward, GUARD_FORWARD).addScaledVector(side, GUARD_SIDE);
+  target.y -= GUARD_DOWN;
+  solveArm(upper, lower, hand, target, forward, side, weight, mirror);
 }
 
 /** Arm extension over the swing: 0 → 1 at the hit frame → 0 at the end. Drives the

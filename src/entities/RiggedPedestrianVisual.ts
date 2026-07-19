@@ -6,7 +6,7 @@ import { findHumanoidBones, type HumanoidBones } from './RiggedPlayerVisual';
 import { NPC_CATALOG, type NpcCharacterId } from './NpcCatalog';
 import type { RagdollEnvironment, VerletRagdoll } from './PedRagdoll';
 import { RagdollDriver } from './RagdollDriver';
-import { drivePunchArm, PUNCH_POSE, swingExtension } from '../systems/MeleeSystem';
+import { driveGuardArm, drivePunchArm, PUNCH_POSE, swingExtension } from '../systems/MeleeSystem';
 import type { PedState } from './Pedestrian';
 
 export const NPC_ANIMATIONS = ['idle', 'walk', 'sprint', 'punch_right', 'death'] as const;
@@ -357,20 +357,22 @@ export class RiggedPedestrianVisual {
 
   private applyAdditivePose(): void {
     const bones = this.bones; if (!bones) return;
-    if (this.state.punching || this.state.braced) {
-      // Guard stance over the idle base: fists half-raised, slight crouch-lean — a fighter, not a queuer.
-      bones.leftUpperArm.rotation.x -= 0.55; bones.rightUpperArm.rotation.x -= 0.55;
-      bones.leftLowerArm.rotation.x -= 0.85; bones.rightLowerArm.rotation.x -= 0.85;
-      bones.spine.rotation.x += 0.1;
-    }
+    const squaredUp = this.state.punching || this.state.braced;
+    if (squaredUp) bones.spine.rotation.x += 0.1; // slight crouch-lean: a fighter, not a queuer
     if (this.state.punching) {
-      // The punch itself: shoulders twist in, weight leans forward, and the right arm runs the
-      // jab IK — chamber at the ribs, straight-line drive to extension on the damage frame.
+      // Shoulders twist in and the weight leans forward behind the strike (before the arm IK,
+      // so the guard and jab targets ride the twisted torso).
       const extension = swingExtension(this.state.punchElapsed);
       bones.chest.rotation.y += PUNCH_POSE.chestTwist * extension;
       bones.spine.rotation.x += PUNCH_POSE.lean * extension;
-      drivePunchArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, this.state.punchElapsed);
     }
+    if (squaredUp) {
+      // Boxing guard: the off-hand fist stays up through the WHOLE engagement — the relaxed base
+      // clip reads as hand-behind-the-back once the body leans in. Both fists guard while braced.
+      driveGuardArm(this.parent, bones.leftUpperArm, bones.leftLowerArm, bones.leftHand, 1, -1);
+      if (!this.state.punching) driveGuardArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, 1, 1);
+    }
+    if (this.state.punching) drivePunchArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, this.state.punchElapsed);
     if (this.state.state === 'cower' || this.state.covering) {
       bones.spine.rotation.x += 0.42; bones.chest.rotation.x += 0.26;
       if (this.state.state === 'cower') {

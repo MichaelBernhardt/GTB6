@@ -5,7 +5,7 @@ import type { WeaponId } from '../config';
 import type { RagdollEnvironment, VerletRagdoll } from './PedRagdoll';
 import { RagdollDriver } from './RagdollDriver';
 import { buildWeaponModel } from './WeaponModels';
-import { drivePunchArm, PUNCH_POSE, swingExtension } from '../systems/MeleeSystem';
+import { driveGuardArm, drivePunchArm, PUNCH_POSE, punchArmWeight, swingExtension } from '../systems/MeleeSystem';
 import {
   AIM_MUZZLE_DIR, AIM_TOP_DIR, CARRY_MUZZLE_DIR, CARRY_TOP_DIR,
   sampleBoneModelQuaternion, weaponAttachQuaternion, type AdditiveRotation,
@@ -437,6 +437,8 @@ export class RiggedPlayerVisual {
       bones.chest.rotation.y += (left ? -PUNCH_POSE.chestTwist : PUNCH_POSE.chestTwist) * extension;
       bones.spine.rotation.x += PUNCH_POSE.lean * extension;
       drivePunchArm(this.parent, left ? bones.leftUpperArm : bones.rightUpperArm, left ? bones.leftLowerArm : bones.rightLowerArm, left ? bones.leftHand : bones.rightHand, this.state.attackElapsed, left ? -1 : 1);
+      // Off-hand guards for the duration of the swing — no relaxed arm trailing behind the lean.
+      driveGuardArm(this.parent, left ? bones.rightUpperArm : bones.leftUpperArm, left ? bones.rightLowerArm : bones.leftLowerArm, left ? bones.rightHand : bones.leftHand, punchArmWeight(this.state.attackElapsed), left ? 1 : -1);
     }
     if (this.state.driveBy) { bones.rightUpperArm.rotation.x -= 0.32; bones.rightUpperArm.rotation.z += 0.12; bones.head.rotation.y -= 0.12; }
     const recoil = RECOIL[this.weapon];
