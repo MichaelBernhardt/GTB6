@@ -220,8 +220,8 @@ export class PopulationSystem {
         ped.stumble(position);
         if (assault) this.frighten(ped, FEAR_EVENTS.assault.base, position); else ped.applyFear(BUMP_FEAR, position);
       }
-      if (killed || sprinting) this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
-      else this.audio.grunt(ped.group.position.x, ped.group.position.z);
+      if (killed || sprinting) this.audio.scream('pain', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped, killed);
+      else this.audio.grunt(ped.group.position.x, ped.group.position.z, ped.voiceSex, ped);
       events.push({ ped, position: ped.group.position.clone(), knockdown: sprinting, killed, assault });
     }
     return events;
@@ -252,7 +252,7 @@ export class PopulationSystem {
     const before = ped.state;
     ped.applyFear(amount, origin);
     const panicked = before !== ped.state && (ped.state === 'flee' || ped.state === 'cower');
-    if (panicked && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+    if (panicked && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped);
     return panicked;
   }
 
@@ -380,7 +380,7 @@ export class PopulationSystem {
     const driver = new Pedestrian(this.scene, this.clearSpawn(exit.x, exit.z), 120 + this.pedestrians.length, false, police, this.nextSpecialNpcVariant(police ? JMPD_PATROL_NPC_ID : DRIVER_NPC_ID));
     const away = driver.group.position.clone().sub(threat); if (away.lengthSq() < 0.01) away.set(1, 0, 0);
     driver.state = 'flee'; driver.fear = FEAR_MAX; driver.threat.copy(threat); driver.destination.copy(driver.group.position).add(away.normalize().multiplyScalar(55));
-    this.pedestrians.push(driver); this.audio.scream('panic', driver.group.position.x, driver.group.position.z); this.broadcastFear(threat, FEAR_EVENTS.assault); return driver;
+    this.pedestrians.push(driver); this.audio.scream('panic', driver.group.position.x, driver.group.position.z, driver.voiceSex, driver); this.broadcastFear(threat, FEAR_EVENTS.assault); return driver;
   }
 
   spawnHostiles(): void {
@@ -641,10 +641,10 @@ export class PopulationSystem {
         const distanceSq = vehicle.group.position.distanceToSquared(ped.group.position);
         if (distanceSq < 5) {
           const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8, vehicle.group.position); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
-          this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
+          this.audio.scream('pain', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped, killed);
           this.pedestrianImpactCooldown.set(ped, 1);
           if (!vehicle.playerControlled) this.requestCollisionReplan(vehicle); // NPC that just hit someone: try a fresh way through
-        } else if (distanceSq < 22 && Math.abs(vehicle.speed) > 16 && !ped.contact && !ped.hostile && !ped.police && Math.random() < 0.01) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+        } else if (distanceSq < 22 && Math.abs(vehicle.speed) > 16 && !ped.contact && !ped.hostile && !ped.police && Math.random() < 0.01) this.audio.scream('panic', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped);
       }
     }
   }
