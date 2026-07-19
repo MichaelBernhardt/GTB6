@@ -51,6 +51,19 @@ describe("jab mechanics regression", () => {
     const atHit = sample(MELEE_HIT_AT - 0.001); // the exact damage frame
     const midDrive = rows.find((r) => Math.abs(r.elapsed - 0.24) < 0.021)!;
     expect(atHit.straightDeg).toBeGreaterThan(150); // snapped straight at the damage frame
+    // The OFF-hand holds guard through the entire swing: fist forward of the torso, never
+    // trailing behind the back (the relaxed base pose + punch lean used to read exactly that).
+    for (const t of [0.06, 0.18, 0.3, 0.42, 0.54]) {
+      visual.setState(state({ punchElapsed: t })); visual.update(1 / 30);
+      parent.updateMatrixWorld(true);
+      const off = bone('Hand_L');
+      expect(off.z).toBeGreaterThan(0.1);
+      expect(off.y).toBeGreaterThan(1.1); expect(off.y).toBeLessThan(1.6); // chin/chest guard height
+    }
+    visual.setState(state({ punching: false, braced: true })); visual.update(1 / 30);
+    parent.updateMatrixWorld(true);
+    expect(bone('Hand_L').z).toBeGreaterThan(0.1); // braced stance: both fists up too
+    expect(bone('Hand_R').z).toBeGreaterThan(0.1);
     expect(midDrive.straightDeg).toBeLessThan(120); // still coiled well into the drive
     expect(atHit.f.z - chamber.z).toBeGreaterThan(0.35); // real forward travel
   });
