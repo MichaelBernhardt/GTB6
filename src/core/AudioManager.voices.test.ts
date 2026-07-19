@@ -102,12 +102,14 @@ describe('recorded ped voices', () => {
     expect(playedClips()).toEqual(['aargh-neutral']);
   });
 
-  it('bumping a female ped plays the annoyed hey; males keep the synth grunt', async () => {
+  it('bumping a female plays the annoyed hey, a male the voetsek; procedural peds keep the synth grunt', async () => {
     const audio = await makeAudio();
     audio.grunt(1, 1, 'female', {});
     expect(playedClips()).toEqual(['annoyed-hey-female']);
-    const before = context.started.length;
     audio.grunt(1, 1, 'male', {});
+    expect(playedClips()).toEqual(['annoyed-hey-female', 'bump-voetsek-male']);
+    const before = context.started.length;
+    audio.grunt(1, 1, 'neutral', {});
     expect(playedClips(before)).toEqual([]); // no recorded clip...
     expect(context.started.slice(before).some((s) => s.kind === 'oscillator')).toBe(true); // ...the formant grunt fired instead
   });

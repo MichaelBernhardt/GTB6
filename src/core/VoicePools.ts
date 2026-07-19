@@ -11,12 +11,12 @@ export type VoiceKind = 'hit' | 'death' | 'fear' | 'bump';
 
 export type VoiceClipId =
   | 'hit-argh-male' | 'annoyed-hey-female' | 'oof-neutral' | 'scream-male'
-  | 'fear-arrggh-male' | 'aargh-neutral' | 'arrrgh-female'
+  | 'fear-arrggh-male' | 'aargh-neutral' | 'arrrgh-female' | 'bump-voetsek-male'
   | 'police-radio-1' | 'police-radio-2' | 'police-radio-3';
 
 export const VOICE_CLIP_IDS: readonly VoiceClipId[] = [
   'hit-argh-male', 'annoyed-hey-female', 'oof-neutral', 'scream-male',
-  'fear-arrggh-male', 'aargh-neutral', 'arrrgh-female',
+  'fear-arrggh-male', 'aargh-neutral', 'arrrgh-female', 'bump-voetsek-male',
   'police-radio-1', 'police-radio-2', 'police-radio-3',
 ];
 
@@ -39,10 +39,9 @@ const POOLS: Record<VoiceKind, Record<VoiceSex, readonly VoiceClipId[]>> = {
     female: ['arrrgh-female'],
     neutral: ['aargh-neutral'],
   },
-  // No male "hey!" was recorded, so only females voice the bump from a clip;
-  // AudioManager keeps the synthesized grunt for everyone else.
+  // Procedural (neutral) peds have no recorded bump bark and keep the synthesized grunt.
   bump: {
-    male: [],
+    male: ['bump-voetsek-male'],
     female: ['annoyed-hey-female'],
     neutral: [],
   },
@@ -59,6 +58,7 @@ export function voicePool(kind: VoiceKind, sex: VoiceSex): readonly VoiceClipId[
  */
 export const CLIP_TRIM: Record<VoiceClipId, number> = {
   'hit-argh-male': 1.3,
+  'bump-voetsek-male': 1.3,
   'annoyed-hey-female': 0.95,
   'oof-neutral': 3.5,
   'scream-male': 0.9,

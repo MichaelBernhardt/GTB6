@@ -32,9 +32,9 @@ describe('voicePool', () => {
     expect(voicePool('death', 'female')).not.toContain('hit-argh-male');
   });
 
-  it('only females have a recorded bump bark (no male "hey" was recorded)', () => {
+  it('bump barks are gendered; procedural peds keep the synth grunt', () => {
     expect(voicePool('bump', 'female')).toEqual(['annoyed-hey-female']);
-    expect(voicePool('bump', 'male')).toEqual([]);
+    expect(voicePool('bump', 'male')).toEqual(['bump-voetsek-male']);
     expect(voicePool('bump', 'neutral')).toEqual([]);
   });
 
@@ -73,7 +73,7 @@ describe('ClipPicker', () => {
     const picker = new ClipPicker();
     expect(picker.pick(voicePool('fear', 'female'))).toBe('arrrgh-female');
     expect(picker.pick(voicePool('fear', 'female'))).toBe('arrrgh-female');
-    expect(picker.pick(voicePool('bump', 'male'))).toBeUndefined();
+    expect(picker.pick(voicePool('bump', 'neutral'))).toBeUndefined();
   });
 
   it('covers the whole pool over many picks', () => {
