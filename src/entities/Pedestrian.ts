@@ -192,6 +192,7 @@ export class Pedestrian {
       dead: this.state === 'down' && this.health === 0,
       knockdown: this.state === 'down' && this.knockedDown,
       punching: this.swing !== undefined,
+      punchElapsed: this.swing?.elapsed ?? 0,
       braced: this.engaged,
       hailing: this.hailing,
       covering: this.covering,
