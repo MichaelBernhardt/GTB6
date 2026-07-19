@@ -73,6 +73,31 @@ describe('hostile wave melee', () => {
     expect(hits).toBe(0); // the started swing whiffed; nobody lands a phantom hit
   });
 
+  it('a rooftop player is glowered at from below, never swung at, never hit', () => {
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const position = player(); position.y = 8; // on a roof directly above street level
+    population.spawnHostileWave(waveSpots(position));
+    let hits = 0; let everSwung = false;
+    for (let t = 0; t < 12; t += DT) {
+      population.update(DT, position, (amount) => { hits += amount; }, true);
+      everSwung ||= population.hostiles.some((ped) => ped.punching);
+    }
+    expect(hits).toBe(0);
+    expect(everSwung).toBe(false); // fists don't reach 8u up: no swing, so no invisible whiffing either
+    // They still WANT the player: gathered directly below in hostile state (pursuit is not height-gated).
+    const below = population.hostiles.filter((ped) => ped.state === 'hostile' && Math.hypot(ped.group.position.x - position.x, ped.group.position.z - position.z) < 2);
+    expect(below.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('the player cannot punch or mug a ped through a floor either', () => {
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const position = player();
+    const victim = population.spawnAmbientPedestrian(position.x, position.z);
+    victim.group.position.set(position.x, 0, position.z);
+    expect(population.nearestPedestrian(new THREE.Vector3(position.x, 0.4, position.z))).toBe(victim); // same level: in reach
+    expect(population.nearestPedestrian(new THREE.Vector3(position.x, 8, position.z))).toBeUndefined(); // rooftop above: out of fist reach
+  });
+
   it('never punches a player in a vehicle', () => {
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const position = player();

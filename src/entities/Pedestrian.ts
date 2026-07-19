@@ -146,7 +146,10 @@ export class Pedestrian {
     // `pursuing` is only set where the destination was copied from the player this frame, so
     // arrest officers (who reuse the 'hostile' state to hustle to the cruiser door) and hostiles
     // whose quarry left aggro range keep the old arrival behaviour, bust flow included.
-    if (this.pursuing && distance < MELEE_ENGAGE_RANGE) {
+    // Horizontal range on purpose: a pursuer under a rooftop player gathers directly below and
+    // glowers up (swings and damage are height-gated in PopulationSystem) instead of grinding
+    // the wall forever.
+    if (this.pursuing && Math.hypot(player.x - this.group.position.x, player.z - this.group.position.z) < MELEE_ENGAGE_RANGE) {
       this.engaged = true; this.watchdog.reset();
       this.group.rotation.y = Math.atan2(player.x - this.group.position.x, player.z - this.group.position.z);
       this.phase += dt * 5.5 * 2.4; // keep the guard-pose bounce alive while holding ground

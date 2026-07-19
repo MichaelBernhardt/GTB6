@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  advanceSwing, beginSwing, MELEE_HIT_ARC_DOT, MELEE_HIT_AT, MELEE_HIT_RANGE,
+  advanceSwing, beginSwing, MELEE_HEIGHT_REACH, MELEE_HIT_ARC_DOT, MELEE_HIT_AT, MELEE_HIT_RANGE,
   MELEE_SWING_SECONDS, meleeHitLands, swingExtension,
 } from './MeleeSystem';
 
@@ -31,11 +31,14 @@ describe('melee swing timing', () => {
 });
 
 describe('hit gate', () => {
-  it("lands only in reach and in the attacker's forward arc at the hit frame", () => {
-    expect(meleeHitLands(MELEE_HIT_RANGE - 0.1, 1)).toBe(true);
-    expect(meleeHitLands(MELEE_HIT_RANGE + 0.1, 1)).toBe(false); // backed off mid-windup: whiff
-    expect(meleeHitLands(1, MELEE_HIT_ARC_DOT - 0.1)).toBe(false); // circled behind the attacker
-    expect(meleeHitLands(1, MELEE_HIT_ARC_DOT + 0.1)).toBe(true);
+  it("lands only in reach, at fist height, and in the attacker's forward arc at the hit frame", () => {
+    expect(meleeHitLands(MELEE_HIT_RANGE - 0.1, 0, 1)).toBe(true);
+    expect(meleeHitLands(MELEE_HIT_RANGE + 0.1, 0, 1)).toBe(false); // backed off mid-windup: whiff
+    expect(meleeHitLands(1, 0, MELEE_HIT_ARC_DOT - 0.1)).toBe(false); // circled behind the attacker
+    expect(meleeHitLands(1, 0, MELEE_HIT_ARC_DOT + 0.1)).toBe(true);
+    expect(meleeHitLands(0.5, MELEE_HEIGHT_REACH + 0.1, 1)).toBe(false); // target on a roof directly above: no punching through the floor
+    expect(meleeHitLands(0.5, -MELEE_HEIGHT_REACH - 0.1, 1)).toBe(false); // or below a ledge
+    expect(meleeHitLands(0.5, MELEE_HEIGHT_REACH - 0.5, 1)).toBe(true); // a kerb/stair step is still in reach
   });
 });
 
