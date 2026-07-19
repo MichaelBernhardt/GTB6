@@ -67,6 +67,8 @@ import type { BaseQuality, CheatSettings, GameMode, GameSettings, GameSnapshot, 
 import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
+import { TouchControls } from './ui/TouchControls';
+import { shouldEnableTouch, touchQuality } from './ui/TouchModels';
 import { UIManager } from './ui/UIManager';
 import { City, ROAD_NETWORK } from './world/City';
 import { COURIER_DEPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
@@ -152,6 +154,8 @@ export class Game {
   private activeBottleStore = ''; // name of the bottle store currently being browsed (for the menu header)
   private garageVehicle?: Vehicle;
   private ui = new UIManager();
+  private touch?: TouchControls;
+  private readonly touchMode = shouldEnableTouch(location.search, navigator.maxTouchPoints > 0 || 'ontouchstart' in window, matchMedia('(pointer: coarse)').matches);
   private multiplayerOverlay = new MultiplayerOverlay();
   private online?: OnlineSession;
   private onlineWasDead = false;
@@ -219,6 +223,7 @@ export class Game {
 
   constructor(private container: HTMLElement) {
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
+    if (this.touchMode) this.settings.quality = touchQuality(this.saveExists, this.settings.quality, 'low'); // phones start on low; a saved choice from the settings menu wins
     this.setupRenderer(); this.setupScene();
     this.ui.showLoading({ progress: 18, label: 'Building Johannesburg', detail: 'Laying out roads, terrain, water and landmarks.' });
     this.city = new City(this.scene, this.baseQuality());
@@ -251,6 +256,7 @@ export class Game {
     this.trains = new TrainSystem(this.scene, this.city);
     this.planes = functionalPlaneSpawns().map((spawn, index) => new Plane(this.scene, spawn, this.city, 4242 + index * 101));
     this.input = new InputManager(this.renderer.domElement);
+    if (this.touchMode) this.touch = new TouchControls(this.input, this.renderer.domElement, this.ui.root);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
     this.missions.completed = new Set(this.save.completedMissions);
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
@@ -2388,6 +2394,15 @@ export class Game {
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
     const onlineState = this.online?.localState;
     this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.touch?.update({
+      active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
+      prompt,
+      dialogue: !this.online && Boolean(this.dialogue.line),
+      driving: Boolean(this.activeVehicle),
+      flying: Boolean(this.activePlane),
+      airborneFlight: this.activePlane ? !this.activePlane.state.grounded : false,
+      weapon: spec.name,
+    });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
     const hostiles = this.mapHostiles(); // arrest officers are on the map as JMPD, not as red hostiles

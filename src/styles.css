@@ -258,3 +258,48 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .multiplayer-chat input { box-sizing: border-box; width: 100%; border: 1px solid rgba(118,235,198,.55); border-radius: 3px; background: rgba(4,11,12,.86); color: #fff; padding: .65rem .75rem; font: inherit; opacity: .58; }
 .multiplayer-chat input:focus { opacity: 1; outline: 2px solid rgba(118,235,198,.25); }
 @media (max-width: 700px) { .multiplayer-scoreboard { width: 9.5rem; } .multiplayer-status { left: 1rem; translate: 0; max-width: calc(100vw - 12rem); } }
+
+/* ===== Touch controls (overlay built by TouchControls; body.is-touch only) ===== */
+body.is-touch { touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.is-touch canvas { touch-action: none; }
+/* the joystick owns the lower-left corner, so the minimap moves to the top-left and shrinks */
+body.is-touch #minimap { left: calc(10px + env(safe-area-inset-left, 0px)); top: calc(10px + env(safe-area-inset-top, 0px)); bottom: auto; width: 148px; height: 148px; border-width: 4px; }
+body.is-touch .hud-items { left: calc(166px + env(safe-area-inset-left, 0px)); bottom: auto; top: 118px; }
+body.is-touch .hud-status { right: calc(16px + env(safe-area-inset-right, 0px)); }
+body.is-touch .hud-prompt { bottom: 8px; max-width: 44vw; }
+.tc { position: absolute; inset: 0; z-index: 30; color: var(--paper); font-family: Inter, "Helvetica Neue", Arial, sans-serif; }
+.tc.is-hidden { display: none; }
+.tc-zone { position: absolute; pointer-events: auto; touch-action: none; }
+.tc-zone-move { left: 0; bottom: 0; width: 45%; height: 72%; }
+.tc-zone-look { right: 0; bottom: 0; width: 55%; height: 100%; }
+.tc-btn { pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; display: grid; place-items: center; border: 2px solid rgba(242, 237, 218, .4); border-radius: 50%; background: rgba(23, 33, 31, .38); color: var(--paper); font: 800 11px/1.15 Inter, sans-serif; letter-spacing: .07em; text-transform: uppercase; opacity: .45; transition: opacity .12s; }
+.tc-btn.is-on, .tc-btn:active { opacity: .95; }
+.tc-btn.is-on { border-color: var(--yellow); color: var(--yellow); }
+.tc-btn.is-hidden { display: none; }
+/* joystick: rest pose lower-left; while touched it re-centres under the thumb (inline style) */
+.tc-stick { position: absolute; left: calc(118px + env(safe-area-inset-left, 0px)); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); width: 136px; height: 136px; pointer-events: none; border: 2px solid rgba(242, 237, 218, .35); border-radius: 50%; background: rgba(23, 33, 31, .28); opacity: .45; }
+.tc-stick.is-live { bottom: auto; opacity: .95; }
+.tc-stick-ring { position: absolute; inset: 12px; border: 1px dashed rgba(242, 237, 218, .3); border-radius: 50%; } /* full deflection past this ring sprints */
+.tc-stick-knob { position: absolute; left: 50%; top: 50%; width: 60px; height: 60px; margin: -30px; border-radius: 50%; background: rgba(242, 237, 218, .55); border: 2px solid rgba(242, 237, 218, .7); }
+.tc-stick.is-live .tc-stick-knob { background: var(--yellow); border-color: var(--yellow); }
+.tc-fire { position: absolute; right: calc(26px + env(safe-area-inset-right, 0px)); bottom: calc(54px + env(safe-area-inset-bottom, 0px)); width: 88px; height: 88px; font-size: 13px; }
+.tc-aim { position: absolute; right: calc(128px + env(safe-area-inset-right, 0px)); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); width: 60px; height: 60px; }
+.tc-jump { position: absolute; right: calc(136px + env(safe-area-inset-right, 0px)); bottom: calc(116px + env(safe-area-inset-bottom, 0px)); width: 60px; height: 60px; }
+.tc-weapon { position: absolute; left: calc(156px + env(safe-area-inset-left, 0px)); bottom: calc(178px + env(safe-area-inset-bottom, 0px)); width: 62px; height: 62px; font-size: 8.5px; padding: 4px; text-align: center; }
+/* context pills: stacked above the right cluster, labels mirror the HUD prompt */
+.tc-context { position: absolute; right: calc(26px + env(safe-area-inset-right, 0px)); bottom: calc(168px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+.tc-pill { pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px 0 8px; border: 2px solid rgba(242, 237, 218, .4); border-radius: 26px; background: rgba(23, 33, 31, .5); color: var(--paper); font: 800 12px Inter, sans-serif; opacity: .6; transition: opacity .12s; }
+.tc-pill:active { opacity: 1; }
+.tc-pill kbd { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--yellow); border-radius: 50%; background: rgba(247, 200, 67, .18); color: var(--yellow); font: 900 14px Inter, sans-serif; }
+/* utility grid tucked under the relocated minimap: pause, map / camera, torch */
+.tc-utils { position: absolute; left: calc(10px + env(safe-area-inset-left, 0px)); top: calc(168px + env(safe-area-inset-top, 0px)); display: grid; grid-template-columns: 46px 46px; gap: 8px; }
+.tc-utils .tc-btn { width: 46px; height: 46px; border-radius: 12px; font-size: 15px; }
+/* portrait on a touch device: the game is landscape-only — ask for a rotate */
+.tc-rotate { position: fixed; inset: 0; z-index: 200; display: none; place-items: center; text-align: center; background: rgba(13, 19, 18, .97); color: var(--paper); pointer-events: auto; }
+.tc-rotate b { display: block; margin-bottom: 8px; font-size: 22px; }
+.tc-rotate span { color: var(--paper-dim); font-size: 13px; }
+body.is-touch .tc-rotate { display: none; }
+@media (orientation: portrait) { body.is-touch .tc-rotate { display: grid; } }
+.map-view-close { display: none; position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); width: 52px; height: 52px; border: 2px solid var(--line); border-radius: 12px; background: rgba(23, 33, 31, .8); color: var(--paper); font: 800 20px Inter, sans-serif; }
+body.is-touch .map-view-close { display: grid; place-items: center; }
+body.is-touch .menu-card button, body.is-touch .menu-card .danger-link { min-height: 44px; } /* thumb-sized menu targets */
