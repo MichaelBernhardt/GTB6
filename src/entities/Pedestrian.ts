@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems/BumpSystem';
 import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, FEAR_MAX } from '../systems/FearSystem';
-import { advanceSwing, beginSwing, MELEE_COOLDOWN_JITTER, MELEE_COOLDOWN_MIN, MELEE_ENGAGE_RANGE, swingExtension, type MeleeSwing } from '../systems/MeleeSystem';
+import { advanceSwing, beginSwing, MELEE_COOLDOWN_JITTER, MELEE_COOLDOWN_MIN, MELEE_ENGAGE_RANGE, MELEE_ENGAGE_RELEASE, swingExtension, type MeleeSwing } from '../systems/MeleeSystem';
 import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
 import type { NpcCharacterId } from './NpcCatalog';
@@ -44,6 +44,7 @@ export class Pedestrian {
   private meleeCooldown = 0;
   private pendingMeleeHit = false;
   private engaged = false; // squared up at melee range this frame (drives the braced visual)
+  private engagedHold = false; // sticky engage: held until the player backs beyond the release ring
   private pursuing = false; // destination copied from the player this frame: actively hunting them
   private downTimer = 0;
   private knockedDown = false;
@@ -142,13 +143,16 @@ export class Pedestrian {
     // whose quarry left aggro range keep the old arrival behaviour, bust flow included.
     // Horizontal range on purpose: a pursuer under a rooftop player gathers directly below and
     // glowers up (swings and damage are height-gated in PopulationSystem) instead of grinding
-    // the wall forever.
-    if (this.pursuing && Math.hypot(player.x - this.group.position.x, player.z - this.group.position.z) < MELEE_ENGAGE_RANGE) {
-      this.engaged = true; this.watchdog.reset();
+    // the wall forever. Hysteresis on the release: once squared up, a short shuffle out to
+    // MELEE_ENGAGE_RELEASE keeps the stance — the guard must not flicker off between swings.
+    const horizontal = Math.hypot(player.x - this.group.position.x, player.z - this.group.position.z);
+    if (this.pursuing && horizontal < (this.engagedHold ? MELEE_ENGAGE_RELEASE : MELEE_ENGAGE_RANGE)) {
+      this.engaged = true; this.engagedHold = true; this.watchdog.reset();
       this.group.rotation.y = Math.atan2(player.x - this.group.position.x, player.z - this.group.position.z);
       this.phase += dt * 5.5 * 2.4; // keep the guard-pose bounce alive while holding ground
       return;
     }
+    this.engagedHold = false;
     // Pursuers also skip the arrival check: their destination IS the player, and the idle flip
     // at sqrt(5) would stop them just outside engage range. They keep closing until the engage
     // branch above takes over.

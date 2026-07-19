@@ -14,6 +14,9 @@ export const MELEE_SWING_SECONDS = 0.6;
 export const MELEE_HIT_AT = 0.35;
 /** A pursuing hostile stops advancing and squares up inside this range of the player. */
 export const MELEE_ENGAGE_RANGE = 1.6;
+/** Hysteresis: once squared up, the stance holds until the player backs beyond this — a short
+ *  shuffle in and out of engage range must not flicker the guard off between swings. */
+export const MELEE_ENGAGE_RELEASE = 2.2;
 /** Swings may start a little outside the hold ring, so a strafing player still gets swung at. */
 export const MELEE_START_RANGE = 2.0;
 /** The target must still be inside this at the hit frame for damage to land. */
@@ -160,8 +163,10 @@ export function drivePunchArm(root: THREE.Object3D, upper: THREE.Object3D, lower
   solveArm(upper, lower, hand, target, forward, side, weight, mirror);
 }
 
-/** The swing's pose-blend envelope: fast in over the chamber, fast back out after the hit. */
-export function punchArmWeight(elapsed: number): number {
+/** The swing's pose-blend envelope: fast in over the chamber, fast back out after the hit. The
+ *  weight blends jab-over-guard (the guard is applied first at full weight), so 0 means "at
+ *  guard", never "at the relaxed base pose". */
+function punchArmWeight(elapsed: number): number {
   if (elapsed <= 0 || elapsed >= MELEE_SWING_SECONDS) return 0;
   const windup = Math.min(1, elapsed / MELEE_HIT_AT);
   const retract = elapsed <= MELEE_HIT_AT ? 0 : (elapsed - MELEE_HIT_AT) / (MELEE_SWING_SECONDS - MELEE_HIT_AT);
