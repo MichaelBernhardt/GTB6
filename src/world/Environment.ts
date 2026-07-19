@@ -16,10 +16,19 @@ export interface EnvironmentHandle {
 const SHADOW_SPAN = 80;
 const SUN_DISTANCE = 240;
 
+/** Haze density per tier, tuned with chunk culling (~2500u radius) and camera far 8000: the CBD
+ *  skyline reads clear well past its ~1100u radius, the chunk boundary sits in a solid haze band,
+ *  and the horizon is near-opaque by the far plane so it reads hazy, never clipped. The potato
+ *  density instead goes near-opaque by that tier's 1500u streaming ring — a genuinely smoggy day
+ *  that hides the pulled-in pop-in edge (applied live by Game's world-budget pass). */
+export function fogDensity(quality: 'potato' | 'low' | 'medium' | 'high'): number {
+  return quality === 'potato' ? 0.0011 : quality === 'low' ? 0.00032 : 0.00025;
+}
+
 export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'medium' | 'high'): EnvironmentHandle {
   const shadows = quality !== 'low';
   scene.background = new THREE.Color(0x6fa8dd); // clear-colour fallback behind the atmospheric dome
-  scene.fog = new THREE.FogExp2(0xc4b48c, quality === 'low' ? 0.00032 : 0.00025); // player-relative, tuned with chunk culling (~2500u radius) and camera far 8000: the CBD skyline reads clear well past its ~1100u radius, the chunk boundary sits in a solid haze band, and the horizon is near-opaque by the far plane so it reads hazy, never clipped
+  scene.fog = new THREE.FogExp2(0xc4b48c, fogDensity(quality)); // player-relative haze (see fogDensity)
 
   const sky = createAtmosphericSky(quality); scene.add(sky.mesh);
   const skyTraffic = createAmbientSkyTraffic(quality); scene.add(skyTraffic.group);

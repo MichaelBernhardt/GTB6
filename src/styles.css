@@ -273,24 +273,32 @@ body.is-touch .hud-vehicle { right: auto; left: 50%; bottom: 46px; width: 150px;
 .tc.is-hidden { display: none; }
 .tc-zone { position: absolute; pointer-events: auto; touch-action: none; }
 .tc-zone-move { left: 0; bottom: 0; width: 45%; height: 72%; }
-.tc-zone-look { right: 0; bottom: 0; width: 55%; height: 100%; }
+.tc-zone-look { right: 0; bottom: 0; width: 45%; height: 72%; }
 .tc-btn { pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; display: grid; place-items: center; border: 2px solid rgba(242, 237, 218, .4); border-radius: 50%; background: rgba(23, 33, 31, .38); color: var(--paper); font: 800 11px/1.15 Inter, sans-serif; letter-spacing: .07em; text-transform: uppercase; opacity: .45; transition: opacity .12s; }
 .tc-btn.is-on, .tc-btn:active { opacity: .95; }
 .tc-btn.is-on { border-color: var(--yellow); color: var(--yellow); }
 .tc-btn.is-hidden { display: none; }
-/* joystick: rest pose lower-left; while touched it re-centres under the thumb (inline style) */
-.tc-stick { position: absolute; left: calc(118px + env(safe-area-inset-left, 0px)); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); width: 136px; height: 136px; pointer-events: none; border: 2px solid rgba(242, 237, 218, .35); border-radius: 50%; background: rgba(23, 33, 31, .28); opacity: .45; }
+/* two floating sticks: rest poses in the lower corners; while touched each re-centres under the
+ * thumb (inline style). Left = discrete 8-way movement, right = analogue free-look rate. */
+.tc-stick { position: absolute; width: 136px; height: 136px; pointer-events: none; border: 2px solid rgba(242, 237, 218, .35); border-radius: 50%; background: rgba(23, 33, 31, .28); opacity: .45; }
+.tc-stick-move { left: calc(118px + env(safe-area-inset-left, 0px)); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+.tc-stick-look { right: calc(118px + env(safe-area-inset-right, 0px)); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
 .tc-stick.is-live { bottom: auto; opacity: .95; }
-.tc-stick-ring { position: absolute; inset: 12px; border: 1px dashed rgba(242, 237, 218, .3); border-radius: 50%; } /* full deflection past this ring sprints */
+.tc-stick.is-sprint { border-color: var(--yellow); }
+.tc-stick-ring { position: absolute; inset: 12px; border: 1px dashed rgba(242, 237, 218, .3); border-radius: 50%; } /* move: the knob rides this walk ring, rim = sprint · look: full-rate rim */
 .tc-stick-knob { position: absolute; left: 50%; top: 50%; width: 60px; height: 60px; margin: -30px; border-radius: 50%; background: rgba(242, 237, 218, .55); border: 2px solid rgba(242, 237, 218, .7); }
 .tc-stick.is-live .tc-stick-knob { background: var(--yellow); border-color: var(--yellow); }
-.tc-fire { position: absolute; right: calc(26px + env(safe-area-inset-right, 0px)); bottom: calc(54px + env(safe-area-inset-bottom, 0px)); width: 88px; height: 88px; font-size: 13px; }
-.tc-aim { position: absolute; right: calc(128px + env(safe-area-inset-right, 0px)); bottom: calc(24px + env(safe-area-inset-bottom, 0px)); width: 60px; height: 60px; }
-.tc-jump { position: absolute; right: calc(136px + env(safe-area-inset-right, 0px)); bottom: calc(116px + env(safe-area-inset-bottom, 0px)); width: 60px; height: 60px; }
-.tc-weapon { position: absolute; left: calc(156px + env(safe-area-inset-left, 0px)); bottom: calc(178px + env(safe-area-inset-bottom, 0px)); width: 62px; height: 62px; font-size: 8.5px; padding: 4px; text-align: center; }
-/* context pills: a row above the right cluster growing leftward, labels mirror the HUD prompt
+.tc-stick-tag { position: absolute; left: 50%; bottom: 5px; transform: translateX(-50%); font: 800 9px Inter, sans-serif; letter-spacing: .14em; color: rgba(242, 237, 218, .6); }
+/* FIRE lives on the LEFT, above the movement stick: the right thumb owns continuous aim-look on
+ * the look stick, so the pair that must combine is look+fire — aim right, squeeze left. */
+.tc-fire { position: absolute; left: calc(146px + env(safe-area-inset-left, 0px)); bottom: calc(186px + env(safe-area-inset-bottom, 0px)); width: 88px; height: 88px; font-size: 13px; }
+/* right-edge button column beside the look stick: tappable without abandoning the stick for long */
+.tc-aim { position: absolute; right: calc(24px + env(safe-area-inset-right, 0px)); bottom: calc(30px + env(safe-area-inset-bottom, 0px)); width: 62px; height: 62px; }
+.tc-jump { position: absolute; right: calc(24px + env(safe-area-inset-right, 0px)); bottom: calc(108px + env(safe-area-inset-bottom, 0px)); width: 62px; height: 62px; }
+.tc-weapon { position: absolute; right: calc(24px + env(safe-area-inset-right, 0px)); bottom: calc(186px + env(safe-area-inset-bottom, 0px)); width: 62px; height: 62px; font-size: 8.5px; padding: 4px; text-align: center; }
+/* context pills: a row above the look stick growing leftward, labels mirror the HUD prompt
  * (row, not column: a second pill must not climb into the ammo panel on 390px-tall phones) */
-.tc-context { position: absolute; right: calc(26px + env(safe-area-inset-right, 0px)); bottom: calc(172px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: row-reverse; gap: 10px; align-items: center; }
+.tc-context { position: absolute; right: calc(100px + env(safe-area-inset-right, 0px)); bottom: calc(196px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: row-reverse; gap: 10px; align-items: center; }
 .tc-pill { pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px 0 8px; border: 2px solid rgba(242, 237, 218, .4); border-radius: 26px; background: rgba(23, 33, 31, .5); color: var(--paper); font: 800 12px Inter, sans-serif; opacity: .6; transition: opacity .12s; }
 .tc-pill:active { opacity: 1; }
 .tc-pill kbd { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--yellow); border-radius: 50%; background: rgba(247, 200, 67, .18); color: var(--yellow); font: 900 14px Inter, sans-serif; }
@@ -306,13 +314,14 @@ body.is-touch .tc-rotate { display: none; }
 .map-view-close { display: none; position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); width: 52px; height: 52px; border: 2px solid var(--line); border-radius: 12px; background: rgba(23, 33, 31, .8); color: var(--paper); font: 800 20px Inter, sans-serif; }
 body.is-touch .map-view-close { display: grid; place-items: center; }
 body.is-touch .menu-card button, body.is-touch .menu-card .danger-link { min-height: 44px; } /* thumb-sized menu targets */
-/* swap-sides setting: mirror every cluster (stick right, buttons/pills/utils left↔right) */
+/* swap-sides setting: mirror every cluster (movement right, look left, fire follows movement) */
 .tc.is-swapped .tc-zone-move { left: auto; right: 0; }
 .tc.is-swapped .tc-zone-look { right: auto; left: 0; }
-.tc.is-swapped .tc-stick { left: auto; right: calc(118px + env(safe-area-inset-right, 0px)); }
-.tc.is-swapped .tc-fire { right: auto; left: calc(26px + env(safe-area-inset-left, 0px)); }
-.tc.is-swapped .tc-aim { right: auto; left: calc(128px + env(safe-area-inset-left, 0px)); }
-.tc.is-swapped .tc-jump { right: auto; left: calc(136px + env(safe-area-inset-left, 0px)); }
-.tc.is-swapped .tc-context { right: auto; left: calc(26px + env(safe-area-inset-left, 0px)); flex-direction: row; }
-.tc.is-swapped .tc-weapon { left: auto; right: calc(156px + env(safe-area-inset-right, 0px)); }
+.tc.is-swapped .tc-stick-move { left: auto; right: calc(118px + env(safe-area-inset-right, 0px)); }
+.tc.is-swapped .tc-stick-look { right: auto; left: calc(118px + env(safe-area-inset-left, 0px)); }
+.tc.is-swapped .tc-fire { left: auto; right: calc(146px + env(safe-area-inset-right, 0px)); }
+.tc.is-swapped .tc-aim { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); }
+.tc.is-swapped .tc-jump { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); }
+.tc.is-swapped .tc-weapon { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); }
+.tc.is-swapped .tc-context { right: auto; left: calc(100px + env(safe-area-inset-left, 0px)); flex-direction: row; }
 .tc.is-swapped .tc-utils { left: auto; right: calc(10px + env(safe-area-inset-right, 0px)); }

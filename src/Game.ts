@@ -75,7 +75,8 @@ import { UIManager } from './ui/UIManager';
 import { City, ROAD_NETWORK } from './world/City';
 import { COURIER_DEPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
-import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
+import { CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE, POTATO_CHUNK_RANGE, POTATO_DETAIL_RANGE } from './world/ChunkVisibility';
+import { buildEnvironment, fogDensity, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 import { loadTreeLibrary } from './world/FoliageAssets';
@@ -83,6 +84,8 @@ import { loadTreeLibrary } from './world/FoliageAssets';
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
 const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and downsamples — real supersampling AA. The floor bites hardest on LOW-dpi screens (a 1× monitor jumps to 2×, where aliasing shows most); HiDPI already renders dense, so it just stays at native.
 const ULTRA_MAX_SCALE = 3; // …but cap the buffer so a 4×-dpi panel doesn't blow up VRAM/fill
+const POTATO_RENDER_SCALE = 0.6; // potato renders at 0.6× CSS resolution and the canvas upscales — the single biggest lever on a weak GPU
+const POTATO_DENSITY_SCALE = 0.5; // potato halves the ambient ped/car census targets
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
@@ -226,7 +229,7 @@ export class Game {
   constructor(private container: HTMLElement) {
     bootMark('boot: settings');
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
-    if (this.touchMode) this.settings.quality = touchQuality(this.saveExists, this.settings.quality, 'low'); // phones start on low; a saved choice from the settings menu wins
+    if (this.touchMode) this.settings.quality = touchQuality(this.saveExists, this.settings.quality, 'potato'); // phones start on the Skorokoro tier; a saved choice from the settings menu wins
     bootMark('boot: renderer');
     this.setupRenderer(); this.setupScene();
     void this.boot(); // async staged build: yields to the frame loop so the bar moves and the page paints
@@ -297,6 +300,7 @@ export class Game {
     this.missions.completed = new Set(this.save.completedMissions);
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
+    this.applyWorldBudget(); // potato boots with its rings/fog/crowd budget from the first frame
     this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
     bootMark('boot: interactive');
     if (import.meta.env.DEV) Object.assign(window, { __game: this, __scripts: MISSION_SCRIPTS, __roads: ROAD_NETWORK, __bootTimeline: bootTimeline });
@@ -341,7 +345,7 @@ export class Game {
 
   private setupRenderer(): void {
     this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
-    this.renderer.shadowMap.enabled = this.settings.quality !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = this.baseQuality() !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
     this.renderer.shadowMap.autoUpdate = true;
     // GPU context loss (OOM, driver reset — the classic silent mobile death): surface it through
@@ -363,7 +367,7 @@ export class Game {
 
   private setupComposer(): void {
     this.composer?.dispose(); this.composer = undefined; this.gtao = undefined;
-    if (this.settings.quality === 'low') return; // low quality: plain renderer.render, no post stack
+    if (this.baseQuality() === 'low') return; // low and potato: plain renderer.render, no post stack
     const ultra = this.settings.quality === 'ultra';
     const composer = new EffectComposer(this.renderer);
     // Two samples preserve edge stability while halving the multisample bandwidth/memory of the old 4x
@@ -647,27 +651,43 @@ export class Game {
   }
 
   private applyQuality(): void {
-    const shadows = this.settings.quality !== 'low';
+    const shadows = this.baseQuality() !== 'low';
     this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
     this.dayNight.setQuality(this.baseQuality());
     this.city.setWaterQuality(this.baseQuality()); // rebuilds water meshes; disposes the old tier's materials and mirror target
+    this.applyWorldBudget();
     this.setupComposer();
   }
 
   /** Visual tier the world subsystems (city, lights, water, environment) render at. `ultra` is a render-only
-   *  super-tier — everything except the renderer's pixel ratio and post stack treats it as `high`. */
-  private baseQuality(): BaseQuality { return this.settings.quality === 'ultra' ? 'high' : this.settings.quality; }
+   *  super-tier — everything except the renderer's pixel ratio and post stack treats it as `high`. `potato`
+   *  is `low` visuals plus the world-budget cuts (render scale, streaming rings, fog, crowds). */
+  private baseQuality(): BaseQuality {
+    return this.settings.quality === 'ultra' ? 'high' : this.settings.quality === 'potato' ? 'low' : this.settings.quality;
+  }
 
   /** Render resolution multiplier. Base tiers only CAP the ratio (min with devicePixelRatio → never above
    *  native, so they're a HiDPI perf throttle, NOT antialiasing). Ultra instead FORCES the ratio up to at
    *  least ULTRA_MIN_SCALE — genuine supersampling that downsamples geometry, textures and specular alike.
    *  Because it's a floor (max, not min), the boost lands hardest on low-dpi screens where aliasing is most
-   *  visible: a 1× monitor renders at 2× (2× SSAA); a 2× Retina panel is already dense, so it stays at native. */
+   *  visible: a 1× monitor renders at 2× (2× SSAA); a 2× Retina panel is already dense, so it stays at native.
+   *  Potato goes the other way entirely: a fixed sub-native buffer the canvas CSS-upscales. */
   private renderPixelRatio(): number {
+    if (this.settings.quality === 'potato') return POTATO_RENDER_SCALE;
     if (this.settings.quality === 'ultra') return Math.min(ULTRA_MAX_SCALE, Math.max(devicePixelRatio || 1, ULTRA_MIN_SCALE));
     const cap: Record<BaseQuality, number> = { low: 1, medium: 1.25, high: 1.5 };
     return Math.min(devicePixelRatio || 1, cap[this.settings.quality]);
+  }
+
+  /** The potato tier's world budget, applied at boot and on quality change (idempotent, cheap):
+   *  pulled-in streaming rings, smog-thick fog so their edge hides in haze, half-density crowds.
+   *  The sub-native render scale is renderPixelRatio()'s job. */
+  private applyWorldBudget(): void {
+    const potato = this.settings.quality === 'potato';
+    this.city.setStreamRanges(potato ? POTATO_CHUNK_RANGE : CHUNK_VISIBLE_RANGE, potato ? POTATO_DETAIL_RANGE : DETAIL_VISIBLE_RANGE);
+    this.lifecycle.densityScale = potato ? POTATO_DENSITY_SCALE : 1;
+    (this.scene.fog as THREE.FogExp2).density = fogDensity(potato ? 'potato' : this.baseQuality());
   }
 
   private startGame(fresh: boolean): void {
@@ -722,6 +742,7 @@ export class Game {
     else if (this.input.consume('Escape')) this.ui.back();
     this.player.updateVisual(frameDt);
     this.profiler.mark('camera');
+    this.touch?.tickLook(frameDt); // look-stick deflection → this frame's mouse deltas, ahead of the camera reading them
     this.tickMouseSteer(frameDt); this.updateCamera(frameDt); this.updateMarker(frameDt); this.renderHUD();
     this.profiler.mark('culling');
     this.environment.updateShadowFocus(this.activeVehicle?.group.position ?? this.player.group.position);

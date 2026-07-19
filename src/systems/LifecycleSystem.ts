@@ -181,6 +181,9 @@ function rescale(target: Map<number, number>, natural: number, total: number, ke
 export class LifecycleSystem {
   /** Console-adjustable population tuning; `set busy` / `set peds` / `set cars` mutate this. */
   tuning: PopulationTuning = { busy: 100 };
+  /** Quality-tier crowd multiplier (potato halves it). Scales the NATURAL targets only — console
+   *  `set peds/cars` pins stay absolute so debugging numbers mean what they say. */
+  densityScale = 1;
   private gameHours = 0;
   private timer = LIFECYCLE_INTERVAL;
   private downSince = new Map<Pedestrian, number>();
@@ -239,8 +242,8 @@ export class LifecycleSystem {
       pedTarget.set(key, target.peds); carTarget.set(key, target.cars);
       pedNatural += target.peds; carNatural += target.cars;
     }
-    const pedTotal = Math.min(PED_TARGET_CAP, Math.max(0, this.tuning.peds ?? Math.round(pedNatural)));
-    const carTotal = Math.min(CAR_TARGET_CAP, Math.max(0, this.tuning.cars ?? Math.round(carNatural)));
+    const pedTotal = Math.min(PED_TARGET_CAP, Math.max(0, this.tuning.peds ?? Math.round(pedNatural * this.densityScale)));
+    const carTotal = Math.min(CAR_TARGET_CAP, Math.max(0, this.tuning.cars ?? Math.round(carNatural * this.densityScale)));
     rescale(pedTarget, pedNatural, pedTotal, activeKeys);
     rescale(carTarget, carNatural, carTotal, activeKeys);
     return { activeKeys, pedTarget, carTarget, pedTotal, carTotal };

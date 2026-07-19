@@ -21,6 +21,10 @@ export const CHUNK_HYSTERESIS = 200;
  *  before this range, so its chunk tier culls much tighter than the world tier. */
 export const DETAIL_VISIBLE_RANGE = 1200;
 export const DETAIL_HYSTERESIS = 150;
+/** Potato (Skorokoro) tier pulls both streaming rings in hard; the denser potato fog (Game's world
+ *  budget) is tuned to be near-opaque at the world ring so the pop-in edge hides in the haze. */
+export const POTATO_CHUNK_RANGE = 1500;
+export const POTATO_DETAIL_RANGE = 700;
 
 /** Key of the always-visible bucket (world ground plane, skyline landmarks). */
 export const FAR_CHUNK = 'far';
@@ -116,6 +120,10 @@ export class ChunkVisibility {
     private range = CHUNK_VISIBLE_RANGE,
     private hysteresis = CHUNK_HYSTERESIS,
   ) {}
+
+  /** Live range change (quality tier switch): the staggered walk re-evaluates every chunk against
+   *  the new ring within a few frames — no rebuild, geometry stays in memory either way. */
+  setRange(range: number): void { this.range = range; }
 
   /** Test up to `budget` chunks against the focus point; call once per frame. */
   update(x: number, z: number, budget = 192): void {
