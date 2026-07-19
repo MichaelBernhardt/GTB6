@@ -7,6 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
 import { AudioManager } from './core/AudioManager';
+import { bootMark, bootTimeline } from './core/BootTimeline';
 import { radioDial } from './core/RadioStations';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, KNOCKOFF_IMPACT_SPEED, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
@@ -93,33 +94,33 @@ export class Game {
   private gtao?: GTAOPass;
   private environment!: EnvironmentHandle;
   private clock = new THREE.Clock();
-  private input: InputManager;
+  private input!: InputManager;
   private audio = new AudioManager();
   private saveManager = new SaveManager();
   private saveExists = false;
   private save: SavedGame;
   private settings: GameSettings;
   private cheats: CheatSettings;
-  private city: City;
-  private dayNight: DayNightSystem;
-  private player: Player;
-  private cameraController: CameraController;
-  private population: PopulationSystem;
-  private lifecycle: LifecycleSystem;
+  private city!: City;
+  private dayNight!: DayNightSystem;
+  private player!: Player;
+  private cameraController!: CameraController;
+  private population!: PopulationSystem;
+  private lifecycle!: LifecycleSystem;
   private cameraForward = new THREE.Vector3();
   private trainEye = new THREE.Vector3(); // FP drive eye anchor, pushed past the hidden cab shell
-  private combat: CombatSystem;
-  private gore: GoreSystem;
-  private pickups: PickupSystem;
-  private projectiles: ProjectileSystem;
-  private bullets: BulletSystem;
-  private propFx: PropSystem;
-  private vehicleFire: VehicleFireSystem;
+  private combat!: CombatSystem;
+  private gore!: GoreSystem;
+  private pickups!: PickupSystem;
+  private projectiles!: ProjectileSystem;
+  private bullets!: BulletSystem;
+  private propFx!: PropSystem;
+  private vehicleFire!: VehicleFireSystem;
   private shake = 0;
   private wanted = new WantedSystem();
   private knowledge = new PoliceKnowledge<Pedestrian>();
-  private police: PoliceSystem;
-  private trains: TrainSystem;
+  private police!: PoliceSystem;
+  private trains!: TrainSystem;
   private missions = new MissionSystem();
   private story = new StoryDirector();
   private dialogue = new DialogueSystem();
@@ -143,14 +144,14 @@ export class Game {
   private depotClock = 0; // sweeps the Kelvin Yard guards' torch cones
   private yardGuards: Pedestrian[] = [];
   private loadShedding = new LoadSheddingSystem();
-  private torch: TorchSystem;
+  private torch!: TorchSystem;
   private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
   private muzzleFlash = 0; // seconds the player's last shot keeps them lit for blackout stealth — shooting gives you away
   private concealed = false; // blackout stealth verdict this frame: JMPD sight checks shrink to whites-of-eyes while true
   private livingCity: LivingCitySystem;
   private economy: Economy;
-  private shops: ShopSystem;
-  private safehouses: SafehouseSystem;
+  private shops!: ShopSystem;
+  private safehouses!: SafehouseSystem;
   private activeSafehouse?: SafehousePlace;
   private activeBottleStore = ''; // name of the bottle store currently being browsed (for the menu header)
   private garageVehicle?: Vehicle;
@@ -220,21 +221,51 @@ export class Game {
   private airborne?: AirborneState;
   private planes: Plane[] = [];
   private activePlane?: Plane;
-  private districtTargets: TeleportTarget[];
+  private districtTargets!: TeleportTarget[];
 
   constructor(private container: HTMLElement) {
+    bootMark('boot: settings');
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
     if (this.touchMode) this.settings.quality = touchQuality(this.saveExists, this.settings.quality, 'low'); // phones start on low; a saved choice from the settings menu wins
+    bootMark('boot: renderer');
     this.setupRenderer(); this.setupScene();
-    this.ui.showLoading({ progress: 18, label: 'Building Johannesburg', detail: 'Laying out roads, terrain, water and landmarks.' });
-    this.city = new City(this.scene, this.baseQuality());
-    this.ui.showLoading({ progress: 46, label: 'City foundations ready', detail: 'Starting the people, traffic and game systems.' });
+    void this.boot(); // async staged build: yields to the frame loop so the bar moves and the page paints
+  }
+
+  /** The heavy construction, staged. Each `breathe` reports a REAL checkpoint and yields to the
+   *  frame loop, so the loading bar reflects work actually done, paint happens between stages, and
+   *  mobile watchdogs see a responsive main thread instead of one multi-second task. A rejection
+   *  here surfaces through main.ts's boot traps as the error card.
+   *  NOTE: Game.boot-order.test.ts parses the source from `constructor(` through the end of this
+   *  method — keep boot() directly above prepareAssets(). */
+  private async boot(): Promise<void> {
+    // rAF for "the loading DOM painted"; the timeout keeps hidden tabs booting (rAF never fires there).
+    const breathe = (progress: number, label: string, detail = 'Johannesburg city works in progress.'): Promise<void> => {
+      this.ui.showLoading({ progress, label, detail });
+      return new Promise((resolve) => {
+        const fallback = setTimeout(resolve, 250);
+        requestAnimationFrame(() => { clearTimeout(fallback); resolve(); });
+      });
+    };
+    await breathe(6, 'Building Johannesburg', 'Laying out roads, terrain, water and landmarks.');
+    bootMark('boot: city');
+    this.city = new City(this.scene, this.baseQuality(), true);
+    const stages = this.city.buildStages(this.baseQuality());
+    // Each next() performs the chunk the previous yield announced: show the label, then pull.
+    // Stage fractions are weighted by measured cost, so the city build walks the bar 6% → 40%.
+    for (let stage = stages.next(); !stage.done; stage = stages.next()) {
+      await breathe(6 + stage.value.fraction * 34, stage.value.label);
+    }
+    await breathe(42, 'City foundations ready', 'Starting the people, traffic and game systems.');
+    bootMark('boot: districts');
     this.districtTargets = districtAnchors((x, z) => this.city.districtAt(x, z));
     this.dayNight = new DayNightSystem(this.scene, this.environment, this.city, this.baseQuality(), this.save.timeOfDay);
     this.torch = new TorchSystem(this.scene);
     this.shops = new ShopSystem(this.scene, this.city);
     buildKelvinYard(this.scene, this.city);
     this.safehouses = new SafehouseSystem(this.scene, this.city);
+    await breathe(44, 'Opening the safehouses');
+    bootMark('boot: player + population');
     this.player = new Player(this.scene, new THREE.Vector3(...this.save.position)); // resume where the last save actually left off (Continue); New Game repositions to spawn in startGame
     this.player.group.position.y = this.restoreY(this.save.position[0], this.save.position[2], this.save.position[1]); // keep saved elevation (rooftop/overpass), else sit on the ground
     this.player.setHeading(this.save.heading); // resume facing the saved direction
@@ -243,6 +274,8 @@ export class Game {
     this.population = new PopulationSystem(this.scene, this.city, this.audio);
     // Guards need the population roster: this spawn must stay AFTER the PopulationSystem line above.
     this.yardGuards = [0, Math.PI].map((angle) => this.population.spawnYardGuard(KELVIN_OFFICE_SPOT.x + Math.sin(angle) * 12, KELVIN_OFFICE_SPOT.z + Math.cos(angle) * 12));
+    await breathe(46, 'Bringing out the people');
+    bootMark('boot: gameplay systems');
     this.lifecycle = new LifecycleSystem(this.city, this.population);
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene, (x, z) => this.city.surfaceHeightAt(x, z));
@@ -256,6 +289,8 @@ export class Game {
     this.police = new PoliceSystem(this.scene, this.city, this.audio);
     this.trains = new TrainSystem(this.scene, this.city);
     this.planes = functionalPlaneSpawns().map((spawn, index) => new Plane(this.scene, spawn, this.city, 4242 + index * 101));
+    await breathe(48, 'Starting the traffic');
+    bootMark('boot: input + restore');
     this.input = new InputManager(this.renderer.domElement);
     if (this.touchMode) this.touch = new TouchControls(this.input, this.renderer.domElement, this.ui.root);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
@@ -263,7 +298,8 @@ export class Game {
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
     this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
-    if (import.meta.env.DEV) Object.assign(window, { __game: this, __scripts: MISSION_SCRIPTS, __roads: ROAD_NETWORK });
+    bootMark('boot: interactive');
+    if (import.meta.env.DEV) Object.assign(window, { __game: this, __scripts: MISSION_SCRIPTS, __roads: ROAD_NETWORK, __bootTimeline: bootTimeline });
   }
 
   private async prepareAssets(retry = false): Promise<void> {
@@ -294,6 +330,7 @@ export class Game {
       this.ui.showLoading({ progress: 100, label: 'Joburg is ready', detail: 'Welcome to the city.' });
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       this.requiredAssetsReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
+      bootMark('boot: menu'); window.dispatchEvent(new Event('gtb-boot-ready')); // main.ts disarms its boot error traps on this
     } catch (error) {
       failed = true;
       if (attempt !== this.assetLoadAttempt) return;
@@ -307,6 +344,12 @@ export class Game {
     this.renderer.shadowMap.enabled = this.settings.quality !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
     this.renderer.shadowMap.autoUpdate = true;
+    // GPU context loss (OOM, driver reset — the classic silent mobile death): surface it through
+    // the boot error traps in main.ts instead of leaving a frozen bar or a black canvas.
+    this.renderer.domElement.addEventListener('webglcontextlost', (event) => {
+      event.preventDefault();
+      window.dispatchEvent(new ErrorEvent('error', { message: 'Graphics context lost — the device ran out of GPU memory or the driver reset. Reload to continue.' }));
+    });
     this.container.append(this.renderer.domElement); window.addEventListener('resize', () => this.resize());
   }
 

@@ -12,12 +12,15 @@ import { describe, expect, it } from 'vitest';
  */
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'Game.ts'), 'utf8');
 
-/** The constructor body: from `constructor(` to the start of the next class member. */
+/** The boot path: from `constructor(` through the end of the staged async boot() the constructor
+ *  kicks off (the heavy construction lives there so the loading screen can paint between stages).
+ *  boot() sits directly above prepareAssets — that method header bounds the slice. */
 const constructorBody = ((): string => {
   const start = source.indexOf('constructor(');
   expect(start).toBeGreaterThan(-1);
-  const end = source.indexOf('\n  private ', start);
-  return source.slice(start, end === -1 ? undefined : end);
+  const end = source.indexOf('\n  private async prepareAssets', start);
+  expect(end, 'prepareAssets must stay directly after boot() — it bounds the boot-order slice').toBeGreaterThan(-1);
+  return source.slice(start, end);
 })();
 
 const firstIndex = (needle: string): number => {
