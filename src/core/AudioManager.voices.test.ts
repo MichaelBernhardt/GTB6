@@ -25,7 +25,7 @@ class FakeNode {
   constructor(private owner: FakeContext, private kind: string) {}
   connect(node: FakeNode): FakeNode { return node; }
   disconnect(): void { /* noop */ }
-  start(): void { this.owner.started.push({ kind: this.kind, buffer: this.buffer }); }
+  start(at?: number): void { this.owner.started.push({ kind: this.kind, buffer: this.buffer, at: at ?? this.owner.currentTime }); }
   stop(): void { /* noop */ }
 }
 
@@ -33,7 +33,7 @@ class FakeContext {
   currentTime = 0;
   sampleRate = 48000;
   destination = new FakeNode(this, 'destination');
-  started: Array<{ kind: string; buffer: TaggedBuffer | null }> = [];
+  started: Array<{ kind: string; buffer: TaggedBuffer | null; at?: number }> = [];
   resume(): Promise<void> { return Promise.resolve(); }
   createBuffer(_channels: number, length: number, rate: number): { getChannelData(): Float32Array; duration: number } {
     return { getChannelData: () => new Float32Array(length), duration: length / rate };
@@ -174,6 +174,27 @@ describe('recorded ped voices', () => {
     const clips = playedClips();
     expect(clips).toHaveLength(1);
     expect(voicePool('hit', 'male')).toContain(clips[0]);
+  });
+
+  it('playerImpact voices the male hit pool a beat after the thud and never a scream clip', async () => {
+    const audio = await makeAudio();
+    audio.playerImpact();
+    const scheduled = context.started.filter((s) => s.buffer?.clip);
+    expect(scheduled).toHaveLength(1);
+    expect(voicePool('hit', 'male')).toContain(scheduled[0]!.buffer!.clip);
+    expect(scheduled[0]!.buffer!.clip).not.toMatch(/scream|fear/); // owner: no screams for the protagonist's own knocks
+    expect(scheduled[0]!.at).toBeCloseTo(context.currentTime + 0.08, 5); // the "oof" trails the impact thud
+  });
+
+  it('overlapping impact causes in one crash dedupe to a single voice', async () => {
+    const audio = await makeAudio();
+    audio.playerImpact(); // emission-side trigger (PopulationSystem car contact)
+    audio.playerImpact(); // damage-funnel trigger, same frame
+    audio.playerImpact(); // knockdown trigger, same frame
+    expect(playedClips()).toHaveLength(1);
+    context.currentTime += 2; // next, separate crash
+    audio.playerImpact();
+    expect(playedClips()).toHaveLength(2);
   });
 });
 
