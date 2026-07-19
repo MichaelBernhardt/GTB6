@@ -3,6 +3,7 @@ import { PLAYER, type VehicleKind, type WeaponId } from '../config';
 import type { InputManager } from '../core/InputManager';
 import { fallDamage, jumpVelocity, moveSpeed, stepVertical } from '../core/GameRules';
 import { inebriationFraction } from '../core/DrinkRules';
+import { MELEE_SWING_SECONDS } from '../systems/MeleeSystem';
 import type { CheatSettings } from '../types';
 import type { City } from '../world/City';
 import {
@@ -141,7 +142,7 @@ export class Player {
   setWeapon(id: WeaponId): void { if (id === this.weapon) return; this.weapon = id; this.riggedVisual.setWeapon(id); }
   /** Report one ranged shot accepted by CombatSystem so visual recoil can retrigger independently of the held trigger. */
   registerShot(): void { if (this.weapon !== 'fists') this.visualState.shotSequence += 1; }
-  punch(): void { this.punchTimer = 0.6; this.punchLeft = !this.punchLeft; this.visualState.attack = this.punchLeft ? 'punch_left' : 'punch_right'; } // window matches the 0.6s punch clips, so a single swing plays out instead of cutting at two-thirds
+  punch(): void { this.punchTimer = MELEE_SWING_SECONDS; this.punchLeft = !this.punchLeft; this.visualState.attack = this.punchLeft ? 'punch_left' : 'punch_right'; this.visualState.attackElapsed = 0; }
 
   setDead(dead: boolean): void {
     this.visualState.dead = dead; this.visualState.attack = undefined;
@@ -213,7 +214,9 @@ export class Player {
 
   private applyPunch(dt: number): void {
     if (this.punchTimer <= 0) { this.visualState.attack = undefined; return; }
-    this.punchTimer = Math.max(0, this.punchTimer - dt); if (this.punchTimer === 0) this.visualState.attack = undefined;
+    this.punchTimer = Math.max(0, this.punchTimer - dt);
+    this.visualState.attackElapsed = MELEE_SWING_SECONDS - this.punchTimer;
+    if (this.punchTimer === 0) this.visualState.attack = undefined;
   }
 
   private turnToward(target: number, dt: number, rate: number): void {
