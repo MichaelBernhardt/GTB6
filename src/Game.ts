@@ -785,6 +785,7 @@ export class Game {
       if (boom.policeHit) this.reportCrime(boom.position, 24, { copWitnessed: true, label: 'explosion' });
       for (const victim of boom.victims) {
         this.gore.burst(victim.position, victim.killed ? 1.5 : 0.9, victim.killed);
+        this.audio.scream('pain', victim.position.x, victim.position.z, victim.ped.voiceSex, victim.ped, victim.killed); // the crowd cap keeps a packed blast from becoming a choir
         if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
       }
       if (boom.playerDamage > 0) this.damagePlayer(boom.playerDamage);
@@ -864,6 +865,7 @@ export class Game {
       if (boom.vehicle.police) this.reportCrime(boom.position, POLICE_WRECK_HEAT, { copWitnessed: true, label: 'vehicle arson' });
       for (const victim of boom.victims) {
         this.gore.burst(victim.position, victim.killed ? 1.4 : 0.85, victim.killed);
+        this.audio.scream('pain', victim.position.x, victim.position.z, victim.ped.voiceSex, victim.ped, victim.killed);
         if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
       }
       if (boom.vehicle === this.activeVehicle || boom.vehicle === this.transition?.vehicle) { this.ejectFromWreck(boom.vehicle); this.damagePlayer(OCCUPANT_BURNOUT_DAMAGE); }
