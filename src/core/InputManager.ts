@@ -9,6 +9,9 @@ export class InputManager {
   firePressed = false;
   private rmbHeld = false;
   private ignoreNextMove = false; // swallow the first delta after a (re)lock: browsers report a huge movementX/Y jump from the drifted cursor to the lock point, which would snap the camera
+  /** Touch mode: taps fire compatibility mousedown/mouseup events, which would read every UI tap
+   *  as pulling the trigger. TouchControls sets this so only synthesized fire state counts. */
+  ignoreMouse = false;
 
   constructor(private element: HTMLElement) {
     window.addEventListener('keydown', (event) => {
@@ -28,15 +31,33 @@ export class InputManager {
     });
     document.addEventListener('pointerlockchange', () => { if (document.pointerLockElement === this.element) this.ignoreNextMove = true; }); // fresh lock: arm the one-shot spike guard
     window.addEventListener('mousedown', (event) => {
-      if (this.suspended) return;
+      if (this.suspended || this.ignoreMouse) return;
       if (event.button === 0) { this.firing = true; this.firePressed = true; }
       if (event.button === 2) this.rmbHeld = true;
     });
-    window.addEventListener('mouseup', (event) => { if (event.button === 0) this.firing = false; if (event.button === 2) this.rmbHeld = false; });
+    window.addEventListener('mouseup', (event) => { if (this.ignoreMouse) return; if (event.button === 0) this.firing = false; if (event.button === 2) this.rmbHeld = false; });
     window.addEventListener('contextmenu', (event) => { if (document.pointerLockElement === this.element) event.preventDefault(); });
     window.addEventListener('wheel', (event) => { if (!this.suspended && document.pointerLockElement === this.element) this.wheel += Math.sign(event.deltaY); }, { passive: true });
     this.element.addEventListener('click', () => { if (!document.pointerLockElement) void this.element.requestPointerLock().catch(() => undefined); });
   }
+
+  // --- Touch synthesis (TouchControls) -------------------------------------------------------
+  // Writes the exact state the DOM listeners write, so down()/consume()/aiming/mouseDX behave
+  // identically for touch and keyboard players. Suspension applies the same way: while the
+  // console or map owns input, synthesized events are dropped just like real ones. The overlay
+  // re-asserts its held keys every frame, so state lost to a reset()/suspend cycle recovers on
+  // the next frame (same as a keyboard's auto-repeat re-adding a still-held key).
+  synthKey(code: string, held: boolean): void {
+    if (this.suspended) return;
+    if (!held) { this.held.delete(code); return; }
+    if (!this.held.has(code)) this.pressed.add(code);
+    this.held.add(code);
+  }
+  synthPress(code: string): void { if (!this.suspended) this.pressed.add(code); }
+  synthLook(dx: number, dy: number): void { if (!this.suspended) { this.mouseDX += dx; this.mouseDY += dy; } }
+  synthFire(held: boolean): void { if (this.suspended) return; if (held && !this.firing) this.firePressed = true; this.firing = held; }
+  synthAim(held: boolean): void { if (!this.suspended) this.rmbHeld = held; }
+  synthWheel(step: number): void { if (!this.suspended) this.wheel += step; }
 
   reset(): void { this.held.clear(); this.pressed.clear(); this.firing = false; this.firePressed = false; this.rmbHeld = false; this.wheel = 0; this.mouseDX = 0; this.mouseDY = 0; }
   suspend(value: boolean): void { this.suspended = value; this.reset(); }

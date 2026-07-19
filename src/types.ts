@@ -42,6 +42,7 @@ export interface GameSettings {
   showFps: boolean;
   showPerfChart: boolean; // scrolling stacked-area graph of the per-frame loop cost; toggled by the `perfchart` console command
   mouseSensitivity: number;
+  touchSwapSides: boolean; // mirror the touch clusters: stick right, buttons left (touch mode only)
   cameraViewFoot: number;
   cameraViewVehicle: number;
   minimapZoom: number;
