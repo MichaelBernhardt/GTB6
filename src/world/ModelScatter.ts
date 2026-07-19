@@ -357,8 +357,12 @@ function tryPlace(
 }
 
 /** Densely walk a road centreline once, yielding arc-length-spaced frontage anchors per side. */
-function frontagePass(occ: ScatterOccupancy, buildings: BuildingIndex, out: ScatteredModel[]): void {
+/** Chunked: yields its completed fraction every few hundred roads (the whole-map scatter is the
+ *  single biggest boot block on mobile). Iteration order untouched — the layout stays identical. */
+function* frontagePass(occ: ScatterOccupancy, buildings: BuildingIndex, out: ScatteredModel[]): Generator<number> {
+  const stride = Math.max(60, Math.ceil(GENERATED_ROADS.length / 24));
   for (let ri = 0; ri < GENERATED_ROADS.length; ri++) {
+    if (ri > 0 && ri % stride === 0) yield ri / GENERATED_ROADS.length;
     const road = GENERATED_ROADS[ri]!;
     if (road.width < 6) continue;
     for (const side of [1, -1] as const) frontageSide(road, ri, side, occ, buildings, out);
@@ -410,9 +414,12 @@ function frontageSide(road: GeneratedRoad, ri: number, side: 1 | -1, occ: Scatte
   }
 }
 
-/** Grid-sample a landuse polygon and fill it with foliage (+ sparse structures) from `profile`. */
-function areaPass(polygons: readonly MapPolygon[], profile: AreaProfile, occ: ScatterOccupancy, buildings: BuildingIndex, out: ScatteredModel[]): void {
-  for (const poly of polygons) {
+/** Grid-sample a landuse polygon and fill it with foliage (+ sparse structures) from `profile`.
+ *  Chunked per polygon: yields the completed fraction so the staged boot can paint mid-pass. */
+function* areaPass(polygons: readonly MapPolygon[], profile: AreaProfile, occ: ScatterOccupancy, buildings: BuildingIndex, out: ScatteredModel[]): Generator<number> {
+  for (let pi = 0; pi < polygons.length; pi++) {
+    if (pi > 0 && pi % 8 === 0) yield pi / polygons.length;
+    const poly = polygons[pi]!;
     for (let gx = poly.minX + profile.step * 0.5; gx < poly.maxX; gx += profile.step) {
       for (let gz = poly.minZ + profile.step * 0.5; gz < poly.maxZ; gz += profile.step) {
         // seeded jitter keeps the grid from reading as a lattice
@@ -435,16 +442,19 @@ function areaPass(polygons: readonly MapPolygon[], profile: AreaProfile, occ: Sc
   }
 }
 
-function buildAllScatter(): void {
+/** The citywide scatter layout as a chunked pass (fraction 0..1): the frontage walk dominates,
+ *  the landuse fills follow. Same pass order as ever — determinism is untouched. */
+export function* scatterStages(): Generator<number> {
+  if (scatterCells) return;
   const out: ScatteredModel[] = [];
   const occ = new ScatterOccupancy();
   const buildings = new BuildingIndex();
   // Crafted claims are already fixed (RESERVED_PADS / MANICURED_FOOTPRINTS) and the procedural
   // buildings are indexed above — so both passes below flow deterministically AROUND them.
-  frontagePass(occ, buildings, out);
-  areaPass(FARM_POLYGONS, AREA_FARM, occ, buildings, out);
-  areaPass(GREEN_POLYGONS, AREA_PARK, occ, buildings, out);
-  areaPass(BEACH_POLYGONS, AREA_BEACH, occ, buildings, out);
+  for (const f of frontagePass(occ, buildings, out)) yield f * 0.7;
+  for (const f of areaPass(FARM_POLYGONS, AREA_FARM, occ, buildings, out)) yield 0.7 + f * 0.1;
+  for (const f of areaPass(GREEN_POLYGONS, AREA_PARK, occ, buildings, out)) yield 0.8 + f * 0.15;
+  for (const f of areaPass(BEACH_POLYGONS, AREA_BEACH, occ, buildings, out)) yield 0.95 + f * 0.05;
 
   const cells = new Map<string, ScatteredModel[]>();
   const canonical: ScatteredModel[] = [];
@@ -461,7 +471,7 @@ function buildAllScatter(): void {
 
 /** Force the (memoized) citywide scatter layout to build now — call during load, not first frame. */
 export function ensureScatter(): void {
-  if (!scatterCells) buildAllScatter();
+  for (const fraction of scatterStages()) void fraction; // synchronous drain
 }
 
 /** Every scattered model across the whole map (capped per cell). Memoized; deterministic. */

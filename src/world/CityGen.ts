@@ -361,10 +361,16 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
   }
 }
 
-function buildAllParcels(): void {
+/** The citywide parcel layout as a chunked pass: yields its completed fraction every few hundred
+ *  roads so a staged boot can paint between chunks (this is one of the two largest main-thread
+ *  blocks on mobile). Iteration order is untouched — the layout stays identical to a full drain. */
+export function* parcelStages(): Generator<number> {
+  if (parcelCells) return;
   const out: GeneratedBuilding[] = [];
   const occ = new Occupancy();
+  const stride = Math.max(60, Math.ceil(GENERATED_ROADS.length / 24));
   for (let ri = 0; ri < GENERATED_ROADS.length; ri++) {
+    if (ri > 0 && ri % stride === 0) yield ri / GENERATED_ROADS.length;
     const road = GENERATED_ROADS[ri]!;
     if (road.width < 6) continue;
     const walk = walkRoad(road);
@@ -387,7 +393,7 @@ function buildAllParcels(): void {
 
 /** Force the (memoized) citywide parcel layout to build now — call during load, not first frame. */
 export function ensureParcels(): void {
-  if (!parcelCells) buildAllParcels();
+  for (const fraction of parcelStages()) void fraction; // synchronous drain
 }
 
 /** Every parcel across the whole map (capped per cell). Memoized; deterministic. */

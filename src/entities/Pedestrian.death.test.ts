@@ -14,6 +14,21 @@ const expectDown = (ped: Pedestrian): void => {
 };
 
 describe('Pedestrian death pose', () => {
+  it('overkill corpseHit is pure spectacle: dead stays dead, no health/state movement, living are immune', () => {
+    const ped = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 1);
+    ped.takeDamage(999);
+    expect(ped.state).toBe('down'); expect(ped.health).toBe(0);
+    for (let hit = 0; hit < 5; hit++) ped.corpseHit(new THREE.Vector3(3, 0, 0), 55); // shotgun party on the body
+    expect(ped.state).toBe('down'); expect(ped.health).toBe(0); // roster truth unchanged — no re-kill, no revival
+    const alive = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 2);
+    alive.corpseHit(new THREE.Vector3(3, 0, 0), 55); // stray call on the living is inert
+    expect(alive.health).toBe(60); expect(alive.state).toBe('walk');
+    const survivor = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 3);
+    survivor.knockdown(new THREE.Vector3(3, 0, 0)); // down but alive
+    survivor.corpseHit(new THREE.Vector3(3, 0, 0), 55);
+    expect(survivor.health).toBeGreaterThan(0); expect(survivor.state).toBe('down'); // untouched: rises on its own clock
+  });
+
   it('falls over cleanly when killed while walking', () => {
     const ped = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 1);
     for (let i = 0; i < 30; i++) ped.update(1 / 60, city, choices, new THREE.Vector3(5, 0, 5));

@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems/BumpSystem';
 import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, FEAR_MAX } from '../systems/FearSystem';
+import { advanceSwing, beginSwing, MELEE_COOLDOWN_JITTER, MELEE_COOLDOWN_MIN, MELEE_ENGAGE_RANGE, MELEE_ENGAGE_RELEASE, swingExtension, type MeleeSwing } from '../systems/MeleeSystem';
 import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
-import type { NpcCharacterId } from './NpcCatalog';
+import type { VoiceSex } from '../core/VoicePools';
+import { NPC_CATALOG, type NpcCharacterId } from './NpcCatalog';
 import { impactKickSpeed, type RagdollEnvironment } from './PedRagdoll';
 import { RiggedPedestrianVisual } from './RiggedPedestrianVisual';
 
@@ -39,7 +41,12 @@ export class Pedestrian {
   private routed = false;
   private replanCooldown = 0; // seconds until this ped may ask the planner again — set when a plan attempt yields nothing (budget-starved or unreachable) so a ped can't hammer A* every frame
   private watchdog = new ProgressWatchdog();
-  private punchTimer = 0;
+  private swing?: MeleeSwing;
+  private meleeCooldown = 0;
+  private pendingMeleeHit = false;
+  private engaged = false; // squared up at melee range this frame (drives the braced visual)
+  private engagedHold = false; // sticky engage: held until the player backs beyond the release ring
+  private pursuing = false; // destination copied from the player this frame: actively hunting them
   private downTimer = 0;
   private knockedDown = false;
   private deathSpinTotal = 0;
@@ -72,6 +79,11 @@ export class Pedestrian {
     }
   }
 
+  /** Voice casting: rigged NPCs speak with their catalog sex, procedural fallback peds stay neutral. */
+  get voiceSex(): VoiceSex {
+    return this.visualVariant ? NPC_CATALOG[this.visualVariant].sex : 'neutral';
+  }
+
   /** Free this ped's GPU geometry when it despawns — otherwise every culled/replaced ped leaks its meshes
    *  and the session slowly degrades. Geometries are built per-ped (unique), so disposing them is safe. */
   dispose(): void {
@@ -85,6 +97,7 @@ export class Pedestrian {
   }
 
   private updateMotion(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
+    this.engaged = false; this.pursuing = false;
     if (this.state === 'down') {
       this.groundY = city.surfaceHeightAt(this.group.position.x, this.group.position.z); this.group.position.y = this.groundY + 0.36;
       if (this.deathSpinElapsed < DEATH_SPIN_DURATION) {
@@ -114,16 +127,42 @@ export class Pedestrian {
       if (this.fear < CALM_THRESHOLD) { this.setPanicPose(false, false); this.pickDestination(this.localTarget(city, choices)); }
       return;
     }
-    if (this.enraged) { if (this.fear < CALM_THRESHOLD) { this.enraged = false; this.setPanicPose(false, false); this.pickDestination(this.localTarget(city, choices)); } else { this.state = 'hostile'; this.destination.copy(player); } }
+    if (this.enraged) { if (this.fear < CALM_THRESHOLD) { this.enraged = false; this.setPanicPose(false, false); this.pickDestination(this.localTarget(city, choices)); } else { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; } }
     if (this.state === 'flee' && this.fear < CALM_THRESHOLD) this.pickDestination(this.localTarget(city, choices)); // calm down even when a wall kept the flee point unreachable
-    if (this.aggressive && !this.contact && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); }
-    if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); }
-    this.punchTimer = Math.max(0, this.punchTimer - dt);
+    if (this.aggressive && !this.contact && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; }
+    if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; }
+    if (this.swing) {
+      const { hit, done } = advanceSwing(this.swing, dt);
+      if (hit) this.pendingMeleeHit = true;
+      if (done) { this.swing = undefined; this.meleeCooldown = MELEE_COOLDOWN_MIN + Math.random() * MELEE_COOLDOWN_JITTER; }
+    }
+    this.meleeCooldown = Math.max(0, this.meleeCooldown - dt);
     this.replanCooldown = Math.max(0, this.replanCooldown - dt);
     if (this.state === 'hostile') this.setGuardPose(distance); else { this.group.rotation.x = 0; this.setPanicPose(this.state === 'flee', false); }
     if (this.hailing && this.state === 'idle') { const arm = this.arms[1]; if (arm) { arm.rotation.x = Math.PI * 0.95; arm.rotation.z = -0.22; } } // curbside hail: one arm out for the taxi
     if (this.state === 'idle') { this.idleTime -= dt; if (this.idleTime <= 0) this.pickDestination(this.localTarget(city, choices)); return; }
-    if ((this.destination.x - this.group.position.x) ** 2 + (this.destination.z - this.group.position.z) ** 2 < 5) {
+    // Squared up: a pursuer at melee range holds ground FACING the player and STAYS in 'hostile'
+    // state — the generic arrival branch below used to flip pursuers to 'idle' at arm's length,
+    // which starved the attack scan (they walked up and just stood there, never swinging).
+    // `pursuing` is only set where the destination was copied from the player this frame, so
+    // arrest officers (who reuse the 'hostile' state to hustle to the cruiser door) and hostiles
+    // whose quarry left aggro range keep the old arrival behaviour, bust flow included.
+    // Horizontal range on purpose: a pursuer under a rooftop player gathers directly below and
+    // glowers up (swings and damage are height-gated in PopulationSystem) instead of grinding
+    // the wall forever. Hysteresis on the release: once squared up, a short shuffle out to
+    // MELEE_ENGAGE_RELEASE keeps the stance — the guard must not flicker off between swings.
+    const horizontal = Math.hypot(player.x - this.group.position.x, player.z - this.group.position.z);
+    if (this.pursuing && horizontal < (this.engagedHold ? MELEE_ENGAGE_RELEASE : MELEE_ENGAGE_RANGE)) {
+      this.engaged = true; this.engagedHold = true; this.watchdog.reset();
+      this.group.rotation.y = Math.atan2(player.x - this.group.position.x, player.z - this.group.position.z);
+      this.phase += dt * 5.5 * 2.4; // keep the guard-pose bounce alive while holding ground
+      return;
+    }
+    this.engagedHold = false;
+    // Pursuers also skip the arrival check: their destination IS the player, and the idle flip
+    // at sqrt(5) would stop them just outside engage range. They keep closing until the engage
+    // branch above takes over.
+    if (!this.pursuing && (this.destination.x - this.group.position.x) ** 2 + (this.destination.z - this.group.position.z) ** 2 < 5) {
       if (this.state === 'flee' && this.fear >= CALM_THRESHOLD) { this.fleeFrom(this.threat); return; }
       if (this.state !== 'walk' || !this.advanceRoute()) { this.state = 'idle'; this.idleTime = 1 + Math.random() * 4; return; }
     }
@@ -159,7 +198,9 @@ export class Pedestrian {
       state: this.state,
       dead: this.state === 'down' && this.health === 0,
       knockdown: this.state === 'down' && this.knockedDown,
-      punching: this.punchTimer > 0,
+      punching: this.swing !== undefined,
+      punchElapsed: this.swing?.elapsed ?? 0,
+      braced: this.engaged,
       hailing: this.hailing,
       covering: this.covering,
       stumbling: this.stumbleTimer > 0,
@@ -180,6 +221,7 @@ export class Pedestrian {
 
   takeDamage(amount: number, origin?: THREE.Vector3): boolean {
     if (this.state === 'down' || this.contact) return false;
+    this.swing = undefined; this.pendingMeleeHit = false; // a hit interrupts the wind-up: no punches landed from the floor
     this.health = Math.max(0, this.health - amount); this.fear = FEAR_MAX; this.enraged = this.aggressive && this.health > 0;
     this.state = this.health === 0 ? 'down' : this.aggressive ? 'hostile' : 'flee';
     if (this.state === 'down') { this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36; this.beginDeathFall(origin, amount); }
@@ -215,6 +257,17 @@ export class Pedestrian {
     this.deathSpinElapsed = 0;
   }
 
+  /** Overkill: damage landing on the settled corpse re-kicks its ragdoll — spectacle only, with no
+   *  health, state, or kill-credit side effects (dead stays dead, roster truth unchanged). */
+  corpseHit(origin: THREE.Vector3 | undefined, damage: number): void {
+    if (this.state !== 'down' || this.health > 0) return;
+    this.riggedVisual?.reviveRagdollImpact(
+      origin ? this.group.position.x - origin.x : undefined,
+      origin ? this.group.position.z - origin.z : undefined,
+      impactKickSpeed(damage),
+    );
+  }
+
   /** Soft player bump: a brief off-balance reaction, no state change. */
   stumble(origin: THREE.Vector3): void {
     if (this.state === 'down' || this.contact) return;
@@ -228,6 +281,7 @@ export class Pedestrian {
   knockdown(origin: THREE.Vector3, damage = KNOCKDOWN_DAMAGE): boolean {
     if (this.state === 'down' || this.contact) return false;
     const outcome = knockdownOutcome(this.health, damage);
+    this.swing = undefined; this.pendingMeleeHit = false;
     this.health = outcome.health; this.downTimer = outcome.downTime; this.threat.copy(origin);
     this.fear = accumulateFear(this.fear, FEAR_EVENTS.assault.base); this.stumbleTimer = 0; this.state = 'down'; this.knockedDown = true;
     this.setPanicPose(false, false); this.group.rotation.x = 0; this.group.rotation.z = Math.PI / 2; this.group.position.y = this.groundY + 0.36;
@@ -319,7 +373,27 @@ export class Pedestrian {
     this.destination.copy(this.group.position).addScaledVector(away.normalize(), 55);
   }
 
-  punch(): void { this.punchTimer = 0.28; }
+  /** Begin a melee swing (windup → hit frame → recover). The caller resolves the hit via
+   *  consumeMeleeHit; damage is never applied here. Returns false while mid-swing or recovering. */
+  punch(): boolean {
+    if (this.swing || this.meleeCooldown > 0 || this.state === 'down') return false;
+    this.swing = beginSwing();
+    return true;
+  }
+
+  /** Mid-swing: the punch animation (rigged clip or procedural jab) is playing. */
+  get punching(): boolean { return this.swing !== undefined; }
+
+  /** Able to start a fresh swing right now. */
+  get meleeReady(): boolean { return !this.swing && this.meleeCooldown <= 0 && this.state !== 'down'; }
+
+  /** True exactly once per swing, on the frame the fist reaches full extension. The caller
+   *  (PopulationSystem) then decides whether the hit lands — still in range and in the arc. */
+  consumeMeleeHit(): boolean {
+    const hit = this.pendingMeleeHit && this.state !== 'down';
+    this.pendingMeleeHit = false;
+    return hit;
+  }
 
   /** Crouch behind cover (arrest officers). Reapplied every frame by the police system, after update() resets the pose. */
   takeCover(): void {
@@ -335,7 +409,7 @@ export class Pedestrian {
 
   private setGuardPose(distance: number): void {
     this.group.scale.y = 1; this.group.rotation.x = distance > 3 ? 0.14 : 0.05;
-    const jab = this.punchTimer > 0 ? Math.sin((0.28 - this.punchTimer) / 0.28 * Math.PI) : 0;
+    const jab = this.swing ? swingExtension(this.swing.elapsed) : 0;
     const bounce = distance < 4 ? Math.sin(this.phase * 3) * 0.12 : 0;
     const lead = this.arms[0]; const rear = this.arms[1];
     if (lead) lead.rotation.x = 1.32 + jab * 0.55 + bounce;

@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import type { WeaponId } from '../config';
+import type { RagdollEnvironment, VerletRagdoll } from './PedRagdoll';
+import { RagdollDriver } from './RagdollDriver';
 import { buildWeaponModel } from './WeaponModels';
+import { driveGuardArm, drivePunchArm, PUNCH_POSE, swingExtension } from '../systems/MeleeSystem';
 import {
   AIM_MUZZLE_DIR, AIM_TOP_DIR, CARRY_MUZZLE_DIR, CARRY_TOP_DIR,
   sampleBoneModelQuaternion, weaponAttachQuaternion, type AdditiveRotation,
@@ -38,6 +41,9 @@ export interface PlayerVisualState {
   velocityY: number;
   landing: boolean;
   attack?: 'punch_left' | 'punch_right';
+  /** Seconds into the current punch; drives the additive swing (the shipped punch clips are
+   *  retired from selection — their retarget swings the fist backwards). */
+  attackElapsed: number;
   coverMode: CoverMode;
   coverTwist: number;
   rideMode: RideMode;
@@ -49,6 +55,8 @@ export interface PlayerVisualState {
   inebriation: number;
   tumbleProgress: number;
   tumbleDirection: -1 | 1;
+  /** Impact knockdown: the verlet ragdoll owns the skeleton until Player clears the flag. */
+  ragdoll: boolean;
   dead: boolean;
 }
 
@@ -62,6 +70,7 @@ const DEFAULT_STATE: PlayerVisualState = {
   onGround: true,
   velocityY: 0,
   landing: false,
+  attackElapsed: 0,
   coverMode: 'none',
   coverTwist: 0,
   rideMode: 'none',
@@ -73,6 +82,7 @@ const DEFAULT_STATE: PlayerVisualState = {
   inebriation: 0,
   tumbleProgress: 0,
   tumbleDirection: 1,
+  ragdoll: false,
   dead: false,
 };
 
@@ -81,7 +91,9 @@ export const initialPlayerVisualState = (): PlayerVisualState => ({ ...DEFAULT_S
 export function selectPlayerAnimation(state: PlayerVisualState): PlayerAnimationName {
   if (state.dead) return 'death';
   if (state.tumbleProgress > 0) return 'tumble';
-  if (state.attack) return state.attack;
+  // No attack branch: punches are the additive pose in applyAdditivePose over the current base.
+  // The shipped punch_left/right clips retargeted the swing BACKWARDS (fist behind the body at
+  // full "extension") and read as a shoulder hunch, so they are retired until re-exported.
   if (state.airMode !== 'none') return state.airMode;
   if (!state.onGround) return state.velocityY > 0.25 ? 'jump' : 'fall';
   if (state.landing) return 'land';
@@ -240,6 +252,14 @@ export class RiggedPlayerVisual {
   private pedalPhase = 0;
   private handledShotSequence = 0;
   private recoilAge = Number.POSITIVE_INFINITY;
+  private readonly ragdollDriver = new RagdollDriver();
+  private impactX?: number;
+  private impactZ?: number;
+  private impactSpeed?: number;
+  private impactDown?: number;
+  private ragdollGroundY = 0;
+  /** Bare-visual fallback (unit tests / missing city): flat ground at the player's own height. */
+  private readonly fallbackEnv: RagdollEnvironment = { heightAt: () => this.ragdollGroundY };
 
   constructor(private parent: THREE.Object3D, options: RiggedPlayerVisualOptions = {}) {
     this.url = options.url ?? PLAYER_MODEL_URL; this.loader = options.load ?? ((url) => new GLTFLoader().loadAsync(url)); this.onStatus = options.onStatus;
@@ -248,6 +268,18 @@ export class RiggedPlayerVisual {
 
   get ready(): boolean { return this.status === 'ready'; }
   get failed(): boolean { return this.status === 'failed'; }
+  get activeAnimation(): PlayerAnimationName | undefined { return this.currentName; }
+  /** Live sim handle for tests/Player; undefined until a knockdown ragdoll starts. */
+  get ragdollBody(): VerletRagdoll | undefined { return this.ragdollDriver.body; }
+
+  /** The player was floored by an impact from `direction` (world XZ, pointing away from the source):
+   *  the ragdoll starts with a matching kick; `downSpeed` carries a hard landing's fall momentum. */
+  primeRagdollImpact(directionX?: number, directionZ?: number, speed?: number, downSpeed?: number): void {
+    this.impactX = directionX; this.impactZ = directionZ; this.impactSpeed = speed; this.impactDown = downSpeed;
+  }
+
+  /** World position of the downed body's hips — where the survivor should stand back up. */
+  ragdollHips(out: THREE.Vector3): boolean { return this.ragdollDriver.hipsPosition(out); }
 
   load(): Promise<void> {
     if (this.status === 'ready') return Promise.resolve();
@@ -271,9 +303,11 @@ export class RiggedPlayerVisual {
     for (const [weaponId, mesh] of this.weaponMeshes) mesh.visible = weaponId === id;
   }
 
-  update(dt: number): void {
+  update(dt: number, env?: RagdollEnvironment): void {
     if (!this.ready || !this.mixer || !this.bones) return;
     const step = Math.max(0, dt); this.elapsed += step;
+    if (this.state.ragdoll) { this.updateRagdoll(step, env); return; }
+    if (this.ragdollDriver.active) this.endRagdoll(); // back on their feet: hand the bones back to the mixer
     if (this.state.shotSequence !== this.handledShotSequence) {
       this.handledShotSequence = this.state.shotSequence; this.recoilAge = 0;
     }
@@ -284,6 +318,40 @@ export class RiggedPlayerVisual {
     this.mixer.update(step); this.captureMixedPose(); this.cleanupFadedActions(); this.restoreMixedPose();
     if (shotPoseActive) this.recoilAge = Math.min(recoil!.duration, this.recoilAge + step);
     this.applyAdditivePose(step);
+  }
+
+  private updateRagdoll(dt: number, env?: RagdollEnvironment): void {
+    this.group.position.set(0, 0, 0); this.group.rotation.set(0, 0, 0); // wipe additive-pose offsets (air/tumble) before the world-space sim reads frames
+    if (!this.ragdollDriver.active) this.beginRagdoll();
+    const body = this.ragdollDriver.body!;
+    if (body.frozen) return; // settled: zero per-frame cost while Player waits out the down window
+    body.step(dt, env ?? this.fallbackEnv);
+    this.ragdollDriver.drive();
+  }
+
+  /** Freeze the mixer and hand the skeleton to the shared driver, kicked with the primed impact.
+   *  Unlike NPC corpses the player ragdoll is never registered against the concurrency cap: there is
+   *  exactly one and it is the thing the camera is looking at. */
+  private beginRagdoll(): void {
+    this.mixer!.stopAllAction();
+    for (const action of this.fadingActions) action.stop();
+    this.fadingActions.clear(); this.current = undefined; this.currentName = undefined;
+    this.recoilAge = Number.POSITIVE_INFINITY;
+    const body = this.ragdollDriver.begin(this.group, this.bones!);
+    this.ragdollGroundY = this.group.getWorldPosition(new THREE.Vector3()).y;
+    let kickX = this.impactX ?? 0; let kickZ = this.impactZ ?? 0;
+    if (kickX * kickX + kickZ * kickZ < 1e-6 && !this.impactDown) { // no primed impact: crumple forward so a balanced pose can't settle standing
+      const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(this.group.getWorldQuaternion(new THREE.Quaternion()));
+      kickX = forward.x; kickZ = forward.z;
+    }
+    body.kick(kickX, kickZ, this.impactSpeed ?? 2.6, this.impactDown ?? 0);
+    this.impactX = undefined; this.impactZ = undefined; this.impactSpeed = undefined; this.impactDown = undefined;
+  }
+
+  private endRagdoll(): void {
+    this.ragdollDriver.end();
+    // mixedRotations still hold the pre-ragdoll pose the undo just restored, so the next
+    // restoreMixedPose/transitionTo cycle fades cleanly from where the body was floored.
   }
 
   private install(gltf: GLTF): void {
@@ -307,6 +375,7 @@ export class RiggedPlayerVisual {
   }
 
   private resetInstalledModel(): void {
+    this.ragdollDriver.release(); // the skeleton is going away with the model
     this.mixer?.stopAllAction(); this.group.clear(); this.group.visible = false; this.mixer = undefined; this.bones = undefined;
     this.actions.clear(); this.fadingActions.clear(); this.mixedRotations.clear(); this.weaponMeshes.clear(); this.gripFrames.clear(); this.current = undefined; this.currentName = undefined;
     if (this.status !== 'loading') { this.status = 'idle'; this.error = undefined; }
@@ -362,6 +431,18 @@ export class RiggedPlayerVisual {
   private applyAdditivePose(dt: number): void {
     const bones = this.bones; if (!bones) return;
     bones.chest.rotation.y += this.state.coverTwist;
+    if (this.state.attack) {
+      const extension = swingExtension(this.state.attackElapsed);
+      const left = this.state.attack === 'punch_left';
+      bones.chest.rotation.y += (left ? -PUNCH_POSE.chestTwist : PUNCH_POSE.chestTwist) * extension;
+      bones.spine.rotation.x += PUNCH_POSE.lean * extension;
+      // Guard is the floor pose for BOTH arms across the whole punch, recovery included: the jab
+      // layers on top of the guarded arm so blend-in/retract animate guard→jab→guard and the
+      // relaxed base (which reads as hands-behind-the-back) never shows through.
+      driveGuardArm(this.parent, bones.leftUpperArm, bones.leftLowerArm, bones.leftHand, 1, -1);
+      driveGuardArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, 1, 1);
+      drivePunchArm(this.parent, left ? bones.leftUpperArm : bones.rightUpperArm, left ? bones.leftLowerArm : bones.rightLowerArm, left ? bones.leftHand : bones.rightHand, this.state.attackElapsed, left ? -1 : 1);
+    }
     if (this.state.driveBy) { bones.rightUpperArm.rotation.x -= 0.32; bones.rightUpperArm.rotation.z += 0.12; bones.head.rotation.y -= 0.12; }
     const recoil = RECOIL[this.weapon];
     const weaponRaised = this.weapon !== 'fists' && (this.state.aiming || this.state.firing || Boolean(recoil && this.recoilAge < recoil.duration));

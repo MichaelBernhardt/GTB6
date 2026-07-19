@@ -3,6 +3,7 @@ import type { DrinkId } from '../core/DrinkRules';
 import type { MissionChoice } from '../systems/MissionSystem';
 import type { CheatSettings, GameSettings } from '../types';
 import type { RoadPoint } from '../world/City';
+import { easeProgress, isStalled, workingDots } from './BootProgress';
 import { ConsoleView } from './ConsoleView';
 import { HudView } from './HudView';
 import { MapView, type MapViewFrame } from './MapView';
@@ -27,6 +28,11 @@ export class UIManager {
   private toastTimer = 0;
   private fadeTimer?: ReturnType<typeof setTimeout>;
   private controlsFromMain = false;
+  private loadingTarget?: LoadingState;
+  private loadingDisplay = 0;
+  private loadingLastReal = 0;
+  private loadingLastTick = 0;
+  private loadingTicker?: ReturnType<typeof setInterval>;
   private lastSettings?: GameSettings;
   private mainSummary: MainMenuSummary = { hasSave: false, money: 0, completedMissions: 0, totalMissions: 0, reputation: 'neutral' };
   onStart?: (fresh: boolean) => void;
@@ -102,7 +108,30 @@ export class UIManager {
     return false;
   }
 
-  showLoading(state: LoadingState = { progress: 0, label: 'Starting city systems', detail: 'Preparing the renderer and Johannesburg map.' }): void { this.menuView.loading(state); }
+  /** Real boot checkpoints land here; a ticker eases the visible bar toward the latest one so
+   *  it always moves between checkpoints — honestly (see BootProgress: it never arrives early,
+   *  and after 8s without real progress the detail line flips to "still working…" instead). */
+  showLoading(state: LoadingState = { progress: 0, label: 'Starting city systems', detail: 'Preparing the renderer and Johannesburg map.' }): void {
+    const previous = this.loadingTarget;
+    if (!previous || previous.progress !== state.progress || previous.label !== state.label || previous.detail !== state.detail) this.loadingLastReal = performance.now();
+    this.loadingTarget = state;
+    this.menuView.loading({ ...state, progress: this.loadingDisplay }); // claim the screen at the current eased value; the ticker animates from here
+    if (this.loadingTicker === undefined) { this.loadingLastTick = performance.now(); this.loadingTicker = setInterval(() => this.tickLoading(), 120); }
+  }
+
+  private tickLoading(): void {
+    const target = this.loadingTarget;
+    if (!target) return;
+    if (this.menuView.screen !== 'loading') { // another screen took over: stop driving
+      clearInterval(this.loadingTicker); this.loadingTicker = undefined; this.loadingTarget = undefined;
+      return;
+    }
+    const now = performance.now();
+    this.loadingDisplay = easeProgress(this.loadingDisplay, target.progress, now - this.loadingLastTick);
+    this.loadingLastTick = now;
+    const stalled = isStalled(now, this.loadingLastReal);
+    this.menuView.loading({ progress: this.loadingDisplay, label: target.label, detail: stalled ? `Still working${workingDots(now)} — ${target.detail}` : target.detail });
+  }
   showAssetFailure(retry: () => void): void { this.menuView.assetFailed(retry); }
   showMainMenu(summary?: MainMenuSummary): void {
     if (summary) this.mainSummary = summary;

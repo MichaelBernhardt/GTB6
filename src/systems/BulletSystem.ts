@@ -11,12 +11,14 @@ import type { ShotResult } from './CombatSystem';
 export const MAX_BULLETS = 240;
 const PED_HIT_RADIUS = 0.5; // forgiving next to the ~0.3 mesh, but far under the metres a mover travels in flight
 const PED_HIT_HEIGHT = 1.85;
+const CORPSE_HIT_RADIUS = 0.8; // a sprawled body covers more ground than a standing one...
+const CORPSE_HIT_HEIGHT = 0.5; // ...but hugs it
 const VEHICLE_HIT_MARGIN = 0.12;
 const WALL_SAMPLE = 0.8; // stride for sampling city geometry along the swept segment
 const TRACER_LENGTH = 7;
 const TRACER_MIN_TRAVEL = 3; // no streak in the shooter's face; it fades in past the muzzle
 
-interface Shot { live: number; position: THREE.Vector3; weapon: WeaponId; damage: number; falloffFloor?: number; exclude?: Vehicle; victim?: Pedestrian; killed: boolean; policeHit: boolean; hitPoint?: THREE.Vector3; hitVehicles: Set<Vehicle>; }
+interface Shot { live: number; position: THREE.Vector3; weapon: WeaponId; damage: number; falloffFloor?: number; exclude?: Vehicle; victim?: Pedestrian; killed: boolean; policeHit: boolean; hitPoint?: THREE.Vector3; hitVehicles: Set<Vehicle>; kickedCorpses: Set<Pedestrian>; }
 interface Bullet { shot: Shot; position: THREE.Vector3; direction: THREE.Vector3; speed: number; range: number; traveled: number; primary: boolean; tracer?: THREE.Mesh; }
 interface Effect { mesh: THREE.Mesh; life: number; }
 /** One trigger pull fully resolved (every pellet landed or expired): feed `result` straight into Game.handleGunshot. */
@@ -41,7 +43,7 @@ export class BulletSystem {
 
   /** One trigger pull: `position` is the shooter (crime reports), `origin`/`directions` the aim rays (camera or hip). */
   spawnShot(position: THREE.Vector3, origin: THREE.Vector3, directions: THREE.Vector3[], count: number, spec: WeaponSpec, exclude?: Vehicle): void {
-    const shot: Shot = { live: 0, position: position.clone(), weapon: spec.id, damage: spec.damage, falloffFloor: spec.falloffFloor, exclude, killed: false, policeHit: false, hitVehicles: new Set() };
+    const shot: Shot = { live: 0, position: position.clone(), weapon: spec.id, damage: spec.damage, falloffFloor: spec.falloffFloor, exclude, killed: false, policeHit: false, hitVehicles: new Set(), kickedCorpses: new Set() };
     for (let i = 0; i < count; i++) {
       const bullet = this.free.pop(); const direction = directions[i];
       if (!bullet || !direction) break; // pool exhausted: drop the extra pellets rather than allocate
@@ -60,7 +62,15 @@ export class BulletSystem {
       const step = Math.min(bullet.speed * dt, bullet.range - bullet.traveled);
       let hitT = Infinity; let hitPed: Pedestrian | undefined; let hitVehicle: Vehicle | undefined;
       for (const ped of population.pedestrians) {
-        if (ped.state === 'down') continue;
+        if (ped.state === 'down') {
+          // Overkill: rounds pass THROUGH a settled corpse (it never shields a live target or eats the
+          // hit) but jolt its ragdoll — once per trigger pull, so a shotgun blast is one kick, not nine.
+          if (ped.health === 0 && !bullet.shot.kickedCorpses.has(ped) && this.corpseGrazeT(bullet, step, ped) >= 0) {
+            bullet.shot.kickedCorpses.add(ped);
+            ped.corpseHit(bullet.position, bullet.shot.damage);
+          }
+          continue;
+        }
         const t = this.pedInterceptT(bullet, step, ped);
         if (t >= 0 && t < hitT) { hitT = t; hitPed = ped; }
       }
@@ -125,6 +135,18 @@ export class BulletSystem {
     if (ox * ox + oz * oz > PED_HIT_RADIUS * PED_HIT_RADIUS) return -1;
     const y = bullet.position.y + bullet.direction.y * step * t;
     return y >= ped.group.position.y - 0.05 && y <= ped.group.position.y + PED_HIT_HEIGHT ? t : -1;
+  }
+
+  /** pedInterceptT for a body on the deck: wider ground-level disc, low vertical band. */
+  private corpseGrazeT(bullet: Bullet, step: number, ped: Pedestrian): number {
+    const px = ped.group.position.x - bullet.position.x; const pz = ped.group.position.z - bullet.position.z;
+    const dx = bullet.direction.x * step; const dz = bullet.direction.z * step;
+    const lengthSq = dx * dx + dz * dz;
+    const t = lengthSq > 1e-8 ? THREE.MathUtils.clamp((px * dx + pz * dz) / lengthSq, 0, 1) : 0;
+    const ox = px - dx * t; const oz = pz - dz * t;
+    if (ox * ox + oz * oz > CORPSE_HIT_RADIUS * CORPSE_HIT_RADIUS) return -1;
+    const y = bullet.position.y + bullet.direction.y * step * t;
+    return y >= ped.group.position.y - 0.05 && y <= ped.group.position.y + CORPSE_HIT_HEIGHT ? t : -1;
   }
 
   /** Slab test of the swept segment against the vehicle's heading-aligned box (bounce/pitch wobble ignored). */

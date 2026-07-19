@@ -76,7 +76,12 @@ export class ProjectileSystem {
     flash.position.copy(position).setY(Math.max(1.4, position.y)); this.scene.add(flash); this.flashes.push(flash);
     const victims: ExplosionVictim[] = []; let policeHit = false;
     for (const ped of population.pedestrians) {
-      if (ped.state === 'down') continue;
+      if (ped.state === 'down') {
+        // Overkill: the blast wave flops settled corpses in radius — spectacle only, no victim credit.
+        const jolt = splashDamage(rocket.damage, ped.group.position.distanceTo(position), rocket.radius);
+        if (jolt > 0) ped.corpseHit(position, jolt);
+        continue;
+      }
       const damage = splashDamage(rocket.damage, ped.group.position.distanceTo(position), rocket.radius);
       if (damage <= 0) continue;
       const killed = ped.takeDamage(damage, position);

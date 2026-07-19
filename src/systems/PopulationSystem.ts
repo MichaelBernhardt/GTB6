@@ -15,6 +15,7 @@ import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separationPush } from './BumpSystem';
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
+import { MELEE_DAMAGE, MELEE_GLOBAL_STAGGER, MELEE_HEIGHT_REACH, MELEE_START_RANGE, meleeHitLands } from './MeleeSystem';
 import { MISSIONS } from './MissionSystem';
 import { ProgressWatchdog, RoutePlanner, type NavPoint } from './NavGraph';
 import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, vehicleHitDamage } from './TrafficAvoidance';
@@ -27,7 +28,7 @@ interface DrivePlan { points: NavPoint[]; index: number; watchdog: ProgressWatch
 interface TaxiState { stopTimer: number; dwell: number; hootTimer: number; }
 interface Holdup { held: number; honkAt: number; giveUpAt: number; dodge: number; side: number; holding: boolean; clearFor: number; } // one blocked-by-the-player driver's patience
 export interface PlayerBump { ped: Pedestrian; position: THREE.Vector3; knockdown: boolean; killed: boolean; assault: boolean; }
-export interface PlayerVehicleHit { speed: number; damage: number; knockdown: boolean; }
+export interface PlayerVehicleHit { speed: number; damage: number; knockdown: boolean; dirX: number; dirZ: number; } // dir = the car's travel direction (the way the body gets thrown)
 
 /** Freeze/thaw distance checks run for each agent once per this many frames, staggered by agent index. */
 const FREEZE_CHECK_FRAMES = 10;
@@ -180,9 +181,34 @@ export class PopulationSystem {
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation(dt);
     this.updateTrafficEngineAudio(player);
-    if (damagePlayer && this.hostileAttackCooldown <= 0) {
-      const attacker = this.pedestrians.find((ped) => ped.state === 'hostile' && ped.group.position.distanceTo(player) < 2.3);
-      if (attacker) { attacker.punch(); damagePlayer(7); this.hostileAttackCooldown = 0.9; }
+    this.resolveMelee(player, damagePlayer, playerOnFoot);
+  }
+
+  /** Hostile melee. Swings START here (readable one-at-a-time cadence via the global stagger)
+   *  and RESOLVE here: damage lands only on the swing's hit frame, and only if the player is
+   *  still in reach and in front of the attacker — backing off mid-windup escapes clean, and
+   *  there is never damage without the matching punch animation. Arrest officers reuse the
+   *  'hostile' ped state to hustle to the cruiser, so police are excluded: the bust flow stays
+   *  proximity-only. Everything gates on the player being on foot — nobody punches a car door. */
+  private resolveMelee(player: THREE.Vector3, damagePlayer: ((amount: number) => void) | undefined, playerOnFoot: boolean): void {
+    if (!damagePlayer) return;
+    for (const ped of this.pedestrians) {
+      if (ped.police || ped.frozen) continue;
+      const dx = player.x - ped.group.position.x; const dz = player.z - ped.group.position.z;
+      const heightGap = player.y - ped.group.position.y;
+      if (ped.consumeMeleeHit()) {
+        const distance = Math.hypot(dx, dz);
+        const facingDot = distance > 1e-4 ? (Math.sin(ped.group.rotation.y) * dx + Math.cos(ped.group.rotation.y) * dz) / distance : 1;
+        if (playerOnFoot && meleeHitLands(distance, heightGap, facingDot)) { damagePlayer(MELEE_DAMAGE); this.audio.melee(); }
+        else this.audio.whiff();
+      }
+      // Swings need the target in fist reach VERTICALLY too: a player on a roof directly above
+      // gets glowered at from below, never swung at (and per the hit gate, never damaged).
+      if (playerOnFoot && this.hostileAttackCooldown <= 0 && ped.state === 'hostile' && ped.meleeReady
+        && Math.abs(heightGap) <= MELEE_HEIGHT_REACH
+        && dx * dx + dz * dz < MELEE_START_RANGE * MELEE_START_RANGE && ped.punch()) {
+        this.hostileAttackCooldown = MELEE_GLOBAL_STAGGER;
+      }
     }
   }
 
@@ -220,8 +246,8 @@ export class PopulationSystem {
         ped.stumble(position);
         if (assault) this.frighten(ped, FEAR_EVENTS.assault.base, position); else ped.applyFear(BUMP_FEAR, position);
       }
-      if (killed || sprinting) this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
-      else this.audio.grunt(ped.group.position.x, ped.group.position.z);
+      if (killed || sprinting) this.audio.scream('pain', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped, killed);
+      else this.audio.grunt(ped.group.position.x, ped.group.position.z, ped.voiceSex, ped);
       events.push({ ped, position: ped.group.position.clone(), knockdown: sprinting, killed, assault });
     }
     return events;
@@ -252,7 +278,7 @@ export class PopulationSystem {
     const before = ped.state;
     ped.applyFear(amount, origin);
     const panicked = before !== ped.state && (ped.state === 'flee' || ped.state === 'cower');
-    if (panicked && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+    if (panicked && Math.random() < 0.4) this.audio.scream('panic', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped);
     return panicked;
   }
 
@@ -305,7 +331,8 @@ export class PopulationSystem {
         if (impact > 0.8 && this.playerHitCooldown <= 0) {
           this.playerHitCooldown = HIT_COOLDOWN;
           const damage = vehicleHitDamage(impact);
-          this.playerVehicleHits.push({ speed: impact, damage, knockdown: damage > 0 });
+          this.playerVehicleHits.push({ speed: impact, damage, knockdown: damage > 0, dirX: forward.x * Math.sign(vehicle.speed || 1), dirZ: forward.z * Math.sign(vehicle.speed || 1) });
+          this.audio.playerImpact(); // voiced at emission (even a zero-damage shove earns an "oof"); the damage funnel's own trigger dedupes via the shared speaker token
           if (damage > 0) { vehicle.speed *= HIT_SPEED_KEEP; this.audio.collision(impact); } // the body costs the car some momentum
         }
       }
@@ -364,10 +391,12 @@ export class PopulationSystem {
     }
   }
 
+  /** Nearest mug/melee target. Height-gated like NPC melee: a ped below a rooftop/ledge is out
+   *  of fist reach — the player can't punch (or get a mug prompt) through a floor either. */
   nearestPedestrian(position: THREE.Vector3, maxDistance = 3.2): Pedestrian | undefined {
     let nearest: Pedestrian | undefined; let best = maxDistance * maxDistance;
     for (const ped of this.pedestrians) {
-      if (ped.contact || ped.state === 'down') continue;
+      if (ped.contact || ped.state === 'down' || Math.abs(ped.group.position.y - position.y) > MELEE_HEIGHT_REACH) continue;
       const distance = ped.group.position.distanceToSquared(position);
       if (distance <= best) { nearest = ped; best = distance; }
     }
@@ -380,7 +409,7 @@ export class PopulationSystem {
     const driver = new Pedestrian(this.scene, this.clearSpawn(exit.x, exit.z), 120 + this.pedestrians.length, false, police, this.nextSpecialNpcVariant(police ? JMPD_PATROL_NPC_ID : DRIVER_NPC_ID));
     const away = driver.group.position.clone().sub(threat); if (away.lengthSq() < 0.01) away.set(1, 0, 0);
     driver.state = 'flee'; driver.fear = FEAR_MAX; driver.threat.copy(threat); driver.destination.copy(driver.group.position).add(away.normalize().multiplyScalar(55));
-    this.pedestrians.push(driver); this.audio.scream('panic', driver.group.position.x, driver.group.position.z); this.broadcastFear(threat, FEAR_EVENTS.assault); return driver;
+    this.pedestrians.push(driver); this.audio.scream('panic', driver.group.position.x, driver.group.position.z, driver.voiceSex, driver); this.broadcastFear(threat, FEAR_EVENTS.assault); return driver;
   }
 
   spawnHostiles(): void {
@@ -637,14 +666,25 @@ export class PopulationSystem {
     for (const vehicle of this.vehicles) {
       if (Math.abs(vehicle.speed) < 7) continue;
       for (const ped of this.pedestrians) {
-        if (ped.state === 'down' || (this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
+        if ((this.pedestrianImpactCooldown.get(ped) ?? 0) > 0) continue;
+        if (ped.state === 'down') {
+          // Overkill: rolling over a settled corpse re-kicks its ragdoll — no damage, heat, or replan.
+          if (ped.health === 0 && vehicle.group.position.distanceToSquared(ped.group.position) < 5) {
+            ped.corpseHit(vehicle.group.position, Math.abs(vehicle.speed) * 2.8);
+            this.pedestrianImpactCooldown.set(ped, 1);
+          }
+          continue;
+        }
         const distanceSq = vehicle.group.position.distanceToSquared(ped.group.position);
         if (distanceSq < 5) {
-          const killed = ped.takeDamage(Math.abs(vehicle.speed) * 2.8, vehicle.group.position); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
-          this.audio.scream('pain', ped.group.position.x, ped.group.position.z);
+          // Unified with the sprint-bump path: a survivable car hit floors the ped into the knockdown
+          // ragdoll (direction-correct, speed-scaled kick) instead of an instant standing flee; a fatal
+          // one flows into the same down-dead state knockdownOutcome reports.
+          const killed = ped.knockdown(vehicle.group.position, Math.abs(vehicle.speed) * 2.8); this.broadcastFear(ped.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault); this.impacts.push({ position: ped.group.position.clone().add(new THREE.Vector3(0, 0.7, 0)), killed, vehicle, ped });
+          this.audio.scream('pain', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped, killed);
           this.pedestrianImpactCooldown.set(ped, 1);
           if (!vehicle.playerControlled) this.requestCollisionReplan(vehicle); // NPC that just hit someone: try a fresh way through
-        } else if (distanceSq < 22 && Math.abs(vehicle.speed) > 16 && !ped.contact && !ped.hostile && !ped.police && Math.random() < 0.01) this.audio.scream('panic', ped.group.position.x, ped.group.position.z);
+        } else if (distanceSq < 22 && Math.abs(vehicle.speed) > 16 && !ped.contact && !ped.hostile && !ped.police && Math.random() < 0.01) this.audio.scream('panic', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped);
       }
     }
   }

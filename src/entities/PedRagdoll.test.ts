@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  impactKickSpeed, RAGDOLL_PARTICLES, RAGDOLL_PARTICLE_COUNT, RAGDOLL_REST_STEPS, RAGDOLL_STEP,
-  RAGDOLL_TIMEOUT, VerletRagdoll, type RagdollEnvironment,
+  crashKickSpeed, impactKickSpeed, landingDownSpeed, RAGDOLL_PARTICLES, RAGDOLL_PARTICLE_COUNT,
+  RAGDOLL_REST_STEPS, RAGDOLL_STEP, RAGDOLL_TIMEOUT, VerletRagdoll, type RagdollEnvironment,
 } from './PedRagdoll';
 
 const P = RAGDOLL_PARTICLES;
@@ -121,5 +121,36 @@ describe('VerletRagdoll', () => {
     simulate(body, flat, RAGDOLL_TIMEOUT);
     expect(body.frozen).toBe(true);
     expect(body.elapsed).toBeGreaterThan(RAGDOLL_REST_STEPS * RAGDOLL_STEP); // it fell first, then proved stillness
+  });
+
+  it('downward carry slams the body flat instead of tipping it like a pushed mannequin', () => {
+    const slammed = new VerletRagdoll(standingSeed()); const tipped = new VerletRagdoll(standingSeed());
+    slammed.kick(1, 0, 2, 6); tipped.kick(1, 0, 2);
+    for (let frame = 0; frame < 18; frame++) { slammed.step(1 / 60, flat); tipped.step(1 / 60, flat); } // 0.3s in
+    expect(particleY(slammed, P.hips)).toBeLessThan(particleY(tipped, P.hips) - 0.1); // the fall's momentum arrives with the body
+    simulate(slammed, flat, RAGDOLL_TIMEOUT);
+    let lowest = Infinity;
+    for (let particle = 0; particle < RAGDOLL_PARTICLE_COUNT; particle++) lowest = Math.min(lowest, particleY(slammed, particle));
+    expect(lowest).toBeGreaterThan(-0.01); // the extra momentum never punches through the road
+  });
+
+  it('a pure downward kick with no horizontal direction still moves the body', () => {
+    const body = new VerletRagdoll(standingSeed());
+    body.kick(0, 0, 0, 5);
+    body.step(1 / 60, flat);
+    expect(particleY(body, P.hips)).toBeLessThan(1.0); // dropped from the seeded 1.0
+  });
+
+  it('crash kick scales with the speed the hit stole and stays under the cap', () => {
+    expect(crashKickSpeed(13)).toBeGreaterThan(5); // the knock-off threshold reads as a real launch
+    expect(crashKickSpeed(25)).toBeGreaterThan(crashKickSpeed(13));
+    expect(crashKickSpeed(999)).toBeLessThanOrEqual(9);
+    expect(crashKickSpeed(-5)).toBe(2); // clamped floor: a degenerate impact is still a nudge
+  });
+
+  it('landing carry grows with the drop and caps below terminal', () => {
+    expect(landingDownSpeed(0)).toBe(0);
+    expect(landingDownSpeed(15)).toBeGreaterThan(landingDownSpeed(13));
+    expect(landingDownSpeed(600)).toBeLessThanOrEqual(6); // skydive slams, but the particles never tunnel the ground band
   });
 });

@@ -62,6 +62,7 @@ export class MapView {
   private dragging = false;
   private lastX = 0;
   private lastY = 0;
+  private pinchDist = 0;
   private pending = false;
   onClose?: () => void;
 
@@ -79,7 +80,9 @@ export class MapView {
     hint.textContent = 'drag to pan · scroll to zoom · hover a street for its name · M / ESC to close';
     const title = document.createElement('div'); title.className = 'map-view-title'; title.textContent = 'CITY MAP';
     this.tooltip.className = 'map-view-tooltip';
-    this.root.append(this.canvas, title, hint, this.tooltip, this.buildSearch(), this.buildFilters());
+    const close = document.createElement('button'); close.className = 'map-view-close'; close.textContent = '✕'; close.setAttribute('aria-label', 'Close map');
+    close.addEventListener('click', () => this.onClose?.());
+    this.root.append(this.canvas, title, hint, this.tooltip, this.buildSearch(), this.buildFilters(), close);
     const ctx = this.canvas.getContext('2d'); if (!ctx) throw new Error('Canvas unavailable'); this.ctx = ctx;
 
     this.canvas.addEventListener('mousedown', (e) => { this.dragging = true; this.lastX = e.clientX; this.lastY = e.clientY; this.canvas.classList.add('is-dragging'); });
@@ -101,6 +104,33 @@ export class MapView {
       this.requestDraw();
     }, { passive: false });
     window.addEventListener('resize', () => { if (this.open) this.draw(); });
+
+    // Touch: one finger pans, two fingers pinch-zoom (anchored on the pinch midpoint), and a
+    // visible close button stands in for M/Esc. All additive — desktop mouse paths untouched.
+    this.canvas.addEventListener('touchstart', (e) => {
+      const t = e.touches[0]; if (!this.open || !t) return;
+      e.preventDefault(); this.tooltip.style.display = 'none';
+      if (e.touches.length >= 2) { this.dragging = false; this.pinchDist = Math.hypot(e.touches[1]!.clientX - t.clientX, e.touches[1]!.clientY - t.clientY); }
+      else { this.dragging = true; this.lastX = t.clientX; this.lastY = t.clientY; }
+    }, { passive: false });
+    this.canvas.addEventListener('touchmove', (e) => {
+      const t = e.touches[0]; if (!this.open || !t) return;
+      e.preventDefault();
+      if (e.touches.length >= 2 && this.pinchDist > 0) {
+        const second = e.touches[1]!;
+        const dist = Math.hypot(second.clientX - t.clientX, second.clientY - t.clientY);
+        const midX = (t.clientX + second.clientX) / 2; const midY = (t.clientY + second.clientY) / 2;
+        const before = screenToWorld(midX, midY, this.camera());
+        this.zoom = clampZoom(this.zoom * (dist / this.pinchDist)); this.pinchDist = dist;
+        const after = screenToWorld(midX, midY, this.camera());
+        this.viewX += before.x - after.x; this.viewZ += before.z - after.z;
+        this.requestDraw();
+      } else if (this.dragging) {
+        this.viewX -= (t.clientX - this.lastX) / this.zoom; this.viewZ -= (t.clientY - this.lastY) / this.zoom;
+        this.lastX = t.clientX; this.lastY = t.clientY; this.requestDraw();
+      }
+    }, { passive: false });
+    this.canvas.addEventListener('touchend', (e) => { if (e.touches.length === 0) { this.dragging = false; this.pinchDist = 0; } });
   }
 
   /** Capture-phase keydown, registered only while the map is open. The game's InputManager also
