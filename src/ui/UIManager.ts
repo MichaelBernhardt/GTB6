@@ -9,7 +9,7 @@ import { HudView } from './HudView';
 import { MapView, type MapViewFrame } from './MapView';
 import { MenuView } from './MenuView';
 import { MinimapView, type MapMarker, type MapPoint } from './MinimapView';
-import type { CheatWeaponEntry, DrinkCatalogEntry, HudState, LoadingState, MainMenuSummary, NotificationTone, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
+import { TOAST_MS, toastVisibleAt, type CheatWeaponEntry, type DrinkCatalogEntry, type HudState, type LoadingState, type MainMenuSummary, type NotificationTone, type ShopArmourEntry, type ShopCatalogEntry, type WheelEntry } from './UIModels';
 
 export type { CheatWeaponEntry, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
 
@@ -25,7 +25,7 @@ export class UIManager {
   private minimapView = new MinimapView();
   private consoleView = new ConsoleView();
   private mapView = new MapView();
-  private toastTimer = 0;
+  private toastDeadline = 0; // wall-clock ms (performance.now domain) — never frame-counted
   private fadeTimer?: ReturnType<typeof setTimeout>;
   private controlsFromMain = false;
   private loadingTarget?: LoadingState;
@@ -76,7 +76,7 @@ export class UIManager {
   updateMap(frame: MapViewFrame): void { this.mapView.update(frame); }
 
   update(state: HudState): void {
-    this.hudView.update(state); this.toastTimer = Math.max(0, this.toastTimer - 1 / 60); if (this.toastTimer === 0) this.toast.classList.remove('is-visible');
+    this.hudView.update(state); if (!toastVisibleAt(performance.now(), this.toastDeadline)) this.toast.classList.remove('is-visible');
   }
 
   damageFlash(): void { this.vignette.classList.remove('is-flashing'); void this.vignette.offsetWidth; this.vignette.classList.add('is-flashing'); }
@@ -95,7 +95,7 @@ export class UIManager {
 
   notify(title: string, detail = '', success = true, tone?: NotificationTone): void {
     const resolved = tone ?? (success ? 'success' : 'danger'); this.toast.innerHTML = `<small>${resolved === 'danger' ? 'CITY ALERT' : resolved === 'reputation' ? 'STREET WORD' : resolved === 'radio' ? 'JMPD DISPATCH' : resolved === 'music' ? 'NOW TUNED' : 'UPDATE'}</small><strong>${title}</strong><span>${detail}</span>`;
-    this.toast.className = `is-visible tone-${resolved}`; this.toastTimer = 4;
+    this.toast.className = `is-visible tone-${resolved}`; this.toastDeadline = performance.now() + TOAST_MS;
   }
   hideMenu(): void { this.menuView.hide(); }
 

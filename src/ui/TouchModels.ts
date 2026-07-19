@@ -11,6 +11,14 @@ export function shouldEnableTouch(search: string, hasTouch: boolean, coarsePoint
   return hasTouch && coarsePointer;
 }
 
+/** First-visit "pin to home screen" hint: browser-tab fullscreen still shows Android's status bar,
+ *  and iOS Safari has no fullscreen API at all — an installed (A2HS) launch is the only true
+ *  immersive path on both. Show the hint only in a browser tab (not an installed standalone /
+ *  fullscreen launch, where it's moot) and only until dismissed once — never nag twice. */
+export function shouldShowInstallHint(dismissed: boolean, standaloneDisplay: boolean): boolean {
+  return !dismissed && !standaloneDisplay;
+}
+
 /** Touch devices default the render quality to the floor tier (potato/Skorokoro) — but only on a
  *  fresh install; a saved choice (the settings menu can raise it) always wins. */
 export function touchQuality<Q>(hasSave: boolean, saved: Q, floor: Q): Q {
