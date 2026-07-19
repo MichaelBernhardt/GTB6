@@ -374,7 +374,7 @@ export class RiggedPlayerVisual {
       const left = this.state.attack === 'punch_left';
       bones.chest.rotation.y += (left ? -PUNCH_POSE.chestTwist : PUNCH_POSE.chestTwist) * extension;
       bones.spine.rotation.x += PUNCH_POSE.lean * extension;
-      drivePunchArm(this.parent, left ? bones.leftUpperArm : bones.rightUpperArm, left ? bones.leftHand : bones.rightHand, extension);
+      drivePunchArm(this.parent, left ? bones.leftUpperArm : bones.rightUpperArm, left ? bones.leftLowerArm : bones.rightLowerArm, left ? bones.leftHand : bones.rightHand, this.state.attackElapsed, left ? -1 : 1);
     }
     if (this.state.driveBy) { bones.rightUpperArm.rotation.x -= 0.32; bones.rightUpperArm.rotation.z += 0.12; bones.head.rotation.y -= 0.12; }
     const recoil = RECOIL[this.weapon];
