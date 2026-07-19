@@ -307,6 +307,11 @@ body.is-touch .hud-vehicle { right: auto; left: 50%; bottom: 46px; width: 150px;
 .tc-utils .tc-btn { width: 46px; height: 46px; border-radius: 12px; font-size: 15px; }
 /* portrait on a touch device: the game is landscape-only — ask for a rotate */
 .tc-rotate { position: fixed; inset: 0; z-index: 200; display: none; place-items: center; text-align: center; background: rgba(13, 19, 18, .97); color: var(--paper); pointer-events: auto; }
+/* one-time A2HS tip (touch only, never shown installed): paper card, top-centre, above the menu */
+.tc-install-hint { position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%) rotate(-.35deg); z-index: 210; display: flex; gap: 10px; align-items: flex-start; width: min(430px, calc(100vw - 24px)); padding: 10px 12px; color: var(--ink); background: var(--paper); border-left: 6px solid var(--yellow); box-shadow: var(--shadow); font-family: Inter, "Helvetica Neue", Arial, sans-serif; }
+.tc-install-hint b { display: block; margin-bottom: 2px; color: #8c6d14; font-size: 9px; font-weight: 900; letter-spacing: 1.6px; }
+.tc-install-hint span { font-size: 12px; line-height: 1.35; }
+.tc-install-hint button { flex: none; width: 34px; height: 34px; margin: -2px -4px 0 0; border: 2px solid var(--ink); border-radius: 10px; background: transparent; color: var(--ink); font: 800 14px Inter, sans-serif; }
 .tc-rotate b { display: block; margin-bottom: 8px; font-size: 22px; }
 .tc-rotate span { color: var(--paper-dim); font-size: 13px; }
 body.is-touch .tc-rotate { display: none; }

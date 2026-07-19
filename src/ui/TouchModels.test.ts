@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LOOK_DEADZONE, LOOK_MAX_RATE, LOOK_VERTICAL_SCALE, lookRate, parsePromptActions, remapForFlight, shouldEnableTouch, stickKeys, stickKnobOffset, touchQuality } from './TouchModels';
+import { LOOK_DEADZONE, LOOK_MAX_RATE, LOOK_VERTICAL_SCALE, lookRate, parsePromptActions, remapForFlight, shouldEnableTouch, shouldShowInstallHint, stickKeys, stickKnobOffset, touchQuality } from './TouchModels';
 
 const none = new Set<string>();
 const keys = (x: number, y: number, previous = none): string[] => [...stickKeys(x, y, previous)].sort();
@@ -14,6 +14,14 @@ describe('shouldEnableTouch', () => {
     expect(shouldEnableTouch('?touch=1', false, false)).toBe(true);
     expect(shouldEnableTouch('?foo=2&touch=1', false, false)).toBe(true);
     expect(shouldEnableTouch('?touch=0', true, true)).toBe(false);
+  });
+});
+
+describe('shouldShowInstallHint', () => {
+  it('shows once in a browser tab, never installed, never after dismissal', () => {
+    expect(shouldShowInstallHint(false, false)).toBe(true);
+    expect(shouldShowInstallHint(true, false)).toBe(false); // dismissed once = never again
+    expect(shouldShowInstallHint(false, true)).toBe(false); // already running standalone/fullscreen
   });
 });
 

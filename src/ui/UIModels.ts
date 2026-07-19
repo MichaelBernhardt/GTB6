@@ -23,6 +23,13 @@ export interface MissionPassedView { name: string; items: string[] }
  *  silently declines). */
 export const dialogueAdvanceLabel = (view: DialogueView): string => view.more ? 'E  MORE' : view.offer ? 'E  TAKE THE JOB' : 'E  DONE';
 
+/** Toast lifetime in WALL-CLOCK milliseconds. Auto-hide must never be counted in frames: the HUD
+ *  updates once per rendered frame, so a per-frame countdown that assumes 60fps stretches "4
+ *  seconds" into minutes on a phone (the owner's "toast never disappears" bug). notify() stamps
+ *  `now + TOAST_MS` as the deadline; every HUD update — however rare — compares against the clock. */
+export const TOAST_MS = 4000;
+export const toastVisibleAt = (now: number, deadline: number): boolean => now < deadline;
+
 export interface HudState {
   health: number;
   armour: number;

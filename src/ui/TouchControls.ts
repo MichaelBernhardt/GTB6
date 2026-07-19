@@ -1,5 +1,7 @@
 import type { InputManager } from '../core/InputManager';
-import { lookRate, parsePromptActions, remapForFlight, stickKeys, stickKnobOffset } from './TouchModels';
+import { lookRate, parsePromptActions, remapForFlight, shouldShowInstallHint, stickKeys, stickKnobOffset } from './TouchModels';
+
+const INSTALL_HINT_KEY = 'gtb-install-hint-dismissed';
 
 export interface TouchFrame {
   /** Overlay shows only while actually playing with no DOM overlay (map/console/menus) on top. */
@@ -99,6 +101,7 @@ export class TouchControls {
     this.rotateOverlay.className = 'tc-rotate';
     this.rotateOverlay.innerHTML = '<div><b>Rotate your phone</b><span>Groot Theft Bakkie plays in landscape.</span></div>';
     document.body.append(this.rotateOverlay);
+    this.buildInstallHint();
 
     this.bindFloatingStick(this.moveZone, this.stick, this.moveState, (x, y) => this.applyStick(x, y), () => this.applyStick(0, 0));
     this.bindFloatingStick(this.lookZone, this.lookStick, this.lookState, (x, y) => this.moveLook(x, y), () => this.moveLook(0, 0));
@@ -272,18 +275,43 @@ export class TouchControls {
     return button;
   }
 
-  /** Fullscreen + orientation lock, requested once on the first user gesture. Both are
-   *  best-effort: iPhone Safari supports neither — there the rotate overlay (CSS, portrait
-   *  only) and viewport-fit=cover carry the experience instead. */
+  /** Fullscreen + orientation lock, requested on the first user gesture and re-armed whenever the
+   *  browser drops fullscreen (fullscreenchange listener in the constructor) — gestures and system
+   *  notifications can kick Android out silently, and the next touch re-enters. Best-effort:
+   *  browser-tab fullscreen still shows Android's status bar (only an installed A2HS launch with
+   *  the manifest's display:fullscreen hides it), and iPhone Safari supports neither call — there
+   *  the rotate overlay (CSS, portrait only) and viewport-fit=cover carry the experience. */
   private requestImmersion(): void {
     if (this.immersed) return;
     this.immersed = true;
     void (async () => {
-      try { await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }); } catch { /* unsupported or denied */ }
+      // documentElement (not an inner element) + navigationUI:'hide', or Android keeps more chrome
+      try { await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }); }
+      catch { this.immersed = false; return; } // denied this time — the next gesture retries
       try {
         const orientation = screen.orientation as ScreenOrientation & { lock?: (kind: string) => Promise<void> };
         await orientation.lock?.('landscape');
       } catch { /* iOS / unsupported: rotate overlay covers portrait */ }
     })();
+  }
+
+  /** One-time "pin to home screen" card: the only path to true fullscreen (no Android status bar,
+   *  iOS standalone). Skipped entirely when already running installed; dismiss remembers forever. */
+  private buildInstallHint(): void {
+    const standalone = matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(INSTALL_HINT_KEY) === '1'; } catch { /* storage blocked: show, just don't persist */ }
+    if (!shouldShowInstallHint(dismissed, standalone)) return;
+    const hint = document.createElement('div');
+    hint.className = 'tc-install-hint';
+    hint.innerHTML = '<div><b>SKELM TIP</b><span>Pin Joburg to your home screen — it runs true fullscreen from there. No system bars, just city.</span></div>';
+    const dismiss = document.createElement('button');
+    dismiss.textContent = '✕'; dismiss.setAttribute('aria-label', 'Dismiss tip');
+    dismiss.addEventListener('click', () => {
+      hint.remove();
+      try { localStorage.setItem(INSTALL_HINT_KEY, '1'); } catch { /* storage blocked */ }
+    });
+    hint.append(dismiss);
+    document.body.append(hint);
   }
 }
