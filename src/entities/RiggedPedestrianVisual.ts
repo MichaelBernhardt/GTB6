@@ -364,13 +364,12 @@ export class RiggedPedestrianVisual {
       bones.spine.rotation.x += 0.1;
     }
     if (this.state.punching) {
-      // The punch itself: shoulders twist in, weight leans forward, the guard's bent elbow
-      // unbends, and the whole right arm is driven onto the ped's forward ray in world space.
+      // The punch itself: shoulders twist in, weight leans forward, and the right arm runs the
+      // jab IK — chamber at the ribs, straight-line drive to extension on the damage frame.
       const extension = swingExtension(this.state.punchElapsed);
-      bones.rightLowerArm.rotation.x += 0.85 * extension; // cancel the guard bend: the fist leads
       bones.chest.rotation.y += PUNCH_POSE.chestTwist * extension;
       bones.spine.rotation.x += PUNCH_POSE.lean * extension;
-      drivePunchArm(this.parent, bones.rightUpperArm, bones.rightHand, extension);
+      drivePunchArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, this.state.punchElapsed);
     }
     if (this.state.state === 'cower' || this.state.covering) {
       bones.spine.rotation.x += 0.42; bones.chest.rotation.x += 0.26;
