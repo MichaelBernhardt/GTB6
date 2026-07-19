@@ -84,8 +84,11 @@ export class AudioManager {
     if (loaded.length === 0) return false;
     let level = VOICE_LEVEL; let pan = 0;
     if (x !== undefined && z !== undefined) {
-      level *= distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 10, 125);
-      if (level < 0.005) return true;
+      // Hot sources need believable distance: a tighter window than the synth scream (full only inside
+      // 6m, gone by 90m) and a steeper curve (gain squared → effective pow 3.2) so far vocals truly recede.
+      const falloff = distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 6, 90);
+      level *= falloff * falloff;
+      if (level < 0.003) return true;
       pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.7;
     }
     // Gate before picking: a denied pick must not advance the no-repeat memory, or the next
