@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
-import { findHumanoidBones, type HumanoidBone, type HumanoidBones } from './RiggedPlayerVisual';
+import { findHumanoidBones, type HumanoidBones } from './RiggedPlayerVisual';
 import { NPC_CATALOG, type NpcCharacterId } from './NpcCatalog';
-import { RAGDOLL_PARTICLES, RAGDOLL_PARTICLE_COUNT, VerletRagdoll, type RagdollEnvironment } from './PedRagdoll';
+import type { RagdollEnvironment, VerletRagdoll } from './PedRagdoll';
+import { RagdollDriver } from './RagdollDriver';
 import type { PedState } from './Pedestrian';
 
 export const NPC_ANIMATIONS = ['idle', 'walk', 'sprint', 'punch_right', 'death'] as const;
@@ -101,63 +102,6 @@ const unregisterRagdoll = (visual: RiggedPedestrianVisual): void => {
 /** Test isolation only: forget leftover simulating ragdolls from a previous test. */
 export function resetActiveRagdolls(): void { activeRagdolls.length = 0; }
 
-const PARTICLE = RAGDOLL_PARTICLES;
-/** Which bone seeds which particle (bone origins at the moment of death). */
-const RAGDOLL_BONE_PARTICLES: ReadonlyArray<readonly [HumanoidBone, number]> = [
-  ['hips', PARTICLE.hips], ['chest', PARTICLE.chest], ['head', PARTICLE.head],
-  ['leftUpperArm', PARTICLE.shoulderL], ['leftLowerArm', PARTICLE.elbowL], ['leftHand', PARTICLE.wristL],
-  ['rightUpperArm', PARTICLE.shoulderR], ['rightLowerArm', PARTICLE.elbowR], ['rightHand', PARTICLE.wristR],
-  ['leftUpperLeg', PARTICLE.hipL], ['leftLowerLeg', PARTICLE.kneeL], ['leftFoot', PARTICLE.ankleL],
-  ['rightUpperLeg', PARTICLE.hipR], ['rightLowerLeg', PARTICLE.kneeR], ['rightFoot', PARTICLE.ankleR],
-];
-
-/** How each bone follows the particles. The CMU-retargeted rig has skewed local axes, so no euler or
- *  axis assumptions here: every bone keeps its seeded world orientation rotated by the delta of its
- *  particle frame (WeaponGrip's derive-the-rest-frame pattern). `frame` bones get a full two-vector
- *  basis (face-up vs face-down matters for the torso); the rest get swing-only, inheriting their
- *  twist from the death pose. Ordered parents-first so the live parent chain is current when read. */
-const RAGDOLL_DRIVE_SPECS: ReadonlyArray<{ bone: HumanoidBone; from: number; to: number; rightFrom: number; rightTo: number; frame: boolean }> = [
-  { bone: 'hips', from: PARTICLE.hips, to: PARTICLE.chest, rightFrom: PARTICLE.hipL, rightTo: PARTICLE.hipR, frame: true },
-  { bone: 'spine', from: PARTICLE.hips, to: PARTICLE.chest, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'chest', from: PARTICLE.chest, to: PARTICLE.head, rightFrom: PARTICLE.shoulderL, rightTo: PARTICLE.shoulderR, frame: true },
-  { bone: 'head', from: PARTICLE.chest, to: PARTICLE.head, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'leftUpperArm', from: PARTICLE.shoulderL, to: PARTICLE.elbowL, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'leftLowerArm', from: PARTICLE.elbowL, to: PARTICLE.wristL, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'rightUpperArm', from: PARTICLE.shoulderR, to: PARTICLE.elbowR, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'rightLowerArm', from: PARTICLE.elbowR, to: PARTICLE.wristR, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'leftUpperLeg', from: PARTICLE.hipL, to: PARTICLE.kneeL, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'leftLowerLeg', from: PARTICLE.kneeL, to: PARTICLE.ankleL, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'rightUpperLeg', from: PARTICLE.hipR, to: PARTICLE.kneeR, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'rightLowerLeg', from: PARTICLE.kneeR, to: PARTICLE.ankleR, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'leftFoot', from: PARTICLE.ankleL, to: PARTICLE.toeL, rightFrom: -1, rightTo: -1, frame: false },
-  { bone: 'rightFoot', from: PARTICLE.ankleR, to: PARTICLE.toeR, rightFrom: -1, rightTo: -1, frame: false },
-];
-
-interface RagdollDrive {
-  bone: THREE.Bone; from: number; to: number; rightFrom: number; rightTo: number; frame: boolean;
-  seedQuat: THREE.Quaternion;   // bone world orientation at seed time
-  seedDir: THREE.Vector3;       // world particle-pair direction at seed time (swing bones)
-  frameRest: THREE.Quaternion;  // inverse(seed frame) × seedQuat, precomposed (frame bones)
-  undo: THREE.Quaternion;       // local rotation before the ragdoll took over (mixer handback)
-}
-
-const SEED_SCRATCH = new Float32Array(RAGDOLL_PARTICLE_COUNT * 3);
-const SCRATCH_V1 = new THREE.Vector3(); const SCRATCH_V2 = new THREE.Vector3(); const SCRATCH_V3 = new THREE.Vector3();
-const SCRATCH_Q1 = new THREE.Quaternion(); const SCRATCH_Q2 = new THREE.Quaternion();
-const SCRATCH_M1 = new THREE.Matrix4();
-
-/** Orientation of the orthonormalised (right, up) particle frame; false when the vectors are too
- *  short or parallel to define one (the caller then just keeps the bone's last orientation). */
-function particleFrameQuaternion(rightX: number, rightY: number, rightZ: number, upX: number, upY: number, upZ: number, out: THREE.Quaternion): boolean {
-  SCRATCH_V1.set(rightX, rightY, rightZ); SCRATCH_V2.set(upX, upY, upZ);
-  if (SCRATCH_V1.lengthSq() < 1e-8 || SCRATCH_V2.lengthSq() < 1e-8) return false;
-  SCRATCH_V1.normalize(); SCRATCH_V3.crossVectors(SCRATCH_V1, SCRATCH_V2);
-  if (SCRATCH_V3.lengthSq() < 1e-8) return false;
-  SCRATCH_V3.normalize(); SCRATCH_V2.crossVectors(SCRATCH_V3, SCRATCH_V1);
-  out.setFromRotationMatrix(SCRATCH_M1.makeBasis(SCRATCH_V1, SCRATCH_V2, SCRATCH_V3));
-  return true;
-}
-
 /** Floor (min skinned-vertex y, model space) of this rig's death pose, sampled across the clip.
  *  The retargeted capture keeps the hips near standing height while the body tips over, so the pose's
  *  lowest point climbs 0 → ~0.65 through the clip (varying per character) — played raw, corpses end up
@@ -226,11 +170,7 @@ export class RiggedPedestrianVisual {
   private deathFloor: DeathFloorCurve = { step: DEATH_FLOOR_SAMPLE_STEP, floors: [] };
   private ragdollDeath = false;
   private ragdollJitter: number[] = [];
-  private ragdoll?: VerletRagdoll;
-  private ragdollDrives?: RagdollDrive[];
-  private readonly ragdollGroupQuat = new THREE.Quaternion();
-  private readonly ragdollHipsParentInverse = new THREE.Matrix4();
-  private readonly ragdollHipsUndoPos = new THREE.Vector3();
+  private readonly ragdollDriver = new RagdollDriver();
   private ragdollGroundY = 0;
   private impactX?: number;
   private impactZ?: number;
@@ -246,7 +186,7 @@ export class RiggedPedestrianVisual {
   get ready(): boolean { return this.status === 'ready'; }
   get deathStyle(): 'ragdoll' | 'pose' { return this.ragdollDeath ? 'ragdoll' : 'pose'; }
   /** Live sim handle for tests; undefined until a ragdoll death starts. */
-  get ragdollBody(): VerletRagdoll | undefined { return this.ragdoll; }
+  get ragdollBody(): VerletRagdoll | undefined { return this.ragdollDriver.body; }
   get failed(): boolean { return this.status === 'failed'; }
   get activeAnimation(): NpcAnimationName | undefined { return this.currentName; }
   animationTime(name: NpcAnimationName): number | undefined { return this.actions.get(name)?.time; }
@@ -273,7 +213,7 @@ export class RiggedPedestrianVisual {
     if (!this.ready || !this.mixer || !this.bones) return;
     this.group.position.set(0, 0, 0); this.group.rotation.set(0, 0, 0); this.group.scale.set(1, 1, 1);
     if (this.state.state === 'down' && (this.state.knockdown || (this.state.dead && this.ragdollDeath))) { this.updateRagdoll(Math.max(0, dt), env); return; }
-    if (this.ragdoll) this.endRagdoll(); // knocked-down ped is back up: hand the bones back to the mixer
+    if (this.ragdollDriver.active) this.endRagdoll(); // knocked-down ped is back up: hand the bones back to the mixer
     const animation = selectNpcAnimation(this.state); this.transitionTo(animation); this.setPlaybackRate(animation);
     this.mixer.update(Math.max(0, dt)); this.applyAdditivePose();
   }
@@ -286,122 +226,64 @@ export class RiggedPedestrianVisual {
   }
 
   private updateRagdoll(dt: number, env?: RagdollEnvironment): void {
-    if (!this.ragdoll) this.beginRagdoll();
-    const body = this.ragdoll!;
+    if (!this.ragdollDriver.active) this.beginRagdoll();
+    const body = this.ragdollDriver.body!;
     if (body.frozen) return; // settled corpse: zero per-frame cost
     body.step(dt, env ?? this.fallbackEnv);
-    this.driveRagdollBones();
+    this.ragdollDriver.drive();
     if (body.frozen) unregisterRagdoll(this);
   }
 
-  /** Seed the Verlet body from the rig's bone world positions (inheriting the current animation
-   *  pose), freeze the mixer, and record each driven bone's world frame so driveRagdollBones can
-   *  rotate the shipped rest orientations by particle-frame deltas — never raw axis math. */
+  /** Freeze the mixer, hand the skeleton to the shared driver, then kick the fresh body. */
   private beginRagdoll(): void {
-    const bones = this.bones!;
     this.mixer!.stopAllAction(); this.current = undefined; this.currentName = undefined;
-    this.group.updateWorldMatrix(true, true);
-    this.group.getWorldQuaternion(this.ragdollGroupQuat);
-    for (const [name, particle] of RAGDOLL_BONE_PARTICLES) {
-      bones[name].getWorldPosition(SCRATCH_V1);
-      SEED_SCRATCH[particle * 3] = SCRATCH_V1.x; SEED_SCRATCH[particle * 3 + 1] = SCRATCH_V1.y; SEED_SCRATCH[particle * 3 + 2] = SCRATCH_V1.z;
-    }
-    // Toe particles sit at the ball-of-foot so the whole foot rests on the road (the retarget keeps
-    // ball_l/ball_r); if a future rig drops them, fall back to a nominal foot-length ahead of the ankle.
-    for (const [foot, ballName, particle] of [[bones.leftFoot, 'ball_l', PARTICLE.toeL], [bones.rightFoot, 'ball_r', PARTICLE.toeR]] as const) {
-      const ball = foot.getObjectByName(ballName);
-      if (ball) ball.getWorldPosition(SCRATCH_V1);
-      else foot.getWorldPosition(SCRATCH_V1).add(SCRATCH_V2.set(0, 0, 0.14).applyQuaternion(this.ragdollGroupQuat));
-      SEED_SCRATCH[particle * 3] = SCRATCH_V1.x; SEED_SCRATCH[particle * 3 + 1] = SCRATCH_V1.y; SEED_SCRATCH[particle * 3 + 2] = SCRATCH_V1.z;
-    }
-    this.ragdoll = new VerletRagdoll(SEED_SCRATCH);
-    this.ragdollHipsParentInverse.copy((bones.hips.parent ?? this.group).matrixWorld).invert();
-    this.ragdollHipsUndoPos.copy(bones.hips.position);
-    this.ragdollGroundY = this.group.getWorldPosition(SCRATCH_V1).y;
-    this.ragdollDrives = RAGDOLL_DRIVE_SPECS.map((spec) => {
-      const bone = bones[spec.bone];
-      const drive: RagdollDrive = {
-        bone, from: spec.from, to: spec.to, rightFrom: spec.rightFrom, rightTo: spec.rightTo, frame: spec.frame,
-        seedQuat: bone.getWorldQuaternion(new THREE.Quaternion()),
-        seedDir: new THREE.Vector3(
-          SEED_SCRATCH[spec.to * 3] - SEED_SCRATCH[spec.from * 3],
-          SEED_SCRATCH[spec.to * 3 + 1] - SEED_SCRATCH[spec.from * 3 + 1],
-          SEED_SCRATCH[spec.to * 3 + 2] - SEED_SCRATCH[spec.from * 3 + 2],
-        ),
-        frameRest: new THREE.Quaternion(), undo: bone.quaternion.clone(),
-      };
-      if (drive.seedDir.lengthSq() < 1e-8) drive.seedDir.set(0, 1, 0); else drive.seedDir.normalize();
-      if (spec.frame && particleFrameQuaternion(
-        SEED_SCRATCH[spec.rightTo * 3] - SEED_SCRATCH[spec.rightFrom * 3],
-        SEED_SCRATCH[spec.rightTo * 3 + 1] - SEED_SCRATCH[spec.rightFrom * 3 + 1],
-        SEED_SCRATCH[spec.rightTo * 3 + 2] - SEED_SCRATCH[spec.rightFrom * 3 + 2],
-        drive.seedDir.x, drive.seedDir.y, drive.seedDir.z, SCRATCH_Q1,
-      )) drive.frameRest.copy(SCRATCH_Q1).invert().multiply(drive.seedQuat);
-      else if (spec.frame) drive.frame = false; // degenerate seed frame: fall back to swing
-      return drive;
-    });
+    const body = this.ragdollDriver.begin(this.group, this.bones!);
+    this.ragdollGroundY = this.group.getWorldPosition(new THREE.Vector3()).y;
     // Always kick — a perfectly balanced seed pose could otherwise settle standing upright.
-    const [r0 = 0.5, r1 = 0.5, , , , r5 = 0.5] = this.ragdollJitter;
-    let kickX = this.impactX ?? 0; let kickZ = this.impactZ ?? 0;
-    if (kickX * kickX + kickZ * kickZ < 1e-6) { const angle = r5 * Math.PI * 2; kickX = Math.sin(angle); kickZ = Math.cos(angle); }
-    const twist = (r1 - 0.5) * 0.5; const cos = Math.cos(twist); const sin = Math.sin(twist); // ±14°: same shot, different falls
-    this.ragdoll.kick(kickX * cos - kickZ * sin, kickX * sin + kickZ * cos, this.impactSpeed ?? (2.6 + r0 * 1.6));
-    this.impactX = undefined; this.impactZ = undefined; this.impactSpeed = undefined;
+    this.applyImpactKick(body);
     if (activeRagdolls.length >= MAX_ACTIVE_RAGDOLLS) activeRagdolls[0]?.haltRagdoll();
     activeRagdolls.push(this);
   }
 
-  /** Pose the skeleton from the particles: each driven bone's world orientation is its seeded
-   *  orientation rotated by the delta between its seed and current particle frame, converted to a
-   *  local rotation through the live parent chain (parents are driven first). */
-  private driveRagdollBones(): void {
-    const drives = this.ragdollDrives; const body = this.ragdoll;
-    if (!drives || !body) return;
-    const p = body.positions; const bones = this.bones!;
-    for (const drive of drives) {
-      const dirX = p[drive.to * 3] - p[drive.from * 3];
-      const dirY = p[drive.to * 3 + 1] - p[drive.from * 3 + 1];
-      const dirZ = p[drive.to * 3 + 2] - p[drive.from * 3 + 2];
-      if (drive.frame) {
-        if (!particleFrameQuaternion(
-          p[drive.rightTo * 3] - p[drive.rightFrom * 3],
-          p[drive.rightTo * 3 + 1] - p[drive.rightFrom * 3 + 1],
-          p[drive.rightTo * 3 + 2] - p[drive.rightFrom * 3 + 2],
-          dirX, dirY, dirZ, SCRATCH_Q1,
-        )) continue;
-        SCRATCH_Q1.multiply(drive.frameRest); // desired world orientation
-      } else {
-        SCRATCH_V1.set(dirX, dirY, dirZ);
-        if (SCRATCH_V1.lengthSq() < 1e-8) continue;
-        SCRATCH_Q1.setFromUnitVectors(drive.seedDir, SCRATCH_V1.normalize()).multiply(drive.seedQuat);
-      }
-      SCRATCH_Q2.set(0, 0, 0, 1);
-      for (let node: THREE.Object3D | null = drive.bone.parent; node && node !== this.group; node = node.parent) SCRATCH_Q2.premultiply(node.quaternion);
-      SCRATCH_Q2.premultiply(this.ragdollGroupQuat);
-      drive.bone.quaternion.copy(SCRATCH_Q2.invert().multiply(SCRATCH_Q1));
-    }
-    SCRATCH_V1.set(p[PARTICLE.hips * 3], p[PARTICLE.hips * 3 + 1], p[PARTICLE.hips * 3 + 2]).applyMatrix4(this.ragdollHipsParentInverse);
-    bones.hips.position.copy(SCRATCH_V1);
+  /** Spend the primed impact (or the jittered fallback) as a kick on `body`. */
+  private applyImpactKick(body: VerletRagdoll): void {
+    const [r0 = 0.5, r1 = 0.5, , , , r5 = 0.5] = this.ragdollJitter;
+    let kickX = this.impactX ?? 0; let kickZ = this.impactZ ?? 0;
+    if (kickX * kickX + kickZ * kickZ < 1e-6) { const angle = r5 * Math.PI * 2; kickX = Math.sin(angle); kickZ = Math.cos(angle); }
+    const twist = (r1 - 0.5) * 0.5; const cos = Math.cos(twist); const sin = Math.sin(twist); // ±14°: same shot, different falls
+    body.kick(kickX * cos - kickZ * sin, kickX * sin + kickZ * cos, this.impactSpeed ?? (2.6 + r0 * 1.6));
+    this.impactX = undefined; this.impactZ = undefined; this.impactSpeed = undefined;
+  }
+
+  /** Overkill: a fresh hit lands on a corpse — wake its ragdoll for another damage-scaled flop, same
+   *  sim and settle logic. Pure spectacle: no health/state side effects, and a settled corpse SKIPS
+   *  when the concurrency cap is full rather than evicting a fresh death. Pose-death corpses convert:
+   *  the next update seeds a ragdoll from their settled pose (the body may pop slightly as the sink
+   *  offset re-resolves — reads as the hit jolting it). */
+  reviveRagdollImpact(directionX?: number, directionZ?: number, speed?: number): void {
+    if (!this.ready || !this.state.dead || this.state.state !== 'down') return;
+    const body = this.ragdollDriver.body;
+    if (body && !body.frozen) { this.primeRagdollImpact(directionX, directionZ, speed); this.applyImpactKick(body); return; } // still tumbling: fold the impulse straight in
+    if (activeRagdolls.length >= MAX_ACTIVE_RAGDOLLS) return;
+    this.primeRagdollImpact(directionX, directionZ, speed);
+    if (body) { body.revive(); this.applyImpactKick(body); activeRagdolls.push(this); return; }
+    this.ragdollDeath = true; // pose corpse: beginRagdoll takes it from here on the next update
   }
 
   /** Concurrency cap: freeze this ragdoll wherever it is so a newer death can simulate. */
   private haltRagdoll(): void {
-    if (this.ragdoll) this.ragdoll.frozen = true;
+    if (this.ragdollDriver.body) this.ragdollDriver.body.frozen = true;
     unregisterRagdoll(this);
   }
 
   private endRagdoll(): void {
-    if (this.ragdollDrives) {
-      for (const drive of this.ragdollDrives) drive.bone.quaternion.copy(drive.undo);
-      this.bones?.hips.position.copy(this.ragdollHipsUndoPos);
-    }
-    this.ragdollDrives = undefined; this.ragdoll = undefined;
+    this.ragdollDriver.end();
     unregisterRagdoll(this);
   }
 
   dispose(): void {
     if (this.disposed) return;
-    unregisterRagdoll(this); this.ragdoll = undefined; this.ragdollDrives = undefined;
+    unregisterRagdoll(this); this.ragdollDriver.release();
     this.disposed = true; this.status = 'disposed'; this.mixer?.stopAllAction();
     if (this.model && this.mixer) this.mixer.uncacheRoot(this.model);
     this.group.clear(); this.parent.remove(this.group); this.group.visible = false;
