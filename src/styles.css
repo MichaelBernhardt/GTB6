@@ -324,9 +324,12 @@ body.is-touch .menu-card button, body.is-touch .menu-card .danger-link { min-hei
 .tc.is-swapped .tc-stick-move { left: auto; right: calc(118px + env(safe-area-inset-right, 0px)); }
 .tc.is-swapped .tc-stick-look { right: auto; left: calc(118px + env(safe-area-inset-left, 0px)); }
 .tc.is-swapped .tc-fire { left: auto; right: calc(146px + env(safe-area-inset-right, 0px)); }
-.tc.is-swapped .tc-aim { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); }
-.tc.is-swapped .tc-jump { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); }
-.tc.is-swapped .tc-weapon { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); }
+/* mirrored column rides ~16px lower than the unswapped one: the minimap owns the top-left down to
+ * y≈158, and at the stock heights the weapon button clipped its corner */
+.tc.is-swapped .tc-aim { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+.tc.is-swapped .tc-jump { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
+.tc.is-swapped .tc-weapon { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); bottom: calc(162px + env(safe-area-inset-bottom, 0px)); }
 .tc.is-swapped .tc-context { right: auto; left: calc(100px + env(safe-area-inset-left, 0px)); flex-direction: row; }
-/* utils deliberately stay top-left in swapped mode: the minimap they tuck under doesn't move,
- * and mirroring them right collides with the ammo panel (hud-status is top-right in both modes) */
+/* swapped utils mirror right but sit BELOW the ammo panel (hud-status stays top-right in both
+ * modes); left-edge stays clear for the mirrored aim/jump/weapon column */
+.tc.is-swapped .tc-utils { left: auto; right: calc(10px + env(safe-area-inset-right, 0px)); top: calc(190px + env(safe-area-inset-top, 0px)); }
