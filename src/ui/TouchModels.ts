@@ -72,7 +72,7 @@ export interface PromptAction {
  *  absent — the stick already covers them — and CTRL (cover peek) is a hold read from the
  *  held-key set, which a tap can't satisfy; the AIM toggle already drives that path. */
 const PROMPT_KEY_CODES: Record<string, string> = {
-  E: 'KeyE', F: 'KeyF', Q: 'KeyQ', R: 'KeyR', L: 'KeyL', V: 'KeyV', H: 'KeyH',
+  E: 'KeyE', F: 'KeyF', Q: 'KeyQ', R: 'KeyR', L: 'KeyL', V: 'KeyV', H: 'KeyH', N: 'KeyN',
   ENTER: 'Enter', SPACE: 'Space',
 };
 

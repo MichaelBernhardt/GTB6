@@ -10,6 +10,7 @@ export interface TouchFrame {
   flying: boolean;
   airborneFlight: boolean; // wheels off the ground: stick becomes the yoke, throttle moves to buttons
   weapon: string;
+  swap: boolean; // settings toggle: mirror the clusters (stick right, buttons left)
 }
 
 const STICK_RADIUS = 68; // px, half the base circle
@@ -101,6 +102,7 @@ export class TouchControls {
    *  a held physical key comes back via auto-repeat). */
   update(frame: TouchFrame): void {
     this.flying = frame.flying; this.airborneFlight = frame.airborneFlight;
+    this.root.classList.toggle('is-swapped', frame.swap);
     this.root.classList.toggle('is-hidden', !frame.active);
     if (!frame.active) { this.releaseAll(); return; }
     for (const code of this.applied) this.input.synthKey(code, true);
@@ -108,11 +110,12 @@ export class TouchControls {
     if (this.jumpHeld) this.input.synthKey(this.flying ? 'KeyS' : 'Space', true);
     this.input.synthAim(this.aimOn && !this.flying);
 
-    this.fireButton.textContent = this.flying ? 'THR +' : 'FIRE';
-    this.jumpButton.textContent = this.flying ? 'THR −' : frame.driving ? 'BRAKE' : 'JUMP';
+    const setLabel = (element: HTMLElement, text: string): void => { if (element.textContent !== text) element.textContent = text; };
+    setLabel(this.fireButton, this.flying ? 'THR +' : 'FIRE');
+    setLabel(this.jumpButton, this.flying ? 'THR −' : frame.driving ? 'BRAKE' : 'JUMP');
     this.aimButton.classList.toggle('is-hidden', this.flying);
     this.weaponButton.classList.toggle('is-hidden', this.flying);
-    this.weaponButton.textContent = frame.weapon;
+    setLabel(this.weaponButton, frame.weapon);
 
     // A live dialogue card advances on E but writes no prompt string — give it a pill of its own.
     const actions = frame.dialogue && !frame.prompt ? [{ key: 'E', code: 'KeyE', label: 'Continue' }] : parsePromptActions(frame.prompt);
@@ -155,9 +158,11 @@ export class TouchControls {
     zone.addEventListener('pointerdown', (event) => {
       if (this.stickPointer !== undefined) return;
       this.stickPointer = event.pointerId; TouchControls.capture(zone, event.pointerId);
-      // Floating base: the stick re-centres under the thumb, clamped so the circle stays on screen.
+      // Floating base: the stick re-centres under the thumb, clamped into its zone (works
+      // for either side — the swap setting moves the zone, not this math) and on screen.
+      const bounds = zone.getBoundingClientRect();
       this.stickCenter = {
-        x: Math.min(Math.max(event.clientX, STICK_RADIUS + 8), innerWidth * 0.45),
+        x: Math.min(Math.max(event.clientX, bounds.left + STICK_RADIUS + 8), bounds.right - STICK_RADIUS - 8),
         y: Math.min(Math.max(event.clientY, STICK_RADIUS + 8), innerHeight - STICK_RADIUS - 8),
       };
       this.stick.classList.add('is-live');

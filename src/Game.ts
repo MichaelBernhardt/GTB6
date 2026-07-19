@@ -2402,6 +2402,7 @@ export class Game {
       flying: Boolean(this.activePlane),
       airborneFlight: this.activePlane ? !this.activePlane.state.grounded : false,
       weapon: spec.name,
+      swap: this.settings.touchSwapSides,
     });
     const markers = this.mapMarkers();
     const police = this.mapPolice();
