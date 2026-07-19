@@ -79,6 +79,7 @@ import { buildEnvironment, type EnvironmentHandle } from './world/Environment';
 import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 import { loadTreeLibrary } from './world/FoliageAssets';
+import { loadCityBake } from './world/bake/loader';
 
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
 const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and downsamples — real supersampling AA. The floor bites hardest on LOW-dpi screens (a 1× monitor jumps to 2×, where aliasing shows most); HiDPI already renders dense, so it just stays at native.
@@ -248,13 +249,21 @@ export class Game {
       });
     };
     await breathe(6, 'Building Johannesburg', 'Laying out roads, terrain, water and landmarks.');
+    bootMark('boot: bake fetch');
+    // Pre-built city data (public/baked/): hydrating it skips the two whole-map layout passes and
+    // the nav-graph builds — the dominant slow-device boot cost. Any failure falls back to live
+    // derivation below; the staged build is unchanged either way, its heavy stages just no-op.
+    const hydrated = await loadCityBake();
+    if (hydrated) await breathe(8, 'Unpacking the city', 'Pre-surveyed parcels, veld and lanes loaded.');
     bootMark('boot: city');
     this.city = new City(this.scene, this.baseQuality(), true);
     const stages = this.city.buildStages(this.baseQuality());
     // Each next() performs the chunk the previous yield announced: show the label, then pull.
     // Stage fractions are weighted by measured cost, so the city build walks the bar 6% → 40%.
     for (let stage = stages.next(); !stage.done; stage = stages.next()) {
-      await breathe(6 + stage.value.fraction * 34, stage.value.label);
+      const label = hydrated && (stage.value.label === 'Surveying the parcels' || stage.value.label === 'Scattering the veld')
+        ? 'Unpacking the city' : stage.value.label; // hydrated boots skip those passes — don't claim the work
+      await breathe(6 + stage.value.fraction * 34, label);
     }
     await breathe(42, 'City foundations ready', 'Starting the people, traffic and game systems.');
     bootMark('boot: districts');

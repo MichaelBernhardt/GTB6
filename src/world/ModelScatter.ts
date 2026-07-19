@@ -474,6 +474,21 @@ export function ensureScatter(): void {
   for (const fraction of scatterStages()) void fraction; // synchronous drain
 }
 
+/** Install a pre-baked canonical scatter list (see tools/bake) — the exact counterpart of
+ *  CityGen.hydrateParcels: scatterStages()/scatterCell() then serve the baked layout. */
+export function hydrateScatter(models: ScatteredModel[]): boolean {
+  if (scatterCells) return false;
+  const cells = new Map<string, ScatteredModel[]>();
+  for (const model of models) {
+    const key = `${Math.floor(model.x / CELL_SIZE)},${Math.floor(model.z / CELL_SIZE)}`;
+    const bucket = cells.get(key);
+    if (bucket) bucket.push(model); else cells.set(key, [model]);
+  }
+  allScatter = models;
+  scatterCells = cells;
+  return true;
+}
+
 /** Every scattered model across the whole map (capped per cell). Memoized; deterministic. */
 export function allScatteredModels(): readonly ScatteredModel[] {
   ensureScatter();

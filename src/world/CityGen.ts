@@ -396,6 +396,26 @@ export function ensureParcels(): void {
   for (const fraction of parcelStages()) void fraction; // synchronous drain
 }
 
+/**
+ * Install a pre-baked canonical parcel list (see tools/bake) in place of the live layout pass:
+ * parcelStages()/generateCell()/allBuildings() then serve the baked city. The list is exactly what
+ * parcelStages emitted at bake time (already capped per cell — bake.test.ts holds the two paths
+ * identical), so re-bucketing it reproduces parcelCells verbatim. A layout that already ran wins —
+ * hydrating after the fact would discard the world the caller has been handed pieces of.
+ */
+export function hydrateParcels(buildings: GeneratedBuilding[]): boolean {
+  if (parcelCells) return false;
+  const cells = new Map<string, GeneratedBuilding[]>();
+  for (const building of buildings) {
+    const key = `${Math.floor(building.x / CELL_SIZE)},${Math.floor(building.z / CELL_SIZE)}`;
+    const bucket = cells.get(key);
+    if (bucket) bucket.push(building); else cells.set(key, [building]);
+  }
+  allParcels = buildings;
+  parcelCells = cells;
+  return true;
+}
+
 /** Every parcel across the whole map (capped per cell). Memoized; deterministic. */
 export function allBuildings(): readonly GeneratedBuilding[] {
   ensureParcels();
