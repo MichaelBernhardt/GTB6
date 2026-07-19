@@ -20,6 +20,10 @@ export const MELEE_START_RANGE = 2.0;
 export const MELEE_HIT_RANGE = 2.4;
 /** And roughly in front of the attacker: dot(facing, toTarget) above this. */
 export const MELEE_HIT_ARC_DOT = 0.25;
+/** Fists reach this far vertically, no further: a target on a roof/ledge above (or below) this
+ *  gap can be pursued and glowered at, but never swung at and never hit — no punching through
+ *  floors. Applies identically to the player's own punch. */
+export const MELEE_HEIGHT_REACH = 2.0;
 /** Per landed hit. Forgiving by canon: a fumbling player in a 3-hostile scrum takes ~12-16/s
  *  standing still, so 100 health + stims survives a wave fight while still punishing tanking. */
 export const MELEE_DAMAGE = 8;
@@ -43,9 +47,11 @@ export function advanceSwing(swing: MeleeSwing, dt: number): { hit: boolean; don
   return { hit, done: swing.elapsed >= MELEE_SWING_SECONDS };
 }
 
-/** Range + arc gate applied at the hit frame — the only place melee damage is ever decided. */
-export function meleeHitLands(distance: number, facingDot: number): boolean {
-  return distance < MELEE_HIT_RANGE && facingDot > MELEE_HIT_ARC_DOT;
+/** Range + height + arc gate applied at the hit frame — the only place melee damage is ever
+ *  decided. `distance` is horizontal; the height gap is gated separately so a rooftop target
+ *  directly overhead (tiny horizontal distance, large Δy) can never be hit through the floor. */
+export function meleeHitLands(distance: number, heightGap: number, facingDot: number): boolean {
+  return distance < MELEE_HIT_RANGE && Math.abs(heightGap) <= MELEE_HEIGHT_REACH && facingDot > MELEE_HIT_ARC_DOT;
 }
 
 /** Code-driven punch pose, layered over a stable base clip and scaled by swingExtension. The
