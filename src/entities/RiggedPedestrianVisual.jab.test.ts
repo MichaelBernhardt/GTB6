@@ -60,9 +60,23 @@ describe("jab mechanics regression", () => {
       expect(off.z).toBeGreaterThan(0.1);
       expect(off.y).toBeGreaterThan(1.1); expect(off.y).toBeLessThan(1.6); // chin/chest guard height
     }
-    visual.setState(state({ punching: false, braced: true })); visual.update(1 / 30);
-    parent.updateMatrixWorld(true);
-    expect(bone('Hand_L').z).toBeGreaterThan(0.1); // braced stance: both fists up too
+    // Full engagement cycle at frame rate — braced hold, whole swing, recovery, back to hold:
+    // NEITHER fist ever crosses behind the torso plane. The guard is the floor pose under the
+    // jab, so the swing's blend-in and retract tail can never expose the relaxed base
+    // (owner report: "both hands return to behind the back before/after punch").
+    const bothInFront = () => {
+      parent.updateMatrixWorld(true);
+      expect(bone('Hand_L').z).toBeGreaterThan(0);
+      expect(bone('Hand_R').z).toBeGreaterThan(0);
+    };
+    visual.setState(state({ punching: false, braced: true }));
+    for (let i = 0; i < 10; i++) { visual.update(1 / 30); bothInFront(); }
+    for (let t = 1 / 30; t < MELEE_SWING_SECONDS; t += 1 / 30) {
+      visual.setState(state({ punchElapsed: t, braced: true })); visual.update(1 / 30); bothInFront();
+    }
+    visual.setState(state({ punching: false, braced: true }));
+    for (let i = 0; i < 6; i++) { visual.update(1 / 30); bothInFront(); }
+    expect(bone('Hand_L').z).toBeGreaterThan(0.1); // and the settled braced stance is a real guard
     expect(bone('Hand_R').z).toBeGreaterThan(0.1);
     expect(midDrive.straightDeg).toBeLessThan(120); // still coiled well into the drive
     expect(atHit.f.z - chamber.z).toBeGreaterThan(0.35); // real forward travel

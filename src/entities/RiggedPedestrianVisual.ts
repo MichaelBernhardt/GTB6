@@ -367,10 +367,12 @@ export class RiggedPedestrianVisual {
       bones.spine.rotation.x += PUNCH_POSE.lean * extension;
     }
     if (squaredUp) {
-      // Boxing guard: the off-hand fist stays up through the WHOLE engagement — the relaxed base
-      // clip reads as hand-behind-the-back once the body leans in. Both fists guard while braced.
+      // Boxing guard is the FLOOR pose for both arms through the whole engagement — the relaxed
+      // base clip reads as hands-behind-the-back once the body leans in. The jab is layered ON
+      // TOP of the guarded arm, so its blend-in and retract animate guard→jab→guard and the base
+      // pose never shows through, not even for the retract tail of a swing.
       driveGuardArm(this.parent, bones.leftUpperArm, bones.leftLowerArm, bones.leftHand, 1, -1);
-      if (!this.state.punching) driveGuardArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, 1, 1);
+      driveGuardArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, 1, 1);
     }
     if (this.state.punching) drivePunchArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, this.state.punchElapsed);
     if (this.state.state === 'cower' || this.state.covering) {
