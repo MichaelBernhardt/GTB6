@@ -792,6 +792,7 @@ export class Game {
       if (boom.policeHit) this.reportCrime(boom.position, 24, { copWitnessed: true, label: 'explosion' });
       for (const victim of boom.victims) {
         this.gore.burst(victim.position, victim.killed ? 1.5 : 0.9, victim.killed);
+        this.audio.scream('pain', victim.position.x, victim.position.z, victim.ped.voiceSex, victim.ped, victim.killed); // the crowd cap keeps a packed blast from becoming a choir
         if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
       }
       if (boom.playerDamage > 0) this.damagePlayer(boom.playerDamage);
@@ -871,6 +872,7 @@ export class Game {
       if (boom.vehicle.police) this.reportCrime(boom.position, POLICE_WRECK_HEAT, { copWitnessed: true, label: 'vehicle arson' });
       for (const victim of boom.victims) {
         this.gore.burst(victim.position, victim.killed ? 1.4 : 0.85, victim.killed);
+        this.audio.scream('pain', victim.position.x, victim.position.z, victim.ped.voiceSex, victim.ped, victim.killed);
         if (victim.killed) { this.spawnDrops(victim.ped); if (victim.ped.hostile) this.hostileDefeated += 1; }
       }
       if (boom.vehicle === this.activeVehicle || boom.vehicle === this.transition?.vehicle) { this.ejectFromWreck(boom.vehicle); this.damagePlayer(OCCUPANT_BURNOUT_DAMAGE); }
@@ -1320,6 +1322,7 @@ export class Game {
     this.player.resetAirbornePose(); // the rider's group inherited the bike's full orientation (incl. terrain pitch on rotation.x); wipe it before the ragdoll seeds or the body lands inverted under the tar
     this.player.knockdown(Math.sin(vehicle.heading) * thrown, Math.cos(vehicle.heading) * thrown, crashKickSpeed(impact), 0, this.city);
     this.audio.setEngine(false); this.audio.stopRadio(); this.shake = Math.min(0.7, this.shake + 0.35);
+    this.audio.playerImpact(); // knock-offs bypass the damage funnel, so the rider voices the fall here
     this.ui.notify('Knocked off', 'Tar 1, rider 0. The bike is right there.', false);
   }
 
@@ -2427,7 +2430,7 @@ export class Game {
   private damagePlayer(amount: number): void {
     if (this.cheats.invulnerable || amount <= 0) return;
     this.ui.damageFlash();
-    this.audio.voice('hit', 'male', undefined, undefined, this.player); // the protagonist is male: recorded male pain pool, non-positional (it's him)
+    this.audio.playerImpact();
     const routed = absorbDamage(this.inventory.armour, amount);
     this.inventory.armour = routed.armour;
     if (routed.through > 0) this.player.takeDamage(routed.through);

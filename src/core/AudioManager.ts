@@ -77,7 +77,7 @@ export class AudioManager {
    * no immediate repeats, per-speaker cooldown and a global cap on overlapping vocals. Returns true when
    * the recorded pool handled the event (even if throttled/inaudible) so callers know not to synth-fallback.
    */
-  voice(kind: VoiceKind, sex: VoiceSex = 'neutral', x?: number, z?: number, speaker?: object): boolean {
+  voice(kind: VoiceKind, sex: VoiceSex = 'neutral', x?: number, z?: number, speaker?: object, delay = 0): boolean {
     const context = this.context; const master = this.master;
     if (!context || !master) return false;
     const loaded = voicePool(kind, sex).filter((clip) => this.voiceBuffers.has(clip));
@@ -96,9 +96,18 @@ export class AudioManager {
     const duration = Math.max(...loaded.map((clip) => this.voiceBuffers.get(clip)!.duration));
     if (!this.voiceGate.tryUtter(this.now(), duration, speaker)) return true;
     const clip = this.clipPicker.pick(loaded)!;
-    this.playClip(this.voiceBuffers.get(clip)!, level * CLIP_TRIM[clip], pan);
+    this.playClip(this.voiceBuffers.get(clip)!, level * CLIP_TRIM[clip], pan, delay);
     return true;
   }
+
+  /** The protagonist reacting to a knock — car hit, knock-off, hard landing, any damage: male hit pool,
+   *  non-positional (it's him), delayed a beat past the impact thud so the "oof" reads as a reaction to
+   *  the crash rather than part of it. Every trigger path shares this one internal speaker token, so
+   *  overlapping causes in the same crash (shove + damage + knockdown) dedupe via the speaker cooldown. */
+  playerImpact(): void {
+    this.voice('hit', 'male', undefined, undefined, this.playerVoiceToken, 0.08);
+  }
+  private readonly playerVoiceToken = {};
 
   private playClip(buffer: AudioBuffer, level: number, pan: number, at = 0): void {
     const context = this.context; const master = this.master;

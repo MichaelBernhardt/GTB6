@@ -332,6 +332,7 @@ export class PopulationSystem {
           this.playerHitCooldown = HIT_COOLDOWN;
           const damage = vehicleHitDamage(impact);
           this.playerVehicleHits.push({ speed: impact, damage, knockdown: damage > 0, dirX: forward.x * Math.sign(vehicle.speed || 1), dirZ: forward.z * Math.sign(vehicle.speed || 1) });
+          this.audio.playerImpact(); // voiced at emission (even a zero-damage shove earns an "oof"); the damage funnel's own trigger dedupes via the shared speaker token
           if (damage > 0) { vehicle.speed *= HIT_SPEED_KEEP; this.audio.collision(impact); } // the body costs the car some momentum
         }
       }
