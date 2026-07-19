@@ -1,7 +1,7 @@
 import type { WeaponSound } from '../config';
 import { distanceGain, engineCutoff, engineFrequency, engineLevel, engineProfile, engineState, engineThrob, shiftGlide, stereoPan, trafficEngineGain, type EngineProfile } from './AudioMath';
 import { cycleRadioStation, radioStation, type RadioStation, type RadioStationId } from './RadioStations';
-import { CLIP_TRIM, ClipPicker, POLICE_RADIO_CLIPS, RADIO_LEVEL, RadioGate, VOICE_CLIP_IDS, VOICE_LEVEL, VoiceGate, voicePool, type VoiceClipId, type VoiceKind, type VoiceSex } from './VoicePools';
+import { CLIP_TRIM, ClipPicker, PLAYER_VOICE_RATE, POLICE_RADIO_CLIPS, RADIO_LEVEL, RadioGate, radioRate, utteranceRate, VOICE_CLIP_IDS, VOICE_LEVEL, VoiceCasting, VoiceGate, voicePool, type VoiceClipId, type VoiceKind, type VoiceSex } from './VoicePools';
 
 interface BurstOptions { duration: number; type: BiquadFilterType; frequency: number; q?: number; peak: number; decay: number; at?: number; pan?: number; echo?: number; rate?: number; rateTo?: number; }
 interface BlipOptions { type?: OscillatorType; slide?: number; at?: number; pan?: number; attack?: number; }
@@ -32,6 +32,7 @@ export class AudioManager {
   private clipPicker = new ClipPicker();
   private voiceGate = new VoiceGate();
   private radioGate = new RadioGate();
+  private voiceCasting = new VoiceCasting();
   private radioTimer?: ReturnType<typeof setInterval>;
   private radioGain?: GainNode;
   private radioNextBeat = 0;
@@ -96,7 +97,7 @@ export class AudioManager {
     const duration = Math.max(...loaded.map((clip) => this.voiceBuffers.get(clip)!.duration));
     if (!this.voiceGate.tryUtter(this.now(), duration, speaker)) return true;
     const clip = this.clipPicker.pick(loaded)!;
-    this.playClip(this.voiceBuffers.get(clip)!, level * CLIP_TRIM[clip], pan, delay);
+    this.playClip(this.voiceBuffers.get(clip)!, level * CLIP_TRIM[clip], pan, delay, utteranceRate(this.voiceCasting.baseRate(speaker)));
     return true;
   }
 
@@ -105,16 +106,17 @@ export class AudioManager {
    *  the crash rather than part of it. Every trigger path shares this one internal speaker token, so
    *  overlapping causes in the same crash (shove + damage + knockdown) dedupe via the speaker cooldown. */
   playerImpact(): void {
+    this.voiceCasting.pin(this.playerVoiceToken, PLAYER_VOICE_RATE); // the protagonist's voice never re-rolls
     this.voice('hit', 'male', undefined, undefined, this.playerVoiceToken, 0.08);
   }
   private readonly playerVoiceToken = {};
 
-  private playClip(buffer: AudioBuffer, level: number, pan: number, at = 0): void {
+  private playClip(buffer: AudioBuffer, level: number, pan: number, at = 0, rate = 1): void {
     const context = this.context; const master = this.master;
     if (!context || !master) return;
     const t = this.now() + at;
     const source = context.createBufferSource(); source.buffer = buffer;
-    source.playbackRate.value = 0.96 + Math.random() * 0.08; // slight pitch variance so a pool of few clips doesn't sound stamped out
+    source.playbackRate.value = rate; // per-speaker persistent voice + per-play jitter, from VoicePools
     const gain = context.createGain(); gain.gain.value = level;
     let tail: AudioNode = gain;
     if (pan) { const panner = context.createStereoPanner(); panner.pan.value = pan; gain.connect(panner); tail = panner; }
@@ -163,7 +165,7 @@ export class AudioManager {
     const clip = this.clipPicker.pick(loaded);
     const buffer = clip ? this.voiceBuffers.get(clip) : undefined;
     this.burst({ duration: 0.14, type: 'bandpass', frequency: 2100, q: 1.1, peak: 0.05, decay: 0.12, rate: 1.5 });
-    if (clip && buffer) { this.playClip(buffer, RADIO_LEVEL * CLIP_TRIM[clip], 0, 0.1); return; }
+    if (clip && buffer) { this.playClip(buffer, RADIO_LEVEL * CLIP_TRIM[clip], 0, 0.1, radioRate()); return; }
     this.blip(950, 0.15, 0.042, { at: 0.13, attack: 0.012 });
     this.blip(1400, 0.15, 0.036, { at: 0.31, attack: 0.012 });
     this.burst({ duration: 0.32, type: 'bandpass', frequency: 1750, q: 0.8, peak: 0.028, decay: 0.28, at: 0.48, rate: 1.3 });

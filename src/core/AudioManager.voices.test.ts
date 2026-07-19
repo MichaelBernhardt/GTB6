@@ -25,7 +25,7 @@ class FakeNode {
   constructor(private owner: FakeContext, private kind: string) {}
   connect(node: FakeNode): FakeNode { return node; }
   disconnect(): void { /* noop */ }
-  start(at?: number): void { this.owner.started.push({ kind: this.kind, buffer: this.buffer, at: at ?? this.owner.currentTime }); }
+  start(at?: number): void { this.owner.started.push({ kind: this.kind, buffer: this.buffer, at: at ?? this.owner.currentTime, rate: this.playbackRate.value }); }
   stop(): void { /* noop */ }
 }
 
@@ -33,7 +33,7 @@ class FakeContext {
   currentTime = 0;
   sampleRate = 48000;
   destination = new FakeNode(this, 'destination');
-  started: Array<{ kind: string; buffer: TaggedBuffer | null; at?: number }> = [];
+  started: Array<{ kind: string; buffer: TaggedBuffer | null; at?: number; rate?: number }> = [];
   resume(): Promise<void> { return Promise.resolve(); }
   createBuffer(_channels: number, length: number, rate: number): { getChannelData(): Float32Array; duration: number } {
     return { getChannelData: () => new Float32Array(length), duration: length / rate };
@@ -195,6 +195,37 @@ describe('recorded ped voices', () => {
     context.currentTime += 2; // next, separate crash
     audio.playerImpact();
     expect(playedClips()).toHaveLength(2);
+  });
+});
+
+describe('voice pitch', () => {
+  it('every utterance lands inside the non-comedic clamp and repeats from one ped share a voice', async () => {
+    const audio = await makeAudio();
+    const ped = {};
+    const rates: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      context.currentTime = 1 + i * (SPEAKER_COOLDOWN + 0.1);
+      audio.scream('pain', 1, 1, 'female', ped);
+    }
+    for (const s of context.started.filter((entry) => entry.buffer?.clip)) {
+      expect(s.rate!).toBeGreaterThanOrEqual(0.85);
+      expect(s.rate!).toBeLessThanOrEqual(1.15);
+      rates.push(s.rate!);
+    }
+    expect(rates).toHaveLength(6);
+    // One ped = one persistent voice: successive utterances differ only by the ±5% per-play jitter,
+    // never by a fresh ±12% casting roll.
+    const spread = Math.max(...rates) - Math.min(...rates);
+    expect(spread).toBeLessThanOrEqual(0.115);
+  });
+
+  it('radio chatter pitch stays in its narrow band', async () => {
+    const audio = await makeAudio();
+    audio.policeRadio();
+    const clip = context.started.find((s) => s.buffer?.clip);
+    expect(clip).toBeDefined();
+    expect(clip!.rate!).toBeGreaterThanOrEqual(0.95);
+    expect(clip!.rate!).toBeLessThanOrEqual(1.05);
   });
 });
 

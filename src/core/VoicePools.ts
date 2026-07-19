@@ -85,6 +85,49 @@ export const MAX_CONCURRENT_VOICES = 3;
 /** Minimum gap between police-radio clips so a crime spree doesn't machine-gun static. */
 export const RADIO_COOLDOWN = 6;
 
+/** Per-speaker persistent pitch spread: each ped's voice sits up to ~±2 semitones from the recording. */
+export const VOICE_RATE_SPREAD = 0.12;
+/** Small per-play jitter on top, so repeats from the same speaker still vary audibly. */
+export const VOICE_RATE_JITTER = 0.05;
+/** Radio chatter varies only this much in total — static shouldn't chipmunk. */
+export const RADIO_RATE_JITTER = 0.05;
+/** Hard clamp on any utterance rate so no combination ever sounds comedic. */
+export const VOICE_RATE_MIN = 0.85;
+export const VOICE_RATE_MAX = 1.15;
+/** The protagonist's fixed, near-neutral voice offset — recognisably him, every time. */
+export const PLAYER_VOICE_RATE = 0.98;
+
+/**
+ * Stable voice casting: each speaker draws one persistent playback-rate offset (uniform in
+ * ±VOICE_RATE_SPREAD) the first time they utter, so different people have audibly different voices
+ * and the same person stays consistent. Speakers are held weakly; anonymous utterances draw fresh.
+ */
+export class VoiceCasting {
+  private rates = new WeakMap<object, number>();
+
+  baseRate(speaker: object | undefined, rng: () => number = Math.random): number {
+    const draw = (): number => 1 - VOICE_RATE_SPREAD + rng() * 2 * VOICE_RATE_SPREAD;
+    if (!speaker) return draw();
+    let rate = this.rates.get(speaker);
+    if (rate === undefined) { rate = draw(); this.rates.set(speaker, rate); }
+    return rate;
+  }
+
+  /** Fix a speaker's voice instead of drawing one (the player). */
+  pin(speaker: object, rate: number): void { this.rates.set(speaker, rate); }
+}
+
+/** A speaker's rate for one utterance: their persistent voice plus per-play jitter, clamped sane. */
+export function utteranceRate(base: number, rng: () => number = Math.random): number {
+  const jittered = base * (1 - VOICE_RATE_JITTER + rng() * 2 * VOICE_RATE_JITTER);
+  return Math.min(VOICE_RATE_MAX, Math.max(VOICE_RATE_MIN, jittered));
+}
+
+/** Radio clips take only the narrow jitter, centred on the recording. */
+export function radioRate(rng: () => number = Math.random): number {
+  return 1 - RADIO_RATE_JITTER + rng() * 2 * RADIO_RATE_JITTER;
+}
+
 /** Random pick that never returns the same clip twice in a row per pool (single-clip pools excepted). */
 export class ClipPicker {
   private last = new Map<string, VoiceClipId>();
