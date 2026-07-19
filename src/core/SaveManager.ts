@@ -123,7 +123,7 @@ function deserialize(value: string | null): SavedGame {
     const parsed = JSON.parse(value) as Partial<Omit<SavedGame, 'version'>> & { version?: number };
     if (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) return structuredClone(DEFAULT_SAVE);
     const settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
-    if (settings.quality !== 'low' && settings.quality !== 'medium' && settings.quality !== 'high' && settings.quality !== 'ultra') settings.quality = 'high';
+    if (!['potato', 'low', 'medium', 'high', 'ultra'].includes(settings.quality)) settings.quality = 'high';
     settings.cameraViewFoot = sanitizeView(settings.cameraViewFoot); settings.cameraViewVehicle = sanitizeView(settings.cameraViewVehicle);
     settings.minimapZoom = sanitizeMinimapZoom(settings.minimapZoom);
     const spawn = sanitizeSpawn(parsed.spawn);

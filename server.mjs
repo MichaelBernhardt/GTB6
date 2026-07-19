@@ -23,7 +23,7 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2',
 };
 
-const COMPRESSIBLE = new Set(['.css', '.html', '.js', '.json', '.map', '.svg']);
+const COMPRESSIBLE = new Set(['.bin', '.css', '.html', '.js', '.json', '.map', '.svg']);
 
 const fileDetails = async (path) => {
   try {

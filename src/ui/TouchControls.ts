@@ -1,5 +1,7 @@
 import type { InputManager } from '../core/InputManager';
-import { parsePromptActions, remapForFlight, stickKeys, TOUCH_LOOK_GAIN } from './TouchModels';
+import { lookRate, parsePromptActions, remapForFlight, shouldShowInstallHint, stickKeys, stickKnobOffset } from './TouchModels';
+
+const INSTALL_HINT_KEY = 'gtb-install-hint-dismissed';
 
 export interface TouchFrame {
   /** Overlay shows only while actually playing with no DOM overlay (map/console/menus) on top. */
@@ -14,10 +16,18 @@ export interface TouchFrame {
 }
 
 const STICK_RADIUS = 68; // px, half the base circle
+/** Knob display radii as a fraction of the base: the move knob SNAPS to the active 8-way
+ *  direction (walk ring) and jumps to the outer ring when the sprint tier engages. */
+const KNOB_WALK = 0.38;
+const KNOB_SPRINT = 0.62;
 
-/** On-screen touch controls. Renders a DOM overlay (left joystick, right free-look region,
- *  action buttons, context pills) and SYNTHESIZES InputManager state — gameplay code reads
- *  keys/mouse exactly as it does on desktop. Constructed only when touch mode is on. */
+/** Per-stick floating-base drag state (both sticks re-centre under the thumb inside their zone). */
+interface StickState { pointer?: number; center: { x: number; y: number } }
+
+/** On-screen touch controls. Renders a DOM overlay (left discrete movement stick — plain 8-way
+ *  WASD, full deflection sprints — right analogue free-look stick whose deflection is a continuous
+ *  look rate, action buttons, context pills) and SYNTHESIZES InputManager state — gameplay code
+ *  reads keys/mouse exactly as it does on desktop. Constructed only when touch mode is on. */
 export class TouchControls {
   readonly root = document.createElement('div');
   private readonly rotateOverlay = document.createElement('div');
@@ -31,12 +41,13 @@ export class TouchControls {
   private readonly weaponButton: HTMLButtonElement;
   private readonly contextRow = document.createElement('div');
 
-  private stickPointer?: number;
-  private stickCenter = { x: 0, y: 0 };
+  private readonly lookStick: HTMLElement;
+  private readonly lookKnob: HTMLElement;
+  private moveState: StickState = { center: { x: 0, y: 0 } };
+  private lookState: StickState = { center: { x: 0, y: 0 } };
   private rawStick = new Set<string>(); // WASD-domain keys, feeds the hysteresis
   private applied = new Set<string>(); // codes currently synthesized as held (post flight remap)
-  private lookPointer?: number;
-  private lookLast = { x: 0, y: 0 };
+  private lookVec = { x: 0, y: 0 }; // live look-stick deflection in base-radius units
   private fireHeld = false;
   private jumpHeld = false;
   private aimOn = false;
@@ -56,9 +67,12 @@ export class TouchControls {
     this.root.className = 'tc is-hidden';
     this.moveZone = this.zone('tc-zone-move');
     this.lookZone = this.zone('tc-zone-look');
-    this.stick = document.createElement('div'); this.stick.className = 'tc-stick';
+    this.stick = document.createElement('div'); this.stick.className = 'tc-stick tc-stick-move';
     this.stick.innerHTML = '<i class="tc-stick-ring"></i><b class="tc-stick-knob"></b>';
     this.knob = this.stick.querySelector('.tc-stick-knob')!;
+    this.lookStick = document.createElement('div'); this.lookStick.className = 'tc-stick tc-stick-look';
+    this.lookStick.innerHTML = '<i class="tc-stick-ring"></i><b class="tc-stick-knob"></b><span class="tc-stick-tag">LOOK</span>';
+    this.lookKnob = this.lookStick.querySelector('.tc-stick-knob')!;
     // Releases clear BOTH meanings of the button: the mode can flip (enter/exit a plane) while held.
     this.fireButton = this.holdButton('tc-fire', 'FIRE', (held) => {
       this.fireHeld = held;
@@ -81,15 +95,16 @@ export class TouchControls {
     for (const [glyph, code, label] of [['❚❚', 'Escape', 'Pause'], ['MAP', 'KeyM', 'Map'], ['CAM', 'KeyV', 'Camera'], ['⚡', 'KeyL', 'Torch']] as const) {
       utils.append(this.tapButton('tc-util', glyph, () => this.input.synthPress(code), label));
     }
-    this.root.append(this.moveZone, this.lookZone, this.stick, this.weaponButton, this.fireButton, this.aimButton, this.jumpButton, this.contextRow, utils);
+    this.root.append(this.moveZone, this.lookZone, this.stick, this.lookStick, this.weaponButton, this.fireButton, this.aimButton, this.jumpButton, this.contextRow, utils);
     parent.append(this.root);
 
     this.rotateOverlay.className = 'tc-rotate';
     this.rotateOverlay.innerHTML = '<div><b>Rotate your phone</b><span>Groot Theft Bakkie plays in landscape.</span></div>';
     document.body.append(this.rotateOverlay);
+    this.buildInstallHint();
 
-    this.bindStick();
-    this.bindLook();
+    this.bindFloatingStick(this.moveZone, this.stick, this.moveState, (x, y) => this.applyStick(x, y), () => this.applyStick(0, 0));
+    this.bindFloatingStick(this.lookZone, this.lookStick, this.lookState, (x, y) => this.moveLook(x, y), () => this.moveLook(0, 0));
     // Fullscreen + landscape lock need a user gesture; grab the first touch anywhere (menus included),
     // and re-arm whenever the user backs out of fullscreen so the next touch re-enters it.
     window.addEventListener('pointerdown', () => this.requestImmersion(), { capture: true });
@@ -140,8 +155,20 @@ export class TouchControls {
     if (this.jumpHeld) { this.input.synthKey('Space', false); this.input.synthKey('KeyS', false); }
     this.fireHeld = false; this.jumpHeld = false;
     this.input.synthAim(false);
-    this.resetStickVisual();
-    this.stickPointer = undefined; this.lookPointer = undefined;
+    this.moveLook(0, 0);
+    this.resetStickVisual(this.stick); this.resetStickVisual(this.lookStick);
+    this.refreshMoveKnob();
+    this.moveState.pointer = undefined; this.lookState.pointer = undefined;
+  }
+
+  /** Runs each frame BEFORE the camera consumes mouse deltas (endFrame clears them at frame end,
+   *  so feeding from the render-time update() would be wiped unread): converts the look stick's
+   *  current deflection into this frame's synthetic mouse movement. dt is the sim time the camera
+   *  will advance by, so the turn rate tracks game time — paused (dt 0) means no turn. */
+  tickLook(dt: number): void {
+    if (!this.lookVec.x && !this.lookVec.y) return;
+    const { dx, dy } = lookRate(this.lookVec.x, this.lookVec.y);
+    this.input.synthLook(dx * dt, dy * dt);
   }
 
   /** Diffs the desired held-key set against what is currently synthesized. */
@@ -151,68 +178,63 @@ export class TouchControls {
     for (const code of this.applied) if (!next.has(code)) this.input.synthKey(code, false);
     for (const code of next) this.input.synthKey(code, true);
     this.applied = new Set(next);
+    this.refreshMoveKnob();
   }
 
-  private bindStick(): void {
-    const zone = this.moveZone;
+  /** The move knob renders the SYNTHESIZED state, not the raw thumb: snapped to the active 8-way
+   *  direction, walk ring normally, out to the rim when the sprint tier engages, centred when idle.
+   *  That makes the discreteness (and the sprint threshold) visible at a glance. */
+  private refreshMoveKnob(): void {
+    const offset = stickKnobOffset(this.rawStick);
+    const radius = STICK_RADIUS * (offset?.sprint ? KNOB_SPRINT : KNOB_WALK);
+    this.stick.classList.toggle('is-sprint', Boolean(offset?.sprint));
+    this.knob.style.transform = offset ? `translate(${offset.x * radius}px, ${offset.y * radius}px)` : '';
+  }
+
+  /** The look knob is ANALOGUE: it follows the thumb (clamped to the rim) and its deflection is
+   *  read as a look rate every frame by tickLook. */
+  private moveLook(x: number, y: number): void {
+    const magnitude = Math.hypot(x, y);
+    const clamp = magnitude > 1 ? 1 / magnitude : 1;
+    this.lookVec = { x: x * clamp, y: y * clamp };
+    this.lookKnob.style.transform = magnitude ? `translate(${x * clamp * STICK_RADIUS * 0.62}px, ${y * clamp * STICK_RADIUS * 0.62}px)` : '';
+  }
+
+  /** Floating base shared by both sticks: on touch the base re-centres under the thumb, clamped
+   *  into its zone (works for either side — the swap setting moves the zone, not this math) and
+   *  on screen; drags report deflection in base-radius units until release. */
+  private bindFloatingStick(zone: HTMLElement, stick: HTMLElement, state: StickState, onVector: (x: number, y: number) => void, onRelease: () => void): void {
+    const report = (event: PointerEvent): void =>
+      onVector((event.clientX - state.center.x) / STICK_RADIUS, (event.clientY - state.center.y) / STICK_RADIUS);
     zone.addEventListener('pointerdown', (event) => {
-      if (this.stickPointer !== undefined) return;
-      this.stickPointer = event.pointerId; TouchControls.capture(zone, event.pointerId);
-      // Floating base: the stick re-centres under the thumb, clamped into its zone (works
-      // for either side — the swap setting moves the zone, not this math) and on screen.
+      if (state.pointer !== undefined) return;
+      state.pointer = event.pointerId; TouchControls.capture(zone, event.pointerId);
       const bounds = zone.getBoundingClientRect();
-      this.stickCenter = {
+      state.center = {
         x: Math.min(Math.max(event.clientX, bounds.left + STICK_RADIUS + 8), bounds.right - STICK_RADIUS - 8),
         y: Math.min(Math.max(event.clientY, STICK_RADIUS + 8), innerHeight - STICK_RADIUS - 8),
       };
-      this.stick.classList.add('is-live');
-      this.stick.style.left = `${this.stickCenter.x - STICK_RADIUS}px`;
-      this.stick.style.top = `${this.stickCenter.y - STICK_RADIUS}px`;
-      this.moveStick(event.clientX, event.clientY);
+      stick.classList.add('is-live');
+      stick.style.left = `${state.center.x - STICK_RADIUS}px`;
+      stick.style.top = `${state.center.y - STICK_RADIUS}px`;
+      report(event);
     });
     zone.addEventListener('pointermove', (event) => {
-      if (event.pointerId === this.stickPointer) this.moveStick(event.clientX, event.clientY);
+      if (event.pointerId === state.pointer) report(event);
     });
     for (const type of ['pointerup', 'pointercancel'] as const) {
       zone.addEventListener(type, (event) => {
-        if (event.pointerId !== this.stickPointer) return;
-        this.stickPointer = undefined;
-        this.applyStick(0, 0);
-        this.resetStickVisual();
+        if (event.pointerId !== state.pointer) return;
+        state.pointer = undefined;
+        onRelease();
+        this.resetStickVisual(stick);
       });
     }
   }
 
-  private moveStick(clientX: number, clientY: number): void {
-    const x = (clientX - this.stickCenter.x) / STICK_RADIUS;
-    const y = (clientY - this.stickCenter.y) / STICK_RADIUS;
-    const magnitude = Math.hypot(x, y);
-    const clamp = magnitude > 1 ? 1 / magnitude : 1;
-    this.knob.style.transform = `translate(${x * clamp * STICK_RADIUS * 0.62}px, ${y * clamp * STICK_RADIUS * 0.62}px)`;
-    this.applyStick(x, y);
-  }
-
-  private resetStickVisual(): void {
-    this.stick.classList.remove('is-live');
-    this.stick.style.left = ''; this.stick.style.top = '';
-    this.knob.style.transform = '';
-  }
-
-  private bindLook(): void {
-    const zone = this.lookZone;
-    zone.addEventListener('pointerdown', (event) => {
-      if (this.lookPointer !== undefined) return;
-      this.lookPointer = event.pointerId; TouchControls.capture(zone, event.pointerId);
-      this.lookLast = { x: event.clientX, y: event.clientY };
-    });
-    zone.addEventListener('pointermove', (event) => {
-      if (event.pointerId !== this.lookPointer) return;
-      this.input.synthLook((event.clientX - this.lookLast.x) * TOUCH_LOOK_GAIN, (event.clientY - this.lookLast.y) * TOUCH_LOOK_GAIN);
-      this.lookLast = { x: event.clientX, y: event.clientY };
-    });
-    for (const type of ['pointerup', 'pointercancel'] as const) {
-      zone.addEventListener(type, (event) => { if (event.pointerId === this.lookPointer) this.lookPointer = undefined; });
-    }
+  private resetStickVisual(stick: HTMLElement): void {
+    stick.classList.remove('is-live');
+    stick.style.left = ''; stick.style.top = '';
   }
 
   /** setPointerCapture throws for pointers that are already gone (and for synthesized events in
@@ -253,18 +275,43 @@ export class TouchControls {
     return button;
   }
 
-  /** Fullscreen + orientation lock, requested once on the first user gesture. Both are
-   *  best-effort: iPhone Safari supports neither — there the rotate overlay (CSS, portrait
-   *  only) and viewport-fit=cover carry the experience instead. */
+  /** Fullscreen + orientation lock, requested on the first user gesture and re-armed whenever the
+   *  browser drops fullscreen (fullscreenchange listener in the constructor) — gestures and system
+   *  notifications can kick Android out silently, and the next touch re-enters. Best-effort:
+   *  browser-tab fullscreen still shows Android's status bar (only an installed A2HS launch with
+   *  the manifest's display:fullscreen hides it), and iPhone Safari supports neither call — there
+   *  the rotate overlay (CSS, portrait only) and viewport-fit=cover carry the experience. */
   private requestImmersion(): void {
     if (this.immersed) return;
     this.immersed = true;
     void (async () => {
-      try { await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }); } catch { /* unsupported or denied */ }
+      // documentElement (not an inner element) + navigationUI:'hide', or Android keeps more chrome
+      try { await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }); }
+      catch { this.immersed = false; return; } // denied this time — the next gesture retries
       try {
         const orientation = screen.orientation as ScreenOrientation & { lock?: (kind: string) => Promise<void> };
         await orientation.lock?.('landscape');
       } catch { /* iOS / unsupported: rotate overlay covers portrait */ }
     })();
+  }
+
+  /** One-time "pin to home screen" card: the only path to true fullscreen (no Android status bar,
+   *  iOS standalone). Skipped entirely when already running installed; dismiss remembers forever. */
+  private buildInstallHint(): void {
+    const standalone = matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(INSTALL_HINT_KEY) === '1'; } catch { /* storage blocked: show, just don't persist */ }
+    if (!shouldShowInstallHint(dismissed, standalone)) return;
+    const hint = document.createElement('div');
+    hint.className = 'tc-install-hint';
+    hint.innerHTML = '<div><b>SKELM TIP</b><span>Pin Joburg to your home screen — it runs true fullscreen from there. No system bars, just city.</span></div>';
+    const dismiss = document.createElement('button');
+    dismiss.textContent = '✕'; dismiss.setAttribute('aria-label', 'Dismiss tip');
+    dismiss.addEventListener('click', () => {
+      hint.remove();
+      try { localStorage.setItem(INSTALL_HINT_KEY, '1'); } catch { /* storage blocked */ }
+    });
+    hint.append(dismiss);
+    document.body.append(hint);
   }
 }

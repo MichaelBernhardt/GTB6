@@ -3,7 +3,7 @@
     "composite": true,
     "skipLibCheck": true,
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
@@ -13,5 +13,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["node"]
   },
-  "include": ["tools"]
+  "include": ["tools", "src"]
 }

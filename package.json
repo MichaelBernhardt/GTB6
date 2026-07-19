@@ -12,6 +12,7 @@
     "dev": "vite",
     "dev:multiplayer-server": "PORT=4173 node server.mjs",
     "build": "tsc -b && vite build",
+    "bake": "tsx tools/bake/index.ts",
     "heroku-postbuild": "npm run build",
     "lint": "eslint .",
     "test": "vitest run",

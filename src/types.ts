@@ -33,12 +33,15 @@ export interface SavedGame {
   inventory: Inventory;
 }
 /** Tiers the world subsystems understand. `ultra` is a render-only super-tier (High visuals + extra AA);
- *  it maps down to `high` for everything except the renderer's pixel ratio and post-processing. */
+ *  it maps down to `high` for everything except the renderer's pixel ratio and post-processing.
+ *  `potato` (the settings menu calls it Skorokoro) is the mirror image below `low`: low visuals plus
+ *  a sub-native render scale, shorter streaming rings, denser fog and thinner crowds. */
 export type BaseQuality = 'low' | 'medium' | 'high';
+export type Quality = 'potato' | BaseQuality | 'ultra';
 
 export interface GameSettings {
   masterVolume: number;
-  quality: BaseQuality | 'ultra';
+  quality: Quality;
   showFps: boolean;
   showPerfChart: boolean; // scrolling stacked-area graph of the per-frame loop cost; toggled by the `perfchart` console command
   mouseSensitivity: number;

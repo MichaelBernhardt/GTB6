@@ -502,6 +502,28 @@ export function buildVehicleNav(network: RoadDefinition[] = ROAD_NETWORK): NavGr
   return bridgeIslands(graph);
 }
 
+/** Pre-baked vehicle nav EDGES (see tools/bake): when installed before a City is constructed, its
+ *  field initializer pairs them with live-resampled lane nodes instead of running buildVehicleNav —
+ *  the edges are the expensive part (every junction turn is gated by on-tar sampling), while the
+ *  nodes are a ~20ms resample of the road network. Bake determinism is held by bake.test.ts, so the
+ *  adopted graph is exactly what the builder would have produced. The loader installs this before
+ *  the City exists — it is never swapped mid-game. */
+let bakedVehicleEdges: number[][] | undefined;
+export function installBakedVehicleNav(edges: number[][]): void {
+  bakedVehicleEdges = edges;
+}
+
+/** The baked-edge graph, or undefined when no bake is installed or the node count disagrees with
+ *  this build's road network (a stale artifact — the live builder runs instead). */
+function adoptBakedVehicleNav(): NavGraph | undefined {
+  const edges = bakedVehicleEdges;
+  if (!edges) return undefined;
+  const nodes: NavPoint[] = [];
+  for (const lane of buildCityNavPaths(ROAD_NETWORK).lanes) for (const point of lane.points) nodes.push({ x: point.x, z: point.z });
+  if (nodes.length !== edges.length) return undefined;
+  return { nodes, edges };
+}
+
 /** Cell size for the signalised-junction spatial index (see City.signalStops). Comfortably larger than any
  *  junction's influence radius (widest/2 + SIGNAL_STOP_APPROACH), so buckets stay small. */
 const SIGNAL_CELL = 48;
@@ -572,9 +594,8 @@ export class City {
   /** Sampled rail centrelines (world XZ) — the train system runs along these. */
   railPaths: RoadPoint[][] = [];
   trafficRoutes: RoadPoint[][] = [];
-  private navPaths = buildCityNavPaths(ROAD_NETWORK);
-  vehicleNav: NavGraph = buildVehicleNav(ROAD_NETWORK); // directed one-way lanes (left-hand); pedNav stays undirected
-  pedNav: NavGraph = bridgeIslands(buildNavGraph(this.navPaths.walks, PED_NAV_JOIN));
+  vehicleNav: NavGraph = adoptBakedVehicleNav() ?? buildVehicleNav(ROAD_NETWORK); // directed one-way lanes (left-hand); pedNav stays undirected
+  pedNav: NavGraph = bridgeIslands(buildNavGraph(buildCityNavPaths(ROAD_NETWORK).walks, PED_NAV_JOIN));
   private roadSurfaces: Array<{ points: RoadPoint[]; width: number; closed: boolean }> = [];
   private roadIndex = new RoadIndex();
   /** Tight sibling used only while baking kerbs/paving. The general index keeps a 64u query halo for
@@ -715,6 +736,14 @@ export class City {
       }
     }
     return cells;
+  }
+
+  /** Quality-tier streaming rings, changeable live: the staggered culling walk re-evaluates every
+   *  chunk against the new ranges within a few frames, no rebuild. Potato passes the pulled-in
+   *  pair; every other tier restores the defaults. */
+  setStreamRanges(world: number, detail: number): void {
+    this.chunkCulling.setRange(world);
+    this.detailCulling.setRange(detail);
   }
 
   /** Frame-budgeted distance culling: chunks near the focus join the scene, far ones detach (with
