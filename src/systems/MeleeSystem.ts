@@ -65,8 +65,15 @@ export const PUNCH_POSE = {
   chestTwist: 0.3,  // shoulders rotate in behind the strike (sign flips for a left-hand punch)
   lean: 0.14,       // body weight commits forward
   rise: 0.14,       // extension point's upward bias: fist lands at face height, not a horizontal prod
-  wristTwist: 1.25, // roll the hand palm-inward (thumb up): side-on the open palm reads as a fist
+  palmDown: 0.35,   // downward bias of the palm-inward roll: inward-and-down, never "offering"
 } as const;
+
+/** The hand's flat (palm-plane normal) axis in hand-bone-local space, measured by PCA over each
+ *  rig's hand-skinned vertices — identical (mirrored) on every NPC rig and the protagonist.
+ *  The z sign flips per hand; PALM_SIGN resolves palm vs back-of-hand (verified visually). */
+export const PALM_LOCAL_X = 0.7071;
+export const PALM_LOCAL_Z = -0.7071;
+export const PALM_SIGN = 1;
 
 /** Jab shape. CHAMBER (first 30% of the windup): fist coils in by the ribs, elbow folded hard.
  *  DRIVE: the fist travels a straight line from the chamber to full extension on the facing ray,
@@ -127,16 +134,26 @@ function solveArm(upper: THREE.Object3D, lower: THREE.Object3D, hand: THREE.Obje
   const fistAfter = JAB_B.setFromMatrixPosition(hand.matrixWorld);
   const fistTarget = JAB_C.copy(shoulder).addScaledVector(dir, span);
   rotateBoneWorld(lower, JAB_B.copy(fistAfter).sub(elbowAfter), JAB_D.copy(fistTarget).sub(elbowAfter), weight);
-  // Palm-inward wrist roll about the forearm axis: side-on, the open palm reads as a fist.
+  // SOLVED palm roll about the forearm axis: measure where the palm normal currently points and
+  // rotate the hand until it faces inward with a downward bias — never palm-up "offering". The
+  // roll is computed, not authored, so it is correct on every rig and at every arm pose.
   hand.updateWorldMatrix(true, false);
   const axis = JAB_D.setFromMatrixPosition(hand.matrixWorld).sub(elbowAfter);
   if (axis.lengthSq() > 1e-8) {
     axis.normalize();
-    PUNCH_Q1.setFromAxisAngle(axis, PUNCH_POSE.wristTwist * mirror * weight);
     hand.getWorldQuaternion(PUNCH_Q2);
-    PUNCH_Q1.multiply(PUNCH_Q2);
-    const parent = hand.parent;
-    if (parent) { parent.getWorldQuaternion(PUNCH_Q2); hand.quaternion.copy(PUNCH_Q2.invert().multiply(PUNCH_Q1)); }
+    const palm = JAB_B.set(PALM_SIGN * PALM_LOCAL_X, 0, PALM_SIGN * (mirror > 0 ? PALM_LOCAL_Z : -PALM_LOCAL_Z)).applyQuaternion(PUNCH_Q2);
+    const desired = JAB_C.copy(side).multiplyScalar(-1); desired.y -= PUNCH_POSE.palmDown; // inward toward the midline, tilted down
+    palm.addScaledVector(axis, -palm.dot(axis));
+    desired.addScaledVector(axis, -desired.dot(axis));
+    if (palm.lengthSq() > 1e-6 && desired.lengthSq() > 1e-6) {
+      palm.normalize(); desired.normalize();
+      const roll = Math.atan2(JAB_A.crossVectors(palm, desired).dot(axis), palm.dot(desired));
+      PUNCH_Q1.setFromAxisAngle(axis, roll * weight);
+      PUNCH_Q1.multiply(PUNCH_Q2);
+      const parent = hand.parent;
+      if (parent) { parent.getWorldQuaternion(PUNCH_Q2); hand.quaternion.copy(PUNCH_Q2.invert().multiply(PUNCH_Q1)); }
+    }
   }
 }
 
@@ -152,7 +169,7 @@ export function drivePunchArm(root: THREE.Object3D, upper: THREE.Object3D, lower
   const upperLength = JAB_A.setFromMatrixPosition(lower.matrixWorld).distanceTo(shoulder);
   const lowerLength = JAB_B.setFromMatrixPosition(hand.matrixWorld).distanceTo(JAB_A);
   const forward = root.getWorldDirection(JAB_FWD);
-  const side = JAB_SIDE.set(forward.z, 0, -forward.x).multiplyScalar(mirror); // forward × up: the punching arm's own side of the body
+  const side = JAB_SIDE.set(-forward.z, 0, forward.x).multiplyScalar(mirror); // the punching arm’s own side of the body (measured: Hand_R hangs at -x with forward +z)
   const windup = Math.min(1, elapsed / MELEE_HIT_AT);
   const drive = windup <= CHAMBER_END ? 0 : ((windup - CHAMBER_END) / (1 - CHAMBER_END)) ** 2;
   const reach = (upperLength + lowerLength) * EXTEND_REACH;
@@ -186,7 +203,7 @@ export function driveGuardArm(root: THREE.Object3D, upper: THREE.Object3D, lower
   upper.updateWorldMatrix(true, false); lower.updateWorldMatrix(true, false); hand.updateWorldMatrix(true, false);
   const shoulder = JAB_SHOULDER.setFromMatrixPosition(upper.matrixWorld);
   const forward = root.getWorldDirection(JAB_FWD);
-  const side = JAB_SIDE.set(forward.z, 0, -forward.x).multiplyScalar(mirror);
+  const side = JAB_SIDE.set(-forward.z, 0, forward.x).multiplyScalar(mirror);
   const target = JAB_TARGET.copy(shoulder).addScaledVector(forward, GUARD_FORWARD).addScaledVector(side, GUARD_SIDE);
   target.y -= GUARD_DOWN;
   solveArm(upper, lower, hand, target, forward, side, weight, mirror);
