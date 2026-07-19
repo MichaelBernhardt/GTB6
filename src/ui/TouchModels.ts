@@ -11,26 +11,20 @@ export function shouldEnableTouch(search: string, hasTouch: boolean, coarsePoint
   return hasTouch && coarsePointer;
 }
 
-/** Touch devices default the render quality to low — but only on a fresh install; a saved
- *  choice (the settings menu can raise it) always wins. */
-export function touchQuality<Q>(hasSave: boolean, saved: Q, low: Q): Q {
-  return hasSave ? saved : low;
+/** Touch devices default the render quality to the floor tier (potato/Skorokoro) — but only on a
+ *  fresh install; a saved choice (the settings menu can raise it) always wins. */
+export function touchQuality<Q>(hasSave: boolean, saved: Q, floor: Q): Q {
+  return hasSave ? saved : floor;
 }
-
-/** Converts look-drag pixels to mouse-movement counts so the existing sensitivity setting
- *  applies downstream: a ~full-width drag on a phone sweeps roughly a half turn. */
-export const TOUCH_LOOK_GAIN = 3;
 
 const DEADZONE = 0.16;
 /** 8-way sectors: a direction key engages when its axis share exceeds sin(22.5°) and releases
  *  below a lower bound, so the thumb can ride a sector edge without key flicker. */
 const DIRECTION_ACQUIRE = 0.3827;
 const DIRECTION_RELEASE = 0.28;
-/** Deflection tiers reuse existing keys, so movement code needs no changes: a shallow push
- *  strolls (holds ALT), full deflection sprints (holds SHIFT — which also pedals bicycles
- *  hard). Each threshold pair is hysteretic to stop tier flicker at the boundary. */
-const WALK_BELOW = 0.4;
-const WALK_EXIT = 0.46;
+/** The movement stick is DISCRETE — exactly the WASD keys, no analog speed tiers — except full
+ *  deflection, which sprints (holds SHIFT — which also pedals bicycles hard). The threshold
+ *  pair is hysteretic to stop tier flicker at the boundary. */
 const SPRINT_ABOVE = 0.95;
 const SPRINT_EXIT = 0.88;
 
@@ -47,9 +41,40 @@ export function stickKeys(x: number, y: number, previous: ReadonlySet<string>): 
   if (share(y, 'KeyS')) keys.add('KeyS');
   if (share(-x, 'KeyA')) keys.add('KeyA');
   if (share(x, 'KeyD')) keys.add('KeyD');
-  if (magnitude < (previous.has('AltLeft') ? WALK_EXIT : WALK_BELOW)) keys.add('AltLeft');
-  else if (magnitude > (previous.has('ShiftLeft') ? SPRINT_EXIT : SPRINT_ABOVE)) keys.add('ShiftLeft');
+  if (magnitude > (previous.has('ShiftLeft') ? SPRINT_EXIT : SPRINT_ABOVE)) keys.add('ShiftLeft');
   return keys;
+}
+
+/** The free-look stick is ANALOGUE: deflection → continuous look rate, independent of movement.
+ *  Rates are in mouse-movement counts per second, so the existing mouse-sensitivity setting
+ *  applies downstream exactly as it does to a physical mouse. */
+export const LOOK_DEADZONE = 0.15;
+/** Squared response: half deflection turns at ~17% of max — fine aim near centre, fast sweep at the edge. */
+export const LOOK_EXPO = 2;
+/** Counts/s at full deflection: × the 0.0025 rad/count default sensitivity ≈ a 180°/s sweep. */
+export const LOOK_MAX_RATE = 1300;
+/** Pitch runs slower than yaw — the pitch range is a fraction of a full turn. */
+export const LOOK_VERTICAL_SCALE = 0.55;
+
+/** Look-stick deflection → look velocity (counts/s). Feed as synthLook(dx·dt, dy·dt) each frame. */
+export function lookRate(x: number, y: number): { dx: number; dy: number } {
+  const raw = Math.hypot(x, y);
+  const magnitude = Math.min(raw, 1); // over-deflection clamps to the rim rate
+  if (magnitude < LOOK_DEADZONE) return { dx: 0, dy: 0 };
+  const curved = ((magnitude - LOOK_DEADZONE) / (1 - LOOK_DEADZONE)) ** LOOK_EXPO;
+  const scale = (LOOK_MAX_RATE * curved) / raw; // ÷ raw magnitude: direction preserved, length curved
+  return { dx: x * scale, dy: y * scale * LOOK_VERTICAL_SCALE };
+}
+
+/** Where the movement knob VISUALLY sits for a synthesized key set: snapped to the active 8-way
+ *  direction (unit vector) so the discreteness is visible, at the sprint or walk display radius.
+ *  Returns null when idle (knob re-centres). */
+export function stickKnobOffset(keys: ReadonlySet<string>): { x: number; y: number; sprint: boolean } | null {
+  const x = Number(keys.has('KeyD')) - Number(keys.has('KeyA'));
+  const y = Number(keys.has('KeyS')) - Number(keys.has('KeyW'));
+  if (!x && !y) return null;
+  const inv = 1 / Math.hypot(x, y);
+  return { x: x * inv, y: y * inv, sprint: keys.has('ShiftLeft') };
 }
 
 /** Airborne flight remap: the stick becomes the yoke — stick up climbs (ArrowDown is "pull

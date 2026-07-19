@@ -738,6 +738,14 @@ export class City {
     return cells;
   }
 
+  /** Quality-tier streaming rings, changeable live: the staggered culling walk re-evaluates every
+   *  chunk against the new ranges within a few frames, no rebuild. Potato passes the pulled-in
+   *  pair; every other tier restores the defaults. */
+  setStreamRanges(world: number, detail: number): void {
+    this.chunkCulling.setRange(world);
+    this.detailCulling.setRange(detail);
+  }
+
   /** Frame-budgeted distance culling: chunks near the focus join the scene, far ones detach (with
    *  hysteresis). Geometry is kept in memory, so re-entering a chunk costs nothing. Colliders, nav
    *  graphs, the minimap and the map overlay are data, not scene geometry — culling never touches

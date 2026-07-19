@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePromptActions, remapForFlight, shouldEnableTouch, stickKeys, touchQuality } from './TouchModels';
+import { LOOK_DEADZONE, LOOK_MAX_RATE, LOOK_VERTICAL_SCALE, lookRate, parsePromptActions, remapForFlight, shouldEnableTouch, stickKeys, stickKnobOffset, touchQuality } from './TouchModels';
 
 const none = new Set<string>();
 const keys = (x: number, y: number, previous = none): string[] => [...stickKeys(x, y, previous)].sort();
@@ -36,9 +36,9 @@ describe('stickKeys', () => {
     expect(keys(0.7, 0)).toEqual(['KeyD']);
     expect(keys(0.5, -0.5)).toEqual(['KeyD', 'KeyW']);
   });
-  it('deflection tiers: shallow strolls (ALT), full sprints (SHIFT)', () => {
-    expect(keys(0, -0.3)).toEqual(['AltLeft', 'KeyW']);
-    expect(keys(0, -0.7)).toEqual(['KeyW']); // run: no modifier
+  it('is discrete: shallow and deep pushes are the same plain WASD, only full deflection sprints', () => {
+    expect(keys(0, -0.3)).toEqual(['KeyW']); // no walk tier — the stick is a dpad
+    expect(keys(0, -0.7)).toEqual(['KeyW']);
     expect(keys(0, -1)).toEqual(['KeyW', 'ShiftLeft']);
   });
   it('clamps over-deflection to the rim', () => {
@@ -56,10 +56,51 @@ describe('stickKeys', () => {
     expect(keys(0, -0.91)).toEqual(['KeyW']); // fresh: 0.91 < 0.95, no sprint
     expect(keys(0, -0.8, sprinting)).toEqual(['KeyW']);
   });
-  it('walk hysteresis mirrors sprint at the low boundary', () => {
+  it('never emits the old ALT walk tier', () => {
     const strolling = new Set(['KeyW', 'AltLeft']);
-    expect(keys(0, -0.43, strolling)).toContain('AltLeft'); // 0.43 < exit 0.46: keep strolling
-    expect(keys(0, -0.43)).toEqual(['KeyW']);
+    expect(keys(0, -0.3, strolling)).toEqual(['KeyW']); // even a stale held set can't re-acquire it
+  });
+});
+
+describe('lookRate', () => {
+  it('is exactly zero inside the deadzone (no drift from a resting thumb)', () => {
+    expect(lookRate(0, 0)).toEqual({ dx: 0, dy: 0 });
+    expect(lookRate(LOOK_DEADZONE * 0.99, 0)).toEqual({ dx: 0, dy: 0 });
+  });
+  it('reaches the max rate at full deflection, vertically damped', () => {
+    expect(lookRate(1, 0).dx).toBeCloseTo(LOOK_MAX_RATE);
+    expect(lookRate(1, 0).dy).toBe(0);
+    expect(lookRate(0, 1).dy).toBeCloseTo(LOOK_MAX_RATE * LOOK_VERTICAL_SCALE);
+  });
+  it('response is expo: half deflection turns at well under half rate', () => {
+    const half = lookRate(0.5, 0).dx;
+    expect(half).toBeGreaterThan(0);
+    expect(half).toBeLessThan(LOOK_MAX_RATE * 0.25);
+  });
+  it('is monotonic in deflection and preserves direction', () => {
+    let last = 0;
+    for (const m of [0.2, 0.4, 0.6, 0.8, 1]) {
+      const rate = lookRate(-m, 0).dx;
+      expect(rate).toBeLessThanOrEqual(0); // leftward deflection turns left
+      expect(Math.abs(rate)).toBeGreaterThanOrEqual(last);
+      last = Math.abs(rate);
+    }
+  });
+  it('clamps over-deflection to the rim rate', () => {
+    expect(lookRate(3, 0).dx).toBeCloseTo(LOOK_MAX_RATE);
+  });
+});
+
+describe('stickKnobOffset', () => {
+  it('re-centres when idle and snaps to the active 8-way direction', () => {
+    expect(stickKnobOffset(new Set())).toBeNull();
+    expect(stickKnobOffset(new Set(['KeyW']))).toEqual({ x: 0, y: -1, sprint: false });
+    const diagonal = stickKnobOffset(new Set(['KeyW', 'KeyD']))!;
+    expect(diagonal.x).toBeCloseTo(Math.SQRT1_2);
+    expect(diagonal.y).toBeCloseTo(-Math.SQRT1_2);
+  });
+  it('reports the sprint tier for the wider display radius', () => {
+    expect(stickKnobOffset(new Set(['KeyW', 'ShiftLeft']))!.sprint).toBe(true);
   });
 });
 

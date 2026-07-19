@@ -96,10 +96,12 @@ describe('SaveManager', () => {
     expect(patched.loadout.shotgun).toEqual({ ammo: 3, reserve: 8, owned: true });
   });
 
-  it('accepts the Ultra quality tier and rejects unknown ones', () => {
+  it('accepts the Ultra and Skorokoro (potato) quality tiers and rejects unknown ones', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, quality: 'ultra' } });
     expect(manager.load().settings.quality).toBe('ultra'); // Ultra is a valid saved tier
+    manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, quality: 'potato' } });
+    expect(manager.load().settings.quality).toBe('potato'); // the touch default must survive a reload
     manager.save({ ...DEFAULT_SAVE, settings: { ...DEFAULT_SAVE.settings, quality: 'insane' } as unknown as GameSettings });
     expect(manager.load().settings.quality).toBe('high'); // anything unknown falls back to High
   });
