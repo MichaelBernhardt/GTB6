@@ -1,6 +1,7 @@
 import type { WeaponSound } from '../config';
 import { distanceGain, engineCutoff, engineFrequency, engineLevel, engineProfile, engineState, engineThrob, shiftGlide, stereoPan, trafficEngineGain, type EngineProfile } from './AudioMath';
 import { cycleRadioStation, radioStation, type RadioStation, type RadioStationId } from './RadioStations';
+import { CLIP_TRIM, ClipPicker, POLICE_RADIO_CLIPS, RADIO_LEVEL, RadioGate, VOICE_CLIP_IDS, VOICE_LEVEL, VoiceGate, voicePool, type VoiceClipId, type VoiceKind, type VoiceSex } from './VoicePools';
 
 interface BurstOptions { duration: number; type: BiquadFilterType; frequency: number; q?: number; peak: number; decay: number; at?: number; pan?: number; echo?: number; rate?: number; rateTo?: number; }
 interface BlipOptions { type?: OscillatorType; slide?: number; at?: number; pan?: number; attack?: number; }
@@ -26,6 +27,11 @@ export class AudioManager {
   private listener = { x: 0, z: 0, yaw: 0 };
   private lastScream = 0;
   private lastGrunt = 0;
+  private voiceBuffers = new Map<VoiceClipId, AudioBuffer>();
+  private voiceLoad?: Promise<void>;
+  private clipPicker = new ClipPicker();
+  private voiceGate = new VoiceGate();
+  private radioGate = new RadioGate();
   private radioTimer?: ReturnType<typeof setInterval>;
   private radioGain?: GainNode;
   private radioNextBeat = 0;
@@ -46,8 +52,62 @@ export class AudioManager {
       let brown = 0;
       this.rumble = this.buildNoise(2, () => (brown = (brown + 0.02 * (Math.random() * 2 - 1)) / 1.02) * 3.5);
       this.buildEcho(); this.buildAmbience();
+      void this.loadVoices();
     }
     await this.context.resume();
+  }
+
+  /** Fetch+decode the recorded voice/radio clips (public/audio). Fails open per clip: anything that
+   *  doesn't arrive keeps its synthesized stand-in, so audio works offline and before the fetches land. */
+  private loadVoices(): Promise<void> {
+    const context = this.context;
+    if (!context) return Promise.resolve();
+    this.voiceLoad ??= Promise.all(VOICE_CLIP_IDS.map(async (id) => {
+      try {
+        const response = await fetch(`/audio/${id}.mp3`);
+        if (!response.ok) return;
+        this.voiceBuffers.set(id, await context.decodeAudioData(await response.arrayBuffer()));
+      } catch { /* fail open: the synthesized voice remains */ }
+    })).then(() => undefined);
+    return this.voiceLoad;
+  }
+
+  /**
+   * Play a recorded utterance from the (kind, sex) pool: positional when x/z given, random clip with
+   * no immediate repeats, per-speaker cooldown and a global cap on overlapping vocals. Returns true when
+   * the recorded pool handled the event (even if throttled/inaudible) so callers know not to synth-fallback.
+   */
+  voice(kind: VoiceKind, sex: VoiceSex = 'neutral', x?: number, z?: number, speaker?: object): boolean {
+    const context = this.context; const master = this.master;
+    if (!context || !master) return false;
+    const loaded = voicePool(kind, sex).filter((clip) => this.voiceBuffers.has(clip));
+    if (loaded.length === 0) return false;
+    let level = VOICE_LEVEL; let pan = 0;
+    if (x !== undefined && z !== undefined) {
+      level *= distanceGain(Math.hypot(x - this.listener.x, z - this.listener.z), 10, 125);
+      if (level < 0.005) return true;
+      pan = stereoPan(this.listener.x, this.listener.z, this.listener.yaw, x, z) * 0.7;
+    }
+    // Gate before picking: a denied pick must not advance the no-repeat memory, or the next
+    // utterance could audibly repeat the last clip that actually played.
+    const duration = Math.max(...loaded.map((clip) => this.voiceBuffers.get(clip)!.duration));
+    if (!this.voiceGate.tryUtter(this.now(), duration, speaker)) return true;
+    const clip = this.clipPicker.pick(loaded)!;
+    this.playClip(this.voiceBuffers.get(clip)!, level * CLIP_TRIM[clip], pan);
+    return true;
+  }
+
+  private playClip(buffer: AudioBuffer, level: number, pan: number, at = 0): void {
+    const context = this.context; const master = this.master;
+    if (!context || !master) return;
+    const t = this.now() + at;
+    const source = context.createBufferSource(); source.buffer = buffer;
+    source.playbackRate.value = 0.96 + Math.random() * 0.08; // slight pitch variance so a pool of few clips doesn't sound stamped out
+    const gain = context.createGain(); gain.gain.value = level;
+    let tail: AudioNode = gain;
+    if (pan) { const panner = context.createStereoPanner(); panner.pan.value = pan; gain.connect(panner); tail = panner; }
+    source.connect(gain); tail.connect(master);
+    source.start(t);
   }
 
   setVolume(value: number): void {
@@ -81,10 +141,17 @@ export class AudioManager {
     if (hoot) setTimeout(() => this.horn(pan, 0.05 * level), 210);
   }
 
-  /** JMPD dispatch coming over the air: a squelch crackle opens the channel, two Motorola-ish ANI
-   *  alert tones, a static bed under the "transmission", then a squelch tail closes it. ~1s, desk-radio level. */
+  /** JMPD dispatch coming over the air: a squelch crackle opens the channel, then a random recorded
+   *  chatter clip (non-positional, desk-radio level, never the same clip twice running). Falls back to the
+   *  synthesized ANI-tone sequence until the recordings load. Rate-limited so a crime spree reads as one
+   *  busy channel, not machine-gun static — the limit applies to every dispatch source (crimes, arrests). */
   policeRadio(): void {
+    if (!this.radioGate.tryDispatch(this.now())) return;
+    const loaded = POLICE_RADIO_CLIPS.filter((clip) => this.voiceBuffers.has(clip));
+    const clip = this.clipPicker.pick(loaded);
+    const buffer = clip ? this.voiceBuffers.get(clip) : undefined;
     this.burst({ duration: 0.14, type: 'bandpass', frequency: 2100, q: 1.1, peak: 0.05, decay: 0.12, rate: 1.5 });
+    if (clip && buffer) { this.playClip(buffer, RADIO_LEVEL * CLIP_TRIM[clip], 0, 0.1); return; }
     this.blip(950, 0.15, 0.042, { at: 0.13, attack: 0.012 });
     this.blip(1400, 0.15, 0.036, { at: 0.31, attack: 0.012 });
     this.burst({ duration: 0.32, type: 'bandpass', frequency: 1750, q: 0.8, peak: 0.028, decay: 0.28, at: 0.48, rate: 1.3 });
@@ -310,7 +377,14 @@ export class AudioManager {
     this.blip(95, 0.14, 0.11 * (0.4 + power) * level, { slide: 40, at: 0.035, pan });
   }
 
-  scream(kind: 'panic' | 'pain' = 'panic', x?: number, z?: number): void {
+  /** Hurt/panic vocal. Prefers the recorded pools (gendered when the caller knows the speaker's sex,
+   *  death pool when the hit killed); the synthesized formant scream remains the fallback until clips load. */
+  scream(kind: 'panic' | 'pain' = 'panic', x?: number, z?: number, sex: VoiceSex = 'neutral', speaker?: object, killed = false): void {
+    if (this.voice(killed ? 'death' : kind === 'pain' ? 'hit' : 'fear', sex, x, z, speaker)) return;
+    this.synthScream(kind, x, z);
+  }
+
+  private synthScream(kind: 'panic' | 'pain', x?: number, z?: number): void {
     const context = this.context; const master = this.master;
     if (!context || !master) return;
     const t = this.now();
@@ -365,8 +439,14 @@ export class AudioManager {
     this.blip(150 * jitter, 0.13, 0.35 * level, { slide: 42, pan });
   }
 
-  /** Short "hey!"-style vocal bark for a shoulder bump: a formant-filtered falling saw. */
-  grunt(x?: number, z?: number): void {
+  /** Short "hey!"-style vocal bark for a shoulder bump. Female peds use the recorded annoyed "hey!";
+   *  no male take was recorded, so everyone else keeps the synthesized formant grunt. */
+  grunt(x?: number, z?: number, sex: VoiceSex = 'neutral', speaker?: object): void {
+    if (this.voice('bump', sex, x, z, speaker)) return;
+    this.synthGrunt(x, z);
+  }
+
+  private synthGrunt(x?: number, z?: number): void {
     const context = this.context; const master = this.master;
     if (!context || !master) return;
     const t = this.now();

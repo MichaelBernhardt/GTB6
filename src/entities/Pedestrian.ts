@@ -5,7 +5,8 @@ import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, F
 import { advanceSwing, beginSwing, MELEE_COOLDOWN_JITTER, MELEE_COOLDOWN_MIN, MELEE_ENGAGE_RANGE, swingExtension, type MeleeSwing } from '../systems/MeleeSystem';
 import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
-import type { NpcCharacterId } from './NpcCatalog';
+import type { VoiceSex } from '../core/VoicePools';
+import { NPC_CATALOG, type NpcCharacterId } from './NpcCatalog';
 import { impactKickSpeed, type RagdollEnvironment } from './PedRagdoll';
 import { RiggedPedestrianVisual } from './RiggedPedestrianVisual';
 
@@ -75,6 +76,11 @@ export class Pedestrian {
       this.riggedVisual = new RiggedPedestrianVisual(this.group, visualVariant, { onReady: () => { this.proceduralModel.visible = false; } });
       void this.riggedVisual.load().catch(() => { /* fail open: the procedural pedestrian remains visible */ });
     }
+  }
+
+  /** Voice casting: rigged NPCs speak with their catalog sex, procedural fallback peds stay neutral. */
+  get voiceSex(): VoiceSex {
+    return this.visualVariant ? NPC_CATALOG[this.visualVariant].sex : 'neutral';
   }
 
   /** Free this ped's GPU geometry when it despawns — otherwise every culled/replaced ped leaks its meshes

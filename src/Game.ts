@@ -937,7 +937,7 @@ export class Game {
       this.player.punch();
       if (shot.victim) {
         this.reportCrime(this.player.group.position, shot.killed ? 24 : 16, { victims: [shot.victim], radius: (shot.killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius, cityEvent: !shot.victim.hostile && !shot.victim.police ? (shot.killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: shot.killed ? 'murder' : 'assault' }); this.population.broadcastFear(this.player.group.position, FEAR_EVENTS.assault);
-        if (shot.hitPoint) { this.gore.burst(shot.hitPoint, shot.killed ? 1.2 : 0.72, Boolean(shot.killed)); this.audio.splat(shot.killed ? 1 : 0.6, shot.hitPoint.x, shot.hitPoint.z); this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z); }
+        if (shot.hitPoint) { this.gore.burst(shot.hitPoint, shot.killed ? 1.2 : 0.72, Boolean(shot.killed)); this.audio.splat(shot.killed ? 1 : 0.6, shot.hitPoint.x, shot.hitPoint.z); this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z, shot.victim.voiceSex, shot.victim, Boolean(shot.killed)); }
         if (shot.policeHit) this.reportCrime(this.player.group.position, 24, { copWitnessed: true, label: 'assault' });
         if (shot.killed) { this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill); this.spawnDrops(shot.victim); if (shot.victim.hostile) this.hostileDefeated += 1; }
       }
@@ -1186,7 +1186,7 @@ export class Game {
     if (shot.victim && shot.hitPoint) {
       this.gore.burst(shot.hitPoint, shot.killed ? 1.45 : 0.92, shot.killed);
       this.audio.splat(shot.killed ? 0.9 : 0.5, shot.hitPoint.x, shot.hitPoint.z);
-      this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z);
+      this.audio.scream('pain', shot.hitPoint.x, shot.hitPoint.z, shot.victim.voiceSex, shot.victim, Boolean(shot.killed));
       if (shot.killed) this.population.broadcastFear(shot.victim.group.position, FEAR_EVENTS.kill);
     }
     if (shot.policeHit) this.reportCrime(position, 24, { copWitnessed: true, label: 'gunfire' });
@@ -1412,7 +1412,7 @@ export class Game {
     ped.group.position.copy(origin).add(side); ped.group.position.y = this.city.surfaceHeightAt(ped.group.position.x, ped.group.position.z); ped.group.visible = true;
     ped.idleTime = 0; ped.pickDestination(this.city.sidewalkPoints);
     this.population.pedestrians.push(ped);
-    if (panic) { ped.fear = 0; ped.applyFear(FEAR_MAX, origin); this.audio.scream('panic', ped.group.position.x, ped.group.position.z); }
+    if (panic) { ped.fear = 0; ped.applyFear(FEAR_MAX, origin); this.audio.scream('panic', ped.group.position.x, ped.group.position.z, ped.voiceSex, ped); }
   }
 
   /** Ends any hail/ride without payment: the hailer drops the arm, a boarded passenger climbs out where the taxi stands. */
@@ -1857,7 +1857,7 @@ export class Game {
     }
     const killed = victim.takeDamage(34, this.player.group.position); this.reportCrime(this.player.group.position, killed ? 24 : 16, { victims: [victim], radius: (killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault).radius, cityEvent: !victim.hostile && !victim.police ? (killed ? 'civilian-murder' : 'civilian-assault') : undefined, label: killed ? 'murder' : 'assault' }); this.population.broadcastFear(this.player.group.position, killed ? FEAR_EVENTS.kill : FEAR_EVENTS.assault);
     this.gore.burst(victim.group.position.clone().add(new THREE.Vector3(0, 1.05, 0)), killed ? 1.2 : 0.72, killed); this.audio.melee();
-    this.audio.splat(killed ? 1 : 0.6, victim.group.position.x, victim.group.position.z); this.audio.scream('pain', victim.group.position.x, victim.group.position.z);
+    this.audio.splat(killed ? 1 : 0.6, victim.group.position.x, victim.group.position.z); this.audio.scream('pain', victim.group.position.x, victim.group.position.z, victim.voiceSex, victim, killed);
     if (killed) this.spawnDrops(victim);
   }
 
@@ -2411,6 +2411,7 @@ export class Game {
   private damagePlayer(amount: number): void {
     if (this.cheats.invulnerable || amount <= 0) return;
     this.ui.damageFlash();
+    this.audio.voice('hit', 'male', undefined, undefined, this.player); // the protagonist is male: recorded male pain pool, non-positional (it's him)
     const routed = absorbDamage(this.inventory.armour, amount);
     this.inventory.armour = routed.armour;
     if (routed.through > 0) this.player.takeDamage(routed.through);
@@ -2470,6 +2471,7 @@ export class Game {
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false);
     this.mode = 'busted'; this.bustTimer = 3; this.bustMeter = 0;
     this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio();
+    this.audio.policeRadio(); // dispatch calls the arrest in
     this.closeWeaponWheel(); this.closeConsole(); this.closeMap();
     this.ui.notify('BUSTED', 'JMPD got the cuffs on you. Processed and kicked out the station — lighter a few things.', false);
     document.exitPointerLock();
