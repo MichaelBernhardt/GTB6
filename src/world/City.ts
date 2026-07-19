@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
+import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
 import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
@@ -35,8 +36,8 @@ import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
-import { CELL_SIZE, RAILWAY_STATION_CLEARANCE, ensureParcels, generateCell, type GeneratedBuilding } from './CityGen';
-import { ensureScatter, scatterCell, type ScatteredModel } from './ModelScatter';
+import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type GeneratedBuilding } from './CityGen';
+import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
@@ -533,6 +534,9 @@ const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
 const GENERIC_AREA_NAMES = new Set(['park', 'grass', 'forest', 'wood', 'scrub', 'golf_course', 'nature_reserve', 'green', 'water', 'brownfield', 'mine_dump']);
 const PARK_TREE_SPECIES = ['shade-tree', 'jacaranda', 'shade-tree', 'gum', 'pine'] as const;
 
+/** One step of the staged city build: the label for the loading bar and the build fraction 0..1. */
+export interface CityBuildStage { label: string; fraction: number }
+
 export class City {
   group = new THREE.Group();
   /** Per-cell chunk groups on the MERGE_CHUNK_SIZE grid: every piece of static world geometry
@@ -602,16 +606,37 @@ export class City {
   private waterHandle?: WaterHandle;
   private waterMood?: { hour: number; sun: THREE.Vector3; color: THREE.Color };
   private architecture: BuildingArchitecture;
-  private infrastructure: UrbanInfrastructure;
+  private infrastructure!: UrbanInfrastructure; // assigned in buildStages (constructor drains it, or the staged boot walks it)
   private parkTreeSites: Array<{ x: number; z: number; seed: number }> = [];
   private treeAssetsInstalled = false;
 
-  constructor(scene: THREE.Scene, quality: BaseQuality = 'medium') {
+  /** `staged: true` skips the build here so an async caller can walk buildStages() itself,
+   *  yielding to the frame loop between stages (loading bar moves, watchdogs stay happy).
+   *  The default drains synchronously — tests and tools construct a finished city in one call. */
+  constructor(scene: THREE.Scene, quality: BaseQuality = 'medium', staged = false) {
+    bootMark('city: fields ready'); // field initializers above already built nav graphs + textures
     this.group.name = 'Joburg'; scene.add(this.group);
     this.architecture = new BuildingArchitecture(this.group);
-    ensureParcels(); // build the citywide parcel layout now (during load), not on the first frame
-    ensureScatter(); // and the scattered structure/foliage layout (same on-demand streaming path)
-    this.buildGround(); this.buildRoads(); this.buildWaterBodies(); this.buildCoast(); this.buildParks(); this.buildLandmarks(); this.buildAirfield();
+    if (!staged) for (const stage of this.buildStages(quality)) void stage;
+  }
+
+  /** The city build as labelled stages: each yield announces the work the NEXT next() performs
+   *  and reports the build fraction (weights from measured stage cost). The two whole-map layout
+   *  passes are themselves chunked, so no single next() blocks the thread for long. Labels feed
+   *  the loading bar; bootMark timestamps feed the boot timeline / error card. */
+  *buildStages(quality: BaseQuality): Generator<CityBuildStage> {
+    yield { label: 'Surveying the parcels', fraction: 0 }; bootMark('city: parcels');
+    for (const f of parcelStages()) yield { label: 'Surveying the parcels', fraction: f * 0.28 };
+    yield { label: 'Scattering the veld', fraction: 0.28 }; bootMark('city: scatter');
+    for (const f of scatterStages()) yield { label: 'Scattering the veld', fraction: 0.28 + f * 0.4 };
+    yield { label: 'Grading the ground', fraction: 0.68 }; bootMark('city: ground'); this.buildGround();
+    yield { label: 'Laying the roads', fraction: 0.69 }; bootMark('city: roads'); this.buildRoads();
+    yield { label: 'Filling the dams', fraction: 0.85 }; bootMark('city: water'); this.buildWaterBodies();
+    yield { label: 'Tracing the coast', fraction: 0.85 }; bootMark('city: coast'); this.buildCoast();
+    yield { label: 'Planting the parks', fraction: 0.86 }; bootMark('city: parks'); this.buildParks();
+    yield { label: 'Raising the landmarks', fraction: 0.87 }; bootMark('city: landmarks'); this.buildLandmarks();
+    yield { label: 'Paving the airfield', fraction: 0.87 }; bootMark('city: airfield'); this.buildAirfield();
+    yield { label: 'Wiring the streetlights', fraction: 0.88 }; bootMark('city: infrastructure');
     this.infrastructure = new UrbanInfrastructure(
       this.group,
       this.chunkStore,
@@ -624,8 +649,10 @@ export class City {
       this.props,
       (x, z) => this.sidewalkHeightAt(x, z),
     );
+    yield { label: 'Merging the city blocks', fraction: 0.91 }; bootMark('city: merge');
     mergeStaticGeometry(this.group, MERGE_CHUNK_SIZE, this.chunkStore); // water is built after the merge: its meshes stay live for per-frame animation
-    this.setWaterQuality(quality);
+    yield { label: 'Filling the pools', fraction: 0.97 }; bootMark('city: water tier'); this.setWaterQuality(quality);
+    bootMark('city: done');
   }
 
   /** Finish tree-dependent city construction only after loadTreeLibrary() validates the required GLB.
