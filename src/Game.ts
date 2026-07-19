@@ -717,7 +717,7 @@ export class Game {
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
     this.profiler.mark('traffic');
-    this.population.update(dt, focus, (amount) => this.damagePlayer(amount), !this.activeVehicle && !this.transition && !this.airborne);
+    this.population.update(dt, focus, (amount) => { this.damagePlayer(amount); this.shake = Math.min(0.7, this.shake + 0.18); }, !this.activeVehicle && !this.transition && !this.airborne); // hostile punches land with a jolt, not just the damage flash
     for (const hit of this.population.consumePlayerVehicleHits()) { // civilian traffic vs the on-foot player: the driver is AI, the player the victim — no heat, just physics
       if (hit.damage > 0) this.damagePlayer(hit.damage);
       if (hit.knockdown && !this.player.knockedDown) { this.player.knockdown(hit.dirX, hit.dirZ, impactKickSpeed(hit.damage), 0, this.city); this.shake = Math.min(0.7, this.shake + 0.3); }

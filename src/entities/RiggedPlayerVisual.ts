@@ -5,6 +5,7 @@ import type { WeaponId } from '../config';
 import type { RagdollEnvironment, VerletRagdoll } from './PedRagdoll';
 import { RagdollDriver } from './RagdollDriver';
 import { buildWeaponModel } from './WeaponModels';
+import { drivePunchArm, PUNCH_POSE, swingExtension } from '../systems/MeleeSystem';
 import {
   AIM_MUZZLE_DIR, AIM_TOP_DIR, CARRY_MUZZLE_DIR, CARRY_TOP_DIR,
   sampleBoneModelQuaternion, weaponAttachQuaternion, type AdditiveRotation,
@@ -40,6 +41,9 @@ export interface PlayerVisualState {
   velocityY: number;
   landing: boolean;
   attack?: 'punch_left' | 'punch_right';
+  /** Seconds into the current punch; drives the additive swing (the shipped punch clips are
+   *  retired from selection — their retarget swings the fist backwards). */
+  attackElapsed: number;
   coverMode: CoverMode;
   coverTwist: number;
   rideMode: RideMode;
@@ -66,6 +70,7 @@ const DEFAULT_STATE: PlayerVisualState = {
   onGround: true,
   velocityY: 0,
   landing: false,
+  attackElapsed: 0,
   coverMode: 'none',
   coverTwist: 0,
   rideMode: 'none',
@@ -86,7 +91,9 @@ export const initialPlayerVisualState = (): PlayerVisualState => ({ ...DEFAULT_S
 export function selectPlayerAnimation(state: PlayerVisualState): PlayerAnimationName {
   if (state.dead) return 'death';
   if (state.tumbleProgress > 0) return 'tumble';
-  if (state.attack) return state.attack;
+  // No attack branch: punches are the additive pose in applyAdditivePose over the current base.
+  // The shipped punch_left/right clips retargeted the swing BACKWARDS (fist behind the body at
+  // full "extension") and read as a shoulder hunch, so they are retired until re-exported.
   if (state.airMode !== 'none') return state.airMode;
   if (!state.onGround) return state.velocityY > 0.25 ? 'jump' : 'fall';
   if (state.landing) return 'land';
@@ -424,6 +431,13 @@ export class RiggedPlayerVisual {
   private applyAdditivePose(dt: number): void {
     const bones = this.bones; if (!bones) return;
     bones.chest.rotation.y += this.state.coverTwist;
+    if (this.state.attack) {
+      const extension = swingExtension(this.state.attackElapsed);
+      const left = this.state.attack === 'punch_left';
+      bones.chest.rotation.y += (left ? -PUNCH_POSE.chestTwist : PUNCH_POSE.chestTwist) * extension;
+      bones.spine.rotation.x += PUNCH_POSE.lean * extension;
+      drivePunchArm(this.parent, left ? bones.leftUpperArm : bones.rightUpperArm, left ? bones.leftLowerArm : bones.rightLowerArm, left ? bones.leftHand : bones.rightHand, this.state.attackElapsed, left ? -1 : 1);
+    }
     if (this.state.driveBy) { bones.rightUpperArm.rotation.x -= 0.32; bones.rightUpperArm.rotation.z += 0.12; bones.head.rotation.y -= 0.12; }
     const recoil = RECOIL[this.weapon];
     const weaponRaised = this.weapon !== 'fists' && (this.state.aiming || this.state.firing || Boolean(recoil && this.recoilAge < recoil.duration));

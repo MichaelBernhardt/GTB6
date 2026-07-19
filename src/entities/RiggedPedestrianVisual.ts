@@ -6,6 +6,7 @@ import { findHumanoidBones, type HumanoidBones } from './RiggedPlayerVisual';
 import { NPC_CATALOG, type NpcCharacterId } from './NpcCatalog';
 import type { RagdollEnvironment, VerletRagdoll } from './PedRagdoll';
 import { RagdollDriver } from './RagdollDriver';
+import { drivePunchArm, PUNCH_POSE, swingExtension } from '../systems/MeleeSystem';
 import type { PedState } from './Pedestrian';
 
 export const NPC_ANIMATIONS = ['idle', 'walk', 'sprint', 'punch_right', 'death'] as const;
@@ -20,6 +21,11 @@ export interface RiggedPedestrianState {
    *  draw; survivors hand back to animation when the down timer expires and they rise. */
   knockdown: boolean;
   punching: boolean;
+  /** Seconds into the current swing; drives the additive punch pose (the shipped punch clip is
+   *  retired — its retarget swings the fist backwards and reads as a shoulder hunch). */
+  punchElapsed: number;
+  /** Squared up at melee range: standing guard, not running — sprint-in-place reads as broken. */
+  braced: boolean;
   hailing: boolean;
   covering: boolean;
   stumbling: boolean;
@@ -28,7 +34,10 @@ export interface RiggedPedestrianState {
 
 export const selectNpcAnimation = (state: RiggedPedestrianState): NpcAnimationName => {
   if (state.state === 'down') return 'death';
-  if (state.punching) return 'punch_right';
+  // Punching and braced both sit on the stable idle base: the punch itself is the additive pose
+  // (the shipped punch_right clip retargeted the swing BACKWARDS — fist behind the body at
+  // "extension" — so playing it reads as a shoulder hunch, never a punch).
+  if (state.punching || state.braced) return 'idle';
   if (state.state === 'flee' || state.state === 'hostile') return 'sprint';
   if (state.state === 'walk') return 'walk';
   return 'idle';
@@ -164,9 +173,10 @@ export class RiggedPedestrianVisual {
   private model?: THREE.Object3D;
   private bones?: HumanoidBones;
   private actions = new Map<NpcAnimationName, THREE.AnimationAction>();
+  private mixedRotations = new Map<THREE.Bone, THREE.Quaternion>();
   private current?: THREE.AnimationAction;
   private currentName?: NpcAnimationName;
-  private state: RiggedPedestrianState = { state: 'idle', dead: false, knockdown: false, punching: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
+  private state: RiggedPedestrianState = { state: 'idle', dead: false, knockdown: false, punching: false, punchElapsed: 0, braced: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
   private deathFloor: DeathFloorCurve = { step: DEATH_FLOOR_SAMPLE_STEP, floors: [] };
   private ragdollDeath = false;
   private ragdollJitter: number[] = [];
@@ -214,8 +224,24 @@ export class RiggedPedestrianVisual {
     this.group.position.set(0, 0, 0); this.group.rotation.set(0, 0, 0); this.group.scale.set(1, 1, 1);
     if (this.state.state === 'down' && (this.state.knockdown || (this.state.dead && this.ragdollDeath))) { this.updateRagdoll(Math.max(0, dt), env); return; }
     if (this.ragdollDriver.active) this.endRagdoll(); // knocked-down ped is back up: hand the bones back to the mixer
+    // Restore last frame's pure mixed pose before advancing the mixer: on a static clip the mixer
+    // skips rewriting unchanged bones, so additive edits (guard, punch, hail, cower) would
+    // otherwise compound every frame and spiral (the player visual's proven pattern).
+    this.restoreMixedPose();
     const animation = selectNpcAnimation(this.state); this.transitionTo(animation); this.setPlaybackRate(animation);
-    this.mixer.update(Math.max(0, dt)); this.applyAdditivePose();
+    this.mixer.update(Math.max(0, dt)); this.captureMixedPose(); this.applyAdditivePose();
+  }
+
+  private restoreMixedPose(): void {
+    for (const [bone, rotation] of this.mixedRotations) bone.quaternion.copy(rotation);
+  }
+
+  private captureMixedPose(): void {
+    if (!this.bones) return;
+    for (const bone of Object.values(this.bones)) {
+      const rotation = this.mixedRotations.get(bone);
+      if (rotation) rotation.copy(bone.quaternion); else this.mixedRotations.set(bone, bone.quaternion.clone());
+    }
   }
 
   /** The ped was felled by an impact from `direction` (world XZ, pointing away from the source):
@@ -287,7 +313,7 @@ export class RiggedPedestrianVisual {
     this.disposed = true; this.status = 'disposed'; this.mixer?.stopAllAction();
     if (this.model && this.mixer) this.mixer.uncacheRoot(this.model);
     this.group.clear(); this.parent.remove(this.group); this.group.visible = false;
-    this.actions.clear(); this.model = undefined; this.mixer = undefined; this.bones = undefined; this.current = undefined; this.currentName = undefined;
+    this.actions.clear(); this.mixedRotations.clear(); this.model = undefined; this.mixer = undefined; this.bones = undefined; this.current = undefined; this.currentName = undefined;
   }
 
   private install(template: NpcTemplate): void {
@@ -331,6 +357,20 @@ export class RiggedPedestrianVisual {
 
   private applyAdditivePose(): void {
     const bones = this.bones; if (!bones) return;
+    if (this.state.punching || this.state.braced) {
+      // Guard stance over the idle base: fists half-raised, slight crouch-lean — a fighter, not a queuer.
+      bones.leftUpperArm.rotation.x -= 0.55; bones.rightUpperArm.rotation.x -= 0.55;
+      bones.leftLowerArm.rotation.x -= 0.85; bones.rightLowerArm.rotation.x -= 0.85;
+      bones.spine.rotation.x += 0.1;
+    }
+    if (this.state.punching) {
+      // The punch itself: shoulders twist in, weight leans forward, and the right arm runs the
+      // jab IK — chamber at the ribs, straight-line drive to extension on the damage frame.
+      const extension = swingExtension(this.state.punchElapsed);
+      bones.chest.rotation.y += PUNCH_POSE.chestTwist * extension;
+      bones.spine.rotation.x += PUNCH_POSE.lean * extension;
+      drivePunchArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, this.state.punchElapsed);
+    }
     if (this.state.state === 'cower' || this.state.covering) {
       bones.spine.rotation.x += 0.42; bones.chest.rotation.x += 0.26;
       if (this.state.state === 'cower') {

@@ -15,6 +15,7 @@ import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separationPush } from './BumpSystem';
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
+import { MELEE_DAMAGE, MELEE_GLOBAL_STAGGER, MELEE_HEIGHT_REACH, MELEE_START_RANGE, meleeHitLands } from './MeleeSystem';
 import { MISSIONS } from './MissionSystem';
 import { ProgressWatchdog, RoutePlanner, type NavPoint } from './NavGraph';
 import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, vehicleHitDamage } from './TrafficAvoidance';
@@ -180,9 +181,34 @@ export class PopulationSystem {
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation(dt);
     this.updateTrafficEngineAudio(player);
-    if (damagePlayer && this.hostileAttackCooldown <= 0) {
-      const attacker = this.pedestrians.find((ped) => ped.state === 'hostile' && ped.group.position.distanceTo(player) < 2.3);
-      if (attacker) { attacker.punch(); damagePlayer(7); this.hostileAttackCooldown = 0.9; }
+    this.resolveMelee(player, damagePlayer, playerOnFoot);
+  }
+
+  /** Hostile melee. Swings START here (readable one-at-a-time cadence via the global stagger)
+   *  and RESOLVE here: damage lands only on the swing's hit frame, and only if the player is
+   *  still in reach and in front of the attacker — backing off mid-windup escapes clean, and
+   *  there is never damage without the matching punch animation. Arrest officers reuse the
+   *  'hostile' ped state to hustle to the cruiser, so police are excluded: the bust flow stays
+   *  proximity-only. Everything gates on the player being on foot — nobody punches a car door. */
+  private resolveMelee(player: THREE.Vector3, damagePlayer: ((amount: number) => void) | undefined, playerOnFoot: boolean): void {
+    if (!damagePlayer) return;
+    for (const ped of this.pedestrians) {
+      if (ped.police || ped.frozen) continue;
+      const dx = player.x - ped.group.position.x; const dz = player.z - ped.group.position.z;
+      const heightGap = player.y - ped.group.position.y;
+      if (ped.consumeMeleeHit()) {
+        const distance = Math.hypot(dx, dz);
+        const facingDot = distance > 1e-4 ? (Math.sin(ped.group.rotation.y) * dx + Math.cos(ped.group.rotation.y) * dz) / distance : 1;
+        if (playerOnFoot && meleeHitLands(distance, heightGap, facingDot)) { damagePlayer(MELEE_DAMAGE); this.audio.melee(); }
+        else this.audio.whiff();
+      }
+      // Swings need the target in fist reach VERTICALLY too: a player on a roof directly above
+      // gets glowered at from below, never swung at (and per the hit gate, never damaged).
+      if (playerOnFoot && this.hostileAttackCooldown <= 0 && ped.state === 'hostile' && ped.meleeReady
+        && Math.abs(heightGap) <= MELEE_HEIGHT_REACH
+        && dx * dx + dz * dz < MELEE_START_RANGE * MELEE_START_RANGE && ped.punch()) {
+        this.hostileAttackCooldown = MELEE_GLOBAL_STAGGER;
+      }
     }
   }
 
@@ -364,10 +390,12 @@ export class PopulationSystem {
     }
   }
 
+  /** Nearest mug/melee target. Height-gated like NPC melee: a ped below a rooftop/ledge is out
+   *  of fist reach — the player can't punch (or get a mug prompt) through a floor either. */
   nearestPedestrian(position: THREE.Vector3, maxDistance = 3.2): Pedestrian | undefined {
     let nearest: Pedestrian | undefined; let best = maxDistance * maxDistance;
     for (const ped of this.pedestrians) {
-      if (ped.contact || ped.state === 'down') continue;
+      if (ped.contact || ped.state === 'down' || Math.abs(ped.group.position.y - position.y) > MELEE_HEIGHT_REACH) continue;
       const distance = ped.group.position.distanceToSquared(position);
       if (distance <= best) { nearest = ped; best = distance; }
     }
