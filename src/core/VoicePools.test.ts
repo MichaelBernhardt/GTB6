@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CLIP_TRIM, ClipPicker, MAX_CONCURRENT_VOICES, POLICE_RADIO_CLIPS, RADIO_COOLDOWN, RadioGate,
-  SPEAKER_COOLDOWN, VOICE_CLIP_IDS, VoiceGate, voicePool,
+  CLIP_TRIM, ClipPicker, MAX_CONCURRENT_VOICES, PLAYER_VOICE_RATE, POLICE_RADIO_CLIPS, RADIO_COOLDOWN,
+  RADIO_RATE_JITTER, RadioGate, radioRate, SPEAKER_COOLDOWN, utteranceRate, VOICE_CLIP_IDS,
+  VOICE_RATE_MAX, VOICE_RATE_MIN, VOICE_RATE_SPREAD, VoiceCasting, VoiceGate, voicePool,
 } from './VoicePools';
 
 describe('voicePool', () => {
@@ -114,6 +115,52 @@ describe('VoiceGate', () => {
     const gate = new VoiceGate();
     expect(gate.tryUtter(0, 1)).toBe(true);
     expect(gate.tryUtter(0.1, 1)).toBe(true);
+  });
+});
+
+describe('voice pitch casting', () => {
+  it('gives each speaker a persistent voice: same ped always, different peds differ', () => {
+    const casting = new VoiceCasting();
+    const lerato = {}; const thabo = {};
+    let roll = 0.1;
+    const rng = (): number => (roll = roll === 0.1 ? 0.9 : 0.1);
+    const leratoVoice = casting.baseRate(lerato, rng);
+    expect(casting.baseRate(lerato, rng)).toBe(leratoVoice); // stable across utterances
+    expect(casting.baseRate(lerato, rng)).toBe(leratoVoice);
+    expect(casting.baseRate(thabo, rng)).not.toBe(leratoVoice); // a different person sounds different
+  });
+
+  it('draws voices across the full ±spread and the player pin is honoured', () => {
+    const casting = new VoiceCasting();
+    expect(casting.baseRate({}, () => 0)).toBeCloseTo(1 - VOICE_RATE_SPREAD, 8);
+    expect(casting.baseRate({}, () => 1)).toBeCloseTo(1 + VOICE_RATE_SPREAD, 8);
+    const player = {};
+    casting.pin(player, PLAYER_VOICE_RATE);
+    expect(casting.baseRate(player, () => 0)).toBe(PLAYER_VOICE_RATE); // pinned, never re-rolled
+  });
+
+  it('per-play jitter varies repeats but the clamp keeps every rate non-comedic', () => {
+    const casting = new VoiceCasting();
+    for (let i = 0; i < 500; i++) {
+      const rate = utteranceRate(casting.baseRate({}));
+      expect(rate).toBeGreaterThanOrEqual(VOICE_RATE_MIN);
+      expect(rate).toBeLessThanOrEqual(VOICE_RATE_MAX);
+    }
+    // Extremes genuinely need the clamp: deepest voice + downward jitter would undershoot 0.85.
+    expect(utteranceRate(1 - VOICE_RATE_SPREAD, () => 0)).toBe(VOICE_RATE_MIN);
+    expect(utteranceRate(1 + VOICE_RATE_SPREAD, () => 1)).toBe(VOICE_RATE_MAX);
+    const base = 1;
+    expect(utteranceRate(base, () => 0)).not.toBe(utteranceRate(base, () => 1)); // repeats still vary
+  });
+
+  it('radio chatter stays within its narrow band — static must not chipmunk', () => {
+    expect(radioRate(() => 0)).toBeCloseTo(1 - RADIO_RATE_JITTER, 8);
+    expect(radioRate(() => 1)).toBeCloseTo(1 + RADIO_RATE_JITTER, 8);
+    for (let i = 0; i < 200; i++) {
+      const rate = radioRate();
+      expect(rate).toBeGreaterThanOrEqual(1 - RADIO_RATE_JITTER);
+      expect(rate).toBeLessThanOrEqual(1 + RADIO_RATE_JITTER);
+    }
   });
 });
 
