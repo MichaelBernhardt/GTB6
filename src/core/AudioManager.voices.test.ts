@@ -102,7 +102,7 @@ describe('recorded ped voices', () => {
     expect(playedClips()).toEqual(['aargh-neutral']);
   });
 
-  it('bumping a female plays the annoyed hey, a male the voetsek; procedural peds keep the synth grunt', async () => {
+  it('bumping a female plays the annoyed hey, a male the voetsek, a procedural ped either', async () => {
     const audio = await makeAudio();
     audio.grunt(1, 1, 'female', {});
     expect(playedClips()).toEqual(['annoyed-hey-female']);
@@ -110,8 +110,17 @@ describe('recorded ped voices', () => {
     expect(playedClips()).toEqual(['annoyed-hey-female', 'bump-voetsek-male']);
     const before = context.started.length;
     audio.grunt(1, 1, 'neutral', {});
-    expect(playedClips(before)).toEqual([]); // no recorded clip...
-    expect(context.started.slice(before).some((s) => s.kind === 'oscillator')).toBe(true); // ...the formant grunt fired instead
+    const neutral = playedClips(before);
+    expect(neutral).toHaveLength(1);
+    expect(['annoyed-hey-female', 'bump-voetsek-male']).toContain(neutral[0]);
+  });
+
+  it('falls back to the synth grunt only while the bump clips are missing', async () => {
+    fetchOk = false;
+    const audio = await makeAudio();
+    audio.grunt(1, 1, 'male', {});
+    expect(playedClips()).toEqual([]);
+    expect(context.started.some((s) => s.kind === 'oscillator')).toBe(true);
   });
 
   it('one ped cannot utter twice inside the cooldown, and never repeats a clip back-to-back', async () => {
@@ -141,6 +150,14 @@ describe('recorded ped voices', () => {
     const audio = await makeAudio();
     audio.scream('pain', 500, 500, 'female', {});
     expect(context.started).toHaveLength(0);
+  });
+
+  it('hot vocals still carry at mid distance but are gone past the 90m window', async () => {
+    const audio = await makeAudio();
+    audio.scream('pain', 40, 0, 'female', {});
+    expect(playedClips()).toHaveLength(1);
+    audio.scream('pain', 95, 0, 'female', {});
+    expect(playedClips()).toHaveLength(1); // the far scream scheduled nothing
   });
 
   it('falls back to the synthesized scream when the recordings never arrived', async () => {

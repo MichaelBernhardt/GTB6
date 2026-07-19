@@ -39,11 +39,12 @@ const POOLS: Record<VoiceKind, Record<VoiceSex, readonly VoiceClipId[]>> = {
     female: ['arrrgh-female'],
     neutral: ['aargh-neutral'],
   },
-  // Procedural (neutral) peds have no recorded bump bark and keep the synthesized grunt.
+  // Light walk-bump annoyance (owner: "hey!"/"voetsek!" are for bumps, not pain).
+  // Procedural peds have no sex, so either bark at random — an angry noise reads as an angry noise.
   bump: {
     male: ['bump-voetsek-male'],
     female: ['annoyed-hey-female'],
-    neutral: [],
+    neutral: ['annoyed-hey-female', 'bump-voetsek-male'],
   },
 };
 
@@ -70,10 +71,13 @@ export const CLIP_TRIM: Record<VoiceClipId, number> = {
   'police-radio-3': 1.0,
 };
 
-/** Per-utterance base level for ped/player voices before distance falloff — sits alongside the 0.12-peak synth scream. */
-export const VOICE_LEVEL = 0.3;
-/** Non-positional desk-radio level for the police-radio clips (the synth ANI burst peaked ~0.05). */
-export const RADIO_LEVEL = 0.22;
+/** Per-utterance base level for ped/player voices before distance falloff. The recordings are normalised
+ *  hot (peaks ~0 dB), so this starts deliberately low — about half of what a fresh ear would pick — and
+ *  should be tuned down rather than up (owner's instruction). */
+export const VOICE_LEVEL = 0.15;
+/** Non-positional level for the police-radio clips: chatter from a nearby cruiser, well under the
+ *  music/effects bed — not an announcement in your skull. (The old synth ANI burst peaked ~0.05.) */
+export const RADIO_LEVEL = 0.08;
 /** A ped may utter at most once per this many seconds. */
 export const SPEAKER_COOLDOWN = 1.5;
 /** At most this many recorded vocals may overlap — a massacre must not become a choir. */
