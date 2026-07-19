@@ -328,4 +328,5 @@ body.is-touch .menu-card button, body.is-touch .menu-card .danger-link { min-hei
 .tc.is-swapped .tc-jump { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); }
 .tc.is-swapped .tc-weapon { right: auto; left: calc(24px + env(safe-area-inset-left, 0px)); }
 .tc.is-swapped .tc-context { right: auto; left: calc(100px + env(safe-area-inset-left, 0px)); flex-direction: row; }
-.tc.is-swapped .tc-utils { left: auto; right: calc(10px + env(safe-area-inset-right, 0px)); }
+/* utils deliberately stay top-left in swapped mode: the minimap they tuck under doesn't move,
+ * and mirroring them right collides with the ammo panel (hud-status is top-right in both modes) */
