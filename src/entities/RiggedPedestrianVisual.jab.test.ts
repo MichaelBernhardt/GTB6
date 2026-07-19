@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { MELEE_HIT_AT, MELEE_SWING_SECONDS } from '../systems/MeleeSystem';
+import { MELEE_HIT_AT, MELEE_SWING_SECONDS, PALM_LOCAL_X, PALM_LOCAL_Z, PALM_SIGN } from '../systems/MeleeSystem';
 import { RiggedPedestrianVisual, type RiggedPedestrianState } from './RiggedPedestrianVisual';
 
 class FakeImage {
@@ -78,6 +78,26 @@ describe("jab mechanics regression", () => {
     for (let i = 0; i < 6; i++) { visual.update(1 / 30); bothInFront(); }
     expect(bone('Hand_L').z).toBeGreaterThan(0.1); // and the settled braced stance is a real guard
     expect(bone('Hand_R').z).toBeGreaterThan(0.1);
+    // Palms face INWARD (toward the body midline) with a downward bias — never palm-up
+    // "offering". Body right is -x in this identity-parent frame (the right hand hangs at
+    // negative x); the palm normal comes from the measured hand-local flat axis.
+    const palmNormal = (handName: 'Hand_L' | 'Hand_R'): THREE.Vector3 => {
+      const hand = parent.getObjectByName(handName)!;
+      parent.updateMatrixWorld(true);
+      const mirror = handName === 'Hand_R' ? 1 : -1;
+      return new THREE.Vector3(PALM_SIGN * PALM_LOCAL_X, 0, PALM_SIGN * (mirror > 0 ? PALM_LOCAL_Z : -PALM_LOCAL_Z))
+        .applyQuaternion(hand.getWorldQuaternion(new THREE.Quaternion()));
+    };
+    const expectInward = () => {
+      // Hand_R hangs at -x on these rigs, so its midline direction is +x (and mirrored for L).
+      const right = palmNormal('Hand_R'); const left = palmNormal('Hand_L');
+      expect(right.x).toBeGreaterThan(0.5); // right palm toward the midline
+      expect(left.x).toBeLessThan(-0.5); // left palm toward the midline
+      expect(right.y).toBeLessThan(0.2); expect(left.y).toBeLessThan(0.2); // never tipped palm-up
+    };
+    expectInward(); // settled guard
+    visual.setState(state({ punchElapsed: MELEE_HIT_AT - 0.001, braced: true })); visual.update(1 / 30);
+    expectInward(); // and at full extension
     expect(midDrive.straightDeg).toBeLessThan(120); // still coiled well into the drive
     expect(atHit.f.z - chamber.z).toBeGreaterThan(0.35); // real forward travel
   });
