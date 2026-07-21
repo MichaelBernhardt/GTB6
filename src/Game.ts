@@ -467,6 +467,7 @@ export class Game {
       const target = this.online.objective?.target;
       return [
         ...this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const })),
+        ...this.online.vehicleStates.filter((vehicle) => !vehicle.isHot && !vehicle.driverId).map((vehicle) => ({ x: vehicle.x, z: vehicle.z, color: '#8fa7b8' })), // free cars are findable — they spawn at road anchors, not next to players
         ...(target ? [{ x: target.x, z: target.z, color: target.color, objective: true }] : []),
       ];
     }
@@ -2439,7 +2440,9 @@ export class Game {
       const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
       const contactPrompt = this.contactPrompt(); // offer / riddle re-state / job re-brief — undefined when E would do nothing
-      if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat' : 'E  Enter nearby vehicle  ·  ENTER  Global chat  ·  Open PvP';
+      if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat'
+        : this.online.enterableVehicleNear(this.player.group.position.x, this.player.group.position.z) ? 'E  Enter vehicle  ·  ENTER  Global chat'
+        : 'ENTER  Global chat  ·  Open PvP  ·  Cars marked on map'; // the old prompt claimed E worked from anywhere; only promise it in actual reach
       else if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
       else if (this.activePlane) prompt = planeHint(this.activePlane.state);
       else if (this.activeVehicle) {

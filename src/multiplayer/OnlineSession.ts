@@ -234,6 +234,11 @@ export class OnlineSession {
     return id ? this.vehicleVisuals.get(id)?.vehicle : undefined;
   }
 
+  /** Mirrors the server's interact test (radius 6 from vehicle centre) so the E prompt only appears when E will work. */
+  enterableVehicleNear(x: number, z: number): boolean {
+    return this.vehicles.some((vehicle) => !vehicle.driverId && (!vehicle.isHot || this.hotBakkie?.phase === 'active') && Math.hypot(vehicle.x - x, vehicle.z - z) < 6);
+  }
+
   close(): void {
     this.intentionallyClosed = true; clearTimeout(this.reconnectTimer); this.socket?.close();
     for (const avatar of this.avatars.values()) avatar.dispose(this.scene); for (const vehicle of this.vehicleVisuals.values()) vehicle.dispose(this.scene);

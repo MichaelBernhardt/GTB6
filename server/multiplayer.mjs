@@ -29,6 +29,7 @@ const SPAWN_PROTECTION_MS = 2500;
 export const FOOT_SPEED_LIMIT = 16;
 export const VEHICLE_SPEED_LIMIT = 55;
 export const MOVE_BURST_ALLOWANCE = 12;
+export const INTERACT_RADIUS = 6; // measured from the vehicle CENTRE — a bakkie is ~4.5m long, so anything tighter refuses players standing at the bumper. Mirrored in Game.ts's online prompt.
 const HISTORY_MS = 2000;
 const MAX_REWIND_MS = 400;
 const LOCOMOTIONS = ['idle', 'walk', 'sprint'];
@@ -163,14 +164,16 @@ export class MultiplayerWorld {
       if (vehicle?.isHot && this.hot.carrier === player.id) this.hot.carrier = undefined;
       player.vehicleId = undefined; this.notePose(player); return true;
     }
-    let nearest; let distance = 4;
+    let nearest; let distance = INTERACT_RADIUS;
+    let closestAnywhere = Infinity;
     const candidates = [...this.vehicles.values()].sort((left, right) => Number(right.isHot) - Number(left.isHot));
     for (const vehicle of candidates) {
       if (vehicle.isHot && this.hot.phase !== 'active') continue;
       const candidate = Math.hypot(vehicle.x - player.x, vehicle.z - player.z);
+      if (!vehicle.driverId) closestAnywhere = Math.min(closestAnywhere, candidate);
       if (!vehicle.driverId && candidate < distance) { nearest = vehicle; distance = candidate; }
     }
-    if (!nearest) return false;
+    if (!nearest) { console.warn(`[mp] ${player.name} pressed E with no vehicle in range (nearest free: ${closestAnywhere === Infinity ? 'none' : `${closestAnywhere.toFixed(1)}m`})`); return false; }
     nearest.driverId = player.id; player.vehicleId = nearest.id; player.x = nearest.x; player.z = nearest.z; player.heading = nearest.heading; this.notePose(player);
     if (nearest.isHot) {
       const previousActorId = this.hot.lastCarrier;
@@ -198,7 +201,7 @@ export class MultiplayerWorld {
       if (driving.driverId !== player.id || !report || typeof report !== 'object') return false;
       const vx = clamp(report.x, -WORLD_LIMIT, WORLD_LIMIT); const vy = clamp(report.y, -50, 500); const vz = clamp(report.z, -WORLD_LIMIT, WORLD_LIMIT);
       const step = Math.hypot(vx - driving.x, vz - driving.z);
-      if (step > player.moveAllowance) return false;
+      if (step > player.moveAllowance) return this.noteReject(player, step);
       player.moveAllowance -= step;
       const forward = Math.sin(driving.heading) * (vx - driving.x) + Math.cos(driving.heading) * (vz - driving.z); // displacement decides the gameplay speed; the reported figure is presentation only
       if (elapsed > 0.005) driving.gameSpeed = driving.gameSpeed * 0.5 + Math.sign(forward || 1) * (step / elapsed) * 0.5;
@@ -208,13 +211,20 @@ export class MultiplayerWorld {
     } else {
       const x = clamp(message.x, -WORLD_LIMIT, WORLD_LIMIT); const y = clamp(message.y, -50, 500); const z = clamp(message.z, -WORLD_LIMIT, WORLD_LIMIT);
       const step = Math.hypot(x - player.x, z - player.z);
-      if (step > player.moveAllowance) return false;
+      if (step > player.moveAllowance) return this.noteReject(player, step);
       player.moveAllowance -= step;
       player.x = x; player.y = y; player.z = z; player.heading = clamp(message.heading, -Math.PI * 8, Math.PI * 8);
     }
     player.history.push({ t: now, x: player.x, y: player.y, z: player.z });
     while (player.history.length > 1 && now - player.history[0].t > HISTORY_MS) player.history.shift();
     return true;
+  }
+
+  /** A speed-capped report was ignored. Log the first and every hundredth so a stuck-frozen player is diagnosable from the server console. */
+  noteReject(player, step) {
+    player.speedRejects = (player.speedRejects ?? 0) + 1;
+    if (player.speedRejects === 1 || player.speedRejects % 100 === 0) console.warn(`[mp] ignored report #${player.speedRejects} from ${player.name}: ${step.toFixed(1)}m step exceeds ${player.moveAllowance.toFixed(1)}m allowance`);
+    return false;
   }
 
   /** Timestamp a shooter's claimed snapshot tick, clamped so nobody shoots further into the past than real lag explains. */
