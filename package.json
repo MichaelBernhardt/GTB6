@@ -29,6 +29,7 @@
     "map:png": "tsx tools/mapgen/render-png.ts"
   },
   "dependencies": {
+    "geoip-country": "^5.0.202607180103",
     "pg": "^8.22.0",
     "three": "^0.178.0",
     "ws": "^8.21.0"

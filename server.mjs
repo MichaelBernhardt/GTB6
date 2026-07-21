@@ -5,6 +5,7 @@ import { extname, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { createGzip } from 'node:zlib';
+import { createAnalyticsService } from './server/analytics.mjs';
 import { attachMultiplayer } from './server/multiplayer.mjs';
 
 const MIME_TYPES = {
@@ -35,23 +36,14 @@ const fileDetails = async (path) => {
   }
 };
 
-export const createStaticServer = ({ root = resolve('dist') } = {}) => {
+export const createStaticServer = ({ root = resolve('dist'), analytics } = {}) => {
   const staticRoot = resolve(root);
   const indexPath = resolve(staticRoot, 'index.html');
+  const adminPath = resolve(staticRoot, 'admin/index.html');
 
   return createServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'same-origin');
-
-    if (request.url === '/healthz') {
-      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      response.end(JSON.stringify({ status: 'ok' }));
-      return;
-    }
-
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
-      response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return;
-    }
 
     let pathname;
     try {
@@ -60,7 +52,24 @@ export const createStaticServer = ({ root = resolve('dist') } = {}) => {
       response.writeHead(400); response.end('Bad request'); return;
     }
 
-    const requestedPath = resolve(staticRoot, `.${pathname}`);
+    if (pathname === '/healthz') {
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      response.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+
+    if (analytics && await analytics.handle(request, response, pathname)) return;
+    if (pathname.startsWith('/api/')) {
+      response.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      response.end(JSON.stringify({ error: 'API endpoint not found' }));
+      return;
+    }
+
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.writeHead(405, { Allow: 'GET, HEAD' }); response.end(); return;
+    }
+
+    const requestedPath = pathname === '/admin' || pathname === '/admin/' ? adminPath : resolve(staticRoot, `.${pathname}`);
     if (requestedPath !== staticRoot && !requestedPath.startsWith(`${staticRoot}${sep}`)) {
       response.writeHead(403); response.end('Forbidden'); return;
     }
@@ -90,9 +99,11 @@ export const createStaticServer = ({ root = resolve('dist') } = {}) => {
 const entryPath = process.argv[1] ? resolve(process.argv[1]) : '';
 if (entryPath === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT) || 4173;
-  const server = createStaticServer();
-  const multiplayer = await attachMultiplayer(server);
+  const analytics = createAnalyticsService(); await analytics.init();
+  const server = createStaticServer({ analytics });
+  const multiplayer = await attachMultiplayer(server, { analyticsEvent: (type, payload) => analytics.recordSystemEvent(type, payload) });
+  analytics.setMultiplayerProvider(() => ({ connected: multiplayer.world.players.size, capacity: multiplayer.world.capacity, hotBakkie: multiplayer.world.hotBakkieSnapshot() }));
   server.listen(port, '0.0.0.0', () => console.log(`Groot Theft Bakkie listening on port ${port} with one global multiplayer world`));
-  const shutdown = () => server.close(() => { void multiplayer.close().finally(() => process.exit(0)); });
+  const shutdown = () => server.close(() => { void Promise.all([multiplayer.close(), analytics.close()]).finally(() => process.exit(0)); });
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }

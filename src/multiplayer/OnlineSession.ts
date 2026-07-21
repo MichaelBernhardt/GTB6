@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { analytics } from '../analytics/Telemetry';
 import { Vehicle } from '../entities/Vehicle';
 import { RiggedPedestrianVisual, type RiggedPedestrianState } from '../entities/RiggedPedestrianVisual';
 import { MultiplayerOverlay } from './MultiplayerOverlay';
@@ -139,7 +140,7 @@ export class OnlineSession {
     socket.addEventListener('open', () => { this.lastSentReport = undefined; this.reportKeepalive = REPORT_KEEPALIVE_SECONDS; this.send({ type: 'hello', version: MULTIPLAYER_PROTOCOL_VERSION, name: this.name, token: localStorage.getItem(TOKEN_KEY) ?? undefined }); });
     socket.addEventListener('message', (event) => this.message(String(event.data)));
     socket.addEventListener('close', () => { this.connected = false; this.epoch = 0; this.overlay.setStatus('Connection lost · reconnecting…', true); if (!this.intentionallyClosed) this.reconnectTimer = setTimeout(() => this.connect(), 2000); });
-    socket.addEventListener('error', () => this.overlay.setStatus('Could not reach the multiplayer server.', true));
+    socket.addEventListener('error', () => { this.overlay.setStatus('Could not reach the multiplayer server.', true); analytics.captureError(new Error('Multiplayer WebSocket connection failed'), { source: 'network', severity: 'recoverable' }); });
   }
 
   private message(raw: string): void {

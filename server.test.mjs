@@ -10,7 +10,9 @@ describe('production static server', () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'san-cordova-server-'));
     await mkdir(join(root, 'assets'));
+    await mkdir(join(root, 'admin'));
     await writeFile(join(root, 'index.html'), '<!doctype html><title>San Cordova</title>');
+    await writeFile(join(root, 'admin', 'index.html'), '<!doctype html><title>Game analytics</title>');
     await writeFile(join(root, 'assets', 'game.js'), 'export const city = "San Cordova";'.repeat(80));
     server = createStaticServer({ root });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -45,6 +47,12 @@ describe('production static server', () => {
     const head = await fetch(`${baseUrl}/`, { method: 'HEAD' });
     expect(head.status).toBe(200);
     expect(await head.text()).toBe('');
+  });
+
+  it('serves the isolated admin shell and never falls API requests through to game HTML', async () => {
+    const admin = await fetch(`${baseUrl}/admin`); expect(await admin.text()).toContain('<title>Game analytics</title>');
+    const api = await fetch(`${baseUrl}/api/not-found`); expect(api.status).toBe(404); expect(api.headers.get('content-type')).toContain('application/json');
+    expect(await api.text()).not.toContain('San Cordova');
   });
 
   it('rejects unsupported methods', async () => {

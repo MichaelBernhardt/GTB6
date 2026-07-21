@@ -100,8 +100,9 @@ export function parseClientMessage(raw) {
 }
 
 export class MultiplayerWorld {
-  constructor({ capacity = CAPACITY, store = createProfileStore(), now = () => Date.now() } = {}) {
+  constructor({ capacity = CAPACITY, store = createProfileStore(), now = () => Date.now(), analyticsEvent = () => undefined } = {}) {
     this.capacity = capacity; this.store = store; this.now = now; this.players = new Map(); this.tickNumber = 0; this.pendingEvents = []; this.tickTimes = [];
+    this.analyticsEvent = analyticsEvent;
     this.hot = { phase: 'waiting', round: 0, routeIndex: 0, progress: 0, phaseEndsAt: 0, carrier: undefined, lastCarrier: undefined, winner: undefined };
     this.vehicles = new Map(VEHICLE_SPAWNS.map((spawn, index) => {
       const id = `vehicle-${index + 1}`;
@@ -112,6 +113,7 @@ export class MultiplayerWorld {
   }
 
   async init() { await this.store.init(); }
+  track(type, payload = {}) { Promise.resolve(this.analyticsEvent(type, payload)).catch((error) => console.error('[analytics] Multiplayer event failed.', error)); }
 
   async join(socket, hello) {
     if (this.players.size >= this.capacity) throw Object.assign(new Error('The world is full.'), { code: 'SERVER_FULL' });
@@ -127,6 +129,7 @@ export class MultiplayerWorld {
       lastFire: 0, ammo: PISTOL_MAGAZINE, reserve: PISTOL_RESERVE, reloadingUntil: 0, chatTimes: [],
     };
     this.players.set(player.id, player);
+    this.track('multiplayer_join', { concurrency: this.players.size });
     if (this.hot.phase === 'waiting') this.beginCountdown(now, false);
     return player;
   }
@@ -135,6 +138,7 @@ export class MultiplayerWorld {
 
   async leave(player) {
     if (!player || !this.players.delete(player.id)) return;
+    this.track('multiplayer_leave', { concurrency: this.players.size });
     this.releaseVehicle(player);
     await this.store.save(player.token, profileOf(player));
     if (this.players.size === 0) this.resetEmptyShard();
@@ -277,6 +281,7 @@ export class MultiplayerWorld {
     best.health = Math.max(0, best.health - FIRE_DAMAGE);
     if (best.health > 0) return { kind: 'hit', actorId: player.id, targetId: best.id };
     best.deaths += 1; player.kills += 1; best.deadUntil = now + RESPAWN_MS; this.releaseVehicle(best);
+    this.track('multiplayer_kill');
     void this.store.save(best.token, profileOf(best)); void this.store.save(player.token, profileOf(player));
     return { kind: 'kill', actorId: player.id, targetId: best.id };
   }
@@ -301,8 +306,8 @@ export class MultiplayerWorld {
     this.hot.phase = 'cooldown'; this.hot.phaseEndsAt = this.now() + HOT_BAKKIE_COOLDOWN_MS; this.hot.winner = winner; this.hot.carrier = undefined;
     const vehicle = this.vehicles.get('hot-bakkie'); if (vehicle) { vehicle.driverId = undefined; vehicle.speed = 0; }
     if (previousCarrier) previousCarrier.vehicleId = undefined;
-    if (winner) { winner.vehicleId = undefined; winner.runs += 1; void this.store.save(winner.token, profileOf(winner)); this.pendingEvents.push({ type: 'hot-bakkie-event', kind: 'delivery', actorId: winner.id }); }
-    else this.pendingEvents.push({ type: 'hot-bakkie-event', kind: 'timeout' });
+    if (winner) { winner.vehicleId = undefined; winner.runs += 1; void this.store.save(winner.token, profileOf(winner)); this.pendingEvents.push({ type: 'hot-bakkie-event', kind: 'delivery', actorId: winner.id }); this.track('hot_bakkie_delivery'); }
+    else { this.pendingEvents.push({ type: 'hot-bakkie-event', kind: 'timeout' }); this.track('hot_bakkie_timeout'); }
   }
 
   resetEmptyShard() {
@@ -315,6 +320,7 @@ export class MultiplayerWorld {
     if (this.hot.phase === 'countdown' && now >= this.hot.phaseEndsAt) {
       this.hot.phase = 'active'; this.hot.phaseEndsAt = now + HOT_BAKKIE_ACTIVE_MS;
       this.pendingEvents.push({ type: 'hot-bakkie-event', kind: 'start' });
+      this.track('hot_bakkie_start');
     }
     if (this.hot.phase === 'active' && now >= this.hot.phaseEndsAt) this.beginCooldown(undefined);
     if (this.hot.phase === 'cooldown' && now >= this.hot.phaseEndsAt && this.players.size > 0) this.beginCountdown(now);
