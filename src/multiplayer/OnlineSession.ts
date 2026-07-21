@@ -182,7 +182,7 @@ export class OnlineSession {
     for (const state of players) {
       if (state.id === this.selfId) continue;
       let avatar = this.avatars.get(state.id); if (!avatar) { avatar = new RemoteAvatar(this.scene, state.id, state.name, state.appearance); this.avatars.set(state.id, avatar); }
-      avatar.setState({ ...state, y: this.surfaceHeight(state.x, state.z) });
+      avatar.setState({ ...state, y: Math.max(state.y, this.surfaceHeight(state.x, state.z)) }); // reported height shows jumps; the floor guard hides quantization dips
     }
     for (const [id, avatar] of this.avatars) if (!live.has(id)) { avatar.dispose(this.scene); this.avatars.delete(id); }
     const liveVehicles = new Set(vehicles.map((vehicle) => vehicle.id));

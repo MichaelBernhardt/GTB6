@@ -913,7 +913,6 @@ export class Game {
       const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
       if (shot.fired && !shot.melee) { this.player.registerShot(); online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize()); }
     }
-    if (!driven) this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
     const moving = this.input.down('KeyW') || this.input.down('KeyS') || this.input.down('KeyA') || this.input.down('KeyD');
     const report: OnlineReport | undefined = stateBefore?.dead ? undefined : driven ? {
       x: driven.group.position.x, y: driven.group.position.y, z: driven.group.position.z, heading: driven.heading, locomotion: 'idle', aiming: false,
