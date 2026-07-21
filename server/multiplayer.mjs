@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createProfileStore, tokenHash } from './profile-store.mjs';
 import { ROAD_INDEX } from './road-network.mjs';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const TICK_RATE = 20;
 export const SNAPSHOT_RATE = 10;
 export const CAPACITY = 16;
@@ -24,9 +24,14 @@ const PISTOL_MAGAZINE = 12;
 const PISTOL_RESERVE = 84;
 const RESPAWN_MS = 3000;
 const SPAWN_PROTECTION_MS = 2500;
-const WALK_SPEED = 8;
-const SPRINT_SPEED = 13;
-const AIM_SPEED_MULTIPLIER = 0.5;
+// Clients are authoritative over their own pose; the server only bounds how fast one can move.
+// Limits sit above the honest maxima (sprint 13, fastest car ~38) so validation never fights lag.
+export const FOOT_SPEED_LIMIT = 16;
+export const VEHICLE_SPEED_LIMIT = 55;
+export const MOVE_BURST_ALLOWANCE = 12;
+const HISTORY_MS = 2000;
+const MAX_REWIND_MS = 400;
+const LOCOMOTIONS = ['idle', 'walk', 'sprint'];
 
 export const ONLINE_APPEARANCES = [
   'braamfontein-creative', 'sandton-professional', 'rosebank-athlete', 'melville-creative',
@@ -94,15 +99,15 @@ export function parseClientMessage(raw) {
 }
 
 export class MultiplayerWorld {
-  constructor({ capacity = CAPACITY, store = createProfileStore(), now = () => Date.now(), roadIndex = ROAD_INDEX } = {}) {
-    this.capacity = capacity; this.store = store; this.now = now; this.roadIndex = roadIndex; this.players = new Map(); this.tickNumber = 0; this.pendingEvents = [];
+  constructor({ capacity = CAPACITY, store = createProfileStore(), now = () => Date.now() } = {}) {
+    this.capacity = capacity; this.store = store; this.now = now; this.players = new Map(); this.tickNumber = 0; this.pendingEvents = []; this.tickTimes = [];
     this.hot = { phase: 'waiting', round: 0, routeIndex: 0, progress: 0, phaseEndsAt: 0, carrier: undefined, lastCarrier: undefined, winner: undefined };
     this.vehicles = new Map(VEHICLE_SPAWNS.map((spawn, index) => {
       const id = `vehicle-${index + 1}`;
-      return [id, { id, kind: ['compact', 'sport', 'bakkie'][index % 3], x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, speed: 0, health: 100, driverId: undefined, isHot: false }];
+      return [id, { id, kind: ['compact', 'sport', 'bakkie'][index % 3], x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, speed: 0, gameSpeed: 0, health: 100, driverId: undefined, isHot: false }];
     }));
     const spawn = HOT_BAKKIE_ROUTES[0].spawn;
-    this.vehicles.set('hot-bakkie', { id: 'hot-bakkie', kind: 'bakkie', x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, speed: 0, health: 145, driverId: undefined, isHot: true });
+    this.vehicles.set('hot-bakkie', { id: 'hot-bakkie', kind: 'bakkie', x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, speed: 0, gameSpeed: 0, health: 145, driverId: undefined, isHot: true });
   }
 
   async init() { await this.store.init(); }
@@ -117,7 +122,7 @@ export class MultiplayerWorld {
       id: randomUUID(), socket, token: loaded.token, name, appearance: appearanceForToken(loaded.token),
       kills: loaded.profile.kills ?? 0, deaths: loaded.profile.deaths ?? 0, runs: loaded.profile.runs ?? 0,
       x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, health: 100, deadUntil: 0, protectedUntil: now + SPAWN_PROTECTION_MS,
-      input: { seq: 0, forward: 0, side: 0, sprint: false, aiming: false, yaw: spawn.heading - Math.PI },
+      epoch: 1, seq: 0, locomotion: 'idle', aiming: false, moveAllowance: MOVE_BURST_ALLOWANCE, lastReportAt: now, history: [{ t: now, x: spawn.x, y: 0, z: spawn.z }],
       lastFire: 0, ammo: PISTOL_MAGAZINE, reserve: PISTOL_RESERVE, reloadingUntil: 0, chatTimes: [],
     };
     this.players.set(player.id, player);
@@ -137,18 +142,26 @@ export class MultiplayerWorld {
   releaseVehicle(player) {
     if (!player?.vehicleId) return;
     const vehicle = this.vehicles.get(player.vehicleId);
-    if (vehicle) { vehicle.driverId = undefined; vehicle.speed = 0; }
+    if (vehicle) { vehicle.driverId = undefined; vehicle.speed = 0; vehicle.gameSpeed = 0; }
     if (vehicle?.isHot && this.hot.carrier === player.id) this.hot.carrier = undefined;
     player.vehicleId = undefined;
+  }
+
+  /** A seat change snaps the player's server pose; refill the movement budget so the jump never reads as a speed violation. */
+  notePose(player) {
+    const now = this.now();
+    player.moveAllowance = MOVE_BURST_ALLOWANCE; player.lastReportAt = now;
+    player.history.push({ t: now, x: player.x, y: player.y, z: player.z });
+    while (player.history.length > 1 && now - player.history[0].t > HISTORY_MS) player.history.shift();
   }
 
   interact(player) {
     if (!player || player.deadUntil) return false;
     if (player.vehicleId) {
       const vehicle = this.vehicles.get(player.vehicleId);
-      if (vehicle) { vehicle.driverId = undefined; vehicle.speed = 0; player.x += Math.cos(vehicle.heading) * 2.2; player.z -= Math.sin(vehicle.heading) * 2.2; }
+      if (vehicle) { vehicle.driverId = undefined; vehicle.speed = 0; vehicle.gameSpeed = 0; player.x += Math.cos(vehicle.heading) * 2.2; player.z -= Math.sin(vehicle.heading) * 2.2; }
       if (vehicle?.isHot && this.hot.carrier === player.id) this.hot.carrier = undefined;
-      player.vehicleId = undefined; return true;
+      player.vehicleId = undefined; this.notePose(player); return true;
     }
     let nearest; let distance = 4;
     const candidates = [...this.vehicles.values()].sort((left, right) => Number(right.isHot) - Number(left.isHot));
@@ -158,7 +171,7 @@ export class MultiplayerWorld {
       if (!vehicle.driverId && candidate < distance) { nearest = vehicle; distance = candidate; }
     }
     if (!nearest) return false;
-    nearest.driverId = player.id; player.vehicleId = nearest.id; player.x = nearest.x; player.z = nearest.z; player.heading = nearest.heading;
+    nearest.driverId = player.id; player.vehicleId = nearest.id; player.x = nearest.x; player.z = nearest.z; player.heading = nearest.heading; this.notePose(player);
     if (nearest.isHot) {
       const previousActorId = this.hot.lastCarrier;
       this.hot.carrier = player.id; this.hot.lastCarrier = player.id;
@@ -167,9 +180,62 @@ export class MultiplayerWorld {
     return true;
   }
 
-  input(player, message) {
-    if (!player || !Number.isInteger(message.seq) || message.seq <= player.input.seq) return;
-    player.input = { seq: message.seq, forward: clamp(message.forward, -1, 1), side: clamp(message.side, -1, 1), sprint: Boolean(message.sprint), aiming: Boolean(message.aiming), yaw: clamp(message.yaw, -Math.PI * 8, Math.PI * 8) };
+  /** Client-authoritative pose report. Never corrected back to the sender — invalid reports are simply
+   *  not applied, so a violator's last accepted pose is what everyone else keeps seeing. */
+  state(player, message) {
+    const now = this.now();
+    if (!player || player.deadUntil) return false;
+    if (message.epoch !== player.epoch || !Number.isInteger(message.seq) || message.seq <= player.seq) return false;
+    player.seq = message.seq;
+    player.locomotion = LOCOMOTIONS.includes(message.locomotion) ? message.locomotion : 'idle';
+    player.aiming = Boolean(message.aiming);
+    const driving = player.vehicleId ? this.vehicles.get(player.vehicleId) : undefined;
+    const limit = driving ? VEHICLE_SPEED_LIMIT : FOOT_SPEED_LIMIT;
+    const elapsed = Math.min(1, Math.max(0, (now - player.lastReportAt) / 1000)); player.lastReportAt = now;
+    player.moveAllowance = Math.min(MOVE_BURST_ALLOWANCE + limit * 0.25, player.moveAllowance + limit * elapsed);
+    if (driving) {
+      const report = message.vehicle;
+      if (driving.driverId !== player.id || !report || typeof report !== 'object') return false;
+      const vx = clamp(report.x, -WORLD_LIMIT, WORLD_LIMIT); const vy = clamp(report.y, -50, 500); const vz = clamp(report.z, -WORLD_LIMIT, WORLD_LIMIT);
+      const step = Math.hypot(vx - driving.x, vz - driving.z);
+      if (step > player.moveAllowance) return false;
+      player.moveAllowance -= step;
+      const forward = Math.sin(driving.heading) * (vx - driving.x) + Math.cos(driving.heading) * (vz - driving.z); // displacement decides the gameplay speed; the reported figure is presentation only
+      if (elapsed > 0.005) driving.gameSpeed = driving.gameSpeed * 0.5 + Math.sign(forward || 1) * (step / elapsed) * 0.5;
+      driving.x = vx; driving.y = vy; driving.z = vz; driving.heading = clamp(report.heading, -Math.PI * 8, Math.PI * 8);
+      driving.speed = clamp(report.speed, -VEHICLE_SPEED_LIMIT, VEHICLE_SPEED_LIMIT);
+      player.x = vx; player.y = vy; player.z = vz; player.heading = driving.heading;
+    } else {
+      const x = clamp(message.x, -WORLD_LIMIT, WORLD_LIMIT); const y = clamp(message.y, -50, 500); const z = clamp(message.z, -WORLD_LIMIT, WORLD_LIMIT);
+      const step = Math.hypot(x - player.x, z - player.z);
+      if (step > player.moveAllowance) return false;
+      player.moveAllowance -= step;
+      player.x = x; player.y = y; player.z = z; player.heading = clamp(message.heading, -Math.PI * 8, Math.PI * 8);
+    }
+    player.history.push({ t: now, x: player.x, y: player.y, z: player.z });
+    while (player.history.length > 1 && now - player.history[0].t > HISTORY_MS) player.history.shift();
+    return true;
+  }
+
+  /** Timestamp a shooter's claimed snapshot tick, clamped so nobody shoots further into the past than real lag explains. */
+  rewindTime(tick, now) {
+    const entry = Number.isInteger(tick) ? this.tickTimes.find((candidate) => candidate.tick === tick) : undefined;
+    return Math.min(now, Math.max(now - MAX_REWIND_MS, entry ? entry.t : now));
+  }
+
+  poseAt(player, time) {
+    const history = player.history;
+    let after = history[history.length - 1];
+    if (!after || time >= after.t) return player;
+    for (let index = history.length - 2; index >= 0; index -= 1) {
+      const before = history[index];
+      if (time >= before.t) {
+        const span = after.t - before.t; const mix = span > 0 ? (time - before.t) / span : 1;
+        return { x: before.x + (after.x - before.x) * mix, y: before.y + (after.y - before.y) * mix, z: before.z + (after.z - before.z) * mix };
+      }
+      after = before;
+    }
+    return history[0];
   }
 
   reload(player) {
@@ -186,10 +252,12 @@ export class MultiplayerWorld {
     if (length < 0.9 || length > 1.1) return undefined;
     if (player.ammo <= 0) return undefined;
     player.lastFire = now; player.ammo -= 1;
+    const rewindTo = this.rewindTime(message.tick, now); // judge the shot against the world the shooter was rendering
     const [dx, dy, dz] = direction.map((value) => value / length); let best; let bestT = FIRE_RANGE;
     for (const target of this.players.values()) {
       if (target === player || target.deadUntil || now < target.protectedUntil) continue;
-      const ox = target.x - player.x; const oy = (target.y + 1) - (player.y + 1.4); const oz = target.z - player.z;
+      const pose = this.poseAt(target, rewindTo);
+      const ox = pose.x - player.x; const oy = (pose.y + 1) - (player.y + 1.4); const oz = pose.z - player.z;
       const t = ox * dx + oy * dy + oz * dz;
       if (t <= 0 || t >= bestT) continue;
       const miss = Math.hypot(ox - dx * t, oy - dy * t, oz - dz * t);
@@ -215,7 +283,7 @@ export class MultiplayerWorld {
     this.hot.phase = 'countdown'; this.hot.routeIndex = (this.hot.round - 1) % HOT_BAKKIE_ROUTES.length;
     this.hot.progress = 0; this.hot.carrier = undefined; this.hot.lastCarrier = undefined; this.hot.winner = undefined; this.hot.phaseEndsAt = now + HOT_BAKKIE_COUNTDOWN_MS;
     const spawn = HOT_BAKKIE_ROUTES[this.hot.routeIndex].spawn; const vehicle = this.vehicles.get('hot-bakkie');
-    if (vehicle) Object.assign(vehicle, { x: spawn.x, z: spawn.z, heading: spawn.heading, speed: 0, health: 145, driverId: undefined });
+    if (vehicle) Object.assign(vehicle, { x: spawn.x, z: spawn.z, heading: spawn.heading, speed: 0, gameSpeed: 0, health: 145, driverId: undefined });
   }
 
   beginCooldown(winner) {
@@ -248,14 +316,14 @@ export class MultiplayerWorld {
     const radius = checkpoint.delivery ? HOT_BAKKIE_DROP_RADIUS : HOT_BAKKIE_CHECKPOINT_RADIUS;
     if (Math.hypot(vehicle.x - checkpoint.x, vehicle.z - checkpoint.z) > radius) return;
     if (checkpoint.delivery) {
-      if (Math.abs(vehicle.speed) < HOT_BAKKIE_DROP_MAX_SPEED) this.beginCooldown(carrier);
+      if (Math.abs(vehicle.gameSpeed) < HOT_BAKKIE_DROP_MAX_SPEED) this.beginCooldown(carrier); // displacement-derived, so a spoofed speedo can't fake a gentle stop
       return;
     }
     this.hot.progress += 1;
     this.pendingEvents.push({ type: 'hot-bakkie-event', kind: 'checkpoint', actorId: carrier.id, progress: this.hot.progress });
   }
 
-  tick(dt = 1 / TICK_RATE) {
+  tick() {
     const now = this.now(); this.tickNumber += 1;
     for (const player of this.players.values()) {
       if (player.reloadingUntil && now >= player.reloadingUntil) {
@@ -265,27 +333,14 @@ export class MultiplayerWorld {
         if (now < player.deadUntil) continue;
         const spawn = ONLINE_SPAWNS[this.tickNumber % ONLINE_SPAWNS.length];
         Object.assign(player, { x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, health: 100, ammo: PISTOL_MAGAZINE, reserve: PISTOL_RESERVE, reloadingUntil: 0, deadUntil: 0, protectedUntil: now + SPAWN_PROTECTION_MS });
+        // The one server-initiated move: an epoch bump discards the client's in-flight reports about the old life.
+        player.epoch += 1; player.history = [{ t: now, x: spawn.x, y: 0, z: spawn.z }]; player.moveAllowance = MOVE_BURST_ALLOWANCE; player.lastReportAt = now; player.locomotion = 'idle';
         this.pendingEvents.push({ type: 'combat', kind: 'respawn', actorId: player.id });
+        this.pendingEvents.push({ type: 'teleport', to: player.id, epoch: player.epoch, x: quantize(spawn.x), y: 0, z: quantize(spawn.z), heading: quantize(spawn.heading, 3) });
       }
-      const input = player.input;
       if (player.vehicleId) {
         const vehicle = this.vehicles.get(player.vehicleId);
-        if (!vehicle || vehicle.driverId !== player.id) { player.vehicleId = undefined; continue; }
-        const throttle = input.forward; const targetSpeed = throttle >= 0 ? throttle * 32 : throttle * 12;
-        vehicle.speed += (targetSpeed - vehicle.speed) * (1 - Math.exp(-dt * (throttle ? 3.2 : 1.7)));
-        const steerScale = Math.min(1, Math.abs(vehicle.speed) / 5); vehicle.heading += input.side * steerScale * dt * 1.65 * (vehicle.speed < 0 ? -1 : 1);
-        const nextX = clamp(vehicle.x + Math.sin(vehicle.heading) * vehicle.speed * dt, -WORLD_LIMIT, WORLD_LIMIT);
-        const nextZ = clamp(vehicle.z + Math.cos(vehicle.heading) * vehicle.speed * dt, -WORLD_LIMIT, WORLD_LIMIT);
-        if (this.roadIndex.acceptsMove(vehicle.x, vehicle.z, nextX, nextZ)) { vehicle.x = nextX; vehicle.z = nextZ; }
-        else vehicle.speed = 0;
-        player.x = vehicle.x; player.z = vehicle.z; player.heading = vehicle.heading; continue;
-      }
-      const length = Math.hypot(input.side, input.forward); player.heading = input.yaw + Math.PI;
-      if (length > 0) {
-        const side = input.side / Math.max(1, length); const forward = input.forward / Math.max(1, length); const speed = (input.sprint ? SPRINT_SPEED : WALK_SPEED) * (input.aiming ? AIM_SPEED_MULTIPLIER : 1);
-        const sin = Math.sin(input.yaw); const cos = Math.cos(input.yaw);
-        player.x = clamp(player.x + (side * cos - forward * sin) * speed * dt, -WORLD_LIMIT, WORLD_LIMIT);
-        player.z = clamp(player.z + (-side * sin - forward * cos) * speed * dt, -WORLD_LIMIT, WORLD_LIMIT);
+        if (!vehicle || vehicle.driverId !== player.id) player.vehicleId = undefined;
       }
     }
     this.updateHotBakkie(now);
@@ -296,20 +351,21 @@ export class MultiplayerWorld {
 
   snapshot() {
     const now = this.now();
-    return [...this.players.values()].map((player) => {
-      const moving = Math.hypot(player.input.forward, player.input.side) > 0.05;
-      const locomotion = player.deadUntil ? 'death' : moving ? player.input.sprint ? 'sprint' : 'walk' : 'idle';
-      return {
-        id: player.id, name: player.name, appearance: player.appearance, runs: player.runs,
-        x: quantize(player.x), y: quantize(player.y), z: quantize(player.z), heading: quantize(player.heading, 3), health: player.health,
-        kills: player.kills, deaths: player.deaths, ammo: player.ammo, reserve: player.reserve, reloading: Boolean(player.reloadingUntil),
-        locomotion, aiming: player.input.aiming, dead: Boolean(player.deadUntil), protected: now < player.protectedUntil, vehicleId: player.vehicleId,
-      };
-    });
+    this.tickTimes.push({ tick: this.tickNumber, t: now }); // remembers when each broadcast tick was true, for fire rewinds
+    while (this.tickTimes.length > 40) this.tickTimes.shift();
+    return [...this.players.values()].map((player) => ({
+      id: player.id, name: player.name, appearance: player.appearance, runs: player.runs,
+      x: quantize(player.x), y: quantize(player.y), z: quantize(player.z), heading: quantize(player.heading, 3), health: player.health,
+      kills: player.kills, deaths: player.deaths, ammo: player.ammo, reserve: player.reserve, reloading: Boolean(player.reloadingUntil),
+      locomotion: player.deadUntil ? 'death' : player.locomotion, aiming: player.aiming, dead: Boolean(player.deadUntil), protected: now < player.protectedUntil, vehicleId: player.vehicleId,
+    }));
   }
 
   vehicleSnapshot() {
-    return [...this.vehicles.values()].map((vehicle) => ({ ...vehicle, x: quantize(vehicle.x), y: quantize(vehicle.y), z: quantize(vehicle.z), heading: quantize(vehicle.heading, 3), speed: quantize(vehicle.speed) }));
+    return [...this.vehicles.values()].map((vehicle) => ({
+      id: vehicle.id, kind: vehicle.kind, x: quantize(vehicle.x), y: quantize(vehicle.y), z: quantize(vehicle.z),
+      heading: quantize(vehicle.heading, 3), speed: quantize(vehicle.speed), health: vehicle.health, driverId: vehicle.driverId, isHot: vehicle.isHot,
+    }));
   }
 
   hotBakkieSnapshot() {
@@ -328,9 +384,9 @@ export class MultiplayerWorld {
 }
 
 const send = (socket, message) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); };
-const sendSnapshot = (socket, message) => {
+const sendSnapshot = (socket, encoded) => { // snapshots are identical for everyone now: encode once, fan out
   if (socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) return false;
-  socket.send(JSON.stringify(message)); return true;
+  socket.send(encoded); return true;
 };
 
 export async function attachMultiplayer(server, options = {}) {
@@ -344,7 +400,12 @@ export async function attachMultiplayer(server, options = {}) {
     wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws));
   });
   const broadcast = (message) => { const encoded = JSON.stringify(message); for (const client of wss.clients) if (client.readyState === WebSocket.OPEN) client.send(encoded); };
-  const broadcastEvents = (events) => { for (const event of events) broadcast(event); };
+  const deliverEvents = (events) => {
+    for (const { to, ...event } of events) {
+      if (!to) { broadcast(event); continue; }
+      const target = world.players.get(to); if (target) send(target.socket, event); // teleports are the recipient's business only
+    }
+  };
   wss.on('connection', (socket) => {
     let player; const helloTimer = setTimeout(() => socket.close(4001, 'Handshake timeout'), 5000);
     socket.on('message', async (raw) => {
@@ -358,8 +419,8 @@ export async function attachMultiplayer(server, options = {}) {
         } catch (error) { send(socket, { type: 'error', code: error.code ?? 'JOIN_FAILED', message: error.message }); socket.close(4003, error.code ?? 'Join failed'); }
         return;
       }
-      if (message.type === 'input') world.input(player, message);
-      else if (message.type === 'interact') { world.interact(player); broadcastEvents(world.consumeEvents()); }
+      if (message.type === 'state') world.state(player, message);
+      else if (message.type === 'interact') { world.interact(player); deliverEvents(world.consumeEvents()); }
       else if (message.type === 'reload') world.reload(player);
       else if (message.type === 'fire') { const event = world.fire(player, message); if (event) broadcast({ type: 'combat', ...event }); }
       else if (message.type === 'chat') { const text = world.chat(player, message.text); if (text) broadcast({ type: 'chat', playerId: player.id, name: player.name, text }); }
@@ -367,10 +428,10 @@ export async function attachMultiplayer(server, options = {}) {
     });
     socket.on('close', () => { clearTimeout(helloTimer); if (player) { void world.leave(player); broadcast({ type: 'chat', name: 'World', text: `${player.name} left Johannesburg.`, system: true }); } });
   });
-  const tickTimer = setInterval(() => broadcastEvents(world.tick()), 1000 / TICK_RATE);
+  const tickTimer = setInterval(() => deliverEvents(world.tick()), 1000 / TICK_RATE);
   const snapshotTimer = setInterval(() => {
-    const players = world.snapshot(); const vehicles = world.vehicleSnapshot(); const hotBakkie = world.hotBakkieSnapshot();
-    for (const player of world.players.values()) sendSnapshot(player.socket, { type: 'snapshot', tick: world.tickNumber, acknowledgedInput: player.input.seq, players, vehicles, hotBakkie });
+    const encoded = JSON.stringify({ type: 'snapshot', tick: world.tickNumber, players: world.snapshot(), vehicles: world.vehicleSnapshot(), hotBakkie: world.hotBakkieSnapshot() });
+    for (const player of world.players.values()) sendSnapshot(player.socket, encoded);
   }, 1000 / SNAPSHOT_RATE);
   return { world, wss, async close() { clearInterval(tickTimer); clearInterval(snapshotTimer); for (const client of wss.clients) client.close(1012, 'Server restarting'); await new Promise((resolve) => wss.close(resolve)); await world.close(); } };
 }

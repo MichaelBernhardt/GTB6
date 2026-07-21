@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryProfileStore } from './profile-store.mjs';
 import {
-  appearanceForToken, cleanChat, cleanName, HOT_BAKKIE_ACTIVE_MS, HOT_BAKKIE_COOLDOWN_MS,
+  appearanceForToken, cleanChat, cleanName, FOOT_SPEED_LIMIT, HOT_BAKKIE_ACTIVE_MS, HOT_BAKKIE_COOLDOWN_MS,
   HOT_BAKKIE_COUNTDOWN_MS, HOT_BAKKIE_DROP_MAX_SPEED, HOT_BAKKIE_ROUTES, MultiplayerWorld,
   ONLINE_APPEARANCES, PROTOCOL_VERSION,
 } from './multiplayer.mjs';
@@ -14,6 +14,11 @@ const makeWorld = async (options = {}) => {
   return { world, clock };
 };
 const join = (world, name = 'Mika', token) => world.join(socket(), { version: PROTOCOL_VERSION, name, token });
+let reportSeq = 0;
+const report = (world, player, pose, extra = {}) => world.state(player, {
+  seq: (reportSeq += 1), epoch: player.epoch, x: player.x, y: player.y, z: player.z, heading: player.heading,
+  locomotion: 'walk', aiming: false, ...pose, ...extra,
+});
 const activate = (world, clock) => { clock.value += HOT_BAKKIE_COUNTDOWN_MS; world.tick(0); };
 const claimHotBakkie = (world, player) => {
   const vehicle = world.vehicles.get('hot-bakkie'); player.x = vehicle.x; player.z = vehicle.z;
@@ -34,15 +39,37 @@ describe('multiplayer input validation', () => {
   });
 });
 
-describe('authoritative multiplayer world', () => {
-  it('moves from inputs, rejects stale sequences, and caps the shard', async () => {
-    const { world } = await makeWorld({ capacity: 1 }); const player = await join(world); const startZ = player.z;
-    world.input(player, { seq: 2, forward: 1, side: 0, sprint: true, yaw: 0 });
-    world.input(player, { seq: 1, forward: -1, side: 0, sprint: false, yaw: 0 }); world.tick(1);
-    expect(startZ - player.z).toBeCloseTo(13); expect(player.input.seq).toBe(2);
-    world.input(player, { seq: 3, forward: 1, side: 0, sprint: true, aiming: true, yaw: 0 }); const aimedStart = player.z; world.tick(1);
-    expect(aimedStart - player.z).toBeCloseTo(6.5);
+describe('client-authoritative multiplayer world', () => {
+  it('accepts honest pose reports and rejects stale, wrong-epoch, or teleporting ones', async () => {
+    const { world, clock } = await makeWorld({ capacity: 1 }); const player = await join(world); const startX = player.x; const startZ = player.z;
+    clock.value += 100;
+    expect(report(world, player, { z: startZ - 1.2, heading: 2, locomotion: 'sprint' })).toBe(true);
+    expect(player.z).toBeCloseTo(startZ - 1.2); expect(player.heading).toBe(2); expect(player.locomotion).toBe('sprint');
+    const seenSeq = player.seq;
+    expect(report(world, player, { z: startZ }, { seq: seenSeq })).toBe(false); // stale seq: replayed or reordered
+    expect(report(world, player, { z: startZ }, { epoch: player.epoch + 1 })).toBe(false); // wrong epoch: a report about a life the server ended
+    expect(player.z).toBeCloseTo(startZ - 1.2);
+    expect(report(world, player, { x: startX + 500 })).toBe(false); // teleport: far past the burst allowance
+    expect(player.x).toBeCloseTo(startX);
     await expect(join(world, 'Other')).rejects.toMatchObject({ code: 'SERVER_FULL' }); await world.close();
+  });
+
+  it('caps sustained speed at the validator limit without ever correcting the client', async () => {
+    const { world, clock } = await makeWorld(); const player = await join(world); const startZ = player.z;
+    player.moveAllowance = 0; // spent burst: from here only the refill rate matters
+    clock.value += 1000;
+    expect(report(world, player, { z: startZ - FOOT_SPEED_LIMIT - 4 })).toBe(false); // faster than any honest sprint
+    expect(player.z).toBeCloseTo(startZ); // ignored, never snapped back
+    clock.value += 1000;
+    expect(report(world, player, { z: startZ - FOOT_SPEED_LIMIT + 2 })).toBe(true); // honest pace after a laggy second
+    await world.close();
+  });
+
+  it('ignores pose reports from the dead', async () => {
+    const { world, clock } = await makeWorld(); const player = await join(world);
+    player.deadUntil = clock.value + 3000; const frozenX = player.x;
+    expect(report(world, player, { x: frozenX + 1 })).toBe(false);
+    expect(player.x).toBe(frozenX); await world.close();
   });
 
   it('owns PvP damage, carrier death, kill statistics, and timed respawn', async () => {
@@ -53,7 +80,29 @@ describe('authoritative multiplayer world', () => {
     for (let shot = 0; shot < 3; shot += 1) { event = world.fire(attacker, { direction: [0, 0, -1] }); clock.value += 400; }
     expect(event).toMatchObject({ kind: 'kill', targetId: target.id }); expect(world.hot.carrier).toBeUndefined(); expect(hot.driverId).toBeUndefined();
     expect(attacker.kills).toBe(1); expect(target.deaths).toBe(1); expect(target.deadUntil).toBeGreaterThan(clock.value);
-    clock.value += 3100; expect(world.tick()).toContainEqual({ type: 'combat', kind: 'respawn', actorId: target.id }); expect(target.health).toBe(100); await world.close();
+    clock.value += 3100; const events = world.tick();
+    expect(events).toContainEqual({ type: 'combat', kind: 'respawn', actorId: target.id }); expect(target.health).toBe(100);
+    // Respawn is the one server-initiated move: a targeted teleport with a fresh epoch that retires in-flight reports about the old life.
+    expect(events).toContainEqual(expect.objectContaining({ type: 'teleport', to: target.id, epoch: 2 }));
+    expect(target.epoch).toBe(2);
+    expect(report(world, target, { x: target.x + 1 }, { epoch: 1 })).toBe(false);
+    expect(report(world, target, { x: target.x + 1 })).toBe(true); await world.close();
+  });
+
+  it('rewinds hit tests to the snapshot tick the shooter saw, clamped to real lag', async () => {
+    const { world, clock } = await makeWorld({ capacity: 2 }); const attacker = await join(world, 'Shooter'); const target = await join(world, 'Mover');
+    clock.value += 3000; // spawn protection over
+    attacker.x = 0; attacker.z = 0; attacker.history = [{ t: clock.value, x: 0, y: 0, z: 0 }];
+    target.x = 0; target.z = -30; target.y = 0; target.history = [{ t: clock.value, x: 0, y: 0, z: -30 }];
+    world.snapshot(); const seenTick = world.tickNumber; // the world the shooter is rendering: target dead ahead
+    clock.value += 200; target.x = 12; target.history.push({ t: clock.value, x: 12, y: 0, z: -30 }); // then the target strafes hard
+    const aim = [0, -0.4 / Math.hypot(30, 0.4), -30 / Math.hypot(30, 0.4)];
+    expect(world.fire(attacker, { direction: aim, tick: seenTick })).toMatchObject({ kind: 'hit', targetId: target.id }); // judged in the shooter's time frame
+    clock.value += 400;
+    expect(world.fire(attacker, { direction: aim })).toMatchObject({ kind: 'shot' }); // same aim without the tick claim: judged in the present, a miss
+    clock.value += 2000; target.history.push({ t: clock.value, x: 12, y: 0, z: -30 });
+    expect(world.fire(attacker, { direction: aim, tick: seenTick })).toMatchObject({ kind: 'shot' }); // the old tick is now beyond the rewind cap: no shooting into ancient history
+    await world.close();
   });
 
   it('restores persistent guest runs and stable appearance by token', async () => {
@@ -63,29 +112,36 @@ describe('authoritative multiplayer world', () => {
     expect(appearanceForToken(token)).toBe(appearance); expect(ONLINE_APPEARANCES).toContain(appearance); await world.close();
   });
 
-  it('arbitrates ordinary vehicle entry and releases the driver on exit', async () => {
-    const { world } = await makeWorld(); const first = await join(world, 'Driver'); const second = await join(world, 'Passenger');
+  it('arbitrates vehicle entry, applies only the driver\'s vehicle reports, and releases the seat on exit', async () => {
+    const { world, clock } = await makeWorld(); const first = await join(world, 'Driver'); const second = await join(world, 'Passenger');
     const vehicle = world.vehicles.get('vehicle-2'); first.x = vehicle.x; first.z = vehicle.z; second.x = vehicle.x; second.z = vehicle.z;
     expect(world.interact(first)).toBe(true); expect(first.vehicleId).toBe(vehicle.id); expect(world.interact(second)).toBe(false);
-    world.input(first, { seq: 1, forward: 1, side: 0, sprint: false, yaw: 0 }); const before = { x: vehicle.x, z: vehicle.z };
-    for (let step = 0; step < 20; step += 1) world.tick(1 / 20);
-    expect(Math.hypot(vehicle.x - before.x, vehicle.z - before.z)).toBeGreaterThan(1); expect(world.interact(first)).toBe(true); expect(vehicle.driverId).toBeUndefined();
+    const before = { x: vehicle.x, z: vehicle.z }; clock.value += 200;
+    expect(report(world, second, {}, { vehicle: { x: before.x + 5, y: 0, z: before.z, heading: 1, speed: 10 } })).toBe(true); // a non-driver's vehicle claim is just their own foot report
+    expect(vehicle.x).toBe(before.x);
+    expect(report(world, first, {}, { vehicle: { x: before.x + 4, y: 0, z: before.z + 1, heading: 0.4, speed: 15 } })).toBe(true);
+    expect(vehicle.x).toBeCloseTo(before.x + 4); expect(vehicle.heading).toBeCloseTo(0.4); expect(first.x).toBeCloseTo(before.x + 4); // the driver carries the vehicle, and the vehicle carries the driver
+    expect(world.interact(first)).toBe(true); expect(vehicle.driverId).toBeUndefined(); expect(vehicle.gameSpeed).toBe(0);
     second.x = vehicle.x; second.z = vehicle.z; expect(world.interact(second)).toBe(true); await world.close();
   });
 
-  it('rejects off-road vehicle movement and stops the vehicle', async () => {
-    const { world } = await makeWorld(); const player = await join(world, 'Shortcut'); const vehicle = world.vehicles.get('vehicle-1');
-    vehicle.x = 8750; vehicle.z = 8750; vehicle.heading = 0; player.x = vehicle.x; player.z = vehicle.z;
-    expect(world.interact(player)).toBe(true); world.input(player, { seq: 1, forward: 1, side: 0, sprint: false, yaw: 0 }); world.tick(1 / 20);
-    expect(vehicle).toMatchObject({ x: 8750, z: 8750, speed: 0 }); await world.close();
+  it('derives gameplay speed from displacement so a spoofed speedometer cannot fake a gentle stop', async () => {
+    const { world, clock } = await makeWorld(); const player = await join(world, 'Spoofer'); const vehicle = world.vehicles.get('vehicle-1');
+    player.x = vehicle.x; player.z = vehicle.z; expect(world.interact(player)).toBe(true);
+    clock.value += 500;
+    expect(report(world, player, {}, { vehicle: { x: vehicle.x + 10, y: 0, z: vehicle.z, heading: Math.PI / 2, speed: 0 } })).toBe(true);
+    expect(vehicle.speed).toBe(0); // the claim is broadcast as-is for presentation
+    expect(Math.abs(vehicle.gameSpeed)).toBeGreaterThan(HOT_BAKKIE_DROP_MAX_SPEED); // but gameplay sees 20 m/s of actual displacement
+    await world.close();
   });
 
-  it('quantizes complete protocol-v2 snapshots', async () => {
+  it('quantizes complete protocol-v3 snapshots', async () => {
     const { world } = await makeWorld(); const player = await join(world, 'Data Saver');
-    player.x = 12.34567; player.z = -98.76543; player.heading = Math.PI; player.input.sprint = true; player.input.forward = 1;
-    const vehicle = world.vehicles.get('vehicle-1'); vehicle.speed = 12.34567; vehicle.heading = Math.PI / 3;
+    player.x = 12.34567; player.z = -98.76543; player.heading = Math.PI; player.locomotion = 'sprint';
+    const vehicle = world.vehicles.get('vehicle-1'); vehicle.speed = 12.34567; vehicle.heading = Math.PI / 3; vehicle.gameSpeed = 9.9;
     expect(world.snapshot()[0]).toMatchObject({ x: 12.35, z: -98.77, heading: 3.142, runs: 0, ammo: 12, reserve: 84, reloading: false, locomotion: 'sprint', aiming: false });
     expect(world.vehicleSnapshot()[0]).toMatchObject({ speed: 12.35, heading: 1.047, isHot: false });
+    expect(world.vehicleSnapshot()[0]).not.toHaveProperty('gameSpeed'); // server-internal — never leaks onto the wire
     expect(world.vehicleSnapshot().find((entry) => entry.id === 'hot-bakkie')).toMatchObject({ kind: 'bakkie', isHot: true }); await world.close();
   });
 
@@ -125,9 +181,9 @@ describe('Hot Bakkie event cycle', () => {
 
   it('requires the delivery radius and low speed, then persists one run', async () => {
     const { world, clock } = await makeWorld(); const player = await join(world); const token = player.token; activate(world, clock); const hot = claimHotBakkie(world, player); const drop = HOT_BAKKIE_ROUTES[world.hot.routeIndex].checkpoints[3]; world.hot.progress = 3;
-    Object.assign(hot, { x: drop.x + 17, z: drop.z, speed: 0 }); world.tick(0); expect(world.hot.phase).toBe('active');
-    Object.assign(hot, { x: drop.x, z: drop.z, speed: HOT_BAKKIE_DROP_MAX_SPEED }); world.tick(0); expect(world.hot.phase).toBe('active');
-    hot.speed = HOT_BAKKIE_DROP_MAX_SPEED - 0.01; expect(world.tick(0)).toContainEqual({ type: 'hot-bakkie-event', kind: 'delivery', actorId: player.id });
+    Object.assign(hot, { x: drop.x + 17, z: drop.z, gameSpeed: 0 }); world.tick(0); expect(world.hot.phase).toBe('active');
+    Object.assign(hot, { x: drop.x, z: drop.z, gameSpeed: HOT_BAKKIE_DROP_MAX_SPEED }); world.tick(0); expect(world.hot.phase).toBe('active');
+    hot.gameSpeed = HOT_BAKKIE_DROP_MAX_SPEED - 0.01; expect(world.tick(0)).toContainEqual({ type: 'hot-bakkie-event', kind: 'delivery', actorId: player.id });
     expect(world.hot).toMatchObject({ phase: 'cooldown', winner: player }); expect(player.runs).toBe(1);
     await world.leave(player); const returning = await join(world, 'Winner', token); expect(returning.runs).toBe(1); await world.close();
   });

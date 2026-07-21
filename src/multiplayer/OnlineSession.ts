@@ -4,24 +4,28 @@ import { RiggedPedestrianVisual, type RiggedPedestrianState } from '../entities/
 import { MultiplayerOverlay } from './MultiplayerOverlay';
 import { extrapolateVehicle } from './latency';
 import { hotBakkieObjective, type OnlineObjective } from './presentation';
-import { MULTIPLAYER_PROTOCOL_VERSION, multiplayerWebSocketUrl, parseServerMessage, type ClientMessage, type HotBakkieState, type NetPlayer, type NetVehicle } from './protocol';
+import { MULTIPLAYER_PROTOCOL_VERSION, multiplayerWebSocketUrl, parseServerMessage, type ClientMessage, type HotBakkieState, type NetPlayer, type NetVehicle, type NetVehicleReport } from './protocol';
 
-export interface OnlineInput { forward: number; side: number; sprint: boolean; aiming: boolean; yaw: number }
+/** The local player is the authority on their own pose: this is a report of where they ARE, not a request to move. */
+export interface OnlineReport { x: number; y: number; z: number; heading: number; locomotion: 'idle' | 'walk' | 'sprint'; aiming: boolean; vehicle?: NetVehicleReport }
+export interface OnlineTeleport { epoch: number; x: number; y: number; z: number; heading: number }
 
 const TOKEN_KEY = 'groot-theft-bakkie-multiplayer-token';
-const INPUT_RATE = 20;
-const INPUT_KEEPALIVE_SECONDS = 0.5;
-const INPUT_BACKPRESSURE_BYTES = 16 * 1024;
+const REPORT_RATE = 20;
+const REPORT_KEEPALIVE_SECONDS = 0.5;
+const REPORT_BACKPRESSURE_BYTES = 16 * 1024;
 
-const normalizedInput = (input: OnlineInput): OnlineInput => ({
-  forward: Math.round(input.forward * 100) / 100,
-  side: Math.round(input.side * 100) / 100,
-  sprint: input.sprint,
-  aiming: input.aiming,
-  yaw: Math.round(input.yaw * 10_000) / 10_000,
+const round = (value: number, places: number): number => { const scale = 10 ** places; return Math.round(value * scale) / scale; };
+const normalizedReport = (report: OnlineReport): OnlineReport => ({
+  x: round(report.x, 2), y: round(report.y, 2), z: round(report.z, 2), heading: round(report.heading, 4),
+  locomotion: report.locomotion, aiming: report.aiming,
+  vehicle: report.vehicle ? { x: round(report.vehicle.x, 2), y: round(report.vehicle.y, 2), z: round(report.vehicle.z, 2), heading: round(report.vehicle.heading, 4), speed: round(report.vehicle.speed, 2) } : undefined,
 });
 
-const sameInput = (left: OnlineInput | undefined, right: OnlineInput): boolean => Boolean(left && left.forward === right.forward && left.side === right.side && left.sprint === right.sprint && left.aiming === right.aiming && left.yaw === right.yaw);
+const sameVehicle = (left: NetVehicleReport | undefined, right: NetVehicleReport | undefined): boolean =>
+  left === right || Boolean(left && right && left.x === right.x && left.y === right.y && left.z === right.z && left.heading === right.heading && left.speed === right.speed);
+const sameReport = (left: OnlineReport | undefined, right: OnlineReport): boolean =>
+  Boolean(left && left.x === right.x && left.y === right.y && left.z === right.z && left.heading === right.heading && left.locomotion === right.locomotion && left.aiming === right.aiming && sameVehicle(left.vehicle, right.vehicle));
 const angleDelta = (from: number, to: number): number => Math.atan2(Math.sin(to - from), Math.cos(to - from));
 
 export class RemoteAvatar {
@@ -107,17 +111,19 @@ export class OnlineSession {
   private socket?: WebSocket;
   private avatars = new Map<string, RemoteAvatar>();
   private vehicleVisuals = new Map<string, RemoteVehicle>();
-  private inputSeq = 0;
+  private stateSeq = 0;
   private fireSeq = 0;
   private sendAccumulator = 0;
-  private inputKeepalive = INPUT_KEEPALIVE_SECONDS;
-  private lastSentInput?: OnlineInput;
+  private reportKeepalive = REPORT_KEEPALIVE_SECONDS;
+  private lastSentReport?: OnlineReport;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private intentionallyClosed = false;
   private players: NetPlayer[] = [];
   private vehicles: NetVehicle[] = [];
   private playerNames = new Map<string, string>();
-  private localCorrection?: NetPlayer;
+  private epoch = 0; // 0 until the server hands us a life; reports are muted so a stale pose can't leak
+  private pendingTeleport?: OnlineTeleport;
+  private lastSnapshotTick = 0;
   private hotBakkie?: HotBakkieState;
   selfId?: string;
   connected = false;
@@ -130,9 +136,9 @@ export class OnlineSession {
   private connect(): void {
     this.overlay.setStatus('Connecting to the global world…');
     const socket = new WebSocket(multiplayerWebSocketUrl()); this.socket = socket;
-    socket.addEventListener('open', () => { this.lastSentInput = undefined; this.inputKeepalive = INPUT_KEEPALIVE_SECONDS; this.send({ type: 'hello', version: MULTIPLAYER_PROTOCOL_VERSION, name: this.name, token: localStorage.getItem(TOKEN_KEY) ?? undefined }); });
+    socket.addEventListener('open', () => { this.lastSentReport = undefined; this.reportKeepalive = REPORT_KEEPALIVE_SECONDS; this.send({ type: 'hello', version: MULTIPLAYER_PROTOCOL_VERSION, name: this.name, token: localStorage.getItem(TOKEN_KEY) ?? undefined }); });
     socket.addEventListener('message', (event) => this.message(String(event.data)));
-    socket.addEventListener('close', () => { this.connected = false; this.overlay.setStatus('Connection lost · reconnecting…', true); if (!this.intentionallyClosed) this.reconnectTimer = setTimeout(() => this.connect(), 2000); });
+    socket.addEventListener('close', () => { this.connected = false; this.epoch = 0; this.overlay.setStatus('Connection lost · reconnecting…', true); if (!this.intentionallyClosed) this.reconnectTimer = setTimeout(() => this.connect(), 2000); });
     socket.addEventListener('error', () => this.overlay.setStatus('Could not reach the multiplayer server.', true));
   }
 
@@ -144,9 +150,10 @@ export class OnlineSession {
         id: message.playerId, name: this.name, appearance: 'braamfontein-creative', runs: 0, ...message.spawn,
         health: 100, kills: 0, deaths: 0, ammo: 12, reserve: 84, reloading: false, locomotion: 'idle', aiming: false, dead: false, protected: true,
       };
-      this.localCorrection = this.localState;
+      this.pendingTeleport = { epoch: 1, ...message.spawn };
     }
-    else if (message.type === 'snapshot') this.snapshot(message.players, message.vehicles, message.hotBakkie);
+    else if (message.type === 'teleport') this.pendingTeleport = message;
+    else if (message.type === 'snapshot') this.snapshot(message.tick, message.players, message.vehicles, message.hotBakkie);
     else if (message.type === 'chat') this.overlay.chat(message.name, message.text, message.system);
     else if (message.type === 'combat') {
       const actor = this.playerNames.get(message.actorId) ?? 'Player'; const target = message.targetId ? this.playerNames.get(message.targetId) ?? 'Player' : undefined;
@@ -167,9 +174,9 @@ export class OnlineSession {
     else if (message.type === 'error') this.overlay.setStatus(message.message, true);
   }
 
-  private snapshot(players: NetPlayer[], vehicles: NetVehicle[], hotBakkie: HotBakkieState): void {
-    this.players = players; this.vehicles = vehicles; this.hotBakkie = hotBakkie;
-    this.playerNames = new Map(players.map((player) => [player.id, player.name])); this.localState = players.find((player) => player.id === this.selfId); this.localCorrection = this.localState;
+  private snapshot(tick: number, players: NetPlayer[], vehicles: NetVehicle[], hotBakkie: HotBakkieState): void {
+    this.lastSnapshotTick = tick; this.players = players; this.vehicles = vehicles; this.hotBakkie = hotBakkie;
+    this.playerNames = new Map(players.map((player) => [player.id, player.name])); this.localState = players.find((player) => player.id === this.selfId);
     this.overlay.setPlayers(players, this.selfId, hotBakkie.carrier);
     const live = new Set(players.map((player) => player.id));
     for (const state of players) {
@@ -179,38 +186,53 @@ export class OnlineSession {
     }
     for (const [id, avatar] of this.avatars) if (!live.has(id)) { avatar.dispose(this.scene); this.avatars.delete(id); }
     const liveVehicles = new Set(vehicles.map((vehicle) => vehicle.id));
+    const drivenId = this.localState?.vehicleId;
     for (const state of vehicles) {
       const grounded = { ...state, y: this.surfaceHeight(state.x, state.z) }; let vehicle = this.vehicleVisuals.get(state.id);
-      if (!vehicle) { vehicle = new RemoteVehicle(this.scene, grounded); this.vehicleVisuals.set(state.id, vehicle); } else vehicle.setState(grounded);
+      if (!vehicle) { vehicle = new RemoteVehicle(this.scene, grounded); this.vehicleVisuals.set(state.id, vehicle); }
+      else if (state.id === drivenId) vehicle.vehicle.health = state.health; // our hands are on this wheel — the server only owns its health
+      else vehicle.setState(grounded);
     }
     for (const [id, vehicle] of this.vehicleVisuals) if (!liveVehicles.has(id)) { vehicle.dispose(this.scene); this.vehicleVisuals.delete(id); }
   }
 
-  update(dt: number, input: OnlineInput): NetPlayer | undefined {
+  update(dt: number, report: OnlineReport | undefined): NetPlayer | undefined {
+    const drivenId = this.localState?.vehicleId;
     for (const avatar of this.avatars.values()) avatar.update(dt);
-    for (const vehicle of this.vehicleVisuals.values()) vehicle.update(dt);
-    this.sendAccumulator += dt; this.inputKeepalive += dt;
-    if (this.sendAccumulator >= 1 / INPUT_RATE) {
-      this.sendAccumulator %= 1 / INPUT_RATE;
-      const latest = normalizedInput(input);
-      if ((!sameInput(this.lastSentInput, latest) || this.inputKeepalive >= INPUT_KEEPALIVE_SECONDS) && this.sendInput(latest)) {
-        this.lastSentInput = latest; this.inputKeepalive = 0;
+    for (const [id, vehicle] of this.vehicleVisuals) if (id !== drivenId) vehicle.update(dt);
+    this.sendAccumulator += dt; this.reportKeepalive += dt;
+    if (report && this.epoch > 0 && this.sendAccumulator >= 1 / REPORT_RATE) {
+      this.sendAccumulator %= 1 / REPORT_RATE;
+      const latest = normalizedReport(report);
+      if ((!sameReport(this.lastSentReport, latest) || this.reportKeepalive >= REPORT_KEEPALIVE_SECONDS) && this.sendReport(latest)) {
+        this.lastSentReport = latest; this.reportKeepalive = 0;
       }
     }
     return this.localState;
   }
 
-  fire(direction: THREE.Vector3): void { this.send({ type: 'fire', seq: ++this.fireSeq, direction: [direction.x, direction.y, direction.z] }); }
+  fire(direction: THREE.Vector3): void { this.send({ type: 'fire', seq: ++this.fireSeq, direction: [direction.x, direction.y, direction.z], tick: this.lastSnapshotTick }); }
   reload(): void { this.send({ type: 'reload' }); }
   interact(): void { this.send({ type: 'interact' }); }
 
-  private sendInput(input: OnlineInput): boolean {
-    if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > INPUT_BACKPRESSURE_BYTES) return false;
-    this.socket.send(JSON.stringify({ type: 'input', seq: ++this.inputSeq, ...input } satisfies ClientMessage)); return true;
+  private sendReport(report: OnlineReport): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > REPORT_BACKPRESSURE_BYTES) return false;
+    this.socket.send(JSON.stringify({ type: 'state', seq: ++this.stateSeq, epoch: this.epoch, ...report } satisfies ClientMessage)); return true;
   }
 
   private send(message: ClientMessage): void { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(message)); }
-  consumeLocalCorrection(): NetPlayer | undefined { const state = this.localCorrection; this.localCorrection = undefined; return state; }
+
+  /** The only path by which the server moves the local player: spawn and respawn. Consuming it arms the new epoch. */
+  consumeTeleport(): OnlineTeleport | undefined {
+    const teleport = this.pendingTeleport; if (!teleport) return undefined;
+    this.pendingTeleport = undefined; this.epoch = teleport.epoch; return teleport;
+  }
+
+  /** While the server seats us in a vehicle, its visual is handed to the local simulation. */
+  get drivenVehicle(): Vehicle | undefined {
+    const id = this.localState?.vehicleId;
+    return id ? this.vehicleVisuals.get(id)?.vehicle : undefined;
+  }
 
   close(): void {
     this.intentionallyClosed = true; clearTimeout(this.reconnectTimer); this.socket?.close();
