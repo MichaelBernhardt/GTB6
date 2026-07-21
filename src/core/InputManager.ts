@@ -1,3 +1,6 @@
+export const typingInField = (target: EventTarget | null): boolean =>
+  target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
+
 export class InputManager {
   private held = new Set<string>();
   private pressed = new Set<string>();
@@ -15,7 +18,7 @@ export class InputManager {
 
   constructor(private element: HTMLElement) {
     window.addEventListener('keydown', (event) => {
-      if (this.suspended) return;
+      if (this.suspended || typingInField(event.target)) return; // a focused text field owns the keyboard — WASD/Space must insert letters, not steer
       if (!this.held.has(event.code)) this.pressed.add(event.code);
       this.held.add(event.code);
       if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Tab', 'PageUp', 'PageDown', 'AltLeft'].includes(event.code)) event.preventDefault();

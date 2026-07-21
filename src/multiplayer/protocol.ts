@@ -1,6 +1,6 @@
 import type { NpcCharacterId } from '../entities/NpcCatalog';
 
-export const MULTIPLAYER_PROTOCOL_VERSION = 2;
+export const MULTIPLAYER_PROTOCOL_VERSION = 3;
 const ONLINE_APPEARANCE_IDS = ['braamfontein-creative', 'sandton-professional', 'rosebank-athlete', 'melville-creative', 'newtown-producer', 'fordsburg-restaurateur', 'maboneng-courier', 'parkhurst-architect'] as const;
 
 export type NetLocomotion = 'idle' | 'walk' | 'sprint' | 'death';
@@ -54,10 +54,12 @@ export interface HotBakkieState {
   winner?: string;
 }
 
+export interface NetVehicleReport { x: number; y: number; z: number; heading: number; speed: number }
+
 export type ClientMessage =
   | { type: 'hello'; version: number; name: string; token?: string }
-  | { type: 'input'; seq: number; forward: number; side: number; sprint: boolean; aiming: boolean; yaw: number }
-  | { type: 'fire'; seq: number; direction: [number, number, number] }
+  | { type: 'state'; seq: number; epoch: number; x: number; y: number; z: number; heading: number; locomotion: 'idle' | 'walk' | 'sprint'; aiming: boolean; vehicle?: NetVehicleReport }
+  | { type: 'fire'; seq: number; direction: [number, number, number]; tick: number }
   | { type: 'reload' }
   | { type: 'interact' }
   | { type: 'chat'; text: string }
@@ -65,7 +67,8 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { type: 'welcome'; playerId: string; token: string; tickRate: number; capacity: number; spawn: NetPoint }
-  | { type: 'snapshot'; tick: number; acknowledgedInput: number; players: NetPlayer[]; vehicles: NetVehicle[]; hotBakkie: HotBakkieState }
+  | { type: 'snapshot'; tick: number; players: NetPlayer[]; vehicles: NetVehicle[]; hotBakkie: HotBakkieState }
+  | { type: 'teleport'; epoch: number; x: number; y: number; z: number; heading: number }
   | { type: 'chat'; playerId?: string; name: string; text: string; system?: boolean }
   | { type: 'combat'; kind: 'shot' | 'hit' | 'kill' | 'respawn'; actorId: string; targetId?: string }
   | { type: 'hot-bakkie-event'; kind: 'start' | 'claim' | 'takeover' | 'checkpoint' | 'delivery' | 'timeout'; actorId?: string; previousActorId?: string; progress?: number }
@@ -100,7 +103,8 @@ export function parseServerMessage(raw: string): ServerMessage | undefined {
   try {
     const value: unknown = JSON.parse(raw); if (!record(value) || !string(value.type)) return undefined;
     if (value.type === 'welcome' && string(value.playerId) && string(value.token) && number(value.tickRate) && number(value.capacity) && isPoint(value.spawn)) return value as unknown as ServerMessage;
-    if (value.type === 'snapshot' && number(value.tick) && number(value.acknowledgedInput) && Array.isArray(value.players) && value.players.every(isPlayer) && Array.isArray(value.vehicles) && value.vehicles.every(isVehicle) && isHotBakkie(value.hotBakkie)) return value as unknown as ServerMessage;
+    if (value.type === 'snapshot' && number(value.tick) && Array.isArray(value.players) && value.players.every(isPlayer) && Array.isArray(value.vehicles) && value.vehicles.every(isVehicle) && isHotBakkie(value.hotBakkie)) return value as unknown as ServerMessage;
+    if (value.type === 'teleport' && number(value.epoch) && number(value.x) && number(value.y) && number(value.z) && number(value.heading)) return value as unknown as ServerMessage;
     if (value.type === 'chat' && optionalString(value.playerId) && string(value.name) && string(value.text) && (value.system === undefined || typeof value.system === 'boolean')) return value as unknown as ServerMessage;
     if (value.type === 'combat' && oneOf(value.kind, ['shot', 'hit', 'kill', 'respawn']) && string(value.actorId) && optionalString(value.targetId)) return value as unknown as ServerMessage;
     if (value.type === 'hot-bakkie-event' && oneOf(value.kind, ['start', 'claim', 'takeover', 'checkpoint', 'delivery', 'timeout']) && optionalString(value.actorId) && optionalString(value.previousActorId) && (value.progress === undefined || number(value.progress))) return value as unknown as ServerMessage;

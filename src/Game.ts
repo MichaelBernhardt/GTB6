@@ -16,8 +16,7 @@ import { crashKickSpeed, impactKickSpeed, landingDownSpeed } from './entities/Pe
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
 import { InputManager } from './core/InputManager';
 import { MultiplayerOverlay } from './multiplayer/MultiplayerOverlay';
-import { OnlineSession } from './multiplayer/OnlineSession';
-import { onlineCorrectionFactor } from './multiplayer/latency';
+import { OnlineSession, type OnlineReport } from './multiplayer/OnlineSession';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { FrameProfiler } from './core/FrameProfiler';
@@ -473,6 +472,7 @@ export class Game {
       const target = this.online.objective?.target;
       return [
         ...this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const })),
+        ...this.online.vehicleStates.filter((vehicle) => !vehicle.isHot && !vehicle.driverId).map((vehicle) => ({ x: vehicle.x, z: vehicle.z, color: '#8fa7b8' })), // free cars are findable — they spawn at road anchors, not next to players
         ...(target ? [{ x: target.x, z: target.z, color: target.color, objective: true }] : []),
       ];
     }
@@ -716,6 +716,7 @@ export class Game {
   private startOnline(name: string): void {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.endTaxiShift(); this.endCourierShift(); this.online?.close(); this.trains.endRide();
+    Object.assign(this.cheats, { fastRun: false, bigJump: false, invulnerable: false }); // cheat speeds would trip the server's movement validator and freeze you in place for everyone else
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
     this.activeVehicle = undefined; this.transition = undefined; this.cover = undefined; this.airborne = undefined; this.player.resetAirbornePose(); this.releasePlane();
     this.player.group.position.set(...PLAYER_SPAWN); this.player.group.position.y = this.city.surfaceHeightAt(PLAYER_SPAWN[0], PLAYER_SPAWN[2]);
@@ -890,8 +891,26 @@ export class Game {
     const online = this.online; if (!online) return;
     if (this.input.consume('Escape')) { this.pause(); return; }
     const stateBefore = online.localState;
+    // We are the authority on our own pose. The server never corrects it — its only say is the
+    // discrete spawn/respawn teleport below; everything else we simulate locally and report.
+    const teleport = online.consumeTeleport();
+    if (teleport) {
+      this.player.group.position.set(teleport.x, this.city.surfaceHeightAt(teleport.x, teleport.z), teleport.z);
+      this.player.setHeading(teleport.heading);
+    }
     if (this.input.consume('KeyE')) online.interact();
-    if (!stateBefore?.dead && !stateBefore?.vehicleId) {
+    const driven = !stateBefore?.dead && stateBefore?.vehicleId ? online.drivenVehicle : undefined;
+    if (driven && this.activeVehicle !== driven) { // the server granted the seat: the real local physics take the wheel
+      this.activeVehicle = driven; driven.playerControlled = true; driven.occupied = true;
+      this.player.inVehicle = true; this.driveSteer = 0; this.prevDrivenSpeed = 0;
+    }
+    else if (!driven && this.activeVehicle) this.exitOnlineVehicle();
+    if (driven) {
+      const speed = driven.updatePlayer(dt, this.input, this.city, this.driveSteer);
+      this.player.group.position.copy(driven.group.position);
+      this.audio.setEngine(true, speed, this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0, driven.spec.maxSpeed, driven.spec.kind);
+    }
+    else if (!stateBefore?.dead) {
       this.player.setVisible(true); this.player.update(dt, this.input, this.cameraController.yaw, this.city);
       if (stateBefore) {
         this.combat.loadout.pistol.ammo = stateBefore.ammo; this.combat.loadout.pistol.reserve = stateBefore.reserve;
@@ -902,25 +921,31 @@ export class Game {
       const shot = this.combat.fire(this.input, this.camera, this.player.group.position, this.population, { aim: this.input.aiming, heading: this.player.heading });
       if (shot.fired && !shot.melee) { this.player.registerShot(); online.fire(this.camera.getWorldDirection(new THREE.Vector3()).normalize()); }
     }
-    const state = online.update(dt, {
-      forward: Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')),
-      side: Number(this.input.down('KeyD')) - Number(this.input.down('KeyA')),
-      sprint: this.input.down('ShiftLeft'), aiming: this.input.aiming, yaw: this.cameraController.yaw,
-    });
+    const moving = this.input.down('KeyW') || this.input.down('KeyS') || this.input.down('KeyA') || this.input.down('KeyD');
+    const report: OnlineReport | undefined = stateBefore?.dead ? undefined : driven ? {
+      x: driven.group.position.x, y: driven.group.position.y, z: driven.group.position.z, heading: driven.heading, locomotion: 'idle', aiming: false,
+      vehicle: { x: driven.group.position.x, y: driven.group.position.y, z: driven.group.position.z, heading: driven.heading, speed: driven.speed },
+    } : {
+      x: this.player.group.position.x, y: this.player.group.position.y, z: this.player.group.position.z, heading: this.player.heading,
+      locomotion: moving ? this.input.down('ShiftLeft') ? 'sprint' : 'walk' : 'idle', aiming: this.input.aiming,
+    };
+    const state = online.update(dt, report);
     if (!state) return;
-    const authoritative = online.consumeLocalCorrection();
-    if (authoritative) {
-      const error = Math.hypot(authoritative.x - this.player.group.position.x, authoritative.z - this.player.group.position.z);
-      const moving = this.input.down('KeyW') || this.input.down('KeyS') || this.input.down('KeyA') || this.input.down('KeyD');
-      const correction = onlineCorrectionFactor(error, moving, authoritative.dead, Boolean(authoritative.vehicleId));
-      this.player.group.position.x = THREE.MathUtils.lerp(this.player.group.position.x, authoritative.x, correction);
-      this.player.group.position.z = THREE.MathUtils.lerp(this.player.group.position.z, authoritative.z, correction);
-    }
-    this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
     this.player.health = state.health; this.player.setVisible(!state.dead && !state.vehicleId);
     if (state.dead && !this.onlineWasDead) { this.ui.notify('EISH', 'You were eliminated. Respawning in three seconds.', false); this.audio.setFire(false); }
     this.onlineWasDead = state.dead;
     this.markerTarget = this.currentTarget();
+  }
+
+  /** Leaving an online seat (E, death, delivery): hand the visual back to snapshots and step out beside it. */
+  private exitOnlineVehicle(): void {
+    const vehicle = this.activeVehicle; if (!vehicle) return;
+    vehicle.playerControlled = false; vehicle.occupied = false; vehicle.setFirstPerson(false);
+    this.activeVehicle = undefined; this.player.inVehicle = false; this.audio.setEngine(false);
+    const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(2.2);
+    const target = vehicle.group.position.clone().add(side);
+    const spot = safePlacement(target.x, target.z, (px, pz) => this.city.collides(px, pz, PLAYER.radius));
+    this.player.group.position.set(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z);
   }
 
   private applyEskom(event: 'start' | 'end' | undefined): void {
@@ -2425,7 +2450,9 @@ export class Game {
       const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
       const contactPrompt = this.contactPrompt(); // offer / riddle re-state / job re-brief — undefined when E would do nothing
-      if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat' : 'E  Enter nearby vehicle  ·  ENTER  Global chat  ·  Open PvP';
+      if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat'
+        : this.online.enterableVehicleNear(this.player.group.position.x, this.player.group.position.z) ? 'E  Enter vehicle  ·  ENTER  Global chat'
+        : 'ENTER  Global chat  ·  Open PvP  ·  Cars marked on map'; // the old prompt claimed E worked from anywhere; only promise it in actual reach
       else if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
       else if (this.activePlane) prompt = planeHint(this.activePlane.state);
       else if (this.activeVehicle) {

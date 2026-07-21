@@ -14,7 +14,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
+    "typeRoots": ["./node_modules/@types"] // hermetic: without this, tsc walks ancestor node_modules and a stray ~/node_modules (e.g. @types/bun) can clobber DOM globals like fetch
   },
   "include": ["src"]
 }
