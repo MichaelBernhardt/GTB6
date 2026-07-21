@@ -3,14 +3,14 @@ import { buildAnalyticsDashboard, MemoryAnalyticsStore, PostgresAnalyticsStore }
 
 const session = (overrides = {}) => ({
   sessionId: 'session-1', visitorHash: 'visitor-1', startedAt: new Date('2026-07-20T10:00:00Z'), lastSeenAt: new Date('2026-07-20T10:30:00Z'),
-  mode: 'singleplayer', active: true, visible: true, build: 'abc1234', browser: 'chromium', platform: 'windows', device: 'desktop', viewport: 'large', quality: 'high',
+  mode: 'singleplayer', active: true, visible: true, build: 'abc1234', browser: 'chromium', platform: 'windows', device: 'desktop', viewport: 'large', quality: 'high', country: 'ZA',
   returning: false, fpsSum: 118, fpsCount: 2, modeSeconds: { loading: 10, menu: 20, singleplayer: 1200, multiplayer: 0, paused: 30, hidden: 0 }, ...overrides,
 });
 const event = (eventId, type, overrides = {}) => ({ eventId, sessionId: 'session-1', type, at: new Date('2026-07-20T10:20:00Z'), payload: {}, build: 'abc1234', browser: 'chromium', platform: 'windows', ...overrides });
 
 describe('analytics aggregation', () => {
   it('calculates live, gameplay, mission, retention, and error groups without identity fields', () => {
-    const sessions = [session(), session({ sessionId: 'session-2', visitorHash: 'visitor-1', returning: true, mode: 'multiplayer', modeSeconds: { loading: 1, menu: 2, singleplayer: 0, multiplayer: 600, paused: 0, hidden: 0 } })];
+    const sessions = [session(), session({ sessionId: 'session-2', visitorHash: 'visitor-1', returning: true, mode: 'multiplayer', country: 'US', modeSeconds: { loading: 1, menu: 2, singleplayer: 0, multiplayer: 600, paused: 0, hidden: 0 } })];
     const events = [
       event('e1', 'mission_start', { payload: { missionId: 'couch-run' } }),
       event('e2', 'mission_complete', { payload: { missionId: 'couch-run', durationSeconds: 300 } }),
@@ -25,6 +25,10 @@ describe('analytics aggregation', () => {
     expect(result.gameplay).toMatchObject({ deaths: 1, vehicleCrashes: 1, aircraftCrashes: 1 });
     expect(result.gameplay.multiplayer).toMatchObject({ joins: 1, peakConcurrency: 3, kills: 1, deaths: 1 });
     expect(result.technical[0]).toMatchObject({ fingerprint: 'fingerprint', count: 2, affectedSessions: 2, severity: 'fatal' });
+    expect(result.geography).toEqual([
+      { country: 'US', sessions: 1, uniquePlayers: 1, share: 50 },
+      { country: 'ZA', sessions: 1, uniquePlayers: 1, share: 50 },
+    ]);
     expect(JSON.stringify(result)).not.toContain('displayName');
   });
 });
@@ -50,6 +54,7 @@ describe('PostgreSQL analytics store', () => {
     const sql = query.mock.calls.map(([statement]) => String(statement)).join('\n');
     expect(sql).toContain('analytics_sessions'); expect(sql).toContain('analytics_events'); expect(sql).toContain('analytics_daily_rollups');
     expect(sql).toContain('"returning" BOOLEAN NOT NULL DEFAULT FALSE');
+    expect(sql).toContain("country CHAR(2) NOT NULL DEFAULT 'ZZ'");
     expect(sql.match(/DELETE FROM/g)).toHaveLength(3); expect(store.available).toBe(true);
   });
 });

@@ -46,6 +46,8 @@ table { width: 100%; border-collapse: collapse; font-size: .78rem; }
 th, td { padding: .7rem .6rem; border-bottom: 1px solid #2a3935; text-align: left; vertical-align: top; }
 th { color: #91a29a; font-size: .65rem; letter-spacing: .08em; text-transform: uppercase; }
 td code { color: #f7c843; }
+.data-credit { margin: .9rem 0 0; color: #82938b; font-size: .7rem; line-height: 1.5; }
+.data-credit a { color: #aebbb4; }
 .severity { display: inline-block; padding: .2rem .35rem; border: 1px solid #956e2c; color: #ffc85c; text-transform: uppercase; }
 .severity.fatal { border-color: #9f3e34; color: #ff9c8d; }
 .status-dot { display: inline-block; width: .55rem; height: .55rem; margin-right: .4rem; border-radius: 50%; background: #55d4b0; }
