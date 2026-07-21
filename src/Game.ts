@@ -6,6 +6,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
+import { analytics } from './analytics/Telemetry';
 import { AudioManager } from './core/AudioManager';
 import { bootMark, bootTimeline } from './core/BootTimeline';
 import { radioDial } from './core/RadioStations';
@@ -202,6 +203,7 @@ export class Game {
   private wheelVector = new THREE.Vector2();
   private wheelHighlight: WeaponId = 'pistol';
   private previousObjective = '';
+  private missionTelemetryStartedAt?: number;
   private loggedDrawCalls = false;
   private vehicleCollisionCooldown = new WeakMap<Vehicle, number>();
   private reputationReactionCooldown = 0;
@@ -231,6 +233,7 @@ export class Game {
     bootMark('boot: settings');
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
     if (this.touchMode) this.settings.quality = touchQuality(this.saveExists, this.settings.quality, 'potato'); // phones start on the Skorokoro tier; a saved choice from the settings menu wins
+    analytics.setQuality(this.settings.quality);
     bootMark('boot: renderer');
     this.setupRenderer(); this.setupScene();
     void this.boot(); // async staged build: yields to the frame loop so the bar moves and the page paints
@@ -317,6 +320,7 @@ export class Game {
 
   private async prepareAssets(retry = false): Promise<void> {
     const attempt = ++this.assetLoadAttempt; this.requiredAssetsReady = false; this.mode = 'loading';
+    analytics.setMode('loading');
     this.ui.showLoading({ progress: 52, label: retry ? 'Retrying required models' : 'Loading required models', detail: 'Player, vehicles and trees · 0 of 3 ready.' });
     let completed = 0; let failed = false;
     const track = (name: string, task: Promise<void>): Promise<void> => task.then(() => {
@@ -342,12 +346,13 @@ export class Game {
       if (attempt !== this.assetLoadAttempt) return;
       this.ui.showLoading({ progress: 100, label: 'Joburg is ready', detail: 'Welcome to the city.' });
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      this.requiredAssetsReady = true; this.mode = 'menu'; this.ui.showMainMenu(this.mainMenuSummary());
+      this.requiredAssetsReady = true; this.mode = 'menu'; analytics.setMode('menu'); this.ui.showMainMenu(this.mainMenuSummary());
       bootMark('boot: menu'); window.dispatchEvent(new Event('gtb-boot-ready')); // main.ts disarms its boot error traps on this
     } catch (error) {
       failed = true;
       if (attempt !== this.assetLoadAttempt) return;
       console.error('[assets] A required 3D asset failed to load.', error);
+      analytics.captureError(error, { source: 'asset', severity: 'recoverable', asset: 'required-3d-assets' });
       this.ui.showAssetFailure(() => { void this.prepareAssets(true); });
     }
   }
@@ -399,12 +404,12 @@ export class Game {
   private bindUI(): void {
     this.ui.onStart = (fresh) => this.startGame(fresh);
     this.ui.onOnline = (name) => this.startOnline(name);
-    this.ui.onResume = () => { this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); if (this.activeVehicle && !this.activeVehicle.spec.twoWheeler) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
-    this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; this.ui.hideMenu(); };
+    this.ui.onResume = () => { this.mode = 'playing'; analytics.setMode(this.online ? 'multiplayer' : 'singleplayer'); this.input.reset(); this.ui.hideMenu(); if (this.activeVehicle && !this.activeVehicle.spec.twoWheeler) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
+    this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; analytics.setMode(this.online ? 'multiplayer' : 'singleplayer'); this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
     this.ui.onSettings = (settings) => {
       const qualityChanged = settings.quality !== undefined && settings.quality !== this.settings.quality;
-      Object.assign(this.settings, settings); this.audio.setVolume(this.settings.masterVolume);
+      Object.assign(this.settings, settings); analytics.setQuality(this.settings.quality); this.audio.setVolume(this.settings.masterVolume);
       if (qualityChanged) this.applyQuality(); this.persist();
     };
     this.ui.onShowCheats = () => this.ui.showCheats(WEAPONS.filter((spec) => !spec.melee).map((spec) => ({ id: spec.id, name: spec.name, owned: this.combat.owned(spec.id) })), this.cheats);
@@ -431,7 +436,7 @@ export class Game {
       this.ui.onResume?.();
     };
     this.ui.onMissionChoice = (id) => {
-      const update = this.missions.choose(id); this.mode = 'playing'; this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+      const update = this.missions.choose(id); this.mode = 'playing'; analytics.setMode('singleplayer'); this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
       this.processMissionUpdate(update);
     };
     this.ui.onConsoleCommand = (text) => this.ui.consolePrint(runConsoleCommand(text, this.consoleHost));
@@ -568,6 +573,7 @@ export class Game {
       this.resetMissionRuntime();
       const mission = this.missions.forceStart(index);
       if (!mission) return `Eish, mission ${index} would not arm.`;
+      this.trackMissionStart(mission.id);
       this.teleportPlayer(mission.start.position.x, mission.start.position.z, mission.contact);
       return `Mission ${index} "${mission.name}" armed — you're with ${mission.contact}. Objective: ${this.missions.objective?.text ?? ''}`;
     },
@@ -703,7 +709,7 @@ export class Game {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
-    this.player.setDead(false); this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+    this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
 
@@ -715,7 +721,7 @@ export class Game {
     this.player.group.position.set(...PLAYER_SPAWN); this.player.group.position.y = this.city.surfaceHeightAt(PLAYER_SPAWN[0], PLAYER_SPAWN[2]);
     this.player.setDead(false); this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
     this.markerTarget = undefined;
-    this.mode = 'playing'; this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
+    this.mode = 'playing'; analytics.setMode('multiplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
     void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Global world', 'Open PvP is active. Press Enter to chat.');
   }
@@ -724,6 +730,7 @@ export class Game {
     requestAnimationFrame(this.animate);
     this.profiler.enabled = this.settings.showFps || this.settings.showPerfChart; this.profiler.frameStart(); // off = zero overhead
     const raw = this.clock.getDelta(); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
+    analytics.sampleFps(this.fps);
     this.navHudTimer += raw; // once a real second, convert the A* solve/ms totals into per-second rates for the HUD
     if (this.navHudTimer >= 1) {
       const solves = this.population.navSolveCount(); const ms = this.population.navSolveMs();
@@ -1180,6 +1187,7 @@ export class Game {
    *  pilot is thrown clear and billed for the impact — a full-speed stall-in is lethal without the cheat. */
   private crashActivePlane(plane: Plane, sink: number, speed: number): void {
     const at = plane.group.position.clone();
+    analytics.record('aircraft_crash', { sink: Math.abs(sink), speed: Math.abs(speed) });
     plane.wreck(); this.releasePlane();
     this.audio.explosion(at.x, at.z); this.audio.setEngine(false);
     this.shake = Math.min(0.7, this.shake + 0.5);
@@ -1330,7 +1338,7 @@ export class Game {
     const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
     this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed, vehicle.spec.kind); // 'bicycle' routes to the freewheel/wind voice, everything else to an engine profile
     this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
-    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); this.wallCrashCooldown = 0.8; this.taxiRide.recordCrash(this.prevDrivenSpeed); this.recordCourierCrash(this.prevDrivenSpeed); }
+    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); analytics.record('vehicle_collision', { impact: this.prevDrivenSpeed, vehicleKind: vehicle.spec.kind }); this.wallCrashCooldown = 0.8; this.taxiRide.recordCrash(this.prevDrivenSpeed); this.recordCourierCrash(this.prevDrivenSpeed); }
     this.prevDrivenSpeed = speed;
     this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
     if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
@@ -1847,7 +1855,7 @@ export class Game {
     if (!this.dialogue.active) return false;
     if (this.dialogue.advance() === 'finished') {
       const offered = this.story.acceptOffer();
-      if (offered) { this.resetMissionRuntime(); this.missions.start(offered); }
+      if (offered) { this.resetMissionRuntime(); if (this.missions.start(offered)) this.trackMissionStart(offered); }
     }
     this.audio.ui(true);
     return true;
@@ -1907,10 +1915,10 @@ export class Game {
   }
 
   private tryMissionInteraction(): boolean {
-    if (this.missions.state === 'failed' && this.missions.active) { this.resetMissionRuntime(); this.missions.restart(); this.ui.notify('Mission restarted', this.missions.active?.name ?? ''); return true; }
+    if (this.missions.state === 'failed' && this.missions.active) { const missionId = this.missions.active.id; this.resetMissionRuntime(); if (this.missions.restart()) this.trackMissionStart(missionId); this.ui.notify('Mission restarted', this.missions.active?.name ?? ''); return true; }
     if (this.missions.objective?.kind === 'collect') return false;
     if (this.missions.objective?.kind === 'choice') {
-      this.mode = 'paused'; document.exitPointerLock(); this.ui.showMissionChoice(this.missions.active?.name ?? 'Choose', this.missions.objective.choices ?? []); return true;
+      this.mode = 'paused'; analytics.setMode('paused'); document.exitPointerLock(); this.ui.showMissionChoice(this.missions.active?.name ?? 'Choose', this.missions.objective.choices ?? []); return true;
     }
     const action = this.contactAction();
     if (!action) return false;
@@ -2026,12 +2034,12 @@ export class Game {
   private enterSafehouse(place: SafehousePlace): void {
     if (!canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge)) { this.ui.notify(place.name, 'The JMPD has eyes on you. Lose the heat first.', false); return; }
     this.activeSafehouse = place;
-    this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
+    this.mode = 'paused'; analytics.setMode('paused'); this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
     this.ui.showSafehouse(place.name, SLEEP_HOURS);
   }
 
   private openWeaponShop(): void {
-    this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
+    this.mode = 'paused'; analytics.setMode('paused'); this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
     this.renderShop();
   }
 
@@ -2070,7 +2078,7 @@ export class Game {
 
   private openBottleStore(name: string): void {
     this.activeBottleStore = name;
-    this.mode = 'paused'; this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
+    this.mode = 'paused'; analytics.setMode('paused'); this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
     this.renderBottleStore();
   }
 
@@ -2153,7 +2161,7 @@ export class Game {
   }
 
   private processMissionUpdate(update: MissionUpdate): void {
-    if (update.failed) { this.audio.ui(false); this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false); }
+    if (update.failed) { const missionId = this.missions.active?.id; if (missionId) analytics.record('mission_fail', { missionId, durationSeconds: this.missionTelemetryDuration(), reason: update.failed }); this.missionTelemetryStartedAt = undefined; this.audio.ui(false); this.ui.notify('Mission failed', `${update.failed}. Press E to restart.`, false); }
     if (update.choice) {
       const { missionId, choice } = update.choice;
       this.story.onChoice(missionId, choice.id);
@@ -2171,6 +2179,7 @@ export class Game {
       }
     } else if (update.completed) { this.celebrateMission(update.completed); }
     if (update.completed) {
+      analytics.record('mission_complete', { missionId: update.completed.id, durationSeconds: this.missionTelemetryDuration() }); this.missionTelemetryStartedAt = undefined;
       for (const flag of this.story.onMissionCompleted(update.completed)) if (flag.startsWith('act')) this.ui.notify('Word travels', 'New contacts will hear your name now.', true, 'reputation');
       const outro = MISSION_SCRIPTS[update.completed.id]?.outro;
       if (outro?.length) this.dialogue.start({ id: `${update.completed.id}:outro`, lines: outro });
@@ -2400,6 +2409,7 @@ export class Game {
       const direction = driven.group.position.clone().sub(other.group.position).setY(0).normalize(); driven.group.position.addScaledVector(direction, 0.4); other.group.position.addScaledVector(direction, -0.35);
       if ((this.vehicleCollisionCooldown.get(driven) ?? 0) <= 0) {
         const impact = Math.abs(driven.speed - other.speed);
+        if (impact > 12) analytics.record('vehicle_collision', { impact, vehicleKind: driven.spec.kind });
         if (driven.spec.twoWheeler) this.damagePlayer(riderImpactDamage(impact)); else driven.takeDamage(impact * 0.35); // riders eat the hit themselves
         other.takeDamage(impact * 0.25); this.audio.collision(impact); this.taxiRide.recordCrash(impact); this.recordCourierCrash(impact); this.vehicleCollisionCooldown.set(driven, 0.8);
         if (driven.spec.twoWheeler && shouldKnockOff(impact)) { this.knockOff(driven, impact); return; }
@@ -2513,9 +2523,10 @@ export class Game {
   }
   private die(): void {
     if (this.mode === 'dead') return;
-    if (this.missions.state === 'active') this.missions.fail('You were incapacitated');
+    analytics.record('player_death', { mode: this.online ? 'multiplayer' : 'singleplayer' });
+    if (this.missions.state === 'active') this.processMissionUpdate(this.missions.fail('You were incapacitated'));
     this.endCourierShift();
-    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.setDead(true); this.mode = 'dead'; this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
+    this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.setDead(true); this.mode = 'dead'; analytics.setMode('paused'); this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   /** `reload` console command: restore the manual checkpoint live (no page refresh) — money, time, kit, cheats,
    *  living-city and mission progress, wanted cleared, and the player set back at the checkpoint position/facing.
@@ -2558,10 +2569,10 @@ export class Game {
    *  Mirrors die(), but the collar is survivable — you keep your progress, just not your hardware or bail money. */
   private getBusted(): void {
     if (this.mode === 'dead' || this.mode === 'busted') return;
-    if (this.missions.state === 'active') this.missions.fail('JMPD nicked you');
+    if (this.missions.state === 'active') this.processMissionUpdate(this.missions.fail('JMPD nicked you'));
     this.endCourierShift();
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false);
-    this.mode = 'busted'; this.bustTimer = 3; this.bustMeter = 0;
+    this.mode = 'busted'; analytics.setMode('paused'); this.bustTimer = 3; this.bustMeter = 0;
     this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio();
     this.audio.policeRadio(); // dispatch calls the arrest in
     this.closeWeaponWheel(); this.closeConsole(); this.closeMap();
@@ -2585,13 +2596,15 @@ export class Game {
       this.economy.spend(bail); this.persist();
       this.ui.notify('Released', `Bail: R${bail.toLocaleString()}. Weapons confiscated. Wanted level cleared.`, false);
     }
-    this.mode = 'playing';
+    this.mode = 'playing'; analytics.setMode(this.online ? 'multiplayer' : 'singleplayer');
   }
   /** Tears down the JMPD response and drops its foot officers from the population roster. */
   private clearPolice(): void {
     for (const officer of this.police.reset()) this.population.removePedestrian(officer);
   }
-  private pause(): void { this.mode = 'paused'; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private pause(): void { this.mode = 'paused'; analytics.setMode('paused'); this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); document.exitPointerLock(); this.ui.showPause(this.settings); }
+  private trackMissionStart(missionId: string): void { this.missionTelemetryStartedAt = performance.now(); analytics.record('mission_start', { missionId }); }
+  private missionTelemetryDuration(): number { return this.missionTelemetryStartedAt === undefined ? 0 : Math.max(0, (performance.now() - this.missionTelemetryStartedAt) / 1000); }
   private persist(): void {
     const at = this.activeVehicle?.group.position ?? this.player.group.position; // live location (the vehicle is the player while driving)
     const heading = this.activeVehicle?.heading ?? this.player.heading;

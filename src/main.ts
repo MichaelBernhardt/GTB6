@@ -1,10 +1,12 @@
 import './styles.css';
+import { analytics } from './analytics/Telemetry';
 import { bootTimelineTail } from './core/BootTimeline';
 import { installProfiler } from './dev/Profiler';
 import { Game } from './Game';
 
 const container = document.querySelector<HTMLElement>('#game');
 if (!container) throw new Error('Game container not found');
+analytics.start();
 
 /** Boot error card: replaces the loading UI with a readable breakdown (what broke, where boot
  *  died, device info, Reload). Inline styles only — it must render even when the stylesheet,
@@ -44,6 +46,7 @@ const onBootRejection = (event: PromiseRejectionEvent): void =>
 window.addEventListener('error', onBootError);
 window.addEventListener('unhandledrejection', onBootRejection);
 window.addEventListener('gtb-boot-ready', () => {
+  analytics.markBootComplete();
   window.removeEventListener('error', onBootError);
   window.removeEventListener('unhandledrejection', onBootRejection);
 }, { once: true });
@@ -51,6 +54,8 @@ window.addEventListener('gtb-boot-ready', () => {
 // Probable mobile killer #1 gets its own friendly message: probe WebGL2 before building anything.
 const probe = document.createElement('canvas').getContext('webgl2');
 if (!probe) {
+  const error = new Error('WebGL2 graphics could not start on this device.');
+  analytics.captureError(error, { source: 'boot', severity: 'fatal' });
   showBootError("This browser can't draw Joburg", 'WebGL2 graphics could not start on this device. Try updating your browser, closing other tabs, or a different device.');
 } else {
   probe.getExtension('WEBGL_lose_context')?.loseContext(); // release the probe context straight away
@@ -60,8 +65,8 @@ if (!probe) {
     try {
       new Game(container);
     } catch (error) {
+      analytics.captureError(error, { source: 'boot', severity: 'fatal' });
       showBootError('The city failed to start', error instanceof Error ? error.message : String(error));
-      throw error;
     }
     // Game's own loading screen reports live progress from here (construction continues async).
     document.querySelector('#boot-loading')?.remove();
