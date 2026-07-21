@@ -46,12 +46,13 @@ describe('authoritative multiplayer world', () => {
   });
 
   it('owns PvP damage, carrier death, kill statistics, and timed respawn', async () => {
-    const { world, clock } = await makeWorld({ capacity: 2 }); const attacker = await join(world, 'Shooter'); const target = await join(world, 'Target');
+    const analyticsEvent = vi.fn(); const { world, clock } = await makeWorld({ capacity: 2, analyticsEvent }); const attacker = await join(world, 'Shooter'); const target = await join(world, 'Target');
     activate(world, clock); const hot = claimHotBakkie(world, target);
     attacker.x = 0; attacker.z = 0; target.x = 0; target.z = -10; hot.x = target.x; hot.z = target.z; clock.value += 3000;
     let event;
     for (let shot = 0; shot < 3; shot += 1) { event = world.fire(attacker, { direction: [0, 0, -1] }); clock.value += 400; }
     expect(event).toMatchObject({ kind: 'kill', targetId: target.id }); expect(world.hot.carrier).toBeUndefined(); expect(hot.driverId).toBeUndefined();
+    expect(analyticsEvent).toHaveBeenCalledWith('multiplayer_kill', {});
     expect(attacker.kills).toBe(1); expect(target.deaths).toBe(1); expect(target.deadUntil).toBeGreaterThan(clock.value);
     clock.value += 3100; expect(world.tick()).toContainEqual({ type: 'combat', kind: 'respawn', actorId: target.id }); expect(target.health).toBe(100); await world.close();
   });
@@ -133,8 +134,9 @@ describe('Hot Bakkie event cycle', () => {
   });
 
   it('broadcasts timeout and starts a fresh round after cooldown', async () => {
-    const { world, clock } = await makeWorld(); const player = await join(world); activate(world, clock); claimHotBakkie(world, player); clock.value += HOT_BAKKIE_ACTIVE_MS;
+    const analyticsEvent = vi.fn(); const { world, clock } = await makeWorld({ analyticsEvent }); const player = await join(world); activate(world, clock); claimHotBakkie(world, player); clock.value += HOT_BAKKIE_ACTIVE_MS;
     expect(world.tick(0)).toContainEqual({ type: 'hot-bakkie-event', kind: 'timeout' }); expect(world.hot.phase).toBe('cooldown'); expect(player.vehicleId).toBeUndefined();
+    expect(analyticsEvent.mock.calls.map(([type]) => type)).toEqual(expect.arrayContaining(['multiplayer_join', 'hot_bakkie_start', 'hot_bakkie_timeout']));
     clock.value += HOT_BAKKIE_COOLDOWN_MS; world.tick(0); expect(world.hot).toMatchObject({ phase: 'countdown', round: 2, routeIndex: 1 }); await world.close();
   });
 

@@ -131,6 +131,8 @@ first-person cabin, and model-specific bakkie/police hierarchies under runtime v
 
 ```text
 src/
+  admin/       dependency-free analytics dashboard
+  analytics/   anonymous browser telemetry client
   core/        input, audio, camera, rules, radio, and persistence
   entities/    player, pedestrian, vehicle, and weapon models
   systems/     missions, combat, police, population, jobs, shops, and city life
@@ -146,7 +148,8 @@ art/character/ original concept, material sources, recipe, and source lock
 art/npcs/     original NPC turnarounds, textile sources, previews, recipes, and source lock
 art/foliage/ original tree recipe, workflow notes, and source lock
 art/vehicles/ original vehicle recipes, editable Blend sources, previews, and source lock
-server.mjs     production static server
+server/        multiplayer, analytics stores/APIs, and SQL migrations
+server.mjs     production static server and request router
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for runtime ownership and data flow, and [GAME_DESIGN.md](GAME_DESIGN.md) for rules and tuning intent.
@@ -163,6 +166,21 @@ PORT=4173 npm start
 ```
 
 The same web process owns the global multiplayer shard. Attach Heroku Postgres and expose its standard `DATABASE_URL` to persist guest names, run wins, and kill/death statistics. Startup applies the additive `runs` column migration automatically. Without a database the server falls back to in-memory profiles, which reset on restart. Keep the app at one web dyno because live world state is process-local.
+
+The protected analytics dashboard lives at `/admin`. Configure all three secrets in production; if either admin
+secret is absent, login and dashboard data are disabled:
+
+```bash
+heroku config:set ADMIN_PASSWORD='a-long-shared-password'
+heroku config:set ADMIN_SESSION_SECRET="$(openssl rand -base64 48)"
+heroku config:set ANALYTICS_SECRET="$(openssl rand -base64 48)"
+```
+
+`ADMIN_SESSION_SECRET` signs eight-hour secure admin cookies. `ANALYTICS_SECRET` HMAC-hashes the anonymous browser
+ID before storage and should remain stable across deploys. Analytics uses Postgres when `DATABASE_URL` exists and an
+in-memory store for local development/tests. Detail is retained for 90 days and daily rollups for one year. Telemetry
+contains coarse client/build/performance data and bounded gameplay/technical events; it does not send display names,
+chat, save contents, or raw IP addresses.
 
 Pull requests into protected `main` must pass the production verification check. A merged push installs dependencies,
 runs lint, tests, character/NPC/foliage asset validation, and the production build before deploying the verified commit
