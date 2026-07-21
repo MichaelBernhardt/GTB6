@@ -24,7 +24,7 @@ function harness(storage = new MemoryStorage()) {
   const beacons = vi.fn(); const nav = { userAgent: 'Mozilla/5.0 Chrome/126.0 Safari/537.36', platform: 'Win32', sendBeacon: beacons } as unknown as Navigator;
   const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
   const request = vi.fn(async (path: string | URL | Request, init?: RequestInit) => { requests.push({ path: String(path), body: JSON.parse(String(init?.body)) }); return new Response(null, { status: 202 }); }) as typeof fetch;
-  const client = new TelemetryClient({ window: win, document: doc, navigator: nav, storage, fetch: request, now: () => now, uuid: () => ids[nextId++] ?? crypto.randomUUID(), setInterval: (() => 1) as unknown as typeof setInterval, clearInterval: vi.fn() });
+  const client = new TelemetryClient({ window: win, document: doc, navigator: nav, storage, fetch: request, now: () => now, uuid: () => ids[nextId++] ?? crypto.randomUUID(), setInterval: () => 1, clearInterval: vi.fn() });
   return { client, win, doc, requests, beacons, storage, advance: (milliseconds: number) => { now += milliseconds; } };
 }
 
@@ -39,6 +39,36 @@ describe('telemetry classifications', () => {
 });
 
 describe('TelemetryClient', () => {
+  it('calls browser-owned APIs with the Window receiver', () => {
+    const win = new EventTarget() as Window;
+    const doc = new EventTarget() as Document;
+    const request = vi.fn(function (this: Window) {
+      if (this !== win) throw new TypeError('Illegal invocation');
+      return Promise.resolve(new Response(null, { status: 202 }));
+    }) as unknown as typeof fetch;
+    const schedule = vi.fn(function (this: Window) {
+      if (this !== win) throw new TypeError('Illegal invocation');
+      return 1;
+    });
+    const unschedule = vi.fn(function (this: Window) {
+      if (this !== win) throw new TypeError('Illegal invocation');
+    });
+    Object.defineProperties(win, {
+      fetch: { value: request }, innerWidth: { value: 1280 }, location: { value: { pathname: '/' } },
+      setInterval: { value: schedule }, clearInterval: { value: unschedule },
+    });
+    Object.defineProperty(doc, 'visibilityState', { value: 'visible' });
+    const client = new TelemetryClient({
+      window: win, document: doc, navigator: { userAgent: '', platform: '' } as Navigator,
+      storage: new MemoryStorage(), now: () => 0, uuid: () => ids[0],
+    });
+
+    expect(() => client.start()).not.toThrow();
+    expect(schedule).toHaveBeenCalledOnce();
+    client.end();
+    expect(unschedule).toHaveBeenCalledWith(1);
+  });
+
   it('persists only the anonymous browser ID while issuing a new session ID', () => {
     const storage = new MemoryStorage(); const first = harness(storage).client; const second = harness(storage).client;
     expect(first.browserId).toBe(second.browserId); expect(first.sessionId).not.toBe(second.sessionId); expect(storage.length).toBe(1);
