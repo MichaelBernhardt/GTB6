@@ -23,7 +23,9 @@ class Client {
   }
   send(message) { this.socket.send(JSON.stringify(message)); }
   report(pose) { this.send({ type: 'state', seq: (this.seq += 1), epoch: this.epoch, heading: 0, locomotion: 'walk', aiming: false, ...pose }); }
-  async expect(match, timeoutMs = 3000) {
+  // Deadlines are generous on purpose: CI runners share cores with parallel suites and can starve
+  // the 100ms snapshot timer for seconds — this run's assertions are eventually-consistent, not timing tests.
+  async expect(match, timeoutMs = 20_000) {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const found = this.messages.find(match);
@@ -73,7 +75,7 @@ describe('multiplayer wire protocol v3', () => {
     const aim = [-20 / aimLength, -0.4 / aimLength, 0];
     for (let shot = 0; shot < 3; shot += 1) {
       bob.send({ type: 'fire', seq: shot + 1, direction: aim, tick: seenTick });
-      if (shot < 2) { await bob.expect((message) => message.type === 'combat' && message.kind === 'hit' && message.targetId === alice.welcome.playerId, 2000); bob.messages.length = 0; clock.value += 400; }
+      if (shot < 2) { await bob.expect((message) => message.type === 'combat' && message.kind === 'hit' && message.targetId === alice.welcome.playerId, 10_000); bob.messages.length = 0; clock.value += 400; }
     }
     await bob.expect((message) => message.type === 'combat' && message.kind === 'kill' && message.targetId === alice.welcome.playerId);
 
@@ -89,5 +91,5 @@ describe('multiplayer wire protocol v3', () => {
     await bob.expect((message) => message.type === 'combat' && message.kind === 'respawn' && message.actorId === alice.welcome.playerId);
 
     alice.close(); bob.close();
-  }, 20_000);
+  }, 120_000);
 });
