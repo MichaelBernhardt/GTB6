@@ -240,7 +240,7 @@ export class PostgresAnalyticsStore {
     this.available = true;
   }
   async startSession(input) {
-    await this.pool.query(`INSERT INTO analytics_sessions (session_id, visitor_hash, started_at, last_seen_at, mode, visible, build_version, browser, platform, device, viewport, quality, country, returning)
+    await this.pool.query(`INSERT INTO analytics_sessions (session_id, visitor_hash, started_at, last_seen_at, mode, visible, build_version, browser, platform, device, viewport, quality, country, "returning")
       VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,EXISTS(SELECT 1 FROM analytics_sessions WHERE visitor_hash=$2))
       ON CONFLICT (session_id) DO UPDATE SET last_seen_at=EXCLUDED.last_seen_at`,
     [input.sessionId, input.visitorHash, input.at, input.mode, input.visible, input.build, input.browser, input.platform, input.device, input.viewport, input.quality, input.country]);

@@ -50,10 +50,16 @@ describe('PostgreSQL analytics store', () => {
   it('creates all analytics tables and applies bounded retention queries', async () => {
     const query = vi.fn(async () => ({ rowCount: 0, rows: [] }));
     const store = new PostgresAnalyticsStore('postgres://localhost/test'); store.pool = { query, end: vi.fn() };
-    await store.init(); await store.cleanup(new Date('2026-07-21T00:00:00Z'));
+    await store.init();
+    await store.startSession({
+      sessionId: 'session', visitorHash: 'visitor', at: new Date('2026-07-20T10:00:00Z'), mode: 'loading', visible: true,
+      build: 'build', browser: 'chromium', platform: 'windows', device: 'desktop', viewport: 'large', quality: 'high', country: 'ZA',
+    });
+    await store.cleanup(new Date('2026-07-21T00:00:00Z'));
     const sql = query.mock.calls.map(([statement]) => String(statement)).join('\n');
     expect(sql).toContain('analytics_sessions'); expect(sql).toContain('analytics_events'); expect(sql).toContain('analytics_daily_rollups');
     expect(sql).toContain('"returning" BOOLEAN NOT NULL DEFAULT FALSE');
+    expect(sql).toContain('country, "returning")');
     expect(sql).toContain("country CHAR(2) NOT NULL DEFAULT 'ZZ'");
     expect(sql.match(/DELETE FROM/g)).toHaveLength(3); expect(store.available).toBe(true);
   });
