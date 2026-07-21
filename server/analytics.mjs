@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { buildAnalyticsDashboard, createAnalyticsStore } from './analytics-store.mjs';
+import { countryCodeForRequest } from './country.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MODES = new Set(['loading', 'menu', 'singleplayer', 'multiplayer', 'paused']);
@@ -100,13 +101,13 @@ function cookieValue(request, name) {
 }
 
 export class AnalyticsService {
-  constructor({ env = process.env, store = createAnalyticsStore(env), now = () => new Date() } = {}) {
+  constructor({ env = process.env, store = createAnalyticsStore(env), now = () => new Date(), countryLookup } = {}) {
     this.env = env; this.store = store; this.now = now; this.startedAt = now(); this.ready = false; this.lastTelemetryAt = undefined;
     this.adminEnabled = Boolean(env.ADMIN_PASSWORD && env.ADMIN_SESSION_SECRET);
     this.analyticsSecretPersistent = Boolean(env.ANALYTICS_SECRET);
     this.analyticsSecret = env.ANALYTICS_SECRET || randomBytes(32).toString('base64url');
     this.build = bounded(env.SOURCE_VERSION || env.HEROKU_SLUG_COMMIT, 40, 'dev');
-    this.rates = new Map(); this.loginRates = new Map(); this.heartbeatIds = new Map(); this.multiplayerProvider = () => ({});
+    this.rates = new Map(); this.loginRates = new Map(); this.heartbeatIds = new Map(); this.multiplayerProvider = () => ({}); this.countryLookup = countryLookup;
   }
 
   async init({ maintenance = true } = {}) {
@@ -203,7 +204,7 @@ export class AnalyticsService {
         if (!isSameOrigin(request)) throw new HttpError(403, 'Cross-origin request rejected');
         if (!this.ready) throw new HttpError(503, 'Analytics storage unavailable');
         this.requestRateLimit(request, 60);
-        const body = await readJson(request, 4096); const input = this.normalizeSession(body); this.rateLimit(`session:${input.sessionId}`, 5);
+        const body = await readJson(request, 4096); const input = { ...this.normalizeSession(body), country: countryCodeForRequest(request, this.countryLookup) }; this.rateLimit(`session:${input.sessionId}`, 5);
         await this.store.startSession(input); this.lastTelemetryAt = input.at; json(response, 202, { accepted: true }); return true;
       }
       if (pathname === '/api/analytics/heartbeat') {

@@ -40,6 +40,16 @@ export function buildAnalyticsDashboard({ sessions, events, rollups = [], range 
   const playtimes = selectedSessions.map((session) => (session.modeSeconds.singleplayer ?? 0) + (session.modeSeconds.multiplayer ?? 0));
   const errorSessions = new Set(selectedEvents.filter((event) => event.type === 'technical_error').map((event) => event.sessionId));
   const fatalEvents = selectedEvents.filter((event) => event.type === 'technical_error' && event.severity === 'fatal');
+  const countryMap = new Map();
+  for (const session of selectedSessions) {
+    const country = /^[A-Z]{2}$/.test(session.country ?? '') ? session.country : 'ZZ';
+    const item = countryMap.get(country) ?? { country, sessions: 0, visitors: new Set() };
+    item.sessions += 1; item.visitors.add(session.visitorHash); countryMap.set(country, item);
+  }
+  const geography = [...countryMap.values()].map((item) => ({
+    country: item.country, sessions: item.sessions, uniquePlayers: item.visitors.size,
+    share: selectedSessions.length ? round(item.sessions / selectedSessions.length * 100) : 0,
+  })).sort((a, b) => b.sessions - a.sessions || a.country.localeCompare(b.country));
 
   const bucketStart = Math.floor(since.getTime() / config.bucket) * config.bucket;
   const points = [];
@@ -114,6 +124,7 @@ export function buildAnalyticsDashboard({ sessions, events, rollups = [], range 
       medianPlaytimeSeconds: round(median(playtimes)), technicalCrashes: fatalEvents.length,
       errorFreeSessionRate: selectedSessions.length ? round((selectedSessions.length - errorSessions.size) / selectedSessions.length * 100) : 100,
     },
+    geography,
     series: {
       concurrency: points.map(({ time, concurrency: value, singleplayer, multiplayer: multi }) => ({ time, value, singleplayer, multiplayer: multi })),
       activeUsers: points.map(({ time, dau, wau, mau }) => ({ time, dau, wau, mau })),
@@ -195,7 +206,7 @@ function rowToSession(row) {
   return {
     sessionId: row.session_id, visitorHash: row.visitor_hash, startedAt: row.started_at, lastSeenAt: row.last_seen_at, endedAt: row.ended_at,
     mode: row.mode, active: row.active, visible: row.visible, build: row.build_version, browser: row.browser, platform: row.platform,
-    device: row.device, viewport: row.viewport, quality: row.quality, returning: row.returning, fpsSum: Number(row.fps_sum), fpsCount: Number(row.fps_count),
+    device: row.device, viewport: row.viewport, quality: row.quality, country: row.country?.trim() || 'ZZ', returning: row.returning, fpsSum: Number(row.fps_sum), fpsCount: Number(row.fps_count),
     modeSeconds: { loading: Number(row.loading_seconds), menu: Number(row.menu_seconds), singleplayer: Number(row.singleplayer_seconds), multiplayer: Number(row.multiplayer_seconds), paused: Number(row.paused_seconds), hidden: Number(row.hidden_seconds) },
   };
 }
@@ -209,7 +220,7 @@ export class PostgresAnalyticsStore {
       session_id TEXT PRIMARY KEY, visitor_hash CHAR(64) NOT NULL, started_at TIMESTAMPTZ NOT NULL, last_seen_at TIMESTAMPTZ NOT NULL,
       ended_at TIMESTAMPTZ, mode VARCHAR(20) NOT NULL, active BOOLEAN NOT NULL DEFAULT FALSE, visible BOOLEAN NOT NULL DEFAULT TRUE,
       build_version VARCHAR(40) NOT NULL, browser VARCHAR(32) NOT NULL, platform VARCHAR(32) NOT NULL, device VARCHAR(16) NOT NULL,
-      viewport VARCHAR(16) NOT NULL, quality VARCHAR(16), "returning" BOOLEAN NOT NULL DEFAULT FALSE, fps_sum DOUBLE PRECISION NOT NULL DEFAULT 0,
+      viewport VARCHAR(16) NOT NULL, quality VARCHAR(16), country CHAR(2) NOT NULL DEFAULT 'ZZ', "returning" BOOLEAN NOT NULL DEFAULT FALSE, fps_sum DOUBLE PRECISION NOT NULL DEFAULT 0,
       fps_count INTEGER NOT NULL DEFAULT 0, loading_seconds DOUBLE PRECISION NOT NULL DEFAULT 0, menu_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
       singleplayer_seconds DOUBLE PRECISION NOT NULL DEFAULT 0, multiplayer_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
       paused_seconds DOUBLE PRECISION NOT NULL DEFAULT 0, hidden_seconds DOUBLE PRECISION NOT NULL DEFAULT 0
@@ -223,15 +234,16 @@ export class PostgresAnalyticsStore {
       day DATE PRIMARY KEY, sessions INTEGER NOT NULL, unique_players INTEGER NOT NULL, playtime_seconds DOUBLE PRECISION NOT NULL,
       technical_crashes INTEGER NOT NULL, payload JSONB NOT NULL DEFAULT '{}'::jsonb, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+    await this.pool.query("ALTER TABLE analytics_sessions ADD COLUMN IF NOT EXISTS country CHAR(2) NOT NULL DEFAULT 'ZZ'");
     await this.pool.query('CREATE INDEX IF NOT EXISTS analytics_sessions_last_seen_idx ON analytics_sessions (last_seen_at)');
     await this.pool.query('CREATE INDEX IF NOT EXISTS analytics_events_occurred_idx ON analytics_events (occurred_at)');
     this.available = true;
   }
   async startSession(input) {
-    await this.pool.query(`INSERT INTO analytics_sessions (session_id, visitor_hash, started_at, last_seen_at, mode, visible, build_version, browser, platform, device, viewport, quality, returning)
-      VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,EXISTS(SELECT 1 FROM analytics_sessions WHERE visitor_hash=$2))
+    await this.pool.query(`INSERT INTO analytics_sessions (session_id, visitor_hash, started_at, last_seen_at, mode, visible, build_version, browser, platform, device, viewport, quality, country, returning)
+      VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,EXISTS(SELECT 1 FROM analytics_sessions WHERE visitor_hash=$2))
       ON CONFLICT (session_id) DO UPDATE SET last_seen_at=EXCLUDED.last_seen_at`,
-    [input.sessionId, input.visitorHash, input.at, input.mode, input.visible, input.build, input.browser, input.platform, input.device, input.viewport, input.quality]);
+    [input.sessionId, input.visitorHash, input.at, input.mode, input.visible, input.build, input.browser, input.platform, input.device, input.viewport, input.quality, input.country]);
   }
   async heartbeat(input) {
     const column = input.visible ? `${input.mode}_seconds` : 'hidden_seconds';

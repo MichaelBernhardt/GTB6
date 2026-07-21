@@ -14,10 +14,10 @@ describe('analytics and admin HTTP APIs', () => {
   const resources = [];
   afterEach(async () => { for (const { server, root, service } of resources.splice(0)) { await new Promise((resolve) => server.close(resolve)); await service.close(); await rm(root, { recursive: true, force: true }); } });
 
-  async function setup(env = { ADMIN_PASSWORD: 'correct horse', ADMIN_SESSION_SECRET: 'admin-secret', ANALYTICS_SECRET: 'analytics-secret', SOURCE_VERSION: 'build-123' }) {
+  async function setup(env = { ADMIN_PASSWORD: 'correct horse', ADMIN_SESSION_SECRET: 'admin-secret', ANALYTICS_SECRET: 'analytics-secret', SOURCE_VERSION: 'build-123' }, countryLookup = () => ({ country: 'ZA' })) {
     const root = await mkdtemp(join(tmpdir(), 'gtb-analytics-')); await mkdir(join(root, 'admin'));
     await writeFile(join(root, 'index.html'), '<title>Game</title>'); await writeFile(join(root, 'admin/index.html'), '<title>Admin analytics</title>');
-    let now = new Date('2026-07-20T10:00:00Z'); const service = new AnalyticsService({ env, store: new MemoryAnalyticsStore(), now: () => now }); await service.init({ maintenance: false });
+    let now = new Date('2026-07-20T10:00:00Z'); const service = new AnalyticsService({ env, store: new MemoryAnalyticsStore(), now: () => now, countryLookup }); await service.init({ maintenance: false });
     const server = createStaticServer({ root, analytics: service }); await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); const base = `http://127.0.0.1:${address.port}`; resources.push({ server, root, service });
     return { base, service, setNow: (value) => { now = value; } };
@@ -35,7 +35,7 @@ describe('analytics and admin HTTP APIs', () => {
     expect((await post(base, '/api/analytics/session', session, 'https://attacker.test')).status).toBe(403);
     expect((await post(base, '/api/analytics/event', { ...crash, eventId: 'bad', type: 'made-up' })).status).toBe(400);
     const stored = [...service.store.events.values()][0]; expect(stored.fingerprint).toHaveLength(64); expect(stored.payload.message).toContain('<redacted>'); expect(stored.payload.message).not.toContain('user@example.com'); expect(stored.payload.message).not.toContain('127.0.0.1'); expect(stored.payload.unknown).toBeUndefined();
-    expect((await service.store.getSession(sessionId)).visitorHash).toHaveLength(64); expect((await service.store.getSession(sessionId)).visitorHash).not.toBe(browserId);
+    expect((await service.store.getSession(sessionId)).visitorHash).toHaveLength(64); expect((await service.store.getSession(sessionId)).visitorHash).not.toBe(browserId); expect((await service.store.getSession(sessionId)).country).toBe('ZA');
     const normalizedA = service.fingerprint({ errorType: 'TypeError', message: 'request 123 failed', stack: 'at boot (app.js:10:2)' }, 'build');
     const normalizedB = service.fingerprint({ errorType: 'TypeError', message: 'request 456 failed', stack: 'at boot (app.js:99:8)' }, 'build'); expect(normalizedA).toBe(normalizedB);
     const api = await fetch(`${base}/api/admin/dashboard`); expect(api.status).toBe(401); expect(api.headers.get('content-type')).toContain('application/json'); expect(await api.text()).not.toContain('<title>Game');
@@ -44,7 +44,7 @@ describe('analytics and admin HTTP APIs', () => {
     const login = await post(base, '/api/admin/login', { password: 'correct horse' }); expect(login.status).toBe(200);
     const cookie = login.headers.get('set-cookie'); expect(cookie).toContain('HttpOnly'); expect(cookie).toContain('Secure'); expect(cookie).toContain('SameSite=Strict'); expect(cookie).toContain('Max-Age=28800');
     const dashboard = await fetch(`${base}/api/admin/dashboard?range=7d`, { headers: { Cookie: cookie.split(';')[0] } }); expect(dashboard.status).toBe(200);
-    const body = await dashboard.json(); expect(body).toMatchObject({ range: '7d', live: { singleplayer: 1, technicalCrashes: 1 }, operations: { build: 'build-123', database: { available: true } } });
+    const body = await dashboard.json(); expect(body).toMatchObject({ range: '7d', live: { singleplayer: 1, technicalCrashes: 1 }, geography: [{ country: 'ZA', sessions: 1, uniquePlayers: 1, share: 100 }], operations: { build: 'build-123', database: { available: true } } });
     expect(JSON.stringify(body)).not.toContain(browserId); expect(JSON.stringify(body)).not.toContain('supersecret');
     const logout = await post(base, '/api/admin/logout', {}); expect(logout.status).toBe(200); expect(logout.headers.get('set-cookie')).toContain('Max-Age=0');
   });
