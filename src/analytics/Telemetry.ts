@@ -7,6 +7,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 
 type ErrorSource = 'boot' | 'runtime' | 'promise' | 'asset' | 'network';
 interface ErrorContext { source: ErrorSource; severity: 'fatal' | 'recoverable'; asset?: string; }
+type IntervalScheduler = (handler: TimerHandler, timeout?: number, ...args: unknown[]) => number;
+type IntervalCanceller = (id?: number) => void;
 interface TelemetryOptions {
   window?: Window;
   document?: Document;
@@ -15,8 +17,8 @@ interface TelemetryOptions {
   fetch?: typeof fetch;
   now?: () => number;
   uuid?: () => string;
-  setInterval?: typeof setInterval;
-  clearInterval?: typeof clearInterval;
+  setInterval?: IntervalScheduler;
+  clearInterval?: IntervalCanceller;
 }
 
 export function coarseBrowser(userAgent: string): 'chromium' | 'firefox' | 'safari' | 'other' {
@@ -61,7 +63,7 @@ export class TelemetryClient {
   private lastHeartbeat: number;
   private startedAt: number;
   private fps = 0;
-  private heartbeatTimer?: ReturnType<typeof setInterval>;
+  private heartbeatTimer?: number;
   private startRequest: Promise<void> = Promise.resolve();
   private readonly win?: Window;
   private readonly doc?: Document;
@@ -70,8 +72,8 @@ export class TelemetryClient {
   private readonly request: typeof fetch;
   private readonly clock: () => number;
   private readonly randomId: () => string;
-  private readonly schedule: typeof setInterval;
-  private readonly unschedule: typeof clearInterval;
+  private readonly schedule: IntervalScheduler;
+  private readonly unschedule: IntervalCanceller;
 
   constructor(options: TelemetryOptions = {}) {
     this.win = options.window ?? (typeof window === 'undefined' ? undefined : window);
@@ -80,11 +82,11 @@ export class TelemetryClient {
     let browserStorage = options.storage;
     if (!browserStorage && this.win) { try { browserStorage = this.win.localStorage; } catch { browserStorage = undefined; } }
     this.storage = browserStorage;
-    this.request = options.fetch ?? fetch;
+    this.request = options.fetch ?? (this.win?.fetch ? this.win.fetch.bind(this.win) : fetch);
     this.clock = options.now ?? (() => performance.now());
     this.randomId = options.uuid ?? (() => crypto.randomUUID());
-    this.schedule = options.setInterval ?? setInterval;
-    this.unschedule = options.clearInterval ?? clearInterval;
+    this.schedule = options.setInterval ?? (this.win?.setInterval ? this.win.setInterval.bind(this.win) : () => 0);
+    this.unschedule = options.clearInterval ?? (this.win?.clearInterval ? this.win.clearInterval.bind(this.win) : () => undefined);
     this.browserId = this.persistentBrowserId(); this.sessionId = this.randomId();
     this.visible = this.doc?.visibilityState !== 'hidden'; this.startedAt = this.clock(); this.lastHeartbeat = this.startedAt;
   }

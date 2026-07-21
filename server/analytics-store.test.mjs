@@ -49,6 +49,7 @@ describe('PostgreSQL analytics store', () => {
     await store.init(); await store.cleanup(new Date('2026-07-21T00:00:00Z'));
     const sql = query.mock.calls.map(([statement]) => String(statement)).join('\n');
     expect(sql).toContain('analytics_sessions'); expect(sql).toContain('analytics_events'); expect(sql).toContain('analytics_daily_rollups');
+    expect(sql).toContain('"returning" BOOLEAN NOT NULL DEFAULT FALSE');
     expect(sql.match(/DELETE FROM/g)).toHaveLength(3); expect(store.available).toBe(true);
   });
 });
