@@ -5,8 +5,7 @@
  * version or map mismatch — returns false and the boot derives live exactly as before; a bad
  * bake can slow a boot down, never break one.
  */
-import rawMap from '../generated/joburg-map.json';
-import { hashString, unpackBake, type BakeManifest } from './format';
+import { unpackBake, type BakeManifest } from './format';
 import { hydrateParcels } from '../CityGen';
 import { hydrateScatter } from '../ModelScatter';
 import { installBakedVehicleNav } from '../City';
@@ -17,7 +16,7 @@ export const BAKE_BIN_URL = '/baked/city.bin';
 
 /** The map-data fingerprint the bake must match — identical computation in tools/bake/index.ts. */
 export function currentMapDataHash(): string {
-  return hashString(JSON.stringify(rawMap));
+  return __MAP_DATA_HASH__;
 }
 
 /**

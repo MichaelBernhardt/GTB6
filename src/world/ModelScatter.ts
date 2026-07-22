@@ -43,6 +43,7 @@ import { RESERVED_PADS } from './placements';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 import { MODEL_INDEX } from './models/catalog';
 import { CELL_SIZE, RAILWAY_STATION_CLEARANCE, allBuildings, footprintRailwayClearance, footprintRoadClearance } from './CityGen';
+import { stablePositionRandom, stableWorldFloat } from './StableRandom';
 
 /** One placed model: which catalog builder to run, where, and the seed/variant it builds from. */
 export interface ScatteredModel {
@@ -58,11 +59,7 @@ export interface ScatteredModel {
 
 const HALF_WORLD = MAP_WORLD_SIZE / 2;
 
-/** Deterministic positional hash in [0,1) — same (x, z, salt) always yields the same value. */
-function seeded(x: number, z: number, salt = 0): number {
-  const value = Math.sin(x * 12.9898 + z * 78.233 + salt * 41.17) * 43758.5453;
-  return value - Math.floor(value);
-}
+const seeded = stablePositionRandom;
 
 /** Per-cell hard cap on scattered models — bounds per-cell generation cost + draw calls. Raised
  *  120 → 170 with the denser profiles: scattered models bake into per-cell merged draw calls, so
@@ -336,6 +333,7 @@ function tryPlace(
   name: string, x: number, z: number, heading: number, roadClear: number,
   occ: ScatterOccupancy, buildings: BuildingIndex, out: ScatteredModel[],
 ): boolean {
+  x = stableWorldFloat(x); z = stableWorldFloat(z); heading = stableWorldFloat(heading);
   const def = MODEL_INDEX.get(name);
   if (!def) return false;
   const w = def.maxFootprint.w; const d = def.maxFootprint.d;

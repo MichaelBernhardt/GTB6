@@ -45,9 +45,10 @@ export const createStaticServer = ({ root = resolve('dist'), analytics } = {}) =
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'same-origin');
 
-    let pathname;
+    let pathname; let requestUrl;
     try {
-      pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
+      requestUrl = new URL(request.url ?? '/', 'http://localhost');
+      pathname = decodeURIComponent(requestUrl.pathname);
     } catch {
       response.writeHead(400); response.end('Bad request'); return;
     }
@@ -75,23 +76,38 @@ export const createStaticServer = ({ root = resolve('dist'), analytics } = {}) =
     }
 
     let path = requestedPath; let details = await fileDetails(path);
+    // Missing file-like requests must be real 404s. Returning index.html with a year-long asset cache
+    // poisons dynamic imports and makes a missing bake/model look like a successful binary response.
+    if (!details && extname(pathname)) { response.writeHead(404); response.end('Not found'); return; }
     if (!details) { path = indexPath; details = await fileDetails(path); }
     if (!details) { response.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' }); response.end('Production build is unavailable'); return; }
 
     const extension = extname(path).toLowerCase();
-    const immutable = pathname.startsWith('/assets/');
-    const gzip = details.size > 1024 && COMPRESSIBLE.has(extension) && request.headers['accept-encoding']?.includes('gzip');
+    const immutable = pathname.startsWith('/assets/') || (pathname.startsWith('/baked/') && requestUrl.searchParams.has('v'));
+    const compressible = details.size > 1024 && COMPRESSIBLE.has(extension);
+    const accepted = request.headers['accept-encoding'] ?? '';
+    let responsePath = path; let responseDetails = details; let contentEncoding; let dynamicGzip = false;
+    if (compressible && accepted.includes('br')) {
+      const compressed = await fileDetails(`${path}.br`);
+      if (compressed) { responsePath = `${path}.br`; responseDetails = compressed; contentEncoding = 'br'; }
+    }
+    if (!contentEncoding && compressible && accepted.includes('gzip')) {
+      const compressed = await fileDetails(`${path}.gz`);
+      if (compressed) { responsePath = `${path}.gz`; responseDetails = compressed; contentEncoding = 'gzip'; }
+      else { contentEncoding = 'gzip'; dynamicGzip = true; }
+    }
     const headers = {
       'Content-Type': MIME_TYPES[extension] ?? 'application/octet-stream',
       'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : extension === '.html' ? 'no-cache' : 'public, max-age=3600',
       Vary: 'Accept-Encoding',
     };
-    if (gzip) headers['Content-Encoding'] = 'gzip'; else headers['Content-Length'] = details.size;
+    if (contentEncoding) headers['Content-Encoding'] = contentEncoding;
+    if (!dynamicGzip) headers['Content-Length'] = responseDetails.size;
     response.writeHead(200, headers);
     if (request.method === 'HEAD') { response.end(); return; }
 
-    const stream = createReadStream(path);
-    if (gzip) pipeline(stream, createGzip(), response, () => undefined);
+    const stream = createReadStream(responsePath);
+    if (dynamicGzip) pipeline(stream, createGzip(), response, () => undefined);
     else { stream.on('error', () => response.destroy()); stream.pipe(response); }
   });
 };

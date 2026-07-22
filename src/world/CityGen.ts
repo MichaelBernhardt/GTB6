@@ -34,6 +34,7 @@ import { classifyZone, type Zone } from './data/zoning';
 import { RESERVED_PADS } from './placements';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 import type { BuildingStyle } from './BuildingArchitecture';
+import { stablePositionRandom, stableWorldFloat } from './StableRandom';
 
 /** Chunk cell size — MUST equal City.MERGE_CHUNK_SIZE (City imports this so they can't drift). */
 export const CELL_SIZE = 976;
@@ -84,11 +85,7 @@ export interface GeneratedBuilding {
   variant: number;
 }
 
-/** Deterministic positional hash in [0,1) — same (x, z, salt) always yields the same value. */
-function seeded(x: number, z: number, salt = 0): number {
-  const value = Math.sin(x * 12.9898 + z * 78.233 + salt * 41.17) * 43758.5453;
-  return value - Math.floor(value);
-}
+const seeded = stablePositionRandom;
 
 /**
  * Minimum distance from a building footprint to the nearest road edge (negative when the footprint
@@ -270,7 +267,9 @@ function commitBuilding(
   style: BuildingStyle, seedX: number, seedZ: number, salt: number,
   occ: Occupancy, out: GeneratedBuilding[],
 ): boolean {
-  const { x, z, width, depth } = fit;
+  const x = stableWorldFloat(fit.x); const z = stableWorldFloat(fit.z);
+  const width = stableWorldFloat(fit.width); const depth = stableWorldFloat(fit.depth);
+  heading = stableWorldFloat(heading);
   if (Math.abs(x) > HALF_WORLD - 20 || Math.abs(z) > HALF_WORLD - 20) return false;
   const c = Math.cos(heading); const s = Math.sin(heading);
   for (const fx of [-0.5, 0, 0.5]) for (const fz of [-0.5, 0, 0.5]) {
@@ -283,7 +282,7 @@ function commitBuilding(
   occ.add(x, z, radius);
   out.push({
     x, z, heading, width, depth,
-    height: buildingHeight(zone, density, seeded(seedX, seedZ, 30 + salt), style),
+    height: stableWorldFloat(buildingHeight(zone, density, seeded(seedX, seedZ, 30 + salt), style)),
     style, zone,
     variant: Math.floor(seeded(seedX, seedZ, 40 + salt) * 997),
   });

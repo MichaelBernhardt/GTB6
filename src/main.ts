@@ -2,7 +2,6 @@ import './styles.css';
 import { analytics } from './analytics/Telemetry';
 import { bootTimelineTail } from './core/BootTimeline';
 import { installProfiler } from './dev/Profiler';
-import { Game } from './Game';
 
 const container = document.querySelector<HTMLElement>('#game');
 if (!container) throw new Error('Game container not found');
@@ -61,8 +60,11 @@ if (!probe) {
   probe.getExtension('WEBGL_lose_context')?.loseContext(); // release the probe context straight away
   // Let the critical HTML loader paint before WebGL takes the main thread. A nested frame
   // guarantees there has been a render opportunity between parsing the page and starting Game.
-  requestAnimationFrame(() => requestAnimationFrame(() => {
+  requestAnimationFrame(() => requestAnimationFrame(async () => {
     try {
+      // Keep the boot/error shell tiny and independently cacheable. The complete game graph starts
+      // downloading only after critical HTML has had a guaranteed paint opportunity.
+      const { Game } = await import('./Game');
       new Game(container);
     } catch (error) {
       analytics.captureError(error, { source: 'boot', severity: 'fatal' });

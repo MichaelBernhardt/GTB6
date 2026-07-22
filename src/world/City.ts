@@ -699,7 +699,7 @@ export class City {
    *  clock the lenses animate on, so drivers stop exactly when the light the player sees turns red. */
   signalStops(position: THREE.Vector3, heading: number): boolean {
     const clock = this.infrastructure.signalClock;
-    // Grid lookup instead of scanning all ~3800 junctions per car per frame: each junction is bucketed into
+    // Grid lookup instead of scanning all signalised junctions per car per frame: each junction is bucketed into
     // every cell its influence radius touches, so the driver's single cell holds every robot that could stop it.
     const cells = (this.signalCells ??= this.buildSignalIndex());
     const bucket = cells.get(`${Math.floor(position.x / SIGNAL_CELL)},${Math.floor(position.z / SIGNAL_CELL)}`);
@@ -720,6 +720,19 @@ export class City {
     let factor = 1;
     for (const junction of bucket) factor = Math.min(factor, signalSlowFactor(junction, position.x, position.z, heading, clock));
     return factor;
+  }
+
+  /** True when a signalised junction is within `radius`. Reuses the robot grid so blackout traffic
+   *  does not linearly scan every city signal for every active vehicle on every simulation step. */
+  signalNearby(position: THREE.Vector3, radius = 24): boolean {
+    const cells = (this.signalCells ??= this.buildSignalIndex());
+    const cx = Math.floor(position.x / SIGNAL_CELL); const cz = Math.floor(position.z / SIGNAL_CELL);
+    const reach = Math.max(0, Math.ceil(radius / SIGNAL_CELL)); const radiusSq = radius * radius;
+    for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
+      const bucket = cells.get(`${cx + dx},${cz + dz}`);
+      if (bucket?.some((junction) => (junction.x - position.x) ** 2 + (junction.z - position.z) ** 2 < radiusSq)) return true;
+    }
+    return false;
   }
 
   /** Buckets every signalised junction into the SIGNAL_CELL grid, padded by its influence radius

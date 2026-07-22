@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { createStaticServer } from './server.mjs';
 
 describe('production static server', () => {
@@ -13,7 +14,11 @@ describe('production static server', () => {
     await mkdir(join(root, 'admin'));
     await writeFile(join(root, 'index.html'), '<!doctype html><title>San Cordova</title>');
     await writeFile(join(root, 'admin', 'index.html'), '<!doctype html><title>Game analytics</title>');
-    await writeFile(join(root, 'assets', 'game.js'), 'export const city = "San Cordova";'.repeat(80));
+    const game = Buffer.from('export const city = "San Cordova";'.repeat(80));
+    await writeFile(join(root, 'assets', 'game.js'), game);
+    await writeFile(join(root, 'assets', 'game.js.br'), brotliCompressSync(game));
+    await writeFile(join(root, 'assets', 'game.js.gz'), gzipSync(game));
+    await writeFile(join(root, 'assets', 'fallback.js'), 'export const fallback = true;'.repeat(80));
     server = createStaticServer({ root });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
@@ -38,6 +43,21 @@ describe('production static server', () => {
     expect(response.headers.get('cache-control')).toContain('immutable');
     expect(response.headers.get('content-encoding')).toBe('gzip');
     expect(await response.text()).toContain('San Cordova');
+  });
+
+  it('prefers a precompressed Brotli asset and retains streaming gzip as a fallback', async () => {
+    const brotli = await fetch(`${baseUrl}/assets/game.js`, { headers: { 'Accept-Encoding': 'br, gzip' } });
+    expect(brotli.headers.get('content-encoding')).toBe('br');
+    expect(await brotli.text()).toContain('San Cordova');
+    const fallback = await fetch(`${baseUrl}/assets/fallback.js`, { headers: { 'Accept-Encoding': 'gzip' } });
+    expect(fallback.headers.get('content-encoding')).toBe('gzip');
+    expect(await fallback.text()).toContain('fallback');
+  });
+
+  it('returns 404 for missing files instead of cache-poisoning them with game HTML', async () => {
+    const response = await fetch(`${baseUrl}/assets/missing.js`);
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain('San Cordova');
   });
 
   it('falls back to index.html for client-side routes and supports HEAD', async () => {
