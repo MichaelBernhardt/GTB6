@@ -1,10 +1,5 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type WeaponId } from './config';
 import { analytics } from './analytics/Telemetry';
 import { AudioManager } from './core/AudioManager';
@@ -81,6 +76,7 @@ import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 import { loadTreeLibrary } from './world/FoliageAssets';
 import { loadCityBake } from './world/bake/loader';
+import type { PostProcessingQuality, PostProcessingStack } from './render/PostProcessing';
 
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
 const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and downsamples — real supersampling AA. The floor bites hardest on LOW-dpi screens (a 1× monitor jumps to 2×, where aliasing shows most); HiDPI already renders dense, so it just stays at native.
@@ -94,8 +90,8 @@ export class Game {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 8000); // player-relative far plane: covers the massed CBD skyline with generous margin at the 18000u parity scale; fog (Environment.ts) hides the cut and the bare outskirts
   private renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  private composer?: EffectComposer;
-  private gtao?: GTAOPass;
+  private postProcessing?: PostProcessingStack;
+  private postProcessingGeneration = 0;
   private environment!: EnvironmentHandle;
   private clock = new THREE.Clock();
   private input!: InputManager;
@@ -380,25 +376,21 @@ export class Game {
   }
 
   private setupComposer(): void {
-    this.composer?.dispose(); this.composer = undefined; this.gtao = undefined;
+    const generation = ++this.postProcessingGeneration;
+    this.postProcessing?.dispose(); this.postProcessing = undefined;
     if (this.baseQuality() === 'low') return; // low and potato: plain renderer.render, no post stack
-    const ultra = this.settings.quality === 'ultra';
-    const composer = new EffectComposer(this.renderer);
-    // Two samples preserve edge stability while halving the multisample bandwidth/memory of the old 4x
-    // full-screen half-float targets. Resolution is already quality-capped by renderPixelRatio(). Ultra
-    // stacks 4x MSAA on top of its 2x supersample for the cleanest possible edges.
-    const samples = ultra ? 4 : 2;
-    composer.renderTarget1.samples = samples; composer.renderTarget2.samples = samples;
-    composer.setSize(innerWidth, innerHeight);
-    composer.addPass(new RenderPass(this.scene, this.camera));
-    if (this.settings.quality === 'high' || ultra) { // GTAO is the expensive pass — high and ultra only
-      this.gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
-      this.gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 2, thickness: 1 }); this.gtao.blendIntensity = 0.9;
-      composer.addPass(this.gtao);
-    }
-    composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.45, 0.85));
-    composer.addPass(new OutputPass());
-    this.composer = composer;
+    const quality = this.settings.quality as PostProcessingQuality;
+    void import('./render/PostProcessing')
+      .then(({ createPostProcessing }) => createPostProcessing(this.renderer, this.scene, this.camera, quality))
+      .then((stack) => {
+        if (generation !== this.postProcessingGeneration) { stack.dispose(); return; }
+        this.postProcessing = stack;
+      })
+      .catch((error: unknown) => {
+        // Post effects are optional: retain the plain renderer and surface a recoverable diagnostic.
+        console.warn('[render] post-processing unavailable; using the base renderer.', error);
+        analytics.captureError(error, { source: 'runtime', severity: 'recoverable', asset: 'post-processing' });
+      });
   }
 
   private bindUI(): void {
@@ -768,7 +760,7 @@ export class Game {
     const measure = import.meta.env.DEV && !this.loggedDrawCalls && this.clock.elapsedTime > 2; // >2s: the staggered chunk culling needs its first full pass before the number means anything
     if (measure) { this.renderer.info.autoReset = false; this.renderer.info.reset(); }
     this.profiler.mark('render');
-    if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
+    if (this.postProcessing) this.postProcessing.composer.render(); else this.renderer.render(this.scene, this.camera);
     if (measure) { this.loggedDrawCalls = true; console.info(`[render] calls=${this.renderer.info.render.calls} tris=${this.renderer.info.render.triangles}`); this.renderer.info.autoReset = true; }
     this.profiler.frameEnd();
     this.input.endFrame();
@@ -2639,5 +2631,5 @@ export class Game {
     this.save = { version: 3, money: this.economy.balance, completedMissions: [...this.missions.completed], storyFlags: this.story.serializeFlags(), diaryPages: this.story.serializeDiaryPages(), spawn: this.save.spawn, position: [at.x, at.y, at.z], heading, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } };
     this.saveManager.save(this.save);
   }
-  private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.composer?.setSize(innerWidth, innerHeight); }
+  private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.postProcessing?.composer.setSize(innerWidth, innerHeight); }
 }

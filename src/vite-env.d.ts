@@ -2,6 +2,8 @@
 
 /** Deployed git release short hash, injected by Vite's define (see vite.config.ts). */
 declare const __BUILD_HASH__: string;
+/** Build-time fingerprint of the generated map; avoids JSON.stringify allocating ~1 MB during boot. */
+declare const __MAP_DATA_HASH__: string;
 
 declare module '*.css';
 

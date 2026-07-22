@@ -7,6 +7,7 @@ import { allBuildings, generateCell } from '../CityGen';
 import { allScatteredModels, scatterCell } from '../ModelScatter';
 import { buildCityNavPaths, buildVehicleNav, ROAD_NETWORK } from '../City';
 import { buildManifest, hashString, packBake, unpackBake, type BakeManifest, type CityBakeData } from './format';
+import { currentMapDataHash } from './loader';
 
 /**
  * The bake gate: STALENESS and DETERMINISM in one comparison. The committed artifacts under
@@ -30,7 +31,9 @@ const liveVehicleNav = buildVehicleNav(ROAD_NETWORK);
 
 describe('city bake staleness/determinism gate', () => {
   it('was baked from this map data (manifest hash matches the imported map JSON)', () => {
-    expect(manifest.mapDataHash, 'map JSON changed since the bake — run `npm run bake` and commit public/baked/').toBe(hashString(JSON.stringify(rawMap)));
+    const liveHash = hashString(JSON.stringify(rawMap));
+    expect(currentMapDataHash(), 'Vite build hash drifted from the imported map JSON').toBe(liveHash);
+    expect(manifest.mapDataHash, 'map JSON changed since the bake — run `npm run bake` and commit public/baked/').toBe(liveHash);
   });
 
   it('decodes to the exact live-derived parcel list', () => {
