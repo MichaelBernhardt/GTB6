@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_MINIMAP_ZOOM, MINIMAP_ZOOM_NAMES, MINIMAP_ZOOM_SCALES, minimapNorthAngle, sanitizeMinimapZoom, stepMinimapZoom } from './MinimapView';
+import { DEFAULT_MINIMAP_ZOOM, MinimapRoadIndex, MINIMAP_ZOOM_NAMES, MINIMAP_ZOOM_SCALES, minimapNorthAngle, sanitizeMinimapZoom, stepMinimapZoom } from './MinimapView';
 
 // Screen position (0 = up, clockwise) the compass 'N' lands at for a given player heading.
 const northScreenDir = (heading: number) => { const p = minimapNorthAngle(heading); return { x: Math.sin(p), y: -Math.cos(p) }; };
@@ -53,5 +53,33 @@ describe('minimap zoom', () => {
   it('recovers from a garbage zoom before stepping', () => {
     expect(stepMinimapZoom(99, 1)).toBe(DEFAULT_MINIMAP_ZOOM + 1);
     expect(stepMinimapZoom(Number.NaN, -1)).toBe(DEFAULT_MINIMAP_ZOOM - 1);
+  });
+});
+
+describe('MinimapRoadIndex', () => {
+  it('returns local roads, de-duplicates cell-spanning roads, and excludes distant cells', () => {
+    const local = [{ x: -20, z: -20 }, { x: 20, z: 20 }];
+    const spanning = [{ x: -900, z: 0 }, { x: 900, z: 0 }];
+    const distant = [{ x: 4_000, z: 4_000 }, { x: 4_200, z: 4_200 }];
+    const roads = [local, spanning, distant];
+    const index = new MinimapRoadIndex(roads, 256);
+    const visible: typeof roads = [];
+    const key = index.query(0, 0, 100, visible);
+    expect(visible).toEqual(expect.arrayContaining([local, spanning]));
+    expect(visible.filter((road) => road === spanning)).toHaveLength(1);
+    expect(visible).not.toContain(distant);
+    expect(index.query(20, 20, 100, visible)).toBe(key); // same cells: retained Path2D remains valid
+    index.query(4_100, 4_100, 100, visible);
+    expect(visible).toContain(distant);
+    expect(visible).not.toContain(local);
+  });
+
+  it('handles an empty index and queries beyond the indexed world bounds', () => {
+    const visible: Array<Array<{ x: number; z: number }>> = [];
+    expect(new MinimapRoadIndex([]).query(0, 0, 1_000_000, visible)).toBe('empty');
+    expect(visible).toEqual([]);
+    const index = new MinimapRoadIndex([[{ x: 0, z: 0 }, { x: 10, z: 10 }]], 256);
+    expect(index.query(1_000_000, 1_000_000, 10, visible)).toBe('empty');
+    expect(visible).toEqual([]);
   });
 });

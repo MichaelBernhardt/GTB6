@@ -21,7 +21,6 @@ import { ProgressWatchdog, RoutePlanner, type NavPoint } from './NavGraph';
 import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, vehicleHitDamage } from './TrafficAvoidance';
 import type { City, RoadPoint } from '../world/City';
 import { HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
-import { CITY_JUNCTIONS } from '../world/UrbanInfrastructure';
 import { powerOn } from '../world/powerGrid';
 
 interface DrivePlan { points: NavPoint[]; index: number; watchdog: ProgressWatchdog; backoff: number; }
@@ -165,7 +164,7 @@ export class PopulationSystem {
       if (playerOnFoot && !vehicle.police && vehicle.group.position.distanceToSquared(player) < AVOID_RANGE * AVOID_RANGE) ({ blocked: playerBlocked, hold: playerHold, dodge } = this.avoidPlayer(vehicle, forward, player, dt));
       else this.holdups.delete(vehicle);
       const taxi = taxiKind;
-      const junctionPanic = robotsOut && !taxi && CITY_JUNCTIONS.some((junction) => (junction.x - vehicle.group.position.x) ** 2 + (junction.z - vehicle.group.position.z) ** 2 < 576);
+      const junctionPanic = robotsOut && !taxi && this.city.signalNearby(vehicle.group.position);
       const speedScale = Math.min(followScale, signalScale); // whichever wants us slower: the leader ahead or the robot
       const throttle = playerHold ? 0 // held: a full stop with hysteresis, no 0.05 creep — this is what arms the honk clock
         : dodge ? DODGE_THROTTLE

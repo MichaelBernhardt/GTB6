@@ -115,7 +115,12 @@ function texturedMaterial(kind: 'corr' | 'brick', color: number, roughness: numb
   const key = `${kind}|${color}`;
   let material = textured.get(key);
   if (!material) {
-    material = new THREE.MeshStandardMaterial({ color, roughness, metalness, map: kind === 'corr' ? corrugation() : brickCourses() });
+    const map = kind === 'corr' ? corrugation() : brickCourses();
+    // Three warns when an explicitly-present texture parameter is undefined. DOM-less test/server
+    // runs intentionally have no canvas texture, so omit the key and use the documented colour fallback.
+    const parameters: THREE.MeshStandardMaterialParameters = { color, roughness, metalness };
+    if (map) parameters.map = map;
+    material = new THREE.MeshStandardMaterial(parameters);
     textured.set(key, material);
   }
   return material;

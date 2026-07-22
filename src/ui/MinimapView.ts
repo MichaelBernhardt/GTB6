@@ -28,47 +28,98 @@ export function stepMinimapZoom(zoom: number, direction: 1 | -1): number {
   return Math.min(MINIMAP_ZOOM_SCALES.length - 1, Math.max(0, sanitizeMinimapZoom(zoom) + direction));
 }
 
+/** Spatial index over immutable road polylines. The minimap used to scan all ~4,000 roads every
+ *  rendered frame; this returns only roads touching the view's grid cells and de-duplicates long
+ *  roads that span several cells. The returned key changes only when the queried cell rectangle
+ *  changes, allowing the caller to retain one combined Path2D while moving inside those cells. */
+export class MinimapRoadIndex {
+  private cells = new Map<string, number[]>();
+  private marks: Uint32Array;
+  private generation = 0;
+  private minCellX = Infinity;
+  private maxCellX = -Infinity;
+  private minCellZ = Infinity;
+  private maxCellZ = -Infinity;
+
+  constructor(readonly roads: RoadPoint[][], private cellSize = 512) {
+    this.marks = new Uint32Array(roads.length);
+    roads.forEach((road, index) => {
+      if (!road.length) return;
+      let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
+      for (const point of road) {
+        minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x);
+        minZ = Math.min(minZ, point.z); maxZ = Math.max(maxZ, point.z);
+      }
+      const minCellX = Math.floor(minX / cellSize); const maxCellX = Math.floor(maxX / cellSize);
+      const minCellZ = Math.floor(minZ / cellSize); const maxCellZ = Math.floor(maxZ / cellSize);
+      this.minCellX = Math.min(this.minCellX, minCellX); this.maxCellX = Math.max(this.maxCellX, maxCellX);
+      this.minCellZ = Math.min(this.minCellZ, minCellZ); this.maxCellZ = Math.max(this.maxCellZ, maxCellZ);
+      for (let cx = minCellX; cx <= maxCellX; cx++) for (let cz = minCellZ; cz <= maxCellZ; cz++) {
+        const key = `${cx},${cz}`; const bucket = this.cells.get(key);
+        if (bucket) bucket.push(index); else this.cells.set(key, [index]);
+      }
+    });
+  }
+
+  query(x: number, z: number, radius: number, out: RoadPoint[][]): string {
+    out.length = 0;
+    this.generation = (this.generation + 1) >>> 0;
+    if (this.generation === 0) { this.marks.fill(0); this.generation = 1; }
+    if (!Number.isFinite(this.minCellX)) return 'empty';
+    const minX = Math.max(this.minCellX, Math.floor((x - radius) / this.cellSize));
+    const maxX = Math.min(this.maxCellX, Math.floor((x + radius) / this.cellSize));
+    const minZ = Math.max(this.minCellZ, Math.floor((z - radius) / this.cellSize));
+    const maxZ = Math.min(this.maxCellZ, Math.floor((z + radius) / this.cellSize));
+    if (minX > maxX || minZ > maxZ) return 'empty';
+    for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
+      for (const index of this.cells.get(`${cx},${cz}`) ?? []) {
+        if (this.marks[index] === this.generation) continue;
+        this.marks[index] = this.generation; out.push(this.roads[index]!);
+      }
+    }
+    return `${minX},${maxX},${minZ},${maxZ}`;
+  }
+}
+
 export class MinimapView {
   readonly canvas = document.createElement('canvas');
   private context: CanvasRenderingContext2D;
   private visibleRoads: RoadPoint[][] = [];
+  private roadIndex?: MinimapRoadIndex;
+  private roadPath = new Path2D();
+  private roadPathKey = '';
 
   constructor() {
     this.canvas.id = 'minimap'; this.canvas.width = 240; this.canvas.height = 240; this.canvas.setAttribute('aria-label', 'Local street map'); this.canvas.setAttribute('role', 'img');
     const context = this.canvas.getContext('2d'); if (!context) throw new Error('Canvas unavailable'); this.context = context;
   }
 
-  private roadBounds = new WeakMap<RoadPoint[], { minX: number; maxX: number; minZ: number; maxZ: number }>();
-
-  /** Cached per-path bbox: the generated map has ~4000 road polylines and most are off-screen. */
-  private boundsOf(road: RoadPoint[]): { minX: number; maxX: number; minZ: number; maxZ: number } {
-    let bounds = this.roadBounds.get(road);
-    if (!bounds) {
-      bounds = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
-      for (const point of road) {
-        bounds.minX = Math.min(bounds.minX, point.x); bounds.maxX = Math.max(bounds.maxX, point.x);
-        bounds.minZ = Math.min(bounds.minZ, point.z); bounds.maxZ = Math.max(bounds.maxZ, point.z);
-      }
-      this.roadBounds.set(road, bounds);
-    }
-    return bounds;
-  }
-
   draw(x: number, z: number, heading: number, allRoads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom = DEFAULT_MINIMAP_ZOOM): void {
     const ctx = this.context; const size = this.canvas.width; const scale = MINIMAP_ZOOM_SCALES[sanitizeMinimapZoom(zoom)];
     const viewRadius = (size * 0.75) / scale; // canvas half-diagonal in world units, with rotation slack
-    const roads = this.visibleRoads; roads.length = 0;
-    for (const road of allRoads) {
-      const bounds = this.boundsOf(road);
-      if (bounds.minX < x + viewRadius && bounds.maxX > x - viewRadius && bounds.minZ < z + viewRadius && bounds.maxZ > z - viewRadius) roads.push(road);
+    if (this.roadIndex?.roads !== allRoads) { this.roadIndex = new MinimapRoadIndex(allRoads); this.roadPathKey = ''; }
+    const roads = this.visibleRoads;
+    const pathKey = this.roadIndex.query(x, z, viewRadius, roads);
+    if (pathKey !== this.roadPathKey) {
+      const path = new Path2D();
+      for (const road of roads) {
+        const first = road[0]; if (!first) continue;
+        path.moveTo(first.x, first.z);
+        for (let index = 1; index < road.length; index++) { const point = road[index]!; path.lineTo(point.x, point.z); }
+      }
+      this.roadPath = path; this.roadPathKey = pathKey;
     }
     const counter = Math.PI - heading; // undo map rotation so blip shapes stay screen-aligned
     ctx.clearRect(0, 0, size, size); ctx.fillStyle = '#17211f'; ctx.fillRect(0, 0, size, size);
+    // Roads are one retained path and therefore two strokes total (outline + surface), rather than
+    // two canvas draw calls per visible polyline. A world-space scale keeps the retained path reusable.
+    ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading - Math.PI); ctx.scale(scale, scale); ctx.translate(-x, -z);
+    ctx.strokeStyle = '#465451'; ctx.lineWidth = Math.max(2.5 / scale, 22); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke(this.roadPath);
+    ctx.strokeStyle = '#c8c4ad'; ctx.lineWidth = Math.max(1.2 / scale, 7); ctx.stroke(this.roadPath); ctx.restore();
+
+    // Blips stay screen-sized under the original rotation-only transform.
     ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading - Math.PI); ctx.translate(-x * scale, -z * scale);
-    ctx.strokeStyle = '#465451'; ctx.lineWidth = Math.max(2.5, 22 * scale); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (let index = 1; index < road.length; index++) { const point = road[index]!; ctx.lineTo(point.x * scale, point.z * scale); } ctx.stroke(); }
-    ctx.strokeStyle = '#c8c4ad'; ctx.lineWidth = Math.max(1.2, 7 * scale);
-    for (const road of roads) { const first = road[0]; if (!first) continue; ctx.beginPath(); ctx.moveTo(first.x * scale, first.z * scale); for (let index = 1; index < road.length; index++) { const point = road[index]!; ctx.lineTo(point.x * scale, point.z * scale); } ctx.stroke(); }
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const marker of markers) {
       if (marker.objective) continue; // drawn after restore in screen space, so it can pin to the edge
       if (marker.area) { // riddle search circle: a region to comb, deliberately not a point

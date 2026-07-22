@@ -205,6 +205,7 @@ export class Game {
   private missionTelemetryStartedAt?: number;
   private loggedDrawCalls = false;
   private vehicleCollisionCooldown = new WeakMap<Vehicle, number>();
+  private protectedVehicles = new Set<Vehicle>(); // reused lifecycle guard set; avoids one allocation per sim step
   private reputationReactionCooldown = 0;
   private helperCooldown = 90;
   private radioCooldown = 0;
@@ -811,7 +812,7 @@ export class Game {
     }
     this.profiler.mark('world');
     const forward = this.camera.getWorldDirection(this.cameraForward);
-    const guarded = new Set<Vehicle>();
+    const guarded = this.protectedVehicles; guarded.clear();
     for (const vehicle of [this.activeVehicle, this.transition?.vehicle, this.garageVehicle]) if (vehicle) guarded.add(vehicle);
     // Visibility apex is the CAMERA (the actual eye), not the player. The camera sits behind and above the
     // character, so a patch beside/behind the player is still on-screen; testing from the player's feet

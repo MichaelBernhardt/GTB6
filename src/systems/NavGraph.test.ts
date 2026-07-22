@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildCityNavPaths, buildVehicleNav, PED_NAV_JOIN, ROAD_NETWORK, VEHICLE_NAV_JOIN } from '../world/City';
 import { MAP_WORLD_SIZE } from '../world/mapData';
-import { bridgeIslands, buildNavGraph, components, findPath, nearestNode, ProgressWatchdog, replanInterval, RoutePlanner, STUCK_EPSILON, STUCK_TIMEOUT, stronglyConnectedComponents, weakComponents, type NavGraph } from './NavGraph';
+import { bridgeIslands, buildNavGraph, components, createPathWorkspace, findPath, MAX_PATH_EXPANSIONS_CITYWIDE, nearestNode, ProgressWatchdog, replanInterval, RoutePlanner, STUCK_EPSILON, STUCK_TIMEOUT, stronglyConnectedComponents, weakComponents, type NavGraph } from './NavGraph';
 
 const line = (count: number, spacing: number, x0 = 0, z0 = 0): { x: number; z: number }[] =>
   Array.from({ length: count }, (_, index) => ({ x: x0 + index * spacing, z: z0 }));
@@ -102,6 +102,16 @@ describe('findPath (A*)', () => {
     expect(findPath(islands, -1, 2)).toBeUndefined();
     expect(findPath(islands, 0, 99)).toBeUndefined();
   });
+
+  it('reuses one workspace across successful, reversed, and unreachable searches', () => {
+    const islands = buildNavGraph([{ points: line(6, 10) }, { points: line(3, 10, 0, 500) }], 5);
+    const workspace = createPathWorkspace(islands.nodes.length);
+    expect(findPath(islands, 0, 5, undefined, workspace)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(findPath(islands, 5, 0, undefined, workspace)).toEqual([5, 4, 3, 2, 1, 0]);
+    expect(findPath(islands, 0, 8, undefined, workspace)).toBeUndefined();
+    expect(findPath(islands, 1, 4, undefined, workspace)).toEqual([1, 2, 3, 4]); // stale stamps never leak
+    expect(workspace.generation).toBe(4);
+  });
 });
 
 describe('city nav graphs', () => {
@@ -159,6 +169,7 @@ describe('directed vehicle nav (buildVehicleNav)', () => {
   });
 
   it('routes across the whole city on one-way lanes', () => {
+    expect(MAX_PATH_EXPANSIONS_CITYWIDE).toBeGreaterThanOrEqual(vehicleNav.nodes.length);
     const s = MAP_WORLD_SIZE / 6000;
     const start = nearestNode(vehicleNav, -330 * s, 240 * s);
     const goal = nearestNode(vehicleNav, 300 * s, -260 * s);
@@ -221,6 +232,18 @@ describe('RoutePlanner budget', () => {
     planner.beginFrame();
     expect(planner.tryPlan(0, 0)).toBeDefined();
     expect(planner.plan(0, 0)).toBeDefined(); // unbudgeted spawn-time solves always run
+  });
+
+  it('uses the spatial index without changing exact nearest-node results', () => {
+    let state = 0x12345678;
+    const random = (): number => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state / 0x1_0000_0000; };
+    const nodes = Array.from({ length: 2_000 }, () => ({ x: random() * 18_000 - 9_000, z: random() * 18_000 - 9_000 }));
+    nodes.push({ x: 0, z: 0 }, { x: 0, z: 0 }); // exact tie: the lower index must still win
+    const graph: NavGraph = { nodes, edges: nodes.map(() => []) };
+    const planner = new RoutePlanner(graph);
+    const queries = Array.from({ length: 200 }, () => ({ x: random() * 20_000 - 10_000, z: random() * 20_000 - 10_000 }));
+    queries.push({ x: 0, z: 0 }, { x: -20_000, z: 20_000 });
+    for (const query of queries) expect(planner.nearest(query.x, query.z)).toBe(nearestNode(graph, query.x, query.z));
   });
 
   it('returns waypoints from the current position to the goal node', () => {

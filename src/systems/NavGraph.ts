@@ -80,20 +80,52 @@ export function nearestNode(graph: NavGraph, x: number, z: number): number {
  *  (ambient wander goals settle a few hundred at most) but far below the full graph, so a mis-aimed or
  *  cross-island goal costs a bounded slice instead of the whole city. */
 export const MAX_PATH_EXPANSIONS = 4000;
-/** Cap for deliberate cross-city solves (scripted mission routes, spawn-time setup): the whole
- *  ~40k-node graph. A citywide A* runs once per scripted route, not per frame — the cost is fine;
+/** Cap for deliberate cross-city solves (scripted mission routes, spawn-time setup): safely above the
+ *  current ~60k-node graph. A citywide A* runs once per scripted route, not per frame — the cost is fine;
  *  the 4000 default exists to stop PER-FRAME replans from scanning the city. */
-export const MAX_PATH_EXPANSIONS_CITYWIDE = 60000;
+export const MAX_PATH_EXPANSIONS_CITYWIDE = 100_000;
 
-export function findPath(graph: NavGraph, start: number, goal: number, maxExpansions = MAX_PATH_EXPANSIONS): number[] | undefined {
+/** Reusable A* scratch memory. RoutePlanner owns one for its fixed graph so repeated AI replans do
+ *  not allocate and initialise several graph-sized typed arrays on every solve. Generation stamps
+ *  make reset proportional to the nodes actually visited, rather than to the whole city graph. */
+export interface PathWorkspace {
+  score: Float64Array;
+  parent: Int32Array;
+  discovered: Uint32Array;
+  settled: Uint32Array;
+  heapNode: number[];
+  heapCost: number[];
+  generation: number;
+}
+
+export function createPathWorkspace(nodeCount: number): PathWorkspace {
+  return {
+    score: new Float64Array(nodeCount), parent: new Int32Array(nodeCount),
+    discovered: new Uint32Array(nodeCount), settled: new Uint32Array(nodeCount),
+    heapNode: [], heapCost: [], generation: 0,
+  };
+}
+
+export function findPath(
+  graph: NavGraph,
+  start: number,
+  goal: number,
+  maxExpansions = MAX_PATH_EXPANSIONS,
+  workspace?: PathWorkspace,
+): number[] | undefined {
   const { nodes, edges } = graph; const count = nodes.length;
   if (start < 0 || goal < 0 || start >= count || goal >= count) return undefined;
   if (start === goal) return [start];
   const goalNode = nodes[goal]; if (!goalNode) return undefined;
-  const gScore = new Float64Array(count).fill(Infinity); gScore[start] = 0;
-  const cameFrom = new Int32Array(count).fill(-1);
-  const settled = new Uint8Array(count);
-  const heapNode: number[] = []; const heapCost: number[] = [];
+  const work = workspace?.score.length === count ? workspace : createPathWorkspace(count);
+  work.generation = (work.generation + 1) >>> 0;
+  if (work.generation === 0) { // extraordinarily rare wrap: clear stamps once, then resume at generation 1
+    work.discovered.fill(0); work.settled.fill(0); work.generation = 1;
+  }
+  const generation = work.generation;
+  const { score: gScore, parent: cameFrom, discovered, settled, heapNode, heapCost } = work;
+  heapNode.length = 0; heapCost.length = 0;
+  discovered[start] = generation; gScore[start] = 0; cameFrom[start] = -1;
   const push = (node: number, cost: number): void => {
     let index = heapNode.length; heapNode.push(node); heapCost.push(cost);
     while (index > 0) {
@@ -127,19 +159,20 @@ export function findPath(graph: NavGraph, start: number, goal: number, maxExpans
       const path: number[] = []; for (let node = goal; node >= 0; node = cameFrom[node] ?? -1) path.push(node);
       return path.reverse();
     }
-    if (current < 0 || settled[current]) continue;
-    settled[current] = 1;
+    if (current < 0 || settled[current] === generation) continue;
+    settled[current] = generation;
     // Hard cap on work: a goal that isn't found within this many settled nodes is treated as unreachable
-    // rather than letting one solve scan the whole ~40k-node graph. Ambient wander goals are local, so a real
+    // rather than letting one solve scan the whole ~60k-node graph. Ambient wander goals are local, so a real
     // route settles far fewer than this; the cap only bites pathological far/unreachable goals.
     if (++settledCount > maxExpansions) return undefined;
     const currentNode = nodes[current]; if (!currentNode) continue;
     for (const neighbor of edges[current] ?? []) {
-      if (settled[neighbor]) continue;
+      if (settled[neighbor] === generation) continue;
       const neighborNode = nodes[neighbor]; if (!neighborNode) continue;
-      const tentative = (gScore[current] ?? Infinity) + Math.hypot(neighborNode.x - currentNode.x, neighborNode.z - currentNode.z);
-      if (tentative >= (gScore[neighbor] ?? Infinity)) continue;
-      gScore[neighbor] = tentative; cameFrom[neighbor] = current; push(neighbor, tentative + heuristic(neighbor));
+      const tentative = gScore[current]! + Math.hypot(neighborNode.x - currentNode.x, neighborNode.z - currentNode.z);
+      if (discovered[neighbor] === generation && tentative >= gScore[neighbor]!) continue;
+      discovered[neighbor] = generation; gScore[neighbor] = tentative; cameFrom[neighbor] = current;
+      push(neighbor, tentative + heuristic(neighbor));
     }
   }
   return undefined;
@@ -274,19 +307,61 @@ const GOAL_REACH_CELLS = 4;
 const GOAL_BIAS_CONE_COS = Math.cos((70 * Math.PI) / 180);
 const GOAL_BIAS_MIN = 220;
 
+interface NodeGrid {
+  cells: Map<string, number[]>;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
 /** Budgeted A* front-end shared by the agents of one system: at most perFrame solves per beginFrame(). */
 export class RoutePlanner {
   private budget = 0;
-  private nodeGrid?: Map<string, number[]>; // lazily-built spatial index over graph nodes, for goalNear
+  private nodeGrid?: NodeGrid; // lazily-built spatial index shared by goal selection and nearest-node lookup
+  private pathWorkspace: PathWorkspace;
   /** Cumulative count of real A* solves and the wall-time spent in them. The on-screen perf HUD reads the
    *  per-second delta; only genuine findPath runs are counted (budget short-circuits and cache hits are not). */
   solves = 0;
   solveMs = 0;
-  constructor(private graph: NavGraph, private perFrame = 2, private random: () => number = Math.random) {}
+  constructor(private graph: NavGraph, private perFrame = 2, private random: () => number = Math.random) {
+    this.pathWorkspace = createPathWorkspace(graph.nodes.length);
+  }
 
   beginFrame(): void { this.budget = this.perFrame; }
   get nodes(): readonly NavPoint[] { return this.graph.nodes; }
-  nearest(x: number, z: number): number { return nearestNode(this.graph, x, z); }
+  nearest(x: number, z: number): number {
+    if (!this.graph.nodes.length) return -1;
+    const grid = (this.nodeGrid ??= this.buildNodeGrid());
+    const cx = Math.floor(x / GOAL_CELL); const cz = Math.floor(z / GOAL_CELL);
+    // Positions outside the graph's rectangular extent are rare (rehome/mission callers stay in-world),
+    // and a ring walk from a distant cell would be worse than the simple exact scan.
+    if (cx < grid.minX || cx > grid.maxX || cz < grid.minZ || cz > grid.maxZ) return nearestNode(this.graph, x, z);
+    const maxReach = Math.max(cx - grid.minX, grid.maxX - cx, cz - grid.minZ, grid.maxZ - cz);
+    let best = -1; let bestDistance = Infinity;
+    const visit = (cellX: number, cellZ: number): void => {
+      for (const index of grid.cells.get(`${cellX},${cellZ}`) ?? []) {
+        const node = this.graph.nodes[index]!;
+        const distance = (node.x - x) ** 2 + (node.z - z) ** 2;
+        if (distance < bestDistance || (distance === bestDistance && index < best)) { bestDistance = distance; best = index; }
+      }
+    };
+    for (let reach = 0; reach <= maxReach; reach++) {
+      if (reach === 0) visit(cx, cz);
+      else {
+        for (let dx = -reach; dx <= reach; dx++) { visit(cx + dx, cz - reach); visit(cx + dx, cz + reach); }
+        for (let dz = -reach + 1; dz < reach; dz++) { visit(cx - reach, cz + dz); visit(cx + reach, cz + dz); }
+      }
+      if (best < 0) continue;
+      // Every unvisited node lies outside this cell rectangle. Once even the nearest rectangle edge
+      // is farther than our candidate, no later ring can improve it (strict comparison preserves ties).
+      const left = (cx - reach) * GOAL_CELL; const right = (cx + reach + 1) * GOAL_CELL;
+      const top = (cz - reach) * GOAL_CELL; const bottom = (cz + reach + 1) * GOAL_CELL;
+      const outsideDistance = Math.min(x - left, right - x, z - top, bottom - z);
+      if (bestDistance < outsideDistance * outsideDistance) return best;
+    }
+    return best;
+  }
   node(index: number): NavPoint | undefined { return this.graph.nodes[index]; }
   randomGoal(): number { return this.graph.nodes.length ? Math.floor(this.random() * this.graph.nodes.length) : -1; }
 
@@ -296,7 +371,7 @@ export class RoutePlanner {
    *  the pick is biased into a cone pointing that way so traffic heads toward the player instead of wandering
    *  off — this is what keeps the visible streets populated rather than draining away from a stationary viewer. */
   goalNear(x: number, z: number, toward?: { x: number; z: number }): number {
-    const grid = (this.nodeGrid ??= this.buildNodeGrid());
+    const grid = (this.nodeGrid ??= this.buildNodeGrid()).cells;
     const cx = Math.floor(x / GOAL_CELL); const cz = Math.floor(z / GOAL_CELL);
     let bx = 0; let bz = 0; let biased = false;
     if (toward) { const dx = toward.x - x; const dz = toward.z - z; const len = Math.hypot(dx, dz); if (len > GOAL_BIAS_MIN) { bx = dx / len; bz = dz / len; biased = true; } }
@@ -318,21 +393,24 @@ export class RoutePlanner {
     return this.randomGoal();
   }
 
-  private buildNodeGrid(): Map<string, number[]> {
-    const grid = new Map<string, number[]>();
+  private buildNodeGrid(): NodeGrid {
+    const cells = new Map<string, number[]>();
+    let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
     this.graph.nodes.forEach((node, index) => {
-      const key = `${Math.floor(node.x / GOAL_CELL)},${Math.floor(node.z / GOAL_CELL)}`;
-      const bucket = grid.get(key); if (bucket) bucket.push(index); else grid.set(key, [index]);
+      const cellX = Math.floor(node.x / GOAL_CELL); const cellZ = Math.floor(node.z / GOAL_CELL);
+      minX = Math.min(minX, cellX); maxX = Math.max(maxX, cellX); minZ = Math.min(minZ, cellZ); maxZ = Math.max(maxZ, cellZ);
+      const key = `${cellX},${cellZ}`;
+      const bucket = cells.get(key); if (bucket) bucket.push(index); else cells.set(key, [index]);
     });
-    return grid;
+    return { cells, minX, maxX, minZ, maxZ };
   }
 
   /** Unbudgeted solve (spawn-time setup). Goal defaults to a random node. */
   plan(fromX: number, fromZ: number, goal = this.randomGoal(), maxExpansions?: number): NavPoint[] | undefined {
-    const start = nearestNode(this.graph, fromX, fromZ);
+    const start = this.nearest(fromX, fromZ);
     if (start < 0 || goal < 0) return undefined;
     const started = performance.now();
-    const path = findPath(this.graph, start, goal, maxExpansions);
+    const path = findPath(this.graph, start, goal, maxExpansions, this.pathWorkspace);
     this.solveMs += performance.now() - started; this.solves += 1;
     return path?.map((index) => this.graph.nodes[index]).filter((point): point is NavPoint => Boolean(point));
   }
@@ -340,7 +418,7 @@ export class RoutePlanner {
   /** Deliberate cross-city solve for scripted mission routes: one-off, so the citywide cap is safe.
    *  Per-frame traffic replans must keep using plan()/tryPlan() with the local cap. */
   planFar(fromX: number, fromZ: number, toX: number, toZ: number): NavPoint[] | undefined {
-    return this.plan(fromX, fromZ, nearestNode(this.graph, toX, toZ), MAX_PATH_EXPANSIONS_CITYWIDE);
+    return this.plan(fromX, fromZ, this.nearest(toX, toZ), MAX_PATH_EXPANSIONS_CITYWIDE);
   }
 
   /** Budgeted solve for per-frame replans; returns undefined without solving once the frame budget is spent. */
@@ -353,7 +431,7 @@ export class RoutePlanner {
   /** Road-preferring route to an arbitrary point: rides the graph to the node NEAREST the target, then
    *  appends the exact target as a final offroad leg — never a beeline while a road path gets close. */
   planTo(fromX: number, fromZ: number, toX: number, toZ: number): NavPoint[] | undefined {
-    const points = this.plan(fromX, fromZ, nearestNode(this.graph, toX, toZ));
+    const points = this.plan(fromX, fromZ, this.nearest(toX, toZ));
     if (!points?.length) return points;
     const last = points[points.length - 1];
     if (last && (last.x - toX) ** 2 + (last.z - toZ) ** 2 > 1) points.push({ x: toX, z: toZ });
