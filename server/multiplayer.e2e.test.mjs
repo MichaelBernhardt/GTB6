@@ -64,10 +64,14 @@ describe('multiplayer wire protocol v3', () => {
     const steps = Math.ceil(distance / 12);
     for (let step = 1; step <= steps; step += 1) {
       clock.value += 1000;
-      bob.report({ x: bobSpawn.x + (bobStop.x - bobSpawn.x) * (step / steps), y: 0, z: bobSpawn.z + (bobStop.z - bobSpawn.z) * (step / steps) });
-      await new Promise((resolve) => setTimeout(resolve, 5)); // keep report order stable on the wire
+      const pose = { x: bobSpawn.x + (bobStop.x - bobSpawn.x) * (step / steps), y: 0, z: bobSpawn.z + (bobStop.z - bobSpawn.z) * (step / steps) };
+      bob.report(pose);
+      // A fixed sleep races the fake clock: on a loaded runner several reports can queue, then all
+      // arrive at one fake timestamp and correctly exhaust the movement allowance. A snapshot is
+      // the protocol-level acknowledgement that this report was processed before time advances.
+      await bob.expect((message) => message.type === 'snapshot' && message.players.some((player) =>
+        player.id === bob.welcome.playerId && Math.abs(player.x - pose.x) < 0.05 && Math.abs(player.z - pose.z) < 0.05));
     }
-    await bob.expect((message) => message.type === 'snapshot' && message.players.some((player) => player.id === bob.welcome.playerId && Math.abs(player.x - bobStop.x) < 0.05));
 
     // Bob shoots the Alice he is rendering: straight -x from 20 m out, stamped with his rendered tick.
     const seenTick = bob.latestSnapshot().tick;
