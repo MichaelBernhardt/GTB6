@@ -6,7 +6,7 @@ import type { InputManager } from '../core/InputManager';
 import { KNOCKOVER_SPEED_KEEP, knockoverDamage, solidImpactDamage, type PropRegistry } from '../systems/PropSystem';
 import { rollBurnDuration } from '../systems/VehicleFireSystem';
 import type { City } from '../world/City';
-import { createSignMesh } from '../world/ProceduralMaterials';
+import { instantiateBikeModel, type TwoWheelerKind } from './BikeAssets';
 import { instantiateRoadVehicleModel, isRoadVehicleKind, onRoadVehicleLibraryReady, type RoadVehicleModelInstance } from './RoadVehicleAssets';
 import { instantiateTaxiModel, onTaxiLibraryReady, type TaxiModelInstance } from './TaxiAsset';
 
@@ -56,14 +56,14 @@ export class Vehicle {
   private rider?: THREE.Group;
   private groundY = 0.02;
   private bikeLean = 0; // smoothed two-wheeler roll, applied as a clean forward-axis bank in alignToRoad (never poked into Euler.z)
+  private rollRadius = 0.36; // metres of travel per radian of wheel spin; per-kind for two-wheelers
   private taxiPlaceholder?: THREE.Group;
   private taxiReadyUnsubscribe?: () => void;
-  private taxiSharedGeometries = new Set<THREE.BufferGeometry>();
-  private taxiOwnedMaterials = new Set<THREE.Material>();
   private roadPlaceholder?: THREE.Group;
   private roadReadyUnsubscribe?: () => void;
-  private roadSharedGeometries = new Set<THREE.BufferGeometry>();
-  private roadOwnedMaterials = new Set<THREE.Material>();
+  /** Library geometry this vehicle only borrows, and the materials it genuinely owns — dispose() reads both. */
+  private sharedGeometries = new Set<THREE.BufferGeometry>();
+  private ownedMaterials = new Set<THREE.Material>();
   private firstPerson = false;
   private headlightFactor = 0;
   private braking = false;
@@ -83,10 +83,12 @@ export class Vehicle {
     const disposedMaterials = new Set<THREE.Material>();
     this.group.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
-      const shared = this.taxiSharedGeometries.has(object.geometry) || this.roadSharedGeometries.has(object.geometry);
+      const shared = this.sharedGeometries.has(object.geometry);
       if (!shared) object.geometry.dispose();
       for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
-        const owned = !shared || this.taxiOwnedMaterials.has(material) || this.roadOwnedMaterials.has(material);
+        // Library geometry implies a library material unless this vehicle cloned it — which keeps the
+        // courier's citywide sign-atlas material out of dispose()'s hands on every ambient despawn.
+        const owned = !shared || this.ownedMaterials.has(material);
         if (owned && !disposedMaterials.has(material)) { disposedMaterials.add(material); material.dispose(); }
       }
     });
@@ -256,10 +258,12 @@ export class Vehicle {
 
   private updateVisuals(dt: number, braking: boolean): void {
     this.braking = braking;
-    const spin = this.speed * dt / 0.36;
+    const spin = this.speed * dt / this.rollRadius; // per-kind rolling radius: bike wheels are not 0.36 m
     if (this.spec.twoWheeler) {
       for (const wheel of this.wheels) wheel.rotation.x += spin;
-      for (const crank of this.cranks) crank.rotation.x += spin * 0.42; // pedal cadence geared below wheel speed
+      // 0.2232 = 0.62 * 0.36, the factor that puts the crank on the same clock as RiggedPlayerVisual's
+      // pedalPhase (dt * speed * 0.62) — before this the chainring spun 1.88x faster than the rider's legs.
+      for (const crank of this.cranks) crank.rotation.x += this.speed * dt * 0.62;
       if (this.steerGroup) this.steerGroup.rotation.y = this.steeringVisual * 0.7;
       if (this.rider) this.rider.visible = this.occupied && !this.playerControlled && !this.wrecked;
       const parked = !this.playerControlled && !this.occupied && Math.abs(this.speed) < 0.5;
@@ -322,7 +326,7 @@ export class Vehicle {
     this.releaseTaxiPlaceholder();
     this.wheels = [...instance.wheels]; this.headLights = [...instance.headLights]; this.brakeLights = [...instance.brakeLights]; this.cabinParts = [...instance.cabinParts];
     this.wheels[0]!.rotation.order = 'YXZ'; this.wheels[1]!.rotation.order = 'YXZ';
-    this.taxiSharedGeometries = new Set(instance.sharedGeometries); this.taxiOwnedMaterials = new Set(instance.ownedMaterials);
+    this.sharedGeometries = new Set(instance.sharedGeometries); this.ownedMaterials = new Set(instance.ownedMaterials);
     this.group.add(instance.root); instance.root.userData.vehicleVisual = 'quantum-express';
     this.setFirstPerson(this.firstPerson); this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
     if (this.wrecked) this.applyWreckAppearance();
@@ -355,7 +359,7 @@ export class Vehicle {
     this.releaseRoadPlaceholder();
     this.wheels = [...instance.wheels]; this.headLights = [...instance.headLights]; this.brakeLights = [...instance.brakeLights]; this.cabinParts = [...instance.cabinParts];
     this.wheels[0]!.rotation.order = 'YXZ'; this.wheels[1]!.rotation.order = 'YXZ';
-    this.roadSharedGeometries = new Set(instance.sharedGeometries); this.roadOwnedMaterials = new Set(instance.ownedMaterials);
+    this.sharedGeometries = new Set(instance.sharedGeometries); this.ownedMaterials = new Set(instance.ownedMaterials);
     this.group.add(instance.root); instance.root.userData.vehicleVisual = this.spec.kind;
     this.setFirstPerson(this.firstPerson); this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
     if (this.wrecked) this.applyWreckAppearance();
@@ -437,104 +441,19 @@ export class Vehicle {
     });
   }
 
-  /** Frame tubes and spoked wheels; the whole front assembly (fork, bars, front wheel) yaws in steerGroup.
-   *  Bicycle adds cranks + pedals, motorbike a tank + exhaust, superbike a low nose-down fairing wedge. */
+  /**
+   * Two-wheelers come from the shared code-built library: geometry is cached per kind for the whole
+   * session and only materials are cloned, so a street full of couriers costs one geometry upload
+   * rather than thirty-four per bike. Handles are resolved by name out of the clone.
+   */
   private buildTwoWheeler(): void {
-    const bicycle = this.spec.kind === 'bicycle'; const superbike = this.spec.kind === 'superbike';
-    const length = this.spec.size[2]; const axleZ = length * 0.36; const wheelRadius = bicycle ? 0.34 : 0.31;
-    const paint = new THREE.MeshPhysicalMaterial({ color: this.spec.color, metalness: 0.4, roughness: 0.22, clearcoat: 1, clearcoatRoughness: 0.1 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x17191c, metalness: 0.42, roughness: 0.48 });
-    const chrome = new THREE.MeshStandardMaterial({ color: 0xb3babd, metalness: 0.9, roughness: 0.2 });
-    const rubber = new THREE.MeshStandardMaterial({ color: 0x101315, roughness: 0.82 });
-    const tube = (x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, radius: number, material: THREE.Material): THREE.Mesh => {
-      const span = new THREE.Vector3(x2 - x1, y2 - y1, z2 - z1);
-      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, span.length(), 8), material);
-      mesh.position.set((x1 + x2) / 2, (y1 + y2) / 2, (z1 + z2) / 2); mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), span.normalize());
-      return mesh;
-    };
-    const buildWheel = (): THREE.Group => {
-      const wheel = new THREE.Group(); const tireTube = bicycle ? 0.045 : 0.1;
-      const tire = new THREE.Mesh(new THREE.TorusGeometry(wheelRadius - tireTube, tireTube, 8, 22), rubber); tire.rotation.y = Math.PI / 2;
-      const hubGeo = new THREE.CylinderGeometry(bicycle ? 0.035 : 0.11, bicycle ? 0.035 : 0.11, bicycle ? 0.06 : 0.15, 10); hubGeo.rotateZ(Math.PI / 2);
-      wheel.add(tire, new THREE.Mesh(hubGeo, chrome));
-      const spokes = bicycle ? 4 : 3;
-      for (let i = 0; i < spokes; i++) { const spoke = new THREE.Mesh(new THREE.BoxGeometry(bicycle ? 0.015 : 0.045, (wheelRadius - tireTube) * 2, bicycle ? 0.015 : 0.05), bicycle ? chrome : dark); spoke.rotation.x = (i / spokes) * Math.PI; wheel.add(spoke); }
-      return wheel;
-    };
-    const rear = buildWheel(); rear.position.set(0, wheelRadius, -axleZ);
-    const steer = new THREE.Group(); steer.position.set(0, wheelRadius, axleZ); this.steerGroup = steer;
-    const front = buildWheel(); steer.add(front);
-    this.wheels.push(front, rear); this.group.add(rear, steer);
-    const barY = (bicycle ? 0.96 : superbike ? 0.8 : 0.92) - wheelRadius;
-    for (const x of bicycle ? [-0.05, 0.05] : [-0.08, 0.08]) steer.add(tube(x, 0, 0, x, barY - 0.05, -0.09, bicycle ? 0.02 : 0.032, bicycle ? paint : chrome)); // fork legs
-    const bars = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, superbike ? 0.5 : 0.46, 8), dark); bars.rotation.z = Math.PI / 2; bars.position.set(0, barY, -0.09); steer.add(bars);
-    for (const x of [-0.21, 0.21]) { const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.1, 8), rubber); grip.rotation.z = Math.PI / 2; grip.position.set(x, barY, -0.09); steer.add(grip); }
-    if (bicycle) {
-      const crankY = 0.36; const crankZ = -0.08; const seat = { y: 0.96, z: -0.3 }; const head = { y: 0.86, z: axleZ - 0.14 };
-      this.group.add(
-        tube(0, head.y, head.z, 0, crankY, crankZ, 0.026, paint), tube(0, head.y + 0.03, head.z, 0, seat.y - 0.08, seat.z + 0.02, 0.024, paint), // down + top tube
-        tube(0, crankY, crankZ, 0, seat.y, seat.z, 0.024, paint), tube(0, wheelRadius, -axleZ, 0, crankY, crankZ, 0.02, paint), tube(0, wheelRadius, -axleZ, 0, seat.y - 0.06, seat.z + 0.02, 0.02, paint), // seat tube + stays
-      );
-      const saddle = new THREE.Mesh(new RoundedBoxGeometry(0.16, 0.06, 0.28, 3, 0.025), dark); saddle.position.set(0, seat.y + 0.04, seat.z); this.group.add(saddle);
-      const crank = new THREE.Group(); crank.position.set(0, crankY, crankZ); this.cranks.push(crank); this.group.add(crank);
-      crank.add(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.34, 0.04), dark));
-      for (const side of [-1, 1]) { const pedal = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.025, 0.09), dark); pedal.position.set(side * 0.1, side * 0.16, 0); crank.add(pedal); }
-    } else if (superbike) {
-      const fairing = new THREE.Mesh(new RoundedBoxGeometry(0.4, 0.26, 1.15, 4, 0.09), paint); fairing.position.set(0, 0.6, 0.16); fairing.rotation.x = 0.12; // nose-down wedge
-      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.36, 10), paint); nose.rotation.x = Math.PI / 2 - 0.12; nose.position.set(0, 0.56, 0.86);
-      const screen = new THREE.Mesh(new RoundedBoxGeometry(0.26, 0.02, 0.3, 2, 0.008), new THREE.MeshPhysicalMaterial({ color: 0x1b2a33, roughness: 0.1, metalness: 0.3, clearcoat: 1 })); screen.position.set(0, 0.78, 0.44); screen.rotation.x = 0.55;
-      const tail = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.13, 0.6, 3, 0.05), paint); tail.position.set(0, 0.78, -0.62); tail.rotation.x = 0.3; // kicked-up tail
-      const seat = new THREE.Mesh(new RoundedBoxGeometry(0.28, 0.07, 0.34, 2, 0.03), rubber); seat.position.set(0, 0.74, -0.3);
-      const engine = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.3, 0.5, 3, 0.05), dark); engine.position.set(0, 0.4, -0.02);
-      this.group.add(fairing, nose, screen, tail, seat, engine, tube(0, wheelRadius, -axleZ, 0, 0.42, -0.15, 0.035, dark));
-      for (const x of [-0.09, 0.09]) this.group.add(tube(x, 0.36, -0.35, x * 1.4, 0.62, -0.92, 0.045, chrome)); // twin underseat exhausts
-    } else {
-      const tank = new THREE.Mesh(new RoundedBoxGeometry(0.32, 0.24, 0.52, 4, 0.08), paint); tank.position.set(0, 0.78, 0.2);
-      const seat = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.11, 0.68, 3, 0.04), rubber); seat.position.set(0, 0.74, -0.42);
-      const engine = new THREE.Mesh(new RoundedBoxGeometry(0.32, 0.34, 0.55, 3, 0.06), dark); engine.position.set(0, 0.44, 0.02);
-      const fender = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.05, 0.5, 2, 0.02), paint); fender.position.set(0, 0.66, -0.72);
-      this.group.add(tank, seat, engine, fender, tube(0, 0.83, 0.52, 0, 0.68, -0.7, 0.045, paint), tube(0, wheelRadius, -axleZ, 0, 0.44, -0.2, 0.035, dark)); // spine + swingarm
-      this.group.add(tube(0.16, 0.3, 0.05, 0.2, 0.44, -0.88, 0.05, chrome)); // exhaust
-      if (this.spec.kind === 'courier') {
-        const box = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.62, 0.58, 4, 0.08), new THREE.MeshStandardMaterial({ color: 0x84f01c, roughness: 0.48 }));
-        box.name = 'courierbox'; box.position.set(0, 1.08, -0.78);
-        const sign = createSignMesh(new THREE.PlaneGeometry(0.5, 0.29), '60-SEK', '#10220b', { background: '#f4ffea' });
-        sign.name = 'sign'; sign.position.set(0, 0, 0.296); box.add(sign);
-        this.group.add(box);
-      }
-    }
-    if (!bicycle) {
-      const lamp = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.12, 0.06, 2, 0.02), new THREE.MeshStandardMaterial({ color: 0xf4edc5, emissive: 0xffe7a0, emissiveIntensity: 1.15, roughness: 0.12 }));
-      if (superbike) { lamp.position.set(0, 0.68, 0.8); this.group.add(lamp); } else { lamp.position.set(0, barY - 0.16, 0.1); steer.add(lamp); }
-      this.headLights.push(lamp);
-      const tail = new THREE.Mesh(new RoundedBoxGeometry(0.12, 0.07, 0.04, 2, 0.015), new THREE.MeshStandardMaterial({ color: 0x5b0808, emissive: 0x390000, emissiveIntensity: 1.8, roughness: 0.22 }));
-      tail.position.set(0, superbike ? 0.86 : 0.72, -length / 2 - 0.02); this.group.add(tail); this.brakeLights.push(tail);
-    }
-    this.buildRider();
+    const instance = instantiateBikeModel(this.spec.kind as TwoWheelerKind, this.spec.color);
+    this.wheels = [...instance.wheels]; this.steerGroup = instance.steerGroup; this.cranks = [...instance.cranks];
+    this.rider = instance.rider; this.headLights = [...instance.headLights]; this.brakeLights = [...instance.brakeLights];
+    this.rollRadius = instance.rollRadius;
+    this.sharedGeometries = new Set(instance.sharedGeometries); this.ownedMaterials = new Set(instance.ownedMaterials);
+    this.group.add(instance.root);
     this.group.rotation.z = 0.15; // spawn resting on the kickstand; updateVisuals takes over once ridden
-    this.group.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; } }); // frustumCulled left default (true): an off-screen bakkie must not render in the main AND shadow pass
-  }
-
-  /** Seated dummy shown while an AI ped rides this two-wheeler (hidden the moment the player takes it). */
-  private buildRider(): void {
-    const bicycle = this.spec.kind === 'bicycle'; const superbike = this.spec.kind === 'superbike';
-    const rider = new THREE.Group(); rider.name = 'rider'; this.rider = rider;
-    const [saddleY, saddleZ] = this.spec.saddle ?? [0.1, -0.2];
-    rider.position.set(0, saddleY, saddleZ); rider.visible = false;
-    const skin = new THREE.MeshStandardMaterial({ color: 0x8b5b43, roughness: 0.8 });
-    const cloth = new THREE.MeshStandardMaterial({ color: bicycle ? 0x536f4a : 0x2a2e35, roughness: 0.74 });
-    const torso = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.6, 0.26, 4, 0.08), cloth); torso.position.set(0, 1.14, superbike ? 0.1 : 0); torso.rotation.x = superbike ? 0.62 : bicycle ? 0.22 : 0.32;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 10), bicycle ? skin : new THREE.MeshStandardMaterial({ color: this.spec.color, roughness: 0.3, metalness: 0.2 })); head.position.set(0, superbike ? 1.36 : 1.48, superbike ? 0.3 : 0.08); // helmet matches the paint
-    rider.add(torso, head);
-    for (const side of [-1, 1]) {
-      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.34, 4, 8), cloth); arm.geometry.translate(0, -0.2, 0);
-      arm.position.set(side * 0.24, superbike ? 1.24 : 1.36, superbike ? 0.2 : 0.06); arm.rotation.x = superbike ? -1.35 : bicycle ? -0.85 : -1.05; arm.rotation.z = side * -0.12;
-      const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.26, 4, 8), cloth); thigh.geometry.translate(0, -0.17, 0);
-      thigh.position.set(side * 0.14, 0.92, 0); thigh.rotation.x = bicycle ? -1.1 : -1.3; thigh.rotation.z = side * -0.14;
-      const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.28, 4, 8), bicycle ? cloth : skin); shin.geometry.translate(0, -0.18, 0);
-      shin.position.set(0, -0.36, 0); shin.rotation.x = bicycle ? 1.15 : 1.55; thigh.add(shin);
-      rider.add(arm, thigh);
-    }
-    this.group.add(rider);
+    this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
   }
 }

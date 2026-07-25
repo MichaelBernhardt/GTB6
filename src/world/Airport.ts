@@ -122,32 +122,91 @@ export function buildLightAircraft(seed: number): BuiltAircraft {
   const body = new THREE.MeshStandardMaterial({ color: 0xe8e6df, roughness: 0.42, metalness: 0.25 });
   const trim = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.45, metalness: 0.2 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x22282b, roughness: 0.5, metalness: 0.35 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x2e4b55, roughness: 0.15, metalness: 0.2, clearcoat: 0.7 });
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x15181a, roughness: 0.88 });
+  const glass = new THREE.MeshPhysicalMaterial({
+    color: 0x2e4b55, roughness: 0.08, metalness: 0.2, clearcoat: 1, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+  });
+  const navRed = new THREE.MeshStandardMaterial({ color: 0xd8362c, emissive: 0x6b0d08, emissiveIntensity: 1.4 });
+  const navGreen = new THREE.MeshStandardMaterial({ color: 0x2fbf4e, emissive: 0x0a5219, emissiveIntensity: 1.4 });
   const group = new THREE.Group();
   const add = (mesh: THREE.Mesh): THREE.Mesh => { mesh.castShadow = true; group.add(mesh); return mesh; };
-  const fuselage = add(new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.5, 3.4, 12), body)); fuselage.rotation.x = Math.PI / 2; fuselage.position.set(0, 1.28, 0.4);
-  const tail = add(new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.14, 3.0, 10), body)); tail.rotation.x = Math.PI / 2; tail.position.set(0, 1.38, -2.8);
-  const cowl = add(new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.44, 0.7, 12), trim)); cowl.rotation.x = Math.PI / 2; cowl.position.set(0, 1.28, 2.4);
-  const prop = new THREE.Group(); prop.position.set(0, 1.28, 2.82); group.add(prop);
+  /** Place a mesh in one call; every position is a literal, so the build stays seed-deterministic. */
+  const put = (geometry: THREE.BufferGeometry, material: THREE.Material, x: number, y: number, z: number,
+    rx = 0, ry = 0, rz = 0): THREE.Mesh => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z); mesh.rotation.set(rx, ry, rz);
+    return add(mesh);
+  };
+
+  // Fuselage: one lathed shell from the spinner bulkhead to the tailcone, so it tapers like an
+  // airframe instead of reading as two stacked drums.
+  const hull = [
+    [0.10, -4.30], [0.16, -3.60], [0.30, -2.60], [0.46, -1.40], [0.56, -0.30],
+    [0.58, 0.70], [0.56, 1.60], [0.48, 2.25], [0.34, 2.62], [0.10, 2.78],
+  ].map(([r, z]) => new THREE.Vector2(r!, z!));
+  const fuselage = new THREE.LatheGeometry(hull, 18);
+  fuselage.rotateX(Math.PI / 2); // lathe axis Y -> nose along +z
+  put(fuselage, body, 0, 1.30, 0);
+  put(new THREE.CylinderGeometry(0.56, 0.47, 0.72, 18), trim, 0, 1.30, 2.42, Math.PI / 2); // cowl
+  put(new THREE.BoxGeometry(0.30, 0.10, 0.22), dark, 0.42, 1.06, 2.10); // exhaust stub
+
+  const prop = new THREE.Group(); prop.position.set(0, 1.30, 2.84); group.add(prop);
   const addProp = (mesh: THREE.Mesh): THREE.Mesh => { mesh.castShadow = true; prop.add(mesh); return mesh; };
-  const spinner = addProp(new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.5, 10), dark)); spinner.rotation.x = Math.PI / 2; spinner.position.set(0, 0, 0.13);
-  addProp(new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.95, 0.06), dark));
-  addProp(new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.16, 0.06), dark));
-  const canopy = add(new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.55, 1.25), glass)); canopy.position.set(0, 1.85, 0.85);
-  const wing = add(new THREE.Mesh(new THREE.BoxGeometry(11, 0.15, 1.55), body)); wing.position.set(0, 2.12, 0.72);
-  const wingTipL = add(new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.17, 1.56), trim)); wingTipL.position.set(-4.95, 2.12, 0.72);
-  const wingTipR = add(new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.17, 1.56), trim)); wingTipR.position.set(4.95, 2.12, 0.72);
-  for (const side of [-1, 1]) {
-    const strut = add(new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.9, 0.12), body)); strut.position.set(side * 1.35, 1.55, 0.85); strut.rotation.z = side * 0.98;
-    const stripe = add(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 3.9), trim)); stripe.position.set(side * 0.56, 1.4, -0.5);
-    const wheel = add(new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.15, 12), dark)); wheel.rotation.z = Math.PI / 2; wheel.position.set(side * 0.95, 0.26, 0.5);
-    const gear = add(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.78, 0.2), body)); gear.position.set(side * 0.55, 0.62, 0.5); gear.rotation.z = side * 0.72;
+  const spinner = addProp(new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.52, 14), trim));
+  spinner.rotation.x = Math.PI / 2; spinner.position.set(0, 0, 0.14);
+  for (const [tip, twist] of [[1, 0.26], [-1, -0.26]] as Array<[number, number]>) {
+    const blade = addProp(new THREE.Mesh(new THREE.BoxGeometry(0.145, 0.92, 0.045), dark));
+    blade.position.set(0, tip * 0.52, 0); blade.rotation.set(0, twist, 0);
   }
-  const noseWheel = add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.13, 12), dark)); noseWheel.rotation.z = Math.PI / 2; noseWheel.position.set(0, 0.22, 1.95);
-  const noseGear = add(new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.7, 0.07), body)); noseGear.position.set(0, 0.6, 1.95);
-  const fin = add(new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.35, 0.9), body)); fin.position.set(0, 2.15, -4.0); fin.rotation.x = 0.18;
-  const finFlash = add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.55, 0.92), trim)); finFlash.position.set(0, 2.45, -4.02); finFlash.rotation.x = 0.18;
-  const stab = add(new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.09, 0.8), body)); stab.position.set(0, 1.5, -4.1);
+
+  // Cabin greenhouse: a sloped windscreen and two side lights that follow the fuselage, plus a
+  // door outline — the old single glass box was buried inside the hull and read as nothing.
+  put(new THREE.BoxGeometry(0.86, 0.62, 0.06), glass, 0, 1.78, 1.32, -0.62);
+  put(new THREE.BoxGeometry(0.80, 0.06, 0.92), glass, 0, 2.02, 0.74); // roof light
+  for (const side of [-1, 1]) {
+    put(new THREE.BoxGeometry(0.05, 0.44, 0.86), glass, side * 0.51, 1.80, 0.66, 0, 0, side * 0.06);
+    put(new THREE.BoxGeometry(0.05, 0.30, 0.60), glass, side * 0.52, 1.72, -0.26, 0, 0, side * 0.06);
+    put(new THREE.BoxGeometry(0.035, 0.72, 0.90), trim, side * 0.545, 1.44, 0.36); // door skin
+    put(new THREE.BoxGeometry(0.05, 0.05, 0.10), dark, side * 0.57, 1.34, 0.74); // door handle
+  }
+
+  // Wing: tapered, with dihedral, split into a main panel plus aileron and flap strips.
+  for (const side of [-1, 1]) {
+    put(new THREE.BoxGeometry(5.4, 0.16, 1.62), body, side * 2.86, 2.14, 0.70, 0, 0, side * -0.045);
+    put(new THREE.BoxGeometry(1.5, 0.10, 0.34), trim, side * 4.72, 2.19, -0.05, 0, 0, side * -0.045); // aileron
+    put(new THREE.BoxGeometry(2.2, 0.10, 0.36), body, side * 2.10, 2.10, -0.06, 0, 0, side * -0.045); // flap
+    put(new THREE.BoxGeometry(0.5, 0.30, 1.20), trim, side * 5.44, 2.30, 0.62, 0, 0, side * -0.045); // winglet
+    put(new THREE.SphereGeometry(0.09, 8, 6), side < 0 ? navRed : navGreen, side * 5.62, 2.30, 0.30);
+    put(new THREE.BoxGeometry(0.06, 1.94, 0.14), body, side * 1.42, 1.56, 0.86, 0, 0, side * 0.96); // lift strut
+    put(new THREE.BoxGeometry(0.05, 1.20, 0.09), body, side * 1.10, 1.52, 0.20, 0.3, 0, side * 0.84); // jury strut
+    put(new THREE.BoxGeometry(0.05, 0.30, 3.9), trim, side * 0.58, 1.42, -0.50); // cheat line
+  }
+  put(new THREE.BoxGeometry(0.92, 0.34, 1.55), body, 0, 1.96, 0.72); // cabin roof / wing root fairing
+  put(new THREE.BoxGeometry(0.70, 0.18, 0.42), body, 0, 1.94, 1.62); // windscreen top fair-in
+  put(new THREE.BoxGeometry(0.24, 0.09, 0.16), dark, -1.90, 2.06, 1.52); // landing light
+
+  // Undercarriage: wheels with spats, a nose leg that steers into the taxi turn.
+  for (const side of [-1, 1]) {
+    const wheel = put(new THREE.CylinderGeometry(0.27, 0.27, 0.16, 16), rubber, side * 0.96, 0.27, 0.50);
+    wheel.rotation.z = Math.PI / 2;
+    put(new THREE.CylinderGeometry(0.14, 0.14, 0.18, 12), body, side * 0.96, 0.27, 0.50, 0, 0, Math.PI / 2); // hub
+    put(new THREE.SphereGeometry(0.30, 10, 8), trim, side * 0.96, 0.36, 0.50, 0, 0, 0).scale.set(0.5, 0.72, 1.5); // spat
+    put(new THREE.BoxGeometry(0.10, 0.80, 0.22), body, side * 0.56, 0.62, 0.50, 0, 0, side * 0.72); // gear leg
+  }
+  const nose = put(new THREE.CylinderGeometry(0.23, 0.23, 0.14, 16), rubber, 0, 0.23, 1.98);
+  nose.rotation.z = Math.PI / 2;
+  put(new THREE.CylinderGeometry(0.10, 0.10, 0.16, 10), body, 0, 0.23, 1.98, 0, 0, Math.PI / 2);
+  put(new THREE.CylinderGeometry(0.06, 0.07, 0.72, 10), body, 0, 0.60, 1.98); // nose oleo
+
+  // Empennage: fin plus a hinged rudder, stabiliser plus elevators.
+  put(new THREE.BoxGeometry(0.11, 1.30, 0.82), body, 0, 2.10, -3.86, 0.20);
+  put(new THREE.BoxGeometry(0.13, 1.05, 0.36), trim, 0, 2.34, -4.32, 0.20); // rudder
+  put(new THREE.BoxGeometry(3.1, 0.10, 0.62), body, 0, 1.50, -4.02);
+  put(new THREE.BoxGeometry(3.0, 0.08, 0.30), trim, 0, 1.50, -4.44); // elevator
+  put(new THREE.SphereGeometry(0.07, 8, 6), navRed, 0, 2.86, -4.02); // fin-top beacon
+  put(new THREE.BoxGeometry(0.04, 0.04, 0.34), dark, 0.44, 1.66, 1.10); // pitot
+  put(new THREE.BoxGeometry(0.03, 0.24, 0.30), dark, 0, 2.14, -1.30); // comms antenna
+
   return { group, prop, halfSpan: 5.6, halfLength: 4.5, height: 3.0 };
 }
 
