@@ -582,7 +582,9 @@ export function buildCar(leading: boolean, trailing: boolean): { group: THREE.Gr
   // ---- Roof: a shallow crown, plus equipment and the cable duct ----
   const crownR = 3.6; const crownY = ROOF_Y - Math.sqrt(crownR * crownR - BODY_HALF * BODY_HALF);
   const half = Math.asin(BODY_HALF / crownR);
-  const crown = new THREE.CylinderGeometry(crownR, crownR, 2 * BODY_END, 20, 1, true, Math.PI / 2 - half, 2 * half);
+  // thetaStart centres the arc overhead: THREE lays cylinder vertices at x = r sin t, z = r cos t, so PI/2 would
+  // put the arc out at +x and the later rotateX would drop it beside the car instead of on top of it.
+  const crown = new THREE.CylinderGeometry(crownR, crownR, 2 * BODY_END, 20, 1, true, Math.PI - half, 2 * half);
   crown.rotateX(Math.PI / 2); crown.translate(0, crownY, 0);
   B.add(crown, 'roof');
   for (const z of [-4.6, 0.6, 4.2]) B.box('roof', 0, ROOF_Y + 0.30, z, 1.5, 0.24, 1.9); // HVAC blisters
