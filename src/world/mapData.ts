@@ -59,7 +59,12 @@ export interface SignalJunctionDef {
 }
 
 interface RawMap {
-  stats: { targetSize: number; metresPerUnit: number; totalRoadKm: number; roadCount: number; junctionCount: number };
+  stats: {
+    targetSize: number; metresPerUnit: number; totalRoadKm: number; roadCount: number; junctionCount: number;
+    bbox?: { south: number; west: number; north: number; east: number };
+    /** Exact projected-metres -> game-units fit: game = (metres - c) * scale. See coordTransform.ts. */
+    fit?: { scale: number; cx: number; cz: number };
+  };
   roads: Array<{ name: string; width: number; kind: string; points: [number, number][] }>;
   junctions: Array<{ x: number; z: number; roads: string[] }>;
   districts: Array<{ name: string; x: number; z: number; radius: number; buildingDensity?: number }>;
@@ -94,6 +99,8 @@ interface RawMap {
 const MAP = rawMap as unknown as RawMap;
 
 export const MAP_STATS = MAP.stats;
+/** Landmarks straight from the generated map (name, position, kind). */
+export const MAP_LANDMARKS: MapLandmark[] = MAP.landmarks;
 /** Square world footprint in game units — the generated map is fitted into this. */
 export const MAP_WORLD_SIZE = MAP.stats.targetSize;
 export const METRES_PER_UNIT = MAP.stats.metresPerUnit;

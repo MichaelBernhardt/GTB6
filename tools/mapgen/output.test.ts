@@ -147,7 +147,11 @@ describe('generated joburg-map.json', () => {
     const margin = 100; // game units (> the ring offset, < the stub-collection band)
     const deadEndsAtBoundary: string[] = [];
     for (const road of map.roads) {
-      if (road.name === 'Kaapstad Quay') continue; // the harbour pier deliberately ends at the water
+      // Roads that deliberately end at the water. Both are already declared in
+      // config.ts CUL_DE_SAC_NAMES, so the dead-end resolver leaves them alone by design;
+      // 'Sloepbaai Road' only started tripping this gate when the dam replaced the ocean and
+      // put the slipway's waterline within 100 units of the road bbox's west extreme.
+      if (road.name === 'Kaapstad Quay' || road.name === 'Sloepbaai Road') continue;
       for (const point of [road.points[0], road.points[road.points.length - 1]]) {
         if ((incidence.get(key(point)) ?? 0) > 1) continue;
         const edge = Math.min(point[0] - minX, maxX - point[0], point[1] - minZ, maxZ - point[1]);

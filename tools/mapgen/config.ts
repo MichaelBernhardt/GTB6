@@ -4,8 +4,37 @@
  * widths and TARGET_SIZE are game world units.
  */
 
-/** Phase-2 driveable crop: CBD up to Sandton, trimmed flanks. [south, west, north, east] */
+/**
+ * FETCH box — FROZEN. Every disk cache in tools/mapgen/cache/ is keyed by a query hash that
+ * embeds these four numbers (overpass.ts:18, elevation.ts:74), so changing it invalidates the
+ * 4.97 MB Overpass extract, the Cape extract, the SRTM grid and the station nodes, and forces a
+ * slow (and rate-limited) network round trip. Crop with CROP_BBOX instead — there is no data
+ * outside this box, so a crop can only ever shrink inward.
+ */
 export const BBOX = { south: -26.23, west: 27.97, north: -26.09, east: 28.09 } as const;
+
+/**
+ * CROP box — the extent that actually becomes the game world. MUST be a subset of BBOX.
+ * Applied to the fetched vector data (process.ts `inBbox`) so the whole organify chain —
+ * run-splitting, thinning, stub pruning, orbital ring, island bridging, dead-end resolution,
+ * meander — runs over the cropped input and treats the new boundary exactly like the old one.
+ * Set equal to BBOX for a no-op.
+ *
+ * Current value: 2/3 of the fetched linear extent in both axes (lat span 0.09333 deg of 0.14,
+ * lon span 0.0800 deg of 0.12), shifted east so the CBD sits nearer the east edge and the
+ * Killarney golf rings survive whole.
+ */
+export const CROP_BBOX = { south: -26.23, west: 27.986, north: -26.13667, east: 28.066 } as const;
+
+if (
+  CROP_BBOX.south < BBOX.south || CROP_BBOX.north > BBOX.north ||
+  CROP_BBOX.west < BBOX.west || CROP_BBOX.east > BBOX.east
+) {
+  throw new Error(
+    `CROP_BBOX must be a subset of the fetched BBOX (there is no data outside it): ` +
+      `crop=${JSON.stringify(CROP_BBOX)} fetch=${JSON.stringify(BBOX)}`,
+  );
+}
 
 /** Approximate centre of the Joburg CBD (Rissik & Commissioner area). */
 export const CBD_CENTER = { lat: -26.205, lon: 28.043 } as const;
@@ -42,7 +71,26 @@ export const MIN_WATER_AREA_M2 = 4000;
  * LENGTHS, dam, ring, meanders) scales with the map automatically because it is converted
  * through fit.scale. A 2-unit-wide car still gets the same two-lane carriageway.
  */
-export const TARGET_SIZE = 18000;
+/**
+ * SCALE VARIANT. The crop controls HOW MUCH CITY; this controls HOW BIG EACH BLOCK FEELS.
+ * They MULTIPLY — never quote one without the other.
+ *   '075'    (default, the shipping variant): ~1.33 m/unit, blocks 75% the size of real Joburg
+ *            relative to the fixed game-scale car.
+ *   'parity' (the control): ~1.00 m/unit, "1 unit = 1 metre", same content, bigger blocks.
+ * Override per build with MAPGEN_SCALE=parity npm run map:build.
+ */
+export const SCALE_VARIANT = (process.env.MAPGEN_SCALE ?? '075') as '075' | 'parity';
+const SCALE_FACTOR = SCALE_VARIANT === 'parity' ? 1 : 0.75;
+
+/**
+ * Calibrated against the emitted `[process] fit: road bbox W x H m` line for the 2/3 crop
+ * (measured 11,946 m on the governing axis). PARITY_TARGET_SIZE / metresPerUnit = the fit;
+ * TARGET_SIZE is read at only three places (process.ts) and the whole graft/ring/meander chain
+ * works in projected metres, so re-calibrating after a crop change is a one-shot: build, read
+ * the log line, set PARITY_TARGET_SIZE = max(W,H) / 0.9914, rebuild.
+ */
+const PARITY_TARGET_SIZE = 12000;
+export const TARGET_SIZE = Math.round(PARITY_TARGET_SIZE * SCALE_FACTOR);
 
 /** Game-unit road widths per OSM highway class. */
 export const ROAD_WIDTHS: Record<string, number> = {
@@ -104,7 +152,7 @@ export const RING_KIND = 'trunk' as const;
  * calibrated to it); instead the declared world square GROWS by this margin per side, so no
  * road runs along the very edge — the band gets border veld cover.
  */
-export const EDGE_MARGIN_UNITS = 600;
+export const EDGE_MARGIN_UNITS = Math.round(600 * SCALE_FACTOR);
 
 /**
  * Border veld: organic scrub polygons filling the set-back band along the north, east and
@@ -156,14 +204,63 @@ export const CAPE_BBOX = { south: -33.93, west: 18.37, north: -33.87, east: 18.4
  * corridor is a ~5500 u drive — the "little drive between them" grows proportionally with the
  * scale-up, exactly as intended.
  */
-export const CORRIDOR_WIDTH_M = 2700;
+export const CORRIDOR_WIDTH_M = 2000;
 /** Coastal road sits this far inland of the waterline. */
 export const COAST_ROAD_SETBACK_M = 260;
 /** North-south stretch applied to the Cape strip so it covers more of the west edge. */
 export const COAST_STRETCH_Z = 1.35;
-/** The ocean fill extends this far west of the coastline. */
+/** The dam fill extends this far west of the shoreline (past the world edge — no far shore). */
 export const OCEAN_EXTENT_M = 2600;
 export const COASTAL_ROAD_NAME = 'Victoria Road';
+
+/**
+ * EGOLI WAL — the inland dam that replaces the ocean. Johannesburg is landlocked; an Atlantic
+ * seaboard was the single most immersion-breaking thing on the map. Modelled on the Vaal Dam:
+ * a shallow flooded basin of drowned river valleys, so the shore is deeply crenellated with
+ * bays, inlets and headlands rather than a smooth lake edge, and it is grass to the waterline
+ * with concrete slipways, not sand.
+ *
+ * HARD CONSTRAINT ON THE SHAPE: the shoreline must stay SINGLE-VALUED, x = f(z), sampled at
+ * uniform z. src/world/beachfront.ts coastXAt() and src/world/City.ts coastlineXAt() both model
+ * the shore as a function of z and would silently flatten an overhanging peninsula. Large
+ * amplitude in x at uniform z gives bays and headlands without overhangs, and both runtime
+ * consumers keep working untouched. Do not generate true peninsulas.
+ *
+ * The dam covers only the SOUTHERN part of the west edge and pinches out at both ends, so it
+ * overhangs ONE edge (west) rather than three as the ocean did — the owner's "it needn't cover
+ * 3 sides though, just one is good". North of it the west band stays dry veld and farmland.
+ */
+export const DAM_NAME = 'Egoli Wal';
+/** Vertex pitch along the shore (m). The old ocean used 380 m — far too coarse for bays. */
+export const DAM_SHORE_STEP_M = 90;
+/** Primary fBm: the bays and headlands. */
+export const DAM_BAY_AMPLITUDE_M = 420;
+export const DAM_BAY_WAVELENGTH_M = 1400;
+/** Secondary fBm: reed-fringed detail. */
+export const DAM_DETAIL_AMPLITUDE_M = 110;
+export const DAM_DETAIL_WAVELENGTH_M = 380;
+/** Drowned-valley inlets cut east into the shore, as fractions of the dam's z span. */
+export const DAM_ARMS = [
+  { at: 0.22, depthM: 820, mouthM: 1100 },
+  { at: 0.52, depthM: 700, mouthM: 900 },
+  { at: 0.78, depthM: 860, mouthM: 1150 },
+] as const;
+/** The dam's z-band as fractions of the city's own north-south span (0 = north, 1 = south). */
+export const DAM_Z_START_FRACTION = 0.42;
+export const DAM_Z_END_FRACTION = 1.04;
+/** Mean shore set-back west of the corridor's west edge (m). */
+export const DAM_SHORE_SETBACK_M = 150;
+/** Water surface elevation (m ASL). The Highveld sits at ~1700 m; a reservoir is not at 0. */
+export const DAM_LEVEL_M = 1480;
+/** One large island, Vaal-style. */
+export const DAM_ISLAND_NAME = 'Voelvlei Island';
+export const DAM_ISLAND_RADIUS_M = 420;
+/**
+ * Pre-smoothing tolerance for the shore ROAD only (m). The raw crenellated polyline still
+ * drives the water polygon and the terrain; the road cuts across the bay mouths on causeways,
+ * which is what a real dam-shore road does — and stops 900 m bays folding the offset road.
+ */
+export const DAM_ROAD_PRESMOOTH_M = 240;
 /** Corridor connector roads (creative geography, hence the in-game names straight away). */
 export const CORRIDOR_LINKS = [
   { name: 'Madiba Meander', kind: 'trunk' },
@@ -191,15 +288,20 @@ export interface MeanderSpec {
    *  junctions are all their own spur/frontage attachments. */
   movePins?: boolean;
 }
+/**
+ * Amplitudes and wavelengths are ~0.66x the pre-crop values: they are denominated in METRES,
+ * but the ring perimeter they ride on dropped to ~68% with the crop, so leaving them alone
+ * turns the orbital's wobble from 3.2% of a side into 4.7% and it reads as a scribble.
+ */
 export const MEANDER_SPECS: Record<string, MeanderSpec> = {
-  'Egoli Orbital': { amplitude: 400, wavelength: 1900, octaves: 3, step: 90, taper: 260, chaikin: 2, movePins: true },
-  Plaaspad: { amplitude: 150, wavelength: 1600, octaves: 2, step: 80, taper: 170, chaikin: 2, movePins: true },
-  'Madiba Meander': { amplitude: 150, wavelength: 2100, octaves: 2, step: 100, taper: 280, chaikin: 1 },
-  'Rooibos Route': { amplitude: 130, wavelength: 1900, octaves: 2, step: 100, taper: 280, chaikin: 1 },
-  Melkweg: { amplitude: 90, wavelength: 1400, octaves: 2, step: 90, taper: 160, chaikin: 1 },
-  'Kraal Close': { amplitude: 90, wavelength: 1400, octaves: 2, step: 90, taper: 160, chaikin: 1 },
-  'Blouberg Road': { amplitude: 160, wavelength: 1700, octaves: 2, step: 90, taper: 240, chaikin: 2 },
-  'Bakoven Road': { amplitude: 160, wavelength: 1800, octaves: 2, step: 90, taper: 240, chaikin: 2 },
+  'Egoli Orbital': { amplitude: 260, wavelength: 1300, octaves: 3, step: 90, taper: 260, chaikin: 2, movePins: true },
+  Plaaspad: { amplitude: 105, wavelength: 1060, octaves: 2, step: 80, taper: 170, chaikin: 2, movePins: true },
+  'Madiba Meander': { amplitude: 105, wavelength: 1390, octaves: 2, step: 100, taper: 280, chaikin: 1 },
+  'Rooibos Route': { amplitude: 90, wavelength: 1250, octaves: 2, step: 100, taper: 280, chaikin: 1 },
+  Melkweg: { amplitude: 65, wavelength: 925, octaves: 2, step: 90, taper: 160, chaikin: 1 },
+  'Kraal Close': { amplitude: 65, wavelength: 925, octaves: 2, step: 90, taper: 160, chaikin: 1 },
+  'Blouberg Road': { amplitude: 110, wavelength: 1120, octaves: 2, step: 90, taper: 240, chaikin: 2 },
+  'Bakoven Road': { amplitude: 110, wavelength: 1120, octaves: 2, step: 90, taper: 240, chaikin: 2 },
 };
 /** Synthetic-road polylines shorter than this many vertices are spurs, not the spine — left straight. */
 export const MEANDER_MIN_VERTICES = 5;
@@ -214,7 +316,18 @@ export const AIRPORT_ACCESS_ROAD_NAME = 'Aviator Avenue';
  * postage stamp on the enlarged map.
  */
 export const AIRPORT_RUNWAY_LENGTH_M = 1250;
-export const AIRPORT_RUNWAY_BEARING_RAD = 0.32; // gentle NE-SW tilt
+/**
+ * ~105 deg: the runway lies ALONG the (now 2000 m) corridor rather than across it. At the old
+ * 0.32 rad the 1250 m strip needs 1186 m of x and does not fit once the 320 m apron offset is
+ * added; at 1.84 it needs 334 m.
+ */
+export const AIRPORT_RUNWAY_BEARING_RAD = 1.84;
+/**
+ * Where the airport sits down the city's north-south span (0 = north edge, 1 = south edge).
+ * Was 0.8, which is now inside the dam band; 0.5 puts it mid-map in the farmland corridor and
+ * cuts its distance from the CBD by ~40% while keeping a non-degenerate rail spur.
+ */
+export const AIRPORT_Z_FRACTION = 0.5;
 
 /** Small sea port / pier on the NW coast (distinct from Kaapstad Quay near the CBD). */
 export const PORT_NAME = 'Seepunt Pier';
@@ -223,7 +336,8 @@ export const PORT_PIER_LENGTH_M = 620;
 
 /** Reservoir / dam near the NE suburb edge (premium water tier, organic shoreline). */
 export const LAKE_NAME = 'Egoli Dam';
-export const LAKE_RADIUS_M = 720;
+/** Shrunk from 720 m: at the cropped bounds the old radius overlapped Killarney golf. */
+export const LAKE_RADIUS_M = 520;
 export const LAKESIDE_TRACK_NAME = 'Dam wal';
 
 /** Elevation grid resolution (cols x rows over the bbox). */

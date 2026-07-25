@@ -95,11 +95,20 @@ export function thinRailways(
 ): { lines: RailLine[]; log: string } {
   const mainline = ways.filter(isMainlineRail);
   const chains = chainWays(mainline);
+  // Run-split at the crop edge rather than node-filtering: a chain that leaves and re-enters
+  // the box would otherwise be joined by a ruler-straight chord across the removed section.
   const candidates = chains
-    .map((chain) => chain
-      .map((id) => nodes.get(id))
-      .filter((node): node is OsmNode => node !== undefined && inBbox(node.lat, node.lon))
-      .map((node) => project(node.lat, node.lon)))
+    .flatMap((chain) => {
+      const runs: Pt[][] = [];
+      let run: Pt[] = [];
+      for (const id of chain) {
+        const node = nodes.get(id);
+        if (node !== undefined && inBbox(node.lat, node.lon)) run.push(project(node.lat, node.lon));
+        else if (run.length > 0) { runs.push(run); run = []; }
+      }
+      if (run.length > 0) runs.push(run);
+      return runs;
+    })
     .filter((points) => points.length >= 2)
     .map((points) => ({ points, length: polylineLength(points) }))
     .filter((line) => line.length >= options.minLength)

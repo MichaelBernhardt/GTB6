@@ -2,6 +2,8 @@ import {
   BBOX,
   BRIDGE_DISTANCE_M,
   CBD_CENTER,
+  CROP_BBOX,
+  DAM_ISLAND_NAME,
   CUL_DE_SAC_NAMES,
   DEADEND_CONNECT_M,
   DEADEND_JOIN_M,
@@ -65,13 +67,43 @@ import type {
 
 const CLIP_MARGIN_DEG = 0.003; // ~300 m of slack around the bbox
 
-function inBbox(lat: number, lon: number): boolean {
+/**
+ * THE CROP. Everything derived from the fetched vector data is filtered through this, so the
+ * whole organify chain downstream (run-splitting, thinning, orbital, dead ends, meander) sees
+ * the new boundary and treats it exactly like the old one. Note this is CROP_BBOX, not BBOX:
+ * BBOX stays frozen at the fetch extent so every disk cache still hits.
+ */
+export function inBbox(lat: number, lon: number): boolean {
   return (
-    lat >= BBOX.south - CLIP_MARGIN_DEG &&
-    lat <= BBOX.north + CLIP_MARGIN_DEG &&
-    lon >= BBOX.west - CLIP_MARGIN_DEG &&
-    lon <= BBOX.east + CLIP_MARGIN_DEG
+    lat >= CROP_BBOX.south - CLIP_MARGIN_DEG &&
+    lat <= CROP_BBOX.north + CLIP_MARGIN_DEG &&
+    lon >= CROP_BBOX.west - CLIP_MARGIN_DEG &&
+    lon <= CROP_BBOX.east + CLIP_MARGIN_DEG
   );
+}
+
+/** True when any vertex of a projected ring falls inside the crop (used for area features). */
+function ringInCrop(nodes: Array<OsmNode | undefined>): boolean {
+  for (const node of nodes) if (node && inBbox(node.lat, node.lon)) return true;
+  return false;
+}
+
+/**
+ * Split a way's nodes into RUNS of consecutive in-crop nodes, exactly as the road extractor
+ * does. Filtering nodes out of a polyline instead (which tracks and rail chains used to do)
+ * leaves a ruler-straight chord wherever a way leaves and re-enters the box — invisible at the
+ * old boundary, very visible when the crop line runs through dense suburbs.
+ */
+function inCropRuns(ids: number[], osmNodes: Map<number, OsmNode>): OsmNode[][] {
+  const runs: OsmNode[][] = [];
+  let run: OsmNode[] = [];
+  for (const id of ids) {
+    const node = osmNodes.get(id);
+    if (node && inBbox(node.lat, node.lon)) run.push(node);
+    else if (run.length > 0) { runs.push(run); run = []; }
+  }
+  if (run.length > 0) runs.push(run);
+  return runs;
 }
 
 function roadName(tags: Record<string, string>, kind: RoadKind): string {
@@ -268,9 +300,41 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   // City-block bounds BEFORE the graft: the ring must wrap the city, not the stretched
   // composite (otherwise it runs along the far corners and city-edge stubs miss its margin).
   const cityBounds = boundsOf(net.nodes.values());
+  // Golf courses and parks the synthetic reservoir must not be dropped on top of. Computed
+  // here (rather than reusing the landuse pass below) purely so the graft can see them —
+  // landuse proper is assembled after the graft because it also collects graft farmland.
+  const avoidCircles: Array<{ x: number; z: number; r: number }> = [];
+  {
+    const consider = (name: string | undefined, kind: MapArea['kind'] | null, pts: Pt[]): void => {
+      if (kind !== 'golf_course' && kind !== 'park' && kind !== 'nature_reserve') return;
+      if (pts.length < 4 || shoelaceArea(pts) < MIN_LANDUSE_AREA_M2) return;
+      const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+      const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+      let r = 0;
+      for (const p of pts) r = Math.max(r, Math.hypot(p.x - cx, p.z - cz));
+      avoidCircles.push({ x: cx, z: cz, r });
+      void name;
+    };
+    for (const relation of relations) {
+      const kind = relation.tags ? landuseKind(relation.tags) : null;
+      if (!kind) continue;
+      const outers = relation.members.filter((m) => m.type === 'way' && (m.role === 'outer' || m.role === ''));
+      for (const ring of assembleRings(outers.map((m) => ways.find((w) => w.id === m.ref)).filter((w): w is OsmWay => Boolean(w)))) {
+        const ringNodes = ring.map((id) => osmNodes.get(id));
+        if (!ringInCrop(ringNodes)) continue;
+        consider(relation.tags?.name, kind, ringNodes.filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon)));
+      }
+    }
+    for (const way of ways) {
+      const kind = way.tags ? landuseKind(way.tags) : null;
+      if (!kind || !way.nodes || way.nodes[0] !== way.nodes[way.nodes.length - 1]) continue;
+      if (!ringInCrop(way.nodes.map((id) => osmNodes.get(id)))) continue;
+      consider(way.tags?.name, kind, way.nodes.slice(0, -1).map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon)));
+    }
+  }
   let coast: CoastGraftResult | undefined;
   if (extras.cape) {
-    coast = graftCoastAndCorridor(net, extras.cape);
+    coast = graftCoastAndCorridor(net, extras.cape, 420, avoidCircles);
     for (const line of coast.log) log.push(line);
   }
 
@@ -349,7 +413,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     const outers = relation.members.filter((m) => m.type === 'way' && (m.role === 'outer' || m.role === ''));
     const rings = assembleRings(outers.map((m) => ways.find((w) => w.id === m.ref)).filter((w): w is OsmWay => Boolean(w)));
     for (const ring of rings) {
-      const points = ring.map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
+      const ringNodes = ring.map((id) => osmNodes.get(id));
+      if (!ringInCrop(ringNodes)) continue; // CROP: water had no bbox filter at all
+      const points = ringNodes.filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
       if (points.length >= 4 && shoelaceArea(points) >= MIN_WATER_AREA_M2) {
         water.push({ name: relation.tags?.name ?? 'Water', points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
       }
@@ -359,6 +425,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   for (const way of ways) {
     const isWater = way.tags?.natural === 'water' || (way.tags?.water !== undefined && !way.tags?.highway);
     if (!isWater || waterWayIds.has(way.id) || !way.nodes || way.nodes[0] !== way.nodes[way.nodes.length - 1]) continue;
+    if (!ringInCrop(way.nodes.map((id) => osmNodes.get(id)))) continue; // CROP
     const points = way.nodes.slice(0, -1).map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
     if (points.length >= 4 && shoelaceArea(points) >= MIN_WATER_AREA_M2) {
       water.push({ name: way.tags?.name ?? 'Water', points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
@@ -407,12 +474,13 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   for (const way of ways) {
     const kind = way.tags?.highway;
     if ((kind !== 'track' && kind !== 'path') || !way.nodes) continue;
-    const points = way.nodes
-      .map((id) => osmNodes.get(id))
-      .filter((n): n is OsmNode => n !== undefined && inBbox(n.lat, n.lon))
-      .map((n) => project(n.lat, n.lon));
-    if (points.length < 2 || polylineLength(points) < MIN_ROAD_LENGTH_M) continue;
-    tracks.push({ name: way.tags?.name ?? (kind === 'track' ? 'Dirt track' : 'Trail'), kind, width: TRACK_WIDTHS[kind], points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
+    // Run-split, don't node-filter: a track that leaves and re-enters the crop must become two
+    // tracks, not one with a ruler-straight chord across the gap.
+    for (const run of inCropRuns(way.nodes, osmNodes)) {
+      const points = run.map((n) => project(n.lat, n.lon));
+      if (points.length < 2 || polylineLength(points) < MIN_ROAD_LENGTH_M) continue;
+      tracks.push({ name: way.tags?.name ?? (kind === 'track' ? 'Dirt track' : 'Trail'), kind, width: TRACK_WIDTHS[kind], points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
+    }
   }
   if (coast) for (const track of coast.tracks) tracks.push({ name: track.name, kind: track.kind, width: track.width, points: track.points });
   const trackKm = tracks.reduce((sum, t) => sum + polylineLength(t.points), 0) / 1000;
@@ -427,7 +495,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     const outers = relation.members.filter((m) => m.type === 'way' && (m.role === 'outer' || m.role === ''));
     const rings = assembleRings(outers.map((m) => ways.find((w) => w.id === m.ref)).filter((w): w is OsmWay => Boolean(w)));
     for (const ring of rings) {
-      const points = ring.map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
+      const ringNodes = ring.map((id) => osmNodes.get(id));
+      if (!ringInCrop(ringNodes)) continue; // CROP: this filter is what decides golf survival
+      const points = ringNodes.filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
       if (points.length >= 4 && shoelaceArea(points) >= MIN_LANDUSE_AREA_M2) {
         landuse.push({ name: relation.tags?.name ?? kind, kind, points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
       }
@@ -437,6 +507,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   for (const way of ways) {
     const kind = way.tags ? landuseKind(way.tags) : null;
     if (!kind || landuseWayIds.has(way.id) || !way.nodes || way.nodes[0] !== way.nodes[way.nodes.length - 1]) continue;
+    if (!ringInCrop(way.nodes.map((id) => osmNodes.get(id)))) continue; // CROP
     const points = way.nodes.slice(0, -1).map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
     if (points.length >= 4 && shoelaceArea(points) >= MIN_LANDUSE_AREA_M2) {
       landuse.push({ name: way.tags?.name ?? kind, kind, points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
@@ -444,11 +515,16 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   }
   if (coast) for (const field of coast.farmland) landuse.push({ name: field.name, kind: 'farmland', points: field.points });
   if (coast) landuse.push({ name: coast.airport.name, kind: 'aerodrome', points: coast.airport.boundary });
+  // The dam's island: scrub landuse rather than a hole in the water polygon, so Water.ts needs
+  // no new plumbing. compositeElevation lifts the terrain under it out of the water.
+  if (coast) landuse.push({ name: DAM_ISLAND_NAME, kind: 'scrub', points: coast.damIsland.polygon });
   const mineDumps = landuse.filter((a) => a.kind === 'mine_dump').length;
   log.push(`landuse: ${landuse.length} polygons (${mineDumps} mine dumps/quarries, ${coast?.farmland.length ?? 0} farmland fields)`);
 
   // ---- Districts ---------------------------------------------------------
-  const districtNodes = extractDistrictNodes(data);
+  // CROP: districts had no bbox filter either. Every leaked place node is also a
+  // nearestDistrict attractor and a station-naming source, so this matters beyond the labels.
+  const districtNodes = extractDistrictNodes(data).filter((d) => inBbox(d.lat, d.lon));
   const districts = districtNodes.map(({ name, lat, lon }) => ({ name, p: project(lat, lon) }));
   if (coast) districts.push(...coast.districts);
 
@@ -518,6 +594,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     const veld = buildBorderVeld({
       world: { minX: worldNW.x, minZ: worldNW.z, maxX: worldSE.x, maxZ: worldSE.z },
       coastline: coast.coastline,
+      dam: { northZ: coast.dam.northZ, southZ: coast.dam.southZ },
     });
     for (const band of veld) landuse.push({ name: band.name, kind: 'scrub', points: band.points });
     log.push(`border: ${veld.length} veld bands along the N/E/S world edges (${EDGE_MARGIN_UNITS} u set-back cover)`);
@@ -541,6 +618,10 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   ));
   // With a coast the grid is rebuilt over the whole composite square: SRTM over the city,
   // synthetic rolling corridor + sea level over the graft (Phase 3 terrain gets it for free).
+  // NB the SRTM corners stay on the FETCH bbox, not the crop. sampleSrtm() maps a projected
+  // point to a grid fraction between these two corners and clamps, so the cached 96x96 grid is
+  // sampled correctly over any sub-box — an explicit subset+regrid would be an identity
+  // operation here, and refetching would cost 93 rate-limited batches for the same numbers.
   const composite = coast ? compositeElevation({
     srtm: elevation,
     joburgNW: project(BBOX.north, BBOX.west),
@@ -606,9 +687,16 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       droppedIslandKm: Math.round(islands.droppedKm * 10) / 10,
       minElevation,
       maxElevation,
-      bbox: { ...BBOX },
+      bbox: { ...CROP_BBOX },
       targetSize: worldSize,
       metresPerUnit: Math.round(fit.metresPerUnit * 1000) / 1000,
+      /**
+       * The exact fit, shipped so old->new coordinate transforms are arithmetic instead of a
+       * regression over district positions. game = (projected_m - c) * scale, and the projection
+       * is always CBD_CENTER-origin equirectangular, so any two builds compose as a pure
+       * similarity with no rotation. See src/world/coordTransform.ts.
+       */
+      fit: { scale: fit.scale, cx: fit.cx, cz: fit.cz },
       ...(coast ? {
         oceanKm2,
         landKm2,

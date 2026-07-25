@@ -42,28 +42,45 @@ export function fbm2(seed: number, x: number, z: number, octaves = 4): number {
 
 const RIDGE_SEED = 7331;
 
-/** Approximate top-ridge line: from 1/3 in from the west edge at mid-map height, angling up
- *  toward (and off) the top-right corner. North is -z; the last vertex sits past the east edge
- *  so the range never "comes down" at the map boundary. */
+/**
+ * EVERY CONSTANT BELOW IS IN PROJECTED METRES relative to CBD_CENTER (+x east, +z south), NOT
+ * game units. It used to be game units, which silently broke the moment TARGET_SIZE changed:
+ * the old crest reached x 9900 / z -9700, so in a ~10,000-unit world three of its four vertices
+ * were off-map and the range vanished while the tests kept passing by sampling coordinates
+ * outside the world. compositeElevation now calls ridgeMetresAt(m.x, m.z) with the projected
+ * point, so the range is immune to TARGET_SIZE and to future re-crops.
+ *
+ * SITING (owner: "a natural place to put the mountain is where there are already tracks, which
+ * would nicely work as mountain tracks"). Measured over the cached Overpass extract inside the
+ * new crop, length-weighted in 1,200 m cells: highway=track totals 9.0 km with a weighted
+ * centroid at m(-4108, -2852) and its densest cells at (-3600,-6000) 1.90 km, (-4800,-3600)
+ * 1.60 km, (-4800,-4800) 0.98 km, (-4800,-6000) 0.92 km; track+path totals 52.4 km along the
+ * same north-west spine. That band IS the Witwatersrand koppie chain — Melville Koppies ->
+ * Emmarentia -> Northcliff -> Delta Park — the real ridge Johannesburg is built on, so the
+ * owner's hint is geologically right as well as convenient. The crest below runs along it, and
+ * roughly 9 km of existing unpaved track becomes mountain road for free.
+ */
 export const RIDGE_CREST: Pt[] = [
-  { x: -3200, z: -3300 },
-  { x: -400, z: -7300 },
-  { x: 3600, z: -9000 },
-  { x: 9900, z: -9700 },
+  { x: -1500, z: -1900 },   // south-east toe: Westcliff ridge, just north-west of the CBD
+  { x: -2900, z: -3500 },   // Melville Koppies
+  { x: -3700, z: -5200 },   // Emmarentia / Linden
+  { x: -4600, z: -7000 },   // Northcliff / Delta Park
+  { x: -5600, z: -9200 },   // runs off the north edge so the range never "comes down"
 ];
 
 /** Peak crest height ADDED to the base terrain, metres (before along-arc/detail variation). */
 export const RIDGE_PEAK_M = 1250;
 /** Hard ceiling on the added ridge metres, so stacked noise multipliers can't spike the composite. */
 export const RIDGE_MAX_M = 1480;
-/** Cross-profile half-widths (game units): a steep face to the south, a broad northern shoulder. */
-export const RIDGE_HALF_WIDTH_SOUTH = 1550;
-export const RIDGE_HALF_WIDTH_NORTH = 2650;
+/** Cross-profile half-widths (METRES): a steep face to the south, a broad northern shoulder. */
+export const RIDGE_HALF_WIDTH_SOUTH = 1200;
+export const RIDGE_HALF_WIDTH_NORTH = 1900;
 /** Influence is EXACTLY zero south of this z and fades in full by RIDGE_FULL_Z (CBD guard). */
-export const RIDGE_ZERO_Z = -1600;
-export const RIDGE_FULL_Z = -3100;
-/** Influence is exactly zero west of this x (rural corridor / coast guard; corridor east ~ -4665). */
-export const RIDGE_ZERO_X = -4500;
+export const RIDGE_ZERO_Z = -1200;
+export const RIDGE_FULL_Z = -3000;
+/** Influence is exactly zero west of this x — the rural corridor / dam guard (corridor east
+ *  sits at the city's own west edge, around -5,900 m at the current crop). */
+export const RIDGE_ZERO_X = -6000;
 
 interface CrestHit { arc: number; d: number; }
 
@@ -90,9 +107,9 @@ function crestAt(x: number, z: number): CrestHit {
 }
 
 /**
- * Metres of mountain added to the base terrain at a game-unit point. Zero across most of the
- * map (everything south of RIDGE_ZERO_Z or west of RIDGE_ZERO_X); rises organically toward the
- * fBm-wobbled crest with intensity growing toward the top edge.
+ * Metres of mountain added to the base terrain at a PROJECTED-METRE point (x east, z south,
+ * origin CBD_CENTER). Zero across most of the map (everything south of RIDGE_ZERO_Z or west of
+ * RIDGE_ZERO_X); rises organically toward the fBm-wobbled crest with intensity growing north.
  */
 export function ridgeMetresAt(x: number, z: number): number {
   const gateSouth = smoothstep((RIDGE_ZERO_Z - z) / (RIDGE_ZERO_Z - RIDGE_FULL_Z));
@@ -107,7 +124,7 @@ export function ridgeMetresAt(x: number, z: number): number {
   const profile = Math.pow(0.5 * (1 + Math.cos(Math.PI * s)), 1.15); // smooth bell, slightly peaked at the top
   // Intensity grows toward the top edge: the south-western tail emerges as gentle foothills and the
   // range only reaches full height near the north boundary (the street grid keeps modest relief).
-  const envelope = smoothstep(arc / 5200) * smoothstep((-z - 2200) / 6200);
+  const envelope = smoothstep(arc / 4600) * smoothstep((-z - 1800) / 5200);
   const ridged = 1 - Math.abs(fbm(RIDGE_SEED + 7, arc / 2100, 3)); // ridged fBm: distinct peaks and saddles along the top
   const peakVar = 0.68 + 0.5 * Math.pow(ridged, 1.3);
   const detail = 0.62 + 0.5 * (fbm2(RIDGE_SEED + 13, x / 1350, z / 1350, 4) * 0.5 + 0.5); // fractal contours on the flanks

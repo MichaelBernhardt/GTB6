@@ -216,6 +216,8 @@ export interface MapStats {
   bbox: { south: number; west: number; north: number; east: number };
   targetSize: number;
   metresPerUnit: number;
+  /** Exact projected-metres -> game-units fit: game = (metres - c) * scale. */
+  fit?: { scale: number; cx: number; cz: number };
   /** Composite (coast) additions. */
   oceanKm2?: number;
   landKm2?: number;

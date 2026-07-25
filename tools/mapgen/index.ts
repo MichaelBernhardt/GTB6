@@ -17,7 +17,7 @@ import { fetchElevationGrid } from './elevation';
 import { applyNameOverrides, loadNameOverrides } from './emit';
 import { fetchBuildingCounts, fetchCape, fetchOsm, fetchStations } from './overpass';
 import { buildPreviewHtml } from './preview';
-import { extractDistrictNodes, processOsm } from './process';
+import { extractDistrictNodes, inBbox as inCropBbox, processOsm } from './process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Output paths default to the committed map + preview; MAPGEN_OUT / MAPGEN_PREVIEW_OUT let a
@@ -39,11 +39,23 @@ async function main(): Promise<void> {
     ? `[mapgen] rail stations: ${osmStations.nodes.length} nodes${osmStations.fromCache ? ' (from cache)' : ''}`
     : '[mapgen] rail stations: OSM fetch unavailable — synthesizing every stop');
 
-  const districtNodes = extractDistrictNodes(data);
-  const [elevation, buildingCounts] = [
+  // Building counts are cached under a key that embeds EVERY district's lat/lon in order, so
+  // the query must keep seeing the FULL district list or it misses the cache and re-queries.
+  // Crop the returned counts instead, with the same predicate process.ts uses — a silent
+  // misalignment here attaches the wrong building density to every district and is invisible
+  // in the JSON.
+  const allDistrictNodes = extractDistrictNodes(data);
+  const [elevation, allBuildingCounts] = [
     await fetchElevationGrid(),
-    await fetchBuildingCounts(districtNodes, DISTRICT_RADIUS_M),
+    await fetchBuildingCounts(allDistrictNodes, DISTRICT_RADIUS_M),
   ];
+  const keepDistrict = allDistrictNodes.map((d) => inCropBbox(d.lat, d.lon));
+  const buildingCounts = allBuildingCounts ? allBuildingCounts.filter((_, i) => keepDistrict[i]) : null;
+  const keptDistricts = keepDistrict.filter(Boolean).length;
+  if (buildingCounts && buildingCounts.length !== keptDistricts) {
+    throw new Error(`building-count crop misaligned: ${buildingCounts.length} counts for ${keptDistricts} districts`);
+  }
+  console.log(`[mapgen] crop: ${keptDistricts}/${allDistrictNodes.length} place nodes inside CROP_BBOX`);
 
   const overrides = loadNameOverrides();
   const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, stations: osmStations?.nodes ?? null });

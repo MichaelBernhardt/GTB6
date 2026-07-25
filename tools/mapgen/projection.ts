@@ -34,6 +34,9 @@ export function makeFitTransform(
   return {
     scale,
     metresPerUnit: 1 / scale,
+    /** Projected-metre centre the fit is built around (shipped in stats.fit). */
+    cx,
+    cz,
     apply: (p: Pt): Pt => ({ x: (p.x - cx) * scale, z: (p.z - cz) * scale }),
     invert: (p: Pt): Pt => ({ x: p.x / scale + cx, z: p.z / scale + cz }),
   };
