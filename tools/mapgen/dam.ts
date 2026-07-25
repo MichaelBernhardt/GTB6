@@ -16,8 +16,13 @@
  *    its inland normal to +x. Large amplitude in x at uniform z buys bays and headlands with
  *    no overhangs, and every one of those consumers keeps working untouched.
  *
- * 2. IT PINCHES OUT AT BOTH ENDS AND OVERHANGS ONLY THE WEST EDGE. The old ocean overhung
- *    west, north AND south, which is what made it read as a sea. The owner asked for one edge.
+ * 2. IT OVERHANGS ONLY THE WEST EDGE — but it runs OFF THE TOP AND BOTTOM OF THAT EDGE.
+ *    The old ocean overhung west, north AND south, which is what made it read as a sea; the
+ *    owner asked for one edge. The first cut of this read that as "pinch it out inside the
+ *    map", which put a 2,831-unit ruler-straight cap across the middle of the playable world.
+ *    One edge means one edge, not three visible ends: the shore is generated over a band that
+ *    extends past the world square at both ends, so the pinch, the taper and the closing cap
+ *    all happen off-map and the player only ever sees crenellated shoreline leaving the frame.
  *
  * Deterministic: every wobble is a hash of the dam's name, no Math.random (pipeline contract).
  */
@@ -27,6 +32,7 @@ import {
   DAM_BAY_WAVELENGTH_M,
   DAM_DETAIL_AMPLITUDE_M,
   DAM_DETAIL_WAVELENGTH_M,
+  DAM_END_TAPER_M,
   DAM_ISLAND_RADIUS_M,
   DAM_NAME,
   DAM_SHORE_STEP_M,
@@ -96,7 +102,11 @@ export function buildDamShore(input: DamShoreInput): DamShore {
     const t = i / steps;
     // Taper both ends so the basin closes into a bay head rather than being sliced off, and
     // pull the shore east there so the water pinches out — lens-shaped, not a rectangle.
-    const endTaper = smoothstep(t / 0.13) * smoothstep((1 - t) / 0.10);
+    // The taper is an ABSOLUTE distance from each end, not a fraction of the span: the band
+    // now overshoots the world square by DAM_OVERSHOOT_M and the taper has to stay inside
+    // that overshoot, or the pinch creeps back into the playable map as a visible bend.
+    const alongM = t * spanM;
+    const endTaper = smoothstep(alongM / DAM_END_TAPER_M) * smoothstep((spanM - alongM) / DAM_END_TAPER_M);
     const pinch = (1 - endTaper) * 1000;
     const x = meanX + (raw[i]! - bias + armsAt(t, spanM)) * endTaper + pinch;
     points.push({ x, z: northZ + t * spanM });
@@ -118,8 +128,15 @@ export function buildDamShore(input: DamShoreInput): DamShore {
  * water, and reads as causeways across the bay mouths — which is exactly what a real dam-shore
  * road does.
  */
-export function buildShoreRoad(shore: DamShore, setbackM: number, windowM = 900): Pt[] {
-  const pts = shore.points;
+export function buildShoreRoad(shore: DamShore, setbackM: number, windowM = 900, clip?: { northZ: number; southZ: number }): Pt[] {
+  // CLIP FIRST. The water polygon runs off the top and bottom of the world square; the ROAD
+  // must not. makeFitTransform measures the fit from the road bbox, so a Victoria Road that
+  // followed the full extended shore would stretch that bbox by the whole overshoot and shrink
+  // the city inside the world square by about a third.
+  const pts = clip
+    ? shore.points.filter((p) => p.z >= clip.northZ && p.z <= clip.southZ)
+    : shore.points;
+  if (pts.length < 2) return shore.points.slice();
   const window = Math.max(1, Math.round(windowM / DAM_SHORE_STEP_M));
   const hull: Pt[] = pts.map((p, i) => {
     let east = p.x;
@@ -154,8 +171,10 @@ export function buildDamPolygon(shore: DamShore, westX: number): Pt[] {
  * (plus a local elevation bump) rather than a hole in the water, which avoids new plumbing
  * in the runtime's Water.ts.
  */
-export function buildDamIsland(shore: DamShore, offsetWestM = 520): { center: Pt; polygon: Pt[] } {
-  const midZ = (shore.northZ + shore.southZ) / 2;
+export function buildDamIsland(shore: DamShore, offsetWestM = 520, centerZ?: number): { center: Pt; polygon: Pt[] } {
+  // centerZ is the CITY's own mid-z, not the band's: the band now overshoots the world square
+  // by 3 km at each end, so its midpoint is no longer a point the player can see.
+  const midZ = centerZ ?? (shore.northZ + shore.southZ) / 2;
   const center: Pt = { x: shore.meanX - offsetWestM, z: midZ };
   const seed = nameSeed(`${DAM_NAME} island`);
   const polygon: Pt[] = [];

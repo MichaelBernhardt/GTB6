@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { COASTAL_ROAD_NAME, CORRIDOR_LINKS, FRONTAGE_ROAD_NAME } from './config';
+import { COASTAL_ROAD_NAME, CORRIDOR_LINKS, DAM_ARMS, DAM_LEVEL_M, FRONTAGE_ROAD_NAME } from './config';
+import { RIDGE_ZERO_Z } from './ridge';
 import type { JoburgMap } from './types';
 
 const mapPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../src/world/generated/joburg-map.json');
@@ -33,6 +34,22 @@ describe('Jozi-by-the-Sea coast', () => {
     expect(coast.harbour.x).toBeLessThan(coast.corridor.westX); // the quay is on the coast strip
   });
 
+  it('runs off the top AND bottom of the world square — no visible cap (D1)', () => {
+    // The polygon closes with two horizontal caps. Both must be outside the world square, or
+    // water stops in a ruler-straight line inside the playable map (it once did, 4,276 units
+    // in from the north edge, with dry veld immediately north of it).
+    const half = map.stats.targetSize / 2;
+    const zs = coast.ocean.map((point) => point[1]);
+    expect(Math.min(...zs)).toBeLessThan(-half - 200);
+    expect(Math.max(...zs)).toBeGreaterThan(half + 200);
+    const inWorld = (p: [number, number]): boolean => Math.abs(p[0]) <= half && Math.abs(p[1]) <= half;
+    for (let i = 0; i < coast.ocean.length; i++) {
+      const a = coast.ocean[i]!; const b = coast.ocean[(i + 1) % coast.ocean.length]!;
+      if (!inWorld(a) && !inWorld(b)) continue;
+      expect(Math.hypot(b[0] - a[0], b[1] - a[1])).toBeLessThan(300); // no straight run in frame
+    }
+  });
+
   it('coastline forms a continuous south-to-north boundary along the west edge', () => {
     // Scale-invariant: the synthetic shoreline step is ~420 m, so cap the gap in metres
     // (keeps passing across TARGET_SIZE tweaks instead of a hard-coded unit threshold).
@@ -45,9 +62,10 @@ describe('Jozi-by-the-Sea coast', () => {
     const zs = coast.coastline.map((point) => point[1]);
     const span = Math.max(...zs) - Math.min(...zs);
     expect(span).toBeGreaterThan(map.stats.targetSize * 0.9); // spans (almost) the whole west edge
-    // West of the corridor band (the odd shoreline wobble may lap slightly over its edge; the
-    // metre-based wobble scales with the footprint, so the tolerance tracks targetSize).
-    expect(Math.max(...coast.coastline.map((point) => point[0]))).toBeLessThan(coast.corridor.westX + 80 * (map.stats.targetSize / 6000));
+    // The dam's drowned-valley arms cut EAST into the corridor by design (DAM_ARMS depth), so
+    // the tolerance is the deepest arm converted to units, not a fixed wobble allowance.
+    const deepestArmUnits = Math.max(...DAM_ARMS.map((arm) => arm.depthM)) / map.stats.metresPerUnit;
+    expect(Math.max(...coast.coastline.map((point) => point[0]))).toBeLessThan(coast.corridor.westX + deepestArmUnits + 60);
   });
 
   it('no road crosses into the ocean (quays excepted — they end at the water)', () => {
@@ -114,14 +132,14 @@ describe('rural corridor', () => {
   it('bakes gentle corridor hills and sea level into the composite height grid', () => {
     const e = map.elevation;
     expect(e.data).toHaveLength(e.cols * e.rows);
-    expect(map.stats.minElevation).toBe(0); // ocean
+    expect(map.stats.minElevation).toBe(DAM_LEVEL_M); // the reservoir surface, not sea level
     expect(map.stats.maxElevation).toBeGreaterThan(1500); // the Rand
     // Sample the corridor band: it must sit between sea level and the city plateau.
     const corridorMidX = (coast.corridor.eastX + coast.corridor.westX) / 2;
     const col = Math.round((corridorMidX - e.x0) / e.dx);
     let corridorMax = 0;
     for (let row = 10; row < e.rows - 10; row++) corridorMax = Math.max(corridorMax, e.data[row * e.cols + col]!);
-    expect(corridorMax).toBeGreaterThan(100);
+    expect(corridorMax).toBeGreaterThan(DAM_LEVEL_M);
     expect(corridorMax).toBeLessThan(1900);
   });
 
@@ -133,9 +151,14 @@ describe('rural corridor', () => {
     const colOf = (x: number): number => Math.round((x - e.x0) / e.dx);
     const rowOf = (z: number): number => Math.round((z - e.z0) / e.dz);
     expect(Math.max(...ridge)).toBeGreaterThan(1000); // the crest genuinely towers over the ~1750 m plateau
-    // The southern half of the map (CBD included) carries EXACTLY zero mountain.
-    for (let row = rowOf(-1400); row < e.rows; row++) for (let col = 0; col < e.cols; col++) expect(at(col, row)).toBe(0);
-    expect(at(colOf(2913), rowOf(5332))).toBe(0); // Joburg CBD
+    // Everything south of the CBD guard carries EXACTLY zero mountain. The guard is authored in
+    // PROJECTED metres (RIDGE_ZERO_Z), so derive its game-unit row from the shipped fit instead
+    // of hard-coding a z that only meant something at the old footprint.
+    const { scale, cz } = map.stats.fit!;
+    const guardZ = (RIDGE_ZERO_Z - cz) * scale;
+    for (let row = rowOf(guardZ) + 1; row < e.rows; row++) for (let col = 0; col < e.cols; col++) expect(at(col, row)).toBe(0);
+    const cbd = { x: -map.stats.fit!.cx * scale, z: -cz * scale };
+    expect(at(colOf(cbd.x), rowOf(cbd.z))).toBe(0); // Joburg CBD
     // The ocean/coast columns and the rural corridor carry none either.
     for (let row = 0; row < e.rows; row++) {
       expect(at(2, row)).toBe(0);

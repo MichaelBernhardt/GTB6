@@ -89,8 +89,33 @@ interface SpotQuery {
   minRoadWidth?: number;
 }
 
+/**
+ * Roads whose name an anchor asked for and the map does not have. A named-road anchor used to
+ * THROW here, which meant a re-crop that dropped one street took down this whole module — and
+ * with it src/world/City.ts and 38 test files — at import time. A missing street is a content
+ * problem, not a structural one: warn once, drop the name constraint and place the site on
+ * whatever road is nearest its intended point. Only a map with no usable road at all still
+ * throws, because that really is a broken map.
+ */
+const missingRoads = new Set<string>();
+export function missingAnchorRoads(): string[] { return [...missingRoads].sort(); }
+
+const ROAD_NAMES = new Set(GENERATED_ROADS.map((road) => road.name));
+
 /** Walks the matching polylines around `near` (samples every ~8u) and returns the clearest kerbside spot. */
-function bestKerbSpot(query: SpotQuery): KerbSpot {
+function bestKerbSpot(request: SpotQuery): KerbSpot {
+  let query = request;
+  if (query.name !== undefined && !ROAD_NAMES.has(query.name)) {
+    if (!missingRoads.has(query.name)) {
+      missingRoads.add(query.name);
+      console.warn(`[placements] no road named "${query.name}" in this map — anchoring to the nearest road instead`);
+    }
+    // Widen the reach too: the intended point was authored beside a street that is gone, so the
+    // nearest surviving carriageway can be a block or three away.
+    const rest: SpotQuery = { ...query };
+    delete rest.name;
+    query = { ...rest, searchRadius: (query.searchRadius ?? 200) * 3 };
+  }
   const { near, clearance, ownRadius, searchRadius = 200 } = query;
   const effRadius = searchRadius * P; // reach scales with the footprint so named roads stay findable
   const searchSq = effRadius * effRadius;
@@ -153,9 +178,21 @@ function bestKerbSpot(query: SpotQuery): KerbSpot {
     }
     best ??= bestAny;
   }
-  if (!best) throw new Error(`placements: no road matches ${query.name ?? 'any'}`);
+  // Reachable only when GENERATED_ROADS itself is empty or degenerate — every named lookup has
+  // already fallen back to "any road" above.
+  if (!best) throw new Error(`placements: the map has no usable road for an anchor near (${near.x.toFixed(0)}, ${near.z.toFixed(0)})`);
   claim(best.x, best.z, ownRadius);
   return best;
+}
+
+/**
+ * Search seed taken from a district centre, so anchors follow the map through a re-crop instead
+ * of being frozen at coordinates authored against an older footprint. The literal is only the
+ * fallback for a district the current map does not carry.
+ */
+function near(district: string, fallback: MapPt): MapPt {
+  const centre = districtCenter(district as Parameters<typeof districtCenter>[0]);
+  return centre ? { x: centre.x, z: centre.z } : fallback;
 }
 
 /** Storefront site: pad near the kerb, building behind it, door facing the road. */
@@ -231,12 +268,17 @@ export const BOTTLE_STORES: BottleStore[] = [
   { name: 'Tops-ish Bottle Store', sign: 'TOPS-ISH', site: shopSite('Commissioner Street', { x: CBD_CENTER.x + 58 * P, z: CBD_CENTER.z + 14 * P }, 8, 3.6, 7.5, 3) },
   { name: 'Maboneng Dop Shop', sign: 'DOP SHOP', site: shopSite('Maritzburg Street', { x: 4838, z: 5010 }, 8, 3.6, 7.5, 3) },
   { name: 'Melville Bottle Bar', sign: 'DRANK', site: shopSite('Main Road', { x: -1150, z: 1870 }, 8, 3.6, 7.5, 3) },
-  // Outlying towns
-  { name: 'Rivonia Cellars', sign: 'CELLARS', site: shopSite('South Road', { x: 5444, z: -7670 }, 8, 3.6, 7.5, 3) },
-  { name: 'Randburg Drankwinkel', sign: 'LIQUORS', site: shopSite('Republic Road', { x: -2650, z: -6920 }, 8, 3.6, 7.5, 3) },
-  // Coast promenade (inland side of the beachfront road so they sit on land, not sand)
-  { name: 'Sea Point Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Victoria Road', { x: -7360, z: -2689 }, 8, 3.6, 7.5, 3) },
-  { name: 'Green Point Grog', sign: 'GROG', site: shopSite('Madiba Meander', { x: -5100, z: -2560 }, 8, 3.6, 7.5, 3) },
+  // Northern suburbs. These two were pinned to South Road (Sandton) and Republic Road
+  // (Randburg) at hard-coded points 2,700 units past the north world edge; the 2/3 crop removed
+  // both streets and bestKerbSpot threw at module import, which took down this file, City.ts and
+  // 38 test files with it. Anchored on district centres now, so a re-crop moves them with the
+  // map instead of stranding them — the brands keep their suburb names, which is how a bottle
+  // store off the Randburg road is named anyway.
+  { name: 'Rivonia Cellars', sign: 'CELLARS', site: shopSite('Oxfraud Road', near('Dunkeld', { x: 1824, z: -3997 }), 8, 3.6, 7.5, 3) },
+  { name: 'Randburg Drankwinkel', sign: 'LIQUORS', site: shopSite('Beyers Naudé Drive', near('Montgomery Park', { x: -2220, z: -2086 }), 8, 3.6, 7.5, 3) },
+  // Dam promenade (inland side of the shore road so they sit on land, not in the water)
+  { name: 'Sea Point Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Victoria Road', near('Sea Pointe', { x: -4085, z: -381 }), 8, 3.6, 7.5, 3) },
+  { name: 'Green Point Grog', sign: 'GROG', site: shopSite('Madiba Meander', near('Green Point', { x: -3975, z: -2405 }), 8, 3.6, 7.5, 3) },
 ];
 
 /** Stored vehicle pose inside the garage, nose pointing out the door. */

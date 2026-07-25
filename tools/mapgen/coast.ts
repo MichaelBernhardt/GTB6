@@ -24,14 +24,18 @@ import {
   COAST_ROAD_SETBACK_M,
   COAST_STRETCH_Z,
   COASTAL_ROAD_NAME,
+  CORRIDOR_DISTRICTS,
   CORRIDOR_LINKS,
   CORRIDOR_WIDTH_M,
+  DAM_ISLAND_OFFSET_M,
   DAM_LEVEL_M,
   DAM_NAME,
+  DAM_OVERSHOOT_M,
+  DAM_ROAD_MARGIN_M,
   DAM_ROAD_PRESMOOTH_M,
+  DAM_SHORE_DISTRICT_SETBACK_M,
+  DAM_SHORE_DISTRICTS,
   DAM_SHORE_SETBACK_M,
-  DAM_Z_END_FRACTION,
-  DAM_Z_START_FRACTION,
   FRONTAGE_ROAD_NAME,
   HARBOUR_DISTRICT_NAME,
   LAKE_NAME,
@@ -219,13 +223,16 @@ export function graftCoastAndCorridor(
   // Cape geometry still defines the frame the beach polygons are transformed into.
   const coastTargetX = corridorWestX - DAM_SHORE_SETBACK_M;
   const jbSpanZ = jb.maxZ - jb.minZ;
+  const cityMidZ = (jb.minZ + jb.maxZ) / 2;
+  // The band OVERSHOOTS the city block (and therefore the world square) at both ends, so the
+  // polygon's closing cap is never in frame — see dam.ts rule 2 and the process.ts assertion.
   const dam = buildDamShore({
     meanX: coastTargetX,
-    northZ: jb.minZ + jbSpanZ * DAM_Z_START_FRACTION,
-    southZ: jb.minZ + jbSpanZ * DAM_Z_END_FRACTION,
+    northZ: jb.minZ - DAM_OVERSHOOT_M,
+    southZ: jb.maxZ + DAM_OVERSHOOT_M,
   });
   const coastline = dam.points;
-  const damIsland = buildDamIsland(dam);
+  const damIsland = buildDamIsland(dam, DAM_ISLAND_OFFSET_M, cityMidZ);
   // Nothing synthetic may be generated in the water. Every graft polyline that wanders west
   // (corridor links, farm lanes, dirt tracks) runs through this — smoothCurve is Catmull-Rom
   // and overshoots its controls, which is how 'Rooibos Route' put a vertex in the dam.
@@ -239,10 +246,12 @@ export function graftCoastAndCorridor(
   );
   const beachMidZ = Number.isFinite(capeBounds.minZ) ? (capeBounds.minZ + capeBounds.maxZ) / 2 : 0;
   const beachMidX = Number.isFinite(capeBounds.minX) ? (capeBounds.minX + capeBounds.maxX) / 2 : 0;
-  // Beaches (now dam-shore resort strips) land on the dam's own z-band, not the old sea strip.
+  // Beaches (now dam-shore resort strips) centre on the CITY's mid-z. They used to centre on
+  // the dam band's midpoint, which was fine while the band sat inside the map and is nonsense
+  // now that it overshoots the world square by 3 km at each end.
   const toComposite = (p: Pt): Pt => ({
     x: p.x - beachMidX + coastTargetX,
-    z: (p.z - beachMidZ) * COAST_STRETCH_Z + (dam.northZ + dam.southZ) / 2,
+    z: (p.z - beachMidZ) * COAST_STRETCH_Z + cityMidZ,
   });
   log.push(
     `dam: '${DAM_NAME}' ${coastline.length}-pt crenellated shore, mean x~${Math.round(coastTargetX)} m, ` +
@@ -258,7 +267,10 @@ export function graftCoastAndCorridor(
   // which is exactly what a real dam-shore road does, while the raw crenellated polyline
   // still drives the water polygon and the terrain.
   const highwayPoints = simplifyPolyline(
-    buildShoreRoad(dam, COAST_ROAD_SETBACK_M, DAM_ROAD_PRESMOOTH_M * 4),
+    buildShoreRoad(dam, COAST_ROAD_SETBACK_M, DAM_ROAD_PRESMOOTH_M * 4, {
+      northZ: jb.minZ - DAM_ROAD_MARGIN_M,
+      southZ: jb.maxZ + DAM_ROAD_MARGIN_M,
+    }),
     SIMPLIFY_TOLERANCE_M * 3,
   );
 
@@ -454,7 +466,11 @@ export function graftCoastAndCorridor(
   const farmland: CoastGraftResult['farmland'] = [];
   const farms: CoastGraftResult['farms'] = [];
   const fieldKinds: MapRuralBuilding['kind'][] = ['farmhouse', 'barn', 'silo', 'windmill'];
-  const bandWest = corridorWestX + 380; const bandEast = corridorEastX - 420;
+  // The western lane starts further east than it used to: the dam band now covers the WHOLE
+  // west edge rather than its southern 60%, so the drowned-valley arms (820-860 m deep) bite
+  // into the corridor at every latitude and the old bandWest lost two fields and six farm
+  // buildings to the water test below. 620 m clears the deepest arm plus the road set-back.
+  const bandWest = corridorWestX + 620; const bandEast = corridorEastX - 420;
   let fieldIndex = 0;
   // Tighter row pitch and lane separation than the pre-crop layout: the corridor narrowed
   // from 2700 m to 2000 m, so the old spacing left most candidates overlapping and rejected.
@@ -480,7 +496,11 @@ export function graftCoastAndCorridor(
       // Fields must not overlap their neighbours (owner: overlapping farm regions make no sense).
       if (farmland.some((field) => quadsOverlap(quad, field.points))) { fieldIndex++; continue; }
       farmland.push({ name: fieldIndex % 3 === 0 ? 'Mielie land' : 'Weiveld', points: quad });
-      if (fieldIndex % 2 === 0 && farms.length < 14) {
+      // Farm clusters hang off every other ACCEPTED field, not off the candidate index. Keyed
+      // to fieldIndex it was a parity lottery: extending the dam band rejected two candidates,
+      // the parity flipped and the corridor went from 11 farm buildings to 5 without a single
+      // field moving.
+      if (farmland.length % 2 === 1 && farms.length < 14) {
         const base = corner(-0.62, -0.55);
         farms.push({ p: base, kind: 'farmhouse' });
         farms.push({ p: { x: base.x + 90, z: base.z + 55 }, kind: fieldKinds[(fieldIndex / 2 + 1) % 3 + 1] ?? 'barn' });
@@ -514,7 +534,10 @@ export function graftCoastAndCorridor(
   // ---- Yacht club / slipway on the dam's northern arm ------------------------------------
   // Was a sea port with a pier reaching into the Atlantic. A dam has a jetty, a slipway and a
   // clubhouse instead; the KEY and the NAME stay so runtime placements keep resolving.
-  const portShore = coastline[Math.floor(coastline.length * 0.86)] ?? coastline[coastline.length - 1]!;
+  // Anchored to the CITY's z span, not to an index into the shore polyline: the polyline now
+  // runs 3 km past the world square at each end, so index 0.86 of it is off-map.
+  const portZ = jb.minZ + jbSpanZ * 0.30;
+  const portShore = coastline.reduce((best, p) => (Math.abs(p.z - portZ) < Math.abs(best.z - portZ) ? p : best), coastline[0]!);
   const pier: Pt[] = [
     { x: portShore.x + 60, z: portShore.z },
     { x: portShore.x - PORT_PIER_LENGTH_M, z: portShore.z - 60 },
@@ -614,11 +637,32 @@ export function graftCoastAndCorridor(
         .map((node) => toComposite(project(node.lat, node.lon))),
     }))
     .filter((beach) => beach.points.length >= 4);
+  // ---- Dam-shore + corridor districts ------------------------------------------------------
+  // NOT the Cape place nodes' own positions any more. Those were transformed from the Cape
+  // extract onto the old sea strip; once the ocean became a reservoir the shoreline moved east
+  // under them and five of the nine ended up inside the water polygon with a sixth 1,232 units
+  // past the west world edge — which also silently relocated the Bantry Bay venue strip, since
+  // beachfront.ts resolves districtCenter('Bantry Bay') by name. Each shore district is placed
+  // ON the measured shoreline at a fraction of the CITY block's z span (always inside the world
+  // square) and set back inland of the waterline, so "on land, in the world" is true by
+  // construction rather than by luck. `places` is still parsed above for the log line only.
+  const shoreXAtZ = (z: number): number =>
+    coastline.reduce((best, p) => (Math.abs(p.z - z) < Math.abs(best.z - z) ? p : best), coastline[0]!).x;
   const districts: CoastGraftResult['districts'] = [
-    ...places.map((place) => ({ name: place.name, p: toComposite(place.p) })),
+    ...DAM_SHORE_DISTRICTS.map(({ name, t }) => {
+      const z = jb.minZ + jbSpanZ * t;
+      return { name, p: { x: shoreXAtZ(z) + DAM_SHORE_DISTRICT_SETBACK_M, z } };
+    }),
+    ...CORRIDOR_DISTRICTS.map(({ name, t, fromWest }) => ({
+      name,
+      p: { x: corridorWestX + fromWest, z: jb.minZ + jbSpanZ * t },
+    })),
     { name: HARBOUR_DISTRICT_NAME, p: { x: harbour.x + 120, z: harbour.z } },
   ];
-  log.push(`coast: ${beaches.length} beaches, ${districts.length - 1} seaboard place nodes grafted`);
+  log.push(
+    `coast: ${beaches.length} beaches, ${DAM_SHORE_DISTRICTS.length} dam-shore + ${CORRIDOR_DISTRICTS.length} corridor districts ` +
+      `re-sited onto the measured shoreline (${places.length} Cape place nodes supplied names only)`,
+  );
 
   return {
     coastline, ocean, dam, damIsland, beaches, farmland, tracks, farms, padstal, harbour, districts,

@@ -587,6 +587,30 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       `1 unit = ${fit.metresPerUnit.toFixed(2)} m`,
   );
 
+  // ---- The dam must run OFF the world square, not stop inside it -------------
+  // D1 regression guard. The dam polygon closes with two horizontal caps; if the band it is
+  // generated over ends inside the world square those caps are ruler-straight edges in the
+  // middle of the playable map (the first cut put one 4,276 units inside the north edge, a
+  // 2,831-unit horizontal line with dry veld immediately north of it). The overshoot that
+  // prevents it is denominated in metres against the city block, so a re-crop that changes the
+  // world/city ratio could quietly bring the cap back. Fail the build instead.
+  if (coast) {
+    const capClearanceUnits = 300;
+    const north = fit.apply({ x: 0, z: coast.dam.northZ }).z;
+    const south = fit.apply({ x: 0, z: coast.dam.southZ }).z;
+    if (north > -worldSize / 2 - capClearanceUnits || south < worldSize / 2 + capClearanceUnits) {
+      throw new Error(
+        `dam cap inside the world square: band z ${north.toFixed(0)}..${south.toFixed(0)} u against a ` +
+          `${worldSize} u world (needs to clear +/-${worldSize / 2} by ${capClearanceUnits} u). ` +
+          `Raise DAM_OVERSHOOT_M.`,
+      );
+    }
+    log.push(
+      `dam: band clears the world square by ${(-worldSize / 2 - north).toFixed(0)} u north / ` +
+        `${(south - worldSize / 2).toFixed(0)} u south — no visible cap`,
+    );
+  }
+
   // ---- Border veld: scrub cover between the outer roads and the world edge ---
   if (coast) {
     const worldNW = fit.invert({ x: -worldSize / 2, z: -worldSize / 2 });
@@ -598,6 +622,33 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     });
     for (const band of veld) landuse.push({ name: band.name, kind: 'scrub', points: band.points });
     log.push(`border: ${veld.length} veld bands along the N/E/S world edges (${EDGE_MARGIN_UNITS} u set-back cover)`);
+  }
+
+  // ---- Clip landuse to the world square --------------------------------------
+  // D5. ringInCrop keeps any polygon with ONE vertex inside CROP_BBOX, which is right for
+  // deciding survival (a park half in the crop should still be a park) and wrong for the
+  // emitted geometry: Delta Park shipped 30 of its 73 vertices up to 865 units north of the
+  // world edge, painting green over the void. Roads, tracks, rail, water, stations and
+  // landmarks are all clean; only landuse leaks, because it is the only layer kept by a
+  // one-vertex test and never re-clipped. Sutherland-Hodgman against the world rectangle keeps
+  // the in-world part instead of dropping the whole polygon.
+  {
+    const nw = fit.invert({ x: -worldSize / 2, z: -worldSize / 2 });
+    const se = fit.invert({ x: worldSize / 2, z: worldSize / 2 });
+    const rect = { minX: Math.min(nw.x, se.x), maxX: Math.max(nw.x, se.x), minZ: Math.min(nw.z, se.z), maxZ: Math.max(nw.z, se.z) };
+    const kept: typeof landuse = [];
+    let trimmed = 0; let dropped = 0;
+    for (const area of landuse) {
+      const escaped = area.points.some((p) => p.x < rect.minX || p.x > rect.maxX || p.z < rect.minZ || p.z > rect.maxZ);
+      if (!escaped) { kept.push(area); continue; }
+      const points = clipPolygonToRect(area.points, rect);
+      if (points.length < 3) { dropped++; continue; }
+      trimmed++;
+      kept.push({ ...area, points });
+    }
+    landuse.length = 0;
+    landuse.push(...kept);
+    if (trimmed || dropped) log.push(`landuse: clipped ${trimmed} polygon(s) back inside the world square, dropped ${dropped} entirely outside`);
   }
   const toUnits = (p: Pt): [number, number] => {
     const q = fit.apply(p);
@@ -795,6 +846,38 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     } : {}),
   };
   return { map, log };
+}
+
+/**
+ * Sutherland-Hodgman: clip a polygon to an axis-aligned rectangle. Used to keep landuse inside
+ * the world square (see D5 above). The projection+fit is a pure similarity with zero rotation,
+ * so the world square really is axis-aligned in projected metres and no general clipper is
+ * needed. Convex clip region, so the algorithm is exact for convex input and produces a
+ * correct (if degenerate-edge-joined) result for the concave park outlines here.
+ */
+export function clipPolygonToRect(
+  polygon: Pt[],
+  rect: { minX: number; maxX: number; minZ: number; maxZ: number },
+): Pt[] {
+  const edges: Array<{ inside: (p: Pt) => boolean; cut: (a: Pt, b: Pt) => Pt }> = [
+    { inside: (p) => p.x >= rect.minX, cut: (a, b) => ({ x: rect.minX, z: a.z + ((b.z - a.z) * (rect.minX - a.x)) / (b.x - a.x) }) },
+    { inside: (p) => p.x <= rect.maxX, cut: (a, b) => ({ x: rect.maxX, z: a.z + ((b.z - a.z) * (rect.maxX - a.x)) / (b.x - a.x) }) },
+    { inside: (p) => p.z >= rect.minZ, cut: (a, b) => ({ x: a.x + ((b.x - a.x) * (rect.minZ - a.z)) / (b.z - a.z), z: rect.minZ }) },
+    { inside: (p) => p.z <= rect.maxZ, cut: (a, b) => ({ x: a.x + ((b.x - a.x) * (rect.maxZ - a.z)) / (b.z - a.z), z: rect.maxZ }) },
+  ];
+  let out = polygon.slice();
+  for (const edge of edges) {
+    if (out.length === 0) return [];
+    const next: Pt[] = [];
+    for (let i = 0; i < out.length; i++) {
+      const a = out[i]!; const b = out[(i + 1) % out.length]!;
+      const aIn = edge.inside(a); const bIn = edge.inside(b);
+      if (aIn) next.push(a);
+      if (aIn !== bIn) next.push(edge.cut(a, b));
+    }
+    out = next;
+  }
+  return out;
 }
 
 /** Stitch outer member ways of a multipolygon into closed node-id rings. */

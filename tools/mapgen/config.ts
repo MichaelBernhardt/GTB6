@@ -83,13 +83,17 @@ export const SCALE_VARIANT = (process.env.MAPGEN_SCALE ?? '075') as '075' | 'par
 const SCALE_FACTOR = SCALE_VARIANT === 'parity' ? 1 : 0.75;
 
 /**
- * Calibrated against the emitted `[process] fit: road bbox W x H m` line for the 2/3 crop
- * (measured 11,946 m on the governing axis). PARITY_TARGET_SIZE / metresPerUnit = the fit;
- * TARGET_SIZE is read at only three places (process.ts) and the whole graft/ring/meander chain
- * works in projected metres, so re-calibrating after a crop change is a one-shot: build, read
- * the log line, set PARITY_TARGET_SIZE = max(W,H) / 0.9914, rebuild.
+ * Calibrated against the emitted `[process] fit: road bbox W x H m` line for THIS crop
+ * (measured 11,773 m on the governing axis — clipping Victoria Road to the city span, so the
+ * water can run off the map without dragging the fit with it, took 122 m off the old 11,895).
+ * PARITY_TARGET_SIZE / metresPerUnit = the fit; TARGET_SIZE is read at only three places
+ * (process.ts) and the whole graft/ring/meander chain works in projected metres, so
+ * re-calibrating after a crop change is a one-shot: build, read the log line, set
+ * PARITY_TARGET_SIZE = max(W,H) / 0.9914, rebuild. Hold metresPerUnit at ~1.322 across crops:
+ * the crop decides how much city, this decides how big a block feels, and comparing two crops
+ * is only meaningful if the block scale is identical in both.
  */
-const PARITY_TARGET_SIZE = 12000;
+const PARITY_TARGET_SIZE = 11875;
 export const TARGET_SIZE = Math.round(PARITY_TARGET_SIZE * SCALE_FACTOR);
 
 /** Game-unit road widths per OSM highway class. */
@@ -245,16 +249,72 @@ export const DAM_ARMS = [
   { at: 0.52, depthM: 700, mouthM: 900 },
   { at: 0.78, depthM: 860, mouthM: 1150 },
 ] as const;
-/** The dam's z-band as fractions of the city's own north-south span (0 = north, 1 = south). */
-export const DAM_Z_START_FRACTION = 0.42;
-export const DAM_Z_END_FRACTION = 1.04;
+/**
+ * THE DAM RUNS OFF THE TOP AND BOTTOM OF THE MAP. It used to occupy a z-band expressed as
+ * fractions of the city span (0.42..1.04), which put its north cap 4,276 units INSIDE the
+ * world square — a 2,831-unit ruler-straight edge across the middle of the map with dry veld
+ * immediately north of it, right beside the airport. That is the "sudden cuts and crops" the
+ * owner rejected. The old ocean never showed a cap because it ran well past the world box at
+ * both ends; the dam now does the same on its ONE edge. The band is the city block extended
+ * by DAM_OVERSHOOT_M at each end, which is comfortably outside the world square (the world is
+ * the road bbox + edge margin, and the road bbox exceeds the city block by well under a
+ * kilometre). process.ts asserts the clearance after the fit, so a re-crop cannot silently
+ * bring the cap back inside.
+ */
+export const DAM_OVERSHOOT_M = 3000;
+/**
+ * The shore pinches out over this distance at each end (m, absolute — a fraction of the span
+ * would drift back inside the world when the span changes). Must be well under DAM_OVERSHOOT_M
+ * so the taper, like the cap, happens entirely off-map: inside the world the shore is pure
+ * crenellation.
+ */
+export const DAM_END_TAPER_M = 900;
+/**
+ * The shore ROAD (Victoria Road) is clipped to the city block plus this margin, while the
+ * WATER runs on past the world edge. Letting the road follow the full extended shore would
+ * blow up the road bbox the fit is measured from and shrink the city inside the world square
+ * by about a third.
+ */
+export const DAM_ROAD_MARGIN_M = 260;
 /** Mean shore set-back west of the corridor's west edge (m). */
 export const DAM_SHORE_SETBACK_M = 150;
+/**
+ * Dam-shore settlements. The Cape place NODES used to supply both the names and the positions
+ * of these districts; when the ocean became a reservoir the shoreline moved east under them
+ * and five of them ended up in the water with a sixth 1,232 units past the west world edge.
+ * Positions are generated ON the measured shoreline instead, at fractions of the CITY block's
+ * own north-south span (t = 0 at its north edge, 1 at its south), which is always inside the
+ * world square. The Cape NAMES are kept deliberately: Kaapstad Quay, Seepunt Pier, Victoria /
+ * Blouberg / Bakoven Road and two story mission lines are all Cape-named too, so renaming is
+ * one coherent job for the owner rather than a half-done rename that reads worse than either.
+ * Order is the real Atlantic-seaboard order, north to south. 0.718 is the harbour, kept clear.
+ */
+export const DAM_SHORE_DISTRICTS = [
+  { name: 'Mouille Point', t: 0.09 },
+  { name: 'Green Point', t: 0.21 },
+  { name: 'Three Anchor Bay', t: 0.33 },
+  { name: 'Sea Point', t: 0.45 },
+  { name: 'Bantry Bay', t: 0.57 }, // beachfront.ts hangs its second venue arc on this one BY NAME
+  { name: 'Fresnaye', t: 0.88 },
+] as const;
+/** Set back inland of the waterline (m): grass shore, then the settlement, then the shore road. */
+export const DAM_SHORE_DISTRICT_SETBACK_M = 330;
+/** The two city-bowl Cape names are backland villages in the corridor, not shore settlements. */
+export const CORRIDOR_DISTRICTS = [
+  { name: 'Bo-Kaap (Schotschekloof)', t: 0.20, fromWest: 620 },
+  { name: 'Tamboerskloof', t: 0.80, fromWest: 1380 },
+] as const;
 /** Water surface elevation (m ASL). The Highveld sits at ~1700 m; a reservoir is not at 0. */
 export const DAM_LEVEL_M = 1480;
-/** One large island, Vaal-style. */
+/**
+ * One island, Vaal-style. Sized to the water band, not to taste: inside the world square the
+ * dam is only ~820 m wide at the island's latitude (shore to west edge), so the old 420 m
+ * radius made an 840 m island that hung half off the map and got clipped flat at the boundary.
+ */
 export const DAM_ISLAND_NAME = 'Voelvlei Island';
-export const DAM_ISLAND_RADIUS_M = 420;
+export const DAM_ISLAND_RADIUS_M = 300;
+/** Island centre, west of the mean shoreline (m). */
+export const DAM_ISLAND_OFFSET_M = 520;
 /**
  * Pre-smoothing tolerance for the shore ROAD only (m). The raw crenellated polyline still
  * drives the water polygon and the terrain; the road cuts across the bay mouths on causeways,
