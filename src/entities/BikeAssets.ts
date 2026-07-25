@@ -790,7 +790,7 @@ function buildSuperbike(M: Palette): { root: THREE.Group; lamp: THREE.Mesh; tail
   F.add(at(shell(0.215, 0.30, 0.022, 2.3, 16), 0, 0.700, 0.345, 0.10, 0, 0), M.paint); // nose fairing
   F.add(at(new THREE.ConeGeometry(0.205, 0.42, 14, 1, false), 0, 0.735, 0.545, Math.PI / 2 - 0.30, 0, 0, 1, 1, 0.62), M.paint);
   for (const side of [-1, 1]) {
-    F.add(at(rbox(0.07, 0.36, 0.70, 0.09, 2), side * 0.168, 0.560, 0.235, 0, side * 0.10, 0.26), M.paint); // side fairing
+    F.add(at(rbox(0.075, 0.34, 0.56, 0.10, 2), side * 0.163, 0.560, 0.285, 0, side * 0.16, 0.30), M.paint); // side fairing
     F.add(at(rbox(0.05, 0.12, 0.26, 0.12, 1), side * 0.196, 0.685, 0.435, 0, side * 0.18, 0.18), M.dark); // duct
   }
   F.add(at(rbox(0.30, 0.075, 0.68, 0.05, 1), 0, 0.315, 0.14, 0.06, 0, 0), M.paint); // belly pan
@@ -800,16 +800,17 @@ function buildSuperbike(M: Palette): { root: THREE.Group; lamp: THREE.Mesh; tail
   F.add(at(new THREE.LatheGeometry(tankProfile.map(([r, y]) => new THREE.Vector2(r, y)), 20), 0, 0.815, 0.155, Math.PI / 2, 0, 0, 1.0, 1, 0.66), M.paint);
   F.add(at(new THREE.CylinderGeometry(0.036, 0.04, 0.02, 14), 0, 0.895, 0.24), M.chrome);
   F.add(at(rbox(0.25, 0.08, 0.40, 0.10, 1), 0, 0.800, -0.235, 0.07, 0, 0), M.rubber); // rider seat
-  F.add(at(rbox(0.28, 0.19, 0.52, 0.13, 2), 0, 0.815, -0.47, 0.18, 0, 0), M.paint); // tail unit
-  F.add(at(rbox(0.20, 0.06, 0.26, 0.10, 1), 0, 0.888, -0.60, 0.18, 0, 0), M.rubber); // pillion pad
+  F.add(at(rbox(0.27, 0.20, 0.40, 0.14, 2), 0, 0.830, -0.435, 0.34, 0, 0), M.paint); // tail unit
+  F.add(at(rbox(0.16, 0.13, 0.26, 0.16, 1), 0, 0.930, -0.655, 0.34, 0, 0), M.paint); // tapered tail tip
+  F.add(at(rbox(0.19, 0.06, 0.22, 0.10, 1), 0, 0.900, -0.545, 0.34, 0, 0), M.rubber); // pillion pad
   for (const side of [-1, 1]) {
     F.add(at(new THREE.CylinderGeometry(0.052, 0.058, 0.26, 14), side * 0.095, 0.695, -0.735, Math.PI / 2 - 0.26, side * 0.10, 0), M.chrome); // underseat can
     F.add(at(new THREE.TorusGeometry(0.053, 0.007, 4, 16), side * 0.098, 0.727, -0.858, Math.PI / 2 - 0.26, side * 0.10, 0), M.dark);
   }
   F.add(rod(0, 0.70, -0.62, 0, 0.44, -0.36, 0.022, 0.022, 8), M.dark); // monoshock
   F.add(coil(0, 0.68, -0.605, 0, 0.475, -0.393, 0.043, 0.0095, 6), M.paint);
-  F.add(at(rbox(0.155, 0.105, 0.012, 0.04, 1), 0, 0.495, -0.845, -0.35, 0, 0), M.plate);
-  F.add(rod(0, 0.62, -0.83, 0, 0.55, -0.90, 0.010, 0.010, 6), M.dark);
+  F.add(at(rbox(0.155, 0.105, 0.012, 0.04, 1), 0, 0.520, -0.815, -0.35, 0, 0), M.plate);
+  F.add(rod(0, 0.72, -0.72, 0, 0.575, -0.80, 0.010, 0.010, 6), M.dark);
   F.add(at(new THREE.BoxGeometry(0.055, 0.09, 0.07), -0.135, 0.415, -0.60, 0, 0, 0.35), M.alloy); // rear caliper
   F.add(at(new THREE.BoxGeometry(0.012, 0.015, 0.62), -0.115, 0.395, -0.44), M.steel); // chain
   F.add(at(new THREE.BoxGeometry(0.012, 0.015, 0.62), -0.115, 0.275, -0.46), M.steel);
@@ -819,7 +820,7 @@ function buildSuperbike(M: Palette): { root: THREE.Group; lamp: THREE.Mesh; tail
   const lensL = at(new THREE.SphereGeometry(0.072, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.45), -0.072, 0.700, 0.560, Math.PI / 2 - 0.24, 0.22, 0, 1, 1, 0.5);
   const lensR = at(new THREE.SphereGeometry(0.072, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.45), 0.072, 0.700, 0.560, Math.PI / 2 - 0.24, -0.22, 0, 1, 1, 0.5);
   const lampMesh = lamp(mergeGeometries([mergeVertices(lensL), mergeVertices(lensR)], false)!);
-  const tailMesh = taillight(at(new THREE.BoxGeometry(0.15, 0.055, 0.02), 0, 0.845, -0.715, 0.18, 0, 0));
+  const tailMesh = taillight(at(new THREE.BoxGeometry(0.115, 0.045, 0.02), 0, 0.955, -0.755, 0.34, 0, 0));
 
   root.add(rear, steer, lampMesh, tailMesh); // lamp is fairing-mounted, so it does NOT steer
   root.add(buildRider({ saddle: VEHICLE_SPECS.superbike.saddle!, hips: [0, 0.87, -0.30], grip: [0.235, 0.935, 0.33], foot: [0.265, 0.42, -0.44], lean: 0.80, helmet: true }, M));

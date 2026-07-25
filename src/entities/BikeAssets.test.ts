@@ -92,4 +92,29 @@ describe('two-wheeler asset library', () => {
     expect(bike.group.getObjectByName('wheel_rear')).toBeDefined();
     expect(Math.abs(bike.group.rotation.z)).toBeCloseTo(0.15); // spawn kickstand tilt survives
   });
+
+  // Nothing shipped asserted that a two-wheeler's wheels actually turn, which is exactly the
+  // failure a name-resolved clone can introduce silently.
+  it('still rolls, steers and pedals once driven', () => {
+    const scene = new THREE.Scene();
+    for (const kind of KINDS) {
+      const bike = new Vehicle(scene, kind, new THREE.Vector3());
+      bike.playerControlled = true;
+      const wheel = bike.group.getObjectByName('wheel_rear')!;
+      const steer = bike.group.getObjectByName('steer')!;
+      const crank = bike.group.getObjectByName('crank');
+      const city = {
+        clampMove: (_from: THREE.Vector3, to: THREE.Vector3) => to.clone(),
+        roadHeightAt: () => 0,
+        surfaceNormalAt: () => new THREE.Vector3(0, 1, 0),
+      } as unknown as Parameters<Vehicle['updatePlayer']>[2];
+      const held = new Set(['KeyW', 'KeyD']);
+      const input = { down: (code: string) => held.has(code) } as unknown as Parameters<Vehicle['updatePlayer']>[1];
+      for (let step = 0; step < 90; step++) bike.updatePlayer(1 / 60, input, city);
+      expect(Math.abs(wheel.rotation.x), `${kind} wheel spin`).toBeGreaterThan(1);
+      expect(Math.abs(steer.rotation.y), `${kind} steering`).toBeGreaterThan(0.05);
+      if (kind === 'bicycle') expect(Math.abs(crank!.rotation.x), 'crank').toBeGreaterThan(0.3);
+      else expect(crank, `${kind} has no cranks`).toBeUndefined();
+    }
+  });
 });
