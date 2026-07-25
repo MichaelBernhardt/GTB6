@@ -33,7 +33,9 @@ describe('northern mountain range in-game', () => {
     expect(peak.y).toBeGreaterThan(250); // vs ±36 u of detrended local hills everywhere else
     // The owner asked for the range pulled DOWN toward the CBD and onto the koppie tracks, so
     // the summit is now a bit over half a world-width out, not hugging the top edge.
-    expect(peak.z).toBeLessThan(-1200);
+    // Relative to the CBD, never to absolute game coordinates: those mean a different place in
+    // every crop, which is exactly how the previous scan window ended up measuring a shoulder.
+    expect(peak.z).toBeLessThan(CBD_CENTER.z - MAP_WORLD_SIZE * 0.2); // well north of the city
     expect(Math.hypot(peak.x - CBD_CENTER.x, peak.z - CBD_CENTER.z)).toBeLessThan(MAP_WORLD_SIZE * 0.62);
     // The height is the ridge riding at its own scale (± the capped local residual).
     const expected = ridgeMetresAt(peak.x, peak.z) * TERRAIN_RIDGE_SCALE;
@@ -41,7 +43,13 @@ describe('northern mountain range in-game', () => {
   });
 
   it('leaves the CBD (and the whole southern half) untouched', () => {
-    for (const [x, z] of [[CBD_CENTER.x, CBD_CENTER.z], [0, 2000], [-3000, 5000], [6000, 8000], [2913, 0]] as const) {
+    // Probes placed relative to the CBD (see above): the range's guard is authored in projected
+    // metres, so "the southern half" is only meaningful measured from the city.
+    const S = MAP_WORLD_SIZE * 0.15;
+    for (const [x, z] of [
+      [CBD_CENTER.x, CBD_CENTER.z], [CBD_CENTER.x, CBD_CENTER.z + S], [CBD_CENTER.x - S, CBD_CENTER.z + S],
+      [CBD_CENTER.x + S, CBD_CENTER.z + 2 * S], [CBD_CENTER.x - 2 * S, CBD_CENTER.z + 2 * S],
+    ] as const) {
       expect(ridgeMetresAt(x, z)).toBe(0);
       expect(Math.abs(terrainHeightAt(x, z))).toBeLessThanOrEqual(TERRAIN_LOCAL_CAP * TERRAIN_LOCAL_SCALE);
     }

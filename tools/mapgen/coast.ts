@@ -259,6 +259,10 @@ export function graftCoastAndCorridor(
       `shore x ${Math.round(dam.minX)}..${Math.round(dam.maxX)} (${Math.round(dam.maxX - dam.minX)} m of crenellation)`,
   );
 
+  /** Shore x at an arbitrary z, by nearest shore vertex. */
+  const shoreXAtZ = (z: number): number =>
+    coastline.reduce((best, p) => (Math.abs(p.z - z) < Math.abs(best.z - z) ? p : best), coastline[0]!).x;
+
   // ---- Dam-shore road (offset inland = east of the shoreline) --------------------
   // The shoreline runs south -> north (decreasing z); a positive perpendicular offset of
   // that travel direction points east, i.e. inland. The offset base is smoothed HARD first
@@ -474,11 +478,13 @@ export function graftCoastAndCorridor(
   let fieldIndex = 0;
   // Tighter row pitch and lane separation than the pre-crop layout: the corridor narrowed
   // from 2700 m to 2000 m, so the old spacing left most candidates overlapping and rejected.
-  for (let z = jb.minZ + 400; z < jb.maxZ - 700; z += 1080) {
+  // 880 m rather than 1080: with the dam band now full height, the arms reject more candidates
+  // and the 72% crop was down to four fields in a 14 km corridor.
+  for (let z = jb.minZ + 400; z < jb.maxZ - 700; z += 880) {
     for (let lane = 0; lane < 2; lane++) {
       const cx = bandWest + (bandEast - bandWest) * (0.24 + lane * 0.54) + (seeded(z, lane) - 0.5) * 300;
       const cz = z + (seeded(lane, z) - 0.5) * 420;
-      if (!clearOfCorridorRoads(cx, cz, 330)) { fieldIndex++; continue; }
+      if (!clearOfCorridorRoads(cx, cz, 300)) { fieldIndex++; continue; }
       if (Math.hypot(cx - airCenter.x, cz - airCenter.z) < 1450) { fieldIndex++; continue; } // keep the aerodrome clear
       // Never let a field spill into the dam — but only where the dam actually IS. The old test
       // used the nearest shore vertex at any z, which after the dam replaced the full-height
@@ -519,7 +525,15 @@ export function graftCoastAndCorridor(
   const cbdZ = Math.max(jb.minZ, Math.min(jb.maxZ, 0));
   const harbourIndex = nearestHighwayIndex(cbdZ);
   const harbourAnchor = highwayNode(harbourIndex);
-  const quayEnd = { x: harbourAnchor.p.x - COAST_ROAD_SETBACK_M * 0.72, z: harbourAnchor.p.z + 60 };
+  // Reach the WATER, not a fixed set-back. Victoria Road is a running-MAX hull of the shore, so
+  // beside a drowned-valley arm it sits several hundred metres east of the local waterline and a
+  // fixed 0.72 * set-back left the quay stranded in the farmland (the 72% crop put it 580 m east
+  // of the corridor's own west edge). Run west until just short of the shore.
+  const quayZ0 = harbourAnchor.p.z + 60;
+  const quayEnd = {
+    x: Math.min(harbourAnchor.p.x - COAST_ROAD_SETBACK_M * 0.72, shoreXAtZ(quayZ0) + 45),
+    z: quayZ0,
+  };
   addRoad('Kaapstad Quay', 'secondary', [harbourAnchor.p, quayEnd], { startId: harbourAnchor.id });
   const harbour = quayEnd;
   log.push(`coast: harbour '${HARBOUR_DISTRICT_NAME}' at z~${Math.round(harbourAnchor.p.z)}`);
@@ -646,8 +660,6 @@ export function graftCoastAndCorridor(
   // ON the measured shoreline at a fraction of the CITY block's z span (always inside the world
   // square) and set back inland of the waterline, so "on land, in the world" is true by
   // construction rather than by luck. `places` is still parsed above for the log line only.
-  const shoreXAtZ = (z: number): number =>
-    coastline.reduce((best, p) => (Math.abs(p.z - z) < Math.abs(best.z - z) ? p : best), coastline[0]!).x;
   const districts: CoastGraftResult['districts'] = [
     ...DAM_SHORE_DISTRICTS.map(({ name, t }) => {
       const z = jb.minZ + jbSpanZ * t;
