@@ -180,16 +180,18 @@ const FRONTAGE: Partial<Record<Zone, FrontageProfile>> = {
   },
 };
 
-/** Coastal promenade override — used on any frontage near a beach, whatever the base zone. */
+/** Dam-front override — used on any frontage near the reservoir, whatever the base zone.
+ *  Palms and surf shacks are gone: a Vaal shore is gums and acacias down to a grass bank, with
+ *  slipways, ski-boat sheds and caravan-park ablutions. */
 const COAST_FRONTAGE: FrontageProfile = {
   yard: 4, structAccept: 0.58,
   structures: [
     { name: 'beach-cafe', weight: 16 }, { name: 'ice-cream-kiosk', weight: 16 }, { name: 'pier-kiosk', weight: 10 },
-    { name: 'pavilion', weight: 10 }, { name: 'ablutions', weight: 8 }, { name: 'surf-shack', weight: 10 },
+    { name: 'pavilion', weight: 10 }, { name: 'ablutions', weight: 8 }, { name: 'boat-shed', weight: 10 },
     { name: 'seafront-cafe', weight: 10 }, { name: 'seafront-bar', weight: 7 }, { name: 'seafront-restaurant', weight: 7 },
   ],
   treeAccept: 0.78,
-  trees: [{ name: 'palm', weight: 40 }, { name: 'agave', weight: 16 }, { name: 'aloe', weight: 14 }],
+  trees: [{ name: 'gum', weight: 30 }, { name: 'acacia', weight: 22 }, { name: 'aloe', weight: 14 }, { name: 'veld-grass', weight: 18 }],
 };
 
 interface AreaProfile {
@@ -229,10 +231,10 @@ const AREA_PARK: AreaProfile = {
 
 const AREA_BEACH: AreaProfile = {
   step: 11, foliageAccept: 0.5,
-  foliage: [{ name: 'palm', weight: 30 }, { name: 'agave', weight: 22 }, { name: 'aloe', weight: 20 }],
+  foliage: [{ name: 'veld-grass', weight: 34 }, { name: 'gum', weight: 18 }, { name: 'aloe', weight: 20 }, { name: 'agave', weight: 10 }],
   structAccept: 0.08,
   structures: [
-    { name: 'beach-loungers', weight: 24 }, { name: 'surf-shack', weight: 14 }, { name: 'lifeguard-tower', weight: 8 },
+    { name: 'beach-loungers', weight: 24 }, { name: 'boat-shed', weight: 14 }, { name: 'lifeguard-tower', weight: 8 },
     { name: 'ice-cream-kiosk', weight: 12 }, { name: 'ablutions', weight: 6 }, { name: 'beach-cafe', weight: 6 },
     { name: 'seafront-cafe', weight: 5 },
   ],

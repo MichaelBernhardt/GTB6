@@ -59,7 +59,15 @@ export interface SignalJunctionDef {
 }
 
 interface RawMap {
-  stats: { targetSize: number; metresPerUnit: number; totalRoadKm: number; roadCount: number; junctionCount: number };
+  stats: {
+    targetSize: number; metresPerUnit: number; totalRoadKm: number; roadCount: number; junctionCount: number;
+    /** Emitted land / water split in km². Used by the derivation tests to state their floors as
+     *  densities rather than counts pinned to one particular crop. */
+    landKm2?: number; oceanKm2?: number;
+    bbox?: { south: number; west: number; north: number; east: number };
+    /** Exact projected-metres -> game-units fit: game = (metres - c) * scale. See coordTransform.ts. */
+    fit?: { scale: number; cx: number; cz: number };
+  };
   roads: Array<{ name: string; width: number; kind: string; points: [number, number][] }>;
   junctions: Array<{ x: number; z: number; roads: string[] }>;
   districts: Array<{ name: string; x: number; z: number; radius: number; buildingDensity?: number }>;
@@ -77,13 +85,16 @@ interface RawMap {
     apron: [number, number][];
     buildings: [number, number][][];
   };
-  /** Jozi-by-the-Sea graft (tools/mapgen/coast.ts): synthetic Atlantic seaboard west of the crop. */
+  /** Vaalpunt Dam graft (tools/mapgen/coast.ts): a strip of the real Vaal Dam west of the crop. */
   coast?: {
+    name?: string;
     coastline: [number, number][];
     ocean: [number, number][];
+    islands?: [number, number][][];
     beaches: Array<{ name: string; points: [number, number][] }>;
     harbour: { x: number; z: number };
     corridor: { eastX: number; westX: number };
+    shoreBuildings?: Array<{ x: number; z: number; w: number; d: number; heading: number; kind: string }>;
   };
   /** SRTM 90 m heightgrid (+ synthetic corridor/coast composite): row-major from the NW corner, values in
    *  metres above sea level, placed in world XZ by an affine origin (x0,z0) + spacing (dx,dz) in game units.
@@ -94,6 +105,8 @@ interface RawMap {
 const MAP = rawMap as unknown as RawMap;
 
 export const MAP_STATS = MAP.stats;
+/** Landmarks straight from the generated map (name, position, kind). */
+export const MAP_LANDMARKS: MapLandmark[] = MAP.landmarks;
 /** Square world footprint in game units — the generated map is fitted into this. */
 export const MAP_WORLD_SIZE = MAP.stats.targetSize;
 export const METRES_PER_UNIT = MAP.stats.metresPerUnit;
@@ -357,12 +370,19 @@ const RAW_COAST = MAP.coast;
 /** North→south shoreline polyline: the land/water boundary the beach strip and ocean share. */
 export const COASTLINE: MapPt[] = RAW_COAST ? toPts(RAW_COAST.coastline) : [];
 
-/** Closed ocean polygon (west of the coastline, extending past the world edge). One premium water site. */
+/** Closed reservoir polygon (west of the coastline, extending past the world edge). One premium
+ *  water site, and NAMED: it is a dam, and the map should say so. */
 export const OCEAN_POLYGON: MapPolygon | undefined =
-  RAW_COAST ? buildPolygon('Ocean', 'ocean', RAW_COAST.ocean) : undefined;
+  RAW_COAST ? buildPolygon(RAW_COAST.name ?? 'Dam', 'ocean', RAW_COAST.ocean) : undefined;
 
-/** Named OSM beach polygons. NB: the real Cape coords sit inland of the *synthetic* coastline, so the
- *  runtime uses only their z-spans (where along the shore the golden sand goes), not their x-position. */
+/** Resort beach polygons — Misty Bay and Leboya Bay, both placed ON LAND at the measured waterline
+ *  by the mapgen graft. They drive both the golden-sand z-bands on the strand and the 'beach' scatter
+ *  zone, so resort clutter (loungers, kiosks, ablutions, ski-boat sheds) lands at the resorts and
+ *  nowhere else along the shore. */
+/** The dam's real islands — inner rings of the placed Vaal outline, Grooteiland first. These are
+ *  HOLES in OCEAN_POLYGON: the terrain lifts them out of the water so they are landable ground. */
+export const DAM_ISLAND_RINGS: MapPt[][] = (RAW_COAST?.islands ?? []).map((ring) => toPts(ring));
+
 export const BEACH_POLYGONS: MapPolygon[] = RAW_COAST
   ? RAW_COAST.beaches
       .map((beach) => buildPolygon(beach.name, 'beach', beach.points))
@@ -374,6 +394,15 @@ export const HARBOUR_POINT: MapPt | undefined = RAW_COAST ? { x: RAW_COAST.harbo
 
 /** Rural corridor x-band separating the Joburg crop (east) from the seaboard (west). */
 export const COAST_CORRIDOR: { eastX: number; westX: number } | undefined = RAW_COAST ? { ...RAW_COAST.corridor } : undefined;
+
+/**
+ * REAL traced building footprints on the dam shore (oriented boxes, world units). These are actual
+ * OSM outlines from Deneysville, Refengkgotso and the marina frontage — the map used to reduce them
+ * to a district density scalar and draw nothing. CityGen lays them down before the procedural
+ * frontage pass, so the real village is the village and the procedural massing infills around it.
+ */
+export interface RealFootprint { x: number; z: number; w: number; d: number; heading: number; kind: string }
+export const REAL_FOOTPRINTS: readonly RealFootprint[] = RAW_COAST?.shoreBuildings ?? [];
 
 export function pointInPolygon(polygon: MapPolygon, x: number, z: number): boolean {
   if (x < polygon.minX || x > polygon.maxX || z < polygon.minZ || z > polygon.maxZ) return false;

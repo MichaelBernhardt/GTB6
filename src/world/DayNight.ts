@@ -33,9 +33,9 @@ export const SKY_KEYFRAMES: SkyKeyframe[] = [
   { hour: 0, ...NIGHT },
   { hour: 4.6, ...NIGHT },
   { hour: 6.1, sky: 0xcf8a52, fog: 0xc08a67, sun: 0xffb26b, sunIntensity: 2.1, hemiSky: 0xe2ad80, hemiGround: 0x4a4034, hemiIntensity: 1.0, ambient: 0xffd2a4, ambientIntensity: 0.24 },
-  { hour: 8, sky: 0x82b0d9, fog: 0xc0b294, sun: 0xffe0a8, sunIntensity: 3.8, hemiSky: 0xd4e4f2, hemiGround: 0x8a7c4d, hemiIntensity: 1.5, ambient: 0xffead0, ambientIntensity: 0.27 },
-  { hour: 12, sky: 0x6fa8dd, fog: 0xc4b48c, sun: 0xffd9a0, sunIntensity: 4.4, hemiSky: 0xcfe4f5, hemiGround: 0x8a7c4d, hemiIntensity: 1.6, ambient: 0xffead0, ambientIntensity: 0.28 },
-  { hour: 16.5, sky: 0x7aa5cc, fog: 0xc2ab84, sun: 0xffd092, sunIntensity: 3.7, hemiSky: 0xccdfe9, hemiGround: 0x83764a, hemiIntensity: 1.45, ambient: 0xffe6c2, ambientIntensity: 0.26 },
+  { hour: 8, sky: 0x82b0d9, fog: 0xc0b294, sun: 0xffe0a8, sunIntensity: 3.8, hemiSky: 0xd4e4f2, hemiGround: 0x74804a, hemiIntensity: 1.5, ambient: 0xffead0, ambientIntensity: 0.27 },
+  { hour: 12, sky: 0x6fa8dd, fog: 0xc4b48c, sun: 0xffd9a0, sunIntensity: 4.4, hemiSky: 0xcfe4f5, hemiGround: 0x74804a, hemiIntensity: 1.6, ambient: 0xffead0, ambientIntensity: 0.28 },
+  { hour: 16.5, sky: 0x7aa5cc, fog: 0xc2ab84, sun: 0xffd092, sunIntensity: 3.7, hemiSky: 0xccdfe9, hemiGround: 0x6f7a46, hemiIntensity: 1.45, ambient: 0xffe6c2, ambientIntensity: 0.26 },
   { hour: 18.2, sky: 0xd07a40, fog: 0xbd7a55, sun: 0xff8e48, sunIntensity: 1.9, hemiSky: 0xe0925e, hemiGround: 0x3b322b, hemiIntensity: 0.9, ambient: 0xffbe86, ambientIntensity: 0.22 },
   { hour: 19.6, sky: 0x2a2440, fog: 0x282742, sun: 0x8d94c8, sunIntensity: 0.55, hemiSky: 0x353057, hemiGround: 0x171a20, hemiIntensity: 0.6, ambient: 0x4a4a78, ambientIntensity: 0.21 },
   { hour: 21, ...NIGHT },
@@ -140,7 +140,6 @@ export class DayNightSystem {
   private streetPool: THREE.PointLight[] = [];
   private streetFound = 0; private streetRefresh = Infinity; private streetFocusX = Infinity; private streetFocusZ = Infinity; private streetActive = false;
   private headPool: THREE.SpotLight[] = [];
-  private facades: THREE.MeshStandardMaterial[];
   private blackout = 0; // eased 0..1 toward "grid down"; with nightFactor it kills the ambient city glow
   /** Story/mission surface: the eased grid-down factor (0 = grid up, 1 = full load-shedding dark). */
   get blackoutFactor(): number { return this.blackout; }
@@ -151,7 +150,6 @@ export class DayNightSystem {
   constructor(private scene: THREE.Scene, private environment: EnvironmentHandle, private city: City, quality: BaseQuality, startHour = DEFAULT_HOUR) {
     this.hour = wrapHour(startHour);
     this.lampXZ = city.streetlightLampsXZ();
-    this.facades = city.facadeMaterials();
     this.moon = new THREE.Mesh(new THREE.SphereGeometry(11, 20, 14), new THREE.MeshBasicMaterial({ color: 0xe6ecf7, fog: false }));
     this.moon.name = 'Moon'; scene.add(this.moon);
     this.buildPools(quality);
@@ -206,7 +204,7 @@ export class DayNightSystem {
     this.city.setWaterMood(this.hour, this.sunDir.y >= this.moonDir.y ? this.sunDir : this.moonDir, sky.sun); // water tint and its specular body track the sky
     const gridNight = night * (1 - this.blackout); // load shedding: mains-fed lights go dark, whatever the hour — eased with the same blackout ramp
     this.city.setStreetlightGlow(night); // the bulb material checks the grid itself so panels also read dark by day
-    for (const material of this.facades) material.emissiveIntensity = gridNight * FACADE_NIGHT_EMISSIVE;
+    this.city.setFacadeGlow(gridNight * FACADE_NIGHT_EMISSIVE); // covers facade materials streamed in after boot, too
     setSignGlow(night, this.blackout); // painted boards ride the same ramp: night glow on a healthy grid, torch-lit paint in a blackout
     this.updateStreetlightPool(focus, gridNight, dt);
     this.updateHeadlightPool(focus, night, traffic, police, playerVehicle); // cars run on batteries — Eskom can't touch these
