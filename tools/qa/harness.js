@@ -16,6 +16,15 @@ window.__qa = (() => {
   const STEP = 0.15; // sim step used for fast-forwarding
   const state = { mission: null, log: [], findings: [], shots: [] };
 
+  /**
+   * Metres per world unit, read from the committed map's own stats and stashed on the window by
+   * mission-harness.py before this file is installed — never hard-coded, so the tier bands below
+   * stay honest across any future re-crop or rescale. The design bands are real DISTANCES; units
+   * and metres stopped being interchangeable when the 2/3 crop moved the scale off ~1 m/unit.
+   */
+  const METRES_PER_UNIT = window.__metresPerUnit;
+  if (!METRES_PER_UNIT) throw new Error('__qa: window.__metresPerUnit not set — the driver must publish the map scale before installing the harness');
+
   // SwiftShader dies under the continuous background RAF render of a 3.2M-triangle scene across a
   // long sweep. The harness drives via direct sim steps and doesn't need the live view, so suppress
   // the renderer entirely (restored only for a screenshot). This removes the crash source.
@@ -191,15 +200,23 @@ window.__qa = (() => {
         result.roadDistance = Math.round(routeLength(pts));
         // Distance TIERS (owner: effort must scale with the perceived goal — not one flat cap that
         // makes every job feel like the end of a short street). Per-mission band; a declared journey
-        // objective is exempt (the sanctioned long hauls). Numbers are road distance ceilings.
+        // objective is exempt (the sanctioned long hauls).
+        //
+        // The bands are REAL DISTANCES — how far the player actually drives — and they were authored
+        // on the 19,200-unit map, where 1 unit was 0.9914 m and units and metres were interchangeable.
+        // They are not any more: the 2/3 crop rescaled to 1.322 m per unit, so comparing a unit count
+        // against them silently loosened every ceiling by a third (a "standard" 1,800 became 2,380 m
+        // of driving). Converted at the live map scale, so this stays honest at any future rescale.
         const script = window.__scripts?.[g.missions.active?.id] ?? {};
         const journeys = script.journeys ?? [];
         const isJourney = journeys.includes(objIndex());
         const tier = script.tier ?? 'standard';
-        const CEIL = { favour: 1000, standard: 1800, substantial: 2800, journey: 99999 };
-        const ceil = CEIL[tier] ?? 1800;
-        if (isJourney || tier === 'journey') { note(`journey objective: ${result.roadDistance}u to "${destination.label}"`); }
-        else if (result.roadDistance > ceil) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u — over the ${tier} tier ceiling (${ceil}u); re-anchor or re-tier`);
+        const CEIL_M = { favour: 1000, standard: 1800, substantial: 2800, journey: 99999 };
+        const ceilMetres = CEIL_M[tier] ?? 1800;
+        const metres = Math.round(result.roadDistance * METRES_PER_UNIT);
+        result.roadMetres = metres;
+        if (isJourney || tier === 'journey') { note(`journey objective: ${result.roadDistance}u (${metres}m) to "${destination.label}"`); }
+        else if (metres > ceilMetres) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u (${metres}m) — over the ${tier} tier ceiling (${ceilMetres}m); re-anchor or re-tier`);
         result.tier = tier;
         if (o.timeLimit && !isJourney) {
           // Bumbling pace (owner): 50% of cruise, with a 1.25x wrong-turn detour on the route.
