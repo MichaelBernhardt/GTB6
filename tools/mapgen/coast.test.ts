@@ -135,10 +135,26 @@ describe('Vaalpunt Dam shore', () => {
     }
     const zs = coast.coastline.map((point) => point[1]);
     const span = Math.max(...zs) - Math.min(...zs);
-    // A lobe, not a band. The previous 0.60-0.85 band still left 64% of the west edge WET, which is
-    // what the owner rejected ("a large amount of water ... no land comes around over the top").
+    // A LOBE, NOT A BAND — but measured on the thing the owner actually reacted to, which is how
+    // much of the west edge is WATER, not how tall the shore polyline happens to be. Under the
+    // uniform fit the shore dips west of the world edge INSIDE the band as well as at its ends, so
+    // a 72%-tall band leaves 59% of the edge wet and still wraps land over both corners; the old
+    // band-height proxy would have failed a lobe that is in fact drier than the one it guarded.
     expect(span).toBeGreaterThan(map.stats.targetSize * 0.4);
-    expect(span).toBeLessThan(map.stats.targetSize * 0.62);
+    expect(span).toBeLessThan(map.stats.targetSize * 0.78);
+    const half = map.stats.targetSize / 2;
+    const byZ = [...coast.coastline].sort((a, b) => a[1] - b[1]);
+    const shoreXAt = (z: number): number => {
+      if (z <= byZ[0]![1] || z >= byZ[byZ.length - 1]![1]) return -Infinity;
+      let lo = 0; let hi = byZ.length - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (byZ[mid]![1] <= z) lo = mid; else hi = mid; }
+      const a = byZ[lo]!; const b = byZ[hi]!;
+      return b[1] === a[1] ? a[0] : a[0] + (b[0] - a[0]) * ((z - a[1]) / (b[1] - a[1]));
+    };
+    let wet = 0;
+    for (let i = 0; i <= 400; i++) if (shoreXAt(-half + (map.stats.targetSize * i) / 400) > -half) wet++;
+    expect(wet / 401).toBeGreaterThan(0.30); // still a dam, not a pond
+    expect(wet / 401).toBeLessThan(0.66);    // still a lobe: the owner rejected the 64%+ sea
     // The real dam's northern arm cuts EAST into the corridor by design, bounded by the tanh
     // soft-clip (DAM_REACH_EAST_M), so the tolerance is that budget in units — not a fixed wobble.
     const reachUnits = DAM_REACH_EAST_M / map.stats.metresPerUnit;

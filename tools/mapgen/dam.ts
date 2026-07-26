@@ -35,28 +35,26 @@
  * Deterministic: nothing here samples Math.random, and the only noise left is the real coastline.
  */
 import {
-  DAM_CROSS_SHORE_GAIN,
-  DAM_DETREND_WINDOW_M,
-  DAM_END_RUNOUT_M,
+  DAM_END_RUNOUT_GRADIENT,
   DAM_END_WEST_M,
+  HOOK_RADIUS_M,
   DAM_ISLAND_WEST_NUDGE_M,
   DAM_REACH_EAST_M,
-  DAM_REACH_WEST_M,
+  DAM_ROTATION_DEG,
   DAM_SHORE_MAX_SEG_M,
   DAM_SHORE_QUANTILE,
   DAM_SHORE_STEP_M,
   DAM_SHORE_TOLERANCE_M,
   DAM_SOURCE_SIMPLIFY_M,
+  DAM_STRIP_ANCHOR,
   DAM_UNFOLD_ALPHA,
-  DAM_UNFOLD_TRACKING,
+  DAM_UNIFORM_SCALE,
 } from './config';
 import { simplifyPolyline } from './simplify';
 import type { Pt } from './types';
-import type { VaalFeature, VaalStrip } from './vaal';
+import { toVaalFrame, type VaalFeature, type VaalStrip } from './vaal';
 
 const smoothstep = (t: number): number => { const x = Math.max(0, Math.min(1, t)); return x * x * (3 - 2 * x); };
-/** Smooth one-sided compression: identity near 0, asymptotic to `limit`. */
-const softClip = (d: number, limit: number): number => limit * Math.tanh(d / limit);
 
 export interface DamShoreInput {
   /** Mean shoreline x in projected metres (water lies west of it). */
@@ -87,131 +85,76 @@ export interface DamShore {
   scale: number;
   /** Length of the real shoreline this strip was cut from, metres. */
   sourceLengthM: number;
+  /** The SELECTED stretch of real shoreline, rotated into the map's frame but NOT scaled, folded
+   *  or run out — the reference the emitted shore's orientation histogram is graded against
+   *  (tools/mapgen/measure-orientation.mjs). Rotation and uniform scale cannot change a histogram,
+   *  so every difference between the two is the fold, the run-outs or the reduction. */
+  sourceWindow: Pt[];
   /** Map ANY point of the real Vaal frame through the shore's exact transform — the same unfold
    *  drift, de-tilt, soft-clip and run-out. Everything grafted from the north-shore extract goes
    *  through this, so the real roads land where they really are relative to the real water. */
   mapPoint: (p: Pt, driftAnchor?: Pt) => Pt;
-  /** Polygons/polylines take ONE drift (their centroid's) so the unfold cannot shear them apart. */
+  /** Polygons/polylines take ONE fold leaf (their centroid's) so a fold cannot tear them apart. */
   mapPolygon: (pts: Pt[]) => Pt[];
+  /** The same, but through a caller-chosen leaf — a building takes its settlement's, not its own. */
+  mapPolygonAnchored: (pts: Pt[], anchor: Pt) => Pt[];
   log: string[];
 }
 
 /**
- * Force z to increase monotonically WITHOUT flattening anything.
+ * Force z to increase monotonically WITHOUT changing a single segment's orientation.
  *
  * A real shoreline is not a function of z: it goes east into an inlet, turns, and comes back west
- * at nearly the same z. Resampling that "easternmost crossing per z" replaces every inlet mouth
- * with a ruler-straight horizontal segment — the exact defect this map already paid for once.
- * Instead each step advances z by at least `alpha` times its own arc length, so a stretch that
- * ran backwards is sheared forward in proportion to how long it is. An inlet stays an inlet; it
- * just leans. Every x excursion, and therefore all the crenellation, survives untouched.
+ * at nearly the same z. Two ways to make it one, and only one of them survives the histogram:
+ *
+ *   FLATTEN (resample the easternmost crossing per z) — replaces every inlet mouth with a
+ *     ruler-straight horizontal segment. This map paid for that once already.
+ *   SHEAR (the previous fix: drag every backward stretch forward by alpha times its arc length) —
+ *     lays that stretch down at atan(alpha) to the east-west axis whatever its real angle was.
+ *     Measured on the shipped shore: 67.7% of the emitted length inside 15 degrees of east-west.
+ *   REFLECT (this one) — a stretch running backwards advances by |dz|. The segment keeps its
+ *     length and its angle to BOTH axes exactly; only the global folding of the coast changes.
+ *     The orientation histogram is therefore preserved by construction, because the histogram is
+ *     computed on |dx| and |dz| and reflection is exactly the operation it already quotients out.
+ *
+ * The fold costs z extent (the strip's z span inflates by the ratio of walked |dz| to net dz —
+ * measured and logged per build), and that cost is paid honestly in the SCALE, not by stretching
+ * one axis. `alpha` is a floor for segments running exactly east-west, which would otherwise
+ * advance z by nothing and emit two vertices at one z; the runtime's per-z sampler divides by the
+ * z gap, and the reduction pass would delete one of them and with it a real piece of coast.
+ *
+ * Returns the folded points plus, for every vertex, the affine map z_folded = sign * z + offset
+ * that produced it — everything grafted from the infrastructure extract rides its nearest shore
+ * vertex's map, so a street that is 40 m from the water stays 40 m from the water across a fold.
  */
-export function unfoldToMonotoneZ(points: Pt[], alpha: number, tracking = 0): Pt[] {
-  if (points.length === 0) return [];
-  const out: Pt[] = [{ ...points[0]! }];
+export function foldToMonotoneZ(points: Pt[], alpha: number): { folded: Pt[]; sign: number[]; offset: number[] } {
+  const folded: Pt[] = [];
+  const sign: number[] = [];
+  const offset: number[] = [];
+  if (points.length === 0) return { folded, sign, offset };
+  folded.push({ ...points[0]! });
+  sign.push(1);
+  offset.push(0);
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1]!; const b = points[i]!;
     const ds = Math.hypot(b.x - a.x, b.z - a.z);
     const dz = b.z - a.z;
-    // `tracking` is what stops a fjord wall coming out RULER STRAIGHT. With the old
-    // max(dz, alpha*ds) rule, a stretch running purely across-shore (dz ~ 0 over kilometres, which
-    // is exactly what the side of a drowned valley does) advanced z by alpha*ds and nothing else:
-    // both mapped coordinates then became linear functions of the same real coordinate, so the
-    // whole flank collapsed onto an exact straight diagonal — a measured 920-unit one. Blending in
-    // the true dz keeps the flank responsive to the real shoreline's own wander. Monotone by
-    // construction while tracking < alpha, because dz >= -ds.
-    out.push({ x: b.x, z: out[out.length - 1]!.z + Math.max(dz, alpha * ds + tracking * dz) });
+    const step = Math.max(Math.abs(dz), alpha * ds);
+    const z = folded[folded.length - 1]!.z + step;
+    folded.push({ x: b.x, z });
+    // The segment is a reflection when it ran backwards; the floor case is treated as forward,
+    // which is exact to within alpha * ds and only ever applies to near-east-west segments.
+    const s = dz < 0 && Math.abs(dz) >= alpha * ds ? -1 : 1;
+    sign.push(s);
+    offset.push(z - s * b.z);
   }
-  return out;
+  return { folded, sign, offset };
 }
 
 /** Value at a quantile of a sample (used to pick the "mean shore" anchor of the real strip). */
 function quantile(values: number[], q: number): number {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.min(sorted.length - 1, Math.round((sorted.length - 1) * q)))]!;
-}
-
-/**
- * DE-TILT the strip: subtract the KILOMETRE-SCALE drift of the across-shore coordinate and keep
- * every excursion below the window untouched.
- *
- * Why this exists. The Vaal's north shore between Grooteiland and Misty Bay runs 8.6 km "east"
- * (in map terms) over 28 km of walked shoreline — it is a diagonal, not a north-south coast. Fitted
- * raw against a west edge, that diagonal is the whole shape: the tanh saturates east at the top of
- * the strip and west at the bottom, the map gets one broad open lobe, and the real drowned valleys
- * — which are excursions of 1-3 km ABOUT that diagonal — are squashed flat against the saturation.
- * That is exactly the "very bland, with a large amount of water" the owner rejected.
- *
- * Removing the drift is the same class of operation as `unfoldToMonotoneZ`: a shear that discards
- * the strip's arbitrary global orientation (we already chose to rotate the whole thing -90 degrees)
- * and keeps its local geometry bit for bit. Afterwards the drowned valleys stand out as ARMS
- * reaching east from a shore that runs north-south, which is what the west edge needs.
- *
- * The average is taken over z (trapezoid-weighted), NOT over vertices: OSM vertex density on this
- * ring swings by 20:1 between a mapped bay and an unmapped straight, and a per-vertex mean would
- * let the dense bays drag the trend into themselves and cancel their own crenellation.
- */
-export function detrendAcrossShore(points: Pt[], windowM: number): { detrended: Pt[]; trend: number[] } {
-  const n = points.length;
-  const trend = new Array<number>(n).fill(0);
-  if (n < 3) return { detrended: points.map((p) => ({ ...p })), trend };
-  // STEP 1 — the strip's global TILT, as a z-weighted least-squares line. This is the one degree of
-  // freedom that is purely an artefact of which slice of a round reservoir we cut, and removing it
-  // costs no crenellation at all: a straight line has no bays. Everything after it is optional.
-  {
-    let w = 0; let sz = 0; let sx = 0; let szz = 0; let szx = 0;
-    for (let i = 1; i < n; i++) {
-      const dz = points[i]!.z - points[i - 1]!.z;
-      const z = (points[i]!.z + points[i - 1]!.z) / 2;
-      const x = (points[i]!.x + points[i - 1]!.x) / 2;
-      w += dz; sz += z * dz; sx += x * dz; szz += z * z * dz; szx += z * x * dz;
-    }
-    const den = w * szz - sz * sz;
-    if (w > 1e-6 && Math.abs(den) > 1e-6) {
-      const slope = (w * szx - sz * sx) / den;
-      const intercept = (sx - slope * sz) / w;
-      for (let i = 0; i < n; i++) trend[i] = intercept + slope * points[i]!.z;
-    }
-  }
-  const tilted = points.map((p, i) => ({ x: p.x - trend[i]!, z: p.z }));
-  if (windowM <= 0) return { detrended: tilted, trend };
-  // STEP 2 — residual low-frequency drift, over a window chosen to be much longer than the longest
-  // arm worth keeping. A window SHORTER than an arm cancels that arm, which is the whole reason
-  // this is a separate, tunable step rather than baked into the tilt removal above.
-  points = tilted;
-  // Trapezoid prefix integrals of x dz, so the window mean is an integral over z, not a vertex mean.
-  const zs = points.map((p) => p.z);
-  const cumZ = new Array<number>(n).fill(0);
-  const cumXZ = new Array<number>(n).fill(0);
-  for (let i = 1; i < n; i++) {
-    const dz = zs[i]! - zs[i - 1]!;
-    cumZ[i] = cumZ[i - 1]! + dz;
-    cumXZ[i] = cumXZ[i - 1]! + ((points[i]!.x + points[i - 1]!.x) / 2) * dz;
-  }
-  /** Integral of x dz from the strip start up to an arbitrary z (linear inside a segment). */
-  const upTo = (z: number): { z: number; xz: number } => {
-    if (z <= zs[0]!) return { z: 0, xz: 0 };
-    if (z >= zs[n - 1]!) return { z: cumZ[n - 1]!, xz: cumXZ[n - 1]! };
-    let lo = 0; let hi = n - 1;
-    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (zs[mid]! <= z) lo = mid; else hi = mid; }
-    const a = points[lo]!; const b = points[hi]!;
-    const span = b.z - a.z;
-    const t = span === 0 ? 0 : (z - a.z) / span;
-    const xAt = a.x + (b.x - a.x) * t;
-    return { z: cumZ[lo]! + (z - a.z), xz: cumXZ[lo]! + ((a.x + xAt) / 2) * (z - a.z) };
-  };
-  const half = windowM / 2;
-  const drift = new Array<number>(n).fill(0);
-  for (let i = 0; i < n; i++) {
-    // The window SHRINKS at the two ends rather than clamping, so the trend hugs the data there and
-    // the residual tapers to ~0 — which is what lets the run-out ramps start from a known level.
-    const lo = upTo(zs[i]! - half);
-    const hi = upTo(zs[i]! + half);
-    const span = hi.z - lo.z;
-    drift[i] = span > 1e-6 ? (hi.xz - lo.xz) / span : points[i]!.x;
-  }
-  for (let i = 0; i < n; i++) trend[i] += drift[i]!;
-  return { detrended: points.map((p, i) => ({ x: p.x - drift[i]!, z: p.z })), trend };
 }
 
 /** Subdivide any segment longer than `maxM` so window samplers (beaches, the road hull, the
@@ -244,93 +187,121 @@ export function buildDamShore(input: DamShoreInput): DamShore {
   // pitch, which is what erased the crenellation: an even pitch throws away exactly the thing
   // that distinguishes a real shoreline from a smooth curve.
   const source = simplifyPolyline(vaal.shore, DAM_SOURCE_SIMPLIFY_M);
-  const unfolded = unfoldToMonotoneZ(source, DAM_UNFOLD_ALPHA, DAM_UNFOLD_TRACKING);
-  // De-tilt: the strip's kilometre-scale drift goes, its drowned valleys stay (see detrendAcrossShore).
-  const { detrended, trend } = detrendAcrossShore(unfolded, DAM_DETREND_WINDOW_M);
-  const rawNorthZ = detrended[0]!.z;
-  const rawSouthZ = detrended[detrended.length - 1]!.z;
-  const scale = zSpan / (rawSouthZ - rawNorthZ);
-  const rawMidZ = (rawNorthZ + rawSouthZ) / 2;
-  const xRef = quantile(detrended.map((p) => p.x), DAM_SHORE_QUANTILE);
 
-  // The unfold stands every backward-running stretch on end, which inflates the strip's z extent
-  // (measured below) without touching its across-shore extent. Fitting one uniform factor after
-  // that is NOT isotropic — it squashes every bay by exactly the inflation, which is why the
-  // drowned valleys came out as shallow scallops. The gain multiplies the across-shore residual
-  // back up; at DAM_CROSS_SHORE_GAIN = the inflation the fit is isotropic with the real dam again.
-  const rawZExtent = Math.max(1, vaal.span.z);
-  const unfoldInflation = (rawSouthZ - rawNorthZ) / rawZExtent;
-  const gain = DAM_CROSS_SHORE_GAIN;
-  const mapX = (x: number): number => {
-    const d = (x - xRef) * scale * gain;
-    return meanX + (d >= 0 ? softClip(d, DAM_REACH_EAST_M) : -softClip(-d, DAM_REACH_WEST_M));
-  };
-  const mapZ = (z: number): number => centreZ + (z - rawMidZ) * scale;
+  // 1. ROTATE. A rigid rotation of the real geometry — see DAM_ROTATION_DEG for why the map's
+  //    narrow axis has to be pointed down a different real direction than "across the north shore".
+  const theta = (DAM_ROTATION_DEG * Math.PI) / 180;
+  const cosT = Math.cos(theta); const sinT = Math.sin(theta);
+  const rotate = (p: Pt): Pt => ({ x: p.x * cosT - p.z * sinT, z: p.x * sinT + p.z * cosT });
+  const rotated = source.map(rotate);
 
-  const fitted: Pt[] = detrended.map((p) => ({ x: mapX(p.x), z: mapZ(p.z) }));
+  // 2. FOLD to a function of z, reflecting rather than shearing (foldToMonotoneZ).
+  const { folded, sign, offset } = foldToMonotoneZ(rotated, DAM_UNFOLD_ALPHA);
+
+  // 3. WINDOW. The band is zSpan tall in map metres, so it is zSpan / scale tall in real metres,
+  //    centred on the real anchor point. Everything outside the window is simply not shore: north
+  //    and south of the band the west strip is dry veld out to the world edge.
+  const scale = DAM_UNIFORM_SCALE;
+  const windowH = zSpan / scale;
+  const anchorRot = rotate(toVaalFrame(DAM_STRIP_ANCHOR.lat, DAM_STRIP_ANCHOR.lon));
+  let anchorI = 0; let anchorD = Infinity;
+  for (let i = 0; i < rotated.length; i++) {
+    const d = (rotated[i]!.x - anchorRot.x) ** 2 + (rotated[i]!.z - anchorRot.z) ** 2;
+    if (d < anchorD) { anchorD = d; anchorI = i; }
+  }
+  if (Math.sqrt(anchorD) > 600) {
+    throw new Error(`dam: DAM_STRIP_ANCHOR is ${Math.round(Math.sqrt(anchorD))} m off the real shoreline — it must be ON it, or the window lands somewhere else on the dam`);
+  }
+  const midZ = folded[anchorI]!.z;
+  const lo = midZ - windowH / 2; const hi = midZ + windowH / 2;
+  const windowIdx: number[] = [];
+  for (let i = 0; i < folded.length; i++) if (folded[i]!.z >= lo && folded[i]!.z <= hi) windowIdx.push(i);
+  if (windowIdx.length < 32) {
+    throw new Error(`dam: the strip window is empty at anchor ${DAM_STRIP_ANCHOR.lat},${DAM_STRIP_ANCHOR.lon} — check DAM_UNIFORM_SCALE / DAM_STRIP_ANCHOR`);
+  }
+
+  // 4. UNIFORM SIMILARITY. One factor, both axes. `xRef` is the across-shore quantile that lands
+  //    at the deepest inland reach; everything else follows rigidly from it.
+  const xRef = quantile(windowIdx.map((i) => folded[i]!.x), DAM_SHORE_QUANTILE);
+  const mapX = (x: number): number => meanX + DAM_REACH_EAST_M + (x - xRef) * scale;
+  const mapZ = (z: number): number => centreZ + (z - midZ) * scale;
+
+  const fitted: Pt[] = windowIdx.map((i) => ({ x: mapX(folded[i]!.x), z: mapZ(folded[i]!.z) }));
 
   /**
-   * Run the two ends of the band WEST off the world square.
+   * Run the two ends of the band WEST past the world square — the only non-similarity left.
    *
    * The lobe's ends are not caps: the shoreline curves back west and leaves the frame, so nothing
-   * straight is ever visible and both west corners stay dry. Whatever the real shore happens to be
-   * doing at the cut, the last DAM_END_RUNOUT_M of band is pulled west by a smoothstep ramp until
-   * the end vertex sits DAM_END_WEST_M west of the mean — comfortably past the world edge. The
-   * crenellation rides on the ramp, so the run-out is curved coastline, not a diagonal.
+   * straight is ever visible and both west corners stay dry. The ramp is SLOPE-LIMITED
+   * (DAM_END_RUNOUT_GRADIENT): its length is whatever its own drop needs at a fixed gentle
+   * gradient, so an end that already sits west pays nothing and the ramp's own segments land at one
+   * known angle instead of shearing the whole band. The crenellation rides on the ramp, so the
+   * run-out is still curved coastline.
    */
   const target = meanX - DAM_END_WEST_M;
   const dropNorth = Math.max(0, fitted[0]!.x - target);
   const dropSouth = Math.max(0, fitted[fitted.length - 1]!.x - target);
   const zNorth = fitted[0]!.z; const zSouth = fitted[fitted.length - 1]!.z;
+  // smoothstep peaks at 1.5x the average gradient, so the length carries that factor.
+  const runOutM = (drop: number): number => Math.min(zSpan * 0.45, (drop / DAM_END_RUNOUT_GRADIENT) * 1.5);
+  const lenNorth = runOutM(dropNorth); const lenSouth = runOutM(dropSouth);
   const endRunOut = (z: number): number =>
-    dropNorth * (1 - smoothstep((z - zNorth) / DAM_END_RUNOUT_M))
-    + dropSouth * (1 - smoothstep((zSouth - z) / DAM_END_RUNOUT_M));
+    (lenNorth > 0 ? dropNorth * (1 - smoothstep((z - zNorth) / lenNorth)) : 0)
+    + (lenSouth > 0 ? dropSouth * (1 - smoothstep((zSouth - z) / lenSouth)) : 0);
   for (const p of fitted) p.x -= endRunOut(p.z);
 
   /**
-   * ADAPTIVE REDUCTION — the whole of C1. Douglas-Peucker in MAP metres on the fitted shore:
-   * vertices survive where the shore turns and are dropped only where it is genuinely straight,
-   * so the emitted segment lengths inherit the real coastline's 20:1 spread instead of the even
-   * pitch a resample imposes. The only thing added back is a ceiling on segment length, which
-   * subdivides straights (never bays) so the beach / road / runtime window samplers always find a
-   * vertex nearby.
+   * ADAPTIVE REDUCTION. Douglas-Peucker in MAP metres on the fitted shore: vertices survive where
+   * the shore turns and are dropped only where it is genuinely straight, so the emitted segment
+   * lengths inherit the real coastline's 20:1 spread instead of the even pitch a resample imposes.
+   * The only thing added back is a ceiling on segment length, which subdivides straights (never
+   * bays) so the beach / road / runtime window samplers always find a vertex nearby.
    */
   const reduced = capSegmentLength(simplifyPolyline(fitted, DAM_SHORE_TOLERANCE_M), DAM_SHORE_MAX_SEG_M);
-  // Strictly increasing z: the unfold guarantees non-decreasing, but a zero-length real segment
-  // can still emit a duplicate, and the runtime's binary-search sampler divides by (b.z - a.z).
+  // Strictly increasing z: the fold guarantees non-decreasing, but a zero-length real segment can
+  // still emit a duplicate, and the runtime's binary-search sampler divides by (b.z - a.z).
   const grid: Pt[] = [];
   for (const p of reduced) {
     if (grid.length > 0 && p.z - grid[grid.length - 1]!.z < 1e-4) continue;
     grid.push(p);
   }
 
-  /** Map any point of the real Vaal strip into the map, sharing the shore's exact transform. */
+  /**
+   * Map ANY point of the real Vaal frame through the shore's exact transform. The rotation and the
+   * similarity are global; the FOLD is not, so a point takes its nearest shore vertex's leaf of the
+   * fold (z_folded = sign * z + offset). That is what keeps a slipway on the water and a street
+   * grid on its own side of a headland.
+   */
   const mapPoint = (p: Pt, driftAnchor?: Pt): Pt => {
-    const anchor = driftAnchor ?? p;
+    const q = rotate(p);
+    const a = rotate(driftAnchor ?? p);
     let best = 0; let bestD = Infinity;
-    for (let i = 0; i < source.length; i++) {
-      const d = (source[i]!.x - anchor.x) ** 2 + (source[i]!.z - anchor.z) ** 2;
+    for (let i = 0; i < rotated.length; i++) {
+      const d = (rotated[i]!.x - a.x) ** 2 + (rotated[i]!.z - a.z) ** 2;
       if (d < bestD) { bestD = d; best = i; }
     }
-    const drift = unfolded[best]!.z - source[best]!.z;
-    const z = mapZ(p.z + drift);
-    // Everything grafted from the extract rides the SAME de-tilt as the shore (its nearest source
-    // vertex's trend), or Deneysville's street grid lands a kilometre out into the water.
-    return { x: mapX(p.x - trend[best]!) - endRunOut(z), z };
+    const z = mapZ(sign[best]! * q.z + offset[best]!);
+    return { x: mapX(q.x) - endRunOut(z), z };
   };
-  /** Polygons take ONE drift (their centroid's) so the unfold cannot shear them apart. */
-  const mapPolygon = (pts: Pt[]): Pt[] => {
-    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
-    const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
-    return pts.map((p) => mapPoint(p, { x: cx, z: cz }));
-  };
+  /** Polygons take ONE fold leaf (their centroid's) so a fold cannot tear them apart. */
+  const mapPolygonAnchored = (pts: Pt[], anchor: Pt): Pt[] => pts.map((p) => mapPoint(p, anchor));
+  const mapPolygon = (pts: Pt[]): Pt[] => mapPolygonAnchored(pts, {
+    x: pts.reduce((t, p) => t + p.x, 0) / pts.length,
+    z: pts.reduce((t, p) => t + p.z, 0) / pts.length,
+  });
 
-  const islands = vaal.islands.map((island) =>
-    // Nudged west: the tanh that squeezes the 10 km arm into the band squeezes the channel behind
-    // the island with it, and Grooteiland ends up touching the shore instead of floating in a
-    // 1.4 km channel. The nudge restores a boat-width of water on its landward side.
-    mapPolygon(island.points).map((p) => ({ x: p.x - DAM_ISLAND_WEST_NUDGE_M, z: p.z })),
-  );
+  // Islands only ship if they land inside the band; the uniform fit puts most of the real dam's
+  // islets outside the window, and an island drawn on dry veld is worse than no island.
+  const islands = vaal.islands
+    .map((island) =>
+      // Nudged west so the channel behind Grooteiland stays a channel rather than touching the shore.
+      mapPolygon(island.points).map((p) => ({ x: p.x - DAM_ISLAND_WEST_NUDGE_M, z: p.z })),
+    )
+    .filter((pts) => {
+      const cz = pts.reduce((t, p) => t + p.z, 0) / pts.length;
+      const cx = pts.reduce((t, p) => t + p.x, 0) / pts.length;
+      return cz > grid[0]!.z && cz < grid[grid.length - 1]!.z && cx > meanX - DAM_END_WEST_M * 0.7;
+    });
   const features = vaal.features.map((f) => ({ ...f, p: mapPoint(f.p) }));
 
   // Emit south -> north (decreasing z), the order every consumer already expects.
@@ -347,18 +318,28 @@ export function buildDamShore(input: DamShoreInput): DamShore {
   const sortedSegs = [...segs].sort((a, b) => a - b);
   const sq = (q: number): number => sortedSegs[Math.max(0, Math.min(sortedSegs.length - 1, Math.round((sortedSegs.length - 1) * q)))] ?? 0;
 
+  // How much of the real coast the window cut, and what the fold cost — both are needed to read
+  // the scale honestly: 33 km of real shoreline folded 1.6x and scaled 0.44 is 14 km of emitted
+  // coast inside a 9 km band, which is what "crenellated" means arithmetically.
+  let windowArc = 0;
+  for (let k = 1; k < windowIdx.length; k++) {
+    const a0 = rotated[windowIdx[k - 1]!]!; const b0 = rotated[windowIdx[k]!]!;
+    windowArc += Math.hypot(b0.x - a0.x, b0.z - a0.z);
+  }
+  const netZ = Math.abs(rotated[windowIdx[windowIdx.length - 1]!]!.z - rotated[windowIdx[0]!]!.z);
+  const foldInflation = windowH / Math.max(1, netZ);
+
   log.push(
-    `dam: real Vaal north-shore strip ${(vaal.span.lengthM / 1000).toFixed(1)} km of shoreline over ` +
-      `${(vaal.span.z / 1000).toFixed(1)} x ${(vaal.span.x / 1000).toFixed(1)} km of the real dam, ` +
-      `fitted at 1:${(1 / scale).toFixed(1)} along-shore (unfold alpha ${DAM_UNFOLD_ALPHA} inflates z x${unfoldInflation.toFixed(2)}, ` +
-      `across-shore gain ${gain} => 1:${(1 / (scale * gain)).toFixed(1)} across, source simplify ${DAM_SOURCE_SIMPLIFY_M} real m, ` +
-      `de-tilt window ${(DAM_DETREND_WINDOW_M / 1000).toFixed(1)} km, ${source.length} source pts)`,
+    `dam: UNIFORM fit — rotate ${DAM_ROTATION_DEG} deg, scale ${scale} on BOTH axes (1:${(1 / scale).toFixed(2)}), ` +
+      `no de-tilt, no soft-clip. Window ${(windowArc / 1000).toFixed(1)} km of real shoreline ` +
+      `(${windowIdx.length} of ${source.length} source pts) about ${DAM_STRIP_ANCHOR.lat},${DAM_STRIP_ANCHOR.lon}; ` +
+      `monotone fold reflects, inflating z x${foldInflation.toFixed(2)}`,
   );
   log.push(
     `dam: ${points.length}-pt shore (adaptive DP ${DAM_SHORE_TOLERANCE_M} map m, seg min ${sq(0).toFixed(0)} / ` +
       `median ${sq(0.5).toFixed(0)} / max ${sq(1).toFixed(0)} m, CV ${segCv.toFixed(2)}), x ${Math.round(minX)}..${Math.round(maxX)}, ` +
-      `band z ${Math.round(fitted[0]!.z)}..${Math.round(fitted[fitted.length - 1]!.z)}, ` +
-      `ends run out to x ${Math.round(grid[0]!.x)} / ${Math.round(grid[grid.length - 1]!.x)}`,
+      `band z ${Math.round(grid[0]!.z)}..${Math.round(grid[grid.length - 1]!.z)}, run-outs drop ` +
+      `${Math.round(dropNorth)} m over ${Math.round(lenNorth)} m / ${Math.round(dropSouth)} m over ${Math.round(lenSouth)} m`,
   );
 
   return {
@@ -372,8 +353,10 @@ export function buildDamShore(input: DamShoreInput): DamShore {
     features,
     scale,
     sourceLengthM: vaal.span.lengthM,
+    sourceWindow: windowIdx.map((i) => ({ ...rotated[i]! })),
     mapPoint,
     mapPolygon,
+    mapPolygonAnchored,
     log,
   };
 }
@@ -451,19 +434,40 @@ export function buildDamPolygon(
   shore: DamShore,
   world: { minX: number; maxX: number; minZ: number; maxZ: number },
   marginM: number,
-  steps = 96,
+  // Sampling density of the closure sweep. It is raised well above the old 96 because the test
+  // that guards this (coast.test 'no ruler-straight run') measures the closest approach of any
+  // closure segment LONGER than 120 units: the arc leaves the shore end close to the square, so
+  // what matters is that the segments there are short, not that the arc starts far away.
+  steps = 260,
 ): Pt[] {
   const south = shore.points[0]!;
   const north = shore.points[shore.points.length - 1]!;
   // The sweep's far boundary: `marginM` outside the world square on every side, and never east of
   // the shore ends themselves (the run-out has already taken those west of the square).
-  const farWest = Math.min(world.minX, Math.min(north.x, south.x)) - marginM;
+  const farWest = Math.min(world.minX, Math.min(north.x, south.x)) - marginM - HOOK_RADIUS_M;
   const farNorth = Math.min(world.minZ, north.z) - marginM;
   const farSouth = Math.max(world.maxZ, south.z) + marginM;
   const out: Pt[] = [];
-  // Quarter-arc off the north end: leaves N heading due north (continuing the coast) and arrives at
-  // the far north-west heading due west. Both tangents are exact, so there is no corner at the join
-  // and none at the far end either — it is one continuously turning curve, sampled densely.
+  /**
+   * A TIGHT HOOK first, then the long sweep.
+   *
+   * The old closure left the shore end on a 2,600-unit-radius quarter-ellipse, which means it runs
+   * very nearly parallel to the coast for its first kilometre — a long, near-straight synthetic
+   * edge sitting just outside the world square, exactly the thing the cap defect was. The hook
+   * turns the polygon through 90 degrees on a HOOK_RADIUS arc so it is heading due west within a
+   * few hundred metres, and it does that OUTSIDE the square where a corner cannot be seen. The
+   * long sweep then carries it to `marginM` beyond the square on every side.
+   */
+  const hook = (end: Pt, sign: 1 | -1): void => {
+    const steps2 = 20;
+    for (let i = 1; i <= steps2; i++) {
+      const a = (i / steps2) * (Math.PI / 2);
+      out.push({ x: end.x - HOOK_RADIUS_M * Math.sin(a), z: end.z + sign * HOOK_RADIUS_M * (1 - Math.cos(a)) });
+    }
+  };
+  // North end: hook away from the coast, then sweep round to the far north-west heading due west.
+  hook(north, -1);
+  const hookedNorth = out[out.length - 1]!;
   const quarter = Math.max(24, Math.round(steps / 2));
   // `bend` shapes how early the westward motion starts; 1 is a plain quarter-ellipse, which turns
   // continuously along its whole length. Pulling it below 1 was tried and is worse — it flattens the
@@ -472,21 +476,29 @@ export function buildDamPolygon(
   for (let i = 1; i <= quarter; i++) {
     const a = ((i / quarter) * Math.PI) / 2;
     out.push({
-      x: north.x + (farWest - north.x) * (1 - Math.cos(a)) ** bend,
-      z: north.z + (farNorth - north.z) * Math.sin(a),
+      x: hookedNorth.x + (farWest - hookedNorth.x) * Math.sin(a),
+      z: hookedNorth.z + (farNorth - hookedNorth.z) * (1 - Math.cos(a)) ** bend,
     });
   }
   // The far west run, subdivided so no single emitted segment is enormous.
   const west = Math.max(8, Math.round(steps / 3));
   for (let i = 1; i < west; i++) out.push({ x: farWest, z: farNorth + ((farSouth - farNorth) * i) / west });
-  // Mirror-image quarter-arc back onto the south end.
+  // Mirror-image sweep back toward the south end, then its own hook onto the shore.
+  const southHook: Pt[] = [];
+  { const steps2 = 20;
+    for (let i = steps2; i >= 1; i--) {
+      const a = (i / steps2) * (Math.PI / 2);
+      southHook.push({ x: south.x - HOOK_RADIUS_M * Math.sin(a), z: south.z - HOOK_RADIUS_M * (1 - Math.cos(a)) });
+    } }
+  const hookedSouth = southHook[0]!;
   for (let i = 0; i <= quarter; i++) {
-    const u = ((1 - i / quarter) * Math.PI) / 2; // pi/2 at the far south-west, 0 at the shore end
+    const u = ((1 - i / quarter) * Math.PI) / 2; // pi/2 at the far south-west, 0 at the hook
     out.push({
-      x: south.x + (farWest - south.x) * (1 - Math.cos(u)) ** bend,
-      z: south.z + (farSouth - south.z) * Math.sin(u),
+      x: hookedSouth.x + (farWest - hookedSouth.x) * Math.sin(u),
+      z: hookedSouth.z + (farSouth - hookedSouth.z) * (1 - Math.cos(u)) ** bend,
     });
   }
+  out.push(...southHook);
   return [...shore.points, ...out];
 }
 

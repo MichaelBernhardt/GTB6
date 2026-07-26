@@ -17,7 +17,7 @@
  *
  * This module PARSES and CLASSIFIES only. coast.ts does the mapping and the network surgery.
  */
-import { ROAD_WIDTHS, VAAL_SHORE_MIN_AREA_M2 } from './config';
+import { ROAD_WIDTHS, VAAL_SHORE_CHAIN_TURN_DEG, VAAL_SHORE_MIN_AREA_M2, VAAL_SHORE_STREET_NAMES, VAAL_SHORE_UNNAMED_ROAD } from './config';
 import { toVaalFrame } from './vaal';
 import type { MapArea, OsmElement, OsmNode, OsmResponse, OsmWay, Pt, RoadKind } from './types';
 
@@ -54,8 +54,10 @@ export interface VaalShoreExtract {
   areas: Array<{ name: string; kind: MapArea['kind']; points: Pt[] }>;
   places: ShorePlace[];
   pois: ShorePoi[];
-  /** Building centroids + a rough footprint size, for district densities and farm dressing. */
-  buildings: Array<{ p: Pt; kind: string; areaM2: number }>;
+  /** REAL building footprints — the traced outline, not just a centroid. The map used to reduce
+   *  these 498 polygons to five district density scalars, which is why Deneysville's actual houses
+   *  never appeared; they are now carried through as geometry (see coast.ts / CityGen). */
+  buildings: Array<{ p: Pt; kind: string; areaM2: number; points: Pt[] }>;
   log: string[];
 }
 
@@ -134,6 +136,82 @@ const ringArea = (pts: Pt[]): number => {
   return Math.abs(a) / 2;
 };
 
+/**
+ * Give every unnamed real street a name in the local idiom.
+ *
+ * OSM has a `name` on 108 of the extract's 995 highway ways and nothing on the other 887, so the
+ * map used to run 35 of Deneysville's 41 km under one placeholder. Two passes fix that without
+ * inventing connectivity:
+ *
+ * 1. CHAIN. Ways that meet END TO END and carry straight on through the join (turn under
+ *    VAAL_SHORE_CHAIN_TURN_DEG) are one street. That is how OSM splits a road at a bridge, a
+ *    surface change or an administrative edge, and it is why a single street can arrive as five
+ *    unnamed fragments. A chain that touches a NAMED way this way inherits that way's name.
+ * 2. NAME. The LONGEST still-unnamed chains take the pool names, longest first — the sign atlas
+ *    only has room for a handful (see VAAL_SHORE_STREET_NAMES) so they go where they are read.
+ *    Ties break on geometry, never on OSM id order, so two runs of mapgen are byte-identical.
+ *    Everything shorter keeps the generic.
+ */
+function nameUnnamedStreets(roads: ShoreRoad[], nodes: Map<number, Pt>): { named: number; chains: number } {
+  const bearing = (a: Pt, b: Pt): number => Math.atan2(b.z - a.z, b.x - a.x);
+  const turn = (h1: number, h2: number): number => {
+    let d = h2 - h1;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    return Math.abs(d) * (180 / Math.PI);
+  };
+  const ends = roads.map((r) => {
+    const pts = r.nodes.map((id) => nodes.get(id)).filter((p): p is Pt => Boolean(p));
+    if (pts.length < 2) return null;
+    return {
+      head: r.nodes[0]!, tail: r.nodes[r.nodes.length - 1]!,
+      headDir: bearing(pts[0]!, pts[1]!), tailDir: bearing(pts[pts.length - 2]!, pts[pts.length - 1]!),
+      mid: pts[Math.floor(pts.length / 2)]!,
+    };
+  });
+  const parent = roads.map((_, i) => i);
+  const find = (a: number): number => { let r = a; while (parent[r] !== r) r = parent[r]!; return r; };
+  const union = (a: number, b: number): void => { const ra = find(a); const rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  // Index ways by the node ids at their two ends, so only genuine end-to-end meetings are tested.
+  const atNode = new Map<number, number[]>();
+  ends.forEach((e, i) => {
+    if (!e) return;
+    for (const id of [e.head, e.tail]) { const list = atNode.get(id); if (list) list.push(i); else atNode.set(id, [i]); }
+  });
+  for (const [id, list] of atNode) {
+    if (list.length !== 2) continue;              // a T-junction is not a continuation
+    const [i, j] = list as [number, number];
+    const ei = ends[i]; const ej = ends[j];
+    if (!ei || !ej || roads[i]!.kind !== roads[j]!.kind) continue;
+    // Travel direction through the join: leaving i, entering j.
+    const out = ei.tail === id ? ei.tailDir : ei.headDir + Math.PI;
+    const into = ej.head === id ? ej.headDir : ej.tailDir + Math.PI;
+    if (turn(out, into) <= VAAL_SHORE_CHAIN_TURN_DEG) union(i, j);
+  }
+  const groups = new Map<number, number[]>();
+  roads.forEach((_, i) => { const r = find(i); const g = groups.get(r); if (g) g.push(i); else groups.set(r, [i]); });
+  // Sorted deterministically by geometry, never by OSM id order.
+  const lengthOf = (group: number[]): number => {
+    let total = 0;
+    for (const i of group) {
+      const pts = roads[i]!.nodes.map((id) => nodes.get(id)).filter((p): p is Pt => Boolean(p));
+      for (let k = 1; k < pts.length; k++) total += Math.hypot(pts[k]!.x - pts[k - 1]!.x, pts[k]!.z - pts[k - 1]!.z);
+    }
+    return total;
+  };
+  const ordered = [...groups.values()]
+    .map((group) => ({ group, len: lengthOf(group), mid: ends[group[0]!]?.mid ?? { x: 0, z: 0 } }))
+    .sort((a, b) => b.len - a.len || a.mid.z - b.mid.z || a.mid.x - b.mid.x);
+  let named = 0; let pick = 0;
+  for (const { group } of ordered) {
+    const real = group.map((i) => roads[i]!.name).find((n): n is string => Boolean(n));
+    const name = real
+      ?? (pick < VAAL_SHORE_STREET_NAMES.length ? VAAL_SHORE_STREET_NAMES[pick++]! : VAAL_SHORE_UNNAMED_ROAD);
+    for (const i of group) if (!roads[i]!.name) { roads[i]!.name = name; named++; }
+  }
+  return { named, chains: ordered.length };
+}
+
 export function parseVaalShore(data: OsmResponse): VaalShoreExtract {
   const log: string[] = [];
   const osmNodes = new Map<number, OsmNode>();
@@ -186,7 +264,11 @@ export function parseVaalShore(data: OsmResponse): VaalShoreExtract {
 
     if (tags.building) {
       const pts = ptsOf(way);
-      if (pts.length >= 3) buildings.push({ p: centroid(pts), kind: tags.building, areaM2: ringArea(pts) });
+      if (pts.length >= 3) {
+        // Drop the repeated closing vertex; everything downstream treats a ring as open.
+        const ring = pts[0]!.x === pts[pts.length - 1]!.x && pts[0]!.z === pts[pts.length - 1]!.z ? pts.slice(0, -1) : pts;
+        if (ring.length >= 3) buildings.push({ p: centroid(ring), kind: tags.building, areaM2: ringArea(ring), points: ring });
+      }
       continue;
     }
 
@@ -218,6 +300,11 @@ export function parseVaalShore(data: OsmResponse): VaalShoreExtract {
     if (kind && tags.name) pois.push({ name: tags.name, kind, p });
   }
 
+  const naming = nameUnnamedStreets(roads, nodes);
+  log.push(
+    `vaalshore: named ${naming.named} unnamed way(s) across ${naming.chains} street chains ` +
+      `(${new Set(roads.map((r) => r.name)).size} distinct street names in the extract)`,
+  );
   log.push(
     `vaalshore: ${roads.length} real streets (${Object.entries(roadClassCount).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ')}), ` +
       `${tracks.length} tracks/paths, ${areas.length} landuse polygons >= ${VAAL_SHORE_MIN_AREA_M2} m2, ` +

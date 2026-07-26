@@ -93,6 +93,7 @@ interface RawMap {
     beaches: Array<{ name: string; points: [number, number][] }>;
     harbour: { x: number; z: number };
     corridor: { eastX: number; westX: number };
+    shoreBuildings?: Array<{ x: number; z: number; w: number; d: number; heading: number; kind: string }>;
   };
   /** SRTM 90 m heightgrid (+ synthetic corridor/coast composite): row-major from the NW corner, values in
    *  metres above sea level, placed in world XZ by an affine origin (x0,z0) + spacing (dx,dz) in game units.
@@ -388,6 +389,15 @@ export const HARBOUR_POINT: MapPt | undefined = RAW_COAST ? { x: RAW_COAST.harbo
 
 /** Rural corridor x-band separating the Joburg crop (east) from the seaboard (west). */
 export const COAST_CORRIDOR: { eastX: number; westX: number } | undefined = RAW_COAST ? { ...RAW_COAST.corridor } : undefined;
+
+/**
+ * REAL traced building footprints on the dam shore (oriented boxes, world units). These are actual
+ * OSM outlines from Deneysville, Refengkgotso and the marina frontage — the map used to reduce them
+ * to a district density scalar and draw nothing. CityGen lays them down before the procedural
+ * frontage pass, so the real village is the village and the procedural massing infills around it.
+ */
+export interface RealFootprint { x: number; z: number; w: number; d: number; heading: number; kind: string }
+export const REAL_FOOTPRINTS: readonly RealFootprint[] = RAW_COAST?.shoreBuildings ?? [];
 
 export function pointInPolygon(polygon: MapPolygon, x: number, z: number): boolean {
   if (x < polygon.minX || x > polygon.maxX || z < polygon.minZ || z > polygon.maxZ) return false;

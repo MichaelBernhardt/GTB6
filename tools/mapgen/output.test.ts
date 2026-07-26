@@ -158,6 +158,12 @@ describe('generated joburg-map.json', () => {
       if (road.name === 'Deneys Quay' || road.name === 'Sloepbaai Road') continue;
       for (const point of [road.points[0], road.points[road.points.length - 1]]) {
         if ((incidence.get(key(point)) ?? 0) > 1) continue;
+        // West of the farm corridor there IS no OSM crop boundary: that whole strip is the real
+        // Vaal shore graft, and its westernmost streets are simply the westernmost roads in the
+        // map, so the bbox-edge rule below flags them for being at the edge of themselves. A
+        // Deneysville close that stops 300 m short of the water is still a real close. The crop
+        // rule applies to the Joburg extract, which starts at the corridor's east side.
+        if (map.coast && point[0] < map.coast.corridor.westX) continue;
         // Distance to the shoreline POLYLINE, not to its vertices: the shore is adaptively sampled
         // (dense in the bays, up to ~83 units apart on the straights), so a road ending right on the
         // water can still be 80 units from the nearest vertex.

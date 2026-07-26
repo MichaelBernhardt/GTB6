@@ -21,11 +21,15 @@ import { extractDistrictNodes, inBbox as inCropBbox, processOsm } from './proces
 import { parseVaal } from './vaal';
 import { parseVaalShore } from './vaalshore';
 
+const round2 = (v: number): number => Math.round(v * 100) / 100;
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Output paths default to the committed map + preview; MAPGEN_OUT / MAPGEN_PREVIEW_OUT let a
 // determinism harness (or a dry run) emit elsewhere without clobbering the approved map.
 const OUTPUT_JSON = process.env.MAPGEN_OUT ?? resolve(HERE, '../../src/world/generated/joburg-map.json');
 const OUTPUT_PREVIEW = process.env.MAPGEN_PREVIEW_OUT ?? join(HERE, 'preview.html');
+/** Build artifact, not shipped: the real shoreline stretch the dam fit cut (see measure-orientation). */
+const OUTPUT_SOURCE_STRETCH = join(HERE, 'source-stretch.json');
 
 async function main(): Promise<void> {
   const refresh = process.argv.includes('--refresh');
@@ -74,7 +78,7 @@ async function main(): Promise<void> {
   console.log(`[mapgen] crop: ${keptDistricts}/${allDistrictNodes.length} place nodes inside CROP_BBOX`);
 
   const overrides = loadNameOverrides();
-  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, vaal, vaalShore, stations: osmStations?.nodes ?? null });
+  const { map, log, damSourceWindow } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, vaal, vaalShore, stations: osmStations?.nodes ?? null });
   for (const line of log) console.log(`[process] ${line}`);
 
   const finalMap = applyNameOverrides(map, overrides);
@@ -86,6 +90,9 @@ async function main(): Promise<void> {
 
   writeFileSync(OUTPUT_PREVIEW, buildPreviewHtml(finalMap));
   console.log(`[emit] wrote ${OUTPUT_PREVIEW}`);
+
+  writeFileSync(OUTPUT_SOURCE_STRETCH, JSON.stringify(damSourceWindow.map((p) => [round2(p.x), round2(p.z)])));
+  console.log(`[emit] wrote ${OUTPUT_SOURCE_STRETCH} (${damSourceWindow.length} real shoreline pts)`);
 
   const s = finalMap.stats;
   console.log(

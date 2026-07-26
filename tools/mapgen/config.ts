@@ -316,63 +316,86 @@ export const DAM_SHORE_TOLERANCE_M = 8;
  *  a uniform pitch. */
 export const DAM_SHORE_MAX_SEG_M = 110;
 /**
- * DE-TILT WINDOW (real metres of unfolded shore). The north shore between Grooteiland and Misty
- * Bay drifts 8.6 km across-shore over 28 km of walk — it is a diagonal. Fitted raw, that diagonal
- * saturates the tanh and becomes the entire shape (one broad open lobe); the drowned valleys, which
- * are 1-3 km excursions about it, disappear into the saturation. Subtracting the drift over this
- * window turns the same real geometry into a north-south coast with the valleys standing out as
- * arms reaching east. Keep it well above the longest arm you want (a window shorter than an arm
- * cancels that arm); 9 km keeps everything up to ~4 km of reach.
- */
-export const DAM_DETREND_WINDOW_M = 14000;
-/**
- * Unfold strength: minimum forward z advance per metre of real shoreline walked. 0 would leave
- * the shore multi-valued; 1 would stand every inlet on end. 0.32 leans the real inlets just
- * enough to make them functions of z while roughly doubling the strip's z extent, which is where
- * the fit's mild anisotropy comes from — bays keep their width, arms lean.
- */
-export const DAM_UNFOLD_ALPHA = 0.40;
-/**
- * How much of the shore's TRUE across-step z advance the unfold keeps while it is inventing forward
- * motion. Must stay below DAM_UNFOLD_ALPHA (dz >= -ds, so alpha*ds + tracking*dz > 0 exactly when
- * tracking < alpha) or the shore stops being a function of z. Zero — the old behaviour — makes the
- * side of a drowned valley an EXACT straight line, because a stretch with dz ~ 0 then advances by
- * alpha*ds alone and both mapped coordinates become linear in the same real coordinate. Measured:
- * the longest ruler-straight run in the emitted shore was 920 units at tracking 0.
- */
-export const DAM_UNFOLD_TRACKING = 0.30;
-/**
- * Across-shore reach budgets (m, each side of the mean shoreline), applied as a smooth tanh
- * soft-clip rather than a hard clamp. The real dam is ~320 km2 against this map's 168 km2 and its
- * northern arm alone reaches 10 km east of the mean shore, where the map's whole west band is
- * ~2 km wide. tanh is the identity to within 3% for a 200 m bay and asymptotic for the arm, so
- * the crenellation is untouched and only the one huge reach is compressed. A hard clamp would put
- * a flat wall across the arm instead.
- */
-export const DAM_REACH_EAST_M = 2400;
-export const DAM_REACH_WEST_M = 1900;
-/**
- * ACROSS-SHORE GAIN — the control that turns the real drowned valleys into arms you can see.
+ * THE UNIFORM FIT. Everything below replaces the unfold-drift + de-tilt + tanh soft-clip that
+ * shipped before it. Those three were, together, a ~5:1 ANISOTROPIC compression of the real dam,
+ * and the measurement that condemned them is a segment-orientation histogram of the emitted shore:
+ * 67.7% of its length ran within 15 degrees of east-west and 1.2% ran north-south, against a real
+ * source that is essentially flat across all six 15-degree buckets. A squashed coastline does not
+ * read as a coastline at any vertex density — it reads as a staircase of horizontal runs joined by
+ * near-vertical hairpins, which is exactly what the owner saw.
  *
- * `unfoldToMonotoneZ` stands every backward-running stretch of the real shore on end, which
- * inflates the strip's z extent by roughly 2x (the exact factor is measured and logged per build)
- * while leaving the across-shore extent alone. A single uniform fit factor applied AFTER that is
- * therefore anisotropic: every bay comes out squashed by the inflation, which is why the previous
- * shore read as shallow scallops instead of flooded valleys. This gain multiplies the across-shore
- * residual back up. Setting it to the measured inflation makes the fit isotropic with the real dam
- * again; a little above that trades literal fidelity for legibility at map zoom.
+ * The fit is now a SIMILARITY: rotate by DAM_ROTATION_DEG, scale by DAM_UNIFORM_SCALE on BOTH axes,
+ * translate. A similarity cannot change any segment's angle, so the emitted shore's orientation
+ * histogram IS the source stretch's histogram. The only two places the build can still bend it are
+ * the monotone fold (below, angle-preserving by construction) and the two end run-outs (which are
+ * slope-limited, so they cost only as much as their own drop).
  */
-export const DAM_CROSS_SHORE_GAIN = 3.0;
-/** Quantile of the real strip's across-shore coordinate that lands on the mean shoreline. */
-export const DAM_SHORE_QUANTILE = 0.55;
 /**
- * THE LOBE'S ENDS. Over the last DAM_END_RUNOUT_M of band the shoreline is pulled west until its
- * end vertex sits DAM_END_WEST_M west of the mean shore — past the world's west edge, so the two
- * horizontal caps that close the water polygon are entirely off-map and the corners north and
- * south of the lobe are land. The real crenellation rides on the ramp, so the run-out is curved
- * coastline leaving the frame, never a diagonal and never a cap.
+ * ROTATION of the real strip before fitting (degrees, in the game-oriented Vaal frame).
+ *
+ * This is the one free parameter that buys across-shore room without squashing anything. The Vaal's
+ * north shore is a "T": Deneysville -> Vaal Marina runs 13 km along what becomes the map's z axis,
+ * and the northern arm sticks 8 km out along its x axis — where this map's whole west band is
+ * 3.1 km deep. At 0 degrees the arm alone is nearly three times the budget, so no uniform scale
+ * that keeps Deneysville legible can fit it. Rotating the strip re-labels which real direction the
+ * map's narrow axis points down, so the window can cut a stretch whose reach is inside the budget.
+ * 38 degrees came out of a sweep over rotation x scale x window, keeping the placement that lands
+ * the most real OSM infrastructure at a passing histogram.
  */
-export const DAM_END_RUNOUT_M = 700;
+export const DAM_ROTATION_DEG = 38;
+/**
+ * THE SINGLE SCALE FACTOR, real Vaal metres -> projected map metres. Both axes, no exceptions.
+ *
+ * Not a free choice: the across-shore budget is fixed (the world's west edge to the farm corridor
+ * is ~3.1 km) and the selected stretch swings ~7 km across-shore, so the scale is that ratio.
+ * Wanting a bigger scale means picking a stretch with smaller arms — never squashing the arms.
+ */
+export const DAM_UNIFORM_SCALE = 0.52;
+/**
+ * The real point that lands at the CENTRE of the water band. The window is expressed as an anchor
+ * plus a height rather than as an index or a raw offset, so re-simplifying the source or nudging
+ * the scale slides the window smoothly instead of jumping it elsewhere on the dam. This one sits
+ * on the shore below Deneysville, so the band runs from the Refengkgotso side down past the 1938
+ * dam wall and into the mouth of the northern arm.
+ */
+export const DAM_STRIP_ANCHOR = { lat: -26.877953, lon: 28.134482 } as const;
+/**
+ * Monotone-fold floor: the least forward z a segment may advance, per metre of shoreline walked.
+ *
+ * The shore must be single-valued in z (constraint 1 above). The previous fit bought that with a
+ * SHEAR — every backward-running stretch was dragged forward in proportion to its arc length,
+ * which lays it down at atan(alpha) to the east-west axis and is why a third of the emitted length
+ * piled into the 0-15 degree bucket. The fold used now REFLECTS instead: a stretch running
+ * backwards advances by |dz|, so it keeps its length AND its angle to both axes exactly, and only
+ * the global folding of the coast changes. The histogram is preserved by construction. This floor
+ * exists only for segments running exactly east-west (|dz| = 0), which would otherwise stall the z
+ * advance and emit two vertices at one z; at 0.05 they are laid at 2.9 degrees, inside the bucket
+ * they were already in.
+ */
+export const DAM_UNFOLD_ALPHA = 0.05;
+/**
+ * How far east of the mean shoreline the deepest arm reaches (m). NOT a clamp — nothing is clipped
+ * or compressed any more — purely the across-shore PLACEMENT of the uniformly-scaled strip:
+ * DAM_SHORE_QUANTILE of the window's across-shore spread is put here and everything else follows
+ * rigidly. Sized so the arms stop short of the farm corridor's west edge.
+ */
+export const DAM_REACH_EAST_M = 2000;
+/**
+ * Across-shore placement quantile: a quantile rather than the maximum, so one freak vertex cannot
+ * drag the whole strip west and leave the map with a puddle.
+ */
+export const DAM_SHORE_QUANTILE = 0.998;
+/**
+ * THE LOBE'S ENDS, SLOPE-LIMITED. Each end of the band is pulled west until its last vertex sits
+ * DAM_END_WEST_M west of the world's west edge, so the water polygon closes off-map and both west
+ * corners of the world are dry land. The ramp is the ONLY non-similarity left in the fit, so it is
+ * costed: its length is its own drop divided by this gradient (metres of x per metre of z) rather
+ * than a fixed span. A window whose ends already sit west pays almost nothing, and the ramp's own
+ * segments land at one known angle (~39 degrees) instead of shearing the whole band — the fixed
+ * 700 m span it replaces dropped 3.9 km over 700 m of z, i.e. 8 km of near-horizontal shoreline,
+ * about a third of the whole emitted length.
+ */
+export const DAM_END_RUNOUT_GRADIENT = 1.4;
 /**
  * HOW FAR OUTSIDE THE WORLD SQUARE THE WATER POLYGON CLOSES (m). C4: the old closure ran two
  * dead-straight horizontal caps whose nearest ends were 425 m west of the square, in plain view
@@ -382,14 +405,25 @@ export const DAM_END_RUNOUT_M = 700;
  * ON the horizon, not below it — and FogExp2 at 0.00025 has taken ~45% of it as well.
  */
 export const DAM_CLOSURE_MARGIN_M = 3600;
-export const DAM_END_WEST_M = 3900;
+/** Radius of the hook that turns the water polygon 90 degrees away from the coast at each shore
+ *  end (m). Small, so the closure stops running parallel to the shore just outside the square. */
+export const HOOK_RADIUS_M = 700;
 /**
- * Height of the water's z-band, as a fraction of the CITY block's north-south span. 0.85 puts the
- * lobe across ~73% of the world square's height and leaves ~1,780 m (~1,350 units) of dry land in
- * each west corner. Raising it past ~0.95 closes the corners; process.ts fails the build if it
- * does, rather than shipping a sea.
+ * How far west of the MEAN SHORELINE the run-out ends put the shore (m). The world's west edge sits
+ * about 1.5 km west of the mean, so this has to clear that plus a margin; process.ts asserts the
+ * emitted ends really are outside the square after the fit rather than trusting the constant.
  */
-export const DAM_BAND_Z_FRACTION = 0.60;
+export const DAM_END_WEST_M = 3200;
+/**
+ * Height of the water's z-band, as a fraction of the city block's north-south span. Outside it the
+ * west strip is dry veld to the world edge, which is what makes the water a lobe rather than a sea.
+ * The band is centred on the city block, which is smaller than the world square, so 0.88 of the
+ * block is ~72% of the square. Under the uniform fit the shore also dips west of the world edge
+ * INSIDE the band, so the wet part of the west edge (59%) is well short of the band's own height
+ * and ~2,200 / 1,800 units of dry land wrap over each end. process.ts fails the build if the
+ * corners close.
+ */
+export const DAM_BAND_Z_FRACTION = 0.88;
 /**
  * The shore ROAD (Dam Wal Road) spans the city block plus this margin, while the WATER stops
  * short of the world's north and south edges. Letting the road follow the full shore — including
@@ -426,8 +460,9 @@ export const DAM_SHORE_DISTRICTS = [
   // map into open water — but it keeps its defining adjacency to Deneysville and, as in life, it
   // gets no marina, no slipway and no water frontage of its own.
   { name: 'Refengkgotso', t: 0.19 },
-  { name: 'Manten Marina', t: 0.28 },
-  { name: 'Anker Baai', t: 0.38 },
+  // 'Manten Marina' and 'Anker Baai' are gone: the REAL Manten Marine and Anchor Creek Marina now
+  // land as OSM POIs on that same frontage, and Misty Bay is the district over them.
+  { name: 'Anker Baai', t: 0.42 },
   { name: 'Vaalpunt', t: 0.50 },
   { name: 'Leboya Baai', t: 0.62 }, // beachfront.ts hangs its second venue arc on this one BY NAME
   { name: 'Groenpunt', t: 0.74 },
@@ -486,9 +521,13 @@ export const VAAL_SHORE_MIN_AREA_M2 = 9_000;
 /** Fraction of the water band at each end that the graft stays clear of. The band ends run WEST
  *  off the world square, so anything sited there ships off-map. */
 export const VAAL_SHORE_BAND_INSET = 0.055;
-/** How far west of the mean shoreline the graft may reach (m). Inside the water's own westward
- *  excursions, so a street can never be emitted past the world edge. */
-export const VAAL_SHORE_WEST_REACH_M = 900;
+/**
+ * How far west of the mean shoreline the graft may reach (m). Under the uniform fit the shore
+ * itself swings ~1.9 km west of the mean, so a 900 m wall clipped the waterfront off the western
+ * half of the band — measured, it is what dropped Misty Bay's own label. 1,400 m reaches the whole
+ * shore and still stops ~100 m short of the world's west edge, so nothing can be emitted off-map.
+ */
+export const VAAL_SHORE_WEST_REACH_M = 1150;
 /** How far inland a waterfront POI / building / place node is nudged when the mapped shore lands
  *  east of it (m). The shore is a de-tilted, gain-scaled fit, so a real jetty node misses it by
  *  tens of metres; dropping those loses both yacht clubs, the aquatic club and NSRI Station 22. */
@@ -500,34 +539,89 @@ export const VAAL_SHORE_MIN_COMPONENT = 6;
  *  the fragment is left for the connectivity pass to bridge or drop — a 1 km straight spoke across
  *  open veld to reach three houses is worse than not having the three houses. */
 export const VAAL_SHORE_MAX_LINK_M = 620;
+/**
+ * How far a point feature (a marina pin, a building, a place node) may be from a settlement's
+ * centroid and still be mapped through that settlement's fold leaf (real metres). Beyond it the
+ * feature takes its own nearest-shore leaf. Sized to a village, so a slipway lands with its own
+ * town's streets rather than with the next one down the shore.
+ */
+export const VAAL_SHORE_CLUSTER_ANCHOR_M = 2200;
 /** Cap on a grafted settlement's building density (buildings/km2). The Joburg CBD measures 244 in
  *  this pipeline; a dam village that out-densities the CBD masses like Braamfontein. */
 export const VAAL_SHORE_MAX_DENSITY = 170;
-/** Real Vaal streets with no OSM name, and the link roads that tie the towns to Dam Wal Road. */
+/**
+ * STREET NAMES ON THE REAL SHORE.
+ *
+ * OSM names 108 of the 995 highway ways in the extract; the other 887 carry no `name` tag at all.
+ * The map used to label every one of them 'Dampad', so 35 of Deneysville's 41 km of street ran
+ * under a single placeholder — one name for the whole town. The 108 real names ship as they are
+ * (Ring Road, Anchovy Road, Voortrekker Street, Van Niekerk Street...), an unnamed way that simply
+ * continues a named one inherits it, and every remaining chain draws from the pool below.
+ *
+ * The pool is in the LOCAL IDIOM, which on the Vaal is unmistakable: the real streets are named
+ * after fish and shellfish in English and Afrikaans (Galjoen, Steenbras, Kreef, Perlemoen, Leervis,
+ * Kob, Harder, Elf). These are in the same register and deliberately do NOT repeat any of the 108
+ * real names, so nothing here can be mistaken for OSM data.
+ *
+ * WHY ONLY EIGHT, when there are 800-odd unnamed chains. The street-SIGN atlas is a fixed
+ * 2048x4096 texture at 256x64 per board — 512 slots — and the map already puts 378 distinct names
+ * on signed junctions, against a test that demands 120 slots of headroom for the shop, vehicle and
+ * landmark boards. That leaves room for about a dozen new street names in the whole world, and a
+ * name that overflows the atlas is drawn with SOMEONE ELSE'S TEXT. So the eight go to the eight
+ * LONGEST unnamed chains — the streets a player actually drives and reads — and the rest keep the
+ * generic below. Lifting this properly means a bigger or denser sign atlas, which is a VRAM
+ * decision (32 MB today) rather than a mapgen one.
+ */
+export const VAAL_SHORE_STREET_NAMES = [
+  'Galjoen Close', 'Kreef Crescent', 'Steenbras Lane', 'Snoek Close',
+  'Kurper Crescent', 'Elf Lane', 'Baber Close', 'Kabeljou Crescent',
+] as const;
+/** What a short unnamed real lane is called once the eight pool names are spent: Afrikaans for
+ *  "dam track", which is honestly what an untraced Vaal-shore service lane is. */
 export const VAAL_SHORE_UNNAMED_ROAD = 'Dampad';
+/** Link roads that tie the towns to Dam Wal Road (synthetic connectors, honestly named as such). */
 export const VAAL_SHORE_LINK_ROAD = 'Dorpsaansluiting';
+/** Smallest side (world units) a real footprint may have and still ship: CityGen's own
+ *  MIN_FOOTPRINT is 5, below which a mass is rejected outright. */
+export const SHORE_BUILDING_MIN_UNITS = 6;
+/** Most a small real footprint may be inflated to reach that minimum. Beyond ~2x it stops being
+ *  the building that was traced, so a genuine shed is dropped rather than grown into a house. */
+export const SHORE_BUILDING_MAX_GROWTH = 2.0;
+/** Turn (degrees) below which two ways meeting end-to-end are treated as ONE street for naming. */
+export const VAAL_SHORE_CHAIN_TURN_DEG = 40;
 /**
  * MISTY BAY. The owner named it — "Misty bay has some resorts and sandy beaches, hence the choice"
  * — and OpenStreetMap does not have it: a live `nwr["name"~"Misty",i]` over a box far larger than
- * the dam returns zero elements. The place is unmistakably there in the geometry (118 piers, 32
- * private service roads and the Harbour Town Vaal Dam estate within 2 km) but it carries no label,
- * so the label is ours, pinned to the coordinate rather than to any OSM id.
+ * the dam returns zero elements. The label has always been ours, pinned to a coordinate rather
+ * than to any OSM id.
+ *
+ * IT HAS MOVED, and this is a judgement call worth stating plainly. The real Misty Bay sits at
+ * lon 28.1921; Deneysville sits at lon 28.0964; and between them the Vaal's northern arm reaches
+ * EIGHT KILOMETRES inland, where this map's whole west band is 3.1 km deep. Under a uniform fit —
+ * which is the one rule of the current pass — no window that keeps Deneysville's 41 km of real
+ * street grid can also reach the real Misty Bay, and no window that reaches Misty Bay puts enough
+ * water on the map to be a dam. Squashing the arm to make both fit is exactly what produced the
+ * staircase shoreline. So the NAME is now pinned to the best real resort bay inside the window the
+ * fit does reach: the Anchor Creek Marina / Manten Marine frontage east of Deneysville, which
+ * carries two named marinas, a dozen real piers, the waterfront service lanes down to the moorings
+ * and the aquatic club. Real geometry, real resorts, real sandy shore — a kilometre and a half of
+ * real shoreline from where the map's Deneysville stands.
  */
 export const MISTY_BAY_NAME = 'Misty Bay';
-export const MISTY_BAY_LATLON = { lat: -26.888104, lon: 28.192121 } as const;
+export const MISTY_BAY_LATLON = { lat: -26.8963, lon: 28.1156 } as const;
 /**
  * Where down the CITY block's z span the works sits (0 = north edge, 1 = south). MUST be inside
  * the water band (roughly 0.08..0.92 at DAM_BAND_Z_FRACTION 0.85) — buildDamShore throws otherwise,
  * because outside the band `shoreXNear` returns the run-out end of the shore, which is past the
  * world's west edge, and the whole works quietly ships off-map (0.07 did exactly that).
  *
- * 0.16 puts it on the northern shore between Deneysville and Refengkgotso, which is the real
- * arrangement on the Vaal — the works discharges beside the township, not beside the yacht club —
- * and, measured, it is where Dam Wal Road still hugs the bank, so the yard sits one road-width
- * inland of the water rather than stranded mid-corridor (at 0.30 the dam's northern arm pushes the
- * road ~900 units east and the works went with it).
+ * Under the uniform fit the whole real settlement — Deneysville, Refengkgotso, the marina frontage
+ * that Misty Bay names — lands between t 0.19 and t 0.34 of the water band, and 0.16 put the works
+ * yard at t 0.228, i.e. its settling ponds sat ON TOP of the Misty Bay resort district. 0.56 is the
+ * empty shore south of the dam wall, which is still a plausible outfall (downstream of the town, as
+ * a works is) and is measured to be inside the band with Dam Wal Road hugging the bank.
  */
-export const SEWAGE_WORKS_Z_FRACTION = 0.16;
+export const SEWAGE_WORKS_Z_FRACTION = 0.56;
 /** Works footprint (m): inland set-back of the fence, then its size along/across the shore. */
 export const SEWAGE_WORKS_INLAND_M = 150;
 export const SEWAGE_WORKS_LENGTH_M = 320;

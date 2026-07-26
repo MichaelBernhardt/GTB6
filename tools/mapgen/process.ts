@@ -1,4 +1,6 @@
 import {
+  SHORE_BUILDING_MAX_GROWTH,
+  SHORE_BUILDING_MIN_UNITS,
   BBOX,
   BRIDGE_DISTANCE_M,
   CBD_CENTER,
@@ -139,6 +141,10 @@ const round2 = (v: number): number => Math.round(v * 100) / 100;
 export interface ProcessResult {
   map: JoburgMap;
   log: string[];
+  /** The stretch of REAL Vaal shoreline the dam fit cut, rotated into the map frame but unscaled.
+   *  Written out beside the map so tools/mapgen/measure-orientation.mjs can grade the emitted
+   *  shore's orientation histogram against the source it was actually cut from. */
+  damSourceWindow: Pt[];
 }
 
 /**
@@ -810,6 +816,47 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     log.push(`coast: ocean covers ~${oceanKm2} km2 of the ${Math.round(totalKm2)} km2 square`);
   }
 
+  /**
+   * REAL BUILDINGS AS GEOMETRY. The shore extract carries 498 traced OSM footprints; until now they
+   * were counted and thrown away. Each ring becomes its MINIMUM-AREA rectangle (rotating over a
+   * degree grid — footprints are a handful of vertices, so brute force is exact enough and pure),
+   * which is the shape CityGen and the runtime collider already speak. Tiny outbuildings are
+   * dropped: below the engine's minimum footprint they would be shrunk away or rejected anyway.
+   */
+  const shoreBuildings = (coast?.shore?.buildings ?? []).flatMap((building) => {
+    const ring = building.points;
+    if (ring.length < 3) return [];
+    let best: { w: number; d: number; heading: number; cx: number; cz: number; area: number } | null = null;
+    for (let step = 0; step < 90; step++) {
+      const a = (step * Math.PI) / 180;
+      const c = Math.cos(a); const sn = Math.sin(a);
+      let minU = Infinity; let maxU = -Infinity; let minV = Infinity; let maxV = -Infinity;
+      for (const q of ring) {
+        const u = q.x * c + q.z * sn; const v = -q.x * sn + q.z * c;
+        if (u < minU) minU = u; if (u > maxU) maxU = u;
+        if (v < minV) minV = v; if (v > maxV) maxV = v;
+      }
+      const area = (maxU - minU) * (maxV - minV);
+      if (!best || area < best.area) {
+        const cu = (minU + maxU) / 2; const cv = (minV + maxV) / 2;
+        best = { w: maxU - minU, d: maxV - minV, heading: a, area, cx: cu * c - cv * sn, cz: cu * sn + cv * c };
+      }
+    }
+    if (!best) return [];
+    const [x, z] = toUnits({ x: best.cx, z: best.cz });
+    let w = best.w * fit.scale; let d = best.d * fit.scale;
+    // The dam sits at DAM_UNIFORM_SCALE against the city's 1:1, so a real 10 m Deneysville house
+    // measures ~4 units where the engine's minimum buildable footprint is 5. Rather than drop
+    // three quarters of the village, a small footprint is inflated about its own centre until its
+    // short side is buildable, keeping its real position, orientation and aspect exactly — the
+    // fudge is on the size of the dressing, never on the shoreline or the street grid.
+    const grow = Math.min(SHORE_BUILDING_MAX_GROWTH, Math.max(1, SHORE_BUILDING_MIN_UNITS / Math.max(0.01, Math.min(w, d))));
+    w *= grow; d *= grow;
+    if (Math.min(w, d) < SHORE_BUILDING_MIN_UNITS) return [];
+    return [{ x, z, w: round2(w), d: round2(d), heading: round2(-best.heading), kind: building.kind }];
+  });
+  log.push(`shore: ${shoreBuildings.length} REAL building footprints emitted as oriented boxes (of ${coast?.shore?.buildings.length ?? 0} traced)`);
+
   const map: JoburgMap = {
     meta: {
       source: 'OpenStreetMap via Overpass API',
@@ -859,16 +906,24 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       const [x, z] = toUnits(net.nodes.get(junction.nodeId)!);
       return { x, z, roads: junction.roads };
     }),
-    districts: districts.map(({ name, p }, index) => {
+    districts: districts.map(({ name, p, density }, index) => {
       const [x, z] = toUnits(p);
-      const count = districts[index]?.density ?? buildingCounts?.[index];
+      // Two sources, two UNITS, and conflating them was a real bug: `buildingCounts` is a raw
+      // Overpass COUNT inside the district disc and has to be divided by the disc area, while a
+      // shore district's `density` is ALREADY buildings/km2 (see the shore block above). Dividing
+      // that a second time scaled every dam settlement down by the disc area (1.54 km2) — which is
+      // why they all pinned to exactly 110 (the 170 cap, halved) and Misty Bay shipped at 53
+      // against a runtime default of 100, the lowest density on the map.
       const areaKm2 = Math.PI * (DISTRICT_RADIUS_M / 1000) ** 2;
+      const perKm2 = density !== undefined ? density
+        : buildingCounts?.[index] !== undefined ? buildingCounts[index]! / areaKm2
+        : undefined;
       return {
         name,
         x,
         z,
         radius: round2(DISTRICT_RADIUS_M * fit.scale),
-        ...(count !== undefined ? { buildingDensity: Math.round(count / areaKm2) } : {}),
+        ...(perKm2 !== undefined ? { buildingDensity: Math.round(perKm2) } : {}),
       };
     }),
     water: water.map(({ name, points }) => ({ name, points: points.map(toUnits) })),
@@ -922,6 +977,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
           northZ: round2(fit.apply({ x: 0, z: cityBounds.minZ }).z),
           southZ: round2(fit.apply({ x: 0, z: cityBounds.maxZ }).z),
         },
+        ...(shoreBuildings.length > 0 ? { shoreBuildings } : {}),
       },
       rural: {
         farms: coast.farms.map((farm) => { const [x, z] = toUnits(farm.p); return { x, z, kind: farm.kind }; }),
@@ -941,7 +997,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       },
     } : {}),
   };
-  return { map, log };
+  return { map, log, damSourceWindow: coast?.dam.sourceWindow ?? [] };
 }
 
 /**

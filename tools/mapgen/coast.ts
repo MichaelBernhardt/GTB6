@@ -64,10 +64,10 @@ import {
   MISTY_BAY_NAME,
   VAAL_SHORE_ASHORE_M,
   VAAL_SHORE_BAND_INSET,
+  VAAL_SHORE_CLUSTER_ANCHOR_M,
   VAAL_SHORE_LINK_ROAD,
   VAAL_SHORE_MAX_LINK_M,
   VAAL_SHORE_MIN_COMPONENT,
-  VAAL_SHORE_UNNAMED_ROAD,
   VAAL_SHORE_WEST_REACH_M,
   SIMPLIFY_TOLERANCE_M,
   TRACK_WIDTHS,
@@ -140,7 +140,7 @@ export interface CoastGraftResult {
   shore: {
     areas: Array<{ name: string; kind: MapArea['kind']; points: Pt[] }>;
     pois: Array<{ name: string; kind: string; p: Pt }>;
-    buildings: Array<{ p: Pt; kind: string; areaM2: number }>;
+    buildings: Array<{ p: Pt; kind: string; areaM2: number; points: Pt[] }>;
     places: Array<{ name: string; place: string; p: Pt }>;
     roadKm: number;
     roadCount: number;
@@ -630,6 +630,46 @@ export function graftCoastAndCorridor(
     const onLand = (p: Pt): boolean => p.x > shoreXNear(p.z, 90) + 8;
     const usable = (p: Pt): boolean => inKeep(p) && onLand(p);
 
+    /**
+     * ONE FOLD LEAF PER SETTLEMENT. dam.mapPoint takes the fold leaf of the shore vertex nearest
+     * its anchor (see dam.ts), and a street grid is several kilometres across: mapped node by node,
+     * a town that straddles a fold is reflected down the middle and comes out as a torn fan of
+     * streets — measured, Deneysville and Refengkgotso landed 2.0 km apart where the real pair is
+     * 1.2 km. So the real network is split into connected components first (shared OSM node ids =
+     * one settlement), and every node of a component is mapped through its centroid's leaf. Inside
+     * a component the transform is then a pure similarity, so the grid keeps its real shape exactly.
+     */
+    const parentOf = new Map<number, number>();
+    const findRoot = (a: number): number => { let r = a; while (parentOf.get(r) !== r) r = parentOf.get(r)!; return r; };
+    for (const road of src.roads) for (const id of road.nodes) if (!parentOf.has(id)) parentOf.set(id, id);
+    for (const road of src.roads) {
+      for (let i = 1; i < road.nodes.length; i++) {
+        const ra = findRoot(road.nodes[i - 1]!); const rb = findRoot(road.nodes[i]!);
+        if (ra !== rb) parentOf.set(ra, rb);
+      }
+    }
+    const clusterSum = new Map<number, { x: number; z: number; n: number }>();
+    for (const id of parentOf.keys()) {
+      const raw = src.nodes.get(id);
+      if (!raw) continue;
+      const root = findRoot(id);
+      const acc = clusterSum.get(root);
+      if (acc) { acc.x += raw.x; acc.z += raw.z; acc.n++; } else clusterSum.set(root, { x: raw.x, z: raw.z, n: 1 });
+    }
+    const clusters = [...clusterSum.entries()].map(([root, a]) => ({ root, p: { x: a.x / a.n, z: a.z / a.n }, n: a.n }));
+    const clusterAnchor = new Map<number, Pt>();
+    for (const c of clusters) clusterAnchor.set(c.root, c.p);
+    /** Nearest settlement centroid, for the point features that have to sit with their streets. */
+    const nearestCluster = (p: Pt): Pt | undefined => {
+      let best: Pt | undefined; let bestD = VAAL_SHORE_CLUSTER_ANCHOR_M ** 2;
+      for (const c of clusters) {
+        if (c.n < VAAL_SHORE_MIN_COMPONENT) continue;
+        const d = (c.p.x - p.x) ** 2 + (c.p.z - p.z) ** 2;
+        if (d < bestD) { bestD = d; best = c.p; }
+      }
+      return best;
+    };
+
     /** OSM node id -> mapped point, memoised so ways sharing a node share the graph node exactly. */
     const mapped = new Map<number, Pt>();
     const at = (id: number): Pt | undefined => {
@@ -637,7 +677,7 @@ export function graftCoastAndCorridor(
       if (cached) return cached;
       const raw = src.nodes.get(id);
       if (!raw) return undefined;
-      const p = dam.mapPoint(raw);
+      const p = dam.mapPoint(raw, clusterAnchor.get(findRoot(id)) ?? raw);
       mapped.set(id, p);
       return p;
     };
@@ -662,7 +702,7 @@ export function graftCoastAndCorridor(
           const a = net.nodes.get(ids[i - 1]!)!; const b = net.nodes.get(ids[i]!)!;
           roadKm += Math.hypot(b.x - a.x, b.z - a.z) / 1000;
         }
-        const roadName = road.name ?? VAAL_SHORE_UNNAMED_ROAD;
+        const roadName = road.name!; // vaalshore.ts names every way before the graft sees it
         roadNames.add(roadName);
         net.roads.push({ name: roadName, kind: road.kind, width: road.width, nodeIds: ids });
         graftedIds.push(ids);
@@ -737,19 +777,24 @@ export function graftCoastAndCorridor(
     // the waterfront places the owner asked for. Polylines still get cut, because a ROAD in the
     // water is worse than a road missing.
     const ashore = (p: Pt): Pt => ({ x: Math.max(p.x, shoreXNear(p.z, 140) + VAAL_SHORE_ASHORE_M), z: p.z });
-    const pois2 = src.pois.map((poi) => ({ ...poi, p: ashore(dam.mapPoint(poi.p)) })).filter((poi) => inKeep(poi.p));
-    const buildings2 = src.buildings.map((b) => ({ ...b, p: ashore(dam.mapPoint(b.p)) })).filter((b) => inKeep(b.p));
+    const pois2 = src.pois.map((poi) => ({ ...poi, p: ashore(dam.mapPoint(poi.p, nearestCluster(poi.p))) })).filter((poi) => inKeep(poi.p));
+    const buildings2 = src.buildings
+      .map((b) => ({ ...b, p: ashore(dam.mapPoint(b.p, nearestCluster(b.p))), points: dam.mapPolygonAnchored(b.points, nearestCluster(b.p) ?? b.p) }))
+      .filter((b) => inKeep(b.p));
     // Real places, plus Misty Bay — which the owner named and OSM does not carry at all (verified
     // live: nwr[name~"Misty"] over the whole dam returns nothing), so it is named from our side at
     // the coordinate the lead supplied, where the piers and the resort service roads actually are.
     const places2 = [
-      ...src.places.map((pl) => ({ ...pl, p: dam.mapPoint(pl.p) })),
-      { name: MISTY_BAY_NAME, place: 'village', p: dam.mapPoint(toVaalFrame(MISTY_BAY_LATLON.lat, MISTY_BAY_LATLON.lon)) },
+      ...src.places.map((pl) => ({ ...pl, p: dam.mapPoint(pl.p, nearestCluster(pl.p)) })),
+      // Misty Bay: our label on a real resort frontage (see MISTY_BAY_LATLON), mapped through the
+      // same fold leaf as the marina streets it names so it lands on them, not beside them.
+      (() => { const raw = toVaalFrame(MISTY_BAY_LATLON.lat, MISTY_BAY_LATLON.lon);
+        return { name: MISTY_BAY_NAME, place: 'village', p: dam.mapPoint(raw, nearestCluster(raw)) }; })(),
     ].map((pl) => ({ ...pl, p: ashore(pl.p) })).filter((pl) => inKeep(pl.p));
 
     if (process.env.MAPGEN_SHORE_DEBUG) {
       for (const pl of [...src.places, { name: MISTY_BAY_NAME, place: 'village', p: toVaalFrame(MISTY_BAY_LATLON.lat, MISTY_BAY_LATLON.lon) }]) {
-        const m = ashore(dam.mapPoint(pl.p));
+        const m = ashore(dam.mapPoint(pl.p, nearestCluster(pl.p)));
         log.push(`  place '${pl.name}' raw(${pl.p.x.toFixed(0)},${pl.p.z.toFixed(0)}) -> (${m.x.toFixed(0)},${m.z.toFixed(0)}) keepX ${keepMinX.toFixed(0)}..${keepMaxX.toFixed(0)} keepZ ${keepMinZ.toFixed(0)}..${keepMaxZ.toFixed(0)} => ${inKeep(m) ? 'KEEP' : 'DROP'}`);
       }
     }
@@ -947,13 +992,14 @@ export function graftCoastAndCorridor(
   const resortSites = ((): Array<{ name: string; z: number }> => {
     const byName = (needle: string): VaalFeature | undefined =>
       dam.features.find((f) => f.name.toLowerCase().includes(needle));
-    // Misty Bay is not a mapped OSM place — it is a gated waterfront estate on Ring Road in Vaal
-    // Marina, and the only thing OSM has for it is its petrol station ("49 Ring Road, Greater Vaal
-    // Marina"), which is exactly the "petrol on site" the estate advertises. That node is the bay.
-    const misty = byName('bayshore marina');
+    // The sand goes where the district goes. Anchoring it on an OSM node instead (it used to hang
+    // off the Bayshore Marina petrol station) puts it wherever that node happens to map, and under
+    // the uniform fit that node is outside the window entirely — the beach clamped to the far end
+    // of the band, 4 km from the village it is named after.
+    const mistyPlace = shoreGraft?.places.find((pl) => pl.name === MISTY_BAY_NAME);
     const leboya = byName('leboya bay resort');
     const sites: Array<{ name: string; z: number }> = [];
-    if (misty) sites.push({ name: 'Misty Bay beach', z: clampToBand(misty.p.z, 0.12) });
+    if (mistyPlace) sites.push({ name: 'Misty Bay beach', z: clampToBand(mistyPlace.p.z, 0.12) });
     if (leboya) sites.push({ name: 'Leboya Bay beach', z: clampToBand(leboya.p.z, 0.12) });
     // Fall back to shore settlements if the extract ever loses those nodes.
     for (const d of DAM_SHORE_DISTRICTS) {

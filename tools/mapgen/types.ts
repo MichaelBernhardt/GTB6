@@ -144,6 +144,13 @@ export interface MapCoast {
   /** Rural corridor band between the Joburg block and the coast (game-unit extents; the
    *  z clamp keeps the map tint on the corridor's actual land, not the full square). */
   corridor: { eastX: number; westX: number; northZ: number; southZ: number };
+  /** REAL traced building footprints on the dam shore, as oriented boxes in world units: the
+   *  minimum-area rectangle of each OSM way, so a house that really stands at 20 degrees to its
+   *  street stands at 20 degrees in game. These used to be collapsed into a district density
+   *  scalar and never appeared as geometry at all; CityGen now lays them down before the
+   *  procedural frontage pass and marks them occupied, so the procedural massing infills AROUND
+   *  the real village instead of replacing it. */
+  shoreBuildings?: Array<{ x: number; z: number; w: number; d: number; heading: number; kind: string }>;
 }
 
 export interface MapRuralBuilding { x: number; z: number; kind: 'farmhouse' | 'barn' | 'silo' | 'windmill'; }

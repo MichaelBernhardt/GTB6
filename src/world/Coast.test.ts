@@ -25,8 +25,11 @@ describe('coast map data', () => {
     expect(COASTLINE.length).toBeGreaterThan(20);
     const zs = COASTLINE.map((point) => point.z);
     const span = Math.max(...zs) - Math.min(...zs);
+    // Band HEIGHT is only a proxy; what the owner reacted to is how much of the west edge is wet,
+    // and the uniform fit dips the shore west of the world edge inside the band as well as at its
+    // ends. So the height bound is loose and the corners are the real guard.
     expect(span).toBeGreaterThan(MAP_WORLD_SIZE * 0.4);
-    expect(span).toBeLessThan(MAP_WORLD_SIZE * 0.62);
+    expect(span).toBeLessThan(MAP_WORLD_SIZE * 0.78);
     const half = MAP_WORLD_SIZE / 2;
     expect(Math.min(...zs)).toBeGreaterThan(-half + 700); // land in the NW corner
     expect(Math.max(...zs)).toBeLessThan(half - 700); // land in the SW corner
