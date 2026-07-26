@@ -20,6 +20,9 @@ import { createSignMesh } from '../../world/ProceduralMaterials';
 import type { InteriorLayout, InteriorProp } from './grammar';
 import { PLOT_RADIUS, type StagePlot } from './stage';
 
+/** How far the black void reaches. See the note where the shroud is built. */
+const SHROUD_RADIUS = PLOT_RADIUS + 6;
+
 export interface BuiltInterior {
   readonly group: THREE.Group;
   readonly lamps: readonly THREE.PointLight[];
@@ -65,10 +68,13 @@ export function buildInterior(layout: InteriorLayout, plot: StagePlot, heading: 
 
   // ---- the void: everything outside this room is black, whichever way the boom swings ----------
   const voidMaterial = mat(new THREE.MeshBasicMaterial({ color: 0x05070a, side: THREE.BackSide, fog: false }));
-  const shroud = new THREE.Mesh(keep(new THREE.CylinderGeometry(PLOT_RADIUS, PLOT_RADIUS, 26, 20, 1, false)), voidMaterial);
+  // Wider than the plot's clear radius on purpose: the boom only reaches ~16u out in the steady
+  // state, but it LERPS in after a teleport, and a headless capture caught it mid-flight outside a
+  // 20u shroud with the veld and the sky in frame. Six metres of margin costs nothing.
+  const shroud = new THREE.Mesh(keep(new THREE.CylinderGeometry(SHROUD_RADIUS, SHROUD_RADIUS, 30, 20, 1, false)), voidMaterial);
   // Bottom cap one centimetre under the floor plane: above every blade of terrain inside the plot
   // (findStagePlot pins the floor to the highest ground it sampled), so no veld leaks in.
-  shroud.position.y = 13 - 0.01;
+  shroud.position.y = 15 - 0.01;
   group.add(shroud);
 
   // ---- the shell: one inside-out box, six faces, three colours --------------------------------
@@ -173,6 +179,8 @@ export function buildDoorways(
   const steel = mat(new THREE.MeshStandardMaterial({ color: 0x39423f, roughness: 0.62, metalness: 0.35 }));
   const gate = mat(new THREE.MeshStandardMaterial({ color: 0x6d7679, roughness: 0.5, metalness: 0.5 }));
   const mouth = mat(new THREE.MeshBasicMaterial({ color: 0x090c0f }));
+  const plaster = mat(new THREE.MeshStandardMaterial({ color: 0xcdbfa4, roughness: 0.95 }));
+  const plinth = mat(new THREE.MeshStandardMaterial({ color: 0x4d5250, roughness: 0.9 }));
 
   for (const door of doors) {
     const bay = new THREE.Group();
@@ -183,6 +191,12 @@ export function buildDoorways(
       const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
       mesh.position.set(x, y, z); bay.add(mesh);
     };
+    // A slab of wall behind the gate. The doorstep is derived from the ROAD network, so there is no
+    // guarantee CityGen put a building behind it — without this, a door on a vacant plot reads as a
+    // frame standing in a field. Where there IS a facade the slab simply sits inside it.
+    add(3.9, 3.15, 0.42, plaster, 0, 1.575, -0.22);
+    add(4.1, 0.22, 0.5, plinth, 0, 0.11, -0.2);
+    add(4.1, 0.26, 0.52, plinth, 0, 3.05, -0.2);
     add(1.34, 2.24, 0.06, mouth, 0, 1.12, 0.02);
     add(0.16, 2.4, 0.22, steel, -0.75, 1.2, 0.06);
     add(0.16, 2.4, 0.22, steel, 0.75, 1.2, 0.06);
