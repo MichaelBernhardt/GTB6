@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { BEACH_POLYGONS, COAST_CORRIDOR, COASTLINE, HARBOUR_POINT, MAP_WORLD_SIZE, OCEAN_POLYGON } from './mapData';
-import { beachBands, buildShoreRibbon, isSandZ, OCEAN_Y, SEABED_Y, SHORE_LAND_WIDTH, SHORE_SEA_WIDTH, SHORE_Y } from './coast';
+import { beachBands, buildShoreRibbon, farWaterOutline, isSandZ, OCEAN_Y, SEABED_Y, SHORE_LAND_WIDTH, SHORE_SEA_WIDTH, SHORE_Y, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
+
+/** Game.ts's perspective camera far plane: beyond it the frustum cuts and the fog is 98% opaque. */
+const CAMERA_FAR_PLANE = 8000;
 
 describe('coast map data', () => {
   it('exposes the ocean as one large closed polygon west of the city', () => {
@@ -16,26 +19,21 @@ describe('coast map data', () => {
     expect(ocean.minX).toBeLessThan(-MAP_WORLD_SIZE / 2);
   });
 
-  it('carries a shoreline polyline that is a LOBE, not a full-height sea edge', () => {
-    // The reservoir pushes in from the west and leaves BOTH west corners dry — "never covers the
-    // full left extent". It used to span >90% of the world height, which read as an ocean; the
-    // 0.60-0.85 band that replaced that was still 64% of the west edge WET, and the owner's verdict
-    // on it was "a large amount of water ... no land comes around over the top". The band is now cut
-    // so the wet part of the west edge is ~44% and land wraps around both ends of the lobe.
+  it('keeps the water inside the old ocean\'s measured budget', () => {
+    // The Atlantic seaboard nobody complained about, measured: 20.7% of the world wide with 9.4% of
+    // it west of the square. The rejected wholesale-adjacent build ran 56.9% wide with a 43.0%
+    // overhang — the "speaker cone". The SHAPE is no longer graded here (a reservoir edge is
+    // dendritic on purpose); the footprint is.
     expect(COASTLINE.length).toBeGreaterThan(20);
-    const zs = COASTLINE.map((point) => point.z);
-    const span = Math.max(...zs) - Math.min(...zs);
-    // Band HEIGHT is only a proxy; what the owner reacted to is how much of the west edge is wet,
-    // and the uniform fit dips the shore west of the world edge inside the band as well as at its
-    // ends. So the height bound is loose and the corners are the real guard.
-    expect(span).toBeGreaterThan(MAP_WORLD_SIZE * 0.4);
-    expect(span).toBeLessThan(MAP_WORLD_SIZE * 0.78);
+    const ocean = OCEAN_POLYGON!;
+    const xs = ocean.points.map((p) => p.x);
+    const width = Math.max(...xs) - Math.min(...xs);
     const half = MAP_WORLD_SIZE / 2;
-    expect(Math.min(...zs)).toBeGreaterThan(-half + 700); // land in the NW corner
-    expect(Math.max(...zs)).toBeLessThan(half - 700); // land in the SW corner
-    // Both ends leave the world square to the WEST, so the closing caps are never in frame.
-    expect(COASTLINE[0]!.x).toBeLessThan(-half);
-    expect(COASTLINE[COASTLINE.length - 1]!.x).toBeLessThan(-half);
+    expect(width / MAP_WORLD_SIZE).toBeLessThan(0.26);
+    expect((-half - Math.min(...xs)) / MAP_WORLD_SIZE).toBeLessThan(0.095);
+    expect(Math.min(...xs)).toBeLessThan(-half); // it must leave the square, or its own edge shows
+    // Nothing east of the farm corridor is water.
+    expect(Math.max(...xs)).toBeLessThan(-MAP_WORLD_SIZE * 0.22);
   });
 
   it('names the water body as a dam rather than an ocean', () => {
@@ -110,5 +108,70 @@ describe('shore ribbon geometry', () => {
 
   it('returns empty data for a degenerate coastline', () => {
     expect(buildShoreRibbon([{ x: 0, z: 0 }], { bands: [], sand, rock }).positions).toEqual([]);
+  });
+});
+
+describe('the rendered water horizon (D2)', () => {
+  const HALF = MAP_WORLD_SIZE / 2;
+
+  it('carries every closure edge past the camera far plane, or keeps it under drawn ground', () => {
+    // The defect: mapgen closes the dam ~4.2 km past the west edge, inside both the fog and the
+    // 8000-unit far plane, so from the shore it read as a dead-level water/sky line measured at
+    // 142-166/255 of contrast in every column of the frame.
+    //
+    // A closure edge is harmless in exactly two cases, and this asserts every point falls in one:
+    //   * it is at least a far plane away, where the frustum cuts it and the fog is 98% opaque; or
+    //   * it never goes west of the shoreline's own envelope, which is the strip City.buildBeach
+    //     draws the bed sheet over — so ground covers the edge instead of sky.
+    const outline = farWaterOutline(COASTLINE, HALF);
+    const shoreWestmost = Math.min(...COASTLINE.map((point) => point.x));
+    const distanceToWorld = (x: number, z: number): number =>
+      Math.hypot(Math.max(0, Math.abs(x) - HALF), Math.max(0, Math.abs(z) - HALF));
+    for (let i = COASTLINE.length; i < outline.length; i++) {
+      const a = outline[i]!; const b = outline[(i + 1) % outline.length]!;
+      const steps = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 50));
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps; const x = a.x + (b.x - a.x) * t; const z = a.z + (b.z - a.z) * t;
+        if (x >= shoreWestmost) continue; // inside the shore's own envelope: the bed sheet covers it
+        expect(distanceToWorld(x, z)).toBeGreaterThanOrEqual(CAMERA_FAR_PLANE);
+      }
+    }
+  });
+
+  it('keeps the real shoreline verbatim and only replaces the closure', () => {
+    const outline = farWaterOutline(COASTLINE, HALF);
+    expect(outline.length).toBe(COASTLINE.length + 6);
+    for (let i = 0; i < COASTLINE.length; i++) {
+      expect(outline[i]!.x).toBeCloseTo(COASTLINE[i]!.x, 6);
+      expect(outline[i]!.z).toBeCloseTo(COASTLINE[i]!.z, 6);
+    }
+  });
+
+  it('offsets only the shoreline inland, never the run-outs', () => {
+    const inland = 60;
+    const outline = farWaterOutline(COASTLINE, HALF, WATER_HORIZON_CLEARANCE, WATER_HORIZON_BLEND, inland);
+    expect(outline[0]!.x).toBeCloseTo(COASTLINE[0]!.x + inland, 6);
+    // Run-outs sit exactly on the map edge: any further west would hang water over the empty space
+    // beyond the drawn ground, any further east would show water standing on dry land.
+    for (const point of outline.slice(COASTLINE.length)) {
+      expect(point.x).toBeLessThanOrEqual(-HALF + 1e-6);
+    }
+  });
+
+  it('clamps the run-outs to the map edge even when the shore itself is inland', () => {
+    // Under the wholesale placement the shore's ends sit INSIDE the world square (the water simply
+    // stops where the real reservoir stops), and the far sheet exists only to fill the horizon
+    // beyond the drawn ground. Letting a run-out keep an inland x — which is what it used to do —
+    // stood 1,667 units of horizon water on dry land. The bed no longer needs that crutch: it is
+    // driven by signed distance to the real waterline, so it slopes away under the sheet anyway.
+    const line = [{ x: -100, z: 500 }, { x: -120, z: 0 }, { x: -100, z: -500 }];
+    const outline = farWaterOutline(line, HALF);
+    for (const point of outline.slice(line.length)) {
+      expect(point.x).toBeLessThanOrEqual(-HALF + 1e-6);
+    }
+  });
+
+  it('returns nothing for a degenerate coastline', () => {
+    expect(farWaterOutline([{ x: 0, z: 0 }], HALF)).toEqual([]);
   });
 });

@@ -1,4 +1,6 @@
 import {
+  DAM_CLIP_OVERSHOOT_M,
+  DAM_OVERHANG_M,
   SHORE_BUILDING_MAX_GROWTH,
   SHORE_BUILDING_MIN_UNITS,
   BBOX,
@@ -12,7 +14,6 @@ import {
   DEADEND_JOIN_M,
   DEADEND_PRUNE_M,
   DEADEND_PRUNE_MAJOR_M,
-  DAM_CLOSURE_MARGIN_M,
   DISTRICT_RADIUS_M,
   VAAL_SHORE_MAX_DENSITY,
   EDGE_MARGIN_UNITS,
@@ -41,7 +42,6 @@ import {
   TRACK_WIDTHS,
 } from './config';
 import { buildBorderVeld, closeCoastalLoop, compositeElevation, graftCoastAndCorridor, smoothCurve, type CoastGraftResult } from './coast';
-import { buildDamPolygon } from './dam';
 import type { VaalStrip } from './vaal';
 import type { VaalShoreExtract } from './vaalshore';
 import { resolveDeadEnds } from './deadends';
@@ -676,39 +676,52 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   //   - end vertices west of the world edge, or a cap becomes a visible ruler-straight edge.
   if (coast) {
     const half = worldSize / 2;
-    const north = fit.apply({ x: 0, z: coast.dam.northZ }).z;
-    const south = fit.apply({ x: 0, z: coast.dam.southZ }).z;
-    const cornerLandUnits = 600;
-    if (north < -half + cornerLandUnits || south > half - cornerLandUnits) {
-      throw new Error(
-        `dam band reaches the world edge: z ${north.toFixed(0)}..${south.toFixed(0)} u in a ${worldSize} u world ` +
-          `(needs ${cornerLandUnits} u of dry land at each end so both west corners are land). ` +
-          `Lower DAM_BAND_Z_FRACTION.`,
-      );
-    }
-    const ends = [coast.dam.points[0]!, coast.dam.points[coast.dam.points.length - 1]!];
-    const worstEndX = Math.max(...ends.map((p) => fit.apply(p).x));
-    if (worstEndX > -half) {
-      throw new Error(
-        `dam cap visible in the world square: the shore ends at x ${worstEndX.toFixed(0)} u against a west edge of ` +
-          `${(-half).toFixed(0)} u, so the closing cap is drawn in frame. Raise DAM_END_WEST_M.`,
-      );
-    }
-    // Rebuild the water polygon's closure against the ACTUAL world square (C4). At graft time the
-    // fit is not known yet, so coast.ts closes against an estimate; here the rectangle is exact, so
-    // the "every long straight run is DAM_CLOSURE_MARGIN_M outside the square" guarantee is real
-    // rather than hopeful. features.test.ts re-measures it on the emitted map.
     const nw = fit.invert({ x: -half, z: -half });
     const se = fit.invert({ x: half, z: half });
-    coast.ocean = buildDamPolygon(
-      coast.dam,
-      { minX: Math.min(nw.x, se.x), maxX: Math.max(nw.x, se.x), minZ: Math.min(nw.z, se.z), maxZ: Math.max(nw.z, se.z) },
-      DAM_CLOSURE_MARGIN_M,
-    );
+    const worldRect = { minX: Math.min(nw.x, se.x), maxX: Math.max(nw.x, se.x), minZ: Math.min(nw.z, se.z), maxZ: Math.max(nw.z, se.z) };
+    // Re-clip the placed dam against the EXACT world square. The clip box is the closure: three
+    // walls (west, north, south), each of them outside the square, and no east wall at all. So the
+    // only straight edges the water polygon carries are provably out of frame — that is D2 solved by
+    // construction rather than by a margin constant, and it is asserted right here.
+    const reclipped = coast.dam.clipTo(worldRect);
+    coast.ocean = reclipped.water;
+    coast.damIslands = reclipped.islands;
+    const clipWestU = fit.apply({ x: worldRect.minX - DAM_OVERHANG_M, z: 0 }).x;
+    const clipNorthU = fit.apply({ x: 0, z: worldRect.minZ - DAM_CLIP_OVERSHOOT_M }).z;
+    const clipSouthU = fit.apply({ x: 0, z: worldRect.maxZ + DAM_CLIP_OVERSHOOT_M }).z;
+    if (clipWestU > -half || clipNorthU > -half || clipSouthU < half) {
+      throw new Error(
+        `dam closure inside the world square: clip walls at x ${clipWestU.toFixed(0)}, z ${clipNorthU.toFixed(0)}..` +
+          `${clipSouthU.toFixed(0)} u against a ${worldSize} u square. Raise DAM_OVERHANG_M / DAM_CLIP_OVERSHOOT_M.`,
+      );
+    }
+    // Budget, measured on the polygon that actually ships.
+    let wMinX = Infinity; let wMaxX = -Infinity;
+    for (const p of coast.ocean) { const q = fit.apply(p); if (q.x < wMinX) wMinX = q.x; if (q.x > wMaxX) wMaxX = q.x; }
+    let wetRows = 0; let wetCells = 0; let maxReach = 0; const N = 240;
+    for (let r = 0; r < N; r++) {
+      const z = worldRect.minZ + ((worldRect.maxZ - worldRect.minZ) * (r + 0.5)) / N;
+      const xs: number[] = [];
+      for (let i = 0, j = coast.ocean.length - 1; i < coast.ocean.length; j = i++) {
+        const a2 = coast.ocean[i]!; const b2 = coast.ocean[j]!;
+        if ((a2.z > z) !== (b2.z > z)) xs.push(a2.x + (b2.x - a2.x) * ((z - a2.z) / (b2.z - a2.z)));
+      }
+      xs.sort((p, q) => p - q);
+      let row = 0;
+      for (let i = 0; i + 1 < xs.length; i += 2) {
+        const lo = Math.max(xs[i]!, worldRect.minX); const hi = Math.min(xs[i + 1]!, worldRect.maxX);
+        if (hi > lo) { row += hi - lo; maxReach = Math.max(maxReach, fit.apply({ x: hi, z }).x + half); }
+      }
+      if (row > 0) { wetRows++; wetCells += row; }
+    }
+    const spanX = worldRect.maxX - worldRect.minX;
     log.push(
-      `dam: lobe leaves ${(north + half).toFixed(0)} u of land in the NW corner / ${(half - south).toFixed(0)} u in the SW, ` +
-        `shore ends ${(-half - worstEndX).toFixed(0)} u past the west edge; water polygon closes ` +
-        `${Math.round(DAM_CLOSURE_MARGIN_M * fit.scale)} u outside the square on a curve — no visible cap`,
+      `dam: BUDGET vs the old ocean — water width ${(wMaxX - wMinX).toFixed(0)} u ` +
+        `(${(100 * (wMaxX - wMinX) / worldSize).toFixed(1)}% of the world, old 20.7%), west overhang ` +
+        `${(-half - wMinX).toFixed(0)} u (${(100 * (-half - wMinX) / worldSize).toFixed(1)}%, old 9.4%), ` +
+        `max reach ${maxReach.toFixed(0)} u, wet latitudes ${(100 * wetRows / N).toFixed(0)}%, ` +
+        `in-world water area ${(100 * wetCells / N / spanX).toFixed(1)}% (old 7.9%), ` +
+        `${coast.damIslands.length} island(s)`,
     );
   }
 
@@ -969,6 +982,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
         name: DAM_NAME,
         coastline: coast.coastline.map(toUnits),
         ocean: coast.ocean.map(toUnits),
+        islands: coast.damIslands.map((ring) => ring.map(toUnits)),
         beaches: coast.beaches.map((beach) => ({ name: beach.name, points: beach.points.map(toUnits) })),
         harbour: (() => { const [x, z] = toUnits(coast.harbour); return { x, z }; })(),
         corridor: {

@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { COASTAL_ROAD_NAME, CORRIDOR_LINKS, DAM_LEVEL_M, DAM_REACH_EAST_M, FRONTAGE_ROAD_NAME } from './config';
+import { COASTAL_ROAD_NAME, CORRIDOR_LINKS, DAM_LEVEL_M, FRONTAGE_ROAD_NAME } from './config';
 import { RIDGE_ZERO_Z } from './ridge';
 import type { JoburgMap } from './types';
 
@@ -34,23 +34,22 @@ describe('Vaalpunt Dam shore', () => {
     expect(coast.harbour.x).toBeLessThan(coast.corridor.westX); // the quay is on the coast strip
   });
 
-  it('is a LOBE pushing in from the west, with land in both west corners (D1)', () => {
-    // The owner: "like the lake is pushing in from the left side, but never covers the full left
-    // extent". So the band must END inside the world square in z — the inverse of the old rule,
-    // which required it to run off the top and bottom — while the SHORE at those ends has already
-    // run west past the world edge, so the two closing caps are never in frame.
-    const half = map.stats.targetSize / 2;
-    const shoreZs = coast.coastline.map((point) => point[1]);
-    const northZ = Math.min(...shoreZs); const southZ = Math.max(...shoreZs);
-    expect(northZ).toBeGreaterThan(-half + 700); // dry land in the top-left corner
-    expect(southZ).toBeLessThan(half - 700); // dry land in the bottom-left corner
-    // Both corners are outside the water polygon, tested where the map actually is.
-    for (const cornerZ of [-half + 60, half - 60]) {
-      expect(pointInPolygon(coast.ocean, -half + 60, cornerZ)).toBe(false);
-    }
-    // The shore leaves the frame at both ends rather than stopping in it.
-    const ends = [coast.coastline[0]!, coast.coastline[coast.coastline.length - 1]!];
-    for (const end of ends) expect(end[0]).toBeLessThan(-half);
+  it('sits inside the OLD OCEAN\'s measured budget, with no closing edge in frame', () => {
+    // The old Atlantic seaboard nobody complained about, measured: 20.7% of the world wide, 9.4%
+    // of it hanging west of the square. Those are the numbers the wholesale placement is graded
+    // against, not the shape of the band — a reservoir's edge is dendritic and the shape is the
+    // point. The rejected build ran 56.9% wide with a 43.0% overhang: the "speaker cone".
+    const size = map.stats.targetSize; const half = size / 2;
+    const xs = coast.ocean.map((p) => p[0]);
+    const width = Math.max(...xs) - Math.min(...xs);
+    const overhang = -half - Math.min(...xs);
+    expect(width / size).toBeLessThan(0.26);
+    expect(overhang / size).toBeLessThan(0.095);
+    expect(overhang).toBeGreaterThan(180); // the polygon must still leave the square, or its edge shows
+
+    // D2 is asserted structurally by the "no ruler-straight run" test below: the closure is a clip
+    // box whose three walls all lie outside the square, so a long straight run in frame is
+    // impossible unless the construction breaks.
   });
 
   it('shows no ruler-straight run anywhere the player can see it', () => {
@@ -98,67 +97,79 @@ describe('Vaalpunt Dam shore', () => {
       }
       return best;
     };
-    const visible = 3000 / map.stats.metresPerUnit; // 3 km: far past anything the fog leaves legible
 
-    // THE CLOSURE — the synthetic part. Nothing long, and nothing anywhere near the square.
-    const closure = [...coast.ocean.slice(coast.coastline.length - 1), coast.ocean[0]!];
-    let closestClosure = Infinity; let worstNearClosure = 0;
-    for (const [a, b] of runsOf(closure)) {
+    // THE CLOSURE — the synthetic part. It is now the clip box: three walls, all outside the
+    // square. Long straight runs are expected there and are harmless BY CONSTRUCTION, so what this
+    // asserts is the construction: every long straight run in the polygon lies outside the square.
+    let worstInFrame = 0;
+    for (const [a, b] of runsOf([...coast.ocean, coast.ocean[0]!])) {
       const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
       if (len < 120) continue;
-      const d = approach(a, b);
-      closestClosure = Math.min(closestClosure, d);
-      if (d <= visible) worstNearClosure = Math.max(worstNearClosure, len);
+      if (approach(a, b) <= 0) worstInFrame = Math.max(worstInFrame, len);
     }
-    expect(closestClosure).toBeGreaterThan(1500); // the defect stood 321 units off
-    expect(worstNearClosure).toBeLessThan(500); // the defect ran 2,029 units
+    expect(worstInFrame).toBeLessThan(500); // the defect ran 2,029 units
 
-    // THE SHORELINE — real coast, judged on its own. A drowned valley wall is straight; a ruler is
-    // not. 900 units is 1.2 km, and the current worst is a 752-unit stretch 9.3 degrees off axis.
+    // THE SHORELINE — real coast, judged on its own, and judged on the POLYGON rather than on the
+    // per-z envelope (the envelope jumps 1.1 km across a bay mouth by design; the water does not).
+    // Only segments whose whole length is inside the square count: a drowned-valley wall is
+    // straight, a ruler is not, and 900 units is 1.2 km of it.
     let worstShore = 0;
-    for (const [a, b] of runsOf(coast.coastline)) worstShore = Math.max(worstShore, Math.hypot(b[0] - a[0], b[1] - a[1]));
+    for (const [a, b] of runsOf([...coast.ocean, coast.ocean[0]!])) {
+      if (approach(a, b) > 0) continue;
+      worstShore = Math.max(worstShore, Math.hypot(b[0] - a[0], b[1] - a[1]));
+    }
     expect(worstShore).toBeLessThan(900);
   });
 
-  it('coastline forms a continuous south-to-north boundary along the west edge', () => {
-    // Scale-invariant: the shoreline resample step is DAM_SHORE_STEP_M, so cap the gap in metres
-    // (keeps passing across TARGET_SIZE tweaks instead of a hard-coded unit threshold).
-    let previous = coast.coastline[0]!;
-    for (const point of coast.coastline.slice(1)) {
-      const gapM = Math.hypot(point[0] - previous[0], point[1] - previous[1]) * map.stats.metresPerUnit;
-      expect(gapM).toBeLessThan(620);
-      previous = point;
-    }
-    // Monotone in z: every runtime consumer models the shore as x = f(z) (dam.ts rule 1).
-    for (let i = 1; i < coast.coastline.length; i++) {
-      expect(coast.coastline[i]![1]).toBeLessThan(coast.coastline[i - 1]![1]);
-    }
-    const zs = coast.coastline.map((point) => point[1]);
-    const span = Math.max(...zs) - Math.min(...zs);
-    // A LOBE, NOT A BAND — but measured on the thing the owner actually reacted to, which is how
-    // much of the west edge is WATER, not how tall the shore polyline happens to be. Under the
-    // uniform fit the shore dips west of the world edge INSIDE the band as well as at its ends, so
-    // a 72%-tall band leaves 59% of the edge wet and still wraps land over both corners; the old
-    // band-height proxy would have failed a lobe that is in fact drier than the one it guarded.
-    expect(span).toBeGreaterThan(map.stats.targetSize * 0.4);
-    expect(span).toBeLessThan(map.stats.targetSize * 0.78);
-    const half = map.stats.targetSize / 2;
-    const byZ = [...coast.coastline].sort((a, b) => a[1] - b[1]);
-    const shoreXAt = (z: number): number => {
-      if (z <= byZ[0]![1] || z >= byZ[byZ.length - 1]![1]) return -Infinity;
-      let lo = 0; let hi = byZ.length - 1;
-      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (byZ[mid]![1] <= z) lo = mid; else hi = mid; }
-      const a = byZ[lo]!; const b = byZ[hi]!;
-      return b[1] === a[1] ? a[0] : a[0] + (b[0] - a[0]) * ((z - a[1]) / (b[1] - a[1]));
+  it('wets most of the west edge, and only the west edge', () => {
+    const size = map.stats.targetSize; const half = size / 2;
+    const inRing = (ring: Array<[number, number]>, x: number, z: number): boolean => {
+      let c = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = ring[i]!; const b = ring[j]!;
+        if ((a[1] > z) !== (b[1] > z) && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0]) c = !c;
+      }
+      return c;
     };
-    let wet = 0;
-    for (let i = 0; i <= 400; i++) if (shoreXAt(-half + (map.stats.targetSize * i) / 400) > -half) wet++;
-    expect(wet / 401).toBeGreaterThan(0.30); // still a dam, not a pond
-    expect(wet / 401).toBeLessThan(0.66);    // still a lobe: the owner rejected the 64%+ sea
-    // The real dam's northern arm cuts EAST into the corridor by design, bounded by the tanh
-    // soft-clip (DAM_REACH_EAST_M), so the tolerance is that budget in units — not a fixed wobble.
-    const reachUnits = DAM_REACH_EAST_M / map.stats.metresPerUnit;
-    expect(Math.max(...coast.coastline.map((point) => point[0]))).toBeLessThan(coast.corridor.westX + reachUnits + 60);
+    const islands = coast.islands ?? [];
+    const wet = (x: number, z: number): boolean => inRing(coast.ocean, x, z) && !islands.some((r) => inRing(r, x, z));
+    let wetRows = 0; let maxReach = 0; let wetCells = 0;
+    const N = 200;
+    for (let r = 0; r < N; r++) {
+      const z = -half + (size * (r + 0.5)) / N;
+      let row = false;
+      for (let c = 0; c < N; c++) {
+        const x = -half + (size * (c + 0.5)) / N;
+        if (!wet(x, z)) continue;
+        row = true; wetCells++;
+        maxReach = Math.max(maxReach, x + half);
+      }
+      if (row) wetRows++;
+    }
+    expect(wetRows / N).toBeGreaterThan(0.55);           // it is a dam down the west edge, not a pond
+    expect(maxReach).toBeLessThan(size * 0.22);          // no arm may eat the farm corridor
+    expect(wetCells / (N * N)).toBeGreaterThan(0.02);    // the old ocean wet 7.9% of the square
+    expect(wetCells / (N * N)).toBeLessThan(0.12);
+    // ...and nothing east of the corridor is wet at all.
+    for (let r = 0; r < N; r++) {
+      const z = -half + (size * (r + 0.5)) / N;
+      expect(wet(0, z)).toBe(false);
+    }
+  });
+
+  it('brings Grooteiland and the other real islands in as land in the water', () => {
+    const half = map.stats.targetSize / 2;
+    const islands = coast.islands ?? [];
+    expect(islands.length).toBeGreaterThanOrEqual(2);
+    const sizes = islands.map((ring) => {
+      const xs = ring.map((p) => p[0]); const zs = ring.map((p) => p[1]);
+      return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...zs) - Math.min(...zs),
+        cx: (Math.max(...xs) + Math.min(...xs)) / 2, cz: (Math.max(...zs) + Math.min(...zs)) / 2 };
+    }).sort((a, b) => b.w * b.h - a.w * a.h);
+    const groot = sizes[0]!;
+    expect(Math.max(groot.w, groot.h)).toBeGreaterThan(300); // reads as an island at map zoom
+    expect(Math.abs(groot.cx)).toBeLessThan(half);           // and it is IN the world square
+    expect(Math.abs(groot.cz)).toBeLessThan(half);
   });
 
   it('puts both resort beaches on LAND at the waterline', () => {

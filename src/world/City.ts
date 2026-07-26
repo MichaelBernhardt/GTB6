@@ -32,7 +32,8 @@ import {
   type MapPolygon,
   type MapPt,
 } from './mapData';
-import { beachBands, OCEAN_Y, shoreColourAt } from './coast';
+import { damSignedDistance } from './damField';
+import { beachBands, farWaterOutline, OCEAN_Y, shoreColourAt, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
 import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
@@ -185,10 +186,23 @@ export const SEA_FLOOR_Y = -30;
  * below is split so that width is spent above the water rather than under it.
  */
 export const BEACH_INLAND = 132;
+/** Run (units) the bed uses to fall from the waterline to SEA_FLOOR_Y at latitudes where the shoreline
+ *  is already west of the map edge — there is no in-map run left to spend, and a wall reads as a cliff. */
+export const BED_OFFMAP_RUN = 620;
+/** How far past the waterline the drawn bed sheet carries where the shore sits west of the map edge,
+ *  so the strand and its lip are drawn rather than dropping into empty space. */
+export const BED_OFFMAP_OVERHANG = 900;
+/** How far past the world square (in z) the bed sheet runs, so standing in a dry corner and looking
+ *  along the shore does not show the sheet's own end. */
+export const BED_Z_OVERRUN = 600;
 /** Where the terrain crosses the water surface, relative to the mapped shoreline (units, negative
  *  = seaward). Zero would put the rendered waterline exactly on the polyline; a few units seaward
  *  keeps the ocean's lapping edge over sand rather than over grass. */
 export const WATERLINE_OFFSET = -6;
+/** How far inland of the strand crest the coastal profile blends into the city's own relief
+ *  (units). Measured from the WATERLINE, not from a fixed x, so the blend band follows the coast
+ *  into every inlet and around every headland instead of cutting a straight seam across them. */
+export const COAST_BLEND = 520;
 /** How far the ocean surface reaches past the shoreline into the beach, so waves lap up and down the slope. */
 export const BEACH_WATER_INLAND = 60;
 
@@ -202,34 +216,42 @@ function landRelief(x: number, z: number): number {
   return regional * TERRAIN_REGIONAL_SCALE + local * TERRAIN_LOCAL_SCALE + ridgeMetresAt(x, z) * TERRAIN_RIDGE_SCALE;
 }
 
-function analyticTerrainHeightAt(x: number, z: number): number {
+/**
+ * The smooth terrain profile, before the drawn mesh's grid is captured. Exported so the coast tests
+ * can ask whether a given off-map point is above or below the waterline without a renderer.
+ *
+ * THE SEAM. The coastal profile used to be a function of x alone (distance east of a per-latitude
+ * shoreline) and the inland blend ran from the sand crest to a fixed corridor line, so the imported
+ * shore and the city's own relief met on a straight north-south seam. It is now a function of the
+ * SIGNED DISTANCE TO THE WATERLINE, and the blend to full relief happens over a fixed band measured
+ * from that same waterline. The consequences are all the ones we wanted:
+ *   - a ridge peninsula between two drowned valleys is land, because it is outside the polygon;
+ *   - Grooteiland is land, because an island is a hole in the polygon;
+ *   - the transition band follows the coast rather than cutting across it, so there is no seam;
+ *   - the bed slopes away from the waterline in every direction, so no shore is ever a wall.
+ */
+export function analyticTerrainHeightAt(x: number, z: number): number {
   if (!HAS_ELEVATION) return 0;
   const eastX = COAST_CORRIDOR?.eastX;
-  // Fast path — well inland of any coast: full relief, no per-z coastline lookup.
+  // Fast path — well inland of any coast: full relief, no distance-field lookup.
   if (eastX === undefined || x >= eastX) return landRelief(x, z);
-  const shoreX = coastlineXAt(z);
-  const beachTopX = shoreX + BEACH_INLAND; // landward crest of the drawdown strand
-  // Seaward of the crest the profile is TWO ramps, not one.
-  //   1. the STRAND, crest -> waterline: gentle, and it owns the whole BEACH_INLAND width, so the
-  //      bathtub ring and the drawdown grit each get tens of units to read across instead of a
-  //      couple. This is the band a player walks on.
-  //   2. the BED, waterline -> SEA_FLOOR_Y at the map edge: the rest of the drop, steeper.
-  // Both are sloped (never flat), so the waving surface still cannot z-fight them, and the join is
-  // exactly at the water level, which is where the two colour palettes meet anyway.
-  if (x < beachTopX) {
-    const waterX = shoreX + WATERLINE_OFFSET;
-    if (x >= waterX) {
-      const t = beachTopX > waterX ? (beachTopX - x) / (beachTopX - waterX) : 1;
-      return BEACH_TOP_Y + (OCEAN_Y - BEACH_TOP_Y) * t;
-    }
-    const westEdge = -WORLD_SIZE / 2;
-    const t = waterX > westEdge ? Math.min(1, (waterX - x) / (waterX - westEdge)) : 1;
+  // Distance to the waterline, positive on land. WATERLINE_OFFSET keeps the rendered lapping edge
+  // a few units over sand rather than over grass, exactly as before.
+  const d = damSignedDistance(x, z) + WATERLINE_OFFSET;
+  if (d <= 0) {
+    // THE BED. Falls away from the waterline to SEA_FLOOR_Y over a fixed run, in every direction —
+    // around an island, into an inlet, out past the map edge. No per-latitude special case left.
+    const t = Math.min(1, -d / BED_OFFMAP_RUN);
     return OCEAN_Y + (SEA_FLOOR_Y - OCEAN_Y) * t;
   }
-  // Coastal land: rise from the sand crest (+BEACH_TOP_Y) up to full inland relief at the city edge. The
-  // relief contribution is floored at 0 so the mean-zero relief's negative lobes can't drag the immediate
-  // hinterland below the waterline and flood the beach; genuine relief (hills) still comes through.
-  const f = (x - beachTopX) / (eastX - beachTopX);
+  if (d < BEACH_INLAND) {
+    // THE STRAND. The whole BEACH_INLAND width is spent above the water, so the drawdown ring reads.
+    const t = 1 - d / BEACH_INLAND;
+    return BEACH_TOP_Y + (OCEAN_Y - BEACH_TOP_Y) * t;
+  }
+  // THE BLEND. Crest -> full inland relief over COAST_BLEND units of distance from the waterline.
+  // Floored at 0 so the mean-zero relief's negative lobes cannot drag the hinterland under water.
+  const f = Math.min(1, (d - BEACH_INLAND) / COAST_BLEND);
   return BEACH_TOP_Y * (1 - f) + Math.max(0, landRelief(x, z)) * f;
 }
 
@@ -1773,16 +1795,25 @@ export class City {
    *  the ocean surface itself is a live water site (see buildWaterBodies' premium dams). */
   private buildCoast(): void {
     if (!OCEAN_POLYGON) return;
-    const ocean = OCEAN_POLYGON;
 
     // The ocean surface: one huge premium water site. Its shape is shoved BEACH_WATER_INLAND past the
     // shoreline so the water laps up INTO the sloping sand — as the waves rise and fall, the waterline runs
     // in and out over the slope like a tide. The sandy sea floor is the terrain itself (see buildBeach and
     // analyticTerrainHeightAt's continuous slope), so there's no flat seabed plane to z-fight the swell.
+    //
+    // The RENDERED outline is not the mapgen polygon: mapgen closes the dam ~4.2 km past the west edge,
+    // which is inside the fog AND inside the camera's far plane, so the closure showed from the shore as
+    // a dead-level water/sky line. farWaterOutline keeps the real shoreline and carries the far side out
+    // past the far plane instead (see coast.ts). OCEAN_POLYGON itself is untouched — areas, stats and the
+    // minimap still read the surveyed polygon.
+    // width/depth/centre stay the SURVEYED dam: they drive the planar mirror's proximity throttle
+    // (Water.reflectorShouldRender), and a bounding rect stretched to the horizon would hold the
+    // mirror at full rate from every street in the city.
+    const ocean = OCEAN_POLYGON;
     this.waterSites.push({
       kind: 'ocean', x: ocean.cx + BEACH_WATER_INLAND, y: OCEAN_Y, z: ocean.cz,
       width: ocean.maxX - ocean.minX, depth: ocean.maxZ - ocean.minZ,
-      shape: ocean.points.map((point) => ({ x: point.x + BEACH_WATER_INLAND, z: point.z })),
+      shape: farWaterOutline(COASTLINE, WORLD_SIZE / 2, WATER_HORIZON_CLEARANCE, WATER_HORIZON_BLEND, BEACH_WATER_INLAND),
     });
 
     this.buildBeach();
@@ -1800,7 +1831,11 @@ export class City {
     const bands = beachBands(BEACH_POLYGONS);
     const westEdge = -WORLD_SIZE / 2;
     const zs = COASTLINE.map((point) => point.z);
-    const zMin = Math.min(...zs); const zMax = Math.max(...zs);
+    // Cover the whole west edge, not just the shoreline's own z-span: past its ends the terrain still
+    // has a coast profile (coastlineXAt clamps), and leaving those latitudes undrawn left a strip of
+    // empty space between the ground mesh and the water when you stood in a dry corner.
+    const zMin = Math.min(Math.min(...zs), westEdge - BED_Z_OVERRUN);
+    const zMax = Math.max(Math.max(...zs), -westEdge + BED_Z_OVERRUN);
     const CELL = 45; const COLS = 48;
     const rows = Math.max(1, Math.ceil((zMax - zMin) / CELL));
     const dzRow = (zMax - zMin) / rows;
@@ -1808,9 +1843,17 @@ export class City {
     for (let r = 0; r <= rows; r++) {
       const z = zMin + r * dzRow;
       const crest = coastlineXAt(z) + BEACH_INLAND + 3; // a touch past the crest so the sand tucks under the grass
+      // Landward limit: the crest, or the map edge where the crest is already west of it (so the sheet
+      // always meets the ground mesh). Seaward limit: the map edge, or past the crest where the shore
+      // itself is off-map (so the strand and the bed's lip are drawn instead of ending in mid-air).
+      const inner = Math.max(crest, westEdge);
+      const outer = Math.min(westEdge, crest - BED_OFFMAP_OVERHANG);
       for (let c = 0; c <= COLS; c++) {
-        const x = westEdge + (c / COLS) * (crest - westEdge); // columns fan from the map edge to the meandering crest
-        const y = terrainHeightAt(x, z);
+        const x = outer + (c / COLS) * (inner - outer); // columns fan from the seaward limit to the meandering crest
+        // The captured grid clamps at the world square, which would flatten everything drawn past it —
+        // sample the analytic profile out there instead. Both agree exactly on the square's own edge.
+        const inGrid = x >= westEdge && x <= -westEdge && z >= westEdge && z <= -westEdge;
+        const y = inGrid ? terrainHeightAt(x, z) : analyticTerrainHeightAt(x, z);
         positions.push(x, y + 0.03, z); uvs.push(x / 9, z / 9);
         const [cr, cg, cb] = shoreColourAt(y, z, OCEAN_Y, bands);
         colors.push(cr, cg, cb);

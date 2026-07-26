@@ -214,8 +214,8 @@ function near(district: string, fallback: MapPt): MapPt {
 }
 
 /** Storefront site: pad near the kerb, building behind it, door facing the road. */
-function shopSite(roadName: string, near: MapPt, buildingClearance: number, padClearance: number, buildingRadius: number, minEdge: number): ShopSite {
-  const spot = bestKerbSpot({ name: roadName, near, clearance: buildingClearance, ownRadius: buildingRadius, minEdge });
+function shopSite(roadName: string, near: MapPt, buildingClearance: number, padClearance: number, buildingRadius: number, minEdge: number, searchRadius?: number): ShopSite {
+  const spot = bestKerbSpot({ name: roadName, near, clearance: buildingClearance, ownRadius: buildingRadius, minEdge, searchRadius });
   const toRoadX = spot.roadX - spot.x; const toRoadZ = spot.roadZ - spot.z;
   const toRoadLength = Math.hypot(toRoadX, toRoadZ) || 1;
   const pad = {
@@ -298,7 +298,10 @@ export const BOTTLE_STORES: BottleStore[] = [
   // fallbacks are the districts' own measured centres on the committed map: the previous literals
   // were left over from the synthetic sea shoreline and put Groenpunt 4.4 km away on the WRONG side
   // of the map, which would have been invisible until the day a re-crop dropped the district.
-  { name: 'Vaalpunt Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Dam Wal Road', near('Vaalpunt', { x: -3209, z: 40 }), 8, 3.6, 7.5, 3) },
+  // Dam Wal Road is a 14 km hull along the whole dam shore and the Vaalpunt district centre now
+  // sits on the widest part of the reach, where the road's own nodes are 600 u apart and every kerb
+  // spot within the default 200 u reach lands in a junction. A wider search finds real kerb.
+  { name: 'Vaalpunt Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Dam Wal Road', near('Vaalpunt', { x: -3209, z: 40 }), 8, 3.6, 7.5, 3, 900) },
   { name: 'Groenpunt Grog', sign: 'GROG', site: shopSite('Madiba Meander', near('Groenpunt', { x: -4234, z: 2042 }), 8, 3.6, 7.5, 3) },
 ];
 

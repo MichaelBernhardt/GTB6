@@ -136,8 +136,12 @@ export interface MapCoast {
   name?: string;
   /** South-to-north shoreline polyline; everything west of it is water. */
   coastline: [number, number][];
-  /** Closed ocean polygon (coastline closed off to the west). */
+  /** Closed water polygon: the REAL Vaal outline under the placement, clipped to a box that lies
+   *  wholly outside the world square. Its boundary inside the square is undeformed real shoreline. */
   ocean: [number, number][];
+  /** The real inner rings that survived the clip — Grooteiland first. Holes in `ocean`: the runtime
+   *  terrain lifts them out of the water, so they are land you can land a boat on. */
+  islands: [number, number][][];
   beaches: Array<{ name: string; points: [number, number][] }>;
   /** V&A-style working waterfront anchor on the coastal road. */
   harbour: { x: number; z: number };

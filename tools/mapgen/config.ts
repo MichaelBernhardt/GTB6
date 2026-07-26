@@ -247,7 +247,7 @@ export const VAAL_SHORE_START = { lat: -26.923059, lon: 28.100699 } as const;
 export const VAAL_SHORE_MID = { lat: -26.836396, lon: 28.198531 } as const;
 export const VAAL_SHORE_END = { lat: -26.869243, lon: 28.286706 } as const;
 /** Island rings smaller than this are sub-pixel at the fitted scale — Grooteiland has 281. */
-export const VAAL_MIN_ISLAND_POINTS = 60;
+export const VAAL_MIN_ISLAND_POINTS = 14;
 /**
  * Rural corridor width between the Joburg west edge and the coastal strip (metres).
  * Metre-denominated, so it scales with the map: at the 36000 u footprint (~0.49 m/u) the 2700 m
@@ -316,112 +316,57 @@ export const DAM_SHORE_TOLERANCE_M = 8;
  *  a uniform pitch. */
 export const DAM_SHORE_MAX_SEG_M = 110;
 /**
- * THE UNIFORM FIT. Everything below replaces the unfold-drift + de-tilt + tanh soft-clip that
- * shipped before it. Those three were, together, a ~5:1 ANISOTROPIC compression of the real dam,
- * and the measurement that condemned them is a segment-orientation histogram of the emitted shore:
- * 67.7% of its length ran within 15 degrees of east-west and 1.2% ran north-south, against a real
- * source that is essentially flat across all six 15-degree buckets. A squashed coastline does not
- * read as a coastline at any vertex density — it reads as a staircase of horizontal runs joined by
- * near-vertical hairpins, which is exactly what the owner saw.
+ * THE PLACEMENT. One uniform scale, one rotation, one translation, then a clip — nothing else.
  *
- * The fit is now a SIMILARITY: rotate by DAM_ROTATION_DEG, scale by DAM_UNIFORM_SCALE on BOTH axes,
- * translate. A similarity cannot change any segment's angle, so the emitted shore's orientation
- * histogram IS the source stretch's histogram. The only two places the build can still bend it are
- * the monotone fold (below, angle-preserving by construction) and the two end run-outs (which are
- * slope-limited, so they cost only as much as their own drop).
- */
-/**
- * ROTATION of the real strip before fitting (degrees, in the game-oriented Vaal frame).
+ * Four passes deformed the source to make it fit (an unfold drift, a de-tilt, a tanh soft-clip
+ * across the shore, a resample onto an even 35 m grid) and every one of them read as a staircase or
+ * a fan. The owner's diagnosis was the method: copy the coastline wholesale and solve the MERGE.
+ * These five constants are the whole placement, and they came out of an exhaustive search over
+ * (scale x rotation x translation) measured against the old ocean's budget — see
+ * tools/mapgen/search-placement.mjs, which is committed and re-runnable offline.
  *
- * This is the one free parameter that buys across-shore room without squashing anything. The Vaal's
- * north shore is a "T": Deneysville -> Vaal Marina runs 13 km along what becomes the map's z axis,
- * and the northern arm sticks 8 km out along its x axis — where this map's whole west band is
- * 3.1 km deep. At 0 degrees the arm alone is nearly three times the budget, so no uniform scale
- * that keeps Deneysville legible can fit it. Rotating the strip re-labels which real direction the
- * map's narrow axis points down, so the window can cut a stretch whose reach is inside the budget.
- * 38 degrees came out of a sweep over rotation x scale x window, keeping the placement that lands
- * the most real OSM infrastructure at a passing histogram.
+ * The stretch selected runs ~37 km of real Vaal shoreline: the 1938 dam wall and Deneysville at the
+ * top, the channel behind Grooteiland and Misty Bay / Marina Latata in the upper third, Vaal Marina
+ * below them, then the drowned Wilge-side valleys down to the southern arms.
  */
-export const DAM_ROTATION_DEG = 38;
+/** Rotation of the whole real dam before placement, degrees, in the projected frame (x east). */
+export const DAM_ROTATION_DEG = 295;
+/** THE SINGLE SCALE FACTOR, real metres -> projected map metres. Both axes. 1:2.78. */
+export const DAM_SCALE = 0.36;
+/** The real point that lands on the MIDPOINT OF THE WORLD SQUARE'S WEST EDGE. Everything else
+ *  follows rigidly from it: this is the entire translation. It sits in open water in the channel
+ *  east of Grooteiland, which is what puts the island inside the frame. */
+export const DAM_ANCHOR = { lat: -26.920403, lon: 28.259525 } as const;
 /**
- * THE SINGLE SCALE FACTOR, real Vaal metres -> projected map metres. Both axes, no exceptions.
+ * How far WEST of the world square the water is kept before the clip cuts it (m).
  *
- * Not a free choice: the across-shore budget is fixed (the world's west edge to the farm corridor
- * is ~3.1 km) and the selected stretch swings ~7 km across-shore, so the scale is that ratio.
- * Wanting a bigger scale means picking a stretch with smaller arms — never squashing the arms.
+ * The old ocean overhung its square by 9.4% of the map width (920 units), and the first wholesale
+ * build matched that exactly — and looked worse for it, because an OCEAN's overhang is solid blue
+ * while a DAM's is real drowned valley: blue with black off-map ridges poking through it, which
+ * reads as holes in the water. Halving it halves that mess, brings the total water width from
+ * 2,423 units to inside the 2,100 budget, and costs nothing inside the frame.
  */
-export const DAM_UNIFORM_SCALE = 0.52;
+export const DAM_OVERHANG_M = 480;
+/** The same, north and south (m). Bigger, because a horizon line looked along the shore is far more
+ *  visible than one looked at across it — this is 1,400 units, the old ocean's own overshoot. */
+export const DAM_CLIP_OVERSHOOT_M = 1900;
+/** An island smaller than this (projected m2, after scaling) is sub-pixel and is dropped rather
+ *  than shipped as a speck. Grooteiland comes out around 900,000. */
+export const DAM_ISLAND_MIN_AREA_M2 = 5_000;
 /**
- * The real point that lands at the CENTRE of the water band. The window is expressed as an anchor
- * plus a height rather than as an index or a raw offset, so re-simplifying the source or nudging
- * the scale slides the window smoothly instead of jumping it elsewhere on the dam. This one sits
- * on the shore below Deneysville, so the band runs from the Refengkgotso side down past the 1938
- * dam wall and into the mouth of the northern arm.
+ * How far WEST of the farm corridor's west edge the world square's west edge is expected to fall
+ * (m). The fit is measured from the road bbox and is not known when the dam is placed, so the
+ * placement uses this estimate and process.ts re-clips against the exact square. It is a single
+ * measured number, checked every build by the budget line in the log.
  */
-export const DAM_STRIP_ANCHOR = { lat: -26.877953, lon: 28.134482 } as const;
+export const DAM_WEST_BAND_M = 1980;
+/** The same for z: the world square's half-height as a fraction of the city block's. */
+export const DAM_WORLD_HALFZ_FRACTION = 1.085;
 /**
- * Monotone-fold floor: the least forward z a segment may advance, per metre of shoreline walked.
- *
- * The shore must be single-valued in z (constraint 1 above). The previous fit bought that with a
- * SHEAR — every backward-running stretch was dragged forward in proportion to its arc length,
- * which lays it down at atan(alpha) to the east-west axis and is why a third of the emitted length
- * piled into the 0-15 degree bucket. The fold used now REFLECTS instead: a stretch running
- * backwards advances by |dz|, so it keeps its length AND its angle to both axes exactly, and only
- * the global folding of the coast changes. The histogram is preserved by construction. This floor
- * exists only for segments running exactly east-west (|dz| = 0), which would otherwise stall the z
- * advance and emit two vertices at one z; at 0.05 they are laid at 2.9 degrees, inside the bucket
- * they were already in.
- */
-export const DAM_UNFOLD_ALPHA = 0.05;
-/**
- * How far east of the mean shoreline the deepest arm reaches (m). NOT a clamp — nothing is clipped
- * or compressed any more — purely the across-shore PLACEMENT of the uniformly-scaled strip:
- * DAM_SHORE_QUANTILE of the window's across-shore spread is put here and everything else follows
- * rigidly. Sized so the arms stop short of the farm corridor's west edge.
- */
-export const DAM_REACH_EAST_M = 2000;
-/**
- * Across-shore placement quantile: a quantile rather than the maximum, so one freak vertex cannot
- * drag the whole strip west and leave the map with a puddle.
- */
-export const DAM_SHORE_QUANTILE = 0.998;
-/**
- * THE LOBE'S ENDS, SLOPE-LIMITED. Each end of the band is pulled west until its last vertex sits
- * DAM_END_WEST_M west of the world's west edge, so the water polygon closes off-map and both west
- * corners of the world are dry land. The ramp is the ONLY non-similarity left in the fit, so it is
- * costed: its length is its own drop divided by this gradient (metres of x per metre of z) rather
- * than a fixed span. A window whose ends already sit west pays almost nothing, and the ramp's own
- * segments land at one known angle (~39 degrees) instead of shearing the whole band — the fixed
- * 700 m span it replaces dropped 3.9 km over 700 m of z, i.e. 8 km of near-horizontal shoreline,
- * about a third of the whole emitted length.
- */
-export const DAM_END_RUNOUT_GRADIENT = 1.4;
-/**
- * HOW FAR OUTSIDE THE WORLD SQUARE THE WATER POLYGON CLOSES (m). C4: the old closure ran two
- * dead-straight horizontal caps whose nearest ends were 425 m west of the square, in plain view
- * with void above them. The closure is now a continuously-curving sweep whose long straight runs
- * all sit at least this far outside the square on every side. 3,600 m is 2,600+ world units: at a
- * camera height of ~10 u a straight edge that far away subtends 0.2 degrees of depression — it is
- * ON the horizon, not below it — and FogExp2 at 0.00025 has taken ~45% of it as well.
- */
-export const DAM_CLOSURE_MARGIN_M = 3600;
-/** Radius of the hook that turns the water polygon 90 degrees away from the coast at each shore
- *  end (m). Small, so the closure stops running parallel to the shore just outside the square. */
-export const HOOK_RADIUS_M = 700;
-/**
- * How far west of the MEAN SHORELINE the run-out ends put the shore (m). The world's west edge sits
- * about 1.5 km west of the mean, so this has to clear that plus a margin; process.ts asserts the
- * emitted ends really are outside the square after the fit rather than trusting the constant.
- */
-export const DAM_END_WEST_M = 3200;
-/**
- * Height of the water's z-band, as a fraction of the city block's north-south span. Outside it the
- * west strip is dry veld to the world edge, which is what makes the water a lobe rather than a sea.
- * The band is centred on the city block, which is smaller than the world square, so 0.88 of the
- * block is ~72% of the square. Under the uniform fit the shore also dips west of the world edge
- * INSIDE the band, so the wet part of the west edge (59%) is well short of the band's own height
- * and ~2,200 / 1,800 units of dry land wrap over each end. process.ts fails the build if the
- * corners close.
+ * Height of the water's z-band as a fraction of the city block — VESTIGIAL. The band is no longer
+ * chosen: it is wherever the real water happens to be after the placement. Kept only because the
+ * shore road and the border veld still ask "how tall is the dam" and the answer is now measured
+ * from the clipped polygon.
  */
 export const DAM_BAND_Z_FRACTION = 0.88;
 /**
@@ -489,6 +434,11 @@ export const CORRIDOR_DISTRICTS = [
 ] as const;
 /** Water surface elevation (m ASL). The Highveld sits at ~1700 m; a reservoir is not at 0. */
 export const DAM_LEVEL_M = 1480;
+/** How far the land stands above full supply level once it is clear of the waterline (m). The real
+ *  Vaal's ridges rise 20-40 m out of the reservoir; anything less and a peninsula reads as a raft. */
+export const DAM_SHORE_LIFT_M = 26;
+/** The run over which that lift is reached (m) — a beach at the shore, a ridge in the middle. */
+export const DAM_SHORE_LIFT_RUN_M = 420;
 /**
  * GROOTEILAND — way 6139539, the ~3 km island the annual Round the Island race circles, and the
  * owner asked for it by name. It is a real inner ring of the water relation, so it arrives with
@@ -528,6 +478,16 @@ export const VAAL_SHORE_BAND_INSET = 0.055;
  * shore and still stops ~100 m short of the world's west edge, so nothing can be emitted off-map.
  */
 export const VAAL_SHORE_WEST_REACH_M = 1150;
+/**
+ * How far EAST of the world square's west edge the grafted shore streets must stop (m).
+ *
+ * Not cosmetic: the map's fit is measured from the ROAD bounding box, so a street grafted further
+ * west widens the bbox, and a wider bbox means more metres per unit — the whole city shrinks and
+ * the dam band grows to fill the gap. Letting the graft run to the water's edge cost 6% of the
+ * scale in one build (1.36 -> 1.443 m/unit) and pushed the CBD visibly east. This bound keeps the
+ * bbox exactly where the pre-graft build had it, so the graft cannot move the fit.
+ */
+export const VAAL_SHORE_WEST_INSET_M = 800;
 /** How far inland a waterfront POI / building / place node is nudged when the mapped shore lands
  *  east of it (m). The shore is a de-tilted, gain-scaled fit, so a real jetty node misses it by
  *  tens of metres; dropping those loses both yacht clubs, the aquatic club and NSRI Station 22. */
@@ -608,7 +568,7 @@ export const VAAL_SHORE_CHAIN_TURN_DEG = 40;
  * real shoreline from where the map's Deneysville stands.
  */
 export const MISTY_BAY_NAME = 'Misty Bay';
-export const MISTY_BAY_LATLON = { lat: -26.8963, lon: 28.1156 } as const;
+export const MISTY_BAY_LATLON = { lat: -26.888104, lon: 28.192121 } as const;
 /**
  * Where down the CITY block's z span the works sits (0 = north edge, 1 = south). MUST be inside
  * the water band (roughly 0.08..0.92 at DAM_BAND_Z_FRACTION 0.85) — buildDamShore throws otherwise,

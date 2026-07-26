@@ -47,14 +47,31 @@ export type Rgb = readonly [number, number, number];
 // The owner kept the sand and the real place settled why: "Misty bay has some resorts and sandy
 // beaches, hence the choice." So sand survives, but it is zoned rather than smeared everywhere.
 
-/** Resort sand: the two beach polygons only (Misty Bay and Leboya Bay). */
-export const RESORT_SAND: Rgb = [0.86, 0.75, 0.52];
+// THESE ARE ALBEDOS IN LINEAR SPACE, AND THEY LOOK TOO DARK IN SOURCE ON PURPOSE.
+// Two things eat the difference between a number written here and a pixel on screen, and the last
+// pass at this palette missed both, which is how a "grey-brown" shore rendered as a white salt pan
+// at rgb(238,230,210), saturation 0.12, indistinguishable from the resort beach next to it:
+//   1. a BufferAttribute carries no colour space, so three multiplies these straight into the
+//      lighting as LINEAR values. A palette written as though it were sRGB is ~1.8x too bright.
+//   2. the shore is lit by a 4.4-intensity 0xffd9a0 sun over a 0xcfe4f5/0x8a7c4d hemisphere, then
+//      tone-mapped ACES at exposure 1.22. Measured off the shipped frame, that chain multiplies
+//      albedo by (2.37, 1.87, 1.41) before the curve — the light is WARM, so a neutral albedo comes
+//      out warm on screen, and anything above ~0.35 lands in the ACES shoulder where saturation is
+//      crushed towards white. Grey-brown grit in that sun is an albedo near 0.14, not 0.6.
+// The values below were solved backwards through that chain from the colours we want on screen, and
+// checked against the in-engine pixels (see the D2/D3 shore shots). Change them by measuring, not by
+// eye: the same source hex can read as bleached bone or wet mud depending on where it lands on the
+// curve. `map` (the near-neutral dambed grain) multiplies in on top, costing about another 0.7x.
+
+/** Resort sand: the two beach polygons only (Misty Bay and Leboya Bay). Warm, and deliberately the
+ *  most saturated thing on the shore — the owner picked this bay for its sandy beaches. */
+export const RESORT_SAND: Rgb = [0.448, 0.307, 0.208];
 /** Drawdown strand: pale grey-brown grit between the grass line and the bathtub ring. */
-export const DRAWDOWN_GRIT: Rgb = [0.60, 0.57, 0.48];
+export const DRAWDOWN_GRIT: Rgb = [0.196, 0.216, 0.230];
 /** The bathtub ring itself — a bleached band right above the current waterline. */
-export const HIGH_WATER_MARK: Rgb = [0.74, 0.71, 0.60];
+export const HIGH_WATER_MARK: Rgb = [0.304, 0.336, 0.347];
 /** Silt bed below the waterline. */
-export const SUBMERGED_BED: Rgb = [0.33, 0.32, 0.27];
+export const SUBMERGED_BED: Rgb = [0.055, 0.061, 0.062];
 /**
  * Height above the waterline (world units) that the bathtub ring covers, and the height at which
  * resort sand gives way to normal cover. These are HEIGHTS, but what the player sees is a WIDTH,
@@ -126,4 +143,66 @@ export function buildShoreRibbon(coastline: readonly MapPt[], opts: ShoreRibbonO
     if (i < coastline.length - 1) { const base = i * 2; indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3); }
   }
   return { positions, uvs, colors, indices };
+}
+
+// ---- The water horizon ---------------------------------------------------------------------------
+// A reservoir has to run OUT OF SIGHT, not stop. Mapgen closes the ocean polygon a few thousand units
+// past the world edge, which is well inside both the fog and the camera's far plane, so from the shore
+// the sheet ends in a dead-level line where water meets sky — measured at 142-166/255 of luminance
+// contrast, present in every column of the frame, from eye height at x=-4240. Fog cannot save it:
+// FogExp2 at the shipping density 0.00025 still passes a third of the contrast at 4,200 units.
+//
+// The fix is geometric and it is the same one the engine already relies on everywhere else: put the
+// edge PAST the camera's far plane, where the frustum cuts it and the fog is 98% opaque, exactly as
+// it cuts the far end of the veld. Nothing else changes — this outline is render-only, so the mapgen
+// polygon (and every area/stat/minimap that reads it) is untouched.
+
+/** Clearance past the world square for the rendered water's outer edge. Must exceed Game's camera
+ *  far plane (8000 u) so the edge is never inside the frustum from anywhere the player can stand. */
+export const WATER_HORIZON_CLEARANCE = 8200;
+/** Distance in z over which each shore end swings out to the map edge before running to the horizon.
+ *  A right-angle turn there would read as a short level line just off the corner; a diagonal reads as
+ *  the shore carrying on past the crop, which is what it is. */
+export const WATER_HORIZON_BLEND = 900;
+
+/**
+ * Render-only outline for the dam: the real shoreline, then both ends carried out past the camera's
+ * far plane and closed off the map.
+ *
+ * The two run-outs are pinned to `x = -worldHalf` (never further west than the map edge) so they can
+ * not open a strip of empty space between the drawn ground and the water at the dry corners: past the
+ * shoreline's own z-span the water reaches the map edge, where the terrain covers it.
+ */
+export function farWaterOutline(
+  coastline: readonly MapPt[],
+  worldHalf: number,
+  clearance = WATER_HORIZON_CLEARANCE,
+  blend = WATER_HORIZON_BLEND,
+  shoreInland = 0,
+): MapPt[] {
+  if (coastline.length < 2) return [];
+  const first = coastline[0]!;
+  const last = coastline[coastline.length - 1]!;
+  const far = worldHalf + clearance;
+  const edgeX = -worldHalf;
+  // sign = the direction this end runs off the map in z (+1 south, -1 north in world axes)
+  const firstSign = first.z >= last.z ? 1 : -1;
+  // Each run-out sits no further west than the map edge: further west would hang a sliver of water
+  // over the empty space beyond the drawn ground. It also never moves EAST of where the shore already
+  // is, which would pull the water off a bed that is drawn below the waterline and expose a crater.
+  const runOut = (end: MapPt, sign: number): MapPt[] => {
+    // Never EAST of the map edge: the far sheet exists to fill the horizon beyond the drawn ground,
+    // and a run-out inside the square would stand water on land. (It used to take the max, which
+    // was safe only while the shore's own ends were themselves west of the edge — under the
+    // wholesale placement they are not, and the sheet reached 1,667 units into the map.)
+    const x = Math.min(end.x + shoreInland, edgeX);
+    return [{ x, z: end.z + sign * blend }, { x, z: sign * far }];
+  };
+  return [
+    ...coastline.map((point) => ({ x: point.x + shoreInland, z: point.z })),
+    ...runOut(last, -firstSign),
+    { x: -far, z: -firstSign * far },
+    { x: -far, z: firstSign * far },
+    ...runOut(first, firstSign).reverse(),
+  ];
 }

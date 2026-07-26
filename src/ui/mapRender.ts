@@ -151,7 +151,6 @@ interface Prebuilt {
   pondWaterPath: Path2D | null;
   railPath: Path2D | null;
   oceanPath: Path2D | null;
-  coastlinePath: Path2D | null;
   beachPath: Path2D | null;
   farmlandPath: Path2D | null;
   runwayPath: Path2D | null;
@@ -256,7 +255,6 @@ function prebuild(map: RenderMapData): Prebuilt {
     pondWaterPath: pondWater.length ? polyPathOf(pondWater) : null,
     railPath: map.railways.length ? pathOf(map.railways) : null,
     oceanPath: coast ? polyPathOf([{ points: coast.ocean }]) : null,
-    coastlinePath: coast ? pathOf([{ points: coast.coastline }]) : null,
     beachPath: coast && coast.beaches.length ? polyPathOf(coast.beaches) : null,
     farmlandPath: farmFields.length ? polyPathOf(farmFields) : null,
     runwayPath: airport ? pathOf([airport.runway]) : null,
@@ -299,7 +297,10 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
   if (layers.coast && map.coast) {
     if (g.oceanPath) { ctx.fillStyle = OCEAN_COLOR; ctx.globalAlpha = 0.92; ctx.fill(g.oceanPath); ctx.globalAlpha = 1; }
     if (g.beachPath) { ctx.fillStyle = BEACH_COLOR; ctx.globalAlpha = 0.9; ctx.fill(g.beachPath); ctx.globalAlpha = 1; }
-    if (g.coastlinePath) { ctx.strokeStyle = '#8fc7e8'; ctx.lineWidth = Math.max(3, 1.6 / zoom); ctx.stroke(g.coastlinePath); }
+    // Stroke the WATER POLYGON, not `coast.coastline`. The polyline is a per-latitude eastmost
+    // envelope kept for the x = f(z) helpers, and drawn on a drowned-valley shore it cuts straight
+    // across every inlet and reads as a staircase over dry land. The polygon is the real outline.
+    if (g.oceanPath) { ctx.strokeStyle = '#8fc7e8'; ctx.lineWidth = Math.max(3, 1.6 / zoom); ctx.stroke(g.oceanPath); }
     ctx.fillStyle = '#ffd75e';
     ctx.beginPath(); ctx.arc(map.coast.harbour.x, map.coast.harbour.z, Math.max(9, 5 / zoom), 0, Math.PI * 2); ctx.fill();
   }

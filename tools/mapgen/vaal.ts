@@ -1,29 +1,17 @@
 /**
- * THE REAL VAAL DAM — parsed out of the committed one-off Overpass extract and re-oriented so a
- * strip of its NORTH-WEST shore can become the map's west edge.
+ * THE REAL VAAL DAM — parsed out of the committed one-off Overpass extract, and NOTHING ELSE.
  *
- * Why real data at all: the previous shore was fBm noise plus three hand-placed "drowned valley"
- * notches, and it read as noise. The Vaal is a flooded river system — its crenellation is not
- * decoration, it is the shape of the drowned Wilge and Vaal valleys, and no amount of fBm gets
- * Deneysville's headland, the northern arm, or the channel behind Grooteiland.
+ * This module used to cut a "north-shore run" out of the ring and rotate it by -90 degrees so a
+ * strip of it could become the map's west edge. Both of those were the beginning of the deformation
+ * chain that four passes died on: once you have a strip rather than a polygon, the only way to make
+ * it fit is to bend it.
  *
- * THE ORIENTATION (the one non-obvious step). The map needs water WEST of a shoreline that is
- * single-valued in z (dam.ts rule 1). The real north shore of the Vaal runs west->east with water
- * to its SOUTH. So the strip is rotated by -90 degrees:
- *
- *      real north  ->  game east        real east  ->  game south
- *      real south  ->  game west        real west  ->  game north
- *
- * which puts the water west of the shore for free, and — because the dam wall sits at the
- * reservoir's western tip — puts the wall and Deneysville near the TOP of the map, exactly the
- * composition asked for. Walking the run west->east in the real world walks it north->south in
- * the game, past the wall, up the northern arm (the waterway), around Grooteiland, along the
- * Misty Bay / Marina Latata shore and out at Vaal Marina.
- *
- * This module only PARSES and ROTATES. All fitting (scale, monotone unfolding, the soft-clip that
- * squeezes a 10 km arm into a 2 km-wide band) lives in dam.ts, so the raw geography stays legible.
+ * So it now returns the WHOLE water body — the chained outer ring and every inner ring, including
+ * Grooteiland (way 6139539) — in plain projected metres (x east, z south) with no rotation at all.
+ * The single rotation, the single uniform scale and the single translation all live in dam.ts, and
+ * the clip that decides what the map keeps lives there too.
  */
-import { VAAL_MIN_ISLAND_POINTS, VAAL_ORIGIN, VAAL_SHORE_END, VAAL_SHORE_MID, VAAL_SHORE_START, VAAL_WATER_RELATION } from './config';
+import { VAAL_MIN_ISLAND_POINTS, VAAL_ORIGIN, VAAL_WATER_RELATION } from './config';
 import { makeProjector } from './projection';
 import type { OsmElement, OsmNode, OsmRelation, OsmResponse, OsmWay, Pt } from './types';
 
@@ -36,9 +24,9 @@ export interface VaalFeature {
 }
 
 export interface VaalStrip {
-  /** North-shore run, game-oriented Vaal metres, ordered NORTH -> SOUTH (increasing z). */
-  shore: Pt[];
-  /** Island rings (relation inner rings) that fall inside the strip's bbox, largest first. */
+  /** The dam's whole outer ring, projected metres, in ring order. Unrotated, unscaled, uncut. */
+  outer: Pt[];
+  /** Every inner ring (island) of the relation, largest first. Grooteiland is way 6139539. */
   islands: Array<{ id: number; points: Pt[] }>;
   features: VaalFeature[];
   /** Real-world span of the retained strip, for the "how much of the real dam is this" report. */
@@ -49,12 +37,11 @@ export interface VaalStrip {
 const project = makeProjector(VAAL_ORIGIN);
 
 /**
- * Real lat/lon -> game-oriented Vaal metres. `project` gives x east / z south; the -90 degree
- * rotation is then simply (x, z) -> (-z, x).
+ * Real lat/lon -> projected metres about VAAL_ORIGIN, x east / z south. No rotation: the map's
+ * orientation is one rotation applied once, in dam.ts, to the whole body at once.
  */
 export function toVaalFrame(lat: number, lon: number): Pt {
-  const p = project(lat, lon);
-  return { x: -p.z, z: p.x };
+  return project(lat, lon);
 }
 
 /** Chain relation member ways (matched on endpoint COORDINATES — `out geom` carries no node ids). */
@@ -83,15 +70,6 @@ function chainRings(members: Array<Array<{ lat: number; lon: number }>>): Array<
   }
   return rings.sort((a, b) => b.length - a.length);
 }
-
-const nearestIndex = (pts: Pt[], q: Pt): number => {
-  let best = 0; let bestD = Infinity;
-  for (let i = 0; i < pts.length; i++) {
-    const d = (pts[i]!.x - q.x) ** 2 + (pts[i]!.z - q.z) ** 2;
-    if (d < bestD) { bestD = d; best = i; }
-  }
-  return best;
-};
 
 const FEATURE_KIND = (tags: Record<string, string>): VaalFeature['kind'] | null => {
   if (tags.man_made === 'wastewater_plant') return 'sewage';
@@ -131,47 +109,27 @@ export function parseVaal(data: OsmResponse): VaalStrip {
   const ring = rings[0]!.map((g) => toVaalFrame(g.lat, g.lon));
   log.push(`vaal: outer ring ${ring.length} pts chained from ${outer.length} member ways (${rings.length} ring(s))`);
 
-  const startI = nearestIndex(ring, toVaalFrame(VAAL_SHORE_START.lat, VAAL_SHORE_START.lon));
-  const midI = nearestIndex(ring, toVaalFrame(VAAL_SHORE_MID.lat, VAAL_SHORE_MID.lon));
-  const endI = nearestIndex(ring, toVaalFrame(VAAL_SHORE_END.lat, VAAL_SHORE_END.lon));
-  const n = ring.length;
-  const forward = (from: number, to: number): Pt[] => {
-    const out: Pt[] = [];
-    for (let i = from; ; i = (i + 1) % n) { out.push(ring[i]!); if (i === to) break; }
-    return out;
-  };
-  const between = (from: number, to: number, probe: number): boolean => {
-    const span = (to - from + n) % n;
-    return ((probe - from + n) % n) <= span;
-  };
-  // Travel whichever way round the closed ring passes the MID anchor (up the northern arm).
-  const shore = between(startI, endI, midI) ? forward(startI, endI) : forward(endI, startI).reverse();
-
   let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity; let length = 0;
-  for (let i = 0; i < shore.length; i++) {
-    const p = shore[i]!;
+  for (let i = 0; i < ring.length; i++) {
+    const p = ring[i]!;
     if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
     if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
-    if (i > 0) length += Math.hypot(p.x - shore[i - 1]!.x, p.z - shore[i - 1]!.z);
+    if (i > 0) length += Math.hypot(p.x - ring[i - 1]!.x, p.z - ring[i - 1]!.z);
   }
   log.push(
-    `vaal: north-shore run ${shore.length} pts, ${(length / 1000).toFixed(1)} km of real shoreline across ` +
-      `${((maxZ - minZ) / 1000).toFixed(1)} x ${((maxX - minX) / 1000).toFixed(1)} km of the real dam`,
+    `vaal: ${(length / 1000).toFixed(1)} km of real shoreline around a ` +
+      `${((maxX - minX) / 1000).toFixed(1)} x ${((maxZ - minZ) / 1000).toFixed(1)} km body`,
   );
 
-  // Islands: inner rings whose centroid falls inside the strip's bbox. Only rings with real
-  // outlines are kept — the 20-odd-vertex islets are sub-pixel at the fitted 1:4 scale, and they
-  // land west of the world edge where process.ts would only drop them again.
+  // EVERY inner ring, largest first. Which of them survive is dam.ts's decision, taken after the
+  // placement, on the only basis that matters: whether the island lands in the world square and is
+  // big enough to read. Grooteiland is way 6139539 and has 281 vertices.
   const islands = innerMembers
     .filter((m) => m.geometry!.length >= VAAL_MIN_ISLAND_POINTS)
     .map((m) => ({ id: m.ref, points: m.geometry!.map((g) => toVaalFrame(g.lat, g.lon)) }))
-    .filter((island) => {
-      const cx = island.points.reduce((s, p) => s + p.x, 0) / island.points.length;
-      const cz = island.points.reduce((s, p) => s + p.z, 0) / island.points.length;
-      return cx >= minX && cx <= maxX && cz >= minZ && cz <= maxZ;
-    })
     .sort((a, b) => b.points.length - a.points.length);
-  log.push(`vaal: ${islands.length} island(s) inside the strip (largest ${islands[0]?.points.length ?? 0} pts)`);
+  log.push(`vaal: ${islands.length} island ring(s) (largest ${islands[0]?.points.length ?? 0} pts, ` +
+    `Grooteiland ${islands.some((i) => i.id === 6139539) ? 'present' : 'MISSING'})`);
 
   const features: VaalFeature[] = [];
   for (const element of data.elements as OsmElement[]) {
@@ -188,5 +146,5 @@ export function parseVaal(data: OsmResponse): VaalStrip {
   }
   log.push(`vaal: ${features.length} shore features (${[...new Set(features.map((f) => f.kind))].join(', ')})`);
 
-  return { shore, islands, features, span: { x: maxX - minX, z: maxZ - minZ, lengthM: length }, log };
+  return { outer: ring, islands, features, span: { x: maxX - minX, z: maxZ - minZ, lengthM: length }, log };
 }

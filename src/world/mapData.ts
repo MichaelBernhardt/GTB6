@@ -90,6 +90,7 @@ interface RawMap {
     name?: string;
     coastline: [number, number][];
     ocean: [number, number][];
+    islands?: [number, number][][];
     beaches: Array<{ name: string; points: [number, number][] }>;
     harbour: { x: number; z: number };
     corridor: { eastX: number; westX: number };
@@ -378,6 +379,10 @@ export const OCEAN_POLYGON: MapPolygon | undefined =
  *  by the mapgen graft. They drive both the golden-sand z-bands on the strand and the 'beach' scatter
  *  zone, so resort clutter (loungers, kiosks, ablutions, ski-boat sheds) lands at the resorts and
  *  nowhere else along the shore. */
+/** The dam's real islands — inner rings of the placed Vaal outline, Grooteiland first. These are
+ *  HOLES in OCEAN_POLYGON: the terrain lifts them out of the water so they are landable ground. */
+export const DAM_ISLAND_RINGS: MapPt[][] = (RAW_COAST?.islands ?? []).map((ring) => toPts(ring));
+
 export const BEACH_POLYGONS: MapPolygon[] = RAW_COAST
   ? RAW_COAST.beaches
       .map((beach) => buildPolygon(beach.name, 'beach', beach.points))
