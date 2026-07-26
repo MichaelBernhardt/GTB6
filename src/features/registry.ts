@@ -1,3 +1,4 @@
+import { approachNear, sanitizeFuelSave } from './fuel.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -17,6 +18,19 @@ import type { FeatureDescriptor } from './types';
  */
 export const FEATURES: readonly FeatureDescriptor[] = [
   // { id: 'golf', saveKey: 'golf', label: 'Golf', sanitize: sanitizeGolfState, load: () => import('./golf/golf') },
+  {
+    id: 'fuel', saveKey: 'fuel', label: 'Petrol',
+    sanitize: sanitizeFuelSave,
+    load: () => import('./fuel/fuel'),
+    // Petrol is the one feature that has to be TRUE before the player opts in — a tank that only
+    // starts draining once you have already pulled into a garage is a mechanic you can decline. So
+    // `near` also burns the step: it is the only per-frame hook a registry entry gets. See the
+    // comment on approachNear() and the honest gap it documents.
+    approach: {
+      context: 'vehicle', order: 12, prompt: 'E  Pull in for petrol',
+      near: (ctx) => approachNear(ctx.vehicle, ctx.position.x, ctx.position.z),
+    },
+  },
 ];
 
 export function findFeature(id: string): FeatureDescriptor | undefined {
