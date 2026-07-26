@@ -199,4 +199,26 @@ describe("the dam's horizon haze (D2)", () => {
     // ...and its target carries no tint: the mix argument is `fogColor` on its own.
     expect(glsl).toMatch(/mix\( gl_FragColor\.rgb, fogColor, hazeDistance \)/);
   });
+
+  it('gates BOTH haze terms on the grazing angle, so looking down at the dam still shows water', () => {
+    // THE DEFECT THIS PINS. The distance term used to be omnidirectional. At 0.0026 it is 96% at
+    // 700 units and 100% at 1.2 km whatever direction you look from, so from 260 units over Misty
+    // Bay EVERY water pixel measured rgb(196,180,140) — the fog colour to the unit, the same tan as
+    // the veld beside it. The review's words were "there is no blue anywhere in the frame".
+    //
+    // Extinction cannot be 5x the scene fog for the water and 1x for the land seen through the same
+    // air. What actually pales the far end of a lake is FRESNEL, which is a function of angle, so
+    // both terms hang off one `grazing` weight. At pitch 0 from eye height grazing is 0.99+ (D2's
+    // numbers are unchanged); at 20-30 degrees of depression it is 0.01-0.10 and the water keeps its
+    // own colour. If anyone deletes the multiply, the dam goes back to being a tan smear from the air.
+    const glsl = oceanHazeGlsl('eyeDir.y');
+    expect(glsl).toMatch(/float grazing = pow\( 1\.0 - min\( 1\.0, abs\( eyeDir\.y \) \), uOceanGraze \);/);
+    expect(glsl).toMatch(/float hazeDistance = \(.*\) \* grazing;/);
+    expect(glsl).toMatch(/float hazeSky = uOceanSky \* grazing;/);
+    // and the value of it, in numbers rather than in source: eye height at the horizon keeps ~all of
+    // the haze, a camera 260 u up looking at water 900 u away keeps a tenth of it.
+    const graze = (viewY: number): number => (1 - Math.min(1, Math.abs(viewY))) ** OCEAN_GRAZE_POWER;
+    expect(graze(1.3 / 2000)).toBeGreaterThan(0.99); // shore, water 2 km out
+    expect(graze(260 / 900)).toBeLessThan(0.12);     // 260 u up, water 900 u out
+  });
 });

@@ -678,8 +678,11 @@ export class City {
   private grassWind?: { advance(dt: number): void };
   private sand = createSurfaceTexture('sand', 14);
   /** The dam bed's own map — near-neutral, so the vertex palette in coast.ts reaches the screen
-   *  unmultiplied instead of being re-tinted golden by the beach sand texture (see C5). */
-  private damBed = createSurfaceTexture('dambed', 14);
+   *  unmultiplied instead of being re-tinted golden by the beach sand texture (see C5).
+   *  Repeat 1, NOT 14: buildBeach writes uv = world/9, so 14 tiled the grain every 64 cm and the
+   *  whole shore averaged out to one flat fill — from a roof at Misty Bay the beach had literally no
+   *  texture in it, which is most of why the band read as a painted desert rather than as ground. */
+  private damBed = createSurfaceTexture('dambed', 1);
   private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
   private facadeGlows = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeGlowTexture(style));
   private roofMaterial = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, metalness: 0.08 });

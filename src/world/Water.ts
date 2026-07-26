@@ -190,6 +190,9 @@ export interface WaterHandle {
 }
 
 const OCEAN_ALPHA = 0.8; const BASIN_ALPHA = 0.82;
+/** World units per tile of the cheap tier's scrolling ripple sheet on a SHAPED ocean (its uvs are
+ *  world units, not 0..1 — see buildOcean). 9 u is about 12 m: chop, not a tiled floor. */
+export const OCEAN_TILE = 9;
 const REFLECTOR_TEXTURE_SIZE = 512; const REFLECTOR_DISTORTION = 3.4;
 const OCEAN_SEGMENTS: [number, number] = [110, 22];
 
@@ -281,14 +284,31 @@ export const OCEAN_GRAZE_POWER = 7;
  * (180,176,161) rather than (157,166,175).
  */
 const OCEAN_SKY_TINT = 'vec3( 0.90, 0.96, 1.14 )';
-/** Mixes the water toward the cooled fog colour by view angle, then toward the fog colour itself by
- *  distance. Inserted after three's own fog so the two agree about colour space, and it lifts alpha
- *  with it so the dark bed cannot show through. `facing` is the cosine between the view ray and world
- *  up. Distance is applied LAST and on the untinted fog, so the horizon is a colour match, not a step. */
+/**
+ * Mixes the water toward the cooled fog colour by view angle, then toward the fog colour itself by
+ * distance. Inserted after three's own fog so the two agree about colour space, and it lifts alpha
+ * with it so the dark bed cannot show through. `facing` is the cosine between the view ray and world
+ * up. Distance is applied LAST and on the untinted fog, so the horizon is a colour match, not a step.
+ *
+ * BOTH TERMS ARE GATED BY THE SAME GRAZING WEIGHT, AND THAT IS THE FIX FOR "THERE IS NO BLUE ANYWHERE".
+ * The distance term used to be omnidirectional: `1 - exp(-(0.0026 d)^2)`, which is 96% at 700 units
+ * and 100% at 1.2 km whatever angle you look from. At eye height that is exactly right — you are
+ * looking along the surface and the last kilometre of a lake IS the sky. From a roof, a plane or a
+ * hillside it is nonsense: measured in-engine from 260 units over Misty Bay, EVERY water pixel in the
+ * frame came back rgb(196,180,140) — the fog colour to the unit, the same tan as the veld beside it —
+ * while the bed showing through the shallows stayed near-black, so the dam read as scorched ground
+ * with cracks in it. Extinction cannot be five times the scene fog for water and one times it for the
+ * land you are seeing through the same air; what is really happening at the horizon is FRESNEL, and
+ * fresnel is a function of angle. So the distance term now carries the same `grazing` factor the sky
+ * reflection does. At pitch 0 from eye height grazing is 0.99+ at any distance worth hazing, so the
+ * D2 horizon numbers are untouched; looking down at 20-30 degrees it collapses to 0.01-0.10 and the
+ * water keeps its own colour, which is what a reservoir looks like from the air.
+ */
 export const oceanHazeGlsl = (facing: string): string => `
   #ifdef USE_FOG
-    float hazeDistance = 1.0 - exp( - uOceanHaze * uOceanHaze * vFogDepth * vFogDepth );
-    float hazeSky = uOceanSky * pow( 1.0 - min( 1.0, abs( ${facing} ) ), uOceanGraze );
+    float grazing = pow( 1.0 - min( 1.0, abs( ${facing} ) ), uOceanGraze );
+    float hazeDistance = ( 1.0 - exp( - uOceanHaze * uOceanHaze * vFogDepth * vFogDepth ) ) * grazing;
+    float hazeSky = uOceanSky * grazing;
     gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor * ${OCEAN_SKY_TINT}, hazeSky );
     gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, hazeDistance );
     gl_FragColor.a = mix( gl_FragColor.a, 1.0, 1.0 - ( 1.0 - hazeDistance ) * ( 1.0 - hazeSky ) );
@@ -355,7 +375,14 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
 
   const buildOcean = (site: OceanSite): void => {
     if (tier === 'flat') {
-      const texture = createSurfaceTexture('water', 7); textures.push(texture); scrollTextures.push(texture);
+      // UV SCALE. A shaped ocean is a ShapeGeometry, and three writes the shape's own WORLD-UNIT
+      // coordinates straight into uv — it does not normalise them to 0..1 the way PlaneGeometry does.
+      // `repeat: 7` therefore tiled the ripple sheet every 1/7 of a unit — 14 cm — across a reservoir
+      // 3.3 km wide, and what you saw from the bank was not water but the minification moire of it: a
+      // grey diamond lattice marching to the horizon (in-engine, low quality, the tier every phone
+      // gets). One tile per OCEAN_TILE units puts the grain back at the scale of real chop.
+      const texture = createSurfaceTexture('water', site.shape ? 1 / OCEAN_TILE : 7);
+      textures.push(texture); scrollTextures.push(texture);
       const material = new THREE.MeshPhysicalMaterial({ color: 0x2f7589, map: texture, roughness: 0.16, metalness: 0.05, clearcoat: 0.85, clearcoatRoughness: 0.16, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
       moodMaterials.push(material);
       applyOceanHaze(material, hazeUniform, skyUniform, grazeUniform);

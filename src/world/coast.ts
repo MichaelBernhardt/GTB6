@@ -76,12 +76,27 @@ export const DRAWDOWN_GRIT: Rgb = [0.068, 0.071, 0.077];
 /** The bathtub ring itself — a bleached band right above the current waterline. Screen target
  *  rgb(155,148,135), sat 0.13: paler than the grit above it, which is how a drawdown ring reads. */
 export const HIGH_WATER_MARK: Rgb = [0.122, 0.135, 0.152];
-/** Silt bed below the waterline. Screen target rgb(70,66,56) — mostly seen through the water. */
-export const SUBMERGED_BED: Rgb = [0.015, 0.021, 0.027];
-/** The dry veld the shore band abuts. Screen target rgb(218,198,127): MEASURED off the ground mesh
+/**
+ * Silt bed in DEEP water. Screen target rgb(80,78,68).
+ *
+ * "Mostly seen through the water" was the assumption, and it is wrong wherever the water is a metre
+ * deep — which on this bed is the first ~120 units off every shore, because the profile falls to
+ * SEA_FLOOR_Y over BED_OFFMAP_RUN. At rgb(70,66,56) that fringe read as near-black, and from the air
+ * it ringed every bay in what the review called "jagged black shallows": the dam looked like cracked
+ * ground rather than water. So the bed is now a DEPTH RAMP rather than one tone.
+ */
+export const SUBMERGED_BED: Rgb = [0.022, 0.030, 0.038];
+/** The bed in the shallows, right where the water laps. Screen target rgb(132,142,128) — the pale
+ *  olive-grey of a drowned grass bank, which under teal water reads as the turquoise fringe every
+ *  photograph of the Vaal has and is the cue that tells you the dark part is DEEP, not burnt. */
+export const SHALLOW_BED: Rgb = [0.079, 0.119, 0.134];
+/** Depth (units below the surface) over which SHALLOW_BED gives way to SUBMERGED_BED. */
+export const BED_DEPTH_RAMP = 6;
+/** The veld the shore band abuts. Screen target rgb(176,194,122): MEASURED off the ground mesh
  *  at the player's feet, so the sheet's inland edge fades into the ground instead of ending on a
- *  line. Without this the clipped sheet drew a straight north-south colour seam at the map edge. */
-export const VELD_TONE: Rgb = [0.393, 0.304, 0.132];
+ *  line. Without this the clipped sheet drew a straight north-south colour seam at the map edge.
+ *  (Moved with the ground when the veld went from straw to summer green — see GRASS_PALETTES.dry.) */
+export const VELD_TONE: Rgb = [0.164, 0.285, 0.121];
 /**
  * Height above the waterline (world units) that the bathtub ring covers, and the height at which
  * resort sand gives way to normal cover. These are HEIGHTS, but what the player sees is a WIDTH,
@@ -107,7 +122,16 @@ const mix = (a: Rgb, b: Rgb, t: number): Rgb =>
  */
 export function shoreColourAt(y: number, z: number, waterY: number, bands: readonly ZBand[], veldFade = 0): Rgb {
   const rise = y - waterY;
-  if (rise <= 0) return mix(SUBMERGED_BED, HIGH_WATER_MARK, Math.max(0, 1 + rise / 1.2) * 0.35);
+  if (rise <= 0) {
+    // Depth ramp first (pale drowned bank -> dark silt), then the last 2.5 units under the surface
+    // lift toward the bathtub ring so the waterline is a colour transition and not an outline. That
+    // last band used to be 1.2 units at 35%, and from the air it left a dark rim hugging every
+    // waterline — measured on a transect at Grooteiland the shore ran 161 -> 134 -> 103 and only
+    // then hit water, so every bay was drawn with a burnt-looking outline. A drawdown lake bleaches
+    // in the other direction: the shallows are the PALEST part of it.
+    const bed = mix(SHALLOW_BED, SUBMERGED_BED, Math.min(1, -rise / BED_DEPTH_RAMP));
+    return mix(bed, HIGH_WATER_MARK, Math.max(0, 1 + rise / 2.5) * 0.6);
+  }
   const fade = Math.min(1, Math.max(0, veldFade));
   const shore = isSandZ(z, bands)
     ? mix(RESORT_SAND, DRAWDOWN_GRIT, Math.min(1, Math.max(0, (rise - SAND_TOP_RISE) / 0.9)))

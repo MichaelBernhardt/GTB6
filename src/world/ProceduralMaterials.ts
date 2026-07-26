@@ -77,7 +77,9 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
     for (let y = 12; y < 256; y += 18) { context.beginPath(); for (let x = 0; x <= 256; x += 8) context.lineTo(x, y + Math.sin(x * 0.08 + y) * 2); context.stroke(); }
   }
   if (kind === 'water') {
-    const gradient = context.createLinearGradient(0, 0, 256, 256); gradient.addColorStop(0, '#1e6e83'); gradient.addColorStop(0.5, '#4ca0ae'); gradient.addColorStop(1, '#246c80'); context.globalAlpha = 0.55; context.fillStyle = gradient; context.fillRect(0, 0, 256, 256);
+    // The diagonal ramp is deliberately FAINT. At 0.55 it was the strongest thing in the tile, and a
+    // corner-to-corner gradient tiled across a reservoir reads as a diamond lattice, not as water.
+    const gradient = context.createLinearGradient(0, 0, 256, 256); gradient.addColorStop(0, '#1e6e83'); gradient.addColorStop(0.5, '#4ca0ae'); gradient.addColorStop(1, '#246c80'); context.globalAlpha = 0.16; context.fillStyle = gradient; context.fillRect(0, 0, 256, 256);
     context.strokeStyle = '#b9e2df'; context.lineWidth = 2; context.globalAlpha = 0.22;
     for (let y = 8; y < 256; y += 17) { context.beginPath(); for (let x = 0; x <= 256; x += 8) context.lineTo(x, y + Math.sin(x * 0.065 + y * 0.2) * 3); context.stroke(); }
   }
@@ -89,7 +91,13 @@ interface GrassPalette { base: string; patches: [string, string]; blades: string
 const GRASS_PALETTES: Record<GrassVariant, GrassPalette> = {
   // Colours are BAKED to final (materials use color: white), so blades read true regardless of the surface tint.
   lush: { base: '#41651f', patches: ['#4f7a2b', '#325217'], blades: ['#4f7d26', '#63933a', '#3d661d', '#7aa848', '#548a2c'], dry: ['#8a9a4e', '#9aa85c'], dryChance: 0.05, soil: '#3c3a1e', soilChance: 0.04 },
-  dry: { base: '#8a7c44', patches: ['#9a8d51', '#6d6035'], blades: ['#9a8b4b', '#b0a05c', '#847a44', '#8f9a54', '#a8985a'], dry: ['#b6a860', '#8a7c42'], dryChance: 0.55, soil: '#5a4a2e', soilChance: 0.16 },
+  // SUMMER HIGHVELD, NOT WINTER HIGHVELD. This is the map's whole ground plane, and it used to be
+  // straw: base #8a7c44, 55% dry strands. Under a 4.4-intensity warm sun and a warm-tan fog that
+  // measured rgb(218,198,127) at the player's feet and washed to the fog colour beyond a kilometre,
+  // so from any height the world — city included — read as one sheet of sand with the dam as black
+  // cracks in it. The blades are now an olive-green ramp with a quarter of them sun-bleached, which
+  // is what the Highveld looks like between November and April. Nothing else about the ground moved.
+  dry: { base: '#6f7a40', patches: ['#7d8a4b', '#586230'], blades: ['#7b8747', '#8d9a58', '#69753c', '#849154', '#96a463'], dry: ['#a49f5c', '#8a8544'], dryChance: 0.26, soil: '#4b4326', soilChance: 0.14 },
   // Tilled field: deep soil brown with mostly exposed earth and low-contrast dark stubble (reads as soil, not grass).
   soil: { base: '#3a2b1a', patches: ['#473723', '#2b1f12'], blades: ['#43331f', '#4e3c25', '#38291a', '#554027', '#3f2f1d'], dry: ['#6b5836', '#5a4a2c'], dryChance: 0.08, soil: '#241a0f', soilChance: 0.34 },
 };
