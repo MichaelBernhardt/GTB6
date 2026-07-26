@@ -322,7 +322,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     {
       id: 'protest:take', order: 58, context: 'foot',
       test: () => (phase === 'smouldering' && nearBarricade() && tyres < TYRE_CARRY_CAP
-        ? { prompt: 'E  Take a tyre', act: () => { tyres = Math.min(TYRE_CARRY_CAP, tyres + 1); api.notify('Tyre', 'There is always another tyre.', true); api.persist(); } } : undefined),
+        // Teaches the verb on pickup, because this rung sits ABOVE `E  Burn a tyre` while you are
+        // standing in the remains: you stock up here, then go and close a road somewhere else.
+        ? { prompt: 'E  Take a tyre', act: () => { tyres = Math.min(TYRE_CARRY_CAP, tyres + 1); api.notify('Tyre', 'Roll it out on any road and light it. There is always another tyre.', true); api.persist(); } } : undefined),
     },
     {
       id: 'protest:raise', order: 60, context: 'foot',
