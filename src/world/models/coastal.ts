@@ -1,6 +1,8 @@
 /**
- * Beachfront / promenade structures: breezy Cape-coast entertainment set. Bleached timber,
- * whitewash, striped umbrellas, and a lifeguard tower you can climb.
+ * Dam-front / promenade structures: the resort set for a Highveld reservoir, not a Cape seaboard.
+ * Bleached timber, whitewash, striped umbrellas and a lifeguard tower you can climb all survive
+ * verbatim — a Vaal resort beach really does look like that. What went is the surf: buildSurfShack
+ * is now buildBoatShed (water-skis and a bait sign, since the Vaal is a ski and bass-boat dam).
  */
 import { Kit, M, paint, type BuildOptions, type BuiltModel } from './kit';
 

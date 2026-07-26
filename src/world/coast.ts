@@ -3,9 +3,11 @@
  * the drivable sand/rock shore strip, and derives the ocean's premium water site. No three.js
  * here so the maths is unit-testable; City.ts wraps the output in buffers and materials.
  *
- * The named beach polygons (BEACH_POLYGONS) are misplaced by the mapgen graft — real Cape coords
- * land inland of the *synthetic* coastline — so we honour only WHERE along the shore (z) each beach
- * sits and paint golden sand there, laying the geometry itself against the true waterline.
+ * The named beach polygons (BEACH_POLYGONS) are now cut by mapgen as crescents that follow the
+ * MEASURED waterline at the two real resorts (Misty Bay and Leboya Bay), so they are already on
+ * land — the old Cape graft put all 24 vertices of Three Anchor Bay inside the water. We still key
+ * the sand PAINT off their z-extent alone (beachBands) rather than their outline, because the
+ * drivable strip is generated against the true waterline and must agree with it exactly.
  */
 import type { MapPolygon, MapPt } from './mapData';
 
