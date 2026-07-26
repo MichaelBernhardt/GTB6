@@ -31,6 +31,22 @@ Needs `playwright` + `pillow` + `numpy`, and Chromium with SwiftShader
 | `facades.py` | counts City's facade materials at boot and after a tour, and how many carry a night glow. It is what found D4: the map is **empty** at boot, so DayNight's one-time snapshot of it was a zero-length array and no building window in the world had ever lit up. |
 | `look.py` | **does the dam look like a dam?** Thirteen viewpoints — waterline, roof, air, standing on Grooteiland, the west band, and two CBD controls on the same rig — each rendered and then sampled through a ray lattice, so every reported RGB is attributed to the surface the ray hit. Run it at `QUALITY=low` (flat water) and `QUALITY=medium` (physical) — they are different shaders and they do not fail together. |
 | `attribute-frame.py` | renders ONE frame four ways (shipped / shadow map off / Water hidden / fog off) and diffs them. Use it before blaming shading: it is what proved the dark ring around the bays was the drawdown strand's own calibrated colour and not a shadow (shadows off moved 0.1% of pixels). |
+| `horizon.py` | **D2 asked properly: is there a level line that is NOT the horizon?** At pitch 0 the true horizon projects to the exact centre row, so it excludes that band and reports the strongest level step anywhere else. Needed because the raw step cannot tell a cap from a horizon — run against the ORIGINAL ocean the owner accepted, the raw step is 150/255. |
+| `calibrate.py` | **measure the palette instead of deriving it.** Paints the shipped bed sheet a known albedo and reads the pixel back through the game's own composer, so coast.ts's constants can be inversions of a MEASURED transfer under the CURRENT lighting. `--veld` answers the other half: it reads the sheet patch and the neighbouring ground-mesh patch out of one frame and prints the distance between them, which is how the sheet's inland fade is kept from ending on a colour seam. |
+
+## The control that settles D2
+
+`main`'s map still has the ORIGINAL ocean, the one nobody ever complained about, and it boots on the
+same engine. Serve it on its own port and shoot it with the same rig, and the "dead-level water/sky
+line" argument resolves itself:
+
+| | strongest level step | strongest level step that is NOT the horizon |
+| --- | --- | --- |
+| original ocean (`main`, 14 stands) | **147-154** | **151.6** |
+| the dam | 23-88 | 47.5 |
+
+A pitch-0 shot of any body of water has a level step at the horizon; that is what a horizon is. The
+number to watch is the second column.
 
 ## Ground rules for anyone editing these
 

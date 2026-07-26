@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BEACH_POLYGONS, COAST_CORRIDOR, COASTLINE, HARBOUR_POINT, MAP_WORLD_SIZE, OCEAN_POLYGON } from './mapData';
-import { beachBands, buildShoreRibbon, DRAWDOWN_GRIT, farWaterOutline, isSandZ, OCEAN_Y, RESORT_SAND, SEABED_Y, shoreColourAt, SHORE_LAND_WIDTH, SHORE_SEA_WIDTH, SHORE_Y, VELD_TONE, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE, type Rgb } from './coast';
+import { beachBands, buildShoreRibbon, DRAWDOWN_GRIT, farWaterOutline, HIGH_WATER_FADE, HIGH_WATER_MARK, HIGH_WATER_RISE, isSandZ, OCEAN_Y, RESORT_SAND, SEABED_Y, SHALLOW_BED, SHALLOW_BLEACH, shoreColourAt, SHORE_LAND_WIDTH, SHORE_SEA_WIDTH, SHORE_Y, VELD_TONE, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE, type Rgb } from './coast';
+import { BEACH_INLAND, BEACH_TOP_Y, SHORE_VELD_BLEND, STRAND_PAINT_BLEND, STRAND_PAINT_INLAND } from './City';
 
 /** Game.ts's perspective camera far plane: beyond it the frustum cuts and the fog is 98% opaque. */
 const CAMERA_FAR_PLANE = 8000;
@@ -108,6 +109,36 @@ describe('shore palette (D3)', () => {
 
   it('leaves the submerged bed alone whatever the inland fade says', () => {
     expect(shoreColourAt(OCEAN_Y - 5, 900, OCEAN_Y, bands, 1)).toEqual(shoreColourAt(OCEAN_Y - 5, 900, OCEAN_Y, bands));
+  });
+
+  it('confines the bleached ring to a narrow band at the waterline', () => {
+    // WHAT "THE SHORE IS STILL A PALE PAN" ACTUALLY WAS. HIGH_WATER_MARK is the palest tone on the
+    // shore and it used to cover every rise up to 0.62; City's strand profile climbs 0.011 units per
+    // unit of ground, so that was 56 units of bleached bone at the water's edge and 120 before the
+    // grit was even reached. Measured in-engine it read rgb(155,147,133) — concrete. Keep it a ring.
+    const RISE_PER_UNIT = (BEACH_TOP_Y - OCEAN_Y) / BEACH_INLAND;
+    const ringWidth = HIGH_WATER_RISE / RISE_PER_UNIT;
+    const gritWidth = (HIGH_WATER_RISE + HIGH_WATER_FADE) / RISE_PER_UNIT;
+    expect(ringWidth).toBeLessThan(30);   // units of ground, not of height
+    expect(gritWidth).toBeLessThan(60);
+    expect(strand(HIGH_WATER_RISE + HIGH_WATER_FADE + 0.01)).toEqual(DRAWDOWN_GRIT);
+  });
+
+  it('paints the natural strand a fraction of the width the resorts get', () => {
+    // BEACH_INLAND is the TERRAIN and it does not move. The PAINT does: 322 units of exposed lake bed
+    // round every bay is a 430 m mud collar, and on a 600-unit island it is the whole island.
+    expect(STRAND_PAINT_INLAND + STRAND_PAINT_BLEND).toBeLessThan((BEACH_INLAND + SHORE_VELD_BLEND) / 2);
+    expect(STRAND_PAINT_INLAND).toBeGreaterThan(HIGH_WATER_RISE / ((BEACH_TOP_Y - OCEAN_Y) / BEACH_INLAND));
+  });
+
+  it('keeps the UNDERWATER bleach on its own constant, so darkening the ring cannot dull the shallows', () => {
+    // The turquoise fringe is verified and was fought for; the above-water ring being too pale is a
+    // different defect on a different surface. Two constants, and the shallow one is the paler.
+    expect(Math.max(...SHALLOW_BLEACH)).toBeGreaterThan(Math.max(...HIGH_WATER_MARK));
+    const justUnder = shoreColourAt(OCEAN_Y - 0.05, 900, OCEAN_Y, bands);
+    // the lift target is SHALLOW_BLEACH: at the surface the bed is 60% of the way to it
+    expect(justUnder[2]!).toBeGreaterThan(SHALLOW_BED[2]!);
+    expect(justUnder[2]!).toBeLessThan(SHALLOW_BLEACH[2]!);
   });
 });
 
