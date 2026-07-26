@@ -145,15 +145,36 @@ describe('generated joburg-map.json', () => {
       }
     }
     const margin = 100; // game units (> the ring offset, < the stub-collection band)
+    const shore: Array<[number, number]> = map.coast?.coastline ?? [];
     const deadEndsAtBoundary: string[] = [];
     for (const road of map.roads) {
-      // Roads that deliberately end at the water. Both are already declared in
-      // config.ts CUL_DE_SAC_NAMES, so the dead-end resolver leaves them alone by design;
-      // 'Sloepbaai Road' only started tripping this gate when the dam replaced the ocean and
-      // put the slipway's waterline within 100 units of the road bbox's west extreme.
+      // Roads that deliberately end at the water. 'Deneys Quay' and 'Sloepbaai Road' are declared
+      // in config.ts CUL_DE_SAC_NAMES so the resolver leaves them alone by design. The same is now
+      // true of every REAL Vaal-shore street grafted from the north-shore extract — a Deneysville
+      // waterfront close ends at the water because that is where it ends in life — so the exemption
+      // is stated as a PROPERTY rather than a name list: a dangling end within 60 units of the
+      // mapped shoreline is a slipway, not a road clipped by the crop. Everything else must still
+      // rejoin the network.
       if (road.name === 'Deneys Quay' || road.name === 'Sloepbaai Road') continue;
       for (const point of [road.points[0], road.points[road.points.length - 1]]) {
         if ((incidence.get(key(point)) ?? 0) > 1) continue;
+        // Distance to the shoreline POLYLINE, not to its vertices: the shore is adaptively sampled
+        // (dense in the bays, up to ~83 units apart on the straights), so a road ending right on the
+        // water can still be 80 units from the nearest vertex.
+        if (shore.length > 1) {
+          let nearest = Infinity;
+          for (let s = 1; s < shore.length; s++) {
+            const a = shore[s - 1]!; const b = shore[s]!;
+            const dx = b[0] - a[0]; const dz = b[1] - a[1];
+            const lsq = dx * dx + dz * dz;
+            const t = lsq === 0 ? 0 : Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dz) / lsq));
+            nearest = Math.min(nearest, Math.hypot(point[0] - (a[0] + t * dx), point[1] - (a[1] + t * dz)));
+          }
+          // 140 units is the width of the drawdown strand City drapes between the waterline and
+          // the grass line (BEACH_INLAND 132 + the waterline offset): an end inside it is standing on
+          // the beach, which is where a slipway lane stops.
+          if (nearest < 140) continue;
+        }
         const edge = Math.min(point[0] - minX, maxX - point[0], point[1] - minZ, maxZ - point[1]);
         if (edge < margin) deadEndsAtBoundary.push(`${road.name}@${key(point)}`);
       }

@@ -15,10 +15,11 @@ import { fileURLToPath } from 'node:url';
 import { DISTRICT_RADIUS_M } from './config';
 import { fetchElevationGrid } from './elevation';
 import { applyNameOverrides, loadNameOverrides } from './emit';
-import { fetchBuildingCounts, fetchCape, fetchOsm, fetchStations, fetchVaal } from './overpass';
+import { fetchBuildingCounts, fetchCape, fetchOsm, fetchStations, fetchVaal, fetchVaalShore } from './overpass';
 import { buildPreviewHtml } from './preview';
 import { extractDistrictNodes, inBbox as inCropBbox, processOsm } from './process';
 import { parseVaal } from './vaal';
+import { parseVaalShore } from './vaalshore';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Output paths default to the committed map + preview; MAPGEN_OUT / MAPGEN_PREVIEW_OUT let a
@@ -41,6 +42,13 @@ async function main(): Promise<void> {
   console.log(`[mapgen] Vaal Dam extract: ${vaalExtract.data.elements.length} elements${vaalExtract.fromCache ? ' (from cache)' : ''}`);
   const vaal = parseVaal(vaalExtract.data);
   for (const line of vaal.log) console.log(`[mapgen] ${line}`);
+
+  // The real north-shore infrastructure: Deneysville, Refengkgotso, Misty Bay, Vaal Marina and the
+  // marinas. Second one-off cached-and-committed query; like fetchVaal it must never run on rebuild.
+  const shoreExtract = await fetchVaalShore({ refresh });
+  console.log(`[mapgen] Vaal north-shore extract: ${shoreExtract.data.elements.length} elements${shoreExtract.fromCache ? ' (from cache)' : ''}`);
+  const vaalShore = parseVaalShore(shoreExtract.data);
+  for (const line of vaalShore.log) console.log(`[mapgen] ${line}`);
 
   const osmStations = await fetchStations({ refresh });
   console.log(osmStations
@@ -66,7 +74,7 @@ async function main(): Promise<void> {
   console.log(`[mapgen] crop: ${keptDistricts}/${allDistrictNodes.length} place nodes inside CROP_BBOX`);
 
   const overrides = loadNameOverrides();
-  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, vaal, stations: osmStations?.nodes ?? null });
+  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, vaal, vaalShore, stations: osmStations?.nodes ?? null });
   for (const line of log) console.log(`[process] ${line}`);
 
   const finalMap = applyNameOverrides(map, overrides);

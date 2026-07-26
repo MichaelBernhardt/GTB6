@@ -10,7 +10,9 @@ import {
   DEADEND_JOIN_M,
   DEADEND_PRUNE_M,
   DEADEND_PRUNE_MAJOR_M,
+  DAM_CLOSURE_MARGIN_M,
   DISTRICT_RADIUS_M,
+  VAAL_SHORE_MAX_DENSITY,
   EDGE_MARGIN_UNITS,
   LANDMARK_CANONICAL,
   MIN_LANDUSE_AREA_M2,
@@ -37,7 +39,9 @@ import {
   TRACK_WIDTHS,
 } from './config';
 import { buildBorderVeld, closeCoastalLoop, compositeElevation, graftCoastAndCorridor, smoothCurve, type CoastGraftResult } from './coast';
+import { buildDamPolygon } from './dam';
 import type { VaalStrip } from './vaal';
+import type { VaalShoreExtract } from './vaalshore';
 import { resolveDeadEnds } from './deadends';
 import { thinRailways } from './railways';
 import { buildStations } from './stations';
@@ -197,6 +201,8 @@ export interface ProcessExtras {
   vaal?: VaalStrip;
   /** railway=station/halt nodes (fetchStations) — null/absent when the network was unavailable. */
   stations?: OsmNode[] | null;
+  /** Real Vaal north-shore infrastructure (vaalshore.ts parseVaalShore): the towns on the dam. */
+  vaalShore?: VaalShoreExtract | null;
 }
 
 function landuseKind(tags: Record<string, string>): MapArea['kind'] | null {
@@ -338,7 +344,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   }
   let coast: CoastGraftResult | undefined;
   if (extras.cape && extras.vaal) {
-    coast = graftCoastAndCorridor(net, extras.cape, extras.vaal, 420, avoidCircles);
+    coast = graftCoastAndCorridor(net, extras.cape, extras.vaal, extras.vaalShore ?? null, 420, avoidCircles);
     for (const line of coast.log) log.push(line);
   }
 
@@ -377,7 +383,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     connectDistance: DEADEND_CONNECT_M,
     pruneLength: DEADEND_PRUNE_M,
     pruneLengthMajor: DEADEND_PRUNE_MAJOR_M,
-    culDeSacNames: new Set(CUL_DE_SAC_NAMES),
+    // Real Vaal streets are REAL cul-de-sacs. Left in the pass, 66 of them were welded into
+    // loops or T-junctions across open veld and 33 were deleted outright.
+    culDeSacNames: new Set<string>([...CUL_DE_SAC_NAMES, ...(coast?.shore?.roadNames ?? [])]),
   });
   log.push(
     `dead ends: joined ${deadEnds.joined} pairs into loops, tied ${deadEnds.connected} into nearby roads, ` +
@@ -527,6 +535,8 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   if (coast) landuse.push({ name: coast.airport.name, kind: 'aerodrome', points: coast.airport.boundary });
   // The works' yard: brownfield, so the runtime paints dirt rather than veld grass.
   if (coast) landuse.push({ name: coast.sewage.name, kind: 'brownfield', points: coast.sewage.boundary });
+  // Real Vaal-shore landuse: the reserves, pitches, cemeteries and farmland people actually mapped.
+  if (coast?.shore) for (const area of coast.shore.areas) landuse.push({ name: area.name, kind: area.kind, points: area.points });
   // The dam's islands: scrub landuse rather than holes in the water polygon, so Water.ts needs
   // no new plumbing. compositeElevation lifts the terrain under them out of the water. The first
   // and largest is Grooteiland (OSM way 6139539); the rest are its unnamed neighbours.
@@ -542,8 +552,38 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   // CROP: districts had no bbox filter either. Every leaked place node is also a
   // nearestDistrict attractor and a station-naming source, so this matters beyond the labels.
   const districtNodes = extractDistrictNodes(data).filter((d) => inBbox(d.lat, d.lon));
-  const districts = districtNodes.map(({ name, lat, lon }) => ({ name, p: project(lat, lon) }));
+  const districts: Array<{ name: string; p: Pt; density?: number }> =
+    districtNodes.map(({ name, lat, lon }) => ({ name, p: project(lat, lon) }));
   if (coast) districts.push(...coast.districts);
+  // REAL dam-shore settlements. Their building density is measured off the extract rather than left
+  // to the runtime's default, because the two facts that matter here are opposite and both real:
+  // Deneysville is mapped building by building, and Refengkgotso is 250 streets with almost no
+  // building footprints at all (OSM simply has not traced them). Taking the greater of the mapped
+  // footprint density and a street-frontage estimate keeps the township dense — which it is — while
+  // still letting the sparsely-built marinas read as sparse.
+  if (coast?.shore) {
+    const areaKm2 = Math.PI * (DISTRICT_RADIUS_M / 1000) ** 2;
+    const graftNames = coast.shore.roadNames;
+    const graftRoads = net.roads.filter((r) => graftNames.has(r.name));
+    for (const place of coast.shore.places) {
+      const near = coast.shore.buildings.filter((b) => Math.hypot(b.p.x - place.p.x, b.p.z - place.p.z) <= DISTRICT_RADIUS_M);
+      let frontageM = 0;
+      for (const road of graftRoads) {
+        const pts = road.nodeIds.map((id) => net.nodes.get(id)).filter((q): q is Pt => Boolean(q));
+        for (let i = 1; i < pts.length; i++) {
+          const mid = { x: (pts[i]!.x + pts[i - 1]!.x) / 2, z: (pts[i]!.z + pts[i - 1]!.z) / 2 };
+          if (Math.hypot(mid.x - place.p.x, mid.z - place.p.z) <= DISTRICT_RADIUS_M) {
+            frontageM += Math.hypot(pts[i]!.x - pts[i - 1]!.x, pts[i]!.z - pts[i - 1]!.z);
+          }
+        }
+      }
+      // Two sides of every street at a ~28 m plot frontage; that is what a Highveld dorp looks like.
+      const fromStreets = (frontageM * 2) / 28 / areaKm2;
+      // Capped: the Joburg CBD itself measures 244 buildings/km2 in this pipeline, so anything much
+      // above that would mass a Highveld dorp like Braamfontein.
+      districts.push({ name: place.name, p: place.p, density: Math.min(VAAL_SHORE_MAX_DENSITY, Math.round(Math.max(near.length / areaKm2, fromStreets))) });
+    }
+  }
 
   // ---- Rail stations (OSM-snapped where possible, synthesized elsewhere; both ends always) ----
   const osmStationNodes = (extras.stations ?? [])
@@ -584,6 +624,16 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     landmarks.push({ name: coast.airport.name, p: coast.airport.center, kind: 'airport' });
     const portMid = { x: (coast.port.apron[0]!.x + coast.port.apron[2]!.x) / 2, z: (coast.port.apron[0]!.z + coast.port.apron[2]!.z) / 2 };
     landmarks.push({ name: coast.port.name, p: portMid, kind: 'port' });
+  }
+  // Real Vaal-shore POIs: the yacht clubs, marinas, slipways, camp sites, the croc ranch, the
+  // Deneysville pharmacy and SAPS. These are the "etc." in the owner's complaint.
+  if (coast?.shore) {
+    for (const poi of coast.shore.pois) {
+      const key = poi.name.toLowerCase();
+      if (seenLandmarks.has(key)) continue;
+      seenLandmarks.add(key);
+      landmarks.push({ name: poi.name, p: poi.p, kind: poi.kind });
+    }
   }
   // The stadium sometimes appears under both names; keep "FNB Stadium".
   if (landmarks.some((l) => /fnb stadium/i.test(l.name))) {
@@ -638,9 +688,21 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
           `${(-half).toFixed(0)} u, so the closing cap is drawn in frame. Raise DAM_END_WEST_M.`,
       );
     }
+    // Rebuild the water polygon's closure against the ACTUAL world square (C4). At graft time the
+    // fit is not known yet, so coast.ts closes against an estimate; here the rectangle is exact, so
+    // the "every long straight run is DAM_CLOSURE_MARGIN_M outside the square" guarantee is real
+    // rather than hopeful. features.test.ts re-measures it on the emitted map.
+    const nw = fit.invert({ x: -half, z: -half });
+    const se = fit.invert({ x: half, z: half });
+    coast.ocean = buildDamPolygon(
+      coast.dam,
+      { minX: Math.min(nw.x, se.x), maxX: Math.max(nw.x, se.x), minZ: Math.min(nw.z, se.z), maxZ: Math.max(nw.z, se.z) },
+      DAM_CLOSURE_MARGIN_M,
+    );
     log.push(
       `dam: lobe leaves ${(north + half).toFixed(0)} u of land in the NW corner / ${(half - south).toFixed(0)} u in the SW, ` +
-        `shore ends ${(-half - worstEndX).toFixed(0)} u past the west edge — no visible cap`,
+        `shore ends ${(-half - worstEndX).toFixed(0)} u past the west edge; water polygon closes ` +
+        `${Math.round(DAM_CLOSURE_MARGIN_M * fit.scale)} u outside the square on a curve — no visible cap`,
     );
   }
 
@@ -799,7 +861,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     }),
     districts: districts.map(({ name, p }, index) => {
       const [x, z] = toUnits(p);
-      const count = buildingCounts?.[index];
+      const count = districts[index]?.density ?? buildingCounts?.[index];
       const areaKm2 = Math.PI * (DISTRICT_RADIUS_M / 1000) ** 2;
       return {
         name,

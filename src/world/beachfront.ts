@@ -9,9 +9,10 @@
 import { COASTLINE, districtCenter, distanceToRoadEdge, HARBOUR_POINT, type MapPt } from './mapData';
 
 /** Sand-crest inland offset — MUST equal City.BEACH_INLAND (asserted by beachfront.test). */
-export const CREST_INLAND = 40;
-/** Dry sand runs ~26u seaward of the crest before the waterline (City's beach slope profile). */
-const SAND_BAND = 24;
+export const CREST_INLAND = 132;
+/** Dry strand between the crest and the waterline (City's two-ramp beach profile: the whole
+ *  CREST_INLAND width is spent above the water, so the walkable sand is ~130u, not ~26u). */
+export const SAND_BAND = 96;
 
 const coastByZ: readonly MapPt[] = COASTLINE.length ? [...COASTLINE].sort((a, b) => a.z - b.z) : [];
 

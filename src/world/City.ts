@@ -174,8 +174,21 @@ function coastlineXAt(z: number): number {
  *  it, and it's a sandy sea floor all the way out (for diving later). */
 export const BEACH_TOP_Y = 1.5;
 export const SEA_FLOOR_Y = -30;
-/** How far inland (east of the OSM coastline) the sand's landward crest sits. */
-export const BEACH_INLAND = 40;
+/**
+ * How far inland (east of the mapped shoreline) the drawdown strand's landward crest sits.
+ *
+ * 40 units used to be the whole exposed shore, and on a single linear ramp from +BEACH_TOP_Y at
+ * the crest to SEA_FLOOR_Y at the map edge the coloured banding above the waterline collapsed into
+ * an average of TWELVE units — sixteen metres — so a reservoir shore whose whole point is its
+ * bathtub ring read on foot as a featureless plain. The strand is now the width a real drawdown
+ * strand is (this reservoir swung from near-empty in 2025 to over 102% in 2026), and the profile
+ * below is split so that width is spent above the water rather than under it.
+ */
+export const BEACH_INLAND = 132;
+/** Where the terrain crosses the water surface, relative to the mapped shoreline (units, negative
+ *  = seaward). Zero would put the rendered waterline exactly on the polyline; a few units seaward
+ *  keeps the ocean's lapping edge over sand rather than over grass. */
+export const WATERLINE_OFFSET = -6;
 /** How far the ocean surface reaches past the shoreline into the beach, so waves lap up and down the slope. */
 export const BEACH_WATER_INLAND = 60;
 
@@ -194,14 +207,24 @@ function analyticTerrainHeightAt(x: number, z: number): number {
   const eastX = COAST_CORRIDOR?.eastX;
   // Fast path — well inland of any coast: full relief, no per-z coastline lookup.
   if (eastX === undefined || x >= eastX) return landRelief(x, z);
-  const beachTopX = coastlineXAt(z) + BEACH_INLAND; // landward crest of the sand
-  // Seaward of the sand crest: one continuous sand slope from +BEACH_TOP_Y down to SEA_FLOOR_Y at the map
-  // edge. Always sloped, never flat — the ocean surface laps it without z-fighting, and it's a sandy sea
-  // floor all the way out.
+  const shoreX = coastlineXAt(z);
+  const beachTopX = shoreX + BEACH_INLAND; // landward crest of the drawdown strand
+  // Seaward of the crest the profile is TWO ramps, not one.
+  //   1. the STRAND, crest -> waterline: gentle, and it owns the whole BEACH_INLAND width, so the
+  //      bathtub ring and the drawdown grit each get tens of units to read across instead of a
+  //      couple. This is the band a player walks on.
+  //   2. the BED, waterline -> SEA_FLOOR_Y at the map edge: the rest of the drop, steeper.
+  // Both are sloped (never flat), so the waving surface still cannot z-fight them, and the join is
+  // exactly at the water level, which is where the two colour palettes meet anyway.
   if (x < beachTopX) {
+    const waterX = shoreX + WATERLINE_OFFSET;
+    if (x >= waterX) {
+      const t = beachTopX > waterX ? (beachTopX - x) / (beachTopX - waterX) : 1;
+      return BEACH_TOP_Y + (OCEAN_Y - BEACH_TOP_Y) * t;
+    }
     const westEdge = -WORLD_SIZE / 2;
-    const t = beachTopX > westEdge ? Math.min(1, (beachTopX - x) / (beachTopX - westEdge)) : 0;
-    return BEACH_TOP_Y + (SEA_FLOOR_Y - BEACH_TOP_Y) * t;
+    const t = waterX > westEdge ? Math.min(1, (waterX - x) / (waterX - westEdge)) : 1;
+    return OCEAN_Y + (SEA_FLOOR_Y - OCEAN_Y) * t;
   }
   // Coastal land: rise from the sand crest (+BEACH_TOP_Y) up to full inland relief at the city edge. The
   // relief contribution is floored at 0 so the mean-zero relief's negative lobes can't drag the immediate
@@ -621,6 +644,9 @@ export class City {
   private farmSoil = createGrassTexture('soil', 1 / 6); // tilled-field earth for farmland polygons
   private grassWind?: { advance(dt: number): void };
   private sand = createSurfaceTexture('sand', 14);
+  /** The dam bed's own map — near-neutral, so the vertex palette in coast.ts reaches the screen
+   *  unmultiplied instead of being re-tinted golden by the beach sand texture (see C5). */
+  private damBed = createSurfaceTexture('dambed', 14);
   private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
   private facadeGlows = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeGlowTexture(style));
   private roofMaterial = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, metalness: 0.08 });
@@ -1803,8 +1829,10 @@ export class City {
     const normals = geometry.attributes.normal.array; let sumY = 0;
     for (let i = 1; i < normals.length; i += 3) sumY += normals[i]!;
     if (sumY < 0) { for (let i = 0; i < indices.length; i += 3) { const t = indices[i]!; indices[i] = indices[i + 2]!; indices[i + 2] = t; } geometry.setIndex(indices); geometry.computeVertexNormals(); }
-    // White base colour: the vertex colours ARE the palette, and any tint here multiplies into them.
-    const sand = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.sand, roughness: 0.97 }));
+    // White base colour AND a near-neutral map: the vertex colours ARE the palette, and BOTH the
+    // tint and the texture multiply into them. Using the golden beach `sand` map here was the whole
+    // of C5 — it pushed the shore from grey-brown (saturation ~0.19) to golden (~0.57).
+    const sand = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.damBed, roughness: 0.97 }));
     sand.receiveShadow = true; sand.userData.far = true; // the always-visible dam bed, carries to the horizon
     this.group.add(sand);
   }

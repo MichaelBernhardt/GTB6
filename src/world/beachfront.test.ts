@@ -10,6 +10,7 @@ import {
   coastXAt,
   computeBeachfront,
   CREST_INLAND,
+  SAND_BAND,
   pierPlan,
   seawardHeading,
   venuePlan,
@@ -112,7 +113,7 @@ describe('beachfront placement plan', () => {
       expect(MODEL_INDEX.has(spot.name), spot.name).toBe(true);
       const crest = coastXAt(spot.z) + CREST_INLAND;
       expect(spot.x).toBeLessThan(crest); // seaward of the crest…
-      expect(spot.x).toBeGreaterThan(crest - 26); // …but on the dry-sand band, not in the surf
+      expect(spot.x).toBeGreaterThan(crest - SAND_BAND - 2); // …but on the dry-strand band, not in the surf
     }
     expect(plan.boats.length).toBeGreaterThanOrEqual(2);
     for (const boat of plan.boats) expect(boat.x).toBeLessThan(coastXAt(boat.z)); // afloat, west of the waterline

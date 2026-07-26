@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { registerPowered } from './powerGrid';
 
-type SurfaceKind = 'asphalt' | 'concrete' | 'grass' | 'sand' | 'water';
+type SurfaceKind = 'asphalt' | 'concrete' | 'grass' | 'sand' | 'dambed' | 'water';
 
 const seeded = (index: number, salt: number): number => {
   const value = Math.sin(index * 91.731 + salt * 47.233) * 43758.5453;
@@ -31,6 +31,15 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
     concrete: ['#9c9d96', '#b9b7ad', '#777c79'],
     grass: ['#8a7b45', '#a3924f', '#6e6236'],
     sand: ['#c9b569', '#dcc97c', '#a08d4f'],
+    // THE DAM BED IS NOT A BEACH. The bed sheet used to reuse `sand` as its map, and because a
+    // texture MULTIPLIES into the vertex colour, that golden palette (mean rgb 0.76/0.68/0.40)
+    // re-tinted every band it was supposed to leave alone: the silt bed rendered #40381c and the
+    // drawdown grit #746331, pushing the shore's saturation from ~0.19 to ~0.57 — the "golden, not
+    // grey-brown" the owner was looking at. This one is a NEAR-NEUTRAL pale grain: it carries the
+    // grit and the ripple detail and multiplies to almost 1, so the vertex palette in coast.ts
+    // (silt / bathtub ring / drawdown grit / resort sand) survives to the screen as authored —
+    // which also means the resort beaches stay properly warm instead of being greyed out with it.
+    dambed: ['#dcd8cf', '#e8e5de', '#c8c4ba'],
     water: ['#28778b', '#4e9cac', '#15566c'],
   };
   const [base, light, dark] = palette[kind]; context.fillStyle = base; context.fillRect(0, 0, 256, 256);
@@ -52,6 +61,15 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
   if (kind === 'concrete') {
     context.strokeStyle = '#686d69'; context.globalAlpha = 0.42; context.lineWidth = 1;
     for (let p = 0; p <= 256; p += 32) { context.beginPath(); context.moveTo(p, 0); context.lineTo(p, 256); context.stroke(); context.beginPath(); context.moveTo(0, p); context.lineTo(256, p); context.stroke(); }
+    context.globalAlpha = 1;
+  }
+  if (kind === 'dambed') {
+    // Drawdown ripples + a scatter of dark grit, drawn in near-neutral greys so the sheet reads as
+    // exposed lake bed rather than as sand with the colour turned down.
+    context.strokeStyle = '#b3afa5'; context.globalAlpha = 0.20;
+    for (let y = 9; y < 256; y += 14) { context.beginPath(); for (let x = 0; x <= 256; x += 8) context.lineTo(x, y + Math.sin(x * 0.05 + y * 0.7) * 2.6); context.stroke(); }
+    context.globalAlpha = 0.30; context.fillStyle = '#9d998f';
+    for (let i = 0; i < 900; i++) context.fillRect(seeded(i, 21) * 256, seeded(i, 22) * 256, 0.8 + seeded(i, 23) * 1.4, 0.8 + seeded(i, 24) * 1.4);
     context.globalAlpha = 1;
   }
   if (kind === 'sand') {

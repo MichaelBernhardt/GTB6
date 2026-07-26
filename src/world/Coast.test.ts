@@ -18,12 +18,15 @@ describe('coast map data', () => {
 
   it('carries a shoreline polyline that is a LOBE, not a full-height sea edge', () => {
     // The reservoir pushes in from the west and leaves BOTH west corners dry — "never covers the
-    // full left extent". It used to span >90% of the world height, which read as an ocean.
+    // full left extent". It used to span >90% of the world height, which read as an ocean; the
+    // 0.60-0.85 band that replaced that was still 64% of the west edge WET, and the owner's verdict
+    // on it was "a large amount of water ... no land comes around over the top". The band is now cut
+    // so the wet part of the west edge is ~44% and land wraps around both ends of the lobe.
     expect(COASTLINE.length).toBeGreaterThan(20);
     const zs = COASTLINE.map((point) => point.z);
     const span = Math.max(...zs) - Math.min(...zs);
-    expect(span).toBeGreaterThan(MAP_WORLD_SIZE * 0.6);
-    expect(span).toBeLessThan(MAP_WORLD_SIZE * 0.85);
+    expect(span).toBeGreaterThan(MAP_WORLD_SIZE * 0.4);
+    expect(span).toBeLessThan(MAP_WORLD_SIZE * 0.62);
     const half = MAP_WORLD_SIZE / 2;
     expect(Math.min(...zs)).toBeGreaterThan(-half + 700); // land in the NW corner
     expect(Math.max(...zs)).toBeLessThan(half - 700); // land in the SW corner

@@ -55,10 +55,16 @@ export const DRAWDOWN_GRIT: Rgb = [0.60, 0.57, 0.48];
 export const HIGH_WATER_MARK: Rgb = [0.74, 0.71, 0.60];
 /** Silt bed below the waterline. */
 export const SUBMERGED_BED: Rgb = [0.33, 0.32, 0.27];
-/** Height above the waterline (world units) that the bathtub ring covers. */
-export const HIGH_WATER_RISE = 0.75;
+/**
+ * Height above the waterline (world units) that the bathtub ring covers, and the height at which
+ * resort sand gives way to normal cover. These are HEIGHTS, but what the player sees is a WIDTH,
+ * and the width is height / slope: City's strand profile now spends the whole BEACH_INLAND width
+ * on the drop from BEACH_TOP_Y to the waterline, so a 0.75-unit ring is tens of units across
+ * instead of the two or three it was on the old single ramp to SEA_FLOOR_Y.
+ */
+export const HIGH_WATER_RISE = 0.62;
 /** Height above the waterline at which the resort sand gives way to normal ground cover. */
-export const SAND_TOP_RISE = 1.4;
+export const SAND_TOP_RISE = 1.15;
 
 const mix = (a: Rgb, b: Rgb, t: number): Rgb =>
   [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];

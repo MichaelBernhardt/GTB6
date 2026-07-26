@@ -54,26 +54,70 @@ describe('Vaalpunt Dam shore', () => {
   });
 
   it('shows no ruler-straight run anywhere the player can see it', () => {
-    // Not just the caps: ANY stretch of the water boundary that is straight to within 2 units of
-    // its own chord and whose midpoint is inside the world square. The defect this replaces was a
-    // 2,831-unit ruler-straight cap across the middle of the map. What survives is real: the
-    // longest straight stretch left is the 1938 concrete dam wall, which is straight in the source
-    // data because dam walls are, and which the owner asked for by name.
+    // METHOD — this is the point of the test, because the previous version could not fail.
+    //
+    // The defect: the water polygon closed with two 2,029-unit caps at EXACTLY 0.0 degrees off
+    // east-west whose nearest ends sat 321 units (425 m) OUTSIDE the world square. That is real
+    // rendered mesh (City pushes the whole polygon as one water site; Water turns it into a
+    // ShapeGeometry) with void above it, and FogExp2 at 0.00025 takes about 1% at that range. The
+    // old test only scored runs whose MIDPOINT was inside the square, which structurally cannot see
+    // a cap just outside it, and the pass that shipped it asserted "never in frame" without ever
+    // measuring the distance.
+    //
+    // So: (1) a "run" is a maximal span every interior vertex of which is within 2 units of its own
+    // chord — curvature-aware, so subdividing a cap into forty short segments does not hide it, the
+    // way a per-segment or heading-chaining test would; (2) each run is scored by its CLOSEST
+    // APPROACH to the square, not by its midpoint; (3) the SHORELINE and the CLOSURE are judged
+    // separately, because a straight stretch of shoreline is real coast (the raw OSM Vaal ring
+    // behind the longest one here is straight to within 8 m over 1,284 m of real shoreline) while a
+    // straight stretch of closure is the synthetic thing that was wrong.
     const half = map.stats.targetSize / 2;
-    const pts = coast.ocean;
-    let worst = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      for (let j = i + 1; j < pts.length; j++) {
-        const a = pts[i]!; const b = pts[j]!;
-        const dx = b[0] - a[0]; const dz = b[1] - a[1]; const len = Math.hypot(dx, dz) || 1;
-        let bulge = 0;
-        for (let k = i + 1; k < j; k++) bulge = Math.max(bulge, Math.abs((pts[k]![0] - a[0]) * dz - (pts[k]![1] - a[1]) * dx) / len);
-        if (bulge > 2) break;
-        const mx = (a[0] + b[0]) / 2; const mz = (a[1] + b[1]) / 2;
-        if (Math.abs(mx) <= half && Math.abs(mz) <= half) worst = Math.max(worst, len);
+    const runsOf = (poly: Array<[number, number]>): Array<[[number, number], [number, number]]> => {
+      const out: Array<[[number, number], [number, number]]> = [];
+      let i = 0;
+      while (i < poly.length - 1) {
+        let j = i + 1; let last = j;
+        while (j < poly.length) {
+          const a = poly[i]!; const b = poly[j]!;
+          const dx = b[0] - a[0]; const dz = b[1] - a[1]; const len = Math.hypot(dx, dz) || 1;
+          let bulge = 0;
+          for (let k = i + 1; k < j; k++) bulge = Math.max(bulge, Math.abs((poly[k]![0] - a[0]) * dz - (poly[k]![1] - a[1]) * dx) / len);
+          if (bulge > 2) break;
+          last = j; j++;
+        }
+        out.push([poly[i]!, poly[last]!]);
+        i = Math.max(last, i + 1);
       }
+      return out;
+    };
+    const approach = (a: [number, number], b: [number, number]): number => {
+      let best = Infinity;
+      for (let t = 0; t <= 256; t++) {
+        const x = a[0] + (b[0] - a[0]) * (t / 256); const z = a[1] + (b[1] - a[1]) * (t / 256);
+        best = Math.min(best, Math.hypot(Math.max(Math.abs(x) - half, 0), Math.max(Math.abs(z) - half, 0)));
+      }
+      return best;
+    };
+    const visible = 3000 / map.stats.metresPerUnit; // 3 km: far past anything the fog leaves legible
+
+    // THE CLOSURE — the synthetic part. Nothing long, and nothing anywhere near the square.
+    const closure = [...coast.ocean.slice(coast.coastline.length - 1), coast.ocean[0]!];
+    let closestClosure = Infinity; let worstNearClosure = 0;
+    for (const [a, b] of runsOf(closure)) {
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (len < 120) continue;
+      const d = approach(a, b);
+      closestClosure = Math.min(closestClosure, d);
+      if (d <= visible) worstNearClosure = Math.max(worstNearClosure, len);
     }
-    expect(worst).toBeLessThan(260);
+    expect(closestClosure).toBeGreaterThan(1500); // the defect stood 321 units off
+    expect(worstNearClosure).toBeLessThan(500); // the defect ran 2,029 units
+
+    // THE SHORELINE — real coast, judged on its own. A drowned valley wall is straight; a ruler is
+    // not. 900 units is 1.2 km, and the current worst is a 752-unit stretch 9.3 degrees off axis.
+    let worstShore = 0;
+    for (const [a, b] of runsOf(coast.coastline)) worstShore = Math.max(worstShore, Math.hypot(b[0] - a[0], b[1] - a[1]));
+    expect(worstShore).toBeLessThan(900);
   });
 
   it('coastline forms a continuous south-to-north boundary along the west edge', () => {
@@ -91,9 +135,10 @@ describe('Vaalpunt Dam shore', () => {
     }
     const zs = coast.coastline.map((point) => point[1]);
     const span = Math.max(...zs) - Math.min(...zs);
-    // A lobe, not a band: it covers most of the west edge but leaves both corners dry.
-    expect(span).toBeGreaterThan(map.stats.targetSize * 0.6);
-    expect(span).toBeLessThan(map.stats.targetSize * 0.85);
+    // A lobe, not a band. The previous 0.60-0.85 band still left 64% of the west edge WET, which is
+    // what the owner rejected ("a large amount of water ... no land comes around over the top").
+    expect(span).toBeGreaterThan(map.stats.targetSize * 0.4);
+    expect(span).toBeLessThan(map.stats.targetSize * 0.62);
     // The real dam's northern arm cuts EAST into the corridor by design, bounded by the tanh
     // soft-clip (DAM_REACH_EAST_M), so the tolerance is that budget in units — not a fixed wobble.
     const reachUnits = DAM_REACH_EAST_M / map.stats.metresPerUnit;
