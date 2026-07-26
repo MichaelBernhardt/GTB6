@@ -1,3 +1,4 @@
+import { ASK_AROUND_RADIUS, nearestStreetSite, sanitizeStreetState } from './street.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -17,6 +18,21 @@ import type { FeatureDescriptor } from './types';
  */
 export const FEATURES: readonly FeatureDescriptor[] = [
   // { id: 'golf', saveKey: 'golf', label: 'Golf', sanitize: sanitizeGolfState, load: () => import('./golf/golf') },
+  {
+    id: 'street', saveKey: 'street', label: 'Street economy',
+    sanitize: sanitizeStreetState,
+    load: () => import('./street/street'),
+    // The eager stand-in: you notice a block has a trade on it before anybody is standing there,
+    // and "ask around" is a real action, so pressing E keeps the promise the prompt made — it loads
+    // the feature, which staffs the corner and tells you which way to walk.
+    approach: {
+      context: 'foot', order: 58, prompt: 'E  Ask around · this block has a trade on it',
+      near: (ctx) => {
+        const near = nearestStreetSite(ctx.position.x, ctx.position.z);
+        return near !== undefined && near.distanceSq < ASK_AROUND_RADIUS * ASK_AROUND_RADIUS;
+      },
+    },
+  },
 ];
 
 export function findFeature(id: string): FeatureDescriptor | undefined {
