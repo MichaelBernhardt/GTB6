@@ -36,6 +36,7 @@ export type ConsoleCommand =
   | { kind: 'give-armour' }
   | { kind: 'give-item'; item: 'parachute' | 'stim'; count: number }
   | { kind: 'drunk'; level?: number }
+  | { kind: 'feature'; args: string[] }
   | { kind: 'error'; message: string };
 
 /** Game wires these in; the console never imports Game. Each handler returns its console feedback line. */
@@ -68,6 +69,10 @@ export interface ConsoleHost {
   giveArmour(): string;
   giveItem(item: 'parachute' | 'stim', count: number): string;
   setInebriation(level?: number): string;
+  /** The ONE generic feature seam: `feature` lists them, `feature <id> …` talks to a loaded one.
+   *  Per-feature console commands would mean every branch edits this interface AND the stub host
+   *  literal in Console.test.ts — this member is touched once, ever. */
+  feature(args: string[]): string[];
   missionList(): string[];
   missionStart(index: number): string;
 }
@@ -95,6 +100,7 @@ export const HELP_LINES = [
   'give armour — strap on full body armour',
   'give parachute [n] · give stim [n] — stock inventory items',
   'drunk [0-100] — set inebriation (no number = fully legless) to test the stagger',
+  'feature [id] [args] — list the lazily loaded features, or send a command to one',
   'set time <HHMM> — jump the clock (e.g. set time 1200)',
   'set timerate <n> — day/night speed (1 = normal, 0 freezes time)',
   'set busy <10-1000> — crowd level in percent (100 = normal; scales every nearby zone; clears peds/cars pins)',
@@ -198,6 +204,7 @@ export function parseCommand(input: string): ConsoleCommand {
     return level === undefined || level > 100 ? { kind: 'error', message: `Invalid level "${rest[0]}" — use a whole number 0-100.` } : { kind: 'drunk', level };
   }
   if (head === 'skyfall') return { kind: 'skyfall', name: rest.length > 0 ? rest.join(' ') : undefined };
+  if (head === 'feature') return { kind: 'feature', args: rest };
   if (head === 'give') {
     const usage = `Usage: give <${GIVE_WEAPON_IDS.join('|')}> · give ammo · give armour · give parachute [n] · give stim [n]`;
     const [what, countToken, extra] = rest;
@@ -254,6 +261,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'give-armour': return [host.giveArmour()];
     case 'give-item': return [host.giveItem(command.item, command.count)];
     case 'drunk': return [host.setInebriation(command.level)];
+    case 'feature': return host.feature(command.args);
     case 'mission-list': return host.missionList();
     case 'mission-start': return [host.missionStart(command.index)];
   }

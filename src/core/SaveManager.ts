@@ -2,6 +2,7 @@ import { VEHICLE_SPECS, WEAPONS, WEAPON_BY_ID, type VehicleKind, type WeaponId }
 import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
 import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import { DEFAULT_MINIMAP_ZOOM, sanitizeMinimapZoom } from '../ui/MinimapView';
+import { sanitizeFeatureSaves } from '../features/save';
 import type { CheatSettings, GameSettings, Inventory, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
 import { defaultLivingCityState, sanitizeLivingCityState } from '../systems/LivingCitySystem';
 import { DIARY_PAGE_COUNT } from '../systems/StoryDirector';
@@ -112,7 +113,7 @@ export function sanitizeDiaryPages(raw: unknown): number[] {
   return [...new Set(raw.filter((page): page is number => Number.isInteger(page) && page >= 1 && page <= DIARY_PAGE_COUNT))].sort((a, b) => a - b);
 }
 
-export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY };
+export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY, features: {} };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -143,6 +144,7 @@ function deserialize(value: string | null): SavedGame {
       timeOfDay: sanitizeTimeOfDay(parsed.timeOfDay),
       safehouses: sanitizeSafehouses(parsed.safehouses),
       inventory: sanitizeInventory(parsed.inventory),
+      features: sanitizeFeatureSaves(parsed.features), // one delegating sanitizer; saves written before the slot existed arrive as {}
     };
   } catch { return structuredClone(DEFAULT_SAVE); }
 }

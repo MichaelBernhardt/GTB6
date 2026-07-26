@@ -63,6 +63,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-drunk__track em { display: block; height: 100%; background: rgba(0, 0, 0, .55); transition: width .25s ease; }
 .hud-items { position: absolute; left: 28px; bottom: 258px; display: flex; gap: 6px; }
 .hud-items i { padding: 5px 8px; background: rgba(17, 24, 23, .86); color: var(--paper); font: 900 9px Inter, sans-serif; font-style: normal; letter-spacing: 1.2px; border-left: 3px solid var(--teal); }
+.hud-features { position: absolute; left: 28px; bottom: 284px; display: flex; gap: 6px; }
+.hud-features i { min-width: 52px; padding: 5px 8px; background: rgba(17, 24, 23, .86); color: var(--paper); font-style: normal; border-left: 3px solid var(--yellow); }
+.hud-features i.is-warn { border-left-color: #d9534f; }
+.hud-features b { display: block; font: 900 8px Inter, sans-serif; letter-spacing: 1.2px; color: var(--yellow); }
+.hud-features i.is-warn b { color: #f0938f; }
+.hud-features span { display: block; font: 900 12px Inter, sans-serif; letter-spacing: .5px; }
+.hud-features__track { display: block; height: 3px; margin-top: 3px; background: rgba(255, 255, 255, .18); }
+.hud-features__track em { display: block; height: 100%; background: var(--yellow); transition: width .25s ease; }
+.hud-features i.is-warn .hud-features__track em { background: #d9534f; }
 .hud-cash { grid-column: 3; grid-row: 2; display: flex; align-items: baseline; gap: 6px; padding: 4px 8px; color: var(--ink); background: var(--yellow); }
 .hud-cash small { font: 900 8px Inter, sans-serif; letter-spacing: 1px; }
 .hud-cash b { font-size: 21px; }
@@ -225,6 +234,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .hud-objective { top: 99px; width: calc(100vw - 24px); padding: 8px 10px 10px; }.hud-objective strong { font-size: 15px; }
   #minimap { left: 12px; bottom: 12px; width: 142px; height: 142px; border-width: 4px; }
   .hud-items { left: 12px; bottom: 142px; }
+  .hud-features { left: 12px; bottom: 250px; } /* clear of the perf chart's 184px + 60px canvas */
   .hud-fps { left: 12px; bottom: 164px; }.hud-perf { left: 12px; bottom: 184px; }.hud-vehicle { right: 12px; bottom: 12px; width: 138px; }.hud-vehicle b { font-size: 40px; }.hud-prompt { bottom: 12px; max-width: 68vw; padding: 8px 10px; font-size: 10px; }
   #toast { top: 166px; min-width: 0; width: calc(100vw - 28px); max-width: none; }#toast strong { font-size: 18px; }
   .menu-overlay { padding: 18px 16px 56px; background: rgba(13, 19, 18, .96); }.menu-overlay::before { display: none; }.main-menu { width: 100%; }.main-menu h1 { font-size: clamp(65px, 21vw, 92px); letter-spacing: -4px; }.main-menu__lede { font-size: 14px; }.main-menu__rail { grid-template-columns: 1fr; }.main-menu footer { position: static; margin-top: 10px; }
@@ -265,6 +275,7 @@ body.is-touch canvas { touch-action: none; }
 /* the joystick owns the lower-left corner, so the minimap moves to the top-left and shrinks */
 body.is-touch #minimap { left: calc(10px + env(safe-area-inset-left, 0px)); top: calc(10px + env(safe-area-inset-top, 0px)); bottom: auto; width: 148px; height: 148px; border-width: 4px; }
 body.is-touch .hud-items { left: calc(166px + env(safe-area-inset-left, 0px)); bottom: auto; top: 118px; }
+body.is-touch .hud-features { left: calc(166px + env(safe-area-inset-left, 0px)); bottom: auto; top: 148px; }
 body.is-touch .hud-status { right: calc(16px + env(safe-area-inset-right, 0px)); }
 body.is-touch .hud-prompt { bottom: 8px; max-width: 44vw; }
 /* the right cluster owns the lower-right corner — the vehicle panel moves to bottom-centre */

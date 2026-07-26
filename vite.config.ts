@@ -38,7 +38,15 @@ function manualChunk(id: string): string | undefined {
   if (path.endsWith('/src/world/BuildingArchitecture.ts')) return 'world-geometry';
   if (/(?:StableRandom|coast|powerGrid|ChunkVisibility)\.ts$/.test(path)) return 'world-runtime';
   if (path.endsWith('/src/systems/Console.ts')) return 'game-tools';
-  if (/(?:FlightSystem|SkyfallSystem|TaxiJobSystem|CourierJobSystem|LivingCitySystem|TrainRide|TrafficAvoidance|FearSystem|BumpSystem|WantedSystem|LoadSheddingSystem)\.ts$/.test(path)) return 'gameplay-rules';
+  // Pure map/site data: leaves whose only imports are the generated map chunk, each other, or types.
+  // They carry no scene objects and nothing in `simulation` is imported back, so lifting them out of
+  // `simulation` frees real bytes against the per-chunk CODE_LIMIT without creating a chunk cycle.
+  if (/\/src\/world\/(?:mapData|beachfront|placements|data\/manicured|data\/zoning)\.ts$/.test(path)) return 'world-data';
+  // Feature plumbing that MUST be eager: the registry, the host, the interaction ladder, the save
+  // sanitizer, and any top-level `<id>.state.ts`. Matches ONE path segment under src/features/ only —
+  // feature bodies live in src/features/<id>/ and must match NO rule so they stay lazy async chunks.
+  if (/\/src\/features\/[^/]+\.ts$/.test(path)) return 'gameplay-rules';
+  if (/(?:FlightSystem|SkyfallSystem|TaxiJobSystem|CourierJobSystem|LivingCitySystem|TrainRide|TrafficAvoidance|FearSystem|BumpSystem|WantedSystem|LoadSheddingSystem|MeleeSystem|PoliceKnowledge|PedRagdoll|NpcCatalog)\.ts$/.test(path)) return 'gameplay-rules';
   if (path.endsWith('/src/config.ts') || /\/src\/core\/(?:CameraController|GameRules|SaveManager|DrinkRules)\.ts$/.test(path) || path.endsWith('/src/ui/MinimapView.ts') || path.endsWith('/src/systems/Teleport.ts')) return 'simulation';
   // World and simulation modules are tightly connected, so keep them together instead of forcing
   // fragile directory-level cycles. They form a stable cache unit separate from UI/game orchestration.

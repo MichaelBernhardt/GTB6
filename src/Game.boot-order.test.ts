@@ -38,6 +38,9 @@ describe('Game constructor boot order', () => {
       ['this.city = new City(', 'new ShopSystem(this.scene, this.city)'],
       ['this.city = new City(', 'new SafehouseSystem(this.scene, this.city)'],
       ['this.city = new City(', 'new PopulationSystem(this.scene, this.city'],
+      // The FeatureHost adopts the loaded save's `features` slot, so the save must already be read.
+      ['this.save = this.saveManager.load()', 'this.features = new FeatureHost('],
+      ['this.features = new FeatureHost(', 'this.features.restore(this.save.features)'],
     ];
     for (const [dependency, use] of pairs) {
       expect(firstIndex(dependency), `"${use}" runs before "${dependency}" — boot crash`).toBeLessThan(firstIndex(use));

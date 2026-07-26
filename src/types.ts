@@ -31,6 +31,9 @@ export interface SavedGame {
   timeOfDay: number;
   safehouses: SafehouseId[];
   inventory: Inventory;
+  /** One slot for every lazily loaded feature (src/features/): each stores its slice under its own
+   *  save key. Adding a feature never touches this file again — see src/features/README.md. */
+  features: Record<string, unknown>;
 }
 /** Tiers the world subsystems understand. `ultra` is a render-only super-tier (High visuals + extra AA);
  *  it maps down to `high` for everything except the renderer's pixel ratio and post-processing.
