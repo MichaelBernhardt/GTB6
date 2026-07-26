@@ -81,9 +81,9 @@ const cv = createCanvas(W, H); const g = cv.getContext('2d');
 g.fillStyle = '#e8e2d4'; g.fillRect(0, 0, W, H);
 // water
 g.fillStyle = '#2f6fa8';
-for (const r of rings) { g.beginPath(); r.forEach((p, i) => { const [a, b] = px(p); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.closePath(); g.fill(); }
+for (const r of rings) { g.beginPath(); r.forEach((p, i) => { const [a, b] = px(p); if (i) g.lineTo(a, b); else g.moveTo(a, b); }); g.closePath(); g.fill(); }
 g.fillStyle = '#7ea36a';
-for (const isl of inners) { g.beginPath(); isl.pts.forEach((p, i) => { const [a, b] = px(p); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.closePath(); g.fill(); }
+for (const isl of inners) { g.beginPath(); isl.pts.forEach((p, i) => { const [a, b] = px(p); if (i) g.lineTo(a, b); else g.moveTo(a, b); }); g.closePath(); g.fill(); }
 // island labels
 g.font = '12px sans-serif';
 for (const isl of inners) {
@@ -109,7 +109,7 @@ wins.forEach((w, k) => {
   const corners = [[-ww / 2, -hh / 2], [ww / 2, -hh / 2], [ww / 2, hh / 2], [-ww / 2, hh / 2]]
     .map(([u, v]) => ({ x: cx + u * c - v * sn, z: cz + u * sn + v * c }));
   g.strokeStyle = COLORS[k % COLORS.length]; g.lineWidth = 4;
-  g.beginPath(); corners.forEach((p, i) => { const [a, b] = px(p); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.closePath(); g.stroke();
+  g.beginPath(); corners.forEach((p, i) => { const [a, b] = px(p); if (i) g.lineTo(a, b); else g.moveTo(a, b); }); g.closePath(); g.stroke();
   const [a, b] = px(corners[0]); g.fillStyle = COLORS[k % COLORS.length]; g.font = 'bold 22px sans-serif'; g.fillText(String(k), a + 6, b + 24);
 });
 g.fillStyle = '#000'; g.font = 'bold 16px sans-serif';

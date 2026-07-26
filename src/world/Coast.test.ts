@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BEACH_POLYGONS, COAST_CORRIDOR, COASTLINE, HARBOUR_POINT, MAP_WORLD_SIZE, OCEAN_POLYGON } from './mapData';
-import { beachBands, buildShoreRibbon, farWaterOutline, isSandZ, OCEAN_Y, SEABED_Y, SHORE_LAND_WIDTH, SHORE_SEA_WIDTH, SHORE_Y, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
+import { beachBands, buildShoreRibbon, DRAWDOWN_GRIT, farWaterOutline, isSandZ, OCEAN_Y, RESORT_SAND, SEABED_Y, shoreColourAt, SHORE_LAND_WIDTH, SHORE_SEA_WIDTH, SHORE_Y, VELD_TONE, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE, type Rgb } from './coast';
 
 /** Game.ts's perspective camera far plane: beyond it the frustum cuts and the fog is 98% opaque. */
 const CAMERA_FAR_PLANE = 8000;
@@ -69,6 +69,43 @@ describe('beach z-bands', () => {
     expect(isSandZ(300, bands)).toBe(false);
     expect(isSandZ(-200, bands)).toBe(false);
     expect(isSandZ(0, [])).toBe(false);
+  });
+});
+
+/** HSV saturation of a colour, the number the "golden, not grey-brown" complaint is really about. */
+const saturation = (c: Rgb): number => {
+  const max = Math.max(...c); const min = Math.min(...c);
+  return max === 0 ? 0 : (max - min) / max;
+};
+
+describe('shore palette (D3)', () => {
+  const bands = [{ minZ: -100, maxZ: 100 }];
+  const strand = (rise: number, z = 900): Rgb => shoreColourAt(OCEAN_Y + rise, z, OCEAN_Y, bands);
+
+  it('keeps the natural strand far less saturated than the resort sand', () => {
+    // The whole of D3: the two used to be the same golden, and one build inverted them so the natural
+    // shore was MORE saturated than the beach. Measured in-engine the shipped values render the strand
+    // at saturation 0.147 and the resort at 0.332.
+    expect(saturation(strand(2))).toBeLessThan(saturation(RESORT_SAND) * 0.7);
+    expect(saturation(strand(0.3))).toBeLessThan(saturation(RESORT_SAND) * 0.7);
+    expect(saturation(shoreColourAt(OCEAN_Y + 0.2, 0, OCEAN_Y, bands))).toBeCloseTo(saturation(RESORT_SAND), 3);
+  });
+
+  it('keeps the natural strand darker than the bleached ring above the waterline', () => {
+    const ring = strand(0.3); const grit = strand(3);
+    expect(Math.max(...grit)).toBeLessThan(Math.max(...ring));
+  });
+
+  it('fades the inland edge all the way to the veld it abuts', () => {
+    // Without this the clipped sheet ended on a straight north-south colour seam at the map edge.
+    expect(shoreColourAt(OCEAN_Y + 3, 900, OCEAN_Y, bands, 1)).toEqual(VELD_TONE);
+    const half = shoreColourAt(OCEAN_Y + 3, 900, OCEAN_Y, bands, 0.5);
+    for (let i = 0; i < 3; i++) expect(half[i]!).toBeCloseTo((DRAWDOWN_GRIT[i]! + VELD_TONE[i]!) / 2, 6);
+    expect(shoreColourAt(OCEAN_Y + 3, 900, OCEAN_Y, bands, -4)).toEqual(strand(3)); // clamped, no overshoot
+  });
+
+  it('leaves the submerged bed alone whatever the inland fade says', () => {
+    expect(shoreColourAt(OCEAN_Y - 5, 900, OCEAN_Y, bands, 1)).toEqual(shoreColourAt(OCEAN_Y - 5, 900, OCEAN_Y, bands));
   });
 });
 

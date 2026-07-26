@@ -30,7 +30,6 @@ import {
   RAILWAY_STATION_SITES,
   WATER_POLYGONS,
   type MapPolygon,
-  type MapPt,
 } from './mapData';
 import { damSignedDistance } from './damField';
 import { beachBands, farWaterOutline, OCEAN_Y, shoreColourAt, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
@@ -153,22 +152,11 @@ export const SNOWLINE_METRES = 2400;
 export const RIDGE_BASE_METRES = 1730;
 /** In-game Y where snow begins (fbm-dithered in the ground shader; full cover one band higher). */
 export const SNOW_Y = (SNOWLINE_METRES - RIDGE_BASE_METRES) * TERRAIN_RIDGE_SCALE;
-/** Coastline vertices sorted by z, for a per-z land/sea boundary lookup: the synthetic shore meanders
- *  across x by ~1.6 km, so a single global coast x would sink real coastal land (roads, beach) below sea
- *  level. terrain crosses 0 at coastlineXAt(z); seaward of it the ground sinks into the seabed slope. */
-const COAST_BY_Z: readonly MapPt[] = COASTLINE.length ? [...COASTLINE].sort((a, b) => a.z - b.z) : [];
-
-/** The coastline x at world z (interpolated), i.e. where the land meets the sea on this east-west line. */
-function coastlineXAt(z: number): number {
-  const pts = COAST_BY_Z; const n = pts.length;
-  if (n === 0) return Number.NEGATIVE_INFINITY;
-  if (z <= pts[0]!.z) return pts[0]!.x;
-  if (z >= pts[n - 1]!.z) return pts[n - 1]!.x;
-  let lo = 0; let hi = n - 1;
-  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid]!.z <= z) lo = mid; else hi = mid; }
-  const a = pts[lo]!; const b = pts[hi]!;
-  return a.x + (b.x - a.x) * ((z - a.z) / (b.z - a.z || 1));
-}
+// The per-latitude shoreline lookup (COAST_BY_Z / coastlineXAt) is GONE. It answered "which x is the
+// shore at this z", which is a question only a straight coast has an answer to; on a drowned dendritic
+// valley it returned one arbitrary crossing out of the thirty a scanline makes, and every consumer
+// inherited that. The terrain moved to the signed distance field one pass ago; buildBeach was the last
+// caller and now shares the same field, so the envelope has no callers left.
 
 /** Coastal beach/seabed profile: the sand's landward crest sits just above sea level and the ground slopes
  *  continuously down to SEA_FLOOR_Y at the map's west edge — never flat, so the waving ocean can't z-fight
@@ -195,6 +183,26 @@ export const BED_OFFMAP_OVERHANG = 900;
 /** How far past the world square (in z) the bed sheet runs, so standing in a dry corner and looking
  *  along the shore does not show the sheet's own end. */
 export const BED_Z_OVERRUN = 600;
+/**
+ * How far inland of the strand crest the bed sheet fades into the surrounding veld and stops.
+ *
+ * The sheet used to run from the map edge to a per-latitude crest line — a solid pale sheet 1,600
+ * units wide down the whole west side, drawn over ridges, over dry veld and over latitudes the dam
+ * never reaches (at z = -4,400 the reservoir is 800 units off-map and the sheet still covered the
+ * NW corner). On foot that was a featureless pan from the shore to the farm corridor, which is the
+ * cheap half of the "blackness" complaint: not darkness, ABSENCE — no grass, no scrub, no foliage
+ * colour, one flat tone to the horizon. It is now clipped to the shore band by the signed distance
+ * field, so everything further inland is ordinary ground again, and the last stretch of it fades to
+ * VELD_TONE so the clip line is a colour match rather than a seam.
+ */
+export const SHORE_VELD_BLEND = 190;
+/** Vertices per side of the drawn ground mesh. The bed sheet reuses this lattice EXACTLY (same x/z,
+ *  same heights) so the two surfaces cannot interpenetrate — see buildBeach. */
+export const GROUND_SEGMENTS = 256;
+/** Lift of the bed sheet above the ground mesh. With the lattices shared the only disagreement left
+ *  is which way each cell's diagonal runs, so this only has to beat the cell twist — but it also has
+ *  to stay under the water's own 0.045, or the sheet's lip would stand proud of the waterline. */
+export const BED_SHEET_LIFT = 0.022;
 /** Where the terrain crosses the water surface, relative to the mapped shoreline (units, negative
  *  = seaward). Zero would put the rendered waterline exactly on the polyline; a few units seaward
  *  keeps the ocean's lapping edge over sand rather than over grass. */
@@ -1040,7 +1048,7 @@ export class City {
     // A tessellated grass sheet displaced by the heightgrid — the relief every wired system samples via
     // terrainHeightAt. Segment pitch (~70u at 256) oversamples the ~140u heightgrid cells for smooth slopes.
     // Flagged `far` so it never culls: the always-visible earth that carries to the horizon behind the fog.
-    const SEGMENTS = 256;
+    const SEGMENTS = GROUND_SEGMENTS;
     const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, SEGMENTS, SEGMENTS);
     geometry.rotateX(-Math.PI / 2); // into the XZ plane, +Y up — vertex (x, 0, z) now maps straight to world XZ
     const pos = geometry.attributes.position as THREE.BufferAttribute;
@@ -1827,43 +1835,66 @@ export class City {
    *  (see coast.ts shoreColourAt). A reservoir that swings between near-empty and 102% full looks
    *  like this; a seaside does not. */
   private buildBeach(): void {
-    if (COASTLINE.length < 2) return;
+    if (COASTLINE.length < 2 || !OCEAN_POLYGON) return;
     const bands = beachBands(BEACH_POLYGONS);
-    const westEdge = -WORLD_SIZE / 2;
-    const zs = COASTLINE.map((point) => point.z);
-    // Cover the whole west edge, not just the shoreline's own z-span: past its ends the terrain still
-    // has a coast profile (coastlineXAt clamps), and leaving those latitudes undrawn left a strip of
-    // empty space between the ground mesh and the water when you stood in a dry corner.
-    const zMin = Math.min(Math.min(...zs), westEdge - BED_Z_OVERRUN);
-    const zMax = Math.max(Math.max(...zs), -westEdge + BED_Z_OVERRUN);
-    const CELL = 45; const COLS = 48;
-    const rows = Math.max(1, Math.ceil((zMax - zMin) / CELL));
-    const dzRow = (zMax - zMin) / rows;
-    const positions: number[] = []; const uvs: number[] = []; const colors: number[] = [];
-    for (let r = 0; r <= rows; r++) {
-      const z = zMin + r * dzRow;
-      const crest = coastlineXAt(z) + BEACH_INLAND + 3; // a touch past the crest so the sand tucks under the grass
-      // Landward limit: the crest, or the map edge where the crest is already west of it (so the sheet
-      // always meets the ground mesh). Seaward limit: the map edge, or past the crest where the shore
-      // itself is off-map (so the strand and the bed's lip are drawn instead of ending in mid-air).
-      const inner = Math.max(crest, westEdge);
-      const outer = Math.min(westEdge, crest - BED_OFFMAP_OVERHANG);
-      for (let c = 0; c <= COLS; c++) {
-        const x = outer + (c / COLS) * (inner - outer); // columns fan from the seaward limit to the meandering crest
-        // The captured grid clamps at the world square, which would flatten everything drawn past it —
-        // sample the analytic profile out there instead. Both agree exactly on the square's own edge.
-        const inGrid = x >= westEdge && x <= -westEdge && z >= westEdge && z <= -westEdge;
-        const y = inGrid ? terrainHeightAt(x, z) : analyticTerrainHeightAt(x, z);
-        positions.push(x, y + 0.03, z); uvs.push(x / 9, z / 9);
-        const [cr, cg, cb] = shoreColourAt(y, z, OCEAN_Y, bands);
-        colors.push(cr, cg, cb);
-      }
+    const half = WORLD_SIZE / 2;
+    // THE SHEET NOW LIVES ON THE GROUND MESH'S OWN LATTICE. It used to be a 45 x 26 unit fan between
+    // the map edge and a per-latitude crest, i.e. a second triangulation of the same terrain at a
+    // different pitch — so wherever the ground was convex the sheet's chords cut the corner and sank
+    // beneath it, and the golden DRY-VELD ground poked up through the shore in hard-edged wedges.
+    // That, not the palette, is what "the shore renders golden" was: measured in-engine, the pixel at
+    // the player's feet on the strand was rgb(216,196,125), hue 47, saturation 0.42 — and repainting
+    // every vertex of the sheet did not change it by one unit, because the sheet was not what you were
+    // looking at. Sharing the lattice makes the two surfaces agree at every vertex, so a small lift
+    // is enough to settle the order for good.
+    const step = WORLD_SIZE / GROUND_SEGMENTS;
+    const inlandLimit = BEACH_INLAND + SHORE_VELD_BLEND;
+    const i0 = -Math.ceil(BED_OFFMAP_OVERHANG / step);
+    const j0 = -Math.ceil(BED_Z_OVERRUN / step);
+    const j1 = GROUND_SEGMENTS - j0;
+    // East limit: the furthest east the water reaches, plus the whole inland band, in whole cells.
+    const i1 = Math.min(GROUND_SEGMENTS, Math.ceil((OCEAN_POLYGON.maxX + inlandLimit + half) / step) + 1);
+    const cols = i1 - i0 + 1;
+    const gx = (i: number): number => -half + i * step;
+    /** Signed distance to the waterline and the inland fade, per lattice point (built once, reused). */
+    const dist = new Float32Array(cols * (j1 - j0 + 1));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) dist[(j - j0) * cols + (i - i0)] = damSignedDistance(gx(i), gx(j)) + WATERLINE_OFFSET;
     }
-    const stride = COLS + 1; const indices: number[] = [];
-    for (let r = 0; r < rows; r++) for (let c = 0; c < COLS; c++) {
-      const a = r * stride + c; const b = r * stride + c + 1; const d = (r + 1) * stride + c; const e = (r + 1) * stride + c + 1;
-      indices.push(a, b, d, b, e, d);
+    const at = (i: number, j: number): number => dist[(j - j0) * cols + (i - i0)]!;
+    // A cell is drawn when any corner is inside the shore band, or when it is off the west edge (past
+    // the square there is no ground mesh at all, so the sheet is the only thing covering the bed).
+    const wanted = (i: number, j: number): boolean => {
+      if (i < i0 || j < j0 || i >= i1 || j >= j1) return false;
+      if (gx(i) < -half || gx(j) < -half || gx(j + 1) > half) return true;
+      return at(i, j) < inlandLimit || at(i + 1, j) < inlandLimit
+        || at(i, j + 1) < inlandLimit || at(i + 1, j + 1) < inlandLimit;
+    };
+    const positions: number[] = []; const uvs: number[] = []; const colors: number[] = []; const indices: number[] = [];
+    const index = new Map<number, number>();
+    const vertex = (i: number, j: number): number => {
+      const key = (i - i0) * 100000 + (j - j0);
+      const found = index.get(key); if (found !== undefined) return found;
+      const x = gx(i); const z = gx(j);
+      // Inside the square the captured grid IS this lattice, so terrainHeightAt returns the ground
+      // mesh's own vertex height exactly; outside it the grid clamps, so use the analytic profile.
+      const inGrid = x >= -half && x <= half && z >= -half && z <= half;
+      const y = inGrid ? terrainHeightAt(x, z) : analyticTerrainHeightAt(x, z);
+      const d = at(i, j);
+      const fade = Math.min(1, Math.max(0, (d - BEACH_INLAND) / SHORE_VELD_BLEND));
+      const id = positions.length / 3;
+      positions.push(x, y + BED_SHEET_LIFT, z); uvs.push(x / 9, z / 9);
+      const [cr, cg, cb] = shoreColourAt(y, z, OCEAN_Y, bands, fade);
+      colors.push(cr, cg, cb);
+      index.set(key, id);
+      return id;
+    };
+    for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+      if (!wanted(i, j)) continue;
+      const a = vertex(i, j); const b = vertex(i + 1, j); const c = vertex(i, j + 1); const e = vertex(i + 1, j + 1);
+      indices.push(a, b, c, b, e, c);
     }
+    if (indices.length === 0) return;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
@@ -1875,7 +1906,12 @@ export class City {
     // White base colour AND a near-neutral map: the vertex colours ARE the palette, and BOTH the
     // tint and the texture multiply into them. Using the golden beach `sand` map here was the whole
     // of C5 — it pushed the shore from grey-brown (saturation ~0.19) to golden (~0.57).
-    const sand = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.damBed, roughness: 0.97 }));
+    // polygonOffset is the belt to the shared lattice's braces: 0.022 of a unit is thin cover at
+    // 2 km, so bias the depth as well and let the shore win the tie at every distance.
+    const sand = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      color: 0xffffff, vertexColors: true, map: this.damBed, roughness: 0.97,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+    }));
     sand.receiveShadow = true; sand.userData.far = true; // the always-visible dam bed, carries to the horizon
     this.group.add(sand);
   }

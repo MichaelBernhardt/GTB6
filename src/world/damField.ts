@@ -141,7 +141,7 @@ export function damSignedDistance(x: number, z: number): number {
   if (field === undefined) field = build();
   const f = field;
   if (!f) return DAM_FIELD_MAX;
-  let c = (x - f.x0) / f.step; let r = (z - f.z0) / f.step;
+  const c = (x - f.x0) / f.step; const r = (z - f.z0) / f.step;
   if (c < 0 || r < 0 || c > f.cols - 1 || r > f.rows - 1) return DAM_FIELD_MAX;
   const c0 = Math.floor(c); const r0 = Math.floor(r);
   const c1 = Math.min(f.cols - 1, c0 + 1); const r1 = Math.min(f.rows - 1, r0 + 1);

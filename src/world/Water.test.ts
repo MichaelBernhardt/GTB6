@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { DETAIL_WAVES, FOUNTAIN_RIPPLE, OCEAN_WAVES, POND_RIPPLE, REFLECTOR_FAR_INTERVAL, REFLECTOR_RANGE, WATER_KEYFRAMES, createWaterNormalTexture, rectDistanceSq, reflectorShouldRender, rippleEnvelope, ripplePhase, rippleSlope, rippleSlopeGlsl, sampleWaterColor, tileableNoise, waterNoiseHeight, waterTier, waveHeight, waveHeightGlsl, waveSlope, waveSlopeGlsl } from './Water';
+import { DETAIL_WAVES, FOUNTAIN_RIPPLE, OCEAN_HAZE_DENSITY, OCEAN_SKY_MIX, oceanHazeGlsl, OCEAN_WAVES, POND_RIPPLE, REFLECTOR_FAR_INTERVAL, REFLECTOR_RANGE, WATER_KEYFRAMES, createWaterNormalTexture, rectDistanceSq, reflectorShouldRender, rippleEnvelope, ripplePhase, rippleSlope, rippleSlopeGlsl, sampleWaterColor, tileableNoise, waterNoiseHeight, waterTier, waveHeight, waveHeightGlsl, waveSlope, waveSlopeGlsl } from './Water';
 
 describe('water tier selection', () => {
   it('maps quality presets onto distinct tiers', () => {
@@ -141,5 +141,38 @@ describe('procedural water normal texture', () => {
       expect(length).toBeGreaterThan(0.94); expect(length).toBeLessThan(1.06);
     }
     texture.dispose();
+  });
+});
+
+describe("the dam's horizon haze (D2)", () => {
+  it('splices onto a chunk three actually emits', () => {
+    // applyOceanHaze inserts after `#include <fog_fragment>`. If three ever renames or reorders that
+    // chunk the String.replace silently does nothing, the haze disappears and the black horizon line
+    // comes straight back with no error anywhere — so pin the anchor, and pin that it comes AFTER
+    // tonemapping/colour space, which is what lets the haze reuse three's own fogColor uniform.
+    const fragment = THREE.ShaderLib.physical.fragmentShader;
+    expect(fragment).toContain('#include <fog_fragment>');
+    expect(fragment.indexOf('#include <fog_fragment>')).toBeGreaterThan(fragment.indexOf('#include <colorspace_fragment>'));
+    expect(THREE.ShaderChunk.fog_fragment).toContain('fogColor');
+    expect(THREE.ShaderChunk.fog_pars_fragment).toContain('vFogDepth');
+  });
+
+  it('builds GLSL around whatever view-facing term the tier can supply', () => {
+    const glsl = oceanHazeGlsl('eyeDir.y');
+    expect(glsl).toContain('abs( eyeDir.y )');
+    expect(glsl).toContain('uOceanHaze');
+    expect(glsl).toContain('uOceanSky');
+    expect(glsl).toContain('vFogDepth');
+    expect(glsl).toContain('gl_FragColor');
+  });
+
+  it('keeps the haze strong enough to matter and the sky mix short of washing the dam out', () => {
+    // Distance term at the scene fog's own scale: several times denser, or it does nothing at the
+    // ranges a shore view actually spans.
+    expect(OCEAN_HAZE_DENSITY).toBeGreaterThan(0.00025 * 3);
+    expect(OCEAN_HAZE_DENSITY).toBeLessThan(0.01);
+    // Uncapped grazing fresnel is physically right and loses the water against the strand.
+    expect(OCEAN_SKY_MIX).toBeGreaterThan(0.3);
+    expect(OCEAN_SKY_MIX).toBeLessThan(0.85);
   });
 });

@@ -47,31 +47,41 @@ export type Rgb = readonly [number, number, number];
 // The owner kept the sand and the real place settled why: "Misty bay has some resorts and sandy
 // beaches, hence the choice." So sand survives, but it is zoned rather than smeared everywhere.
 
-// THESE ARE ALBEDOS IN LINEAR SPACE, AND THEY LOOK TOO DARK IN SOURCE ON PURPOSE.
-// Two things eat the difference between a number written here and a pixel on screen, and the last
-// pass at this palette missed both, which is how a "grey-brown" shore rendered as a white salt pan
-// at rgb(238,230,210), saturation 0.12, indistinguishable from the resort beach next to it:
-//   1. a BufferAttribute carries no colour space, so three multiplies these straight into the
-//      lighting as LINEAR values. A palette written as though it were sRGB is ~1.8x too bright.
-//   2. the shore is lit by a 4.4-intensity 0xffd9a0 sun over a 0xcfe4f5/0x8a7c4d hemisphere, then
-//      tone-mapped ACES at exposure 1.22. Measured off the shipped frame, that chain multiplies
-//      albedo by (2.37, 1.87, 1.41) before the curve — the light is WARM, so a neutral albedo comes
-//      out warm on screen, and anything above ~0.35 lands in the ACES shoulder where saturation is
-//      crushed towards white. Grey-brown grit in that sun is an albedo near 0.14, not 0.6.
-// The values below were solved backwards through that chain from the colours we want on screen, and
-// checked against the in-engine pixels (see the D2/D3 shore shots). Change them by measuring, not by
-// eye: the same source hex can read as bleached bone or wet mud depending on where it lands on the
-// curve. `map` (the near-neutral dambed grain) multiplies in on top, costing about another 0.7x.
+// THESE ARE ALBEDOS IN LINEAR SPACE AND THEY WERE MEASURED, NOT DERIVED.
+// Two previous passes solved this palette on paper — a claimed (2.37, 1.87, 1.41) light multiplier
+// plus a guess at where the ACES shoulder bites — and both shipped a white salt pan: the last one
+// rendered the natural strand at rgb(208,202,188), saturation 0.096, which is bone, not grit.
+// Paper does not work here because three multiplies a BufferAttribute straight into the lighting as
+// LINEAR values, the sun is warm (0xffd9a0 at 4.4 over a 0xcfe4f5/0x8a7c4d hemisphere), the ACES
+// curve at exposure 1.22 crushes saturation above ~0.3, and the `dambed` map multiplies in on top.
+//
+// So the curve was MEASURED in-engine instead: the real bed sheet was painted with fifteen known
+// albedos, rendered through the game's own composer from eye height at noon, and the pixels read back
+// (tools note: scratchpad d2d3b/calib2.py). The sampled transfer, greys, albedo -> sRGB pixel:
+//     0.02->(76,65,49)  0.04->(99,86,68)  0.07->(126,112,91)  0.10->(147,132,110)
+//     0.14->(167,153,131) 0.19->(185,172,151) 0.25->(199,188,169) 0.32->(210,201,184)
+//     0.42->(221,213,199) 0.55->(229,223,212)
+// Every value below is that table inverted for a chosen screen colour, and the chosen colours are
+// stated. Note the shape of it: because the light is warm, a warm grey ON SCREEN needs a slightly
+// BLUE albedo IN SOURCE, and 0.2 already renders as 185/255. Change these by re-running the sweep.
 
-/** Resort sand: the two beach polygons only (Misty Bay and Leboya Bay). Warm, and deliberately the
- *  most saturated thing on the shore — the owner picked this bay for its sandy beaches. */
-export const RESORT_SAND: Rgb = [0.448, 0.307, 0.208];
-/** Drawdown strand: pale grey-brown grit between the grass line and the bathtub ring. */
-export const DRAWDOWN_GRIT: Rgb = [0.196, 0.216, 0.230];
-/** The bathtub ring itself — a bleached band right above the current waterline. */
-export const HIGH_WATER_MARK: Rgb = [0.304, 0.336, 0.347];
-/** Silt bed below the waterline. */
-export const SUBMERGED_BED: Rgb = [0.055, 0.061, 0.062];
+/** Resort sand: the two beach polygons only. Screen target rgb(216,190,138) — hue 40, sat 0.36,
+ *  deliberately the warmest and most saturated thing on the shore. */
+export const RESORT_SAND: Rgb = [0.375, 0.261, 0.158];
+/** Drawdown strand: the grey-brown grit between the grass line and the bathtub ring. Screen target
+ *  rgb(132,120,103) — hue 30, sat 0.22, val 0.52. Desaturated and mid-toned: grit, not bone. (The
+ *  first pass at the inverted table aimed 15% higher and measured 174,167,155 at the player's feet,
+ *  still too close to bone, so both natural tones were taken down a stop.) */
+export const DRAWDOWN_GRIT: Rgb = [0.068, 0.071, 0.077];
+/** The bathtub ring itself — a bleached band right above the current waterline. Screen target
+ *  rgb(155,148,135), sat 0.13: paler than the grit above it, which is how a drawdown ring reads. */
+export const HIGH_WATER_MARK: Rgb = [0.122, 0.135, 0.152];
+/** Silt bed below the waterline. Screen target rgb(70,66,56) — mostly seen through the water. */
+export const SUBMERGED_BED: Rgb = [0.015, 0.021, 0.027];
+/** The dry veld the shore band abuts. Screen target rgb(218,198,127): MEASURED off the ground mesh
+ *  at the player's feet, so the sheet's inland edge fades into the ground instead of ending on a
+ *  line. Without this the clipped sheet drew a straight north-south colour seam at the map edge. */
+export const VELD_TONE: Rgb = [0.393, 0.304, 0.132];
 /**
  * Height above the waterline (world units) that the bathtub ring covers, and the height at which
  * resort sand gives way to normal cover. These are HEIGHTS, but what the player sees is a WIDTH,
@@ -90,13 +100,21 @@ const mix = (a: Rgb, b: Rgb, t: number): Rgb =>
  * Colour for one vertex of the dam bed / strand sheet, from its HEIGHT relative to the water
  * surface (not its x): the bathtub ring is a water-level phenomenon, so keying it off height makes
  * it follow every bay and headland for free, and it stays right if the water level is ever moved.
+ *
+ * `veldFade` (0..1) carries the vertex's distance inland: the sheet no longer covers the whole west
+ * band, so its landward edge has to arrive at the colour of the ground it abuts rather than stopping
+ * on a line. 0 = on the strand, 1 = ordinary veld.
  */
-export function shoreColourAt(y: number, z: number, waterY: number, bands: readonly ZBand[]): Rgb {
+export function shoreColourAt(y: number, z: number, waterY: number, bands: readonly ZBand[], veldFade = 0): Rgb {
   const rise = y - waterY;
   if (rise <= 0) return mix(SUBMERGED_BED, HIGH_WATER_MARK, Math.max(0, 1 + rise / 1.2) * 0.35);
-  if (isSandZ(z, bands)) return mix(RESORT_SAND, DRAWDOWN_GRIT, Math.min(1, Math.max(0, (rise - SAND_TOP_RISE) / 0.9)));
-  if (rise <= HIGH_WATER_RISE) return HIGH_WATER_MARK;
-  return mix(HIGH_WATER_MARK, DRAWDOWN_GRIT, Math.min(1, (rise - HIGH_WATER_RISE) / 0.7));
+  const fade = Math.min(1, Math.max(0, veldFade));
+  const shore = isSandZ(z, bands)
+    ? mix(RESORT_SAND, DRAWDOWN_GRIT, Math.min(1, Math.max(0, (rise - SAND_TOP_RISE) / 0.9)))
+    : rise <= HIGH_WATER_RISE
+      ? HIGH_WATER_MARK
+      : mix(HIGH_WATER_MARK, DRAWDOWN_GRIT, Math.min(1, (rise - HIGH_WATER_RISE) / 0.7));
+  return fade > 0 ? mix(shore, VELD_TONE, fade) : shore;
 }
 
 export interface ShoreRibbonOptions {

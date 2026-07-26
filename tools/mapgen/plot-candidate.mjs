@@ -129,9 +129,9 @@ const [sx0, sz0] = px({ x: -HALF, z: -HALF }); const [sx1, sz1] = px({ x: HALF, 
 g.fillRect(sx0, sz0, sx1 - sx0, sz1 - sz0);
 // water
 g.fillStyle = '#2f6fa8'; g.beginPath();
-water.forEach((p, i) => { const [a, b] = px(p); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.closePath(); g.fill();
+water.forEach((p, i) => { const [a, b] = px(p); if (i) g.lineTo(a, b); else g.moveTo(a, b); }); g.closePath(); g.fill();
 g.fillStyle = '#6f8f5a';
-for (const isl of isles) { g.beginPath(); isl.pts.forEach((p, i) => { const [a, b] = px(p); i ? g.lineTo(a, b) : g.moveTo(a, b); }); g.closePath(); g.fill(); }
+for (const isl of isles) { g.beginPath(); isl.pts.forEach((p, i) => { const [a, b] = px(p); if (i) g.lineTo(a, b); else g.moveTo(a, b); }); g.closePath(); g.fill(); }
 // world square outline + budget lines
 g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.strokeRect(sx0, sz0, sx1 - sx0, sz1 - sz0);
 g.strokeStyle = '#ff5050'; g.lineWidth = 1.5; g.setLineDash([6, 5]);

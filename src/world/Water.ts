@@ -182,6 +182,10 @@ export interface WaterHandle {
   tier: WaterTier;
   update(dt: number): void;
   setMood(hour: number, sunDirection: THREE.Vector3, sunColor: THREE.Color): void;
+  /** Distance density and grazing sky ceiling of the dam's own horizon haze (see OCEAN_HAZE_DENSITY).
+   *  Shared by every ocean tier, so the D2 verification harness can sweep them in-engine rather than
+   *  rebuilding the world once per candidate value. */
+  setHaze(density: number, skyMix?: number): void;
   dispose(): void;
 }
 
@@ -197,6 +201,83 @@ const detailSlopeGlsl = (): string =>
 /** Fades fragment normal wobble with view distance: far water shades calmly instead of strobing between sky and scatter. */
 const slopeFadeGlsl = (distanceExpr: string): string => `waterSlope *= 1.0 / (1.0 + ${distanceExpr} * 0.016);`;
 
+// ---- The dam's horizon haze (D2) ---------------------------------------------------------------
+// THIS IS WHAT THE "STRAIGHT WATER CAP" ACTUALLY WAS, and two passes chased the wrong thing.
+// The closure geometry is already outside the frustum (coast.ts farWaterOutline), so nothing you can
+// see is an edge. What you see is SHADING: measured in-engine at noon, eye height, fog at the
+// shipping 0.00025, the dam's surface renders at luminance 62-78/255 while the sky right above it is
+// 205-212. FogExp2 barely touches it — 2.4% at 600 units, 24% at 2 km — so from every shore the
+// water/sky boundary is a dead-level, full-width, ~140/255 black line. Hiding the Water group makes
+// it vanish; hiding the sky dome or the far chunks does not. That line is the cap.
+//
+// A real reservoir does not do this, for a reason our shading leaves out. Water is a fresnel surface:
+// at 89 degrees of incidence it reflects ~90% of what is above it, so from eye height the far half of
+// any lake is a pale sheet of sky and only the water at your feet is dark. Look at any photograph of
+// the Vaal from the bank. Our fresnel term is there but it reflects a nearly black environment map, so
+// the whole dam stays the colour of the water at your feet right up to the horizon — which is what
+// turns the last few pixels of it into a drawn-on black line.
+//
+// So two terms, both mixing toward the scene's own fog colour (which IS the horizon sky colour):
+//   SKY — the missing grazing reflection, OCEAN_SKY_MIX * pow(1 - |view.y|, 14). Keyed off the view
+//     angle, so it costs nothing looking down from a bridge or a plane and everything at eye height.
+//     It is deliberately CAPPED below 1: full fresnel is physically right and looks wrong, because it
+//     turns the whole dam into one tone with the strand and you lose the water entirely (measured: a
+//     0.0012/uncapped build read 171,160,131 at 200 units, against a 196,180,140 sky).
+//   DISTANCE — a denser exp2 than the scene fog, which finishes the far field off into the sky and
+//     covers the off-map water you see over the bed at latitudes the dam misses in-square.
+// Both numbers came off an in-engine sweep at four shore viewpoints (scratchpad d2d3b/haze.py), scored
+// on the HARD-EDGE metric — the largest 2-pixel luminance step in the horizon band, which is what a cap
+// is, as opposed to the 14-pixel window that any real lake fails just by being darker than the sky.
+// Applied ONLY to the ocean site: the ponds and inland dams are small enough that no part of one is
+// ever far away or seen at a grazing angle worth speaking of.
+/** Density of the ocean-only distance haze. exp2, like the scene fog, ~5x denser. */
+export const OCEAN_HAZE_DENSITY = 0.0018;
+/** Ceiling on the grazing sky reflection. The far water reaches the sky through the distance term. */
+export const OCEAN_SKY_MIX = 0.65;
+/** Falloff of the grazing term. 14 keeps the water at your feet its own colour: from an eye 1.8 units
+ *  up it is 0.4% of the mix at 5 units out, 21% at 30 and 43% at 200. */
+const OCEAN_GRAZE_POWER = 14;
+/**
+ * Channel scaling that cools the haze colour for water only.
+ *
+ * The haze mixes toward `fogColor`, and over this veld the fog is a warm tan — so a first build hazed
+ * the dam to within 30/255 of the drawdown strand beside it and you could no longer tell the water
+ * from the land you were standing on. What water at a grazing angle actually reflects is the SKY, and
+ * the sky is the cool half of the same light. Scaling the fog colour per channel keeps that difference
+ * without needing the sky colour plumbed into the shader, and it stays right at every hour because it
+ * is relative: at noon it takes the fog's (196,180,140) to (157,166,175), at night (13,23,38) to
+ * (10,21,47).
+ */
+const OCEAN_HAZE_TINT = 'vec3( 0.80, 0.92, 1.25 )';
+/** Mixes the water toward the (cooled) fog colour by view angle and by distance. Inserted after three's
+ *  own fog so the two agree about colour space, and it lifts alpha with it so the dark bed cannot show
+ *  through. `facing` is the cosine between the view ray and world up. */
+export const oceanHazeGlsl = (facing: string): string => `
+  #ifdef USE_FOG
+    float hazeDistance = 1.0 - exp( - uOceanHaze * uOceanHaze * vFogDepth * vFogDepth );
+    float hazeSky = uOceanSky * pow( 1.0 - min( 1.0, abs( ${facing} ) ), ${OCEAN_GRAZE_POWER}.0 );
+    float oceanHaze = 1.0 - ( 1.0 - hazeDistance ) * ( 1.0 - hazeSky );
+    gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor * ${OCEAN_HAZE_TINT}, oceanHaze );
+    gl_FragColor.a = mix( gl_FragColor.a, 1.0, oceanHaze );
+  #endif`;
+
+/** World up in view space, for the grazing term inside a shader that only has view-space vectors. */
+const VIEW_UP_GLSL = 'normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz )';
+
+/** Adds the ocean haze to a material three compiles for us (the flat and physical ocean tiers). */
+function applyOceanHaze(material: THREE.Material, haze: THREE.IUniform, sky: THREE.IUniform): void {
+  const priorCompile = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer): void => {
+    priorCompile.call(material, shader, renderer);
+    shader.uniforms.uOceanHaze = haze; shader.uniforms.uOceanSky = sky;
+    shader.fragmentShader = `uniform float uOceanHaze;\nuniform float uOceanSky;\n${shader.fragmentShader.replace(
+      '#include <fog_fragment>',
+      `#include <fog_fragment>${oceanHazeGlsl(`dot( normalize( vViewPosition ), ${VIEW_UP_GLSL} )`)}`)}`;
+  };
+  const priorKey = material.customProgramCacheKey;
+  material.customProgramCacheKey = (): string => `${priorKey.call(material)}-oceanhaze`;
+}
+
 /** View-space normal from a world-space (∂h/∂x, ∂h/∂z) slope of a horizontal surface. */
 const slopeToViewNormalGlsl = 'normal = normalize((viewMatrix * vec4(normalize(vec3(-waterSlope.x, 1.0, -waterSlope.y)), 0.0)).xyz);';
 
@@ -204,6 +285,8 @@ const slopeToViewNormalGlsl = 'normal = normalize((viewMatrix * vec4(normalize(v
 export function createWater(sites: readonly WaterSite[], tier: WaterTier): WaterHandle {
   const group = new THREE.Group(); group.name = 'Water';
   const timeUniform = { value: 0 };
+  const hazeUniform = { value: OCEAN_HAZE_DENSITY };
+  const skyUniform = { value: OCEAN_SKY_MIX };
   const moodMaterials: THREE.MeshPhysicalMaterial[] = [];
   const textures: THREE.Texture[] = [];
   const scrollTextures: THREE.Texture[] = [];
@@ -241,6 +324,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
       const texture = createSurfaceTexture('water', 7); textures.push(texture); scrollTextures.push(texture);
       const material = new THREE.MeshPhysicalMaterial({ color: 0x2f7589, map: texture, roughness: 0.16, metalness: 0.05, clearcoat: 0.85, clearcoatRoughness: 0.16, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
       moodMaterials.push(material);
+      applyOceanHaze(material, hazeUniform, skyUniform);
       addMesh(oceanGeometryXY(site).rotateX(-Math.PI / 2), material, site);
       return;
     }
@@ -249,6 +333,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
       const fragmentChunk = `\tvec2 waterSlope = ${waveSlopeGlsl('vWaterPos.x', 'vWaterPos.y', 'uTime', [...OCEAN_WAVES, ...DETAIL_WAVES])};\n\twaterSlope += ${detailSlopeGlsl()};\n\t${slopeFadeGlsl('length(vViewPosition)')}\n\t${slopeToViewNormalGlsl}`;
       const material = wavyMaterial('water-ocean', vertexChunk, fragmentChunk, OCEAN_ALPHA);
       material.side = THREE.DoubleSide; // visible from underwater too (looking up at the surface)
+      applyOceanHaze(material, hazeUniform, skyUniform);
       addMesh(oceanGeometryXY(site, OCEAN_SEGMENTS).rotateX(-Math.PI / 2), material, site);
       return;
     }
@@ -282,6 +367,8 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
       uniform float uTime;
       uniform float uAlpha;
       uniform float uDistortion;
+      uniform float uOceanHaze;
+      uniform float uOceanSky;
       varying vec4 vMirrorCoord;
       varying vec3 vWorldPos;
       varying vec2 vWaterPos;
@@ -307,6 +394,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
         #include <fog_fragment>
+        ${oceanHazeGlsl('eyeDir.y')}
       }`;
     reflector = new Reflector(oceanGeometryXY(site, OCEAN_SEGMENTS), {
       textureWidth: REFLECTOR_TEXTURE_SIZE, textureHeight: REFLECTOR_TEXTURE_SIZE, clipBias: 0.015, multisample: 0,
@@ -315,6 +403,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
         uniforms: {
           color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null }, // slots Reflector assigns
           uDetail: { value: null }, uTime: { value: 0 }, uAlpha: { value: OCEAN_ALPHA }, uDistortion: { value: REFLECTOR_DISTORTION },
+          uOceanHaze: { value: OCEAN_HAZE_DENSITY }, uOceanSky: { value: OCEAN_SKY_MIX },
           uColor: { value: new THREE.Color(0x2f7589) }, uSunColor: { value: new THREE.Color(0xffd9a0) }, uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0) },
           ...THREE.UniformsLib.fog,
         },
@@ -363,6 +452,11 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
     update(dt: number): void {
       timeUniform.value += dt; frame++;
       for (const texture of scrollTextures) texture.offset.x = (texture.offset.x + dt * 0.006) % 1;
+    },
+    setHaze(density: number, skyMix = skyUniform.value): void {
+      hazeUniform.value = density; skyUniform.value = skyMix;
+      if (reflectorUniforms?.uOceanHaze) reflectorUniforms.uOceanHaze.value = density;
+      if (reflectorUniforms?.uOceanSky) reflectorUniforms.uOceanSky.value = skyMix;
     },
     setMood(hour: number, sunDirection: THREE.Vector3, sunColor: THREE.Color): void {
       sampleWaterColor(hour, COLOR_TMP);

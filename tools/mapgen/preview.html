@@ -56,7 +56,7 @@
 <script>
 'use strict';
 // ===== SHARED RENDERER (single source of truth — see src/ui/mapRender.ts) =====
-/* mapRender v1.4.0 sha256:69cc6f763330 — inlined from src/ui/mapRender.ts, do not edit here */
+/* mapRender v1.4.0 sha256:3867c2abe901 — inlined from src/ui/mapRender.ts, do not edit here */
 /**
  * Shared canvas map renderer — the SINGLE source of truth for drawing the generated Joburg map.
  *
@@ -99,6 +99,9 @@ const APRON_COLOR = '#6b6f78';
 const WATER_COLOR = '#2e6f9e';
 const WATER_PREMIUM_COLOR = '#3d89bd';
 const OCEAN_COLOR = '#173e63';
+/** How far west of the world square the map paints open water (units). Only has to exceed the widest
+ *  view the map screen can be zoomed out to. */
+const OFFMAP_WATER_REACH = 20000;
 const BEACH_COLOR = '#d9c184';
 const FARMLAND_COLOR = '#5a4630'; // tilled soil brown, matching the 3D farmland fill (createGrassTexture 'soil')
 const DISTRICT_COLOR = '#b9c7d6';
@@ -186,6 +189,33 @@ function snowNoise(x, z) {
     const d = h(ix + 1, iz + 1);
     return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
 }
+/**
+ * Maps an elevation to its rank in the grid, 0..1 — a plain histogram equalisation over a bounded
+ * sample of the values, so it is O(1) per pixel and deterministic. Sampling every value would be
+ * fine at 128x128 too; the stride is there so the cost does not grow if the grid ever does.
+ */
+function elevationRanker(data) {
+    const stride = Math.max(1, Math.floor(data.length / 4096));
+    const sample = [];
+    for (let i = 0; i < data.length; i += stride)
+        sample.push(data[i]);
+    sample.sort((a, b) => a - b);
+    const n = sample.length;
+    if (n < 2 || sample[0] === sample[n - 1])
+        return () => 0.5;
+    return (value) => {
+        let lo = 0;
+        let hi = n; // first index with sample[i] >= value
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (sample[mid] < value)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return Math.min(1, lo / (n - 1)); // lo reaches n above the grid's own maximum
+    };
+}
 function buildHillshade(map) {
     const e = map.elevation;
     if (!e || e.data.every((v) => v === e.data[0]))
@@ -197,8 +227,17 @@ function buildHillshade(map) {
     if (!g)
         return null;
     const img = g.createImageData(e.cols, e.rows);
-    const min = map.stats.minElevation;
-    const max = Math.max(map.stats.maxElevation, min + 1);
+    // GROUND TONE COMES FROM THE GRID'S OWN DISTRIBUTION, NOT FROM min..max.
+    // It used to be t = (v - stats.minElevation) / (stats.maxElevation - stats.minElevation), which is
+    // only stable while the encoding is. The old map wrote 0 metres for water and off-map, so min was 0,
+    // the range was 0..2949 and ordinary land at 1659 m sat at t = 0.56 — mid-ramp, legible. The dam
+    // build writes real metres everywhere, so min became 1480: the identical land dropped to t = 0.16,
+    // the dark end of the ramp, and the WHOLE MAP went dark with it (measured on the two renders: median
+    // luminance 41 -> 34 over the city, 51 -> 39 in the west band, and the share of pixels under 35 went
+    // from 8% to 57%). That is the "large empty unlit areas" on the map screen, and it was never about
+    // the dam. Ranking the values instead makes the tone independent of the encoding: the median of the
+    // land is always mid-grey, whether water is stored as 0 m or as full supply level.
+    const rank = elevationRanker(e.data);
     const cell = Math.abs(e.dx) * map.stats.metresPerUnit;
     const at = (col, row) => e.data[Math.max(0, Math.min(e.rows - 1, row)) * e.cols + Math.max(0, Math.min(e.cols - 1, col))];
     for (let row = 0; row < e.rows; row++) {
@@ -207,7 +246,7 @@ function buildHillshade(map) {
             const dzdy = (at(col, row + 1) - at(col, row - 1)) / (2 * cell);
             let shade = 0.72 - 2.2 * (dzdx * -0.707 + dzdy * -0.707);
             shade = Math.max(0.25, Math.min(1.15, shade));
-            const t = (at(col, row) - min) / (max - min);
+            const t = rank(at(col, row));
             let r = 46 + 44 * t;
             let bg = 56 + 40 * t;
             let bb = 52 + 30 * t;
@@ -302,6 +341,17 @@ function renderMap(ctx, map, cam, opts = {}) {
         ctx.restore();
     }
     if (layers.coast && map.coast) {
+        if (g.oceanPath && g.hillshade) {
+            // Past the west edge the dam carries on — it is 320 km2 and we cropped 154. The old ocean's
+            // polygon overhung far enough to fill this strip; the wholesale Vaal is clipped 353 units off
+            // the edge, which left a PURE BLACK COLUMN down the left of the map screen plus black holes
+            // where real off-map land shows between the water fingers. Render-only, and it stops dead on
+            // the world square so nothing inside the map is touched.
+            ctx.fillStyle = OCEAN_COLOR;
+            ctx.globalAlpha = 0.92;
+            ctx.fillRect(g.hillshade.x - OFFMAP_WATER_REACH, g.hillshade.z - OFFMAP_WATER_REACH, OFFMAP_WATER_REACH, g.hillshade.h + 2 * OFFMAP_WATER_REACH);
+            ctx.globalAlpha = 1;
+        }
         if (g.oceanPath) {
             ctx.fillStyle = OCEAN_COLOR;
             ctx.globalAlpha = 0.92;
