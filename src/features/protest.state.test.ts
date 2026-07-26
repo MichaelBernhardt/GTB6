@@ -130,6 +130,37 @@ describe('grievance ledger', () => {
     expect(outageLedger.hours).toBe(0);
   });
 
+  it('adopting a save at load time KEEPS what this session already felt', () => {
+    // The regression the first in-engine playthrough caught: the eager hook had counted 3.2 outage
+    // hours, `E  Follow the smoke` appeared, the chunk loaded — and the body wiped the ledger with an
+    // empty saved slice, so the press did nothing at all.
+    const ledger = new OutageLedger();
+    ledger.tick(2, 50, 60, false);
+    for (let step = 1; step <= 40; step++) ledger.tick(2 + step * 0.1, 50, 60, false);
+    expect(ledger.ripe).toBe(true);
+    ledger.adopt(defaultProtestSave()); // a brand-new save with no protest slice
+    expect(ledger.hours).toBeCloseTo(4, 5);
+    expect(ledger.ripe).toBe(true);
+    expect(ledger.anchorX).toBeCloseTo(50, 0);
+  });
+
+  it('adopting adds this session on top of the stored baseline, and the live anchor wins', () => {
+    const ledger = new OutageLedger();
+    ledger.tick(2, 900, 900, false);
+    ledger.tick(2.4, 900, 900, false);
+    ledger.adopt({ ...defaultProtestSave(), hours: 2, anchor: [-10, -10] });
+    expect(ledger.hours).toBeCloseTo(2.4, 5);
+    expect(ledger.anchorX).toBeCloseTo(900, 0); // where they stood in the dark THIS session
+  });
+
+  it('a checkpoint reload REPLACES rather than adds', () => {
+    const ledger = new OutageLedger();
+    ledger.hours = 5; ledger.hasAnchor = true; ledger.anchorX = 3;
+    ledger.load({ ...defaultProtestSave(), hours: 1, anchor: [7, 8] });
+    expect(ledger.hours).toBe(1);
+    expect(ledger.anchorX).toBe(7);
+  });
+
   it('round-trips through the save', () => {
     const ledger = new OutageLedger();
     ledger.hours = 2.5; ledger.anchorX = 12.345; ledger.anchorZ = -6.7; ledger.hasAnchor = true;

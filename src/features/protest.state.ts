@@ -169,10 +169,33 @@ export class OutageLedger {
 
   spend(): void { this.hours = Math.min(this.hours, POST_PICKET_HOURS); }
 
+  /** A checkpoint reload REPLACES the ledger: that save is now the truth. */
   load(save: ProtestSave): void {
     this.hours = save.hours;
     if (save.anchor) { this.anchorX = save.anchor[0]; this.anchorZ = save.anchor[1]; this.hasAnchor = true; }
     else { this.hasAnchor = false; this.anchorX = 0; this.anchorZ = 0; }
+  }
+
+  /**
+   * The handover, and the one place this is easy to get catastrophically wrong.
+   *
+   * The eager `approach.near()` hook has been counting outage hours since the session started, from
+   * zero, because an unloaded feature is never handed its save slice. When the body finally loads it
+   * receives that slice — and a plain `load()` there would WIPE the very grievance that caused the
+   * load, leaving the player staring at a prompt that does nothing. (It did exactly that in the first
+   * in-engine playthrough: `E  Follow the smoke` appeared, the chunk arrived, and the feature woke up
+   * with hours=0.00 and no blockade.)
+   *
+   * So: the stored hours are the baseline and whatever this session already felt is added on top.
+   * The live anchor wins when there is one — where the player stood in the dark THIS session is a
+   * better answer than where they stood last time.
+   */
+  adopt(save: ProtestSave): void {
+    const sessionHours = this.hours;
+    const sessionAnchor = this.hasAnchor ? [this.anchorX, this.anchorZ] as const : undefined;
+    this.load(save);
+    this.hours += sessionHours;
+    if (sessionAnchor) { this.anchorX = sessionAnchor[0]; this.anchorZ = sessionAnchor[1]; this.hasAnchor = true; }
   }
 
   store(): Pick<ProtestSave, 'hours' | 'anchor'> {

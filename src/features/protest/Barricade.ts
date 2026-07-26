@@ -109,11 +109,12 @@ function placardTexture(line: string): THREE.Texture {
   return texture;
 }
 
-/** Real placard grammar: hand-lettered, running out of room, and spelling is not the point. */
+/** Real placard grammar: scrap cardboard, permanent marker, hand-lettered, running out of room.
+ *  Deliberately NOT a spelling gag — the joke is the councillor, never the person holding the board. */
 const SLOGANS = [
   '53 DAYS NO WATER',
   'NO WATER NO VOTE',
-  'WHERE IS OUR WATER SINSE 2019',
+  'DRY SINCE 2019',
   'WE ARE NOT ASKING AGAIN',
   'FIX THE PUMP NOT THE PHOTO',
 ];

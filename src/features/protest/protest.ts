@@ -43,8 +43,11 @@ const TYRE_TOLL = 420;
 const TYRE_CLOSURE_RADIUS = 12;
 /** Interaction reach around the barricade centre. Generous — the junk is spread over ~18 units. */
 const BARRICADE_REACH = 12;
-/** A solo tyre needs tar under it and elbow room from the last one. */
-const TAR_REACH = 7;
+/** A solo tyre needs tar under it and elbow room from the last one. Measured against the real map,
+ *  not guessed: `nearestRoadPose` snaps to a sampled LANE centreline, so a player standing squarely
+ *  on the road can still be 7-8 units from the nearest sample. The first in-engine run refused to
+ *  light a tyre in the middle of the road with a reach of 7. */
+const TAR_REACH = 10;
 const SOLO_SPACING = 22;
 
 type Phase = 'idle' | 'live' | 'picketing' | 'smouldering';
@@ -53,7 +56,7 @@ interface SoloFire { fire: TyreFire; id: string; x: number; z: number }
 
 export function createFeature(api: FeatureGameApi, state: unknown): FeatureSystem {
   const save: ProtestSave = sanitizeProtestState(state);
-  outageLedger.load(save);
+  outageLedger.adopt(save); // ADOPT, not load — see OutageLedger.adopt. `load` here wipes the session.
 
   const scorch = new ScorchField(api.scene, (x, z) => api.surfaceHeightAt(x, z));
   scorch.load(save.scorch);

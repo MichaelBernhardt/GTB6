@@ -142,6 +142,29 @@ describe('scorch field', () => {
   });
 });
 
+describe('the eager-to-lazy handover', () => {
+  it('a session that ripened BEFORE the chunk loaded still raises on the first press', () => {
+    // Exactly what the first in-engine playthrough did, and exactly where it failed: the eager
+    // approach counted the outage, showed `E  Follow the smoke`, the chunk arrived — and the body
+    // adopted an empty save slice over the top, so the press did nothing.
+    roadClosures.clear();
+    outageLedger.reset();
+    outageLedger.tick(2, 120, -300, false);
+    for (let step = 1; step <= 40; step++) outageLedger.tick(2 + step * 0.1, 120, -300, false);
+    expect(outageLedger.ripe).toBe(true);
+
+    const api = stubApi();
+    const system = createFeature(api, undefined); // a fresh game: no stored protest slice at all
+    const rung = (system.interactions?.() ?? []).find((entry) => entry.id === 'protest:raise');
+    const offer = rung?.test({ context: 'foot', position: new THREE.Vector3(), vehicle: undefined, hour: 5 });
+    expect(offer?.prompt).toBe('E  Follow the smoke');
+    offer?.act();
+    expect(system.qa?.('site', {})).toMatch(/^ok:/);
+    expect(system.qa?.('closures', {})).toContain('protest:blockade');
+    system.dispose();
+  });
+});
+
 describe('the loaded feature', () => {
   it('closes a road when a blockade goes up and reopens it on dispose', () => {
     roadClosures.clear();
