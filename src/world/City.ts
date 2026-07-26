@@ -661,6 +661,9 @@ export class City {
   private colliderCellSize = 48;
   private collidersIndexed = 0;
   private buildingMaterial = new Map<string, THREE.MeshStandardMaterial>();
+  /** Current lit-window emissive level, so a facade material created mid-flight is born already lit
+   *  (see setFacadeGlow). The day/night cycle owns the value; City only remembers it. */
+  private facadeGlow = 0;
   private asphalt = createGeneratedSurfaceTexture('/textures/asphalt-gpt.jpg', 'asphalt', 1);
   private concrete = createGeneratedSurfaceTexture('/textures/concrete-gpt.jpg', 'concrete', 10);
   private foundationMaterial = new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 });
@@ -867,6 +870,31 @@ export class City {
 
   /** Shared facade materials (buildings are merged per material): the day/night cycle animates their emissiveIntensity for lit windows. */
   facadeMaterials(): THREE.MeshStandardMaterial[] { return [...this.buildingMaterial.values()]; }
+
+  /**
+   * Window glow for every facade material there is, and for every facade material there ever will be.
+   *
+   * D4, "large empty unlit areas". Facade materials are created LAZILY, one per `style-facadeIndex`
+   * pair, the first time a chunk containing that pair is streamed in — and DayNight used to take a
+   * one-time snapshot of the map at construction and walk that array every frame. Anything whose
+   * style/variant pair had not been built by the time the day/night cycle came up therefore had its
+   * emissiveIntensity left at the 0 it was constructed with, permanently: dark windows at midnight,
+   * for good, however long you stood there.
+   *
+   * And the map is EMPTY when DayNight is constructed — building chunks stream in afterwards — so the
+   * snapshot was a zero-length array and the loop over it did nothing at all. Counted in-engine
+   * (tools/qa/shore/facades.py): 0 facade materials at boot, still 0 after two teleports, 19 by the
+   * time the tour reached the third town. Not one window in the world had ever lit up. On the dam
+   * shore at 22:00, pixels over 120/255 go from 0.01% of the frame to 2.85% once the level is pushed
+   * instead of the list walked; those towns had been rendering as unlit black slabs.
+   *
+   * Storing the level instead of the list fixes both halves: existing materials are updated here, and
+   * a material born later is constructed already carrying it (see the facade cache in buildBuilding).
+   */
+  setFacadeGlow(intensity: number): void {
+    this.facadeGlow = intensity;
+    for (const material of this.buildingMaterial.values()) material.emissiveIntensity = intensity;
+  }
 
   streetlightLampsXZ(): Float32Array { return this.infrastructure.lampsXZ; }
 
@@ -2164,7 +2192,9 @@ export class City {
     const palette = BUILDING_PALETTES[style];
     const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
     const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);
-    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: 0, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
+    // emissiveIntensity starts at the CURRENT window-glow level, not 0: this material may be born at
+    // midnight, halfway across the map from wherever the cycle last walked the list (see setFacadeGlow).
+    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: this.facadeGlow, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
     const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
     const foundations = foundationTiers(profile.tiers, -plinthDrop);
     for (const foundation of foundations) {

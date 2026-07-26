@@ -140,7 +140,6 @@ export class DayNightSystem {
   private streetPool: THREE.PointLight[] = [];
   private streetFound = 0; private streetRefresh = Infinity; private streetFocusX = Infinity; private streetFocusZ = Infinity; private streetActive = false;
   private headPool: THREE.SpotLight[] = [];
-  private facades: THREE.MeshStandardMaterial[];
   private blackout = 0; // eased 0..1 toward "grid down"; with nightFactor it kills the ambient city glow
   /** Story/mission surface: the eased grid-down factor (0 = grid up, 1 = full load-shedding dark). */
   get blackoutFactor(): number { return this.blackout; }
@@ -151,7 +150,6 @@ export class DayNightSystem {
   constructor(private scene: THREE.Scene, private environment: EnvironmentHandle, private city: City, quality: BaseQuality, startHour = DEFAULT_HOUR) {
     this.hour = wrapHour(startHour);
     this.lampXZ = city.streetlightLampsXZ();
-    this.facades = city.facadeMaterials();
     this.moon = new THREE.Mesh(new THREE.SphereGeometry(11, 20, 14), new THREE.MeshBasicMaterial({ color: 0xe6ecf7, fog: false }));
     this.moon.name = 'Moon'; scene.add(this.moon);
     this.buildPools(quality);
@@ -206,7 +204,7 @@ export class DayNightSystem {
     this.city.setWaterMood(this.hour, this.sunDir.y >= this.moonDir.y ? this.sunDir : this.moonDir, sky.sun); // water tint and its specular body track the sky
     const gridNight = night * (1 - this.blackout); // load shedding: mains-fed lights go dark, whatever the hour — eased with the same blackout ramp
     this.city.setStreetlightGlow(night); // the bulb material checks the grid itself so panels also read dark by day
-    for (const material of this.facades) material.emissiveIntensity = gridNight * FACADE_NIGHT_EMISSIVE;
+    this.city.setFacadeGlow(gridNight * FACADE_NIGHT_EMISSIVE); // covers facade materials streamed in after boot, too
     setSignGlow(night, this.blackout); // painted boards ride the same ramp: night glow on a healthy grid, torch-lit paint in a blackout
     this.updateStreetlightPool(focus, gridNight, dt);
     this.updateHeadlightPool(focus, night, traffic, police, playerVehicle); // cars run on batteries — Eskom can't touch these

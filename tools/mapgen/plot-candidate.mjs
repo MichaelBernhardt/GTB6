@@ -18,7 +18,6 @@ const relation = data.elements.find((e) => e.type === 'relation' && e.id === 253
 const ORIGIN = { lat: -26.9, lon: 28.15 }; const M_PER_DEG_LAT = 111132;
 const M_PER_DEG_LON = M_PER_DEG_LAT * Math.cos((ORIGIN.lat * Math.PI) / 180);
 const project = (lat, lon) => ({ x: (lon - ORIGIN.lon) * M_PER_DEG_LON, z: (ORIGIN.lat - lat) * M_PER_DEG_LAT });
-const unproject = (x, z) => ({ lat: ORIGIN.lat - z / M_PER_DEG_LAT, lon: ORIGIN.lon + x / M_PER_DEG_LON });
 function chainRings(members) {
   const key = (p) => `${p.lat.toFixed(7)},${p.lon.toFixed(7)}`;
   const rem = members.filter((m) => m.length >= 2).map((m) => [...m]); const rings = [];

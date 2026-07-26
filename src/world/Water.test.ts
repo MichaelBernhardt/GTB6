@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { DETAIL_WAVES, FOUNTAIN_RIPPLE, OCEAN_HAZE_DENSITY, OCEAN_SKY_MIX, oceanHazeGlsl, OCEAN_WAVES, POND_RIPPLE, REFLECTOR_FAR_INTERVAL, REFLECTOR_RANGE, WATER_KEYFRAMES, createWaterNormalTexture, rectDistanceSq, reflectorShouldRender, rippleEnvelope, ripplePhase, rippleSlope, rippleSlopeGlsl, sampleWaterColor, tileableNoise, waterNoiseHeight, waterTier, waveHeight, waveHeightGlsl, waveSlope, waveSlopeGlsl } from './Water';
+import { DETAIL_WAVES, FOUNTAIN_RIPPLE, OCEAN_GRAZE_POWER, OCEAN_HAZE_DENSITY, OCEAN_SKY_MIX, oceanHazeGlsl, OCEAN_WAVES, POND_RIPPLE, REFLECTOR_FAR_INTERVAL, REFLECTOR_RANGE, WATER_KEYFRAMES, createWaterNormalTexture, rectDistanceSq, reflectorShouldRender, rippleEnvelope, ripplePhase, rippleSlope, rippleSlopeGlsl, sampleWaterColor, tileableNoise, waterNoiseHeight, waterTier, waveHeight, waveHeightGlsl, waveSlope, waveSlopeGlsl } from './Water';
 
 describe('water tier selection', () => {
   it('maps quality presets onto distinct tiers', () => {
@@ -173,6 +173,30 @@ describe("the dam's horizon haze (D2)", () => {
     expect(OCEAN_HAZE_DENSITY).toBeLessThan(0.01);
     // Uncapped grazing fresnel is physically right and loses the water against the strand.
     expect(OCEAN_SKY_MIX).toBeGreaterThan(0.3);
-    expect(OCEAN_SKY_MIX).toBeLessThan(0.85);
+    expect(OCEAN_SKY_MIX).toBeLessThan(0.9);
+    // Schlick's own exponent is 5. The 14 this started at was chosen to keep the water at the
+    // player's feet dark, but it also suppressed the reflection over 30-200 units, which from eye
+    // height is the band that fills the frame.
+    expect(OCEAN_GRAZE_POWER).toBeGreaterThanOrEqual(5);
+    expect(OCEAN_GRAZE_POWER).toBeLessThanOrEqual(10);
+  });
+
+  it('lands the DISTANCE haze on the untinted fog colour, which is what kills the horizon line', () => {
+    // THE D2 INVARIANT, and the residual the first fix left behind. Every other surface in the world
+    // resolves at distance to `fogColor`; the sky dome's own horizon IS uHorizonColor = the same fog
+    // colour. While the ocean's distance term mixed toward a TINTED fog it could never arrive there:
+    // measured in-engine at noon, fogColor * vec3(0.80,0.92,1.25) renders (157,166,175) against a
+    // horizon of (212,203,176), so the far water sat 38/255 under the sky however far away it was,
+    // and the worst level step across 18 shore viewpoints was 101/255.
+    //
+    // So: the sky reflection may be tinted (it is a reflection of the cool half of the light), but
+    // the distance term must be applied LAST and must mix toward bare `fogColor`.
+    const glsl = oceanHazeGlsl('eyeDir.y');
+    const skyMix = glsl.indexOf('hazeSky );');
+    const distanceMix = glsl.indexOf('fogColor, hazeDistance );');
+    expect(skyMix).toBeGreaterThan(-1);
+    expect(distanceMix).toBeGreaterThan(skyMix); // distance composes last, so the horizon is the sky
+    // ...and its target carries no tint: the mix argument is `fogColor` on its own.
+    expect(glsl).toMatch(/mix\( gl_FragColor\.rgb, fogColor, hazeDistance \)/);
   });
 });
