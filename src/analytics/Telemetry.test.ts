@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { coarseBrowser, coarsePlatform, TelemetryClient, viewportBucket } from './Telemetry';
+import { coarseBrowser, coarsePlatform, randomUuid, TelemetryClient, viewportBucket } from './Telemetry';
 
 const ids = [
   '123e4567-e89b-42d3-a456-426614174000', '223e4567-e89b-42d3-a456-426614174000', '323e4567-e89b-42d3-a456-426614174000',
@@ -95,5 +95,37 @@ describe('TelemetryClient', () => {
     const payloads = await Promise.all(beacons.mock.calls.map(async (call) => JSON.parse(await (call[1] as Blob).text()) as Record<string, unknown>));
     expect(beacons.mock.calls[0]?.[0]).toBe('/api/analytics/heartbeat'); expect(beacons.mock.calls[1]?.[0]).toBe('/api/analytics/event');
     expect(payloads[0]).toMatchObject({ elapsedSeconds: 4 }); expect(payloads[1]).toMatchObject({ type: 'session_end', data: { durationSeconds: 4 } });
+  });
+});
+
+describe('randomUuid', () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  it('uses the native generator when the page is a secure context', () => {
+    const randomUUID = vi.fn(() => '123e4567-e89b-42d3-a456-426614174000');
+    expect(randomUuid({ randomUUID } as unknown as Crypto)).toBe('123e4567-e89b-42d3-a456-426614174000');
+    expect(randomUUID).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to getRandomValues over plain http, where randomUUID is not exposed', () => {
+    // A LAN preview is not a secure context, so crypto exists but randomUUID does not.
+    const insecure = { getRandomValues: (bytes: Uint8Array) => { bytes.fill(0xff); return bytes; } } as unknown as Crypto;
+    const id = randomUuid(insecure);
+    expect(id).toMatch(UUID);
+    expect(id).toBe('ffffffff-ffff-4fff-bfff-ffffffffffff'); // version and variant nibbles forced
+  });
+
+  it('still yields a valid id when there is no crypto at all', () => {
+    const ids = new Set(Array.from({ length: 50 }, () => randomUuid(undefined)));
+    for (const id of ids) expect(id).toMatch(UUID);
+    expect(ids.size).toBe(50);
+  });
+
+  it('produces ids the client accepts as a persisted browser id', () => {
+    const storage = new MemoryStorage();
+    storage.setItem('groot-theft-bakkie-anonymous-browser-id', randomUuid(undefined));
+    const before = storage.getItem('groot-theft-bakkie-anonymous-browser-id');
+    const client = new TelemetryClient({ storage });
+    expect(client.browserId).toBe(before);
   });
 });
