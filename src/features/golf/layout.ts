@@ -125,22 +125,27 @@ export function courseName(polygon: MapPolygon): string {
 
 // ---- routing ----------------------------------------------------------------------------------
 
-interface Cell { x: number; z: number; inset: number; u: number }
+interface Cell { x: number; z: number; inset: number; u: number; y: number }
 
 /** Tee/pin parameters along the course's long axis. Out, out again, and a long uphill walk home. */
 const HOLE_STOPS: Array<[number, number]> = [[0.08, 0.20], [0.25, 0.52], [0.57, 0.86]];
 
-function interiorCells(polygon: MapPolygon, minInset: number, step: number): Cell[] {
+function interiorCells(polygon: MapPolygon, minInset: number, step: number, groundAt: (x: number, z: number) => number): Cell[] {
   const cells: Cell[] = [];
   for (let x = polygon.minX; x <= polygon.maxX; x += step) {
     for (let z = polygon.minZ; z <= polygon.maxZ; z += step) {
       if (!pointInPolygon(polygon, x, z)) continue;
       const inset = insetAt(polygon, x, z);
-      if (inset >= minInset) cells.push({ x, z, inset, u: 0 });
+      if (inset >= minInset) cells.push({ x, z, inset, u: 0, y: groundAt(x, z) });
     }
   }
   return cells;
 }
+
+/** Steepest tee-to-green gradient a golf hole may have. Parkview's polygon runs up a saturated
+ *  escarpment at its southern tip; routing a green onto that face made the closing hole a wall the
+ *  machine playthrough could not climb inside eight strokes. Golf is played on hills, not on cliffs. */
+export const MAX_HOLE_GRADIENT = 0.13;
 
 /** Par straight off the card: SA courses are metred, and a 3-hole municipal loop is short. */
 export function parForLength(lengthM: number): number {
@@ -157,10 +162,10 @@ export function parForLength(lengthM: number): number {
 export function routeCourse(polygon: MapPolygon, groundAt: (x: number, z: number) => number): CourseLayout {
   const step = Math.max(6, Math.min(14, Math.sqrt(polygon.area) / 30));
   // Back off the inset requirement rather than fail: a narrow course still gets three holes.
-  let cells = interiorCells(polygon, 18, step);
-  if (cells.length < 40) cells = interiorCells(polygon, 9, step);
-  if (cells.length < 12) cells = interiorCells(polygon, 2, step);
-  if (cells.length === 0) cells = [{ x: polygon.cx, z: polygon.cz, inset: 1, u: 0 }];
+  let cells = interiorCells(polygon, 18, step, groundAt);
+  if (cells.length < 40) cells = interiorCells(polygon, 9, step, groundAt);
+  if (cells.length < 12) cells = interiorCells(polygon, 2, step, groundAt);
+  if (cells.length === 0) cells = [{ x: polygon.cx, z: polygon.cz, inset: 1, u: 0, y: groundAt(polygon.cx, polygon.cz) }];
 
   // Principal axis by covariance — the direction the course is longest in, whatever shape it is.
   let mx = 0; let mz = 0;
@@ -177,18 +182,25 @@ export function routeCourse(polygon: MapPolygon, groundAt: (x: number, z: number
   /** The cell near a given fraction of the axis, trading closeness to that mark against elbow room.
    *  Pins weight room far more heavily: a green whose edge touches the boundary fence turns every
    *  missed putt into an out-of-bounds, which is exactly the loop the machine playthrough caught. */
-  const at = (fraction: number, roomy = false): Cell => {
+  const at = (fraction: number, roomy = false, levelWith?: number): Cell => {
     const target = lo + span * fraction;
     let best = cells[0]!; let bestScore = Infinity;
     for (const cell of cells) {
-      const score = Math.abs(cell.u - target) * (roomy ? 1.1 : 2) - cell.inset * (roomy ? 2.2 : 1);
+      let score = Math.abs(cell.u - target) * (roomy ? 1.1 : 2) - cell.inset * (roomy ? 2.2 : 1);
+      if (levelWith !== undefined) score += Math.abs(cell.y - levelWith) * 2.5;
       if (score < bestScore) { bestScore = score; best = cell; }
     }
     return best;
   };
 
   const holes: Hole[] = HOLE_STOPS.map(([teeF, pinF], index) => {
-    const teeCell = at(teeF); const pinCell = at(pinF, true);
+    const teeCell = at(teeF);
+    // Pin: roomy AND close to the tee's height. Without the level term the closer climbed a 60%
+    // face; with it the hole still rolls, it just does not go up a wall.
+    let pinCell = at(pinF, true, teeCell.y);
+    if (Math.abs(pinCell.y - teeCell.y) > MAX_HOLE_GRADIENT * Math.hypot(pinCell.x - teeCell.x, pinCell.z - teeCell.z)) {
+      pinCell = at(pinF, true, teeCell.y); // one flatter retry, then take what the ground gives
+    }
     const tee: Pt = { x: teeCell.x, z: teeCell.z };
     const pin: Pt = { x: pinCell.x, z: pinCell.z };
     const lengthU = Math.max(20, dist(tee.x, tee.z, pin.x, pin.z));

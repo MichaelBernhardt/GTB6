@@ -25,7 +25,7 @@ import {
 } from './shop';
 import {
   MAX_SHOT_SECONDS, POWER_SWEEP, SMASH_LIMIT, TEMPO_FLOOR, TEMPO_SWEEP, cardBonus, clubReachM, gimmeRadius,
-  holeSkin, pickClub, puttReachM, relativeToPar, resolveSwing, scoreName, stepBall, strike,
+  holeSkin, pickClub, playsLikeM, puttReachM, relativeToPar, resolveSwing, scoreName, stepBall, strike,
   club as clubById, type Ball, type Bag, type ClubId,
 } from './swing';
 import { METRES_PER_UNIT } from '../../world/mapData';
@@ -43,6 +43,10 @@ interface Round {
   caddie: boolean;
   clubId: ClubId;
   lie: Lie;
+  /** Straight-line metres to the pin. */
+  toPinM: number;
+  /** What it PLAYS at, once the climb or the drop is priced in. */
+  playsM: number;
   ballAt: THREE.Vector3;
   flight?: Ball;
   /** Rand won this round, before the lay-by cut. */
@@ -95,7 +99,7 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     if (pro) fixtures.push(() => api.removeFixture(pro));
     const firstTee = built.holes[0]?.tee;
     if (firstTee) {
-      const caddie = api.spawnFixture(firstTee.x + 3.4, firstTee.z + 2.6, 'Tebogo the caddie');
+      const caddie = api.spawnFixture(firstTee.x + 3.4, firstTee.z + 2.6, 'Caddie');
       if (caddie) fixtures.push(() => api.removeFixture(caddie));
     }
   }
@@ -152,7 +156,7 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     const paid = api.spend(fee);
     round = {
       holeIndex: 0, strokes: 0, scores: [], phase: 'ready', meter: 0, meterDir: 1, power: 0,
-      caddie: pendingCaddie, clubId: 'driver', lie: 'tee',
+      caddie: pendingCaddie, clubId: 'driver', lie: 'tee', toPinM: 0, playsM: 0,
       ballAt: new THREE.Vector3(first.tee.x, api.surfaceHeightAt(first.tee.x, first.tee.z), first.tee.z),
       gross: 0, feeOwing: paid ? 0 : fee, elapsed: 0,
     };
@@ -169,12 +173,21 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     );
   }
 
+  /** Anything this close to the pin is the putting surface, green collar included. Without the
+   *  collar the picker hands you a wedge from a metre off the fringe, which is nonsense golf. */
+  function puttableFrom(current: Hole, x: number, z: number): boolean {
+    return Math.hypot(current.pin.x - x, current.pin.z - z) <= current.greenR + 3.5;
+  }
+
   /** Read the lie, hand over a club, and stand the player behind the ball on the line to the pin. */
   function placeForShot(): void {
     const current = hole(); if (!round || !current || !layout) return;
-    round.lie = lieAt(layout, current, round.ballAt.x, round.ballAt.z);
     const toPin = Math.hypot(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z);
-    round.clubId = pickClub(bag(), metres(toPin), round.lie);
+    const rise = api.surfaceHeightAt(current.pin.x, current.pin.z) - api.surfaceHeightAt(round.ballAt.x, round.ballAt.z);
+    round.toPinM = metres(toPin);
+    round.playsM = playsLikeM(round.toPinM, metres(rise));
+    round.lie = puttableFrom(current, round.ballAt.x, round.ballAt.z) ? 'green' : lieAt(layout, current, round.ballAt.x, round.ballAt.z);
+    round.clubId = pickClub(bag(), round.playsM, round.lie);
     const at = api.playerPosition();
     if (Math.hypot(at.x - round.ballAt.x, at.z - round.ballAt.z) > 5.5) {
       const bearing = Math.atan2(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z);
@@ -196,10 +209,9 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
   function fire(tempo: number): void {
     const current = hole(); if (!round || !current || !layout) return;
     round.strokes += 1;
-    const toPin = metres(Math.hypot(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z));
     const result = resolveSwing({
       bag: bag(), clubId: round.clubId, lie: round.lie, power: round.power, tempo,
-      reachM: round.clubId === 'putter' ? puttReachM(toPin) : undefined,
+      reachM: round.clubId === 'putter' ? puttReachM(round.playsM) : undefined,
     });
     round.flight = strike(
       { x: round.ballAt.x, y: api.surfaceHeightAt(round.ballAt.x, round.ballAt.z), z: round.ballAt.z },
@@ -221,10 +233,12 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
   function runOutShot(): number {
     const current = hole(); if (!round?.flight || !current) return 0;
     const world = ballWorld(current);
+    const already = round.flight.age;
     let guard = 0;
     while (!round.flight.atRest && guard++ < 4000) stepBall(round.flight, SUB_STEP, world);
     round.flight.atRest = true;
     const seconds = round.flight.age;
+    round.elapsed += seconds - already; // the world clock still spent the shot, skipped or watched
     settleShot();
     return seconds;
   }
@@ -247,9 +261,9 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     const toPin = Math.hypot(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z);
     // The concede only reaches on the putting surface: it saves you the three-footers without
     // holing your approach shots for you. Everything else has to actually go in.
-    const onGreen = lieAt(layout, current, round.ballAt.x, round.ballAt.z) === 'green';
-    if (toPin <= (onGreen && round.strokes > 1 ? gimmeRadius(bag()) : HOLE_RADIUS)) { holeOut(); return; }
-    if (round.strokes >= 8) { api.notify('Pick it up', 'Tebogo has seen enough. Take an eight and walk to the next tee.', false); holeOut(8); return; }
+    const conceded = round.strokes > 1 && puttableFrom(current, round.ballAt.x, round.ballAt.z);
+    if (toPin <= (conceded ? gimmeRadius(bag()) : HOLE_RADIUS)) { holeOut(); return; }
+    if (round.strokes >= 8) { api.notify('Pick it up', 'Your caddie has seen enough. Take an eight and walk to the next tee.', false); holeOut(8); return; }
     placeForShot();
   }
 
@@ -334,7 +348,7 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     }
     const caddieOn = round?.caddie ?? pendingCaddie;
     rows.push({
-      id: 'caddie', label: 'Tebogo, for the round', price: caddieOn ? undefined : CADDIE_FEE,
+      id: 'caddie', label: 'A caddie for the round', price: caddieOn ? undefined : CADDIE_FEE,
       note: caddieOn ? 'ON THE BAG' : undefined, disabled: caddieOn,
       detail: 'Twenty-two years on this course. Reads the break, calls the club, and doubles the size of your tempo window.',
     });
@@ -404,8 +418,8 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
         if (round.phase === 'signed') return { prompt: 'E  Back to the pro shop', act: () => { round = undefined; openShop(); } };
         if (round.phase === 'power') return { prompt: 'E  Set the power', act: press };
         if (round.phase === 'tempo') return { prompt: 'E  Stop the bar on empty', act: press };
-        const toPin = Math.round(metres(Math.hypot(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z)));
-        return { prompt: `E  Swing · ${clubById(round.clubId).name} · ${toPin} m`, act: press };
+        const plays = Math.abs(round.playsM - round.toPinM) > 8 ? ` · plays ${Math.round(round.playsM)}` : '';
+        return { prompt: `E  Swing · ${clubById(round.clubId).name} · ${Math.round(round.toPinM)} m${plays}`, act: press };
       },
     },
     {
@@ -500,16 +514,16 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
         warn: round.meter < 0,
       });
     } else if (round.phase === 'ready') {
-      const toPin = Math.hypot(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z);
       const bearing = Math.atan2(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z);
       const off = Math.abs(Math.atan2(Math.sin(aimHeading() - bearing), Math.cos(aimHeading() - bearing))) * (180 / Math.PI);
-      entries.push({ id: 'golf:club', label: clubById(round.clubId).name, value: `${Math.round(metres(toPin))}m · ${round.lie.toUpperCase()}` });
+      const plays = Math.abs(round.playsM - round.toPinM) > 8 ? ` · PLAYS ${Math.round(round.playsM)}` : '';
+      entries.push({ id: 'golf:club', label: clubById(round.clubId).name, value: `${Math.round(round.toPinM)}m${plays} · ${round.lie.toUpperCase()}` });
       entries.push({ id: 'golf:aim', label: 'AIM', value: off > 12 ? `${Math.round(off)}° OFF` : 'ON LINE', fill: Math.round(Math.max(0, 100 - off * 2.2)), warn: off > 25 });
     }
     const played = done + round.strokes;
     const parSoFar = parDone + (round.phase === 'holed' || round.phase === 'signed' ? 0 : current.par);
     entries.push({ id: 'golf:card', label: 'CARD', value: played === 0 ? 'E' : `${played} · ${relativeToPar(played, parSoFar)}` });
-    if (round.caddie) entries.push({ id: 'golf:caddie', label: 'TEBOGO', value: 'READING IT' });
+    if (round.caddie) entries.push({ id: 'golf:caddie', label: 'CADDIE', value: 'READING IT' });
     entries.push({ id: 'golf:alt', label: 'ALT', value: '+10%' });
     return entries;
   }
@@ -549,7 +563,7 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
       if (active.phase === 'flight') { ballSeconds += runOutShot(); continue; }
       if (active.phase !== 'ready') { aimOverride = undefined; return `stuck:unexpected-phase-${active.phase}`; }
       aimOverride = Math.atan2(current.pin.x - active.ballAt.x, current.pin.z - active.ballAt.z);
-      const toPin = metres(Math.hypot(current.pin.x - active.ballAt.x, current.pin.z - active.ballAt.z));
+      const toPin = active.playsM;
       strokes += 1;
       press();                                                    // start the backswing
       const reach = active.clubId === 'putter' ? puttReachM(toPin) : fullReach(active.clubId, active.lie);
@@ -580,6 +594,7 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
       if (!round) return;
       tickSwing(dt);
       drawAids();
+      if (round.phase === 'signed') return; // the card is already banked; wander off if you like
       const at = api.playerPosition();
       if (Math.hypot(at.x - round.ballAt.x, at.z - round.ballAt.z) > 260) abandon('You walked off the course. The card does not count.');
     },
@@ -600,10 +615,10 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
       if (actionId === 'resume') { api.closeMenu(); return; }
       if (actionId === 'abandon') { api.closeMenu(); abandon('You walked in at the turn.'); return; }
       if (actionId === 'caddie') {
-        if (!api.spend(CADDIE_FEE)) { api.notify('Short', `Tebogo is R${CADDIE_FEE} for the round.`, false); openShop(); return; }
+        if (!api.spend(CADDIE_FEE)) { api.notify('Short', `A caddie is R${CADDIE_FEE} for the round.`, false); openShop(); return; }
         if (round) round.caddie = true; else pendingCaddie = true;
         api.analytics('caddie_hired', { value: CADDIE_FEE });
-        api.notify('On the bag', 'Tebogo takes the driver out of your hands and gives you the 3-wood. He is right.', true);
+        api.notify('On the bag', 'They take the driver out of your hands and hand you the 3-wood. They are right.', true);
         openShop(); return;
       }
       if (actionId === 'sleeve') {

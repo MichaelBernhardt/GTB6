@@ -94,6 +94,16 @@ export function clubReachM(bag: Bag, id: ClubId, lie: Lie): number {
   return id === 'putter' ? carry : carry * (1 + CLUB_RUN[id] * ALTITUDE_ROLL * 0.6);
 }
 
+/**
+ * The distance a shot PLAYS, not the distance it measures. Parkview sits in the Braamfontein Spruit
+ * valley: the opening hole drops 27 m and the finishing hole climbs 54 m. The golfer's rule of thumb
+ * is one metre of rise costs about one metre of club, and the in-engine machine round proved it —
+ * clubbing off the flat number left the last hole short again and again until it hit the eight cap.
+ */
+export function playsLikeM(distanceM: number, riseM: number): number {
+  return Math.max(distanceM * 0.35, distanceM + riseM);
+}
+
 /** The club the caddie hands you: the shortest one that still reaches, driver when nothing does. */
 export function pickClub(bag: Bag, distanceM: number, lie: Lie): ClubId {
   if (lie === 'green') return 'putter';

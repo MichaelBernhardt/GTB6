@@ -41,7 +41,8 @@ export class CourseScene {
       for (const bunker of hole.bunkers) this.add(disc(bunker.x, bunker.z, bunker.rx, bunker.rz, bunker.rot, this.ground, BUNKER_LIFT), sandMat);
       this.add(disc(hole.pin.x, hole.pin.z, hole.greenR + 3.5, hole.greenR + 3.5, 0, this.ground, GREEN_LIFT - 0.06), collarMat);
       this.add(disc(hole.pin.x, hole.pin.z, hole.greenR, hole.greenR, 0, this.ground, GREEN_LIFT), greenMat);
-      this.add(disc(hole.tee.x, hole.tee.z, hole.teeR, hole.teeR * 0.7, 0, this.ground, TEE_LIFT), teeMat);
+      // Circular, matching lieAt's own radial tee test — an ellipse left the markers off the mown patch.
+      this.add(disc(hole.tee.x, hole.tee.z, hole.teeR, hole.teeR, 0, this.ground, TEE_LIFT), teeMat);
       this.buildFlag(hole);
       this.buildTeeMarkers(hole);
     }
@@ -130,7 +131,7 @@ export class CourseScene {
     for (const side of [-1, 1]) {
       const x = hole.tee.x + Math.cos(bearing) * side * 2.6;
       const z = hole.tee.z - Math.sin(bearing) * side * 2.6;
-      this.box(0.5, 0.5, 0.5, hole.number === 1 ? 0xd93b3b : 0xf0c221, x, this.ground(x, z) + TEE_LIFT + 0.25, z, bearing);
+      this.box(0.3, 0.3, 0.3, hole.number === 1 ? 0xd93b3b : 0xf0c221, x, this.ground(x, z) + TEE_LIFT + 0.15, z, bearing);
     }
   }
 
@@ -181,15 +182,18 @@ export class CourseScene {
       'NO TAKKIES · NO SLIP-SLOPS · NO JEANS',
     ]);
     if (board) {
-      const [sx, sz] = forward(-2.35, 0);
-      board.position.set(sx, base + 2.05, sz);
-      board.rotation.y = yaw + Math.PI;
+      // Faces the customer: a PlaneGeometry's normal is +z, and rotation.y = yaw turns +z into the
+      // course's forward vector. yaw + PI would hang the board facing the back wall, mirror-written.
+      const [sx, sz] = forward(-2.3, 0);
+      board.position.set(sx, base + 1.8, sz);
+      board.rotation.y = yaw;
       this.group.add(board);
     }
     // Boom gate at the driveway: the dress code has to be enforced somewhere.
     const [gx, gz] = forward(9.5, 3.0);
-    this.box(0.3, 1.5, 0.3, 0xd0d3d6, gx, base + 0.75, gz, yaw);
-    const boom = this.box(0.18, 0.18, 7.0, 0xe14b3b, gx, base + 1.35, gz, yaw + Math.PI / 2);
+    const gateBase = this.ground(gx, gz); // its own ground: the driveway is ten metres downhill of the shop
+    this.box(0.3, 1.5, 0.3, 0xd0d3d6, gx, gateBase + 0.75, gz, yaw);
+    const boom = this.box(0.18, 0.18, 7.0, 0xe14b3b, gx, gateBase + 1.35, gz, yaw + Math.PI / 2);
     boom.position.x -= Math.cos(yaw) * 3.2;
     boom.position.z += Math.sin(yaw) * 3.2;
   }
@@ -214,7 +218,7 @@ export class CourseScene {
     });
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
-    const geometry = new THREE.PlaneGeometry(5.4, 2.0);
+    const geometry = new THREE.PlaneGeometry(4.9, 1.75);
     const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
     this.disposables.push(texture, geometry, material);
     return new THREE.Mesh(geometry, material);
@@ -287,8 +291,8 @@ export class CourseScene {
   }
 }
 
-/** A terrain-following strip from tee to pin. */
-function ribbon(from: { x: number; z: number }, to: { x: number; z: number }, half: number, ground: Ground, lift: number): THREE.BufferGeometry {
+/** A terrain-following strip from tee to pin. Exported so a test can pin the face winding. */
+export function ribbon(from: { x: number; z: number }, to: { x: number; z: number }, half: number, ground: Ground, lift: number): THREE.BufferGeometry {
   const length = Math.hypot(to.x - from.x, to.z - from.z);
   const steps = Math.max(6, Math.round(length / 9));
   const dirX = (to.x - from.x) / length; const dirZ = (to.z - from.z) / length;
@@ -304,8 +308,10 @@ function ribbon(from: { x: number; z: number }, to: { x: number; z: number }, ha
       positions.push(x, ground(x, z) + lift, z);
     }
     if (i > 0) {
+      // Wound so the face normal points UP. A down-facing fairway is invisible under a FrontSide
+      // material and lit from underneath even when it is not — caught by measuring the winding.
       const a = (i - 1) * 2;
-      indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+      indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
     }
   }
   const geometry = new THREE.BufferGeometry();
@@ -316,7 +322,7 @@ function ribbon(from: { x: number; z: number }, to: { x: number; z: number }, ha
 }
 
 /** A terrain-following ellipse — greens, collars, tee boxes and bunkers all come from here. */
-function disc(cx: number, cz: number, rx: number, rz: number, rot: number, ground: Ground, lift: number): THREE.BufferGeometry {
+export function disc(cx: number, cz: number, rx: number, rz: number, rot: number, ground: Ground, lift: number): THREE.BufferGeometry {
   const segments = 22; const rings = 3;
   const positions: number[] = [cx, ground(cx, cz) + lift, cz];
   const indices: number[] = [];
@@ -330,12 +336,13 @@ function disc(cx: number, cz: number, rx: number, rz: number, rot: number, groun
       positions.push(x, ground(x, z) + lift, z);
     }
   }
-  for (let s = 0; s < segments; s++) indices.push(0, 1 + s, 1 + ((s + 1) % segments));
+  // Wound up-facing, same reason as the ribbon.
+  for (let s = 0; s < segments; s++) indices.push(0, 1 + ((s + 1) % segments), 1 + s);
   for (let ring = 1; ring < rings; ring++) {
     const inner = 1 + (ring - 1) * segments; const outer = 1 + ring * segments;
     for (let s = 0; s < segments; s++) {
       const n = (s + 1) % segments;
-      indices.push(inner + s, outer + s, outer + n, inner + s, outer + n, inner + n);
+      indices.push(inner + s, outer + n, outer + s, inner + s, inner + n, outer + n);
     }
   }
   const geometry = new THREE.BufferGeometry();
