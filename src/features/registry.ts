@@ -1,3 +1,4 @@
+import { nearGolfCourse, sanitizeGolfState } from './golf.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -16,7 +17,13 @@ import type { FeatureDescriptor } from './types';
  *    eager chunk — import it with `import type` from the body.
  */
 export const FEATURES: readonly FeatureDescriptor[] = [
-  // { id: 'golf', saveKey: 'golf', label: 'Golf', sanitize: sanitizeGolfState, load: () => import('./golf/golf') },
+  {
+    id: 'golf', saveKey: 'golf', label: 'Golf', sanitize: sanitizeGolfState,
+    load: () => import('./golf/golf'),
+    // Standing on ANY golf polygon is enough to make E mean something; which of the ten is actually
+    // playable is decided inside the lazy body, so no site derivation is duplicated out here.
+    approach: { context: 'foot', order: 55, prompt: 'E  Walk onto the golf course', near: (ctx) => nearGolfCourse(ctx.position.x, ctx.position.z) },
+  },
 ];
 
 export function findFeature(id: string): FeatureDescriptor | undefined {
