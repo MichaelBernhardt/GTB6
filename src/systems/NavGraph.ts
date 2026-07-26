@@ -65,6 +65,75 @@ export function buildNavGraph(paths: NavPath[], joinRadius: number, opts: NavBui
   return { nodes, edges, tangents };
 }
 
+// ---- runtime road closures ----------------------------------------------------------------------
+
+/** One temporarily unwanted circle of road: a protest barricade, a crash scene, a film shoot, a
+ *  marathon. `toll` is EXTRA A* cost per graph node inside the circle, in world units. */
+export interface RoadClosure { readonly id: string; readonly x: number; readonly z: number; readonly radius: number; readonly toll: number; }
+
+/**
+ * A non-destructive cost overlay on the static nav graph.
+ *
+ * The graph is baked (`public/baked/`) and shared by every RoutePlanner in the game, so a runtime
+ * blockage must NOT rewrite `edges`: mutating it would desync the bake, leak between sessions and
+ * make "lift the closure" mean rebuilding adjacency. Instead A* pays a toll for expanding into a
+ * closed circle, which is three flops per expanded node and exactly zero work while nothing is
+ * closed (`active` short-circuits the whole thing).
+ *
+ * The toll is deliberately FINITE. An infinite one strands a driver whose only lane home runs
+ * through the circle, and an unreachable goal makes traffic give up and respawn instead of divert —
+ * which reads as cars vanishing rather than as a road being shut.
+ */
+export class RoadClosures {
+  private list: RoadClosure[] = [];
+  /** Bumped on every open/close/clear, so an agent holding an already-solved route can notice that
+   *  the world changed under it with one integer compare instead of re-testing its whole path. */
+  stamp = 0;
+
+  get active(): boolean { return this.list.length > 0; }
+  get count(): number { return this.list.length; }
+  get ids(): string[] { return this.list.map((closure) => closure.id); }
+
+  /** Opens (or replaces, by id) one closure. */
+  open(closure: RoadClosure): void {
+    if (!(closure.radius > 0) || !Number.isFinite(closure.toll)) return;
+    this.list = [...this.list.filter((entry) => entry.id !== closure.id), closure];
+    this.stamp = (this.stamp + 1) >>> 0;
+  }
+
+  close(id: string): void {
+    const next = this.list.filter((entry) => entry.id !== id);
+    if (next.length === this.list.length) return;
+    this.list = next; this.stamp = (this.stamp + 1) >>> 0;
+  }
+
+  clear(): void { if (this.list.length) { this.list = []; this.stamp = (this.stamp + 1) >>> 0; } }
+
+  /** Extra cost of standing at (x, z). Overlapping closures stack. */
+  tollAt(x: number, z: number): number {
+    let toll = 0;
+    for (const closure of this.list) {
+      const dx = closure.x - x; const dz = closure.z - z;
+      if (dx * dx + dz * dz <= closure.radius * closure.radius) toll += closure.toll;
+    }
+    return toll;
+  }
+
+  /** Does the not-yet-driven tail of an already-solved route run into a closure? */
+  crosses(points: readonly NavPoint[], from = 0): boolean {
+    if (!this.list.length) return false;
+    for (let index = Math.max(0, from); index < points.length; index++) {
+      const point = points[index];
+      if (point && this.tollAt(point.x, point.z) > 0) return true;
+    }
+    return false;
+  }
+}
+
+/** The one shared overlay. Every RoutePlanner reads it by default, so a system that closes a road
+ *  does not have to be wired to traffic, police and pedestrian routing one at a time. */
+export const roadClosures = new RoadClosures();
+
 export function nearestNode(graph: NavGraph, x: number, z: number): number {
   let best = -1; let bestDistance = Infinity;
   for (let index = 0; index < graph.nodes.length; index++) {
@@ -112,6 +181,7 @@ export function findPath(
   goal: number,
   maxExpansions = MAX_PATH_EXPANSIONS,
   workspace?: PathWorkspace,
+  closures: RoadClosures = roadClosures,
 ): number[] | undefined {
   const { nodes, edges } = graph; const count = nodes.length;
   if (start < 0 || goal < 0 || start >= count || goal >= count) return undefined;
@@ -151,6 +221,9 @@ export function findPath(
     return top;
   };
   const heuristic = (index: number): number => { const node = nodes[index]; return node ? Math.hypot(goalNode.x - node.x, goalNode.z - node.z) : 0; };
+  // Hoisted so an ordinary city with no blockade pays one boolean, not a call per expanded edge. The
+  // toll is added to g, not to h, so the straight-line heuristic stays admissible and A* stays exact.
+  const tolled = closures.active;
   push(start, heuristic(start));
   let settledCount = 0;
   while (heapNode.length) {
@@ -169,7 +242,8 @@ export function findPath(
     for (const neighbor of edges[current] ?? []) {
       if (settled[neighbor] === generation) continue;
       const neighborNode = nodes[neighbor]; if (!neighborNode) continue;
-      const tentative = gScore[current]! + Math.hypot(neighborNode.x - currentNode.x, neighborNode.z - currentNode.z);
+      const tentative = gScore[current]! + Math.hypot(neighborNode.x - currentNode.x, neighborNode.z - currentNode.z)
+        + (tolled ? closures.tollAt(neighborNode.x, neighborNode.z) : 0);
       if (discovered[neighbor] === generation && tentative >= gScore[neighbor]!) continue;
       discovered[neighbor] = generation; gScore[neighbor] = tentative; cameFrom[neighbor] = current;
       push(neighbor, tentative + heuristic(neighbor));
@@ -324,7 +398,7 @@ export class RoutePlanner {
    *  per-second delta; only genuine findPath runs are counted (budget short-circuits and cache hits are not). */
   solves = 0;
   solveMs = 0;
-  constructor(private graph: NavGraph, private perFrame = 2, private random: () => number = Math.random) {
+  constructor(private graph: NavGraph, private perFrame = 2, private random: () => number = Math.random, private closures: RoadClosures = roadClosures) {
     this.pathWorkspace = createPathWorkspace(graph.nodes.length);
   }
 
@@ -410,7 +484,7 @@ export class RoutePlanner {
     const start = this.nearest(fromX, fromZ);
     if (start < 0 || goal < 0) return undefined;
     const started = performance.now();
-    const path = findPath(this.graph, start, goal, maxExpansions, this.pathWorkspace);
+    const path = findPath(this.graph, start, goal, maxExpansions, this.pathWorkspace, this.closures);
     this.solveMs += performance.now() - started; this.solves += 1;
     return path?.map((index) => this.graph.nodes[index]).filter((point): point is NavPoint => Boolean(point));
   }

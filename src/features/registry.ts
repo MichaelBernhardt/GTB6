@@ -1,3 +1,4 @@
+import { sanitizeProtestState, shutdownPending, tickOutage } from './protest.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -17,6 +18,22 @@ import type { FeatureDescriptor } from './types';
  */
 export const FEATURES: readonly FeatureDescriptor[] = [
   // { id: 'golf', saveKey: 'golf', label: 'Golf', sanitize: sanitizeGolfState, load: () => import('./golf/golf') },
+  {
+    id: 'protest', saveKey: 'protest', label: 'Protests + burning tyres',
+    sanitize: sanitizeProtestState,
+    load: () => import('./protest/protest'),
+    // The eager stand-in does double duty, and both halves are cheap. `near()` is called once per
+    // rendered frame on the foot ladder while the body is unloaded, which is the ONLY per-frame hook
+    // an unloaded feature gets — so the grievance clock ticks here, off the live grid state, long
+    // before any of the protest chunk exists. Then it answers the real question: is there a shutdown
+    // to walk toward? `order: 60` keeps it below every other feature's rung, so ticking the clock can
+    // never shadow a shop door or a tee box; it merely means the clock skips the frames where the
+    // player is standing in someone else's doorway.
+    approach: {
+      context: 'foot', order: 60, prompt: 'E  Follow the smoke',
+      near: (ctx) => { tickOutage(ctx.hour, ctx.position.x, ctx.position.z); return shutdownPending(false); },
+    },
+  },
 ];
 
 export function findFeature(id: string): FeatureDescriptor | undefined {
