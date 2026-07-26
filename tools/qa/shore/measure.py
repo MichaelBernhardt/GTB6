@@ -75,7 +75,11 @@ if __name__ == '__main__':
     print('=' * 92)
     print(f'D3 - SHORE COLOUR  [{label}]')
     print('=' * 92)
-    spots = [('sand-natural-down.png', [('natural strand, feet', 600, 640), ('natural strand, mid', 600, 520)]),
+    spots = [('sand-strand-13.png', [('strand  13u out (ring)', 600, 640)]),
+             ('sand-strand-50.png', [('strand  50u out (grit)', 600, 640)]),
+             ('sand-strand-110.png', [('strand 110u out (veld)', 600, 640)]),
+             ('sand-strand-180.png', [('strand 180u out (ground)', 600, 640)]),
+             ('sand-natural-down.png', [('natural strand, feet', 600, 640), ('natural strand, mid', 600, 520)]),
              ('sand-natural.png', [('natural level, near', 600, 660), ('natural level, mid', 600, 540)]),
              ('sand-natural2-down.png', [('natural z=0, feet', 600, 640), ('natural z=0, mid', 600, 520)]),
              ('sand-natural3.png', [('natural S arm, near', 600, 660)]),
