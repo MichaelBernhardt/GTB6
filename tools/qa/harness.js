@@ -228,7 +228,9 @@ window.__qa = (() => {
           // block away — he walked it in a minute). The clean signal is a TRIVIALLY SHORT route wearing
           // a journey-scale timer: the copy sells a trip the geometry doesn't deliver. (A generous timer
           // on a genuinely long route isn't this defect, so key on absolute route length, not a ratio.)
-          if (result.roadDistance < 700 && o.timeLimit >= 400) finding('fail', `promise/geometry: "${o.text}" is a ${result.roadDistance}u hop but carries a ${o.timeLimit}s journey-scale timer — the copy promises a trip the geometry doesn't deliver; lengthen the drive (declare journeys[]) or cut the timer`);
+          // "A block away" is a real-world judgement, so the 700 is METRES like the tier bands above —
+          // in units it called a 924 m walk trivial on this map's scale.
+          if (metres < 700 && o.timeLimit >= 400) finding('fail', `promise/geometry: "${o.text}" is a ${result.roadDistance}u (${metres}m) hop but carries a ${o.timeLimit}s journey-scale timer — the copy promises a trip the geometry doesn't deliver; lengthen the drive (declare journeys[]) or cut the timer`);
         }
         // The other direction: a genuine journey-length drive with no timer and no en-route beat is a
         // long empty haul. Declared journeys should carry a timer or a wave/beat to justify the distance.
