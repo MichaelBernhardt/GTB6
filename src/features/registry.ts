@@ -1,3 +1,4 @@
+import { doorNear, sanitizeInteriorsState } from './interiors.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -16,7 +17,14 @@ import type { FeatureDescriptor } from './types';
  *    eager chunk — import it with `import type` from the body.
  */
 export const FEATURES: readonly FeatureDescriptor[] = [
-  // { id: 'golf', saveKey: 'golf', label: 'Golf', sanitize: sanitizeGolfState, load: () => import('./golf/golf') },
+  {
+    id: 'interiors', saveKey: 'interiors', label: 'Building interiors',
+    sanitize: sanitizeInteriorsState,
+    load: () => import('./interiors/interiors'),
+    // Something to walk up to before the chunk lands: the doorsteps are derived from the generated
+    // road network, so this ring is the same ring the loaded rung uses.
+    approach: { context: 'foot', order: 50, prompt: 'E  Go inside', near: (ctx) => doorNear(ctx.position.x, ctx.position.z) !== undefined },
+  },
 ];
 
 export function findFeature(id: string): FeatureDescriptor | undefined {
