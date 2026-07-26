@@ -214,6 +214,22 @@ export const CAPE_BBOX = { south: -33.93, west: 18.37, north: -33.87, east: 18.4
  * Groenpunt wastewater plant on the north-west shore.
  */
 export const VAAL_BBOX = { south: -26.98, west: 27.95, north: -26.78, east: 28.35 } as const;
+/**
+ * VAAL NORTH SHORE — the *infrastructure* box, deliberately separate from VAAL_BBOX above.
+ *
+ * VAAL_BBOX/fetchVaal brings the water and a handful of point furniture. It brings no roads and no
+ * buildings, which is why Deneysville, Refengkgotso, Misty Bay and Vaal Marina render as empty land
+ * with district labels on them. This box is the second one-off query (overpass.ts fetchVaalShore)
+ * that pulls the real north-shore ways: every highway class, buildings, leisure/tourism (marinas,
+ * slipways, resorts, camp sites), beaches, landuse, amenities, waterways and place nodes.
+ *
+ * Widened past the "roughly (-26.93,28.05)-(-26.85,28.25)" brief so the named landmarks all land
+ * inside it: Groenpunt (-26.8261,28.04), Middelbult (-26.8372,28.0494) and the Groenpunt wastewater
+ * plant (-26.8188,28.0517) sit north-west of that box, and Vaal Marina (-26.8744,28.2311) sits on
+ * its east lip. The area is sparsely mapped (~1000 highways, ~500 buildings) so the widening is
+ * nearly free.
+ */
+export const VAAL_SHORE_BBOX = { south: -26.94, west: 28.0, north: -26.8, east: 28.27 } as const;
 /** OSM relation id of the Vaal Dam water body (`natural=water` + `water=reservoir`, 44 outer rings,
  *  19 inner rings/islands). Pinned rather than bbox-matched: a bbox query drags in farm dams, and
  *  a stable id keeps the committed cache key stable. */
