@@ -46,6 +46,8 @@ import {
   LAKE_NAME,
   LAKE_RADIUS_M,
   LAKESIDE_TRACK_NAME,
+  CORRIDOR_FIELDS_WEST_M,
+  CORRIDOR_FIELD_LANES,
   DAM_WEST_BAND_M,
   DAM_WORLD_HALFZ_FRACTION,
   PADSTAL_NAME,
@@ -111,6 +113,8 @@ export interface CoastGraftResult {
   coastline: Pt[];
   /** Closed dam-water polygon (metres). Still keyed `ocean` so runtime consumers resolve. */
   ocean: Pt[];
+  /** The real waterline pieces of `ocean` (clip walls removed) — what the map strokes as coast. */
+  oceanShore: Pt[][];
   /** The dam's z-band and shore sampler: outside the band the west strip is dry veld. */
   dam: DamShore;
   /** The dam's real islands (Grooteiland first), emitted as scrub polygons with elevation bumps. */
@@ -568,24 +572,40 @@ export function graftCoastAndCorridor(
   // west edge rather than its southern 60%, so the drowned-valley arms (820-860 m deep) bite
   // into the corridor at every latitude and the old bandWest lost two fields and six farm
   // buildings to the water test below. 620 m clears the deepest arm plus the road set-back.
-  const bandWest = corridorWestX + 620; const bandEast = corridorEastX - 420;
+  // THE WEST BAND IS FARMED TOO. The fields used to stop at the corridor's own west edge, which
+  // left the whole strip between the corridor and the dam — 2 km wide down most of the map now
+  // that the water sits further west in the south — as empty dark veld with nothing in it. The
+  // real hinterland of the Vaal is maize and grazing right down to the water, so the lanes run
+  // west until the water test below stops them.
+  // ...but never off the map: a field in the off-map margin is content the player cannot reach and
+  // it draws the eye straight to the boundary. The exact square is not known until process.ts fits
+  // the road bbox, so clamp against the same estimate the dam was placed on.
+  const bandWest = Math.max(corridorWestX - CORRIDOR_FIELDS_WEST_M, worldWestEstimateX + 700);
+  const bandEast = corridorEastX - 420;
   let fieldIndex = 0;
   // Tighter row pitch and lane separation than the pre-crop layout: the corridor narrowed
   // from 2700 m to 2000 m, so the old spacing left most candidates overlapping and rejected.
   // 880 m rather than 1080: with the dam band now full height, the arms reject more candidates
   // and the 72% crop was down to four fields in a 14 km corridor.
   for (let z = jb.minZ + 400; z < jb.maxZ - 700; z += 880) {
-    for (let lane = 0; lane < 2; lane++) {
-      const cx = bandWest + (bandEast - bandWest) * (0.24 + lane * 0.54) + (seeded(z, lane) - 0.5) * 300;
+    for (let lane = 0; lane < CORRIDOR_FIELD_LANES; lane++) {
+      const cx = bandWest + ((bandEast - bandWest) * (lane + 0.5 + (seeded(z, lane) - 0.5) * 0.5)) / CORRIDOR_FIELD_LANES;
       const cz = z + (seeded(lane, z) - 0.5) * 420;
       if (!clearOfCorridorRoads(cx, cz, 300)) { fieldIndex++; continue; }
       if (Math.hypot(cx - airCenter.x, cz - airCenter.z) < 1450) { fieldIndex++; continue; } // keep the aerodrome clear
       // Never let a field spill into the dam — but only where the dam actually IS. The old test
       // used the nearest shore vertex at any z, which after the dam replaced the full-height
       // ocean rejected every field in the corridor (the pinched dam ends sit far east).
+      // Never let a field spill into the dam. POINT-IN-POLYGON, not the eastmost envelope: on a
+      // drowned-valley shore the envelope condemns every peninsula behind it, which is what kept
+      // the west band empty. Test the field's own footprint with a margin instead.
       if (cz >= dam.northZ && cz <= dam.southZ) {
-        const shoreX = coastline.reduce((best, point) => (Math.abs(point.z - cz) < Math.abs(best.z - cz) ? point : best), coastline[0]!).x;
-        if (cx - 380 < shoreX + COAST_ROAD_SETBACK_M) { fieldIndex++; continue; }
+        let wet = false;
+        for (let a = 0; a < 8 && !wet; a++) {
+          const t = (a / 8) * Math.PI * 2;
+          wet = inDamWater({ x: cx + Math.cos(t) * 420, z: cz + Math.sin(t) * 400 });
+        }
+        if (wet || inDamWater({ x: cx, z: cz })) { fieldIndex++; continue; }
       }
       // Fields are sized to the corridor, which is now 2000 m rather than 2700 m wide.
       const w = 360 + seeded(cx, cz) * 300; const h = 320 + seeded(cz, cx) * 300;
@@ -885,7 +905,21 @@ export function graftCoastAndCorridor(
     { x: portShore.x + 60, z: portShore.z },
     wetHead,
   ];
-  const portApronCenter = { x: portShore.x + 190, z: portShore.z };
+  // The apron is a real quayside slab, so it must be ON LAND — `portShore` is the per-z ENVELOPE
+  // and beside a bay mouth the true waterline can be several hundred metres east of it, which put
+  // all four apron corners in the water (features.test asserts they are not).
+  // The apron is a real quayside slab, so EVERY CORNER must be on land — `portShore` is the per-z
+  // ENVELOPE, and beside a bay mouth the true waterline can sit hundreds of metres east of it,
+  // which put all four corners in the water (features.test asserts they are not). Walk the whole
+  // slab east until the polygon is dry rather than nudging its centre.
+  const portApronCenter = (() => {
+    let c = clampToLand({ x: portShore.x + 190, z: portShore.z });
+    for (let step = 0; step < 40; step++) {
+      if (!rectPoly(c.x, c.z, 0, 1, 150, 120).some((p) => inDamWater(p))) break;
+      c = { x: c.x + 60, z: c.z };
+    }
+    return c;
+  })();
   const portApron = rectPoly(portApronCenter.x, portApronCenter.z, 0, 1, 150, 120);
   const port: CoastPort = { name: PORT_NAME, pier, apron: portApron };
   // Access spur off the shore road down to the slipway (ends at the water, like the quay).
@@ -1124,7 +1158,7 @@ export function graftCoastAndCorridor(
   );
 
   return {
-    coastline, ocean, dam, damIslands: dam.islands, vaalFeatures: dam.features, sewage, damWall,
+    coastline, ocean, oceanShore: dam.shore, dam, damIslands: dam.islands, vaalFeatures: dam.features, sewage, damWall,
     shore: shoreGraft ? {
       areas: shoreGraft.areas, pois: shoreGraft.pois, buildings: shoreGraft.buildings,
       places: shoreGraft.places, roadKm: shoreGraft.roadKm, roadCount: shoreGraft.roadCount,
@@ -1289,8 +1323,10 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
       + (at(col, row + 1) * (1 - tx) + at(col + 1, row + 1) * tx) * tz;
   };
 
-  // Shore x by z: only used for the DESCENT profile now, never for the water test.
-  const { xAt: shoreXAt, inBand: inDamBand } = damSampler(coast.dam);
+  // Only the z BAND is still wanted here: the descent's west target is the water's own west limit
+  // now, not the eastmost waterline (see the seam note below), so the x = f(z) envelope has no part
+  // in the height field at all.
+  const { inBand: inDamBand } = damSampler(coast.dam);
   // THE WATER TEST IS THE POLYGON. Using the x = f(z) envelope here is what drowned every
   // peninsula between the drowned valleys: the envelope is the EASTMOST waterline, so the ridges
   // behind it were all "west of the shore" and were flooded in the height field while the water
@@ -1312,6 +1348,8 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
   // dead, and — being the lowest ground on the map — rendered near-black. Distance to the real
   // waterline gives each peninsula and each island the relief its own width earns it.
   const shoreVerts = [...coast.ocean, ...coast.damIslands.flat()];
+  /** West limit of the imported water — the descent's target inside the dam's z band. */
+  const damWestLimit = coast.ocean.reduce((mn, p) => Math.min(mn, p.x), Infinity);
   const distToWaterline = (p: Pt): number => {
     let best = Infinity;
     for (const q of shoreVerts) {
@@ -1346,7 +1384,6 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
     for (let col = 0; col < cols; col++) {
       const unit = { x: x0 + col * dx, z: z0 + row * dz };
       const m = fit.invert(unit);
-      const shoreX = shoreXAt(m.z);
       const inWater = inDamWater(m);
       let height: number;
       let mountain = 0;
@@ -1358,18 +1395,25 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
         // would leave a 1700 m synthetic escarpment across the corridor.
         height = DAM_LEVEL_M + islandBump(m);
       } else {
-        // Rolling descent from the Joburg plateau edge down to the dam / the western veld.
-        const target = inDamBand(m.z) ? shoreX : coast.corridorWestX - 1200;
+        // THE SEAM (merge sub-problem a). Two surfaces, and the land is the LOWER of them, so it
+        // meets the imported waterline at full supply level and the city terrain from underneath.
+        //
+        //   1. the plateau descent, run across the WHOLE west band rather than stopping at the
+        //      eastmost waterline. Using shoreX as the target clamped every peninsula behind the
+        //      envelope to t = 1, which is what made 15 km2 of real land dead flat at 1480 m and
+        //      black on the map (D4). The band's own west limit is the honest target: the ground
+        //      descends from the plateau to the reservoir across the whole strip, and the drowned
+        //      valleys are simply where that descent is under water.
+        //   2. a hinterland profile measured from the REAL waterline, so a 400 m peninsula stays a
+        //      low spit and a 2 km headland becomes Highveld — relief a ridge's own width earns.
+        const target = inDamBand(m.z) ? damWestLimit : coast.corridorWestX - 1200;
         const t = Math.max(0, Math.min(1, (coast.corridorEastX - m.x) / Math.max(1, coast.corridorEastX - target)));
         const cityEdge = sampleSrtm({ x: coast.corridorEastX + 200, z: m.z });
         const base = cityEdge * (1 - smoothstep(t)) + DAM_LEVEL_M * smoothstep(t);
         const hills = 110 * Math.sin(Math.PI * Math.min(1, t * 1.15)) * (0.55 + 0.45 * Math.sin(m.z / 1300 + m.x / 950));
-        // A ridge between two drowned valleys, or an island, is DRY LAND standing out of the water,
-        // and how high it stands is a function of how wide it is: the full drawdown lift within
-        // DAM_SHORE_LIFT_RUN_M of the waterline, tapering in from the shore so nothing is a wall.
         const dw = distToWaterline(m);
-        const lift = DAM_SHORE_LIFT_M * smoothstep(Math.min(1, dw / DAM_SHORE_LIFT_RUN_M));
-        height = Math.max(DAM_LEVEL_M + lift, base + hills * (t < 0.92 ? 1 : (1 - t) / 0.08));
+        const lift = DAM_LEVEL_M + DAM_SHORE_LIFT_M * smoothstep(Math.min(1, dw / DAM_SHORE_LIFT_RUN_M));
+        height = Math.min(lift, base + hills * (t < 0.92 ? 1 : (1 - t) / 0.08));
       }
       // The mountain field is evaluated in PROJECTED METRES (see ridge.ts) so the range is
       // immune to TARGET_SIZE and to future re-crops; it is zero over the water by gating.

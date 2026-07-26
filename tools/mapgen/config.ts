@@ -330,13 +330,13 @@ export const DAM_SHORE_MAX_SEG_M = 110;
  * below them, then the drowned Wilge-side valleys down to the southern arms.
  */
 /** Rotation of the whole real dam before placement, degrees, in the projected frame (x east). */
-export const DAM_ROTATION_DEG = 295;
+export const DAM_ROTATION_DEG = 285;
 /** THE SINGLE SCALE FACTOR, real metres -> projected map metres. Both axes. 1:2.78. */
-export const DAM_SCALE = 0.36;
+export const DAM_SCALE = 0.355;
 /** The real point that lands on the MIDPOINT OF THE WORLD SQUARE'S WEST EDGE. Everything else
  *  follows rigidly from it: this is the entire translation. It sits in open water in the channel
  *  east of Grooteiland, which is what puts the island inside the frame. */
-export const DAM_ANCHOR = { lat: -26.920403, lon: 28.259525 } as const;
+export const DAM_ANCHOR = { lat: -26.932876, lon: 28.279232 } as const;
 /**
  * How far WEST of the world square the water is kept before the clip cuts it (m).
  *
@@ -346,7 +346,7 @@ export const DAM_ANCHOR = { lat: -26.920403, lon: 28.259525 } as const;
  * reads as holes in the water. Halving it halves that mess, brings the total water width from
  * 2,423 units to inside the 2,100 budget, and costs nothing inside the frame.
  */
-export const DAM_OVERHANG_M = 480;
+export const DAM_OVERHANG_M = 951;
 /** The same, north and south (m). Bigger, because a horizon line looked along the shore is far more
  *  visible than one looked at across it — this is 1,400 units, the old ocean's own overshoot. */
 export const DAM_CLIP_OVERSHOOT_M = 1900;
@@ -382,6 +382,18 @@ export const DAM_ROAD_MARGIN_M = 260;
  * veld all the way to the world edge; without this floor the road would chase the run-outs.
  */
 export const DAM_ROAD_DRY_LINE_M = 400;
+/**
+ * How far EAST of the dry line the shore road's fallback may wander (m), and over what wavelength.
+ * Only used where there is no waterline to follow; see buildShoreRoad. Deliberately one-sided so
+ * the wander can never eat into the road's clearance from the water.
+ */
+export const DAM_ROAD_WANDER_M = 320;
+export const DAM_ROAD_WANDER_WAVE_M = 1150;
+/** How far WEST of the farm corridor the field lanes may run (m) — into the dam's own hinterland,
+ *  stopped only by the water test. Zero here is what left the west band as empty veld. */
+export const CORRIDOR_FIELDS_WEST_M = 2100;
+/** Number of field lanes across the (now wider) band. */
+export const CORRIDOR_FIELD_LANES = 4;
 /** Mean shore set-back west of the corridor's west edge (m). */
 export const DAM_SHORE_SETBACK_M = 40;
 /**
@@ -434,11 +446,24 @@ export const CORRIDOR_DISTRICTS = [
 ] as const;
 /** Water surface elevation (m ASL). The Highveld sits at ~1700 m; a reservoir is not at 0. */
 export const DAM_LEVEL_M = 1480;
-/** How far the land stands above full supply level once it is clear of the waterline (m). The real
- *  Vaal's ridges rise 20-40 m out of the reservoir; anything less and a peninsula reads as a raft. */
-export const DAM_SHORE_LIFT_M = 26;
-/** The run over which that lift is reached (m) — a beach at the shore, a ridge in the middle. */
-export const DAM_SHORE_LIFT_RUN_M = 420;
+/**
+ * THE SEAM, AND D4's "blackness", ARE THE SAME NUMBER.
+ *
+ * The height field used to clamp everything west of the eastmost waterline to full supply level
+ * plus 26 m. On a drowned dendritic shore that is most of the west band, so 15 km2 of real
+ * peninsula sat dead flat at the very bottom of the map's tone ramp and rendered as void — the
+ * owner's "the land between the bays renders near-black at map zoom".
+ *
+ * These two now describe a HINTERLAND PROFILE instead: distance from the waterline, not distance
+ * from the corridor. Land rises out of the water toward this cap over this run, and the ordinary
+ * plateau descent takes over as soon as it is the lower of the two, so the shore meets the
+ * imported waterline at exactly full supply level (no cliff) and meets the city terrain from
+ * underneath (no step). That is merge sub-problem (a) solved as a blend, not a butt joint.
+ */
+export const DAM_SHORE_LIFT_M = 240;
+/** The run over which that lift is reached (m). Wide enough that a 400 m peninsula stays low and a
+ *  2 km headland becomes proper Highveld, which is what the real shore does. */
+export const DAM_SHORE_LIFT_RUN_M = 2000;
 /**
  * GROOTEILAND — way 6139539, the ~3 km island the annual Round the Island race circles, and the
  * owner asked for it by name. It is a real inner ring of the water relation, so it arrives with
@@ -446,12 +471,6 @@ export const DAM_SHORE_LIFT_RUN_M = 420;
  * exactly where it really sits, and it is what stops the player seeing the whole lake at once.
  */
 export const DAM_ISLAND_NAME = 'Grooteiland';
-/**
- * Nudge the islands west (m). The tanh that squeezes the 10 km northern arm into a 2 km band
- * squeezes the 1.4 km channel behind Grooteiland with it, and the island ends up touching the
- * shore. This restores a boat-width of water on its landward side.
- */
-export const DAM_ISLAND_WEST_NUDGE_M = 280;
 /**
  * THE SEWAGE WORKS. The single most topical detail available about the real Vaal: untreated
  * sewage from the Emfuleni works has been going into the river for years, and in 2026 the

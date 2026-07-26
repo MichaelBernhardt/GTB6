@@ -13,11 +13,12 @@ const CACHE = new URL('./cache/', import.meta.url);
 const raw = JSON.parse(readFileSync(new URL(readdirSync(CACHE).find((f) => f.startsWith('overpass-vaal-')), CACHE), 'utf8'));
 const data = raw.data ?? raw;
 const relation = data.elements.find((e) => e.type === 'relation' && e.id === 253822);
-const ORIGIN = { lat: -26.9, lon: 28.15 }; const RE = 6378137;
-const project = (lat, lon) => ({
-  x: ((lon - ORIGIN.lon) * Math.PI / 180) * RE * Math.cos((ORIGIN.lat * Math.PI) / 180),
-  z: -((lat - ORIGIN.lat) * Math.PI / 180) * RE,
-});
+// EXACTLY tools/mapgen/projection.ts makeProjector(VAAL_ORIGIN) — same constant, same signs, so a
+// placement chosen here lands where the build puts it rather than 0.2% away from it.
+const ORIGIN = { lat: -26.9, lon: 28.15 }; const M_PER_DEG_LAT = 111132;
+const M_PER_DEG_LON = M_PER_DEG_LAT * Math.cos((ORIGIN.lat * Math.PI) / 180);
+const project = (lat, lon) => ({ x: (lon - ORIGIN.lon) * M_PER_DEG_LON, z: (ORIGIN.lat - lat) * M_PER_DEG_LAT });
+const unproject = (x, z) => ({ lat: ORIGIN.lat - z / M_PER_DEG_LAT, lon: ORIGIN.lon + x / M_PER_DEG_LON });
 function chainRings(members) {
   const key = (p) => `${p.lat.toFixed(7)},${p.lon.toFixed(7)}`;
   const rem = members.filter((m) => m.length >= 2).map((m) => [...m]); const rings = [];

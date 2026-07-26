@@ -1,6 +1,8 @@
 import {
   DAM_CLIP_OVERSHOOT_M,
   DAM_OVERHANG_M,
+  HARBOUR_DISTRICT_NAME,
+  PORT_ACCESS_ROAD_NAME,
   SHORE_BUILDING_MAX_GROWTH,
   SHORE_BUILDING_MIN_UNITS,
   BBOX,
@@ -402,6 +404,38 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   const curvedRoads = meanderSyntheticRoads(net);
   log.push(`meander: curved ${curvedRoads} synthetic spine road(s) with perpendicular fBm noise + Chaikin smoothing`);
 
+  // ---- OVERLAP REPAIR: nothing may be left standing in the imported water ------------------
+  // Merge sub-problem (d). The graft, the corridor and the shore road are all built against the
+  // water polygon, but the passes that run AFTERWARDS are not: the meander bends a road by up to
+  // 105 m perpendicular, and beside a drowned-valley arm that is enough to put Plaaspad's frontage
+  // in the dam. Repair rather than forbid — walk the offending vertex EAST until it is ashore, the
+  // same rule coast.ts uses for grafted street nodes. Quays and jetties are excepted by name:
+  // they are supposed to end at the water.
+  if (coast) {
+    const damWater = coast.ocean; const damIslands = coast.damIslands;
+    const wetRoad = new Set([HARBOUR_DISTRICT_NAME, PORT_ACCESS_ROAD_NAME]);
+    const inRing = (ring: Pt[], p: Pt): boolean => {
+      let c = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = ring[i]!; const b = ring[j]!;
+        if ((a.z > p.z) !== (b.z > p.z) && p.x < ((b.x - a.x) * (p.z - a.z)) / (b.z - a.z) + a.x) c = !c;
+      }
+      return c;
+    };
+    const inWater = (p: Pt): boolean => inRing(damWater, p) && !damIslands.some((r) => inRing(r, p));
+    const protectedIds = new Set<number>();
+    for (const road of net.roads) if (wetRoad.has(road.name)) for (const id of road.nodeIds) protectedIds.add(id);
+    let moved = 0;
+    for (const [id, p] of net.nodes) {
+      if (protectedIds.has(id) || !inWater(p)) continue;
+      for (let d = 25; d <= 1400; d += 25) {
+        const q = { x: p.x + d, z: p.z };
+        if (!inWater(q) && !inWater({ x: q.x + 60, z: q.z })) { net.nodes.set(id, q); moved++; break; }
+      }
+    }
+    if (moved) log.push(`overlap: pushed ${moved} road vertex/vertices out of the dam after the meander`);
+  }
+
   // ---- Junctions + simplification (junction vertices pinned) --------------
   const junctionInfos = findJunctions(net);
   const junctionNodeIds = new Set(junctionInfos.map((j) => j.nodeId));
@@ -686,6 +720,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     const reclipped = coast.dam.clipTo(worldRect);
     coast.ocean = reclipped.water;
     coast.damIslands = reclipped.islands;
+    coast.oceanShore = reclipped.shore;
     const clipWestU = fit.apply({ x: worldRect.minX - DAM_OVERHANG_M, z: 0 }).x;
     const clipNorthU = fit.apply({ x: 0, z: worldRect.minZ - DAM_CLIP_OVERSHOOT_M }).z;
     const clipSouthU = fit.apply({ x: 0, z: worldRect.maxZ + DAM_CLIP_OVERSHOOT_M }).z;
@@ -982,6 +1017,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
         name: DAM_NAME,
         coastline: coast.coastline.map(toUnits),
         ocean: coast.ocean.map(toUnits),
+        shore: coast.oceanShore.map((line) => line.map(toUnits)),
         islands: coast.damIslands.map((ring) => ring.map(toUnits)),
         beaches: coast.beaches.map((beach) => ({ name: beach.name, points: beach.points.map(toUnits) })),
         harbour: (() => { const [x, z] = toUnits(coast.harbour); return { x, z }; })(),

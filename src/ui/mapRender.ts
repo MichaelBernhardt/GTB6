@@ -39,6 +39,8 @@ export interface RenderMapData {
   elevation?: { cols: number; rows: number; x0: number; z0: number; dx: number; dz: number; data: number[] };
   coast?: {
     name?: string; coastline: Poly2; ocean: Poly2; beaches: Array<{ name: string; points: Poly2 }>;
+    /** The REAL waterline pieces of `ocean` — the polygon minus the clip box's own walls. */
+    shore?: Poly2[];
     harbour: { x: number; z: number };
     /** Corridor band extents (metadata for zoning; the map draws no band tint). */
     corridor: { eastX: number; westX: number; northZ?: number; southZ?: number };
@@ -81,9 +83,25 @@ const APRON_COLOR = '#6b6f78';
 const WATER_COLOR = '#2e6f9e';
 const WATER_PREMIUM_COLOR = '#3d89bd';
 const OCEAN_COLOR = '#173e63';
-/** How far west of the world square the map paints open water (units). Only has to exceed the widest
- *  view the map screen can be zoomed out to. */
-const OFFMAP_WATER_REACH = 20000;
+/** How far past the world square the map paints off-map cover (units). Only has to exceed the
+ *  widest view the map screen can be zoomed out to. */
+const OFFMAP_REACH = 20000;
+/**
+ * R1. What is off the west edge is NOT ocean, it is more of the same country: the Vaal is 320 km2
+ * and the world square crops 154. Painting that margin flat navy put a dead-straight hue boundary
+ * — rgb(22,59,93) against rgb(42,62,50), 6.1 km of it — exactly on the world square's west edge,
+ * which is the water-cap defect relocated to the land's termination. So the margin gets the LAND
+ * tone, matching the darkest ground inside the square, and the real water polygon (which overhangs
+ * the square) paints the bays across it. Land continues into land, water into water, and the only
+ * thing that ends at the boundary is the detail.
+ */
+const OFFMAP_LAND_COLOR = '#20262a';
+/** Ramp floor for the ground tone — see buildHillshade. */
+const TONE_FLOOR = 0.38;
+/** Veld tint along the real waterline, matching the border veld's scrub. */
+const SHORE_VELD_COLOR = '#3d5a3a';
+/** [width in units, alpha] — widest and faintest first, so the band falls off outward. */
+const SHORE_VELD_BANDS: Array<[number, number]> = [[900, 0.16], [520, 0.16], [260, 0.16]];
 const BEACH_COLOR = '#d9c184';
 const FARMLAND_COLOR = '#5a4630'; // tilled soil brown, matching the 3D farmland fill (createGrassTexture 'soil')
 const DISTRICT_COLOR = '#b9c7d6';
@@ -154,6 +172,7 @@ interface Prebuilt {
   pondWaterPath: Path2D | null;
   railPath: Path2D | null;
   oceanPath: Path2D | null;
+  shorePath: Path2D | null;
   beachPath: Path2D | null;
   farmlandPath: Path2D | null;
   runwayPath: Path2D | null;
@@ -242,7 +261,13 @@ function buildHillshade(map: RenderMapData): Prebuilt['hillshade'] {
       const dzdy = (at(col, row + 1) - at(col, row - 1)) / (2 * cell);
       let shade = 0.72 - 2.2 * (dzdx * -0.707 + dzdy * -0.707);
       shade = Math.max(0.25, Math.min(1.15, shade));
-      const t = rank(at(col, row));
+      // GROUND TONE SAYS "THIS IS LAND"; RELIEF IS THE SHADING'S JOB. Ranking fixed the encoding
+      // dependency but the ramp still started at black, and the reservoir's shore is by definition
+      // the lowest ground on the map — so the peninsulas between the drowned valleys came out as
+      // void (D4, measured at rgb(25,31,33) against water at rgb(26,65,100)). The floor keeps the
+      // lowest land a legible veld; altitude still lightens it, just from a base rather than from
+      // nothing.
+      const t = TONE_FLOOR + (1 - TONE_FLOOR) * rank(at(col, row));
       let r = 46 + 44 * t; let bg = 56 + 40 * t; let bb = 52 + 30 * t;
       // Snowy tops: blend toward white above the (noise-dithered) snowline, keeping the relief shading.
       const metres = at(col, row); // grid values are metres ASL already
@@ -287,6 +312,7 @@ function prebuild(map: RenderMapData): Prebuilt {
     pondWaterPath: pondWater.length ? polyPathOf(pondWater) : null,
     railPath: map.railways.length ? pathOf(map.railways) : null,
     oceanPath: coast ? polyPathOf([{ points: coast.ocean }]) : null,
+    shorePath: coast?.shore?.length ? pathOf(coast.shore.map((points) => ({ points }))) : (coast ? polyPathOf([{ points: coast.ocean }]) : null),
     beachPath: coast && coast.beaches.length ? polyPathOf(coast.beaches) : null,
     farmlandPath: farmFields.length ? polyPathOf(farmFields) : null,
     runwayPath: airport ? pathOf([airport.runway]) : null,
@@ -327,23 +353,37 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
     ctx.drawImage(g.hillshade.canvas, g.hillshade.x, g.hillshade.z, g.hillshade.w, g.hillshade.h); ctx.restore();
   }
   if (layers.coast && map.coast) {
-    if (g.oceanPath && g.hillshade) {
-      // Past the west edge the dam carries on — it is 320 km2 and we cropped 154. The old ocean's
-      // polygon overhung far enough to fill this strip; the wholesale Vaal is clipped 353 units off
-      // the edge, which left a PURE BLACK COLUMN down the left of the map screen plus black holes
-      // where real off-map land shows between the water fingers. Render-only, and it stops dead on
-      // the world square so nothing inside the map is touched.
-      ctx.fillStyle = OCEAN_COLOR; ctx.globalAlpha = 0.92;
-      ctx.fillRect(g.hillshade.x - OFFMAP_WATER_REACH, g.hillshade.z - OFFMAP_WATER_REACH,
-                   OFFMAP_WATER_REACH, g.hillshade.h + 2 * OFFMAP_WATER_REACH);
+    if (g.hillshade) {
+      // Off-map cover on all four sides, in the LAND tone (see OFFMAP_LAND_COLOR). It stops dead on
+      // the world square, so nothing inside the map is touched; what it removes is the boundary.
+      const h = g.hillshade;
+      ctx.fillStyle = OFFMAP_LAND_COLOR;
+      ctx.fillRect(h.x - OFFMAP_REACH, h.z - OFFMAP_REACH, OFFMAP_REACH, h.h + 2 * OFFMAP_REACH);
+      ctx.fillRect(h.x + h.w, h.z - OFFMAP_REACH, OFFMAP_REACH, h.h + 2 * OFFMAP_REACH);
+      ctx.fillRect(h.x, h.z - OFFMAP_REACH, h.w, OFFMAP_REACH);
+      ctx.fillRect(h.x, h.z + h.h, h.w, OFFMAP_REACH);
+    }
+    // SHORE VELD (D4). Everywhere else on the map, ground that reads as land reads that way because
+    // a landuse polygon tints it — the border veld, the parks, the farm fields. The dam's shore has
+    // none: it arrived as raw geometry, so the peninsulas between the drowned valleys were bare
+    // hillshade at rgb(31,36,37) next to water at rgb(24,60,94), and against that they read as
+    // black holes. A wide soft band of veld along the real waterline is what the drawdown zone
+    // actually is, and it is drawn UNDER the water, so only the land keeps it.
+    if (g.shorePath) {
+      ctx.strokeStyle = SHORE_VELD_COLOR; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (const [w, a] of SHORE_VELD_BANDS) {
+        ctx.lineWidth = w; ctx.globalAlpha = a; ctx.stroke(g.shorePath);
+      }
       ctx.globalAlpha = 1;
     }
     if (g.oceanPath) { ctx.fillStyle = OCEAN_COLOR; ctx.globalAlpha = 0.92; ctx.fill(g.oceanPath); ctx.globalAlpha = 1; }
     if (g.beachPath) { ctx.fillStyle = BEACH_COLOR; ctx.globalAlpha = 0.9; ctx.fill(g.beachPath); ctx.globalAlpha = 1; }
-    // Stroke the WATER POLYGON, not `coast.coastline`. The polyline is a per-latitude eastmost
-    // envelope kept for the x = f(z) helpers, and drawn on a drowned-valley shore it cuts straight
-    // across every inlet and reads as a staircase over dry land. The polygon is the real outline.
-    if (g.oceanPath) { ctx.strokeStyle = '#8fc7e8'; ctx.lineWidth = Math.max(3, 1.6 / zoom); ctx.stroke(g.oceanPath); }
+    // Stroke the REAL SHORELINE ONLY. Two things are wrong with stroking the water polygon whole:
+    // `coast.coastline` is a per-latitude eastmost envelope that cuts straight across every inlet,
+    // and the polygon itself carries the clip box's own walls, which get drawn as a bright ruler-
+    // straight "coast" out in the margin (R1's second line, a 96-110 luminance step). `coast.shore`
+    // is the polygon minus those walls: real waterline, and nothing the clip invented.
+    if (g.shorePath) { ctx.strokeStyle = '#8fc7e8'; ctx.lineWidth = Math.max(3, 1.6 / zoom); ctx.stroke(g.shorePath); }
     ctx.fillStyle = '#ffd75e';
     ctx.beginPath(); ctx.arc(map.coast.harbour.x, map.coast.harbour.z, Math.max(9, 5 / zoom), 0, Math.PI * 2); ctx.fill();
   }

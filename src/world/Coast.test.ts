@@ -29,11 +29,13 @@ describe('coast map data', () => {
     const xs = ocean.points.map((p) => p.x);
     const width = Math.max(...xs) - Math.min(...xs);
     const half = MAP_WORLD_SIZE / 2;
-    expect(width / MAP_WORLD_SIZE).toBeLessThan(0.26);
+    // 0.36, not 0.26 — see tools/mapgen/coast.test.ts for the measured reason: a bounding box that
+    // has to contain a circumnavigable Grooteiland cannot be narrower without drying the map out.
+    expect(width / MAP_WORLD_SIZE).toBeLessThan(0.36);
     expect((-half - Math.min(...xs)) / MAP_WORLD_SIZE).toBeLessThan(0.095);
     expect(Math.min(...xs)).toBeLessThan(-half); // it must leave the square, or its own edge shows
     // Nothing east of the farm corridor is water.
-    expect(Math.max(...xs)).toBeLessThan(-MAP_WORLD_SIZE * 0.22);
+    expect(Math.max(...xs)).toBeLessThan(-MAP_WORLD_SIZE * 0.16);
   });
 
   it('names the water body as a dam rather than an ocean', () => {

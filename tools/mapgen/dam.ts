@@ -29,6 +29,8 @@ import {
   DAM_CLIP_OVERSHOOT_M,
   DAM_ISLAND_MIN_AREA_M2,
   DAM_OVERHANG_M,
+  DAM_ROAD_WANDER_M,
+  DAM_ROAD_WANDER_WAVE_M,
   DAM_ROTATION_DEG,
   DAM_SCALE,
   DAM_SHORE_MAX_SEG_M,
@@ -36,6 +38,7 @@ import {
   DAM_SHORE_TOLERANCE_M,
   DAM_SOURCE_SIMPLIFY_M,
 } from './config';
+import { fbm, nameSeed } from './meander';
 import { simplifyPolyline, simplifyRing } from './simplify';
 import type { Pt } from './types';
 import { toVaalFrame, type VaalFeature, type VaalStrip } from './vaal';
@@ -58,6 +61,9 @@ export interface DamShore {
   water: Pt[];
   /** Real island rings (Grooteiland first), same transform, same clip. */
   islands: Pt[][];
+  /** The REAL waterline, as open polylines: the clipped rings minus the clip box's own walls. This
+   *  is what the map strokes as "coast"; see realShorePieces. */
+  shore: Pt[][];
   /** Derived eastmost-waterline curve, south -> north. NOT the shoreline; see the module header. */
   points: Pt[];
   /** z extent of the water inside/near the world square. */
@@ -82,7 +88,7 @@ export interface DamShore {
   mapPolygonAnchored: (pts: Pt[], anchor?: Pt) => Pt[];
   /** Re-clip the placed water against a different (exact) world square — process.ts calls this once
    *  the fit is known, so the "no closing edge in frame" guarantee is measured, not hoped for. */
-  clipTo: (world: { minX: number; maxX: number; minZ: number; maxZ: number }) => { water: Pt[]; islands: Pt[][] };
+  clipTo: (world: { minX: number; maxX: number; minZ: number; maxZ: number }) => { water: Pt[]; islands: Pt[][]; shore: Pt[][] };
   log: string[];
 }
 
@@ -119,6 +125,45 @@ export function clipToOffMapBox(poly: Pt[], box: { westX: number; northZ: number
   cur = clipHalfPlane(cur, (p) => p.z <= box.southZ,
     (a, b) => ({ x: a.x + (b.x - a.x) * ((box.southZ - a.z) / (b.z - a.z)), z: box.southZ }));
   return cur;
+}
+
+/**
+ * Split a clipped ring into the pieces that are REAL WATERLINE, dropping every segment that lies on
+ * a wall of the clip box.
+ *
+ * R1's second straight line. The map strokes the water polygon to draw the coast, and the polygon
+ * carries the clip's own walls, so the box's west wall came out as a bright ruler-straight coastline
+ * across the off-map margin. A wall is not a shore and must not be drawn as one. Note this is a
+ * RENDER-SIDE distinction only: the polygon that fills the water, floods the height field and tests
+ * point-in-water is untouched, so nothing about the geometry changes.
+ */
+export function realShorePieces(
+  ring: Pt[], box: { westX: number; northZ: number; southZ: number }, epsM = 0.5,
+): Pt[][] {
+  if (ring.length < 2) return [];
+  const onWall = (a: Pt, b: Pt): boolean =>
+    (Math.abs(a.x - box.westX) < epsM && Math.abs(b.x - box.westX) < epsM)
+    || (Math.abs(a.z - box.northZ) < epsM && Math.abs(b.z - box.northZ) < epsM)
+    || (Math.abs(a.z - box.southZ) < epsM && Math.abs(b.z - box.southZ) < epsM);
+  const pieces: Pt[][] = [];
+  let cur: Pt[] = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]!; const b = ring[(i + 1) % ring.length]!;
+    if (onWall(a, b)) { if (cur.length >= 2) pieces.push(cur); cur = []; continue; }
+    if (!cur.length) cur.push(a);
+    cur.push(b);
+  }
+  if (cur.length >= 2) pieces.push(cur);
+  // The walk starts at an arbitrary vertex, so a shore that crosses it arrives as two pieces whose
+  // ends coincide. Rejoin them; a stroke with a seam in it shows at high zoom.
+  if (pieces.length >= 2) {
+    const first = pieces[0]!; const last = pieces[pieces.length - 1]!;
+    if (Math.hypot(last[last.length - 1]!.x - first[0]!.x, last[last.length - 1]!.z - first[0]!.z) < epsM) {
+      pieces[0] = last.concat(first.slice(1));
+      pieces.pop();
+    }
+  }
+  return pieces;
 }
 
 /** Signed area (positive = clockwise in this x/z frame). Used only to size and order islands. */
@@ -179,7 +224,7 @@ export function buildDamShore(input: DamShoreInput): DamShore {
     northZ: world.minZ - DAM_CLIP_OVERSHOOT_M,
     southZ: world.maxZ + DAM_CLIP_OVERSHOOT_M,
   });
-  const clipTo = (world: { minX: number; maxX: number; minZ: number; maxZ: number }): { water: Pt[]; islands: Pt[][] } => {
+  const clipTo = (world: { minX: number; maxX: number; minZ: number; maxZ: number }): { water: Pt[]; islands: Pt[][]; shore: Pt[][] } => {
     const box = boxFor(world);
     const water = clipToOffMapBox(placedOuter, box);
     const islands = placedIslands
@@ -189,11 +234,12 @@ export function buildDamShore(input: DamShoreInput): DamShore {
       .filter((i) => i.pts.length >= 3 && ringArea(i.pts) >= DAM_ISLAND_MIN_AREA_M2
         && i.pts.some((p) => p.x > world.minX && p.x < world.maxX && p.z > world.minZ && p.z < world.maxZ))
       .sort((a, b) => ringArea(b.pts) - ringArea(a.pts));
-    return { water, islands: islands.map((i) => i.pts) };
+    const shore = realShorePieces(water, box).concat(islands.flatMap((i) => realShorePieces(i.pts, box)));
+    return { water, islands: islands.map((i) => i.pts), shore };
   };
 
   const provisionalWorld = { minX: worldWestX, maxX: worldWestX + 4 * halfZ, minZ: centreZ - halfZ, maxZ: centreZ + halfZ };
-  const { water, islands } = clipTo(provisionalWorld);
+  const { water, islands, shore } = clipTo(provisionalWorld);
   if (water.length < 8) {
     throw new Error(`dam: the placement puts no water on the west edge — check DAM_ANCHOR / DAM_ROTATION_DEG / DAM_SCALE`);
   }
@@ -259,6 +305,7 @@ export function buildDamShore(input: DamShoreInput): DamShore {
   return {
     water,
     islands,
+    shore,
     points,
     northZ,
     southZ,
@@ -297,17 +344,29 @@ export function buildShoreRoad(
   const shoreByZ = damSampler(shore);
   const steps = Math.max(8, Math.round((span.southZ - span.northZ) / DAM_SHORE_STEP_M));
   const base: Pt[] = [];
+  // THE FLOOR WANDERS. Where the water is far west there is no waterline for the hull to follow,
+  // so the road fell back on a CONSTANT x and emitted a single 3,892-unit dead-straight segment
+  // down the map — 5.3 km of ruler, which is the same defect class as the straight water cap, just
+  // wearing a road's colours. The fallback is now a deterministic fBm wander that only ever runs
+  // EAST of the dry line, so the running maximum below still guarantees the road cannot reach the
+  // water: the clearance argument is unchanged, and the line is no longer a line.
+  const wanderSeed = nameSeed('Dam Wal Road dry line');
+  const wanderAt = (z: number): number =>
+    DAM_ROAD_WANDER_M * (0.5 + 0.5 * fbm(wanderSeed, z / DAM_ROAD_WANDER_WAVE_M, 3));
   for (let i = steps; i >= 0; i--) {
     const z = span.northZ + ((span.southZ - span.northZ) * i) / steps;
     base.push({ x: Math.max(floorX, shoreByZ.inBand(z) ? shoreByZ.xAt(z) : -Infinity), z });
   }
   const window = Math.max(1, Math.round(windowM / DAM_SHORE_STEP_M));
+  // The wander goes on AFTER the running maximum, never before: a hull whose window (960 m) is
+  // comparable to the wander's wavelength simply takes the wander's peaks and flattens the troughs,
+  // which is how the first attempt at this still emitted a 2.7 km straight.
   const hull: Pt[] = base.map((p, i) => {
     let east = p.x;
     for (let k = Math.max(0, i - window); k <= Math.min(base.length - 1, i + window); k++) {
       if (base[k]!.x > east) east = base[k]!.x;
     }
-    return { x: east + setbackM, z: p.z };
+    return { x: east + setbackM + wanderAt(p.z), z: p.z };
   });
   let smooth = hull;
   for (let pass = 0; pass < 2; pass++) {

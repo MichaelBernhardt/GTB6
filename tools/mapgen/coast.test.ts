@@ -36,14 +36,25 @@ describe('Vaalpunt Dam shore', () => {
 
   it('sits inside the OLD OCEAN\'s measured budget, with no closing edge in frame', () => {
     // The old Atlantic seaboard nobody complained about, measured: 20.7% of the world wide, 9.4%
-    // of it hanging west of the square. Those are the numbers the wholesale placement is graded
-    // against, not the shape of the band — a reservoir's edge is dendritic and the shape is the
-    // point. The rejected build ran 56.9% wide with a 43.0% overhang: the "speaker cone".
+    // of it hanging west of the square. The rejected build ran 56.9% wide with a 43.0% overhang:
+    // the "speaker cone".
+    //
+    // THE WIDTH CEILING WAS RAISED FROM 0.26 TO 0.36, AND THAT IS A REAL LOOSENING — read this
+    // before you accept it. Width here is a BOUNDING BOX: overhang + the deepest single arm. The
+    // owner then required, by name, that Grooteiland be circumnavigable (a channel on BOTH sides,
+    // so ~1,900 u of water before the island's east shore) and that Misty Bay sit properly inland.
+    // tools/mapgen/search-placement.mjs was re-run with a hard cap of 2,150 u on the deepest arm
+    // (MAX_REACH_U=2150) over every scale, every 6 degrees of rotation and a 700 m translation
+    // grid: the best placement that satisfies both named places still measures 2,864 u wide
+    // (29.2%), and it costs a fifth of the island's size, 4.5 points of wet west edge and a fifth
+    // of the water area — a drier map than the one already rejected for being dry. So the ceiling
+    // is the one the geometry actually allows, and the numbers that matter for the "speaker cone"
+    // complaint — the OVERHANG and the MEAN reach — are both well inside the old ocean's.
     const size = map.stats.targetSize; const half = size / 2;
     const xs = coast.ocean.map((p) => p[0]);
     const width = Math.max(...xs) - Math.min(...xs);
     const overhang = -half - Math.min(...xs);
-    expect(width / size).toBeLessThan(0.26);
+    expect(width / size).toBeLessThan(0.36);
     expect(overhang / size).toBeLessThan(0.095);
     expect(overhang).toBeGreaterThan(180); // the polygon must still leave the square, or its edge shows
 
@@ -147,7 +158,18 @@ describe('Vaalpunt Dam shore', () => {
       if (row) wetRows++;
     }
     expect(wetRows / N).toBeGreaterThan(0.55);           // it is a dam down the west edge, not a pond
-    expect(maxReach).toBeLessThan(size * 0.22);          // no arm may eat the farm corridor
+    // The DEEPEST arm may run to 27% (see the budget test above: this is what Grooteiland's channel
+    // costs), but the MEAN band must stay a band — that is the number the "57% wide" complaint was
+    // really about, and it is 1,030 u here against the old ocean's ~1,100.
+    expect(maxReach).toBeLessThan(size * 0.27);
+    let reachSum = 0; let reachRows = 0;
+    for (let r = 0; r < N; r++) {
+      const z = -half + (size * (r + 0.5)) / N;
+      let east = -Infinity;
+      for (let c = 0; c < N; c++) { const x = -half + (size * (c + 0.5)) / N; if (wet(x, z)) east = x; }
+      if (east > -Infinity) { reachSum += east + half; reachRows++; }
+    }
+    expect(reachSum / Math.max(1, reachRows)).toBeLessThan(size * 0.135);
     expect(wetCells / (N * N)).toBeGreaterThan(0.02);    // the old ocean wet 7.9% of the square
     expect(wetCells / (N * N)).toBeLessThan(0.12);
     // ...and nothing east of the corridor is wet at all.
@@ -223,17 +245,33 @@ describe('rural corridor', () => {
     expect(names.has(FRONTAGE_ROAD_NAME)).toBe(true);
   });
 
-  it('has farmland fields, farm buildings and dirt tracks inside the corridor band', () => {
+  it('has farmland fields, farm buildings and dirt tracks between the dam and the city', () => {
     const fields = map.landuse.filter((area) => area.kind === 'farmland');
     expect(fields.length).toBeGreaterThanOrEqual(6);
+    const half = map.stats.targetSize / 2;
+    const islands = coast.islands ?? [];
+    const ringHas = (ring: Array<[number, number]>, x: number, z: number): boolean => {
+      let c = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = ring[i]!; const b = ring[j]!;
+        if ((a[1] > z) !== (b[1] > z) && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0]) c = !c;
+      }
+      return c;
+    };
+    const wet = (x: number, z: number): boolean =>
+      ringHas(coast.ocean, x, z) && !islands.some((r) => ringHas(r, x, z));
     for (const field of fields) {
       for (const point of field.points) {
-        expect(point[0]).toBeGreaterThan(coast.corridor.westX - 120 * (map.stats.targetSize / 6000));
+        // The lanes now run WEST of the corridor into the dam's own hinterland — the strip between
+        // the corridor and the water was 2 km of empty dark veld otherwise. Two things still hold,
+        // and they are the ones that matter: a field is ON THE MAP, and a field is NOT IN THE DAM.
+        expect(point[0]).toBeGreaterThan(-half);
         expect(point[0]).toBeLessThan(coast.corridor.eastX + 120 * (map.stats.targetSize / 6000));
+        expect(wet(point[0], point[1]), `field vertex in the water at ${point[0]},${point[1]}`).toBe(false);
       }
     }
     expect(rural.farms.length).toBeGreaterThanOrEqual(6);
-    expect(rural.farms.every((farm) => farm.x > coast.corridor.westX && farm.x < coast.corridor.eastX)).toBe(true);
+    expect(rural.farms.every((farm) => farm.x > -map.stats.targetSize / 2 && farm.x < coast.corridor.eastX)).toBe(true);
     const plaasTracks = map.tracks.filter((track) => track.name === 'Plaas track');
     expect(plaasTracks.length).toBeGreaterThanOrEqual(3);
   });
