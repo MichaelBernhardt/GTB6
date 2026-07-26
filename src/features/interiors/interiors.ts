@@ -6,7 +6,11 @@
  * The shape of one visit:
  *   walk onto a doorstep -> E -> fade -> the room is BUILT (never before) on a flat plot a few
  *   hundred metres away -> walk around it -> E on the mat -> fade -> back on the exact paving slab
- *   you left, facing the same way, in the same street with the same people in it.
+ *   you left, in the same street with the same people still standing in it.
+ *
+ * Your HEADING is not restored, because the api hands out the player's position Vector3 and nothing
+ * else — there is no api.placePlayer(x, y, z, heading). You come out facing whichever way you were
+ * facing indoors. Noted as a gap rather than papered over.
  *
  * Why a plot and not the building: see the header of ./stage.ts. The short version is that a
  * procedural building is one solid collider per massing tier and a feature cannot add or remove a
