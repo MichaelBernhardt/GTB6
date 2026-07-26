@@ -88,6 +88,7 @@ export class PopulationSystem {
   private policePatrols: Pedestrian[] = [];
   private ambientSerial = 200; // seeds variety (colours, wallets, bravery) for lifecycle-spawned agents
   private npcVariantCursor = 0;
+  private fixtureVariantCursor = 0; // feature fixtures cycle the same cast on their own cursor
   private frame = 0;
   private forward = new THREE.Vector3();
   private playerPos = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z); // last known player position; biases new traffic goals player-ward
@@ -443,6 +444,21 @@ export class PopulationSystem {
     guard.state = 'idle'; guard.idleTime = 999999; guard.makeCarGuard(); guard.group.name = 'Yard Security';
     this.pedestrians.push(guard);
     return guard;
+  }
+
+  /** Features (src/features/): a placed fixture standing its spot — a dealer on his corner, a
+   *  forecourt attendant, a protester. `scripted` keeps it out of the ambient census, out of the
+   *  despawn recycler and out of taxi hailing; it stays an ordinary ped in every other respect.
+   *  The caller owns it: keep your own roster and removeFixture() each one in dispose(). */
+  spawnFixture(x: number, z: number, name?: string): Pedestrian {
+    // Its own cursor, deliberately: PopulationSystem.npcs.test.ts pins the exact ambient round-robin,
+    // so fixtures must not advance it. They still draw from the same cast (no new art needed).
+    const variant = AMBIENT_NPC_CHARACTER_IDS[this.fixtureVariantCursor++ % AMBIENT_NPC_CHARACTER_IDS.length]!;
+    const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++ + 300, false, false, variant);
+    ped.scripted = true; ped.state = 'idle'; ped.idleTime = 999999;
+    if (name) ped.group.name = name;
+    this.pedestrians.push(ped);
+    return ped;
   }
 
   /** Story missions: a scripted vehicle parked at a kerb, driven only once routed somewhere. */

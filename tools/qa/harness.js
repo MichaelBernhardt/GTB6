@@ -296,6 +296,7 @@ window.__qa = (() => {
         }
         if (o.conditions?.drivingTrain || o.conditions?.onTrain) return 'needs:train';
         if (o.conditions?.inPlane) return 'needs:plane';
+        if (o.conditions?.feature) return `needs:feature:${o.conditions.feature}`;
         if (!marker) return 'stuck:no-target';
         let sim = -1;
         const near = Math.hypot(marker.position.x - focus().x, marker.position.z - focus().z) < 45 && !g.activeVehicle;
@@ -679,10 +680,34 @@ window.__qa = (() => {
     });
   }
 
+  /**
+   * GENERIC feature driver — the resolver behind `needs:feature:<id>`.
+   *
+   * The owner's gate is that player-facing content ships only after an in-engine machine
+   * playthrough, and "tests green" is explicitly not "playable". Rather than teach this harness
+   * about golf or petrol, each feature ships its own driver as `qa(action, args)` on its loaded
+   * system; this function loads the feature through the REAL lazy path and hands the drive over.
+   * A feature is therefore machine-playtestable without editing the harness core.
+   *
+   * Returns the usual verdict vocabulary: 'ok', 'stuck:<why>', 'failed:<why>'.
+   */
+  async function feature(id, action = 'run', args = {}) {
+    if (!g.features) return 'stuck:no-feature-host';
+    const verdict = await g.features.qa(id, action, args);
+    note(`feature ${id} ${action} -> ${verdict}`);
+    if (typeof verdict === 'string' && verdict.startsWith('stuck:')) finding('fail', `feature "${id}" could not be driven: ${verdict}`);
+    return verdict;
+  }
+
+  /** What the game says E would do right now, for either ladder — the string the HUD shows. */
+  function featurePrompt(context = 'foot') {
+    return g.features?.offer(context)?.prompt ?? '';
+  }
+
   // capture the last failure reason for reporting
   const origFail = g.missions.fail.bind(g.missions);
   g.missions.fail = (reason) => { state.lastFail = reason; return origFail(reason); };
 
   suppressRender();
-  return { g, state, prep, accept, audit, resolve, trainTo, flyTo, bailAndLand, breachYard, escapeYard, shot, step, note, finding, objIndex };
+  return { g, state, prep, accept, audit, resolve, feature, featurePrompt, trainTo, flyTo, bailAndLand, breachYard, escapeYard, shot, step, note, finding, objIndex };
 })();

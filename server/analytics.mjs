@@ -10,7 +10,7 @@ const PLATFORMS = new Set(['windows', 'macos', 'linux', 'android', 'ios', 'other
 const VIEWPORTS = new Set(['small', 'medium', 'large', 'wide']);
 const QUALITIES = new Set(['potato', 'low', 'medium', 'high', 'ultra', 'unknown']);
 const RANGES = new Set(['24h', '7d', '30d', '90d']);
-const EVENT_TYPES = new Set(['session_end', 'player_death', 'mission_start', 'mission_complete', 'mission_fail', 'vehicle_collision', 'aircraft_crash', 'technical_error']);
+const EVENT_TYPES = new Set(['session_end', 'player_death', 'mission_start', 'mission_complete', 'mission_fail', 'vehicle_collision', 'aircraft_crash', 'technical_error', 'feature_event']);
 const RANGE_MS = { '24h': 86_400_000, '7d': 604_800_000, '30d': 2_592_000_000, '90d': 7_776_000_000 };
 const COOKIE_NAME = 'gtb_admin_session';
 const ADMIN_LIFETIME_SECONDS = 8 * 60 * 60;
@@ -74,6 +74,9 @@ function eventPayload(type, raw) {
   if (type === 'mission_fail') return { missionId: bounded(data.missionId, 80), durationSeconds: finite(data.durationSeconds, 0, 86_400), reason: bounded(data.reason, 100) };
   if (type === 'vehicle_collision') return { impact: finite(data.impact, 0, 250), vehicleKind: bounded(data.vehicleKind, 32, 'unknown') };
   if (type === 'aircraft_crash') return { speed: finite(data.speed, 0, 500), sink: finite(data.sink, 0, 500) };
+  // One bounded shape for every lazily loaded feature (src/features/), so six features share a single
+  // event type instead of each negotiating its own branch here.
+  if (type === 'feature_event') return { feature: bounded(data.feature, 32, 'unknown'), event: bounded(data.event, 40, 'unknown'), detail: bounded(data.detail, 60) || undefined, value: finite(data.value, -1e9, 1e9) };
   if (type === 'technical_error') {
     return {
       errorType: sanitizeTechnicalText(data.errorType, 80), message: sanitizeTechnicalText(data.message, 500),

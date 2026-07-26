@@ -41,13 +41,14 @@ export function computeFare(distance: number): number { return Math.round(FARE_B
 export function startingTip(fare: number): number { return Math.min(TIP_CAP, Math.max(TIP_MIN, Math.round(fare * TIP_RATIO))); }
 export function crashTipPenalty(impact: number): number { return Math.max(1, Math.round(impact / CRASH_TIP_DIVISOR)); }
 
-export interface HailCandidate { state: string; contact: boolean; hostile: boolean; police: boolean; carGuard: boolean; frozen: boolean; stumbling: boolean; fear: number; }
+export interface HailCandidate { state: string; contact: boolean; hostile: boolean; police: boolean; carGuard: boolean; frozen: boolean; stumbling: boolean; fear: number; scripted?: boolean; }
 
 /** Calm civilians hail — walking with wanderlust or paused at the curb. No contacts, car guards, cops,
- *  hostiles, frightened peds, frozen far-cull agents or peds mid-stumble from a bump. */
+ *  hostiles, frightened peds, frozen far-cull agents, peds mid-stumble from a bump, or feature
+ *  fixtures (a dealer standing his corner must not flag down the player's minibus). */
 export function canHail(ped: HailCandidate, distance: number): boolean {
   return (ped.state === 'walk' || ped.state === 'idle') && !ped.contact && !ped.hostile && !ped.police && !ped.carGuard
-    && !ped.frozen && !ped.stumbling && ped.fear < FLEE_THRESHOLD && distance <= HAIL_RADIUS;
+    && !ped.scripted && !ped.frozen && !ped.stumbling && ped.fear < FLEE_THRESHOLD && distance <= HAIL_RADIUS;
 }
 
 export function taxiHudText(phase: TaxiPhase, onDuty: boolean, fare: number, tip: number): string {
