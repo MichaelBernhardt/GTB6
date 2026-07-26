@@ -53,6 +53,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   const plots = new Map<string, StagePlot | undefined>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let visit: Visit | undefined;
+  /** A fade is running and a swap is already scheduled. Without this, two E presses inside the
+   *  260 ms fade queue two installs and you end up standing in two rooms at once. */
+  let swapping = false;
   let disposed = false;
   let overlay: HTMLDivElement | undefined;
 
@@ -107,11 +110,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   const enter = (door: InteriorDoor, instant = false): string => {
     if (visit) return 'failed:already-inside';
+    if (swapping) return 'failed:mid-fade';
     const plot = plotFor(door);
     if (!plot) { api.notify(door.name, 'The door is jammed — nowhere to put the room.', false); api.analytics('no_plot', { detail: door.id }); return 'failed:no-plot'; }
     if (instant) { install(door, plot); return 'ok'; }
+    swapping = true;
     showFade(true);
-    after(FADE_MS, () => { install(door, plot); after(90, () => showFade(false)); });
+    after(FADE_MS, () => { install(door, plot); swapping = false; after(90, () => showFade(false)); });
     return 'ok';
   };
 
@@ -128,9 +133,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   const leave = (instant = false): string => {
     if (!visit) return 'failed:not-inside';
-    if (instant) { close(true); api.persist(); return 'ok'; }
+    if (instant) { swapping = false; close(true); api.persist(); return 'ok'; }
+    if (swapping) return 'failed:mid-fade';
+    swapping = true;
     showFade(true);
-    after(FADE_MS, () => { close(true); api.persist(); after(90, () => showFade(false)); });
+    after(FADE_MS, () => { close(true); swapping = false; api.persist(); after(90, () => showFade(false)); });
     return 'ok';
   };
 
@@ -277,7 +284,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     },
 
     dispose: () => {
-      disposed = true;
+      disposed = true; swapping = false;
       for (const handle of timers) clearTimeout(handle);
       timers.clear();
       close(false);

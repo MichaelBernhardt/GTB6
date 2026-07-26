@@ -167,7 +167,7 @@ function buildProp(prop: InteriorProp, kit: Kit): void {
       const tins = solid(prop.color, 0.55);
       for (let shelf = 0; shelf < 3; shelf++) {
         const y = base + 0.35 + shelf * (prop.h - 0.4) / 3;
-        for (let i = 0; i < 4; i++) box(0.16, 0.2, 0.16, tins, prop.x - prop.w / 2 + 0.2 + i * (prop.w - 0.4) / 3, y + 0.1, prop.z + 0.04);
+        for (let i = 0; i < 4; i++) box(0.16, 0.2, 0.16, tins, prop.x - prop.w / 2 + 0.2 + i * (prop.w - 0.4) / 3, y + 0.1, prop.z - 0.1); // proud of the shelf on the ROOM side
       }
       break;
     }
