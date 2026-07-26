@@ -201,3 +201,47 @@ const api: PreviewApi = {
   },
 };
 (window as unknown as { __preview: PreviewApi }).__preview = api;
+
+// ---- Human-facing chrome. The API above is driven by tools/preview/shoot.py; this makes the same
+// page browsable by hand so the models can be reviewed without a screenshot run.
+const SUBJECTS = ['bicycle', 'motorbike', 'courier', 'superbike', 'traincar', 'traincar-seat', 'traincar-aisle', 'plane'];
+const MODES = ['turnaround', 'hero', 'side', 'front', 'rear', 'top', 'interior'];
+let pickedSubject = SUBJECTS[0]!; let pickedMode = MODES[0]!;
+
+const bar = document.createElement('div');
+bar.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:8px 10px;background:#12141699;backdrop-filter:blur(6px);'
+  + 'font:13px system-ui,sans-serif;color:#dfe5ea;display:flex;gap:14px;align-items:center;flex-wrap:wrap;z-index:9';
+document.body.appendChild(bar);
+const readout = document.createElement('span');
+readout.style.cssText = 'margin-left:auto;opacity:.75;font-variant-numeric:tabular-nums';
+
+function group(items: string[], get: () => string, set: (v: string) => void): HTMLElement {
+  const wrap = document.createElement('div'); wrap.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap';
+  const paint = (): void => {
+    [...wrap.children].forEach((child, index) => {
+      const on = items[index] === get();
+      (child as HTMLElement).style.cssText = 'padding:4px 9px;border-radius:5px;cursor:pointer;border:1px solid '
+        + (on ? '#6ea8fe' : '#ffffff22') + ';background:' + (on ? '#6ea8fe22' : 'transparent') + ';color:inherit';
+    });
+  };
+  for (const item of items) {
+    const button = document.createElement('button'); button.textContent = item;
+    button.onclick = () => { set(item); paint(); refresh(); };
+    wrap.appendChild(button);
+  }
+  paint(); return wrap;
+}
+
+function refresh(): void {
+  try {
+    const { label, tris } = api.render(pickedSubject, pickedMode);
+    readout.textContent = `${label} — ${tris.toLocaleString()} tris`;
+  } catch (error) {
+    readout.textContent = String(error);
+  }
+}
+
+bar.append(group(SUBJECTS, () => pickedSubject, (v) => { pickedSubject = v; }), group(MODES, () => pickedMode, (v) => { pickedMode = v; }), readout);
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight, false); refresh(); });
+renderer.setSize(innerWidth, innerHeight, false);
+refresh();
