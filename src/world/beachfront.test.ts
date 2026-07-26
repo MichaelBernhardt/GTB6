@@ -81,15 +81,15 @@ describe('beachfront placement plan', () => {
     expect(CREST_INLAND).toBe(BEACH_INLAND); // venues sit relative to the same sand crest City drapes
   });
 
-  it('plants the pier root on the sand crest at the Kaapstad Quay harbour', () => {
+  it('plants the pier root on the sand crest at the Deneys Quay harbour', () => {
     expect(plan.pier).toBeDefined();
     expect(plan.pier!.z).toBeCloseTo(HARBOUR_POINT!.z, 6);
     expect(plan.pier!.x).toBeCloseTo(coastXAt(plan.pier!.z) + CREST_INLAND, 6);
     expect(plan.pier!.length).toBeGreaterThan(60); // a real pleasure pier, not a jetty
   });
 
-  it('lays venue strips at both Kaapstad Quay and Bantry Bay, off every road, above the waterline', () => {
-    const quayZ = HARBOUR_POINT!.z; const bayZ = districtCenter('Bantry Bay')!.z;
+  it('lays venue strips at both Deneys Quay and Leboya Baai, off every road, above the waterline', () => {
+    const quayZ = HARBOUR_POINT!.z; const bayZ = districtCenter('Leboya Baai')!.z;
     const nearQuay = plan.venues.filter((v) => Math.abs(v.z - quayZ) < 120);
     const nearBay = plan.venues.filter((v) => Math.abs(v.z - bayZ) < 160);
     expect(nearQuay.length).toBeGreaterThanOrEqual(3);

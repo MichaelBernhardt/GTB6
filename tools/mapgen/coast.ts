@@ -1,11 +1,11 @@
 /**
- * Egoli Wal: grafts an inland DAM (Vaal-Dam character) plus a rural farmland corridor onto the
+ * Vaalpunt Dam: grafts a strip of the REAL Vaal Dam plus a rural farmland corridor onto the
  * west edge of the Joburg crop. This used to be a Cape Town Atlantic-seaboard graft — the
  * ocean is gone because Johannesburg is landlocked and a sea on the west edge was the single
  * most immersion-breaking thing on the map. The Cape extract is still fetched and used, but
- * only for its beach polygons and its place-node district names (Sea Point, Green Point,
- * Bantry Bay, ...), which a dozen runtime anchors resolve against; its coastline GEOMETRY is
- * discarded in favour of the synthetic crenellated dam shore in dam.ts.
+ * only for its two beach OUTLINES, which become the dam's resort strands; its coastline GEOMETRY
+ * and its Cape place names are both discarded in favour of the real Vaal Dam shore (vaal.ts) and
+ * real Vaal place names.
  *
  * Everything here works in the Joburg-projected METRES space of the road network; the
  * shared fit transform in process.ts turns it into game units afterwards.
@@ -16,26 +16,29 @@ import {
   AIRPORT_RUNWAY_BEARING_RAD,
   AIRPORT_RUNWAY_LENGTH_M,
   AIRPORT_Z_FRACTION,
+  BEACH_DEPTH_M,
+  BEACH_LENGTH_M,
+  BEACH_MIN_CLEARANCE_M,
   BORDER_VELD_DEPTH_MAX_M,
   BORDER_VELD_DEPTH_MIN_M,
   BORDER_VELD_NAME,
   CAPE_BBOX,
   COAST_LOOP_LINKS,
   COAST_ROAD_SETBACK_M,
-  COAST_STRETCH_Z,
   COASTAL_ROAD_NAME,
   CORRIDOR_DISTRICTS,
   CORRIDOR_LINKS,
   CORRIDOR_WIDTH_M,
-  DAM_ISLAND_OFFSET_M,
+  DAM_BAND_Z_FRACTION,
   DAM_LEVEL_M,
   DAM_NAME,
-  DAM_OVERSHOOT_M,
+  DAM_ROAD_DRY_LINE_M,
   DAM_ROAD_MARGIN_M,
   DAM_ROAD_PRESMOOTH_M,
   DAM_SHORE_DISTRICT_SETBACK_M,
   DAM_SHORE_DISTRICTS,
   DAM_SHORE_SETBACK_M,
+  DAM_SHORE_STEP_M,
   FRONTAGE_ROAD_NAME,
   HARBOUR_DISTRICT_NAME,
   LAKE_NAME,
@@ -47,16 +50,26 @@ import {
   PORT_NAME,
   PORT_PIER_LENGTH_M,
   ROAD_WIDTHS,
+  SEWAGE_POND_COLS,
+  SEWAGE_POND_D_M,
+  SEWAGE_POND_ROWS,
+  SEWAGE_POND_W_M,
+  SEWAGE_WORKS_DEPTH_M,
+  SEWAGE_WORKS_INLAND_M,
+  SEWAGE_WORKS_LENGTH_M,
+  SEWAGE_WORKS_NAME,
+  SEWAGE_WORKS_Z_FRACTION,
   SIMPLIFY_TOLERANCE_M,
   TRACK_WIDTHS,
 } from './config';
-import { buildDamIsland, buildDamPolygon, buildDamShore, buildShoreRoad, damSampler, type DamShore } from './dam';
+import { buildDamPolygon, buildDamShore, buildShoreRoad, damSampler, type DamShore } from './dam';
 import { nodeDegrees, type RoadNetwork } from './graph';
 import { fbm, nameSeed } from './meander';
 import { boundsOf, makeProjector } from './projection';
 import { ridgeMetresAt } from './ridge';
 import { simplifyPolyline } from './simplify';
 import type { MapRuralBuilding, OsmNode, OsmResponse, OsmWay, Pt, RoadKind } from './types';
+import type { VaalFeature, VaalStrip } from './vaal';
 
 /** Airport geometry in projected metres (turned into game units by the shared fit transform). */
 export interface CoastAirport {
@@ -87,8 +100,14 @@ export interface CoastGraftResult {
   ocean: Pt[];
   /** The dam's z-band and shore sampler: outside the band the west strip is dry veld. */
   dam: DamShore;
-  /** The dam's island, emitted as a scrub polygon with a local elevation bump. */
-  damIsland: { center: Pt; polygon: Pt[] };
+  /** The dam's real islands (Grooteiland first), emitted as scrub polygons with elevation bumps. */
+  damIslands: Pt[][];
+  /** Real Vaal shore furniture (wall, marinas, slipways, camps, the sewage works), mapped in. */
+  vaalFeatures: VaalFeature[];
+  /** The wastewater works on the shore: fence line, settling ponds, outfall, sign point. */
+  sewage: { name: string; boundary: Pt[]; ponds: Pt[][]; outfall: Pt[]; p: Pt };
+  /** The 1938 dam wall, at its real position along the mapped shore (null if the extract loses it). */
+  damWall: { name: string; p: Pt } | null;
   beaches: Array<{ name: string; points: Pt[] }>;
   farmland: Array<{ name: string; points: Pt[] }>;
   tracks: Array<{ name: string; kind: 'track'; width: number; points: Pt[] }>;
@@ -194,6 +213,8 @@ export function smoothCurve(controls: Pt[], step = 90): Pt[] {
 export function graftCoastAndCorridor(
   net: RoadNetwork,
   cape: OsmResponse,
+  /** The real Vaal Dam strip (vaal.ts): the shoreline, the islands and the shore furniture. */
+  vaal: VaalStrip,
   joburgWestStubMargin = 420,
   /** Golf courses / parks the synthetic reservoir must not be dropped on top of (metres). */
   avoidCircles: Array<{ x: number; z: number; r: number }> = [],
@@ -215,24 +236,24 @@ export function graftCoastAndCorridor(
   const beachWays = ways.filter((way) => way.tags?.natural === 'beach' && way.nodes && way.nodes[0] === way.nodes[way.nodes.length - 1]);
 
   // ---- The dam ------------------------------------------------------------------
-  // The Cape coastline geometry is deliberately NOT used: Joburg is landlocked. What we keep
-  // from the Cape extract is the beach polygons (they become dam-shore resort strips) and the
-  // place-node district names, which several runtime anchors resolve against.
+  // The Cape coastline geometry is deliberately NOT used: Joburg is landlocked, and the shore is
+  // now a strip of the REAL Vaal Dam (vaal.ts). What survives from the Cape extract is the two
+  // beach polygons, which become the dam's resort strands.
   const corridorEastX = jb.minX;
   const corridorWestX = jb.minX - CORRIDOR_WIDTH_M;
-  // Cape geometry still defines the frame the beach polygons are transformed into.
   const coastTargetX = corridorWestX - DAM_SHORE_SETBACK_M;
   const jbSpanZ = jb.maxZ - jb.minZ;
   const cityMidZ = (jb.minZ + jb.maxZ) / 2;
-  // The band OVERSHOOTS the city block (and therefore the world square) at both ends, so the
-  // polygon's closing cap is never in frame — see dam.ts rule 2 and the process.ts assertion.
+  // THE LOBE. The band ENDS inside the world square in z — that is the whole point, it is what
+  // leaves land in both west corners — and the shore has already run west off the square by then.
   const dam = buildDamShore({
     meanX: coastTargetX,
-    northZ: jb.minZ - DAM_OVERSHOOT_M,
-    southZ: jb.maxZ + DAM_OVERSHOOT_M,
+    centreZ: cityMidZ,
+    zSpan: jbSpanZ * DAM_BAND_Z_FRACTION,
+    vaal,
   });
   const coastline = dam.points;
-  const damIsland = buildDamIsland(dam, DAM_ISLAND_OFFSET_M, cityMidZ);
+  for (const line of dam.log) log.push(line);
   // Nothing synthetic may be generated in the water. Every graft polyline that wanders west
   // (corridor links, farm lanes, dirt tracks) runs through this — smoothCurve is Catmull-Rom
   // and overshoots its controls, which is how 'Rooibos Route' put a vertex in the dam.
@@ -241,27 +262,23 @@ export function graftCoastAndCorridor(
     const limit = damSample.inBand(p.z) ? damSample.xAt(p.z) + 120 : corridorWestX - 900;
     return { x: Math.max(p.x, limit), z: p.z };
   };
-  const capeBounds = boundsOf(
-    beachWays.flatMap((way) => way.nodes.map((id) => nodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon))),
-  );
-  const beachMidZ = Number.isFinite(capeBounds.minZ) ? (capeBounds.minZ + capeBounds.maxZ) / 2 : 0;
-  const beachMidX = Number.isFinite(capeBounds.minX) ? (capeBounds.minX + capeBounds.maxX) / 2 : 0;
-  // Beaches (now dam-shore resort strips) centre on the CITY's mid-z. They used to centre on
-  // the dam band's midpoint, which was fine while the band sat inside the map and is nonsense
-  // now that it overshoots the world square by 3 km at each end.
-  const toComposite = (p: Pt): Pt => ({
-    x: p.x - beachMidX + coastTargetX,
-    z: (p.z - beachMidZ) * COAST_STRETCH_Z + cityMidZ,
-  });
   log.push(
-    `dam: '${DAM_NAME}' ${coastline.length}-pt crenellated shore, mean x~${Math.round(coastTargetX)} m, ` +
-      `z ${Math.round(dam.northZ)}..${Math.round(dam.southZ)} m (${Math.round(dam.southZ - dam.northZ)} m long), ` +
-      `shore x ${Math.round(dam.minX)}..${Math.round(dam.maxX)} (${Math.round(dam.maxX - dam.minX)} m of crenellation)`,
+    `dam: '${DAM_NAME}' mean x~${Math.round(coastTargetX)} m, band z ${Math.round(dam.northZ)}..${Math.round(dam.southZ)} m ` +
+      `(${Math.round(dam.southZ - dam.northZ)} m = ${(DAM_BAND_Z_FRACTION * 100).toFixed(0)}% of the city span), ` +
+      `${dam.islands.length} island(s), ${dam.features.length} real shore features`,
   );
 
   /** Shore x at an arbitrary z, by nearest shore vertex. */
   const shoreXAtZ = (z: number): number =>
     coastline.reduce((best, p) => (Math.abs(p.z - z) < Math.abs(best.z - z) ? p : best), coastline[0]!).x;
+  /** Eastmost shore x within +/- `halfWindow` of z. Nearest-vertex alone is not safe for polygons:
+   *  the shore is sampled every DAM_SHORE_STEP_M and bulges east between samples, which is how a
+   *  beach vertex ends up a metre inside the water. */
+  const shoreXNear = (z: number, halfWindow: number): number => {
+    let east = -Infinity;
+    for (const p of coastline) if (Math.abs(p.z - z) <= halfWindow && p.x > east) east = p.x;
+    return east === -Infinity ? shoreXAtZ(z) : east;
+  };
 
   // ---- Dam-shore road (offset inland = east of the shoreline) --------------------
   // The shoreline runs south -> north (decreasing z); a positive perpendicular offset of
@@ -271,10 +288,13 @@ export function graftCoastAndCorridor(
   // which is exactly what a real dam-shore road does, while the raw crenellated polyline
   // still drives the water polygon and the terrain.
   const highwayPoints = simplifyPolyline(
-    buildShoreRoad(dam, COAST_ROAD_SETBACK_M, DAM_ROAD_PRESMOOTH_M * 4, {
-      northZ: jb.minZ - DAM_ROAD_MARGIN_M,
-      southZ: jb.maxZ + DAM_ROAD_MARGIN_M,
-    }),
+    buildShoreRoad(
+      dam,
+      COAST_ROAD_SETBACK_M,
+      DAM_ROAD_PRESMOOTH_M * 4,
+      { northZ: jb.minZ - DAM_ROAD_MARGIN_M, southZ: jb.maxZ + DAM_ROAD_MARGIN_M },
+      corridorWestX - DAM_ROAD_DRY_LINE_M,
+    ),
     SIMPLIFY_TOLERANCE_M * 3,
   );
 
@@ -375,9 +395,11 @@ export function graftCoastAndCorridor(
   const farmRoadEnds: Pt[] = [];
   [{ dz: -1500, dx: -260 }, { dz: 1750, dx: 420 }].forEach((offset, index) => {
     const endPoint = { x: rMid.x + offset.dx, z: rMid.z + offset.dz };
-    const points = smoothCurve([rMid, { x: rMid.x + offset.dx * 0.4, z: rMid.z + offset.dz * 0.45 }, endPoint], 100);
+    // clampToLand: the real dam's northern arm reaches ~2 km east into the corridor, and without
+    // this Melkweg drops a vertex in the water at the arm head.
+    const points = smoothCurve([rMid, { x: rMid.x + offset.dx * 0.4, z: rMid.z + offset.dz * 0.45 }, endPoint], 100).map(clampToLand);
     addRoad(index === 0 ? 'Melkweg' : 'Kraal Close', 'residential', points, { startId: rRoadMidId });
-    farmRoadEnds.push(endPoint);
+    farmRoadEnds.push(clampToLand(endPoint));
   });
 
   const tracks: CoastGraftResult['tracks'] = [];
@@ -525,7 +547,7 @@ export function graftCoastAndCorridor(
   const cbdZ = Math.max(jb.minZ, Math.min(jb.maxZ, 0));
   const harbourIndex = nearestHighwayIndex(cbdZ);
   const harbourAnchor = highwayNode(harbourIndex);
-  // Reach the WATER, not a fixed set-back. Victoria Road is a running-MAX hull of the shore, so
+  // Reach the WATER, not a fixed set-back. Dam Wal Road is a running-MAX hull of the shore, so
   // beside a drowned-valley arm it sits several hundred metres east of the local waterline and a
   // fixed 0.72 * set-back left the quay stranded in the farmland (the 72% crop put it 580 m east
   // of the corridor's own west edge). Run west until just short of the shore.
@@ -534,7 +556,7 @@ export function graftCoastAndCorridor(
     x: Math.min(harbourAnchor.p.x - COAST_ROAD_SETBACK_M * 0.72, shoreXAtZ(quayZ0) + 45),
     z: quayZ0,
   };
-  addRoad('Kaapstad Quay', 'secondary', [harbourAnchor.p, quayEnd], { startId: harbourAnchor.id });
+  addRoad(HARBOUR_DISTRICT_NAME, 'secondary', [harbourAnchor.p, quayEnd], { startId: harbourAnchor.id });
   const harbour = quayEnd;
   log.push(`coast: harbour '${HARBOUR_DISTRICT_NAME}' at z~${Math.round(harbourAnchor.p.z)}`);
 
@@ -641,22 +663,134 @@ export function graftCoastAndCorridor(
   tracks.push({ name: LAKESIDE_TRACK_NAME, kind: 'track', width: TRACK_WIDTHS.track ?? 5, points: lakeTrackPts });
   log.push(`lake: '${LAKE_NAME}' reservoir (${lakePolygon.length}-pt organic shoreline) near the NE suburb edge`);
 
-  // ---- Beaches (real polygons, transformed) + districts -----------------------------------
+  // ---- The wastewater works ------------------------------------------------------------
+  // Sited deliberately rather than at its mapped position: the real plant is 9 km inland of the
+  // strip we cut, so the transform's nearest-shore drift drops it in the middle of the farmland.
+  // It belongs ON the shore — settling ponds terraced down to an outfall pipe in the water.
+  const sewage = (() => {
+    const z = jb.minZ + jbSpanZ * SEWAGE_WORKS_Z_FRACTION;
+    if (z < dam.northZ || z > dam.southZ) {
+      throw new Error(
+        `SEWAGE_WORKS_Z_FRACTION ${SEWAGE_WORKS_Z_FRACTION} puts the works at z ${Math.round(z)} m, outside the ` +
+          `water band ${Math.round(dam.northZ)}..${Math.round(dam.southZ)} m. Outside the band there is no waterline ` +
+          `to sit beside and the works ships off-map. Keep it inside DAM_BAND_Z_FRACTION.`,
+      );
+    }
+    const waterline = shoreXNear(z, SEWAGE_WORKS_LENGTH_M / 2);
+    // INLAND OF THE SHORE ROAD, not between the road and the water: a works needs road access and
+    // Dam Wal Road hugs the bank here, so anything on the seaward side of it lands under the
+    // carriageway. The outfall crosses the road to reach the dam, which is how it really works.
+    let roadX = waterline;
+    for (const p of highwayPoints) if (Math.abs(p.z - z) <= SEWAGE_WORKS_LENGTH_M && p.x > roadX) roadX = p.x;
+    const x0 = Math.max(waterline + SEWAGE_WORKS_INLAND_M, roadX + SEWAGE_WORKS_INLAND_M);
+    const boundary: Pt[] = [
+      { x: x0, z: z - SEWAGE_WORKS_LENGTH_M / 2 },
+      { x: x0 + SEWAGE_WORKS_DEPTH_M, z: z - SEWAGE_WORKS_LENGTH_M / 2 },
+      { x: x0 + SEWAGE_WORKS_DEPTH_M, z: z + SEWAGE_WORKS_LENGTH_M / 2 },
+      { x: x0, z: z + SEWAGE_WORKS_LENGTH_M / 2 },
+    ];
+    const ponds: Pt[][] = [];
+    const padX = (SEWAGE_WORKS_DEPTH_M - SEWAGE_POND_COLS * SEWAGE_POND_D_M) / (SEWAGE_POND_COLS + 1);
+    const padZ = (SEWAGE_WORKS_LENGTH_M - SEWAGE_POND_ROWS * SEWAGE_POND_W_M) / (SEWAGE_POND_ROWS + 1);
+    for (let r = 0; r < SEWAGE_POND_ROWS; r++) {
+      for (let c = 0; c < SEWAGE_POND_COLS; c++) {
+        const px = x0 + padX + c * (SEWAGE_POND_D_M + padX);
+        const pz = z - SEWAGE_WORKS_LENGTH_M / 2 + padZ + r * (SEWAGE_POND_W_M + padZ);
+        ponds.push([
+          { x: px, z: pz }, { x: px + SEWAGE_POND_D_M, z: pz },
+          { x: px + SEWAGE_POND_D_M, z: pz + SEWAGE_POND_W_M }, { x: px, z: pz + SEWAGE_POND_W_M },
+        ]);
+      }
+    }
+    // The outfall: a short pipe run from the fence into the water. This is the bit in court.
+    const outfall: Pt[] = [
+      { x: x0 + 20, z },
+      { x: (x0 + waterline) / 2, z: z + 22 },
+      { x: waterline - 90, z: z + 30 },
+    ];
+    return { name: SEWAGE_WORKS_NAME, boundary, ponds, outfall, p: { x: x0 + SEWAGE_WORKS_DEPTH_M / 2, z } };
+  })();
+  // The 1938 wall, at its REAL position along the mapped shore — the straightest thing on the
+  // shoreline, because a concrete gravity dam wall is straight. The owner asked for it by name.
+  const damWall = ((): CoastGraftResult['damWall'] => {
+    const walls = dam.features.filter((f) => f.kind === 'wall' && f.name === 'Vaal Dam');
+    if (walls.length === 0) return null;
+    const p = walls.reduce((best, f) => (f.p.z < best.p.z ? f : best), walls[0]!).p;
+    return { name: `${DAM_NAME} wall`, p };
+  })();
+  log.push(
+    `dam: '${SEWAGE_WORKS_NAME}' with ${sewage.ponds.length} settling ponds + outfall on the shore at z~${Math.round(sewage.p.z)}` +
+      (damWall ? `; 1938 wall at ${Math.round(damWall.p.x)},${Math.round(damWall.p.z)}` : '; wall not found in the extract'),
+  );
+
+  // ---- Resort beaches, on land, where the real resorts are --------------------------------
+  // The owner kept the sand and the real place settles why: "Misty bay has some resorts and sandy
+  // beaches, hence the choice." So there are exactly two, both small, both at a real Vaal resort,
+  // and both ON LAND at the waterline — the previous pass shipped Three Anchor Bay with all 24 of
+  // its vertices inside the water polygon, which mapRender.ts drew as a sand sliver in open water.
+  //
+  // The SHAPES are still the two real OSM beach outlines from the Cape extract (a beach outline is
+  // a beach outline), but they are normalised to their own centroid, scaled to a resort footprint
+  // and re-sited: centred a little inland of the local waterline at the resort's z, then every
+  // vertex clamped east of the shore at ITS OWN z. Clamping per vertex rather than per polygon is
+  // what makes "0 vertices in the water" true on a crenellated shore.
+  const resortSites = ((): Array<{ name: string; z: number }> => {
+    const byName = (needle: string): VaalFeature | undefined =>
+      dam.features.find((f) => f.name.toLowerCase().includes(needle));
+    // Misty Bay is not a mapped OSM place — it is a gated waterfront estate on Ring Road in Vaal
+    // Marina, and the only thing OSM has for it is its petrol station ("49 Ring Road, Greater Vaal
+    // Marina"), which is exactly the "petrol on site" the estate advertises. That node is the bay.
+    const misty = byName('bayshore marina');
+    const leboya = byName('leboya bay resort');
+    const sites: Array<{ name: string; z: number }> = [];
+    if (misty) sites.push({ name: 'Misty Bay beach', z: misty.p.z });
+    if (leboya) sites.push({ name: 'Leboya Bay beach', z: leboya.p.z });
+    // Fall back to shore settlements if the extract ever loses those nodes.
+    for (const d of DAM_SHORE_DISTRICTS) {
+      if (sites.length >= 2) break;
+      sites.push({ name: `${d.name} beach`, z: jb.minZ + jbSpanZ * d.t });
+    }
+    return sites.slice(0, 2);
+  })();
+  // The outline is a CRESCENT FOLLOWING THE WATERLINE rather than a transformed Cape polygon:
+  // a resort beach is the sand between the water and the grass, so its seaward edge is the bay's
+  // own shape and its inland edge tapers to nothing at both ends. Building it this way is also the
+  // only way to guarantee "no vertex in the water" on a shore this crenellated — the previous pass
+  // transformed a real Cape outline and shipped all 24 of its vertices inside the water polygon.
+  // The Cape extract still decides HOW MANY there are (one per real beach way) and how long each
+  // one is, so the two strands keep the proportions of two real beaches.
   const beaches = beachWays
-    .map((way) => ({
-      name: way.tags?.name ?? 'Beach',
-      points: way.nodes.slice(0, -1)
+    .map((way, index) => {
+      const site = resortSites[index % resortSites.length]!;
+      const raw = way.nodes.slice(0, -1)
         .map((id) => nodes.get(id))
         .filter((node): node is OsmNode => Boolean(node))
-        .map((node) => toComposite(project(node.lat, node.lon))),
-    }))
+        .map((node) => project(node.lat, node.lon));
+      if (raw.length < 4) return { name: site.name, points: [] as Pt[] };
+      const b = boundsOf(raw);
+      const aspect = Math.max(0.5, Math.min(2, (b.maxZ - b.minZ) / Math.max(1, b.maxX - b.minX)));
+      const lengthM = BEACH_LENGTH_M * Math.sqrt(aspect);
+      const depthM = BEACH_DEPTH_M / Math.sqrt(aspect);
+      const steps = 16;
+      const seaward: Pt[] = []; const inland: Pt[] = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const z = site.z - lengthM / 2 + t * lengthM;
+        const waterline = shoreXNear(z, DAM_SHORE_STEP_M * 1.5) + BEACH_MIN_CLEARANCE_M;
+        seaward.push({ x: waterline, z });
+        // Taper the inland edge to nothing at both ends so the sand fades into the grass bank.
+        inland.push({ x: waterline + depthM * Math.sin(Math.PI * t) ** 0.7, z });
+      }
+      return { name: site.name, points: [...seaward, ...inland.reverse()] };
+    })
     .filter((beach) => beach.points.length >= 4);
+
   // ---- Dam-shore + corridor districts ------------------------------------------------------
   // NOT the Cape place nodes' own positions any more. Those were transformed from the Cape
   // extract onto the old sea strip; once the ocean became a reservoir the shoreline moved east
   // under them and five of the nine ended up inside the water polygon with a sixth 1,232 units
-  // past the west world edge — which also silently relocated the Bantry Bay venue strip, since
-  // beachfront.ts resolves districtCenter('Bantry Bay') by name. Each shore district is placed
+  // past the west world edge — which also silently relocated the second venue strip, since
+  // beachfront.ts resolves districtCenter('Leboya Baai') by name. Each shore district is placed
   // ON the measured shoreline at a fraction of the CITY block's z span (always inside the world
   // square) and set back inland of the waterline, so "on land, in the world" is true by
   // construction rather than by luck. `places` is still parsed above for the log line only.
@@ -672,12 +806,14 @@ export function graftCoastAndCorridor(
     { name: HARBOUR_DISTRICT_NAME, p: { x: harbour.x + 120, z: harbour.z } },
   ];
   log.push(
-    `coast: ${beaches.length} beaches, ${DAM_SHORE_DISTRICTS.length} dam-shore + ${CORRIDOR_DISTRICTS.length} corridor districts ` +
-      `re-sited onto the measured shoreline (${places.length} Cape place nodes supplied names only)`,
+    `coast: ${beaches.length} resort beaches (${beaches.map((b) => b.name).join(', ')}), ` +
+      `${DAM_SHORE_DISTRICTS.length} dam-shore + ${CORRIDOR_DISTRICTS.length} corridor districts ` +
+      `re-sited onto the measured shoreline (${places.length} Cape place nodes ignored)`,
   );
 
   return {
-    coastline, ocean, dam, damIsland, beaches, farmland, tracks, farms, padstal, harbour, districts,
+    coastline, ocean, dam, damIslands: dam.islands, vaalFeatures: dam.features, sewage, damWall,
+    beaches, farmland, tracks, farms, padstal, harbour, districts,
     airport, port, lake,
     corridorEastX, corridorWestX,
     highwayEndIds: { south: highwayIds[0]!, north: highwayIds[highwayIds.length - 1]! },
@@ -687,7 +823,7 @@ export function graftCoastAndCorridor(
 
 /**
  * Close the orbital's open C onto the coastal highway: one organic connector per corner
- * (ring end -> Victoria Road tip), bowed inland so neither connector hugs the world edge.
+ * (ring end -> Dam Wal Road tip), bowed inland so neither connector hugs the world edge.
  * With these two links the whole map is wrapped in a single drivable outer loop.
  */
 export function closeCoastalLoop(
@@ -841,13 +977,23 @@ export function compositeElevation(input: CompositeElevationInput): CompositeEle
   // would flood the dry veld north and south of it.
   const { xAt: shoreXAt, inBand: inDamBand } = damSampler(coast.dam);
 
-  // The island stands out of the water: a local bump around its centre.
-  const island = coast.damIsland;
+  // The islands stand out of the water: a local bump per real island ring. Bounds-fitted ellipses
+  // rather than point-in-polygon, so the bump has soft shoulders and the 128x128 grid never clips a
+  // vertical wall out of Grooteiland's shoreline.
+  const islandBumps = coast.damIslands.map((points) => {
+    const b = boundsOf(points);
+    return {
+      cx: (b.minX + b.maxX) / 2, cz: (b.minZ + b.maxZ) / 2,
+      rx: Math.max(60, (b.maxX - b.minX) / 2), rz: Math.max(60, (b.maxZ - b.minZ) / 2),
+    };
+  });
   const islandBump = (m: Pt): number => {
-    const dxi = (m.x - island.center.x) / 520;
-    const dzi = (m.z - island.center.z) / 330;
-    const r = Math.hypot(dxi, dzi);
-    return r >= 1 ? 0 : 14 * (1 - smoothstep(r));
+    let bump = 0;
+    for (const i of islandBumps) {
+      const r = Math.hypot((m.x - i.cx) / i.rx, (m.z - i.cz) / i.rz);
+      if (r < 1) bump = Math.max(bump, 14 * (1 - smoothstep(r)));
+    }
+    return bump;
   };
 
   const data: number[] = [];

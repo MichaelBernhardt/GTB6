@@ -1,6 +1,6 @@
 /**
- * Beachfront plan (pure data + pure layout, no three.js): the Kaapstad Quay pleasure pier, the
- * seafront venue strips (restaurants / bars / cafes) at Kaapstad Quay and Bantry Bay, beach
+ * Dam-front plan (pure data + pure layout, no three.js): the Deneys Quay pleasure pier, the
+ * water's-edge venue strips (restaurants / bars / cafes) at Deneys Quay and Leboya Baai, beach
  * clutter (loungers, towels, lifeguard tower) and moored boats. Everything derives from committed
  * map data — the coastline polyline, the harbour point and district centres — never hand-typed
  * coordinates, and all variation comes from position hashes, so CityGen / ModelScatter honour the
@@ -56,9 +56,10 @@ export interface VenuePlan {
 }
 
 const SIGNS: Record<VenueKind, readonly string[]> = {
-  restaurant: ['DIE KREEFPOT', 'THE SNOEK & FORK', 'MAMA AFRIKA SEAFOOD', 'PERLEMOEN PALACE'],
-  bar: ['DIE DRONK SEEMEEU', 'SUNDOWNER DECK', 'THE SALTY DOG', 'KAAPSTAD KUIER BAR'],
-  cafe: ['VETKOEK & KOFFIE', 'SEEPUNT ESPRESSO', 'MILKTART MARIA', 'KOEKSISTER KAFEE'],
+  // Freshwater, not seaside: kurper and barbel come out of the Vaal, snoek and perlemoen do not.
+  restaurant: ['DIE KURPERPOT', 'THE BARBEL & FORK', 'MAMA AFRIKA VISBRAAI', 'SKUINSKLIP GRILL'],
+  bar: ['DIE DRONK VISAREND', 'SUNDOWNER DECK', 'THE SLIPWAY ARMS', 'VAALDAM KUIER BAR'],
+  cafe: ['VETKOEK & KOFFIE', 'VAALPUNT ESPRESSO', 'MILKTART MARIA', 'KOEKSISTER KAFEE'],
 };
 const TABLE_GAP = 2.0;
 
@@ -179,10 +180,10 @@ export function computeBeachfront(): BeachfrontPlan {
   const empty: BeachfrontPlan = { venues: [], clutter: [], boats: [], towels: [], pads: [] };
   if (!HARBOUR_POINT || coastByZ.length < 2) return empty;
 
-  // -- Kaapstad Quay: the pleasure pier + a venue arc around a paved quay apron ------------------
+  // -- Deneys Quay: the pleasure pier + a venue arc around a paved quay apron --------------------
   const quayZ = HARBOUR_POINT.z;
   const crestX = coastXAt(quayZ) + CREST_INLAND;
-  const pier = { x: crestX, z: quayZ, length: 120, width: 8.5, sign: 'KAAPSTAD QUAY' };
+  const pier = { x: crestX, z: quayZ, length: 120, width: 8.5, sign: 'DENEYS QUAY' };
   const apron = { minX: crestX - 2, maxX: crestX + 42, minZ: quayZ - 34, maxZ: quayZ + 34 };
   const venues = venueStrip(quayZ - 95, quayZ + 95, 6, 13, 24);
   const boats: BeachSpot[] = [];
@@ -194,11 +195,13 @@ export function computeBeachfront(): BeachfrontPlan {
   }
   const quayClutter = beachClutter(quayZ - 90, quayZ - 40, ['beach-loungers', 'ice-cream-kiosk']);
 
-  // -- Bantry Bay: a venue arc following the bay + a lively beach below it ------------------------
-  const bantry = districtCenter('Bantry Bay');
+  // -- Leboya Baai: a venue arc following the bay + a lively resort beach below it ----------------
+  // BY NAME, and DAM_SHORE_DISTRICTS must keep spelling it the same way: with no district of this
+  // name the strip silently falls back to a fixed offset and lands in open veld.
+  const bantry = districtCenter('Leboya Baai');
   const bayZ = bantry ? bantry.z : quayZ - 4000;
   const bayVenues = venueStrip(bayZ - 130, bayZ + 130, 7, 11, 0, 1);
-  const bayClutter = beachClutter(bayZ - 120, bayZ + 120, ['lifeguard-tower', 'beach-loungers', 'surf-shack', 'beach-loungers', 'ice-cream-kiosk', 'beach-loungers']);
+  const bayClutter = beachClutter(bayZ - 120, bayZ + 120, ['lifeguard-tower', 'beach-loungers', 'boat-shed', 'beach-loungers', 'ice-cream-kiosk', 'beach-loungers']);
   const towels: TowelSpot[] = [];
   for (let i = 0; i < 22; i++) {
     const z = bayZ - 95 + (i / 22) * 190 + (rnd(bayZ, i, 41) - 0.5) * 9;

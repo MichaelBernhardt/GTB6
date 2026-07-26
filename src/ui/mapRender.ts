@@ -38,7 +38,7 @@ export interface RenderMapData {
   junctions: Array<{ x: number; z: number }>;
   elevation?: { cols: number; rows: number; x0: number; z0: number; dx: number; dz: number; data: number[] };
   coast?: {
-    coastline: Poly2; ocean: Poly2; beaches: Array<{ name: string; points: Poly2 }>;
+    name?: string; coastline: Poly2; ocean: Poly2; beaches: Array<{ name: string; points: Poly2 }>;
     harbour: { x: number; z: number };
     /** Corridor band extents (metadata for zoning; the map draws no band tint). */
     corridor: { eastX: number; westX: number; northZ?: number; southZ?: number };

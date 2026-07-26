@@ -4,6 +4,7 @@ import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
 import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
+  BEACH_POLYGONS,
   COASTLINE,
   COAST_CORRIDOR,
   distanceToRailwayCorridor,
@@ -31,7 +32,7 @@ import {
   type MapPolygon,
   type MapPt,
 } from './mapData';
-import { OCEAN_Y } from './coast';
+import { beachBands, OCEAN_Y, shoreColourAt } from './coast';
 import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
@@ -1740,7 +1741,7 @@ export class City {
 
   // ---- Coast: ocean fancy-water + beach/rock shore --------------------------
 
-  /** The Atlantic seaboard graft: a dark seabed, the ocean registered as one premium far-water site
+  /** The Vaalpunt Dam graft: a dark bed, the reservoir registered as one premium far-water site
    *  (planar mirror on high, cheaper tiers below), a drivable sand/rock shore along the waterline, and
    *  a small harbour apron. Built before the static merge so seabed/shore/apron chunk-cull with the rest;
    *  the ocean surface itself is a live water site (see buildWaterBodies' premium dams). */
@@ -1762,24 +1763,31 @@ export class City {
     this.buildBeachfront();
   }
 
-  /** The sandy sea floor: a single draped sheet from the sand crest out to the west map edge, stuck to the
-   *  terrain (which slopes from +BEACH_TOP_Y down to SEA_FLOOR_Y). Replaces the old flat seabed + shore
-   *  ribbon — a continuous slope the ocean laps over without z-fighting, and a real bottom to dive to. */
+  /** The dam bed and its drawdown strand: a single draped sheet from the grass line out to the west
+   *  map edge, stuck to the terrain (which slopes from +BEACH_TOP_Y down to SEA_FLOOR_Y). Vertex-
+   *  coloured rather than uniformly golden — silt below the waterline, a bleached bathtub ring right
+   *  above it, pale drawdown grit above that, and proper resort sand ONLY inside the beach z-bands
+   *  (see coast.ts shoreColourAt). A reservoir that swings between near-empty and 102% full looks
+   *  like this; a seaside does not. */
   private buildBeach(): void {
     if (COASTLINE.length < 2) return;
+    const bands = beachBands(BEACH_POLYGONS);
     const westEdge = -WORLD_SIZE / 2;
     const zs = COASTLINE.map((point) => point.z);
     const zMin = Math.min(...zs); const zMax = Math.max(...zs);
     const CELL = 45; const COLS = 48;
     const rows = Math.max(1, Math.ceil((zMax - zMin) / CELL));
     const dzRow = (zMax - zMin) / rows;
-    const positions: number[] = []; const uvs: number[] = [];
+    const positions: number[] = []; const uvs: number[] = []; const colors: number[] = [];
     for (let r = 0; r <= rows; r++) {
       const z = zMin + r * dzRow;
       const crest = coastlineXAt(z) + BEACH_INLAND + 3; // a touch past the crest so the sand tucks under the grass
       for (let c = 0; c <= COLS; c++) {
         const x = westEdge + (c / COLS) * (crest - westEdge); // columns fan from the map edge to the meandering crest
-        positions.push(x, terrainHeightAt(x, z) + 0.03, z); uvs.push(x / 9, z / 9);
+        const y = terrainHeightAt(x, z);
+        positions.push(x, y + 0.03, z); uvs.push(x / 9, z / 9);
+        const [cr, cg, cb] = shoreColourAt(y, z, OCEAN_Y, bands);
+        colors.push(cr, cg, cb);
       }
     }
     const stride = COLS + 1; const indices: number[] = [];
@@ -1790,17 +1798,19 @@ export class City {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geometry.setIndex(indices); geometry.computeVertexNormals();
     const normals = geometry.attributes.normal.array; let sumY = 0;
     for (let i = 1; i < normals.length; i += 3) sumY += normals[i]!;
     if (sumY < 0) { for (let i = 0; i < indices.length; i += 3) { const t = indices[i]!; indices[i] = indices[i + 2]!; indices[i + 2] = t; } geometry.setIndex(indices); geometry.computeVertexNormals(); }
-    const sand = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xd8c8a0, map: this.sand, roughness: 0.97 }));
-    sand.receiveShadow = true; sand.userData.far = true; // the always-visible sea floor, carries to the horizon
+    // White base colour: the vertex colours ARE the palette, and any tint here multiplies into them.
+    const sand = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, map: this.sand, roughness: 0.97 }));
+    sand.receiveShadow = true; sand.userData.far = true; // the always-visible dam bed, carries to the horizon
     this.group.add(sand);
   }
 
-  /** The beachfront manicure (replaces the old placeholder harbour slab): the Kaapstad Quay
-   *  pleasure pier + paved quay forecourt, seafront venue strips at the quay and Bantry Bay,
+  /** The dam-front manicure (replaces the old placeholder harbour slab): the Deneys Quay
+   *  pleasure pier + paved quay forecourt, water's-edge venue strips at the quay and Leboya Baai,
    *  beach clutter (loungers, lifeguard tower, towels) and moored boats — all placed from the
    *  pure plan in beachfront.ts, whose pads CityGen/ModelScatter already keep clear. Venues and
    *  clutter reuse the catalog path (buildOneModel) so slope plinths + oriented colliders come
@@ -1810,7 +1820,7 @@ export class City {
     if (plan.apron) { // paved quay forecourt draped over the shore terrain
       const { minX, maxX, minZ, maxZ } = plan.apron;
       const polygon: MapPolygon = {
-        name: 'Kaapstad Quay apron', kind: 'beach', minX, maxX, minZ, maxZ,
+        name: 'Deneys Quay apron', kind: 'beach', minX, maxX, minZ, maxZ,
         points: [{ x: minX, z: minZ }, { x: maxX, z: minZ }, { x: maxX, z: maxZ }, { x: minX, z: maxZ }],
         cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, area: (maxX - minX) * (maxZ - minZ),
       };

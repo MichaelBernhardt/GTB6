@@ -151,7 +151,7 @@ describe('generated joburg-map.json', () => {
       // config.ts CUL_DE_SAC_NAMES, so the dead-end resolver leaves them alone by design;
       // 'Sloepbaai Road' only started tripping this gate when the dam replaced the ocean and
       // put the slipway's waterline within 100 units of the road bbox's west extreme.
-      if (road.name === 'Kaapstad Quay' || road.name === 'Sloepbaai Road') continue;
+      if (road.name === 'Deneys Quay' || road.name === 'Sloepbaai Road') continue;
       for (const point of [road.points[0], road.points[road.points.length - 1]]) {
         if ((incidence.get(key(point)) ?? 0) > 1) continue;
         const edge = Math.min(point[0] - minX, maxX - point[0], point[1] - minZ, maxZ - point[1]);

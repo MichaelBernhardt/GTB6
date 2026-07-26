@@ -82,8 +82,9 @@ interface RawMap {
     apron: [number, number][];
     buildings: [number, number][][];
   };
-  /** Jozi-by-the-Sea graft (tools/mapgen/coast.ts): synthetic Atlantic seaboard west of the crop. */
+  /** Vaalpunt Dam graft (tools/mapgen/coast.ts): a strip of the real Vaal Dam west of the crop. */
   coast?: {
+    name?: string;
     coastline: [number, number][];
     ocean: [number, number][];
     beaches: Array<{ name: string; points: [number, number][] }>;
@@ -364,12 +365,15 @@ const RAW_COAST = MAP.coast;
 /** North→south shoreline polyline: the land/water boundary the beach strip and ocean share. */
 export const COASTLINE: MapPt[] = RAW_COAST ? toPts(RAW_COAST.coastline) : [];
 
-/** Closed ocean polygon (west of the coastline, extending past the world edge). One premium water site. */
+/** Closed reservoir polygon (west of the coastline, extending past the world edge). One premium
+ *  water site, and NAMED: it is a dam, and the map should say so. */
 export const OCEAN_POLYGON: MapPolygon | undefined =
-  RAW_COAST ? buildPolygon('Ocean', 'ocean', RAW_COAST.ocean) : undefined;
+  RAW_COAST ? buildPolygon(RAW_COAST.name ?? 'Dam', 'ocean', RAW_COAST.ocean) : undefined;
 
-/** Named OSM beach polygons. NB: the real Cape coords sit inland of the *synthetic* coastline, so the
- *  runtime uses only their z-spans (where along the shore the golden sand goes), not their x-position. */
+/** Resort beach polygons — Misty Bay and Leboya Bay, both placed ON LAND at the measured waterline
+ *  by the mapgen graft. They drive both the golden-sand z-bands on the strand and the 'beach' scatter
+ *  zone, so resort clutter (loungers, kiosks, ablutions, ski-boat sheds) lands at the resorts and
+ *  nowhere else along the shore. */
 export const BEACH_POLYGONS: MapPolygon[] = RAW_COAST
   ? RAW_COAST.beaches
       .map((beach) => buildPolygon(beach.name, 'beach', beach.points))

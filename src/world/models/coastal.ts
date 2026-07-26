@@ -109,8 +109,9 @@ export function buildPavilion(seed: number, options: BuildOptions = {}): BuiltMo
   return kit.done();
 }
 
-/** Surf shack: bleached-timber hut, leaning boards, hire rack. */
-export function buildSurfShack(seed: number, options: BuildOptions = {}): BuiltModel {
+/** Ski-boat shed: bleached-timber hut with skis leaning on the flank and a hire rack. The Vaal is
+ *  a waterski and bass-boat dam, not a surf beach — same hut, different toys and different signs. */
+export function buildBoatShed(seed: number, options: BuildOptions = {}): BuiltModel {
   const kit = new Kit(seed);
   const variant = (options.variant ?? kit.int(1, 0, 2)) % 3;
   const size = options.size ?? kit.rnd(2);
@@ -121,8 +122,8 @@ export function buildSurfShack(seed: number, options: BuildOptions = {}): BuiltM
   kit.box(M.galv, w + 0.8, 0.09, d + 0.9, 0, h + 0.28, 0.1, { rx: 0.14 });
   kit.box(M.darkTimber, 0.9, 1.9, 0.08, -w * 0.22, 0, d / 2 + 0.05, { cast: false });
   kit.box(M.glassDark, 1, 0.8, 0.08, w * 0.22, 1, d / 2 + 0.04, { cast: false });
-  kit.sign(kit.pick(4, ['HANG TEN HUUR', 'SURF SAKE', 'VIS & BAIT', 'BOARDS R50/DAG']), '#8fd8d4', w * 0.85, 0.55, 0, h - 0.35, d / 2 + 0.07, { background: '#3a4a54' });
-  for (let board = 0; board < 2 + (variant % 2); board++) { // boards leaning on the flank
+  kit.sign(kit.pick(4, ['SKI & BAIT', 'BOTE TE HUUR', 'VIS & BAIT', 'KURPER R50/DAG']), '#8fd8d4', w * 0.85, 0.55, 0, h - 0.35, d / 2 + 0.07, { background: '#3a4a54' });
+  for (let board = 0; board < 2 + (variant % 2); board++) { // water-skis leaning on the flank
     kit.box(kit.pick(20 + board, UMBRELLAS), 0.5, 2.1, 0.07, w / 2 + 0.15 + board * 0.28, 0, -d * 0.1 + board * 0.5, { rz: 0.24 });
   }
   if (variant === 2) { // hire rack

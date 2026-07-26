@@ -84,7 +84,7 @@ const SCALE_FACTOR = SCALE_VARIANT === 'parity' ? 1 : 0.75;
 
 /**
  * Calibrated against the emitted `[process] fit: road bbox W x H m` line for THIS crop
- * (measured 11,773 m on the governing axis — clipping Victoria Road to the city span, so the
+ * (measured 11,773 m on the governing axis — clipping Dam Wal Road to the city span, so the
  * water can run off the map without dragging the fit with it, took 122 m off the old 11,895).
  * PARITY_TARGET_SIZE / metresPerUnit = the fit; TARGET_SIZE is read at only three places
  * (process.ts) and the whole graft/ring/meander chain works in projected metres, so
@@ -173,8 +173,8 @@ export const BORDER_VELD_DEPTH_MAX_M = 1050;
  * loop (no dead-ending ring or highway tips at the corners). Cape names, matching the graft.
  */
 export const COAST_LOOP_LINKS = [
-  { name: 'Blouberg Road', kind: 'primary', end: 'north' },
-  { name: 'Bakoven Road', kind: 'primary', end: 'south' },
+  { name: 'Middelbult Road', kind: 'primary', end: 'north' },
+  { name: 'Oranjeville Road', kind: 'primary', end: 'south' },
 ] as const;
 
 /**
@@ -189,7 +189,7 @@ export const DEADEND_PRUNE_M = 450;
 export const DEADEND_PRUNE_MAJOR_M = 160;
 /** Roads allowed to end dead (quays, slipways, farm lanes, airport apron access). */
 export const CUL_DE_SAC_NAMES = [
-  'Kaapstad Quay',
+  'Deneys Quay',
   'Sloepbaai Road',
   'Aviator Avenue',
   'Melkweg',
@@ -197,11 +197,41 @@ export const CUL_DE_SAC_NAMES = [
 ] as const;
 
 /**
- * Jozi-by-the-Sea: the west edge of the map becomes an Atlantic-style coastline grafted
- * from Cape Town's Sea Point -> Camps Bay seaboard, separated from the Joburg block by a
- * rural farmland corridor ("a little drive between them"). Deliberately fantastical.
+ * CAPE EXTRACT — vestigial. The west edge used to be an Atlantic-style coastline grafted from
+ * Cape Town's Sea Point -> Camps Bay seaboard; it is now the real Vaal Dam (VAAL_BBOX below), and
+ * this extract survives only for its two beach polygons, which become the dam's resort strands.
+ * The farmland corridor between the shore and the city block stays ("a little drive between them").
  */
 export const CAPE_BBOX = { south: -33.93, west: 18.37, north: -33.87, east: 18.42 } as const;
+
+/**
+ * VAAL DAM — the real reservoir the map's west edge is cut from, ~70 km south of the city box.
+ * A separate, tiny, one-off Overpass query (overpass.ts fetchVaal), cached and COMMITTED, so the
+ * city extract / SRTM / stations / building caches stay valid and every build stays offline.
+ *
+ * The box covers the dam's north-west arm: Deneysville and Refengkgotso in the west, the dam wall,
+ * Grooteiland mid-water, Vaal Marina in the east, Leboya Bay on the northern arm, and the
+ * Groenpunt wastewater plant on the north-west shore.
+ */
+export const VAAL_BBOX = { south: -26.98, west: 27.95, north: -26.78, east: 28.35 } as const;
+/** OSM relation id of the Vaal Dam water body (`natural=water` + `water=reservoir`, 44 outer rings,
+ *  19 inner rings/islands). Pinned rather than bbox-matched: a bbox query drags in farm dams, and
+ *  a stable id keeps the committed cache key stable. */
+export const VAAL_WATER_RELATION = 253822;
+/** Projection origin for the Vaal strip (mid-dam) — see vaal.ts for the -90 degree re-orientation. */
+export const VAAL_ORIGIN = { lat: -26.9, lon: 28.15 } as const;
+/**
+ * The three anchors that cut the north-shore run out of the closed outer ring. GEOGRAPHIC, not
+ * indices: the chained ring's starting vertex depends on member order, so an index would drift.
+ *   START — the bay south-west of Deneysville (becomes the map's NORTH end, running off the west edge)
+ *   MID   — up the northern arm past Leboya Bay (disambiguates which way round the ring to travel)
+ *   END   — the shore east of Vaal Marina (becomes the map's SOUTH end)
+ */
+export const VAAL_SHORE_START = { lat: -26.923059, lon: 28.100699 } as const;
+export const VAAL_SHORE_MID = { lat: -26.836396, lon: 28.198531 } as const;
+export const VAAL_SHORE_END = { lat: -26.882543, lon: 28.258109 } as const;
+/** Island rings smaller than this are sub-pixel at the fitted scale — Grooteiland has 281. */
+export const VAAL_MIN_ISLAND_POINTS = 60;
 /**
  * Rural corridor width between the Joburg west edge and the coastal strip (metres).
  * Metre-denominated, so it scales with the map: at the 36000 u footprint (~0.49 m/u) the 2700 m
@@ -211,114 +241,192 @@ export const CAPE_BBOX = { south: -33.93, west: 18.37, north: -33.87, east: 18.4
 export const CORRIDOR_WIDTH_M = 2000;
 /** Coastal road sits this far inland of the waterline. */
 export const COAST_ROAD_SETBACK_M = 260;
-/** North-south stretch applied to the Cape strip so it covers more of the west edge. */
-export const COAST_STRETCH_Z = 1.35;
 /** The dam fill extends this far west of the shoreline (past the world edge — no far shore). */
 export const OCEAN_EXTENT_M = 2600;
-export const COASTAL_ROAD_NAME = 'Victoria Road';
+export const COASTAL_ROAD_NAME = 'Dam Wal Road';
 
 /**
- * EGOLI WAL — the inland dam that replaces the ocean. Johannesburg is landlocked; an Atlantic
- * seaboard was the single most immersion-breaking thing on the map. Modelled on the Vaal Dam:
- * a shallow flooded basin of drowned river valleys, so the shore is deeply crenellated with
- * bays, inlets and headlands rather than a smooth lake edge, and it is grass to the waterline
- * with concrete slipways, not sand.
+ * VAALPUNT DAM — the inland reservoir that replaces the ocean, cut from the REAL Vaal Dam
+ * shoreline (tools/mapgen/vaal.ts fetches it; tools/mapgen/dam.ts fits it).
  *
- * HARD CONSTRAINT ON THE SHAPE: the shoreline must stay SINGLE-VALUED, x = f(z), sampled at
- * uniform z. src/world/beachfront.ts coastXAt() and src/world/City.ts coastlineXAt() both model
- * the shore as a function of z and would silently flatten an overhanging peninsula. Large
- * amplitude in x at uniform z gives bays and headlands without overhangs, and both runtime
- * consumers keep working untouched. Do not generate true peninsulas.
+ * Johannesburg is landlocked; an Atlantic seaboard was the single most immersion-breaking thing
+ * on the map. The first replacement was synthetic — fBm bays plus three hand-placed notches — and
+ * the owner's verdict on seeing the real thing was blunt: "Looks at the real Vaal, yes, it's quite
+ * crenulated and distinctive. Perhaps we should get the poly from OSM." So the shore is now the
+ * actual north-west arm of the Vaal: Deneysville and the 1938 dam wall at the top of the map, the
+ * northern arm reaching east as a waterway, Grooteiland mid-water, the Misty Bay / Vaal Marina
+ * shore below it, and the run leaving the world square at both ends.
  *
- * The dam covers only the SOUTHERN part of the west edge and pinches out at both ends, so it
- * overhangs ONE edge (west) rather than three as the ocean did — the owner's "it needn't cover
- * 3 sides though, just one is good". North of it the west band stays dry veld and farmland.
+ * TWO HARD CONSTRAINTS ON THE SHAPE:
+ *
+ * 1. SINGLE-VALUED, x = f(z). src/world/beachfront.ts coastXAt() and src/world/City.ts
+ *    coastlineXAt() both model the shore as a function of z. The real shoreline is not one, so
+ *    dam.ts UNFOLDS it (backward-running stretches drift forward in proportion to their own
+ *    length) rather than flattening it. Do not "fix" that by taking an easternmost crossing —
+ *    that is what puts a ruler-straight line across every inlet mouth.
+ *
+ * 2. A LOBE, NOT A BAND. The water enters the west edge, bulges east and leaves the west edge
+ *    again, so BOTH west corners of the world are dry land — the owner's "like the lake is
+ *    pushing in from the left side, but never covers the full left extent". The band therefore
+ *    ENDS inside the world square in z, which is only safe because the shore has already run west
+ *    off the square by then (DAM_END_WEST_M); process.ts asserts it after the fit.
  */
-export const DAM_NAME = 'Egoli Wal';
-/** Vertex pitch along the shore (m). The old ocean used 380 m — far too coarse for bays. */
-export const DAM_SHORE_STEP_M = 90;
-/** Primary fBm: the bays and headlands. */
-export const DAM_BAY_AMPLITUDE_M = 420;
-export const DAM_BAY_WAVELENGTH_M = 1400;
-/** Secondary fBm: reed-fringed detail. */
-export const DAM_DETAIL_AMPLITUDE_M = 110;
-export const DAM_DETAIL_WAVELENGTH_M = 380;
-/** Drowned-valley inlets cut east into the shore, as fractions of the dam's z span. */
-export const DAM_ARMS = [
-  { at: 0.22, depthM: 820, mouthM: 1100 },
-  { at: 0.52, depthM: 700, mouthM: 900 },
-  { at: 0.78, depthM: 860, mouthM: 1150 },
-] as const;
+export const DAM_NAME = 'Vaalpunt Dam';
+/** Vertex pitch along the emitted shore (m). 90 m was too coarse to carry the real crenellation. */
+export const DAM_SHORE_STEP_M = 35;
 /**
- * THE DAM RUNS OFF THE TOP AND BOTTOM OF THE MAP. It used to occupy a z-band expressed as
- * fractions of the city span (0.42..1.04), which put its north cap 4,276 units INSIDE the
- * world square — a 2,831-unit ruler-straight edge across the middle of the map with dry veld
- * immediately north of it, right beside the airport. That is the "sudden cuts and crops" the
- * owner rejected. The old ocean never showed a cap because it ran well past the world box at
- * both ends; the dam now does the same on its ONE edge. The band is the city block extended
- * by DAM_OVERSHOOT_M at each end, which is comfortably outside the world square (the world is
- * the road bbox + edge margin, and the road bbox exceeds the city block by well under a
- * kilometre). process.ts asserts the clearance after the fit, so a re-crop cannot silently
- * bring the cap back inside.
+ * Douglas-Peucker tolerance applied to the RAW Vaal vertices before fitting (real metres).
+ * The strip carries ~5,400 vertices at ~13 m pitch over 72 km of real shoreline, which is far
+ * more than the map can show; 45 real metres is ~10 map metres at the fitted scale, i.e. still
+ * finer than DAM_SHORE_STEP_M, so the emitted shore is limited by the resample pitch and not by
+ * this. Raising it past ~120 m starts eating whole bays; dropping it below ~25 m only slows the
+ * unfold down. (SIMPLIFY_TOLERANCE_M, 8 m, is for ROADS in map metres — a different axis.)
  */
-export const DAM_OVERSHOOT_M = 3000;
+export const DAM_SOURCE_SIMPLIFY_M = 35;
 /**
- * The shore pinches out over this distance at each end (m, absolute — a fraction of the span
- * would drift back inside the world when the span changes). Must be well under DAM_OVERSHOOT_M
- * so the taper, like the cap, happens entirely off-map: inside the world the shore is pure
- * crenellation.
+ * Unfold strength: minimum forward z advance per metre of real shoreline walked. 0 would leave
+ * the shore multi-valued; 1 would stand every inlet on end. 0.32 leans the real inlets just
+ * enough to make them functions of z while roughly doubling the strip's z extent, which is where
+ * the fit's mild anisotropy comes from — bays keep their width, arms lean.
  */
-export const DAM_END_TAPER_M = 900;
+export const DAM_UNFOLD_ALPHA = 0.32;
 /**
- * The shore ROAD (Victoria Road) is clipped to the city block plus this margin, while the
- * WATER runs on past the world edge. Letting the road follow the full extended shore would
- * blow up the road bbox the fit is measured from and shrink the city inside the world square
- * by about a third.
+ * Across-shore reach budgets (m, each side of the mean shoreline), applied as a smooth tanh
+ * soft-clip rather than a hard clamp. The real dam is ~320 km2 against this map's 168 km2 and its
+ * northern arm alone reaches 10 km east of the mean shore, where the map's whole west band is
+ * ~2 km wide. tanh is the identity to within 3% for a 200 m bay and asymptotic for the arm, so
+ * the crenellation is untouched and only the one huge reach is compressed. A hard clamp would put
+ * a flat wall across the arm instead.
+ */
+export const DAM_REACH_EAST_M = 850;
+export const DAM_REACH_WEST_M = 1500;
+/** Quantile of the real strip's across-shore coordinate that lands on the mean shoreline. */
+export const DAM_SHORE_QUANTILE = 0.55;
+/**
+ * THE LOBE'S ENDS. Over the last DAM_END_RUNOUT_M of band the shoreline is pulled west until its
+ * end vertex sits DAM_END_WEST_M west of the mean shore — past the world's west edge, so the two
+ * horizontal caps that close the water polygon are entirely off-map and the corners north and
+ * south of the lobe are land. The real crenellation rides on the ramp, so the run-out is curved
+ * coastline leaving the frame, never a diagonal and never a cap.
+ */
+export const DAM_END_RUNOUT_M = 1400;
+export const DAM_END_WEST_M = 1650;
+/**
+ * Height of the water's z-band, as a fraction of the CITY block's north-south span. 0.85 puts the
+ * lobe across ~73% of the world square's height and leaves ~1,780 m (~1,350 units) of dry land in
+ * each west corner. Raising it past ~0.95 closes the corners; process.ts fails the build if it
+ * does, rather than shipping a sea.
+ */
+export const DAM_BAND_Z_FRACTION = 0.85;
+/**
+ * The shore ROAD (Dam Wal Road) spans the city block plus this margin, while the WATER stops
+ * short of the world's north and south edges. Letting the road follow the full shore — including
+ * the two west run-outs — would blow up the road bbox the fit is measured from and shrink the
+ * city inside the world square by about a third.
  */
 export const DAM_ROAD_MARGIN_M = 260;
-/** Mean shore set-back west of the corridor's west edge (m). */
-export const DAM_SHORE_SETBACK_M = 150;
 /**
- * Dam-shore settlements. The Cape place NODES used to supply both the names and the positions
- * of these districts; when the ocean became a reservoir the shoreline moved east under them
- * and five of them ended up in the water with a sixth 1,232 units past the west world edge.
- * Positions are generated ON the measured shoreline instead, at fractions of the CITY block's
- * own north-south span (t = 0 at its north edge, 1 at its south), which is always inside the
- * world square. The Cape NAMES are kept deliberately: Kaapstad Quay, Seepunt Pier, Victoria /
- * Blouberg / Bakoven Road and two story mission lines are all Cape-named too, so renaming is
- * one coherent job for the owner rather than a half-done rename that reads worse than either.
- * Order is the real Atlantic-seaboard order, north to south. 0.718 is the harbour, kept clear.
+ * How far west of the corridor the shore road may fall back to when there is no waterline to
+ * follow (m, west of the corridor's west edge). North and south of the lobe the west band is dry
+ * veld all the way to the world edge; without this floor the road would chase the run-outs.
+ */
+export const DAM_ROAD_DRY_LINE_M = 400;
+/** Mean shore set-back west of the corridor's west edge (m). */
+export const DAM_SHORE_SETBACK_M = 40;
+/**
+ * Dam-shore settlements, north to south, at fractions of the CITY block's own span (t = 0 at its
+ * north edge, 1 at its south) and placed ON the measured shoreline, so "on land, in the world" is
+ * true by construction. Cape names are gone: this is a landlocked Highveld reservoir, and every
+ * name below is either a real place on the Vaal Dam (Deneysville, Refengkgotso, Groenpunt, Leboya
+ * Bay, Manten Marine, Anchor Creek) or an Afrikaans coinage in the same register.
+ *
+ * Deneysville and Refengkgotso are deliberately adjacent, as they really are: Deneysville is the
+ * yacht-club town, Refengkgotso is the township beside it with no formalised public water access
+ * at all. That contrast is the sharpest social fact about the real dam and it is free level design.
+ *
+ * beachfront.ts hangs its second venue arc on 'Leboya Baai' BY NAME (and beachfront.test.ts
+ * asserts it) — rename the two together or the venue strip silently relocates to a fallback.
  */
 export const DAM_SHORE_DISTRICTS = [
-  { name: 'Mouille Point', t: 0.09 },
-  { name: 'Green Point', t: 0.21 },
-  { name: 'Three Anchor Bay', t: 0.33 },
-  { name: 'Sea Point', t: 0.45 },
-  { name: 'Bantry Bay', t: 0.57 }, // beachfront.ts hangs its second venue arc on this one BY NAME
-  { name: 'Fresnaye', t: 0.88 },
+  { name: 'Deneysville', t: 0.11 },
+  { name: 'Refengkgotso', t: 0.19 },
+  { name: 'Manten Marina', t: 0.28 },
+  { name: 'Anker Baai', t: 0.38 },
+  { name: 'Vaalpunt', t: 0.50 },
+  { name: 'Leboya Baai', t: 0.62 }, // beachfront.ts hangs its second venue arc on this one BY NAME
+  { name: 'Groenpunt', t: 0.74 },
+  { name: 'Sonsakker', t: 0.86 },
 ] as const;
 /** Set back inland of the waterline (m): grass shore, then the settlement, then the shore road. */
 export const DAM_SHORE_DISTRICT_SETBACK_M = 330;
-/** The two city-bowl Cape names are backland villages in the corridor, not shore settlements. */
+/**
+ * RESORT BEACHES (m). Two only, both small, both at a real Vaal resort — Misty Bay in Vaal Marina
+ * and Leboya Bay on the northern arm. The rest of the shoreline gets the drawdown strand instead
+ * (pale grit and a high-water mark), which is what a reservoir that swung from near-empty in 2025
+ * to over 102% in 2026 actually looks like. The runtime uses each beach polygon's z-span to decide
+ * where the shore ribbon turns golden, and mapRender draws the polygon itself, so both have to be
+ * ON LAND at the waterline.
+ */
+export const BEACH_LENGTH_M = 260;
+export const BEACH_DEPTH_M = 85;
+/** No beach vertex may come closer than this to the waterline (m) — keeps the sand out of the water. */
+export const BEACH_MIN_CLEARANCE_M = 12;
+/** Backland villages in the farmland corridor, not shore settlements. Both are real Vaal places. */
 export const CORRIDOR_DISTRICTS = [
-  { name: 'Bo-Kaap (Schotschekloof)', t: 0.20, fromWest: 620 },
-  { name: 'Tamboerskloof', t: 0.80, fromWest: 1380 },
+  { name: 'Oranjedorp', t: 0.20, fromWest: 620 },
+  { name: 'Metsimaholo', t: 0.62, fromWest: 1380 },
 ] as const;
 /** Water surface elevation (m ASL). The Highveld sits at ~1700 m; a reservoir is not at 0. */
 export const DAM_LEVEL_M = 1480;
 /**
- * One island, Vaal-style. Sized to the water band, not to taste: inside the world square the
- * dam is only ~820 m wide at the island's latitude (shore to west edge), so the old 420 m
- * radius made an 840 m island that hung half off the map and got clipped flat at the boundary.
+ * GROOTEILAND — way 6139539, the ~3 km island the annual Round the Island race circles, and the
+ * owner asked for it by name. It is a real inner ring of the water relation, so it arrives with
+ * the shoreline and needs no synthesis; it lands mid-water between the town and the marina,
+ * exactly where it really sits, and it is what stops the player seeing the whole lake at once.
  */
-export const DAM_ISLAND_NAME = 'Voelvlei Island';
-export const DAM_ISLAND_RADIUS_M = 300;
-/** Island centre, west of the mean shoreline (m). */
-export const DAM_ISLAND_OFFSET_M = 520;
+export const DAM_ISLAND_NAME = 'Grooteiland';
 /**
- * Pre-smoothing tolerance for the shore ROAD only (m). The raw crenellated polyline still
- * drives the water polygon and the terrain; the road cuts across the bay mouths on causeways,
- * which is what a real dam-shore road does — and stops 900 m bays folding the offset road.
+ * Nudge the islands west (m). The tanh that squeezes the 10 km northern arm into a 2 km band
+ * squeezes the 1.4 km channel behind Grooteiland with it, and the island ends up touching the
+ * shore. This restores a boat-width of water on its landward side.
+ */
+export const DAM_ISLAND_WEST_NUDGE_M = 280;
+/**
+ * THE SEWAGE WORKS. The single most topical detail available about the real Vaal: untreated
+ * sewage from the Emfuleni works has been going into the river for years, and in 2026 the
+ * municipal manager is in court on five counts of serious environmental pollution over it. OSM
+ * carries the plant itself (way 667893482, on the northern shore above Groenpunt), so the map
+ * gets settling ponds, a chlorine contact tank and an outfall on the shore — a reason for one
+ * stretch of water to be grim and the rest pristine.
+ */
+export const SEWAGE_WORKS_NAME = 'Groenpunt Vuilwaterwerke';
+/**
+ * Where down the CITY block's z span the works sits (0 = north edge, 1 = south). MUST be inside
+ * the water band (roughly 0.08..0.92 at DAM_BAND_Z_FRACTION 0.85) — buildDamShore throws otherwise,
+ * because outside the band `shoreXNear` returns the run-out end of the shore, which is past the
+ * world's west edge, and the whole works quietly ships off-map (0.07 did exactly that).
+ *
+ * 0.16 puts it on the northern shore between Deneysville and Refengkgotso, which is the real
+ * arrangement on the Vaal — the works discharges beside the township, not beside the yacht club —
+ * and, measured, it is where Dam Wal Road still hugs the bank, so the yard sits one road-width
+ * inland of the water rather than stranded mid-corridor (at 0.30 the dam's northern arm pushes the
+ * road ~900 units east and the works went with it).
+ */
+export const SEWAGE_WORKS_Z_FRACTION = 0.16;
+/** Works footprint (m): inland set-back of the fence, then its size along/across the shore. */
+export const SEWAGE_WORKS_INLAND_M = 150;
+export const SEWAGE_WORKS_LENGTH_M = 320;
+export const SEWAGE_WORKS_DEPTH_M = 210;
+/** Settling ponds inside the fence: rows x cols of rectangles, each this size (m). */
+export const SEWAGE_POND_ROWS = 2;
+export const SEWAGE_POND_COLS = 3;
+export const SEWAGE_POND_W_M = 74;
+export const SEWAGE_POND_D_M = 62;
+
+/**
+ * Pre-smoothing window for the shore ROAD only (m). The raw crenellated polyline still drives the
+ * water polygon and the terrain; the road cuts across the bay mouths on causeways, which is what
+ * a real dam-shore road does — and stops the deep arms folding the offset road.
  */
 export const DAM_ROAD_PRESMOOTH_M = 240;
 /** Corridor connector roads (creative geography, hence the in-game names straight away). */
@@ -329,7 +437,7 @@ export const CORRIDOR_LINKS = [
 export const FRONTAGE_ROAD_NAME = 'Plaaspad';
 /** Renamed to "Ouma se Padstal" via names-overrides.json. */
 export const PADSTAL_NAME = 'Padstal';
-export const HARBOUR_DISTRICT_NAME = 'Kaapstad Quay';
+export const HARBOUR_DISTRICT_NAME = 'Deneys Quay';
 
 /**
  * Organic curvature applied to the synthetic roads (owner: "far too straight ... a bit more
@@ -360,8 +468,8 @@ export const MEANDER_SPECS: Record<string, MeanderSpec> = {
   'Rooibos Route': { amplitude: 90, wavelength: 1250, octaves: 2, step: 100, taper: 280, chaikin: 1 },
   Melkweg: { amplitude: 65, wavelength: 925, octaves: 2, step: 90, taper: 160, chaikin: 1 },
   'Kraal Close': { amplitude: 65, wavelength: 925, octaves: 2, step: 90, taper: 160, chaikin: 1 },
-  'Blouberg Road': { amplitude: 110, wavelength: 1120, octaves: 2, step: 90, taper: 240, chaikin: 2 },
-  'Bakoven Road': { amplitude: 110, wavelength: 1120, octaves: 2, step: 90, taper: 240, chaikin: 2 },
+  'Middelbult Road': { amplitude: 110, wavelength: 1120, octaves: 2, step: 90, taper: 240, chaikin: 2 },
+  'Oranjeville Road': { amplitude: 110, wavelength: 1120, octaves: 2, step: 90, taper: 240, chaikin: 2 },
 };
 /** Synthetic-road polylines shorter than this many vertices are spurs, not the spine — left straight. */
 export const MEANDER_MIN_VERTICES = 5;
@@ -384,13 +492,16 @@ export const AIRPORT_RUNWAY_LENGTH_M = 1250;
 export const AIRPORT_RUNWAY_BEARING_RAD = 1.84;
 /**
  * Where the airport sits down the city's north-south span (0 = north edge, 1 = south edge).
- * Was 0.8, which is now inside the dam band; 0.5 puts it mid-map in the farmland corridor and
- * cuts its distance from the CBD by ~40% while keeping a non-degenerate rail spur.
+ * MEASURED, not chosen: the real Vaal's northern arm reaches ~2 km east into the corridor between
+ * t=0.25 and t=0.70, and at 0.5 the aerodrome boundary sat 100 units INSIDE the waterline with the
+ * apron on the beach. 0.84 is the southern slot where the shoreline is furthest west — 475 units of
+ * clear ground east of Dam Wal Road — and it puts the strip back "in the southern farmland", which
+ * is what its own name says. Re-measure with the shore profile if the water ever moves.
  */
-export const AIRPORT_Z_FRACTION = 0.5;
+export const AIRPORT_Z_FRACTION = 0.84;
 
-/** Small sea port / pier on the NW coast (distinct from Kaapstad Quay near the CBD). */
-export const PORT_NAME = 'Seepunt Pier';
+/** Yacht club slipway + jetty on the dam's northern arm (distinct from Deneys Quay near the CBD). */
+export const PORT_NAME = 'Vaalpunt Slipway';
 export const PORT_ACCESS_ROAD_NAME = 'Sloepbaai Road';
 export const PORT_PIER_LENGTH_M = 620;
 

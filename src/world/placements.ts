@@ -160,7 +160,7 @@ function bestKerbSpot(request: SpotQuery): KerbSpot {
   if (!best) scan(Math.min(query.minEdge, 0.2), false); // relax edge clearance
   if (!best) { // last resort: nearest vertex of the matching road, claims ignored — but simplification
     // pins surviving vertices AT junctions, so prefer one whose spot doesn't sit in a crossing road
-    // (the Sip ’n Save landed dead-centre in the Victoria Road / Madiba Meander intersection this way).
+    // (the Sip ’n Save landed dead-centre in the Dam Wal Road / Madiba Meander intersection this way).
     let bestAny: KerbSpot | undefined; let bestAnyD = Infinity; let bestCleanD = Infinity;
     for (const road of GENERATED_ROADS) {
       if (query.name !== undefined && road.name !== query.name) continue;
@@ -277,8 +277,8 @@ export const BOTTLE_STORES: BottleStore[] = [
   { name: 'Rivonia Cellars', sign: 'CELLARS', site: shopSite('Oxfraud Road', near('Dunkeld', { x: 1824, z: -3997 }), 8, 3.6, 7.5, 3) },
   { name: 'Randburg Drankwinkel', sign: 'LIQUORS', site: shopSite('Beyers Naudé Drive', near('Montgomery Park', { x: -2220, z: -2086 }), 8, 3.6, 7.5, 3) },
   // Dam promenade (inland side of the shore road so they sit on land, not in the water)
-  { name: 'Sea Point Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Victoria Road', near('Sea Pointe', { x: -4085, z: -381 }), 8, 3.6, 7.5, 3) },
-  { name: 'Green Point Grog', sign: 'GROG', site: shopSite('Madiba Meander', near('Green Point', { x: -3975, z: -2405 }), 8, 3.6, 7.5, 3) },
+  { name: 'Vaalpunt Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Dam Wal Road', near('Vaalpunt', { x: -4085, z: -381 }), 8, 3.6, 7.5, 3) },
+  { name: 'Groenpunt Grog', sign: 'GROG', site: shopSite('Madiba Meander', near('Groenpunt', { x: -3975, z: -2405 }), 8, 3.6, 7.5, 3) },
 ];
 
 /** Stored vehicle pose inside the garage, nose pointing out the door. */
@@ -446,7 +446,7 @@ export const PONTE_FORECOURT = walkSpotNear(PONTE_POINT, 3, 5);
 
 /** Constitution Hill handover (Carcass) and the coastal pier (Pier Pressure). */
 export const CON_HILL_SPOT = walkSpotNear(landmarkPoint('Constitution Hill', { x: hillbrow.x, z: hillbrow.z }), 3, 5);
-export const PIER_POINT = landmarkPoint('Seepunt Pier', { x: CBD_CENTER.x, z: CBD_CENTER.z });
+export const PIER_POINT = landmarkPoint('Vaalpunt Slipway', { x: CBD_CENTER.x, z: CBD_CENTER.z });
 export const PIER_SPOT: MapPt = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 65 * P, z: CBD_CENTER.z + 135 * P }, 3, 5);
 /** Ouma se Padstal doorstep (long-haul side run). */
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
@@ -636,5 +636,5 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: PONTE_SPOT.x, z: PONTE_SPOT.z, radius: 30 },
   { x: HILLBROW_TOWER_SPOT.x, z: HILLBROW_TOWER_SPOT.z, radius: 14 },
   { x: WATER_TOWER_SPOT.x, z: WATER_TOWER_SPOT.z, radius: 10 },
-  ...BEACHFRONT_PADS, // Kaapstad Quay pier + seafront venue strips + beach clutter (beachfront.ts)
+  ...BEACHFRONT_PADS, // Deneys Quay pier + dam-front venue strips + beach clutter (beachfront.ts)
 ];

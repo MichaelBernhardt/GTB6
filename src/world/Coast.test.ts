@@ -16,10 +16,24 @@ describe('coast map data', () => {
     expect(ocean.minX).toBeLessThan(-MAP_WORLD_SIZE / 2);
   });
 
-  it('carries a shoreline polyline spanning the full north-south extent', () => {
+  it('carries a shoreline polyline that is a LOBE, not a full-height sea edge', () => {
+    // The reservoir pushes in from the west and leaves BOTH west corners dry — "never covers the
+    // full left extent". It used to span >90% of the world height, which read as an ocean.
     expect(COASTLINE.length).toBeGreaterThan(20);
     const zs = COASTLINE.map((point) => point.z);
-    expect(Math.max(...zs) - Math.min(...zs)).toBeGreaterThan(MAP_WORLD_SIZE * 0.9);
+    const span = Math.max(...zs) - Math.min(...zs);
+    expect(span).toBeGreaterThan(MAP_WORLD_SIZE * 0.6);
+    expect(span).toBeLessThan(MAP_WORLD_SIZE * 0.85);
+    const half = MAP_WORLD_SIZE / 2;
+    expect(Math.min(...zs)).toBeGreaterThan(-half + 700); // land in the NW corner
+    expect(Math.max(...zs)).toBeLessThan(half - 700); // land in the SW corner
+    // Both ends leave the world square to the WEST, so the closing caps are never in frame.
+    expect(COASTLINE[0]!.x).toBeLessThan(-half);
+    expect(COASTLINE[COASTLINE.length - 1]!.x).toBeLessThan(-half);
+  });
+
+  it('names the water body as a dam rather than an ocean', () => {
+    expect(OCEAN_POLYGON!.name).toMatch(/dam/i);
   });
 
   it('keeps the named beaches and the harbour anchor', () => {

@@ -10,6 +10,8 @@ import {
   OVERPASS_ENDPOINTS,
   OVERPASS_USER_AGENT,
   RESIDENTIAL_RADIUS_M,
+  VAAL_BBOX,
+  VAAL_WATER_RELATION,
 } from './config';
 import type { OsmNode, OsmResponse } from './types';
 
@@ -192,6 +194,71 @@ export async function fetchCape(options: { refresh?: boolean } = {}): Promise<{ 
     }
   }
   throw new Error(`Cape seaboard fetch failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+/**
+ * VAAL DAM extract — the real shoreline the map's reservoir is cut from.
+ *
+ * This is a SECOND, tiny, one-off query, ~70 km SOUTH of the city BBOX, and it exists because
+ * synthesising a "Vaal-like" shore never looked like the Vaal: the real dam is a drowned river
+ * system whose crenellation is its whole character. Two parts:
+ *
+ *   1. relation 253822 (`natural=water` + `water=reservoir`) with `out geom`. Its OUTER rings are
+ *      the shoreline; its INNER rings are the dam's islands, including Grooteiland (way 6139539),
+ *      the 3 km island the annual Round the Island race circles. One `out geom` gets both, so no
+ *      node recursion and no second query.
+ *   2. `out center tags` over a box around the north shore for the furniture the composition needs
+ *      — the dam wall ways, Deneysville / Refengkgotso / Vaal Marina place nodes, the marinas,
+ *      slipways, camp sites, beaches, the fuel station and the two wastewater plants.
+ *
+ * The relation id is pinned deliberately: a bbox query for `natural=water` around the Vaal returns
+ * a dozen farm dams too, and pinning keeps the cache key (and therefore the committed cache file)
+ * stable. The cache file IS committed (`git add -f`, past .gitignore) so every later build is
+ * fully offline and byte-reproducible — this fetch must never run in CI or on a re-build.
+ */
+export function buildVaalQuery(): string {
+  const box = `${VAAL_BBOX.south},${VAAL_BBOX.west},${VAAL_BBOX.north},${VAAL_BBOX.east}`;
+  return `
+[out:json][timeout:180];
+rel(${VAAL_WATER_RELATION});
+out geom;
+(
+  nwr["waterway"="dam"](${box});
+  node["place"](${box});
+  nwr["man_made"="wastewater_plant"](${box});
+  nwr["leisure"~"^(marina|slipway|resort|beach_resort|sports_centre|fishing)$"](${box});
+  nwr["tourism"~"^(camp_site|caravan_site|resort|chalet|attraction|picnic_site)$"](${box});
+  nwr["natural"="beach"](${box});
+  nwr["amenity"="fuel"](${box});
+);
+out center tags;
+`.trim();
+}
+
+/** Fetch the Vaal Dam extract with the same disk cache + retry policy as the Cape extract. */
+export async function fetchVaal(options: { refresh?: boolean } = {}): Promise<{ data: OsmResponse; fromCache: boolean }> {
+  const query = buildVaalQuery();
+  const hash = createHash('sha256').update(query).digest('hex').slice(0, 16);
+  const cacheFile = join(CACHE_DIR, `overpass-vaal-${hash}.json`);
+  if (!options.refresh && existsSync(cacheFile)) {
+    return { data: JSON.parse(readFileSync(cacheFile, 'utf8')) as OsmResponse, fromCache: true };
+  }
+  mkdirSync(CACHE_DIR, { recursive: true });
+  let lastError: unknown;
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      console.log(`[overpass] querying Vaal Dam via ${endpoint} ...`);
+      const data = await requestOnce(endpoint, query);
+      writeFileSync(cacheFile, JSON.stringify(data));
+      console.log(`[overpass] got ${data.elements.length} Vaal elements, cached to ${cacheFile}`);
+      return { data, fromCache: false };
+    } catch (error) {
+      lastError = error;
+      console.warn(`[overpass] Vaal attempt failed: ${error instanceof Error ? error.message : String(error)}`);
+      await sleep(8_000);
+    }
+  }
+  throw new Error(`Vaal Dam fetch failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }
 
 /**

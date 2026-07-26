@@ -11,7 +11,7 @@ import type { BuildOptions, BuiltModel, ModelDef } from './kit';
 import { buildBarn, buildFarmhouse, buildFarmWorkerCottages, buildKraal, buildPadstal, buildSilo, buildTractorShed, buildWaterTower, buildWindpomp } from './rural';
 import { buildBigBox, buildFillingStation, buildMixedUseCorner, buildOfficeBlock, buildParkingGarage, buildSpazaShop, buildStripMall } from './commercial';
 import { buildContainerStack, buildFactory, buildLogisticsDepot, buildScrapyard, buildSubstation, buildTankFarm, buildWarehouse, buildWorkshopRow } from './industrial';
-import { buildAblutions, buildBeachCafe, buildBeachLoungers, buildIceCreamKiosk, buildLifeguardTower, buildMooredBoat, buildPavilion, buildPierKiosk, buildSurfShack } from './coastal';
+import { buildAblutions, buildBeachCafe, buildBeachLoungers, buildBoatShed, buildIceCreamKiosk, buildLifeguardTower, buildMooredBoat, buildPavilion, buildPierKiosk } from './coastal';
 import { buildSeafrontBar, buildSeafrontCafe, buildSeafrontRestaurant } from './venues';
 import { buildApartmentBlock, buildFaceBrickHouse, buildRdpRow, buildSandtonVilla, buildSemiDetachedHouse, buildTinRoofHouse, buildTownhouseRow, buildWalkUpFlats } from './residentialSA';
 import { buildBillboard, buildCellTower, buildChurch, buildCommunityHall, buildMosque, buildReservoir, buildSchool, buildSportsGround, buildTaxiRank } from './civic';
@@ -52,7 +52,7 @@ export const MODEL_CATALOG: ModelDef[] = [
   { name: 'ice-cream-kiosk', category: 'coastal', zones: ['beach', 'promenade', 'park'], variants: 3, maxFootprint: { w: 8, d: 6 }, standable: false, spacing: 40, build: buildIceCreamKiosk },
   { name: 'ablutions', category: 'coastal', zones: ['beach', 'park'], variants: 2, maxFootprint: { w: 12, d: 7 }, standable: false, spacing: 120, build: buildAblutions },
   { name: 'pavilion', category: 'coastal', zones: ['promenade', 'park'], variants: 2, maxFootprint: { w: 15, d: 11 }, standable: true, spacing: 90, build: buildPavilion },
-  { name: 'surf-shack', category: 'coastal', zones: ['beach'], variants: 3, maxFootprint: { w: 10, d: 7 }, standable: false, spacing: 36, build: buildSurfShack },
+  { name: 'boat-shed', category: 'coastal', zones: ['beach'], variants: 3, maxFootprint: { w: 10, d: 7 }, standable: false, spacing: 36, build: buildBoatShed },
   { name: 'lifeguard-tower', category: 'coastal', zones: ['beach'], variants: 2, maxFootprint: { w: 5, d: 11 }, standable: true, landmark: true, spacing: 150, build: buildLifeguardTower },
   { name: 'beach-loungers', category: 'coastal', zones: ['beach'], variants: 3, maxFootprint: { w: 11, d: 11 }, standable: false, spacing: 16, build: buildBeachLoungers },
   { name: 'pier-kiosk', category: 'coastal', zones: ['promenade', 'pier'], variants: 2, maxFootprint: { w: 9, d: 6 }, standable: false, spacing: 30, build: buildPierKiosk },
@@ -82,14 +82,14 @@ export const MODEL_CATALOG: ModelDef[] = [
   // ---- Foliage ----
   { name: 'jacaranda', category: 'foliage', zones: ['suburb', 'park', 'city', 'ridge'], variants: 2, maxFootprint: { w: 10.5, d: 10.5 }, standable: false, spacing: 8, build: buildJacaranda },
   { name: 'shade-tree', category: 'foliage', zones: ['suburb', 'park', 'city', 'ridge'], variants: 2, maxFootprint: { w: 12.5, d: 12.5 }, standable: false, spacing: 10, build: buildShadeTree },
-  { name: 'gum', category: 'foliage', zones: ['suburb', 'park', 'city', 'ridge'], variants: 2, maxFootprint: { w: 7, d: 7 }, standable: false, spacing: 9, build: buildGum },
+  { name: 'gum', category: 'foliage', zones: ['suburb', 'park', 'city', 'ridge', 'beach', 'coast'], variants: 2, maxFootprint: { w: 7, d: 7 }, standable: false, spacing: 9, build: buildGum },
   { name: 'pine', category: 'foliage', zones: ['suburb', 'park', 'city', 'ridge'], variants: 2, maxFootprint: { w: 7, d: 7 }, standable: false, spacing: 7, build: buildPine },
-  { name: 'acacia', category: 'foliage', zones: ['rural', 'veld', 'farm'], variants: 2, maxFootprint: { w: 8.5, d: 8.5 }, standable: false, spacing: 14, build: buildAcacia },
-  { name: 'palm', category: 'foliage', zones: ['beach', 'promenade', 'coast'], variants: 2, maxFootprint: { w: 6, d: 6 }, standable: false, spacing: 6, build: buildPalm },
+  { name: 'acacia', category: 'foliage', zones: ['rural', 'veld', 'farm', 'beach', 'coast'], variants: 2, maxFootprint: { w: 8.5, d: 8.5 }, standable: false, spacing: 14, build: buildAcacia },
+  { name: 'palm', category: 'foliage', zones: ['promenade'], variants: 2, maxFootprint: { w: 6, d: 6 }, standable: false, spacing: 6, build: buildPalm },
   { name: 'aloe', category: 'foliage', zones: ['rural', 'veld', 'farm', 'beach', 'promenade', 'coast'], variants: 2, maxFootprint: { w: 3.2, d: 3.2 }, standable: false, spacing: 4, build: buildAloe },
   { name: 'agave', category: 'foliage', zones: ['beach', 'promenade', 'coast'], variants: 2, maxFootprint: { w: 3.6, d: 3.6 }, standable: false, spacing: 5, build: buildAgave },
   { name: 'bougainvillea', category: 'foliage', zones: ['suburb'], variants: 2, maxFootprint: { w: 4.4, d: 4.4 }, standable: false, spacing: 8, build: buildBougainvillea },
-  { name: 'veld-grass', category: 'foliage', zones: ['rural', 'veld', 'farm'], variants: 2, maxFootprint: { w: 2.2, d: 2.2 }, standable: false, spacing: 2.5, build: buildVeldGrass },
+  { name: 'veld-grass', category: 'foliage', zones: ['rural', 'veld', 'farm', 'beach', 'coast', 'promenade'], variants: 2, maxFootprint: { w: 2.2, d: 2.2 }, standable: false, spacing: 2.5, build: buildVeldGrass },
   { name: 'hedge-unit', category: 'foliage', zones: ['suburb', 'estate'], variants: 2, maxFootprint: { w: 4.8, d: 1.9 }, standable: false, spacing: 4, build: buildHedgeUnit },
   { name: 'landmark-tree', category: 'foliage', zones: ['park', 'ridge', 'city'], variants: 2, maxFootprint: { w: 17.5, d: 17.5 }, standable: false, landmark: true, spacing: 260, build: buildLandmarkTree },
 ];

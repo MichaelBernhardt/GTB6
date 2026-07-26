@@ -39,10 +39,14 @@ describe('generated Joburg road topology', () => {
     const names = RAILWAY_NETWORK.map((line) => line.name);
     expect(names).toContain('Lughawe Spur'); // the airport gets rail service
     expect(names.some((name) => name.includes('Main Line'))).toBe(true);
-    // Lines are long, coherent polylines — not fragments.
+    // Lines are long, coherent polylines — not fragments. 700 units (~0.9 km) rather than the old
+    // 1,200: the aerodrome moved from mid-corridor to the southern slot because the real Vaal's
+    // northern arm now reaches ~2 km east into the corridor and the old site put the apron in the
+    // water (see AIRPORT_Z_FRACTION). The new site sits closer to the mainline, so Lughawe Spur is
+    // a ~1 km branch instead of a ~2 km one. Still a real branch with a halt on it, not a stub.
     const length = (points: { x: number; z: number }[]): number =>
       points.reduce((sum, point, index) => index ? sum + Math.hypot(point.x - points[index - 1]!.x, point.z - points[index - 1]!.z) : 0, 0);
-    expect(RAILWAY_NETWORK.every((line) => length(line.points) >= 1200)).toBe(true);
+    expect(RAILWAY_NETWORK.every((line) => length(line.points) >= 700)).toBe(true);
   });
 
   it('projects every generated passenger station onto a real railway corridor', () => {

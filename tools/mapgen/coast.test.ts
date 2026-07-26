@@ -1,12 +1,12 @@
 /**
- * Regression tests over the committed composite map: the Jozi-by-the-Sea coast strip,
- * the rural corridor, and their contract with the game (ocean boundary, connectivity).
+ * Regression tests over the committed composite map: the Vaalpunt Dam shore (a strip of the real
+ * Vaal Dam), the rural corridor, and their contract with the game (water boundary, connectivity).
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { COASTAL_ROAD_NAME, CORRIDOR_LINKS, DAM_ARMS, DAM_LEVEL_M, FRONTAGE_ROAD_NAME } from './config';
+import { COASTAL_ROAD_NAME, CORRIDOR_LINKS, DAM_LEVEL_M, DAM_REACH_EAST_M, FRONTAGE_ROAD_NAME } from './config';
 import { RIDGE_ZERO_Z } from './ridge';
 import type { JoburgMap } from './types';
 
@@ -24,7 +24,7 @@ function pointInPolygon(polygon: [number, number][], x: number, z: number): bool
   return inside;
 }
 
-describe('Jozi-by-the-Sea coast', () => {
+describe('Vaalpunt Dam shore', () => {
   it('ships coastline, ocean, beaches, harbour and corridor extents', () => {
     expect(coast).toBeDefined();
     expect(coast.coastline.length).toBeGreaterThan(30);
@@ -34,24 +34,50 @@ describe('Jozi-by-the-Sea coast', () => {
     expect(coast.harbour.x).toBeLessThan(coast.corridor.westX); // the quay is on the coast strip
   });
 
-  it('runs off the top AND bottom of the world square — no visible cap (D1)', () => {
-    // The polygon closes with two horizontal caps. Both must be outside the world square, or
-    // water stops in a ruler-straight line inside the playable map (it once did, 4,276 units
-    // in from the north edge, with dry veld immediately north of it).
+  it('is a LOBE pushing in from the west, with land in both west corners (D1)', () => {
+    // The owner: "like the lake is pushing in from the left side, but never covers the full left
+    // extent". So the band must END inside the world square in z — the inverse of the old rule,
+    // which required it to run off the top and bottom — while the SHORE at those ends has already
+    // run west past the world edge, so the two closing caps are never in frame.
     const half = map.stats.targetSize / 2;
-    const zs = coast.ocean.map((point) => point[1]);
-    expect(Math.min(...zs)).toBeLessThan(-half - 200);
-    expect(Math.max(...zs)).toBeGreaterThan(half + 200);
-    const inWorld = (p: [number, number]): boolean => Math.abs(p[0]) <= half && Math.abs(p[1]) <= half;
-    for (let i = 0; i < coast.ocean.length; i++) {
-      const a = coast.ocean[i]!; const b = coast.ocean[(i + 1) % coast.ocean.length]!;
-      if (!inWorld(a) && !inWorld(b)) continue;
-      expect(Math.hypot(b[0] - a[0], b[1] - a[1])).toBeLessThan(300); // no straight run in frame
+    const shoreZs = coast.coastline.map((point) => point[1]);
+    const northZ = Math.min(...shoreZs); const southZ = Math.max(...shoreZs);
+    expect(northZ).toBeGreaterThan(-half + 700); // dry land in the top-left corner
+    expect(southZ).toBeLessThan(half - 700); // dry land in the bottom-left corner
+    // Both corners are outside the water polygon, tested where the map actually is.
+    for (const cornerZ of [-half + 60, half - 60]) {
+      expect(pointInPolygon(coast.ocean, -half + 60, cornerZ)).toBe(false);
     }
+    // The shore leaves the frame at both ends rather than stopping in it.
+    const ends = [coast.coastline[0]!, coast.coastline[coast.coastline.length - 1]!];
+    for (const end of ends) expect(end[0]).toBeLessThan(-half);
+  });
+
+  it('shows no ruler-straight run anywhere the player can see it', () => {
+    // Not just the caps: ANY stretch of the water boundary that is straight to within 2 units of
+    // its own chord and whose midpoint is inside the world square. The defect this replaces was a
+    // 2,831-unit ruler-straight cap across the middle of the map. What survives is real: the
+    // longest straight stretch left is the 1938 concrete dam wall, which is straight in the source
+    // data because dam walls are, and which the owner asked for by name.
+    const half = map.stats.targetSize / 2;
+    const pts = coast.ocean;
+    let worst = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const a = pts[i]!; const b = pts[j]!;
+        const dx = b[0] - a[0]; const dz = b[1] - a[1]; const len = Math.hypot(dx, dz) || 1;
+        let bulge = 0;
+        for (let k = i + 1; k < j; k++) bulge = Math.max(bulge, Math.abs((pts[k]![0] - a[0]) * dz - (pts[k]![1] - a[1]) * dx) / len);
+        if (bulge > 2) break;
+        const mx = (a[0] + b[0]) / 2; const mz = (a[1] + b[1]) / 2;
+        if (Math.abs(mx) <= half && Math.abs(mz) <= half) worst = Math.max(worst, len);
+      }
+    }
+    expect(worst).toBeLessThan(260);
   });
 
   it('coastline forms a continuous south-to-north boundary along the west edge', () => {
-    // Scale-invariant: the synthetic shoreline step is ~420 m, so cap the gap in metres
+    // Scale-invariant: the shoreline resample step is DAM_SHORE_STEP_M, so cap the gap in metres
     // (keeps passing across TARGET_SIZE tweaks instead of a hard-coded unit threshold).
     let previous = coast.coastline[0]!;
     for (const point of coast.coastline.slice(1)) {
@@ -59,19 +85,35 @@ describe('Jozi-by-the-Sea coast', () => {
       expect(gapM).toBeLessThan(620);
       previous = point;
     }
+    // Monotone in z: every runtime consumer models the shore as x = f(z) (dam.ts rule 1).
+    for (let i = 1; i < coast.coastline.length; i++) {
+      expect(coast.coastline[i]![1]).toBeLessThan(coast.coastline[i - 1]![1]);
+    }
     const zs = coast.coastline.map((point) => point[1]);
     const span = Math.max(...zs) - Math.min(...zs);
-    expect(span).toBeGreaterThan(map.stats.targetSize * 0.9); // spans (almost) the whole west edge
-    // The dam's drowned-valley arms cut EAST into the corridor by design (DAM_ARMS depth), so
-    // the tolerance is the deepest arm converted to units, not a fixed wobble allowance.
-    const deepestArmUnits = Math.max(...DAM_ARMS.map((arm) => arm.depthM)) / map.stats.metresPerUnit;
-    expect(Math.max(...coast.coastline.map((point) => point[0]))).toBeLessThan(coast.corridor.westX + deepestArmUnits + 60);
+    // A lobe, not a band: it covers most of the west edge but leaves both corners dry.
+    expect(span).toBeGreaterThan(map.stats.targetSize * 0.6);
+    expect(span).toBeLessThan(map.stats.targetSize * 0.85);
+    // The real dam's northern arm cuts EAST into the corridor by design, bounded by the tanh
+    // soft-clip (DAM_REACH_EAST_M), so the tolerance is that budget in units — not a fixed wobble.
+    const reachUnits = DAM_REACH_EAST_M / map.stats.metresPerUnit;
+    expect(Math.max(...coast.coastline.map((point) => point[0]))).toBeLessThan(coast.corridor.westX + reachUnits + 60);
+  });
+
+  it('puts both resort beaches on LAND at the waterline', () => {
+    // The previous pass shipped Three Anchor Bay with all 24 vertices inside the water polygon,
+    // which mapRender.ts drew as a sand sliver in open water.
+    expect(coast.beaches.length).toBe(2);
+    for (const beach of coast.beaches) {
+      const wet = beach.points.filter((p) => pointInPolygon(coast.ocean, p[0], p[1]));
+      expect(wet, `${beach.name} vertices in the water`).toEqual([]);
+    }
   });
 
   it('no road crosses into the ocean (quays excepted — they end at the water)', () => {
     const offenders: string[] = [];
     for (const road of map.roads) {
-      if (road.name === 'Kaapstad Quay') continue; // the pier is supposed to reach the water
+      if (road.name === 'Deneys Quay') continue; // the quay is supposed to reach the water
       for (let index = 0; index < road.points.length; index += 2) {
         const point = road.points[index]!;
         if (pointInPolygon(coast.ocean, point[0], point[1])) { offenders.push(`${road.name}@${point[0]},${point[1]}`); break; }

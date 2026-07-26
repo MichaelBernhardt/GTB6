@@ -145,7 +145,7 @@ describe('citywide model scatter', () => {
 
   it('keeps zone affinity: coastal-only models hug the coast, industry stays in the belt', () => {
     // Models that can ONLY come from the coastal promenade / beach passes must be near a beach.
-    const coastOnly = new Set(['beach-cafe', 'surf-shack', 'lifeguard-tower', 'beach-loungers', 'pier-kiosk']);
+    const coastOnly = new Set(['beach-cafe', 'boat-shed', 'lifeguard-tower', 'beach-loungers', 'pier-kiosk']);
     for (const m of all) if (coastOnly.has(m.name)) expect(nearCoast(m.x, m.z), `${m.name} strayed inland`).toBe(true);
 
     // Rural farmstead structures overwhelmingly sit in farmland / the rural corridor (a few frontage

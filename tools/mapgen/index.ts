@@ -15,9 +15,10 @@ import { fileURLToPath } from 'node:url';
 import { DISTRICT_RADIUS_M } from './config';
 import { fetchElevationGrid } from './elevation';
 import { applyNameOverrides, loadNameOverrides } from './emit';
-import { fetchBuildingCounts, fetchCape, fetchOsm, fetchStations } from './overpass';
+import { fetchBuildingCounts, fetchCape, fetchOsm, fetchStations, fetchVaal } from './overpass';
 import { buildPreviewHtml } from './preview';
 import { extractDistrictNodes, inBbox as inCropBbox, processOsm } from './process';
+import { parseVaal } from './vaal';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Output paths default to the committed map + preview; MAPGEN_OUT / MAPGEN_PREVIEW_OUT let a
@@ -33,6 +34,13 @@ async function main(): Promise<void> {
 
   const cape = await fetchCape({ refresh });
   console.log(`[mapgen] Cape seaboard extract: ${cape.data.elements.length} elements${cape.fromCache ? ' (from cache)' : ''}`);
+
+  // The real Vaal Dam shoreline, ~70 km south of the city box. Cached and committed: this fetch
+  // must never run on a re-build (see overpass.ts fetchVaal).
+  const vaalExtract = await fetchVaal({ refresh });
+  console.log(`[mapgen] Vaal Dam extract: ${vaalExtract.data.elements.length} elements${vaalExtract.fromCache ? ' (from cache)' : ''}`);
+  const vaal = parseVaal(vaalExtract.data);
+  for (const line of vaal.log) console.log(`[mapgen] ${line}`);
 
   const osmStations = await fetchStations({ refresh });
   console.log(osmStations
@@ -58,7 +66,7 @@ async function main(): Promise<void> {
   console.log(`[mapgen] crop: ${keptDistricts}/${allDistrictNodes.length} place nodes inside CROP_BBOX`);
 
   const overrides = loadNameOverrides();
-  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, stations: osmStations?.nodes ?? null });
+  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, vaal, stations: osmStations?.nodes ?? null });
   for (const line of log) console.log(`[process] ${line}`);
 
   const finalMap = applyNameOverrides(map, overrides);

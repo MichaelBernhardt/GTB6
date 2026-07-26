@@ -4,6 +4,7 @@ import {
   CBD_CENTER,
   CROP_BBOX,
   DAM_ISLAND_NAME,
+  DAM_NAME,
   CUL_DE_SAC_NAMES,
   DEADEND_CONNECT_M,
   DEADEND_JOIN_M,
@@ -36,6 +37,7 @@ import {
   TRACK_WIDTHS,
 } from './config';
 import { buildBorderVeld, closeCoastalLoop, compositeElevation, graftCoastAndCorridor, smoothCurve, type CoastGraftResult } from './coast';
+import type { VaalStrip } from './vaal';
 import { resolveDeadEnds } from './deadends';
 import { thinRailways } from './railways';
 import { buildStations } from './stations';
@@ -189,8 +191,10 @@ export interface ProcessExtras {
   buildingCounts?: number[] | null;
   /** Real OSM road names that must survive density thinning (names-overrides keys). */
   protectedNames?: Iterable<string>;
-  /** Cape Town seaboard extract: enables the Jozi-by-the-Sea coast + rural corridor graft. */
+  /** Cape Town seaboard extract: now only supplies the two beach outlines (see coast.ts). */
   cape?: OsmResponse;
+  /** Real Vaal Dam strip (vaal.ts parseVaal): the shoreline the west edge is cut from. */
+  vaal?: VaalStrip;
   /** railway=station/halt nodes (fetchStations) — null/absent when the network was unavailable. */
   stations?: OsmNode[] | null;
 }
@@ -333,8 +337,8 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     }
   }
   let coast: CoastGraftResult | undefined;
-  if (extras.cape) {
-    coast = graftCoastAndCorridor(net, extras.cape, 420, avoidCircles);
+  if (extras.cape && extras.vaal) {
+    coast = graftCoastAndCorridor(net, extras.cape, extras.vaal, 420, avoidCircles);
     for (const line of coast.log) log.push(line);
   }
 
@@ -432,6 +436,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     }
   }
   if (coast) water.push({ name: coast.lake.name, points: coast.lake.polygon });
+  // The wastewater works' settling ponds. Emitted as water bodies so they read as ponds in-game
+  // and on the map; each is well under PREMIUM_WATER_AREA, so they get the cheap rippling basin.
+  if (coast) coast.sewage.ponds.forEach((points, i) => water.push({ name: `${coast!.sewage.name} pond ${i + 1}`, points }));
   log.push(`water: ${water.length} polygons >= ${MIN_WATER_AREA_M2} m2 (${water.filter((w) => w.name !== 'Water').map((w) => w.name).slice(0, 8).join(', ')})`);
 
   // ---- Railways (thinned to a few real lines; the yards are 600+ ways of spaghetti) -------
@@ -483,6 +490,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     }
   }
   if (coast) for (const track of coast.tracks) tracks.push({ name: track.name, kind: track.kind, width: track.width, points: track.points });
+  // The outfall pipe run: an unpaved service track down to the water. It is the reason one stretch
+  // of this shore is grim, and it is the only bit of the works the player can walk along.
+  if (coast) tracks.push({ name: `${coast.sewage.name} outfall`, kind: 'path', width: TRACK_WIDTHS.path ?? 3, points: coast.sewage.outfall });
   const trackKm = tracks.reduce((sum, t) => sum + polylineLength(t.points), 0) / 1000;
   log.push(`tracks: ${tracks.length} off-road track/path polylines, ${trackKm.toFixed(1)} km`);
 
@@ -515,9 +525,16 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   }
   if (coast) for (const field of coast.farmland) landuse.push({ name: field.name, kind: 'farmland', points: field.points });
   if (coast) landuse.push({ name: coast.airport.name, kind: 'aerodrome', points: coast.airport.boundary });
-  // The dam's island: scrub landuse rather than a hole in the water polygon, so Water.ts needs
-  // no new plumbing. compositeElevation lifts the terrain under it out of the water.
-  if (coast) landuse.push({ name: DAM_ISLAND_NAME, kind: 'scrub', points: coast.damIsland.polygon });
+  // The works' yard: brownfield, so the runtime paints dirt rather than veld grass.
+  if (coast) landuse.push({ name: coast.sewage.name, kind: 'brownfield', points: coast.sewage.boundary });
+  // The dam's islands: scrub landuse rather than holes in the water polygon, so Water.ts needs
+  // no new plumbing. compositeElevation lifts the terrain under them out of the water. The first
+  // and largest is Grooteiland (OSM way 6139539); the rest are its unnamed neighbours.
+  if (coast) {
+    coast.damIslands.forEach((points, i) => {
+      landuse.push({ name: i === 0 ? DAM_ISLAND_NAME : `${DAM_ISLAND_NAME} ${i + 1}`, kind: 'scrub', points });
+    });
+  }
   const mineDumps = landuse.filter((a) => a.kind === 'mine_dump').length;
   log.push(`landuse: ${landuse.length} polygons (${mineDumps} mine dumps/quarries, ${coast?.farmland.length ?? 0} farmland fields)`);
 
@@ -561,6 +578,8 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     landmarks.push({ name, p: project(lat, lon), kind });
   }
   if (coast) landmarks.push({ name: coast.padstal.name, p: coast.padstal.p, kind: 'padstal' });
+  if (coast) landmarks.push({ name: coast.sewage.name, p: coast.sewage.p, kind: 'sewage_works' });
+  if (coast?.damWall) landmarks.push({ name: coast.damWall.name, p: coast.damWall.p, kind: 'dam_wall' });
   if (coast) {
     landmarks.push({ name: coast.airport.name, p: coast.airport.center, kind: 'airport' });
     const portMid = { x: (coast.port.apron[0]!.x + coast.port.apron[2]!.x) / 2, z: (coast.port.apron[0]!.z + coast.port.apron[2]!.z) / 2 };
@@ -587,27 +606,41 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       `1 unit = ${fit.metresPerUnit.toFixed(2)} m`,
   );
 
-  // ---- The dam must run OFF the world square, not stop inside it -------------
-  // D1 regression guard. The dam polygon closes with two horizontal caps; if the band it is
-  // generated over ends inside the world square those caps are ruler-straight edges in the
-  // middle of the playable map (the first cut put one 4,276 units inside the north edge, a
-  // 2,831-unit horizontal line with dry veld immediately north of it). The overshoot that
-  // prevents it is denominated in metres against the city block, so a re-crop that changes the
-  // world/city ratio could quietly bring the cap back. Fail the build instead.
+  // ---- The dam must be a LOBE, not a sea --------------------------------------
+  // D1 regression guard, inverted. The dam polygon closes with two horizontal caps. The FIRST cut
+  // put one 4,276 units inside the north edge — a 2,831-unit ruler-straight line across the middle
+  // of the playable map. The fix then was to run the band off the top and bottom of the world; the
+  // owner's verdict on that was that it read as a sea, not a reservoir. So the band now ends INSIDE
+  // the world square in z (land in both west corners) and the caps are hidden the other way: the
+  // shore has already run WEST past the world edge before either cap is reached.
+  //
+  // Both halves of that are asserted here, because both are load-bearing and both are one config
+  // tweak away from silently failing:
+  //   - land clearance north and south, or the lobe becomes the sea again;
+  //   - end vertices west of the world edge, or a cap becomes a visible ruler-straight edge.
   if (coast) {
-    const capClearanceUnits = 300;
+    const half = worldSize / 2;
     const north = fit.apply({ x: 0, z: coast.dam.northZ }).z;
     const south = fit.apply({ x: 0, z: coast.dam.southZ }).z;
-    if (north > -worldSize / 2 - capClearanceUnits || south < worldSize / 2 + capClearanceUnits) {
+    const cornerLandUnits = 600;
+    if (north < -half + cornerLandUnits || south > half - cornerLandUnits) {
       throw new Error(
-        `dam cap inside the world square: band z ${north.toFixed(0)}..${south.toFixed(0)} u against a ` +
-          `${worldSize} u world (needs to clear +/-${worldSize / 2} by ${capClearanceUnits} u). ` +
-          `Raise DAM_OVERSHOOT_M.`,
+        `dam band reaches the world edge: z ${north.toFixed(0)}..${south.toFixed(0)} u in a ${worldSize} u world ` +
+          `(needs ${cornerLandUnits} u of dry land at each end so both west corners are land). ` +
+          `Lower DAM_BAND_Z_FRACTION.`,
+      );
+    }
+    const ends = [coast.dam.points[0]!, coast.dam.points[coast.dam.points.length - 1]!];
+    const worstEndX = Math.max(...ends.map((p) => fit.apply(p).x));
+    if (worstEndX > -half) {
+      throw new Error(
+        `dam cap visible in the world square: the shore ends at x ${worstEndX.toFixed(0)} u against a west edge of ` +
+          `${(-half).toFixed(0)} u, so the closing cap is drawn in frame. Raise DAM_END_WEST_M.`,
       );
     }
     log.push(
-      `dam: band clears the world square by ${(-worldSize / 2 - north).toFixed(0)} u north / ` +
-        `${(south - worldSize / 2).toFixed(0)} u south — no visible cap`,
+      `dam: lobe leaves ${(north + half).toFixed(0)} u of land in the NW corner / ${(half - south).toFixed(0)} u in the SW, ` +
+        `shore ends ${(-half - worstEndX).toFixed(0)} u past the west edge — no visible cap`,
     );
   }
 
@@ -816,6 +849,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     },
     ...(coast ? {
       coast: {
+        name: DAM_NAME,
         coastline: coast.coastline.map(toUnits),
         ocean: coast.ocean.map(toUnits),
         beaches: coast.beaches.map((beach) => ({ name: beach.name, points: beach.points.map(toUnits) })),

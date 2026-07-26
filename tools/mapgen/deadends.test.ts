@@ -8,7 +8,7 @@ const OPTIONS: DeadEndOptions = {
   connectDistance: 300,
   pruneLength: 450,
   pruneLengthMajor: 160,
-  culDeSacNames: new Set(['Kaapstad Quay']),
+  culDeSacNames: new Set(['Deneys Quay']),
 };
 
 /** Tiny network builder: roads as point lists; shared coordinates share a node id. */
@@ -103,11 +103,11 @@ describe('resolveDeadEnds', () => {
   it('leaves protected cul-de-sacs alone', () => {
     const net = makeNet([
       { name: 'Main', points: [{ x: 0, z: 0 }, { x: 2000, z: 0 }] },
-      { name: 'Kaapstad Quay', points: [{ x: 1000, z: 0 }, { x: 1000, z: 300 }] },
+      { name: 'Deneys Quay', points: [{ x: 1000, z: 0 }, { x: 1000, z: 300 }] },
     ]);
     const report = resolveDeadEnds(net, { ...OPTIONS, joinDistance: 0, connectDistance: 0 });
     expect(report.truncated).toBe(0);
-    expect(net.roads.some((road) => road.name === 'Kaapstad Quay')).toBe(true);
+    expect(net.roads.some((road) => road.name === 'Deneys Quay')).toBe(true);
     expect(report.remaining).toBe(2); // Main's own free ends — the quay is excluded from the census
   });
 });

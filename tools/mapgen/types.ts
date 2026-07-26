@@ -20,6 +20,8 @@ export interface OsmRelationMember {
   type: 'node' | 'way' | 'relation';
   ref: number;
   role: string;
+  /** Present only when the query used `out geom` (the Vaal Dam extract) — inline member geometry. */
+  geometry?: Array<{ lat: number; lon: number }>;
 }
 
 export interface OsmRelation {
@@ -128,9 +130,11 @@ export interface MapPort {
   apron: [number, number][];
 }
 
-/** The fantastical west coast: real Cape Town seaboard geometry grafted onto the map. */
+/** The west edge: a strip of the REAL Vaal Dam shoreline grafted onto the map (tools/mapgen/vaal.ts). */
 export interface MapCoast {
-  /** South-to-north shoreline polyline; everything west of it is ocean. */
+  /** The reservoir's in-game name — the water body must read as a named dam, not "Ocean". */
+  name?: string;
+  /** South-to-north shoreline polyline; everything west of it is water. */
   coastline: [number, number][];
   /** Closed ocean polygon (coastline closed off to the west). */
   ocean: [number, number][];
