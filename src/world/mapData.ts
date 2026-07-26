@@ -61,6 +61,9 @@ export interface SignalJunctionDef {
 interface RawMap {
   stats: {
     targetSize: number; metresPerUnit: number; totalRoadKm: number; roadCount: number; junctionCount: number;
+    /** Emitted land / water split in km². Used by the derivation tests to state their floors as
+     *  densities rather than counts pinned to one particular crop. */
+    landKm2?: number; oceanKm2?: number;
     bbox?: { south: number; west: number; north: number; east: number };
     /** Exact projected-metres -> game-units fit: game = (metres - c) * scale. See coordTransform.ts. */
     fit?: { scale: number; cx: number; cz: number };

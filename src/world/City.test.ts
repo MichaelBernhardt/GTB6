@@ -53,7 +53,10 @@ describe('generated Joburg road topology', () => {
     // Sites now come from the pipeline's full `stations` coverage — a superset of the old
     // station-kind landmarks (the real Gautrain trio is still represented by its OSM stations).
     expect(RAILWAY_STATION_SITES.length).toBeGreaterThanOrEqual(Math.max(RAILWAY_STATIONS.length, 15));
-    for (const key of ['Park', 'Sandton', 'Rosebank']) {
+    // 'Sandton' was the third probe; Sandton Station sits north of the 2/3 crop's bbox and is simply
+    // not in this map's OSM extract any more. Dunkeld Station is the surviving northern terminus of
+    // the same line, so the probe still covers "the CBD hub, a northern-suburbs stop, and Rosebank".
+    for (const key of ['Park', 'Dunkeld', 'Rosebank']) {
       expect(RAILWAY_STATION_SITES.some((station) => station.name.includes(key)), key).toBe(true);
     }
     for (const station of RAILWAY_STATION_SITES) {
@@ -88,7 +91,9 @@ describe('generated Joburg road topology', () => {
 
 describe('district naming (generated place nodes)', () => {
   it('names the key districts for dispatch callouts', () => {
-    for (const name of ['Joburg CBD', 'Sandton', 'Braamfontein', 'Hillbrow', 'Newtown']) {
+    // Sandton is outside the crop; Dunkeld is the northernmost district this map actually carries and
+    // stands in for it as the "far from the CBD" callout.
+    for (const name of ['Joburg CBD', 'Dunkeld', 'Braamfontein', 'Hillbrow', 'Newtown']) {
       const center = districtCenter(name);
       expect(center, name).toBeDefined();
       expect(districtAt(center!.x, center!.z)).toBe(name);

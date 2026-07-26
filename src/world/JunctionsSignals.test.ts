@@ -102,9 +102,12 @@ describe('intersection surfaces (BUG B: unify overlapping road ribbons)', () => 
     // than it has approaches, proving the main road stays bare.
     const tees = JUNCTION_SURFACES.filter((s) => s.degree === 3 && s.arms.length === 2 && s.stopLines.length === 1);
     expect(tees.length).toBeGreaterThan(20);
-    // True 4-way crossings (two through-roads) paint every approach: four stop lines.
+    // True 4-way crossings (two through-roads) paint every approach: four stop lines. Stated as a
+    // SHARE of the junctions this map has, because the flat 15 was a share of the 19,200-unit map's
+    // 1,960 junction surfaces (0.77%); the 2/3 crop leaves 1,422, so an absolute count would fail on
+    // map size rather than on any crossing losing its stop lines. This crop runs at 0.84%.
     const crossings = JUNCTION_SURFACES.filter((s) => s.degree >= 4 && s.stopLines.length >= 4);
-    expect(crossings.length).toBeGreaterThan(15);
+    expect(crossings.length / JUNCTION_SURFACES.length).toBeGreaterThan(15 / 1960);
     // Signalised junctions stop every approach — never fewer lines than distinct arms, always at least one.
     const signalKeys = new Set(SIGNAL_JUNCTIONS.map((j) => `${j.x}|${j.z}`));
     for (const surface of JUNCTION_SURFACES) {

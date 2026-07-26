@@ -11,7 +11,7 @@ import {
 } from './ModelScatter';
 import { CELL_SIZE, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, allBuildings, footprintRailwayClearance, footprintRoadClearance, type GeneratedBuilding } from './CityGen';
 import { MODEL_INDEX } from './models/catalog';
-import { MAP_WORLD_SIZE, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, RAILWAY_STATION_SITES, pointInAnyPolygon } from './mapData';
+import { MAP_STATS, MAP_WORLD_SIZE, METRES_PER_UNIT, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, RAILWAY_STATION_SITES, pointInAnyPolygon } from './mapData';
 import { classifyZone } from './data/zoning';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 
@@ -24,7 +24,13 @@ describe('citywide model scatter', () => {
   const all = allScatteredModels();
 
   it('fills the map broadly with thousands of models across every quadrant', () => {
-    expect(all.length).toBeGreaterThan(20000); // dense-clutter floor: streets and veld read inhabited
+    // Dense-clutter floor: streets and veld must read inhabited. Stated as a density rather than the
+    // old flat 20,000, which was ~51% of what the 19,200-unit map actually scattered (39,112 over its
+    // 333.3 km² / 339.4 million square units of land). Clutter is placed in world units, so the same
+    // 51%-of-nominal floor over this crop's own 90.2-million-u² of land is the like-for-like figure.
+    const CLUTTER_FLOOR_PER_SQUARE_UNIT = 20000 / 339.4e6;
+    const landSquareUnits = ((MAP_STATS.landKm2 ?? 333.3) * 1e6) / METRES_PER_UNIT ** 2;
+    expect(all.length).toBeGreaterThan(CLUTTER_FLOOR_PER_SQUARE_UNIT * landSquareUnits);
 
     const quadrants = new Set(all.map((m) => `${Math.sign(m.x)},${Math.sign(m.z)}`));
     expect(quadrants.size).toBeGreaterThanOrEqual(4);
