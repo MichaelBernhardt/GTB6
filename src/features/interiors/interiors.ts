@@ -21,7 +21,7 @@ import * as THREE from 'three';
 import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescriptor } from '../types';
 import { PLAYER } from '../../config';
 import { doorNear, interiorDoors, type InteriorDoor, type InteriorsSave } from '../interiors.state';
-import { buildInterior, toLocal, toWorld, type BuiltInterior } from './build';
+import { buildDoorways, buildInterior, toLocal, toWorld, type BuiltDoorways, type BuiltInterior } from './build';
 import { generateInterior, type InteriorLayout } from './grammar';
 import { findStagePlot, type StagePlot } from './stage';
 
@@ -53,6 +53,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   const plots = new Map<string, StagePlot | undefined>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let visit: Visit | undefined;
+  let phase = 0;
   /** A fade is running and a swap is already scheduled. Without this, two E presses inside the
    *  260 ms fade queue two installs and you end up standing in two rooms at once. */
   let swapping = false;
@@ -75,6 +76,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const handle = setTimeout(() => { timers.delete(handle); if (!disposed) run(); }, ms);
     timers.add(handle);
   };
+
+  // Something to walk up to. Built once, the moment the chunk lands — the eager `approach` ring is
+  // all a player has before that, which is the honest cost of a lazy feature.
+  const doorways: BuiltDoorways = buildDoorways(interiorDoors(), (x, z) => api.surfaceHeightAt(x, z));
+  api.scene.add(doorways.group);
 
   const plotFor = (door: InteriorDoor): StagePlot | undefined => {
     if (!plots.has(door.id)) plots.set(door.id, findStagePlot(door, (x, z) => api.surfaceHeightAt(x, z)));
@@ -190,7 +196,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   // ---- the system --------------------------------------------------------------------------------
 
   return {
-    update: () => {
+    update: (dt) => {
+      // The pad discs pulse whether or not anyone is inside — that is how a door gets noticed.
+      phase += dt;
+      const pulse = 0.42 + Math.sin(phase * 2.6) * 0.16;
+      for (const disc of doorways.discs) { (disc.material as THREE.MeshBasicMaterial).opacity = pulse; disc.rotation.y += dt * 0.9; }
       const current = visit;
       if (!current) return;
       const player = api.playerPosition();
@@ -288,6 +298,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       for (const handle of timers) clearTimeout(handle);
       timers.clear();
       close(false);
+      doorways.dispose();
       overlay?.remove();
       overlay = undefined;
     },

@@ -143,6 +143,76 @@ export function buildInterior(layout: InteriorLayout, plot: StagePlot, heading: 
   };
 }
 
+export interface BuiltDoorways {
+  readonly group: THREE.Group;
+  /** Pulsed from the feature's update() — the same trick ShopSystem uses to make a pad findable. */
+  readonly discs: readonly THREE.Mesh[];
+  dispose(): void;
+}
+
+/**
+ * The street side of the feature: a steel gate, an open doorway and a pulsing pad at every derived
+ * doorstep, so there is something to WALK UP TO and not just an invisible trigger ring.
+ *
+ * These appear the first time the feature loads, which is the honest cost of a lazy chunk: until
+ * somebody presses E on a doorstep the registry's eager `approach` is all that exists. The gate is
+ * modelled OPEN and the frame is thin, because a feature cannot register a collider — walking
+ * through the opening is the correct move, and clipping a 14 cm post is the price.
+ */
+export function buildDoorways(
+  doors: readonly { id: string; name: string; x: number; z: number; heading: number }[],
+  surfaceHeightAt: (x: number, z: number) => number,
+): BuiltDoorways {
+  const group = new THREE.Group();
+  group.name = 'InteriorDoors';
+  const geometries: THREE.BufferGeometry[] = [];
+  const materials: THREE.Material[] = [];
+  const discs: THREE.Mesh[] = [];
+  const keep = <T extends THREE.BufferGeometry>(geometry: T): T => { geometries.push(geometry); return geometry; };
+  const mat = <T extends THREE.Material>(material: T): T => { materials.push(material); return material; };
+  const steel = mat(new THREE.MeshStandardMaterial({ color: 0x39423f, roughness: 0.62, metalness: 0.35 }));
+  const gate = mat(new THREE.MeshStandardMaterial({ color: 0x6d7679, roughness: 0.5, metalness: 0.5 }));
+  const mouth = mat(new THREE.MeshBasicMaterial({ color: 0x090c0f }));
+
+  for (const door of doors) {
+    const bay = new THREE.Group();
+    // Set the frame back off the pad so the player stands in FRONT of the doorway, not inside it.
+    bay.position.set(door.x - Math.sin(door.heading) * 0.9, surfaceHeightAt(door.x, door.z), door.z - Math.cos(door.heading) * 0.9);
+    bay.rotation.y = door.heading; // local +z faces the street
+    const add = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): void => {
+      const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
+      mesh.position.set(x, y, z); bay.add(mesh);
+    };
+    add(1.34, 2.24, 0.06, mouth, 0, 1.12, 0.02);
+    add(0.16, 2.4, 0.22, steel, -0.75, 1.2, 0.06);
+    add(0.16, 2.4, 0.22, steel, 0.75, 1.2, 0.06);
+    add(1.66, 0.18, 0.22, steel, 0, 2.4, 0.06);
+    add(1.66, 0.08, 0.5, steel, 0, 2.56, 0.2); // a lip of awning over the step
+    // The gate, swung open flat against the right post: four bars, so the way in is unmistakably clear.
+    for (let i = 0; i < 4; i++) add(0.05, 2.1, 0.05, gate, 0.6 + i * 0.055, 1.05, 0.24 + i * 0.02);
+    const sign = createSignMesh(keep(new THREE.PlaneGeometry(1.62, 0.42)), door.name.toUpperCase(), '#f0d9a4', { background: '#20262b' });
+    sign.position.set(0, 2.02, 0.13); bay.add(sign);
+    // Pad marker, same shape as ShopSystem.addPadMarker so a door reads like every other doorway
+    // worth walking to in this city.
+    const disc = new THREE.Mesh(keep(new THREE.CylinderGeometry(1.5, 1.5, 0.06, 22)), mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.5 })));
+    disc.position.set(door.x, surfaceHeightAt(door.x, door.z) + 0.3, door.z);
+    const ring = new THREE.Mesh(keep(new THREE.TorusGeometry(1.78, 0.08, 8, 22)), mat(new THREE.MeshBasicMaterial({ color: 0xf5c451 })));
+    ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.02;
+    discs.push(disc);
+    group.add(bay, disc, ring);
+  }
+
+  return {
+    group, discs,
+    dispose: () => {
+      group.removeFromParent();
+      for (const geometry of geometries) geometry.dispose();
+      for (const material of materials) material.dispose();
+      group.clear();
+    },
+  };
+}
+
 interface Kit {
   box(w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh;
   solid(color: number, roughness?: number): THREE.MeshStandardMaterial;

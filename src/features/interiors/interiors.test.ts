@@ -139,13 +139,15 @@ describe('interiors feature', () => {
     }
   });
 
-  it('builds the room only when you go in, and takes all of it away again', () => {
-    const before = world.scene.children.length;
-    expect(before).toBe(0); // nothing at all until someone opens a door
+  const rooms = (): number => world.scene.children.filter((child) => child.name.startsWith('Interior:')).length;
+
+  it('puts a doorway in the street the moment the chunk lands, and no room until you go in', () => {
+    expect(world.scene.children.map((child) => child.name)).toEqual(['InteriorDoors']);
+    expect(rooms()).toBe(0);
     expect(system.qa?.('enter', {})).toBe('ok');
-    expect(world.scene.children.length).toBe(before + 1);
+    expect(rooms()).toBe(1);
     expect(system.qa?.('leave', {})).toBe('ok');
-    expect(world.scene.children.length).toBe(before);
+    expect(rooms()).toBe(0);
   });
 
   it('leaks nothing across ten trips through the same door', () => {
@@ -153,7 +155,7 @@ describe('interiors feature', () => {
       expect(system.qa?.('enter', {})).toBe('ok');
       expect(system.qa?.('leave', {})).toBe('ok');
     }
-    expect(world.scene.children.length).toBe(0);
+    expect(rooms()).toBe(0);
   });
 
   it('shows a HUD chip while you are inside and nothing when you are not', () => {
@@ -202,14 +204,14 @@ describe('interiors feature', () => {
     system.update?.(1 / 60);
     expect(system.qa?.('status', {})).toBe('outside');
     expect(world.player.x).toBe(9000);
-    expect(world.scene.children.length).toBe(0);
+    expect(rooms()).toBe(0);
   });
 
   it('has an idempotent dispose that empties the scene', () => {
     system.qa?.('enter', {});
     system.dispose();
     system.dispose();
-    expect(world.scene.children.length).toBe(0);
+    expect(world.scene.children.length).toBe(0); // the doorways go too
     expect(system.hud?.()).toBeUndefined();
   });
 
