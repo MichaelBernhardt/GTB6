@@ -38,7 +38,10 @@ function manualChunk(id: string): string | undefined {
   if (path.endsWith('/src/world/BuildingArchitecture.ts')) return 'world-geometry';
   if (/(?:StableRandom|coast|powerGrid|ChunkVisibility)\.ts$/.test(path)) return 'world-runtime';
   if (path.endsWith('/src/systems/Console.ts')) return 'game-tools';
-  if (/(?:FlightSystem|SkyfallSystem|TaxiJobSystem|CourierJobSystem|LivingCitySystem|TrainRide|TrafficAvoidance|FearSystem|BumpSystem|WantedSystem|LoadSheddingSystem)\.ts$/.test(path)) return 'gameplay-rules';
+  if (/(?:FlightSystem|SkyfallSystem|TaxiJobSystem|CourierJobSystem|LivingCitySystem|TrainRide|TrainSystem|TrafficAvoidance|FearSystem|BumpSystem|WantedSystem|LoadSheddingSystem)\.ts$/.test(path)) return 'gameplay-rules';
+  // The code-built vehicle geometry is a fat, slow-changing leaf: its own cache unit keeps the
+  // simulation chunk inside tools/check-bundle.mjs's 500 kB executable budget.
+  if (/\/src\/entities\/(?:BikeAssets|Plane)\.ts$/.test(path)) return 'vehicle-models';
   if (path.endsWith('/src/config.ts') || /\/src\/core\/(?:CameraController|GameRules|SaveManager|DrinkRules)\.ts$/.test(path) || path.endsWith('/src/ui/MinimapView.ts') || path.endsWith('/src/systems/Teleport.ts')) return 'simulation';
   // World and simulation modules are tightly connected, so keep them together instead of forcing
   // fragile directory-level cycles. They form a stable cache unit separate from UI/game orchestration.
