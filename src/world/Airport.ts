@@ -14,6 +14,10 @@
  * merge, so it chunks and distance-culls with the rest of the world.
  */
 import * as THREE from 'three';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import {
+  aerofoilSection, capSection, loft, ovalSection, sweepZ, wingLoft, type WingStation,
+} from './Lofting';
 import {
   AERODROME_POLYGONS,
   AIRPORT,
@@ -112,42 +116,135 @@ export function fenceRuns(points: MapPt[], step: number, blocked: (x: number, z:
 
 export interface BuiltAircraft { group: THREE.Group; prop: THREE.Group; halfSpan: number; halfLength: number; height: number; }
 
+/** Per-material collector: every static part of the airframe merges into ONE mesh per material, so a
+ *  parked Kite is five draws instead of twenty-three. Five of them sit on the apron and two more fly. */
+class PartBin {
+  private buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
+
+  add(geometry: THREE.BufferGeometry, material: THREE.Material): void {
+    const indexed = geometry.index ? geometry : mergeVertices(geometry);
+    const bucket = this.buckets.get(material);
+    if (bucket) bucket.push(indexed); else this.buckets.set(material, [indexed]);
+  }
+
+  flush(parent: THREE.Object3D, label: string): void {
+    for (const [material, parts] of this.buckets) {
+      const mesh = new THREE.Mesh(parts.length === 1 ? parts[0]! : mergeGeometries(parts, false)!, material);
+      mesh.name = `${label}_${material.name}`; mesh.castShadow = true;
+      parent.add(mesh);
+    }
+    this.buckets.clear();
+  }
+}
+
+/** Position / rotate a fresh geometry in one call. */
+function placed(geometry: THREE.BufferGeometry, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0): THREE.BufferGeometry {
+  return geometry.applyMatrix4(new THREE.Matrix4().compose(
+    new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)), new THREE.Vector3(1, 1, 1),
+  ));
+}
+
+/** Fuselage/cowl rings: the body is one lofted surface, not a cylinder welded to a cone. */
+const FUSELAGE: Array<[z: number, y: number, hw: number, up: number, down: number]> = [
+  [2.28, 1.30, 0.46, 0.45, 0.43], [1.86, 1.30, 0.55, 0.51, 0.50], [1.34, 1.30, 0.59, 0.50, 0.54],
+  [0.70, 1.28, 0.60, 0.48, 0.56], [-0.10, 1.28, 0.58, 0.48, 0.54], [-0.85, 1.32, 0.50, 0.46, 0.48],
+  [-1.80, 1.40, 0.36, 0.36, 0.34], [-2.80, 1.50, 0.25, 0.25, 0.23], [-3.70, 1.60, 0.17, 0.18, 0.15],
+  [-4.30, 1.66, 0.11, 0.12, 0.10],
+];
+const COWL: Array<[z: number, hw: number, up: number, down: number]> = [
+  [2.20, 0.47, 0.46, 0.44], [2.52, 0.44, 0.42, 0.42], [2.74, 0.35, 0.33, 0.33], [2.86, 0.20, 0.19, 0.19],
+];
+/** Glasshouse rings: half-width, arch height and waistline — a raked windscreen, roof and rear window. */
+const CABIN: Array<[z: number, y: number, hw: number, arch: number]> = [
+  [1.33, 1.79, 0.40, 0.06], [1.06, 1.77, 0.51, 0.20], [0.62, 1.75, 0.57, 0.27],
+  [0.05, 1.75, 0.56, 0.26], [-0.52, 1.75, 0.48, 0.19], [-0.86, 1.76, 0.36, 0.06],
+];
+
 /** A light aircraft (high-wing single-prop, Cessna-ish) built from primitives at the origin: wheels on
  *  y = 0, nose toward local +z, wings along local x. Deterministic per seed (livery colour). Reusable —
  *  future flying/airfield features should build theirs from this. The spinner + blades live in the returned
- *  `prop` subgroup (facing local +z) so a functional plane can spin it; parked dressing leaves it still. */
+ *  `prop` subgroup (facing local +z) so a functional plane can spin it; parked dressing leaves it still.
+ *
+ *  Every lifting surface is a real aerofoil lofted across spanwise stations — rounded leading edge,
+ *  thick forward section, camber over the top, sharp trailing edge — because that section, and the
+ *  taper in plan that goes with it, is the whole difference between an aircraft and a stack of slabs.
+ *  It is also cheap: the wing, tailplane and fin together cost about 350 triangles. */
 export function buildLightAircraft(seed: number): BuiltAircraft {
   const liveries = [0xc9402f, 0x2f6fa8, 0x3e8a52, 0xd08a2c];
   const accent = liveries[Math.floor(seeded(seed, 1, 17) * liveries.length) % liveries.length]!;
-  const body = new THREE.MeshStandardMaterial({ color: 0xe8e6df, roughness: 0.42, metalness: 0.25 });
-  const trim = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.45, metalness: 0.2 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x22282b, roughness: 0.5, metalness: 0.35 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x2e4b55, roughness: 0.15, metalness: 0.2, clearcoat: 0.7 });
+  const body = new THREE.MeshStandardMaterial({ color: 0xe8e6df, roughness: 0.42, metalness: 0.25 }); body.name = 'body';
+  const trim = new THREE.MeshStandardMaterial({ color: accent, roughness: 0.45, metalness: 0.2 }); trim.name = 'trim';
+  const dark = new THREE.MeshStandardMaterial({ color: 0x22282b, roughness: 0.5, metalness: 0.35 }); dark.name = 'dark';
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x2e4b55, roughness: 0.12, metalness: 0.2, clearcoat: 1, transparent: true, opacity: 0.78 }); glass.name = 'glass';
   const group = new THREE.Group();
-  const add = (mesh: THREE.Mesh): THREE.Mesh => { mesh.castShadow = true; group.add(mesh); return mesh; };
-  const fuselage = add(new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.5, 3.4, 12), body)); fuselage.rotation.x = Math.PI / 2; fuselage.position.set(0, 1.28, 0.4);
-  const tail = add(new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.14, 3.0, 10), body)); tail.rotation.x = Math.PI / 2; tail.position.set(0, 1.38, -2.8);
-  const cowl = add(new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.44, 0.7, 12), trim)); cowl.rotation.x = Math.PI / 2; cowl.position.set(0, 1.28, 2.4);
-  const prop = new THREE.Group(); prop.position.set(0, 1.28, 2.82); group.add(prop);
-  const addProp = (mesh: THREE.Mesh): THREE.Mesh => { mesh.castShadow = true; prop.add(mesh); return mesh; };
-  const spinner = addProp(new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.5, 10), dark)); spinner.rotation.x = Math.PI / 2; spinner.position.set(0, 0, 0.13);
-  addProp(new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.95, 0.06), dark));
-  addProp(new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.16, 0.06), dark));
-  const canopy = add(new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.55, 1.25), glass)); canopy.position.set(0, 1.85, 0.85);
-  const wing = add(new THREE.Mesh(new THREE.BoxGeometry(11, 0.15, 1.55), body)); wing.position.set(0, 2.12, 0.72);
-  const wingTipL = add(new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.17, 1.56), trim)); wingTipL.position.set(-4.95, 2.12, 0.72);
-  const wingTipR = add(new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.17, 1.56), trim)); wingTipR.position.set(4.95, 2.12, 0.72);
-  for (const side of [-1, 1]) {
-    const strut = add(new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.9, 0.12), body)); strut.position.set(side * 1.35, 1.55, 0.85); strut.rotation.z = side * 0.98;
-    const stripe = add(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 3.9), trim)); stripe.position.set(side * 0.56, 1.4, -0.5);
-    const wheel = add(new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.15, 12), dark)); wheel.rotation.z = Math.PI / 2; wheel.position.set(side * 0.95, 0.26, 0.5);
-    const gear = add(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.78, 0.2), body)); gear.position.set(side * 0.55, 0.62, 0.5); gear.rotation.z = side * 0.72;
+  const bin = new PartBin();
+
+  // ---- Fuselage: a lofted body with a waisted cabin and an upswept tail boom, plus the glasshouse.
+  bin.add(sweepZ(FUSELAGE.map(([z, y, hw, up, down]) => ({ z, y, section: ovalSection(hw, up, down, 12, 1.15) }))), body);
+  bin.add(sweepZ(COWL.map(([z, hw, up, down]) => ({ z, y: 1.30, section: ovalSection(hw, up, down, 12, 1.2) }))), trim);
+  bin.add(sweepZ(CABIN.map(([z, y, hw, arch]) => ({ z, y, section: capSection(hw, arch, 0.035, 6) })), false, false), glass);
+  for (const side of [-1, 1]) { // cheatline down the flank
+    bin.add(placed(new THREE.BoxGeometry(0.04, 0.16, 3.6), side * 0.585, 1.16, -0.5), trim);
   }
-  const noseWheel = add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.13, 12), dark)); noseWheel.rotation.z = Math.PI / 2; noseWheel.position.set(0, 0.22, 1.95);
-  const noseGear = add(new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.7, 0.07), body)); noseGear.position.set(0, 0.6, 1.95);
-  const fin = add(new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.35, 0.9), body)); fin.position.set(0, 2.15, -4.0); fin.rotation.x = 0.18;
-  const finFlash = add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.55, 0.92), trim)); finFlash.position.set(0, 2.45, -4.02); finFlash.rotation.x = 0.18;
-  const stab = add(new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.09, 0.8), body)); stab.position.set(0, 1.5, -4.1);
+
+  // ---- Wing: NACA 2412, constant chord inboard, tapered and washed out to the tip, 2.6° dihedral.
+  const dihedral = 0.045;
+  const wingSection = (station: { chord: number }): THREE.Vector2[] => aerofoilSection(station.chord, 0.12, 0.02, 0.4, 12);
+  const wingStation = (span: number, chord: number): WingStation =>
+    ({ span, chord, lead: 1.26, rise: 2.05 + Math.abs(span) * dihedral, incidence: 0.03 - Math.abs(span) * 0.004 });
+  bin.add(wingLoft([wingStation(-4.32, 1.20), wingStation(-1.90, 1.55), wingStation(1.90, 1.55), wingStation(4.32, 1.20)], wingSection), body);
+  for (const side of [-1, 1]) { // painted tips, lofted on so the taper carries straight through
+    bin.add(wingLoft([wingStation(side * 4.30, 1.20), wingStation(side * 5.50, 0.82)].sort((a, b) => a.span - b.span), wingSection), trim);
+  }
+  for (const side of [-1, 1]) { // lift strut, aerofoil-sectioned like the real thing
+    const strutSection = (): THREE.Vector2[] => aerofoilSection(0.26, 0.24, 0, 0.4, 8);
+    bin.add(loft([
+      { origin: new THREE.Vector3(side * 0.30, 1.14, 0.86), right: new THREE.Vector3(0, 0, -1), up: new THREE.Vector3(-side, 0, 0), section: strutSection() },
+      { origin: new THREE.Vector3(side * 2.62, 2.09, 1.00), right: new THREE.Vector3(0, 0, -1), up: new THREE.Vector3(-side, 0, 0), section: strutSection() },
+    ]), body);
+  }
+
+  // ---- Tail: swept fin with a painted top, and a tapered tailplane. Both properly sectioned.
+  const tailSection = (station: { chord: number }): THREE.Vector2[] => aerofoilSection(station.chord, 0.1, 0, 0.4, 10);
+  bin.add(wingLoft([
+    { span: -1.78, chord: 0.62, lead: -3.88, rise: 1.63 }, { span: -0.30, chord: 0.96, lead: -3.62, rise: 1.60 },
+    { span: 0.30, chord: 0.96, lead: -3.62, rise: 1.60 }, { span: 1.78, chord: 0.62, lead: -3.88, rise: 1.63 },
+  ], tailSection), body);
+  const finSection = (station: { chord: number }): THREE.Vector2[] => aerofoilSection(station.chord, 0.11, 0, 0.4, 10);
+  bin.add(wingLoft([
+    { span: 1.55, chord: 1.50, lead: -3.16, rise: 0 }, { span: 2.05, chord: 1.24, lead: -3.34, rise: 0 },
+    { span: 2.44, chord: 1.02, lead: -3.50, rise: 0 },
+  ], finSection, 'y'), body);
+  bin.add(wingLoft([
+    { span: 2.42, chord: 1.02, lead: -3.50, rise: 0 }, { span: 2.78, chord: 0.84, lead: -3.64, rise: 0 },
+    { span: 2.95, chord: 0.62, lead: -3.76, rise: 0 },
+  ], finSection, 'y'), trim);
+
+  // ---- Undercarriage: tapered spring legs, a nose leg, three wheels.
+  for (const side of [-1, 1]) {
+    bin.add(loft([
+      { origin: new THREE.Vector3(side * 0.28, 1.02, 0.52), right: new THREE.Vector3(0, 0, -1), up: new THREE.Vector3(-side, 0, 0), section: aerofoilSection(0.30, 0.3, 0, 0.4, 8) },
+      { origin: new THREE.Vector3(side * 1.02, 0.30, 0.52), right: new THREE.Vector3(0, 0, -1), up: new THREE.Vector3(-side, 0, 0), section: aerofoilSection(0.20, 0.3, 0, 0.4, 8) },
+    ]), body);
+    bin.add(placed(new THREE.CylinderGeometry(0.28, 0.28, 0.16, 10), side * 1.06, 0.28, 0.52, 0, 0, Math.PI / 2), dark);
+  }
+  bin.add(placed(new THREE.CylinderGeometry(0.09, 0.06, 0.78, 8), 0, 0.62, 1.94), body);
+  bin.add(placed(new THREE.CylinderGeometry(0.23, 0.23, 0.14, 10), 0, 0.23, 1.94, 0, 0, Math.PI / 2), dark);
+  bin.flush(group, 'kite');
+
+  // ---- Propeller: a real twisted blade rather than crossed planks, in its own spinning group.
+  const prop = new THREE.Group(); prop.position.set(0, 1.30, 2.86); group.add(prop);
+  const propBin = new PartBin();
+  const spinner = new THREE.SphereGeometry(0.21, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.55);
+  propBin.add(placed(spinner.scale(1, 1.9, 1), 0, 0, 0.02, Math.PI / 2, 0, 0), dark);
+  const blade = wingLoft([
+    { span: 0.16, chord: 0.26, lead: 0.13, rise: 0, incidence: 0.55 }, { span: 0.62, chord: 0.34, lead: 0.17, rise: 0, incidence: 0.36 },
+    { span: 0.98, chord: 0.28, lead: 0.14, rise: 0, incidence: 0.2 }, { span: 1.12, chord: 0.09, lead: 0.05, rise: 0, incidence: 0.16 },
+  ], (station) => aerofoilSection(station.chord, 0.14, 0.03, 0.4, 8), 'y');
+  propBin.add(blade, dark);
+  propBin.add(blade.clone().rotateZ(Math.PI), dark);
+  propBin.flush(prop, 'prop');
+
   return { group, prop, halfSpan: 5.6, halfLength: 4.5, height: 3.0 };
 }
 
