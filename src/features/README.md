@@ -101,6 +101,14 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
   fixture ped you forgot leaks its mesh. Keep your own roster and `api.removeFixture()` each one.
 - **Return `undefined` from `test()` when there is nothing to do.** In the `vehicle` context your rung
   sits *above* `E  Exit vehicle`, so a rung that always offers something traps the player in the car.
+- **`test()` and `approach.near()` must be PURE.** `resolveInteraction` returns on the FIRST rung that
+  offers something, so anything you do as a side effect inside a predicate stops the moment another
+  feature ordered above you offers first — and the ladder is a merged array, so "above you" is a
+  property of a build you cannot see from your branch. Protest ticked its grievance clock in
+  `approach.near()`; on its own branch it ran, and the cross-feature verifier measured 3.90
+  outage-hours in the open street against **0.00** on a shop doorstep. It was that feature's only
+  unlock gate. If you need a per-frame hook before your body loads, find a real one (protest uses
+  `powerGrid.onPowerChange`) or ask for a seam — do not hide it in a predicate.
 - **Prompts must read `KEY<two spaces>Label`**, segments joined by ` · ` — that grammar is what
   `parsePromptActions` turns into the mobile context pill, and `interactions.test.ts` asserts every
   registered approach prompt produces one.

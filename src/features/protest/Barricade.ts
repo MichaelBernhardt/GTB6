@@ -109,6 +109,11 @@ function placardTexture(line: string): THREE.Texture {
   return texture;
 }
 
+/** Player-thrown tyres kept in the scene at once. Past this the oldest is recycled. */
+const THROWN_TYRE_CAP = 12;
+/** Stains one barricade may plan. Bounds what a long picket can push out of the citywide FIFO. */
+const SCORCH_PLAN_CAP = 12;
+
 /** Real placard grammar: scrap cardboard, permanent marker, hand-lettered, running out of room.
  *  Deliberately NOT a spelling gag — the joke is the councillor, never the person holding the board. */
 const SLOGANS = [
@@ -132,7 +137,14 @@ class SmokeColumn {
   private puffs: THREE.Sprite[] = [];
   private flames: THREE.Sprite[] = [];
   private clock = 0;
+  private flareLeft = 0;
+  private flareSpan = 1;
   strength = 1; // 0..1, scales height, opacity and flame size
+
+  /** A tyre just landed on the pile: whoomph. This is the visible half of `E  Throw a tyre on the
+   *  fire` — without it the verb moves a HUD bar and nothing else, which is precisely why the owner
+   *  reported it as "didn't seem to work but it could be me doing it wrong". */
+  flare(seconds = 1.8): void { this.flareLeft = seconds; this.flareSpan = seconds; }
 
   constructor(smokeTexture: THREE.Texture, flameTexture: THREE.Texture, private height: number, private count: number, random: () => number) {
     for (let index = 0; index < this.count; index++) {
@@ -156,21 +168,23 @@ class SmokeColumn {
 
   update(dt: number): void {
     this.clock += dt;
+    this.flareLeft = Math.max(0, this.flareLeft - dt);
+    const boost = this.flareSpan > 0 ? this.flareLeft / this.flareSpan : 0; // 1 → 0 over the flare
     const strength = Math.max(0, Math.min(1, this.strength));
     this.puffs.forEach((sprite, index) => {
       const phase = ((sprite.userData.phase as number) + this.clock * 0.09) % 1;
       const rise = phase * this.height * (0.45 + 0.55 * strength);
-      const spread = 1.6 + phase * 9 * (0.5 + 0.5 * strength);
+      const spread = (1.6 + phase * 9 * (0.5 + 0.5 * strength)) * (1 + boost * 0.55);
       sprite.position.set((sprite.userData.drift as number) * rise * 0.22, 1 + rise, Math.sin(phase * 3 + index) * 0.8);
       sprite.scale.setScalar(spread);
       const material = sprite.material as THREE.SpriteMaterial;
-      material.opacity = (1 - phase) * 0.52 * strength;
+      material.opacity = Math.min(1, (1 - phase) * 0.52 * strength * (1 + boost * 0.8));
     });
     this.flames.forEach((sprite) => {
       const flicker = 0.6 + 0.4 * Math.sin(this.clock * 11 + (sprite.userData.phase as number) * 9);
-      sprite.scale.setScalar((0.8 + flicker * 0.7) * (0.35 + 0.65 * strength));
-      (sprite.material as THREE.SpriteMaterial).opacity = 0.85 * flicker * strength;
-      sprite.visible = strength > 0.02;
+      sprite.scale.setScalar((0.8 + flicker * 0.7) * (0.35 + 0.65 * strength) * (1 + boost * 1.7));
+      (sprite.material as THREE.SpriteMaterial).opacity = Math.min(1, 0.85 * flicker * (strength + boost * 0.6));
+      sprite.visible = strength > 0.02 || boost > 0.02;
     });
   }
 
@@ -306,6 +320,13 @@ export class TyreFire {
  * (PopulationSystem already brakes for pedestrians in the lane) and reroutes because the road is
  * closed in the nav overlay — but the player can always shove through. A blockade that traps the
  * player is a blockade that costs patience, and patience is the resource this game spends carefully.
+ *
+ * EVERY PROP IS GROUNDED INDIVIDUALLY. The group sits at the road pose's height, but the junk is laid
+ * out to nine units either side of the centreline and another few units up and down the lane, and the
+ * tar rolls with the terrain (roadHeightAt = terrain + 0.055, re-tessellated every 8 u). Resting every
+ * prop at a constant local height therefore hangs the outer half of the barricade in the air the
+ * moment the road is not dead flat, which is what the owner saw and reported as "tyres float in the
+ * air". `restingY` asks the same surface query the player's own feet use, at the prop's own position.
  */
 export class Barricade {
   readonly group = new THREE.Group();
@@ -316,23 +337,36 @@ export class Barricade {
   private geometries: THREE.BufferGeometry[] = [];
   private materials: THREE.Material[] = [];
   private tyres: THREE.Mesh[] = [];
+  /** Tyres the player threw on, oldest first. Bounded: past THROWN_TYRE_CAP the oldest is recycled. */
+  private thrown: THREE.Mesh[] = [];
+  private thrownCount = 0;
+  private tyreGeometry: THREE.TorusGeometry;
+  private rubber: THREE.MeshLambertMaterial;
   private burning = true;
   /** Where the tar will be stained once this is over. */
   readonly scorchPlan: ScorchMark[] = [];
 
-  constructor(private scene: THREE.Scene, readonly site: BarricadeSite, readonly size: BlockadeSize, tyreTotal: number) {
+  constructor(
+    private scene: THREE.Scene,
+    readonly site: BarricadeSite,
+    readonly size: BlockadeSize,
+    tyreTotal: number,
+    /** Ground height at a WORLD point — `api.surfaceHeightAt`. Required, not defaulted: a default
+     *  would silently reintroduce the floating junk on the next barricade somebody builds. */
+    private surfaceHeightAt: (x: number, z: number) => number,
+  ) {
     const random = siteRandom(site.x, site.z);
     const across = new THREE.Vector3(Math.cos(site.heading), 0, -Math.sin(site.heading)); // perpendicular to travel
     const span = size === 'dawn' ? 9 : 6.5;
 
-    const rubber = this.material(new THREE.MeshLambertMaterial({ color: 0x131313 }));
-    const tyreGeometry = this.geometry(new THREE.TorusGeometry(0.44, 0.17, 6, 14));
+    const rubber = this.rubber = this.material(new THREE.MeshLambertMaterial({ color: 0x131313 }));
+    const tyreGeometry = this.tyreGeometry = this.geometry(new THREE.TorusGeometry(0.44, 0.17, 6, 14));
     for (let index = 0; index < tyreTotal; index++) {
       const offset = (index / Math.max(tyreTotal - 1, 1) - 0.5) * span * 2;
       const stacked = random() > 0.55;
       const tyre = new THREE.Mesh(tyreGeometry, rubber);
       tyre.position.copy(across).multiplyScalar(offset + (random() - 0.5) * 1.2);
-      tyre.position.y = stacked ? 0.5 + random() * 0.35 : 0.17;
+      tyre.position.y = this.restingY(tyre.position.x, tyre.position.z, stacked ? 0.5 + random() * 0.35 : 0.17);
       if (stacked) { tyre.rotation.x = Math.PI / 2 + (random() - 0.5) * 0.5; tyre.rotation.z = random() * 3; }
       else tyre.rotation.x = Math.PI / 2;
       this.tyres.push(tyre); this.group.add(tyre);
@@ -345,18 +379,23 @@ export class Barricade {
     for (let index = 0; index < 16; index++) {
       const mesh = new THREE.Mesh(brickGeometry, brick);
       mesh.position.copy(across).multiplyScalar((random() - 0.5) * span * 2.2);
-      mesh.position.y = 0.09 + (random() > 0.8 ? 0.17 : 0);
+      const rest = 0.09 + (random() > 0.8 ? 0.17 : 0);
       mesh.position.z += (random() - 0.5) * 2.4;
+      mesh.position.y = this.restingY(mesh.position.x, mesh.position.z, rest);
       mesh.rotation.y = random() * 6;
       this.group.add(mesh);
     }
 
     // A wheelie bin on its side, and a mattress. Both always available, both nobody's loss.
     const bin = new THREE.Mesh(this.geometry(new THREE.BoxGeometry(0.62, 1.05, 0.55)), this.material(new THREE.MeshLambertMaterial({ color: 0x2f4b2c })));
-    bin.position.copy(across).multiplyScalar(-span * 0.75); bin.position.y = 0.32; bin.rotation.z = Math.PI / 2;
+    bin.position.copy(across).multiplyScalar(-span * 0.75);
+    bin.position.y = this.restingY(bin.position.x, bin.position.z, 0.31); // on its side: half of 0.62
+    bin.rotation.z = Math.PI / 2;
     this.group.add(bin);
     const mattress = new THREE.Mesh(this.geometry(new THREE.BoxGeometry(1.9, 0.22, 1.2)), this.material(new THREE.MeshLambertMaterial({ color: 0x9a8f7d })));
-    mattress.position.copy(across).multiplyScalar(span * 0.7); mattress.position.y = 0.11; mattress.rotation.y = random() * 0.6;
+    mattress.position.copy(across).multiplyScalar(span * 0.7);
+    mattress.position.y = this.restingY(mattress.position.x, mattress.position.z, 0.11);
+    mattress.rotation.y = random() * 0.6;
     this.group.add(mattress);
 
     // Cut branches — the cheapest barricade material in any suburb with a tree.
@@ -365,7 +404,8 @@ export class Barricade {
     for (let index = 0; index < 4; index++) {
       const branch = new THREE.Mesh(branchGeometry, bark);
       branch.position.copy(across).multiplyScalar((random() - 0.5) * span * 1.8);
-      branch.position.y = 0.1; branch.rotation.z = Math.PI / 2; branch.rotation.y = random() * 3;
+      branch.position.y = this.restingY(branch.position.x, branch.position.z, 0.08); // laid on its side
+      branch.rotation.z = Math.PI / 2; branch.rotation.y = random() * 3;
       this.group.add(branch);
     }
 
@@ -386,17 +426,30 @@ export class Barricade {
       holder.add(pole); holder.add(board);
       holder.position.copy(across).multiplyScalar((random() - 0.5) * span * 1.6);
       holder.position.z += 2.6 + random() * 2.4;
+      holder.position.y = this.restingY(holder.position.x, holder.position.z, 0); // the pole's own foot
       holder.rotation.y = -site.heading + (random() - 0.5) * 0.8;
       this.group.add(holder);
     }
 
     this.column = new SmokeColumn(this.smokeTexture, this.flameTexture, size === 'dawn' ? 62 : 44, size === 'dawn' ? 16 : 11, random);
-    this.column.group.position.set(0, 0, 0);
+    this.column.group.position.set(0, this.restingY(0, 0, 0), 0);
+    this.column.group.name = 'protest-plume'; // the one child that is not a prop resting on the tar
     this.group.add(this.column.group);
 
     this.group.position.set(site.x, site.y, site.z);
     this.group.name = 'protest-barricade';
     scene.add(this.group);
+  }
+
+  /**
+   * Local y for a prop that RESTS `rest` above the ground at its own position.
+   *
+   * The group's origin is the road pose height at the centre of the site, so a prop laid nine units
+   * out along a road that is climbing needs the difference taking out. This is the whole fix for the
+   * floating tyres: one surface query per prop, at build time, at the prop's own x/z.
+   */
+  private restingY(localX: number, localZ: number, rest: number): number {
+    return this.surfaceHeightAt(this.site.x + localX, this.site.z + localZ) - this.site.y + rest;
   }
 
   /** 0..1 — how hard the plume is going. Driven by the picket's smoke level. */
@@ -418,6 +471,47 @@ export class Barricade {
     return allowed.length;
   }
 
+  /**
+   * One more tyre onto the pile — the visible half of the player's `E  Throw a tyre on the fire`.
+   *
+   * TAKES NOTHING. No parent, no target, no position, no options bag: the spot is computed from this
+   * barricade's own site geometry and grounded with the same `restingY` every other prop uses. There
+   * is no argument to this method that could be a Pedestrian, a corpse, a ragdoll, a bone or a skinned
+   * mesh, because there is no argument at all. That is the necklacing block expressed as a shape
+   * rather than as a check somebody has to remember to run — see ../protest.state.ts.
+   *
+   * Returns the world position the tyre landed at, for the caller's stain plan.
+   */
+  addTyre(): ScorchMark {
+    // Its own deterministic stream, salted by how many have already gone on, so a picket looks the
+    // same on every machine and no Math.random enters a world-generation path.
+    const random = siteRandom(this.site.x + this.thrownCount * 7.31, this.site.z - this.thrownCount * 3.17);
+    const across = new THREE.Vector3(Math.cos(this.site.heading), 0, -Math.sin(this.site.heading));
+    const span = this.size === 'dawn' ? 9 : 6.5;
+    const tyre = new THREE.Mesh(this.tyreGeometry, this.rubber);
+    tyre.position.copy(across).multiplyScalar((random() - 0.5) * span * 1.1);
+    tyre.position.z += (random() - 0.5) * 1.6;
+    // They pile up as they land: flat, then leaning on the one before, then on top of that.
+    tyre.position.y = this.restingY(tyre.position.x, tyre.position.z, 0.17 + 0.33 * (this.thrownCount % 3));
+    tyre.rotation.x = Math.PI / 2 + (random() - 0.5) * 0.7;
+    tyre.rotation.z = random() * 3;
+    this.group.add(tyre);
+    this.thrown.push(tyre);
+    this.thrownCount++;
+    // Bounded: a player who stands there hammering E gets a bigger fire, not an unbounded scene graph.
+    while (this.thrown.length > THROWN_TYRE_CAP) { const old = this.thrown.shift(); if (old) this.group.remove(old); }
+    const mark: ScorchMark = { x: this.site.x + tyre.position.x, z: this.site.z + tyre.position.z, r: 1.4 + random() * 0.9 };
+    // Only the first few thrown tyres earn their own stain. Otherwise a long picket would push every
+    // other scorch mark in the city out of the FIFO and the leopard-printed arterials would be lost.
+    if (this.scorchPlan.length < SCORCH_PLAN_CAP) this.scorchPlan.push(mark);
+    this.burning = true;
+    this.column.flare();
+    return mark;
+  }
+
+  /** How many tyres the player has thrown on this barricade. */
+  get thrownTyres(): number { return this.thrownCount; }
+
   /** The crowd has gone. One tyre still going, and the stains are permanent. */
   smoulder(): void { this.burning = false; this.column.strength = 0.07; }
 
@@ -428,7 +522,7 @@ export class Barricade {
     for (const material of this.materials) material.dispose();
     for (const texture of this.placardTextures) texture.dispose();
     this.smokeTexture.dispose(); this.flameTexture.dispose();
-    this.geometries = []; this.materials = []; this.placardTextures = []; this.tyres = [];
+    this.geometries = []; this.materials = []; this.placardTextures = []; this.tyres = []; this.thrown = [];
   }
 
   private geometry<T extends THREE.BufferGeometry>(value: T): T { this.geometries.push(value); return value; }

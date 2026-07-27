@@ -22,18 +22,26 @@
  * THE NECKLACING BLOCK. Burning tyres carry specific historical freight in South Africa. No tyre
  * placement in this feature takes a parent and no ignition takes a target object; both resolve
  * through `assertNotLivingHost` / `ignitableTargets` in ../protest.state, which is enforced by tests
- * (protest.state.test.ts, protest/protest.test.ts) rather than by a comment.
+ * (protest.state.test.ts, protest/protest.test.ts) rather than by a comment. The player's throw verb
+ * calls `Barricade.addTyre()`, which takes NO ARGUMENTS AT ALL: there is nothing to aim it at.
+ *
+ * HOW TO SEE ONE WITHOUT WAITING FOR THE GRID (documented for review, see also protest/README.md):
+ *
+ *     ~                      open the developer console
+ *     feature protest now    once to load the chunk, again to raise it
+ *
+ * That shuts the road nearest your feet, hands you two tyres, and prints a `tp x z` line back to it.
+ * Nothing else is needed — no cheats, no waiting out three load-shedding cycles.
  */
 import * as THREE from 'three';
 import { Barricade, ScorchField, TyreFire, radialTexture, type BarricadeSite } from './Barricade';
 import {
   BLOCKADE_HOURS, blockadeSize, closureRadius, crowdSize, hourDelta, outageLedger, PICKET_SECONDS,
-  picketPayout, sanitizeProtestState, SMOKE_DECAY, SMOKE_PER_TYRE, SOLO_TYRE_SECONDS, TYRE_CARRY_CAP,
-  TYRE_FEED_COOLDOWN, tyreCount, assertNotLivingHost, ignitableTargets,
-  type BlockadeSize, type ProtestSave,
+  picketPayout, RIPE_OUTAGE_HOURS, sanitizeProtestState, SMOKE_DECAY, SMOKE_PER_TYRE,
+  SOLO_TYRE_SECONDS, tickOutage, TYRE_CARRY_CAP, TYRE_FEED_COOLDOWN, tyreCount, assertNotLivingHost,
+  ignitableTargets, type BlockadeSize, type ProtestSave,
 } from '../protest.state';
 import { roadClosures } from '../../systems/NavGraph';
-import { powerOn } from '../../world/powerGrid';
 import type { Pedestrian } from '../../entities/Pedestrian';
 import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescriptor } from '../types';
 
@@ -41,8 +49,10 @@ import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescrip
 const BLOCKADE_TOLL = 700;
 const TYRE_TOLL = 420;
 const TYRE_CLOSURE_RADIUS = 12;
-/** Interaction reach around the barricade centre. Generous — the junk is spread over ~18 units. */
-const BARRICADE_REACH = 12;
+/** Interaction reach around the barricade centre. Generous on purpose: a dawn barricade is 18 units
+ *  of junk with placards another 5 units down the lane, so a reach measured from the centre has to
+ *  clear the whole thing plus the pavement you would naturally walk up on. */
+const BARRICADE_REACH = 17;
 /** A solo tyre needs tar under it and elbow room from the last one. Measured against the real map,
  *  not guessed: `nearestRoadPose` snaps to a sampled LANE centreline, so a player standing squarely
  *  on the road can still be 7-8 units from the nearest sample. The first in-engine run refused to
@@ -57,6 +67,10 @@ interface SoloFire { fire: TyreFire; id: string; x: number; z: number }
 export function createFeature(api: FeatureGameApi, state: unknown): FeatureSystem {
   const save: ProtestSave = sanitizeProtestState(state);
   outageLedger.adopt(save); // ADOPT, not load — see OutageLedger.adopt. `load` here wipes the session.
+  // From here on THIS is the ledger's clock: update() ticks it every sim step with the real game hour,
+  // the real player position and the real grid. The eager power-grid credit stands down while this is
+  // set, so an outage that spans the chunk arriving is counted once and not twice.
+  outageLedger.driven = true;
 
   const scorch = new ScorchField(api.scene, (x, z) => api.surfaceHeightAt(x, z));
   scorch.load(save.scorch);
@@ -78,6 +92,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let pickets = save.pickets;
   let solo: SoloFire[] = [];
   let soloSerial = 0;
+  let taughtFeed = false;
   let disposed = false;
 
   const scratch = new THREE.Vector3();
@@ -89,21 +104,23 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   // ---- the blockade ------------------------------------------------------------------------------
 
-  /** The site is the road nearest to where the player kept standing in the dark. Derived at runtime
-   *  from the live road network — no world coordinate is typed anywhere in this feature, because the
-   *  map is being reshaped underneath it. */
-  function chooseSite(): BarricadeSite {
-    const anchorX = outageLedger.hasAnchor ? outageLedger.anchorX : api.playerPosition().x;
-    const anchorZ = outageLedger.hasAnchor ? outageLedger.anchorZ : api.playerPosition().z;
+  /** The site is the road nearest to where the player kept standing in the dark, or — when the QA
+   *  route asks for one right here — the road nearest their feet. Derived at runtime from the live
+   *  road network: no world coordinate is typed anywhere in this feature, because the map moves. */
+  function chooseSite(preferPlayer = false): BarricadeSite {
+    const useAnchor = outageLedger.hasAnchor && !preferPlayer;
+    const anchorX = useAnchor ? outageLedger.anchorX : api.playerPosition().x;
+    const anchorZ = useAnchor ? outageLedger.anchorZ : api.playerPosition().z;
     const pose = api.nearestRoadPose(scratch.set(anchorX, 0, anchorZ));
     return { x: pose.position.x, y: pose.position.y, z: pose.position.z, heading: pose.heading };
   }
 
-  function raise(force = false): boolean {
+  function raise(force = false, preferPlayer = false): boolean {
     if (barricade || (!force && !outageLedger.ripe)) return false;
-    const site = chooseSite();
+    const site = chooseSite(preferPlayer);
     size = blockadeSize(api.hour());
-    barricade = new Barricade(api.scene, site, size, tyreCount(size));
+    // Every prop is grounded on the surface under IT, not on the site's single height — see Barricade.
+    barricade = new Barricade(api.scene, site, size, tyreCount(size), (x, z) => api.surfaceHeightAt(x, z));
     barricade.strength = 0.85;
     barricade.ignite(barricade.scorchPlan); // props only; the sweep filters people out by construction
     blockadeHoursLeft = BLOCKADE_HOURS;
@@ -167,16 +184,36 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (phase !== 'live') return;
     phase = 'picketing';
     smoke = 58; picketElapsed = 0; feedCooldown = 0;
-    api.notify('You took a corner of the road', 'Keep the smoke up. When the smoke goes, the cameras go, and then nobody comes.', true);
+    api.notify('You took a corner of the road', `Hold it for ${PICKET_SECONDS} seconds. Press E at the fire to throw a tyre on whenever the SMOKE bar drops.`, true);
     api.analytics('picket_joined', { detail: size });
   }
 
-  function feed(): void {
-    if (phase !== 'picketing' || feedCooldown > 0 || !barricade) return;
-    feedCooldown = TYRE_FEED_COOLDOWN;
+  /**
+   * Throw a tyre on the fire.
+   *
+   * THE OWNER REPORTED THIS AS "didn't seem to work but it could be me doing it wrong", and he was
+   * right on both counts. The old body moved a number and called `ignite([{kind:'tyre'}])`, which
+   * sets a boolean — no tyre appeared, the plume did not change, nothing was said, and the prompt
+   * then vanished for three and a half seconds and came back as a DIFFERENT verb. Pressing the key
+   * did something invisible, which is indistinguishable from doing nothing.
+   *
+   * So: a real tyre lands on the pile, the column flares, the bar jumps, and the first throw says
+   * what the loop is. `addTyre()` takes no arguments at all, so no part of this makes it possible to
+   * throw a tyre AT anything — it is placed on the barricade by world coordinate, exactly like every
+   * other prop, and the necklacing block is untouched.
+   */
+  function feed(): boolean {
+    if (phase !== 'picketing' || !barricade || feedCooldown > 0) return false;
+    feedCooldown = TYRE_FEED_COOLDOWN; // a same-frame guard only; the OFFER is never gated on it
     smoke = Math.min(100, smoke + SMOKE_PER_TYRE);
-    // One more tyre onto the pile: the props, never a person. `ignite` filters its candidates.
-    barricade.ignite([{ kind: 'tyre' }]);
+    barricade.addTyre();                  // the visible tyre: no parent, no target, coordinates only
+    barricade.ignite([{ kind: 'tyre' }]); // the props, never a person — `ignite` filters its candidates
+    if (!taughtFeed) {
+      taughtFeed = true;
+      api.notify('On the fire it goes', 'Black smoke is the whole point: when the smoke goes the cameras go. Keep pressing E while the bar drains.', true);
+    }
+    api.analytics('tyre_fed', { value: Math.round(smoke) });
+    return true;
   }
 
   function resolvePicket(success: boolean, reason: 'held' | 'faded' | 'scattered'): void {
@@ -189,7 +226,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       pickets += 1;
       outageLedger.spend();
       api.notify('The councillor came',
-        `Camera crew, two bodyguards, no plumber. You sold cold drinks down the queue all morning: R${payout}. Somebody rolled you a spare tyre.`,
+        `Camera crew, two bodyguards, no plumber. You sold cold drinks down the queue all morning: R${payout}. Somebody rolled you a spare tyre — stand on any road and press E to roll it out and light it.`,
         true);
       api.analytics('picket_held', { value: payout });
     } else if (reason === 'scattered') {
@@ -252,9 +289,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (disposed) return;
     const hour = api.hour();
     const position = api.playerPosition();
-    // The grievance clock keeps running now that we own the frame — same ledger the eager approach
-    // was ticking before this chunk existed, so nothing is double-counted or lost at the handover.
-    outageLedger.tick(hour, position.x, position.z, powerOn());
+    // The accurate half of the grievance clock: real game hours, the real player position, the real
+    // grid. `outageLedger.driven` was set at construction, so the eager power-grid credit stands down
+    // and an outage spanning the chunk's arrival is counted once rather than twice.
+    tickOutage(hour, position.x, position.z);
     const elapsedHours = Math.max(0, Math.min(0.5, hourDelta(lastHour, hour)));
     lastHour = hour;
 
@@ -299,7 +337,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   function hud(): FeatureHudEntry[] | undefined {
     const entries: FeatureHudEntry[] = [];
     if (phase === 'picketing') {
-      entries.push({ id: 'protest:smoke', label: 'SMOKE', value: `${Math.round(picketElapsed)}s`, fill: smoke, warn: smoke < 26 });
+      // The bar IS the smoke, so the number beside it has to be the smoke too. It used to read the
+      // elapsed seconds under a SMOKE label, which is two different quantities in one chip.
+      entries.push({ id: 'protest:smoke', label: 'SMOKE', value: `${Math.round(smoke)}%`, fill: smoke, warn: smoke < 26 });
+      entries.push({ id: 'protest:hold', label: 'HOLD', value: `${Math.max(0, Math.ceil(PICKET_SECONDS - picketElapsed))}s` });
     } else if (barricade && phase !== 'smouldering') {
       entries.push({ id: 'protest:way', label: 'PICKET', value: `${Math.round(distanceTo(barricade.site.x, barricade.site.z))} m` });
     }
@@ -309,22 +350,40 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   // ---- interactions -------------------------------------------------------------------------------
 
+  /**
+   * Every prompt here names the key AND what pressing it will do, because the owner's playtest report
+   * on the old set was "tyre throwing didn't seem to work but it could be me doing it wrong" — which
+   * is a report about the prompt, not about the code. A verb the player cannot tell they performed is
+   * a verb that does not exist.
+   *
+   * The feed rung is also NOT gated on its cooldown any more. It used to be, and the effect was that
+   * pressing E made the prompt disappear and come back three seconds later as `E  Burn a tyre` — the
+   * band flickering between two different verbs at the one moment the player is looking for feedback.
+   */
   const rungs: InteractionDescriptor[] = [
     {
       id: 'protest:feed', order: 54, context: 'foot',
-      test: () => (phase === 'picketing' && nearBarricade() && feedCooldown <= 0
-        ? { prompt: 'E  Throw on a tyre', act: feed } : undefined),
+      test: () => (phase === 'picketing' && nearBarricade()
+        ? { prompt: 'E  Throw a tyre on the fire', act: () => { feed(); } } : undefined),
     },
     {
       id: 'protest:join', order: 56, context: 'foot',
-      test: () => (phase === 'live' && nearBarricade() ? { prompt: 'E  Join the picket', act: join } : undefined),
+      test: () => (phase === 'live' && nearBarricade()
+        ? { prompt: 'E  Join the picket · keep the smoke up', act: join } : undefined),
     },
     {
       id: 'protest:take', order: 58, context: 'foot',
       test: () => (phase === 'smouldering' && nearBarricade() && tyres < TYRE_CARRY_CAP
-        // Teaches the verb on pickup, because this rung sits ABOVE `E  Burn a tyre` while you are
+        // Teaches the verb on pickup, because this rung sits ABOVE the burn rung while you are
         // standing in the remains: you stock up here, then go and close a road somewhere else.
-        ? { prompt: 'E  Take a tyre', act: () => { tyres = Math.min(TYRE_CARRY_CAP, tyres + 1); api.notify('Tyre', 'Roll it out on any road and light it. There is always another tyre.', true); api.persist(); } } : undefined),
+        ? {
+          prompt: `E  Take a tyre · ${tyres}/${TYRE_CARRY_CAP} carried`,
+          act: () => {
+            tyres = Math.min(TYRE_CARRY_CAP, tyres + 1);
+            api.notify(`Tyre ${tyres} of ${TYRE_CARRY_CAP}`, 'Stand anywhere on a road and press E to roll it out and light it. That road shuts until it burns down, and the mark never comes off.', true);
+            api.persist();
+          },
+        } : undefined),
     },
     {
       id: 'protest:raise', order: 60, context: 'foot',
@@ -332,7 +391,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     },
     {
       id: 'protest:burn', order: 62, context: 'foot',
-      test: () => (canBurnHere() ? { prompt: 'E  Burn a tyre', act: () => { burnTyre(); } } : undefined),
+      test: () => (canBurnHere() ? { prompt: 'E  Roll out a tyre and light it', act: () => { burnTyre(); } } : undefined),
     },
   ];
 
@@ -358,19 +417,49 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       + `smoke=${Math.round(smoke)} scorch=${scorch.count} solo=${solo.length} closures=${roadClosures.count}`;
   }
 
+  /** Where the standing blockade is, and the console line that gets you back to it. */
+  function where(): string[] {
+    if (!barricade) return ['Nothing standing. Run "feature protest now".'];
+    const { x, z } = barricade.site;
+    return [
+      `${api.districtAt(x, z)} — ${size} blockade, ${Math.round(distanceTo(x, z))} m away, phase ${phase}.`,
+      `tp ${x.toFixed(0)} ${z.toFixed(0)}`,
+    ];
+  }
+
   function command(args: readonly string[]): string[] {
     const [verb, value] = args;
     switch (verb) {
       case undefined: case 'status': return [status()];
-      case 'ripen': outageLedger.hours = 99; outageLedger.hasAnchor = true;
-        if (!outageLedger.anchorX && !outageLedger.anchorZ) { const p = api.playerPosition(); outageLedger.anchorX = p.x; outageLedger.anchorZ = p.z; }
-        return ['Grievance ripe. Walk outside and follow the smoke.'];
+      case 'ripen': {
+        outageLedger.hours = Math.max(outageLedger.hours, RIPE_OUTAGE_HOURS + 1);
+        const p = api.playerPosition();
+        outageLedger.anchorX = p.x; outageLedger.anchorZ = p.z; outageLedger.hasAnchor = true;
+        return ['Grievance ripe, anchored where you are standing. Walk out and follow the smoke.'];
+      }
+      // THE REVIEW ROUTE. One line, from a cold start, standing anywhere: no waiting out three
+      // load-shedding cycles to look at the thing. The owner could not reach a protest by hand, and a
+      // feature nobody can reach is a feature nobody can judge.
+      case 'now': {
+        if (barricade) return ['One is already standing.', ...where()];
+        outageLedger.hours = Math.max(outageLedger.hours, RIPE_OUTAGE_HOURS + 1);
+        if (!raise(true, true)) return ['Could not find a road near you to shut. Drive into town and try again.'];
+        tyres = Math.max(tyres, 2);
+        return [
+          'Blockade up on the road nearest your feet, and you are carrying 2 tyres.',
+          `Walk into it: E joins the picket, then E throws a tyre on the fire — hold the SMOKE bar for ${PICKET_SECONDS} s.`,
+          ...where(),
+        ];
+      }
+      case 'where': return where();
       case 'raise': return [raise(true) ? 'Blockade up.' : 'There is already one standing.'];
       case 'clear': clearBlockade(); return ['Road reopened.'];
       case 'tyres': tyres = Math.max(0, Math.min(TYRE_CARRY_CAP, Number(value) || 1)); return [`Carrying ${tyres}.`];
+      case 'feed': return [feed() ? `Tyre on. Smoke ${Math.round(smoke)}%.` : 'Only while you are picketing at the barricade.'];
       case 'burn': return [burnTyre() ? 'Lit.' : 'Needs a tyre, tar underfoot, and room from the last one.'];
       case 'scorch': return [`${scorch.count} marks on the tar.`];
-      default: return ['feature protest [status|ripen|raise|clear|tyres <n>|burn|scorch]'];
+      default: return ['feature protest [now|where|status|ripen|raise|clear|tyres <n>|feed|burn|scorch]',
+        'now — raise one at your feet and hand you tyres, for review without waiting out the grid.'];
     }
   }
 
@@ -383,6 +472,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     switch (action) {
       case 'status': case 'run': return `ok:${status()}`;
       case 'ripen': command(['ripen']); return 'ok';
+      case 'now': {
+        if (barricade) return 'failed:already-standing';
+        command(['now']);
+        return barricade ? `ok:${status()}` : 'failed:no-road-nearby';
+      }
+      case 'where': return `ok:${where().join(' | ')}`;
       case 'raise': return raise(true) ? 'ok' : 'failed:already-standing';
       case 'site': return barricade ? `ok:${barricade.site.x.toFixed(1)},${barricade.site.z.toFixed(1)}` : 'stuck:no-blockade';
       case 'crowd': return `ok:${crowd.length}`;
@@ -392,7 +487,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         join(); return 'ok';
       case 'feed':
         if (phase !== 'picketing') return `stuck:phase-${phase}`;
-        feedCooldown = 0; feed(); return `ok:${Math.round(smoke)}`;
+        feedCooldown = 0;
+        if (!feed()) return 'failed:throw-refused';
+        return `ok:${Math.round(smoke)}:tyres-on-the-pile-${barricade?.thrownTyres ?? 0}`;
       case 'smoke': return `ok:${Math.round(smoke)}`;
       case 'tyre': tyres = Math.min(TYRE_CARRY_CAP, tyres + (Number(args.n) || 1)); return `ok:${tyres}`;
       case 'burn': return burnTyre() ? `ok:${solo.length}` : 'failed:no-tar-or-no-tyre';
@@ -440,7 +537,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // Belt and braces: anything this feature ever closed is reopened, so a stale chunk arrival or a
     // new game can never leave the city routing around a barricade that isn't there.
     for (const id of roadClosures.ids) if (id.startsWith('protest:')) roadClosures.close(id);
-    outageLedger.reset();
+    outageLedger.reset(); // also clears `driven`, handing the clock back to the eager power-grid hook
   }
 
   return { update, hud, interactions: () => rungs, serialize, restore, command, qa, dispose };

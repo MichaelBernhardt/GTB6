@@ -10,9 +10,17 @@
  *
  *  1. THE GRIEVANCE LEDGER. A protest that isn't caused by something the player has FELT reads as mob
  *     behaviour. Load shedding is the thing this game already makes the player feel — dark streets,
- *     dead robots, reaching for the torch — so the ledger counts the outage HOURS the player spent
- *     out on foot in the dark, and remembers roughly where. It has to tick before the feature body is
+ *     dead robots, reaching for the torch — so the ledger counts the outage HOURS the player lived
+ *     through, and remembers roughly where they stood. It has to tick before the feature body is
  *     loaded (that is the whole point of "the player already felt it"), which is why it is eager.
+ *
+ *     IT IS DRIVEN BY THE POWER GRID ITSELF, not by an interaction predicate. The first cut ticked it
+ *     from the registry's `approach.near()`, which looked fine on a registry with one feature in it
+ *     and is silently fatal on a real one: `resolveInteraction` returns on the FIRST descriptor that
+ *     offers something, so any feature ordered above this one — a shop door, a tee box, a doorstep —
+ *     stops the only unlock gate this feature has. The cross-feature verifier measured it: 3.90
+ *     outage-hours accumulated standing in the open street, 0.00 standing on a street corner or a
+ *     doorstep. Interaction predicates must be pure. This one now is.
  *
  *  2. THE NECKLACING BLOCK. Burning tyres carry specific, heavy historical freight in South Africa:
  *     necklacing was a real 1980s township execution — a petrol-soaked tyre forced over a person's
@@ -22,14 +30,20 @@
  *     and so the lazy body cannot ship without it. See protest.state.test.ts — the rule is enforced
  *     by tests, not by a comment.
  */
-import { powerOn } from '../world/powerGrid';
+import { onPowerChange, powerOn } from '../world/powerGrid';
 
 // ---- tuning ------------------------------------------------------------------------------------
 
-/** Outage hours the player must have felt, on foot, before a district will shut its own road.
- *  DAY_CYCLE_SECONDS is 600, so one game hour is 25 real seconds and load shedding runs ~35 s in
- *  every ~2.5 min: this ripens in roughly five minutes of ordinary play. Patience is a resource. */
-export const RIPE_OUTAGE_HOURS = 3;
+/**
+ * Outage hours the player must have felt before a district will shut its own road.
+ *
+ * Set against the real schedule rather than guessed. LoadSheddingSystem sheds for 32-44 real seconds
+ * every 130-190, and one game hour is 25 real seconds, so ONE shed is worth 1.28-1.76 hours. At 2.4
+ * this always ripens on the SECOND shed and never the third — about four minutes of ordinary play.
+ * It used to be 3, which needed a third cycle whenever the first two ran short: ten minutes of
+ * walking around waiting for a feature to exist. Patience is a resource; spend it somewhere else.
+ */
+export const RIPE_OUTAGE_HOURS = 2.4;
 /** After a picket the taps come back on, so the ledger is knocked back rather than zeroed — the next
  *  shutdown is earned again, but faster, exactly as a place that keeps being failed gets quicker to
  *  close its own road. */
@@ -44,6 +58,21 @@ export const DAWN_END = 8;
 export const SCORCH_CAP = 48;
 /** Tyres the player may carry. Small on purpose: a tyre is a thing you carry awkwardly, not ammo. */
 export const TYRE_CARRY_CAP = 3;
+
+/**
+ * Real seconds per game hour, for the eager credit below.
+ *
+ * DayNight already owns this (DAY_CYCLE_SECONDS = 600 over 24 hours = 25 s an hour) but DayNight sits
+ * in the `simulation` chunk and this module is eager `gameplay-rules`. Importing it here would make
+ * the two chunks mutually dependent, and a chunk cycle is a shipped crash: the page dies on load with
+ * "Cannot access 'X' before initialization" while every test stays green. So the number is repeated,
+ * and protest.state.test.ts pins it to the real constant so the two can never drift apart in silence.
+ */
+export const SECONDS_PER_GAME_HOUR = 25;
+/** The most grievance any ONE outage may be worth. LoadSheddingSystem runs a shed for 32-44 real
+ *  seconds — 1.3 to 1.8 game hours — so this only ever bites when the wall clock keeps running and the
+ *  game does not: a backgrounded tab, a paused menu, a laptop lid. Generous, but never a free day. */
+export const MAX_OUTAGE_CREDIT_HOURS = 2;
 
 export type BlockadeSize = 'dawn' | 'daytime';
 
@@ -64,7 +93,13 @@ export const PICKET_SECONDS = 70;
  *  holds it; the player is never asked to sprint. */
 export const SMOKE_DECAY = 1.35;
 export const SMOKE_PER_TYRE = 26;
-export const TYRE_FEED_COOLDOWN = 3.5;
+/**
+ * A SAME-FRAME GUARD, and nothing more. It used to be 3.5 s AND it gated the interaction rung, so
+ * pressing E made the prompt vanish and come back three seconds later as a different verb — which is
+ * how a working key ends up reported as "didn't seem to work". The rung is now always offered while
+ * you are picketing at the fire, and this is only here so one keypress cannot be counted twice.
+ */
+export const TYRE_FEED_COOLDOWN = 0.12;
 /** A tyre the player rolls out themselves burns for this long before the road reopens. */
 export const SOLO_TYRE_SECONDS = 95;
 
@@ -136,16 +171,25 @@ export function hourDelta(previous: number, next: number): number {
 /**
  * How much outage the player has personally stood in, and roughly where.
  *
- * Ticked from TWO places by design: the registry's eager `approach.near()` while the body is not
- * loaded (once per rendered frame, on foot), and the loaded body's `update()` afterwards. Both feed
- * the same instance, so walking through three blackouts before the chunk ever loads still counts.
+ * Fed from TWO places, and neither of them is an interaction predicate:
+ *
+ *  - EAGER, while the body is not loaded: powerGrid's own `onPowerChange` hook (see the module-level
+ *    registration at the bottom of this file). One credit per outage endured, measured on the wall
+ *    clock and converted at SECONDS_PER_GAME_HOUR. Coarse, but it is a real hook that fires whatever
+ *    else the game is doing, which is exactly what the old per-frame predicate was not.
+ *  - ACCURATE, once the body is loaded: `update()` calls `tick()` every sim step with the real game
+ *    hour, the real player position and the real grid state, and sets `driven` so the eager credit
+ *    stands down rather than double-counting.
  */
 export class OutageLedger {
   hours = 0;
   anchorX = 0;
   anchorZ = 0;
   hasAnchor = false;
+  /** Set by the loaded body: it is ticking this ledger per frame, so the eager credit must not also. */
+  driven = false;
   private lastHour = -1;
+  private outageStartedAt: number | undefined;
 
   /** @param hour game hour 0..24 · @param powered grid state · returns the hours credited this call. */
   tick(hour: number, x: number, z: number, powered: boolean): number {
@@ -165,7 +209,28 @@ export class OutageLedger {
     return elapsed;
   }
 
-  get ripe(): boolean { return this.hours >= RIPE_OUTAGE_HOURS && this.hasAnchor; }
+  /** The grid went down. Nothing is credited yet — an outage is only worth something once it ends. */
+  beginOutage(now: number): void { this.outageStartedAt = now; }
+
+  /**
+   * The grid came back. Credit the outage the player just lived through, in game hours.
+   *
+   * Returns the hours credited so callers and tests can see it. A no-op while `driven`, because the
+   * loaded body has already counted every one of those hours accurately, frame by frame.
+   */
+  endOutage(now: number): number {
+    const started = this.outageStartedAt;
+    this.outageStartedAt = undefined;
+    if (started === undefined || this.driven) return 0;
+    const credited = clamp((now - started) / 1000 / SECONDS_PER_GAME_HOUR, 0, MAX_OUTAGE_CREDIT_HOURS);
+    this.hours += credited;
+    return credited;
+  }
+
+  /** No `hasAnchor` term: the anchor is a nicety (where the player stood in the dark), and the eager
+   *  path cannot build one without a per-frame position. `chooseSite()` falls back to the road nearest
+   *  the player, which is a better answer anyway — you follow the smoke from where you are. */
+  get ripe(): boolean { return this.hours >= RIPE_OUTAGE_HOURS; }
 
   spend(): void { this.hours = Math.min(this.hours, POST_PICKET_HOURS); }
 
@@ -202,21 +267,38 @@ export class OutageLedger {
     return { hours: Math.round(this.hours * 1000) / 1000, anchor: this.hasAnchor ? [Math.round(this.anchorX * 100) / 100, Math.round(this.anchorZ * 100) / 100] : null };
   }
 
-  reset(): void { this.hours = 0; this.hasAnchor = false; this.anchorX = 0; this.anchorZ = 0; this.lastHour = -1; }
+  reset(): void {
+    this.hours = 0; this.hasAnchor = false; this.anchorX = 0; this.anchorZ = 0;
+    this.lastHour = -1; this.outageStartedAt = undefined; this.driven = false;
+  }
 }
 
-/** The one ledger. Shared by the registry's eager approach and the lazily loaded body. */
+/** The one ledger. Shared by the eager power-grid hook and the lazily loaded body. */
 export const outageLedger = new OutageLedger();
 
-/** Eager per-frame tick, called from the registry's `approach.near()`. Reads the live grid directly
- *  (powerGrid is a module-level singleton, already eager) because the FeatureGameApi that would
- *  otherwise supply it does not exist until the body loads. */
+const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/**
+ * THE EAGER TICK — and the one line in this feature that must never move back into a predicate.
+ *
+ * `onPowerChange` is powerGrid's own listener list, registered once when this module is evaluated at
+ * boot. It fires from `Game.applyEskom`, which is the same call that turns every street light off, so
+ * it cannot be shadowed, skipped or ordered below anybody: if the player saw the lights go out, this
+ * ran. That is the whole property the old `approach.near()` tick did not have.
+ */
+onPowerChange((on) => {
+  if (on) outageLedger.endOutage(nowMs());
+  else outageLedger.beginOutage(nowMs());
+});
+
+/** The accurate per-frame tick, called by the LOADED body with the real clock, position and grid. */
 export function tickOutage(hour: number, x: number, z: number): void {
   outageLedger.tick(hour, x, z, powerOn());
 }
 
-/** Is there a shutdown to walk toward right now? Kept as a free function so both the eager approach
- *  and the loaded body ask the same question. */
+/** Is there a shutdown to walk toward right now? A PURE read: the registry's `approach.near()` calls
+ *  it once per rendered frame and must not change anything, or a feature ordered above this one turns
+ *  the whole ledger off. Kept as a free function so the eager approach and the body agree. */
 export function shutdownPending(loadedBlockade: boolean): boolean {
   return !loadedBlockade && outageLedger.ripe;
 }

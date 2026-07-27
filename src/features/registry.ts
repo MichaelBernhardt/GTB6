@@ -1,4 +1,4 @@
-import { sanitizeProtestState, shutdownPending, tickOutage } from './protest.state';
+import { sanitizeProtestState, shutdownPending } from './protest.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -22,16 +22,19 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     id: 'protest', saveKey: 'protest', label: 'Protests + burning tyres',
     sanitize: sanitizeProtestState,
     load: () => import('./protest/protest'),
-    // The eager stand-in does double duty, and both halves are cheap. `near()` is called once per
-    // rendered frame on the foot ladder while the body is unloaded, which is the ONLY per-frame hook
-    // an unloaded feature gets — so the grievance clock ticks here, off the live grid state, long
-    // before any of the protest chunk exists. Then it answers the real question: is there a shutdown
-    // to walk toward? `order: 60` keeps it below every other feature's rung, so ticking the clock can
-    // never shadow a shop door or a tee box; it merely means the clock skips the frames where the
-    // player is standing in someone else's doorway.
+    // A PURE predicate — one read, no side effect, and that is load-bearing.
+    //
+    // This used to tick the grievance clock here, on the grounds that `near()` is the only per-frame
+    // hook an unloaded feature gets. It is, and it is also not reliable: `resolveInteraction` returns
+    // on the FIRST descriptor that offers something, and `order: 60` puts this one below every other
+    // feature. On a registry with only protest in it the clock ran; with anything else registered
+    // above it the clock stopped dead wherever the player was standing — the cross-feature verifier
+    // measured 3.90 outage-hours out in the open street and 0.00 on a street corner or a doorstep.
+    // Since the ledger is this feature's ONLY unlock gate, that would have shipped a feature that can
+    // never trigger. The clock now runs off powerGrid's own transition hook; see protest.state.ts.
     approach: {
       context: 'foot', order: 60, prompt: 'E  Follow the smoke',
-      near: (ctx) => { tickOutage(ctx.hour, ctx.position.x, ctx.position.z); return shutdownPending(false); },
+      near: () => shutdownPending(false),
     },
   },
 ];

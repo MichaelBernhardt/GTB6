@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   assertNotLivingHost, blockadeSize, closureRadius, crowdSize, defaultProtestSave, hourDelta,
-  ignitableTargets, isLivingTarget, OutageLedger, outageLedger, picketPayout, POST_PICKET_HOURS,
-  ProhibitedTyreHostError, RIPE_OUTAGE_HOURS, sanitizeProtestState, SCORCH_CAP, tickOutage,
-  TYRE_CARRY_CAP, tyreCount,
+  ignitableTargets, isLivingTarget, MAX_OUTAGE_CREDIT_HOURS, OutageLedger, outageLedger, picketPayout,
+  POST_PICKET_HOURS, ProhibitedTyreHostError, RIPE_OUTAGE_HOURS, sanitizeProtestState, SCORCH_CAP,
+  SECONDS_PER_GAME_HOUR, shutdownPending, tickOutage, TYRE_CARRY_CAP, tyreCount,
 } from './protest.state';
+import { FEATURES } from './registry';
+import { DAY_CYCLE_SECONDS } from '../world/DayNight';
+import { setPower } from '../world/powerGrid';
 
 /**
  * THE NECKLACING BLOCK IS THE FIRST SUITE IN THIS FILE ON PURPOSE.
@@ -124,11 +127,91 @@ describe('grievance ledger', () => {
     expect(ledger.ripe).toBe(false);
   });
 
-  it('drives the shared ledger from the eager registry hook', () => {
+  it('drives the shared ledger from the loaded body’s per-frame tick', () => {
     tickOutage(4, 5, 5);   // seeds
     tickOutage(4.2, 5, 5); // powerGrid starts powered, so nothing is credited
     expect(outageLedger.hours).toBe(0);
   });
+
+  it('ripens on hours alone — the eager path cannot build an anchor, and does not need one', () => {
+    const ledger = new OutageLedger();
+    ledger.hours = RIPE_OUTAGE_HOURS;
+    expect(ledger.hasAnchor).toBe(false);
+    expect(ledger.ripe).toBe(true);
+  });
+});
+
+/**
+ * THE CROSS-FEATURE BUG THE VERIFIER FOUND, pinned so it cannot come back.
+ *
+ * The clock used to tick as a side effect inside the registry's `approach.near()` predicate, and
+ * `resolveInteraction` returns on the FIRST descriptor that offers something. With any other feature
+ * registered above protest's `order: 60`, the predicate never ran and the ledger never moved — 3.90
+ * outage-hours measured out in the open street against 0.00 on a doorstep. It is this feature's only
+ * unlock gate, so merged as-is it would simply never have triggered.
+ */
+describe('the grievance clock does not live in an interaction predicate', () => {
+  beforeEach(() => { outageLedger.reset(); setPower(true); });
+
+  it('the registry approach predicate is PURE — asking it a thousand times moves nothing', () => {
+    const approach = FEATURES.find((feature) => feature.id === 'protest')?.approach;
+    expect(approach).toBeDefined();
+    const ctx = { context: 'foot' as const, position: { x: 5, y: 0, z: 5 } as never, vehicle: undefined, hour: 2 };
+    setPower(false);
+    for (let frame = 0; frame < 1000; frame++) approach!.near(ctx);
+    expect(outageLedger.hours).toBe(0); // a predicate that credited would be at several hours by now
+    expect(approach!.near(ctx)).toBe(false);
+  });
+
+  it('credits the outage from powerGrid’s own hook, which nothing can shadow', () => {
+    // The listener is registered at module load; setPower is the exact call Game.applyEskom makes.
+    setPower(false);
+    expect(outageLedger.hours).toBe(0); // an outage is only worth something once it has been endured
+    outageLedger.beginOutage(performance.now() - 38_000); // restamp: 38 s of shed, no CI wall-clock flake
+    setPower(true);                                       // ...and let the real listener close it out
+    expect(outageLedger.hours).toBeCloseTo(38 / SECONDS_PER_GAME_HOUR, 1);
+  });
+
+  it('converts a real outage into game hours at the day-cycle rate', () => {
+    const ledger = new OutageLedger();
+    ledger.beginOutage(0);
+    ledger.endOutage(38_000); // 38 real seconds: the middle of LoadSheddingSystem's 32-44 s shed
+    expect(ledger.hours).toBeCloseTo(38 / SECONDS_PER_GAME_HOUR, 6);
+    expect(ledger.hours).toBeGreaterThan(1);
+  });
+
+  it('two sheds ripen it, which is the five minutes of play the design asks for', () => {
+    const ledger = new OutageLedger();
+    for (let shed = 0; shed < 2; shed++) { ledger.beginOutage(shed * 1e5); ledger.endOutage(shed * 1e5 + 38_000); }
+    expect(ledger.ripe).toBe(true);
+    expect(shutdownPending(false)).toBe(false); // …on the module singleton, which is untouched here
+  });
+
+  it('never banks a whole day because a tab was backgrounded mid-outage', () => {
+    const ledger = new OutageLedger();
+    ledger.beginOutage(0);
+    ledger.endOutage(9_000_000); // two and a half hours of wall clock with the game not running
+    expect(ledger.hours).toBe(MAX_OUTAGE_CREDIT_HOURS);
+  });
+
+  it('stands down while the loaded body is driving the ledger, so nothing is counted twice', () => {
+    const ledger = new OutageLedger();
+    ledger.driven = true;
+    ledger.beginOutage(0);
+    expect(ledger.endOutage(38_000)).toBe(0);
+    expect(ledger.hours).toBe(0);
+  });
+
+  it('pins the conversion rate to DayNight, which it may not import at runtime', () => {
+    // protest.state is eager `gameplay-rules`; DayNight is `simulation`. Importing it there would make
+    // the two chunks mutually dependent and the production bundle would die on load. So the number is
+    // duplicated — and this is the test that stops the duplicate drifting.
+    expect(SECONDS_PER_GAME_HOUR).toBe(DAY_CYCLE_SECONDS / 24);
+  });
+});
+
+describe('grievance ledger: the save handover', () => {
+  beforeEach(() => outageLedger.reset());
 
   it('adopting a save at load time KEEPS what this session already felt', () => {
     // The regression the first in-engine playthrough caught: the eager hook had counted 3.2 outage

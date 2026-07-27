@@ -3,8 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { Barricade, ScorchField, TyreFire } from './Barricade';
 import { createFeature } from './protest';
 import { ProhibitedTyreHostError, SCORCH_CAP, outageLedger } from '../protest.state';
+import { FeatureHost } from '../host';
+import { FEATURES } from '../registry';
 import { roadClosures } from '../../systems/NavGraph';
+import { setPower } from '../../world/powerGrid';
 import type { FeatureGameApi } from '../types';
+
+/** Flat ground, the default for the suites that are not about grounding. */
+const FLAT = () => 0;
 
 /** A Game stand-in: the whole FeatureGameApi surface, with nothing behind it but arithmetic. */
 function stubApi(overrides: Partial<FeatureGameApi> = {}): FeatureGameApi & { notices: string[]; earned: number; events: string[] } {
@@ -65,7 +71,7 @@ describe('necklacing block: the tyre and fire APIs take coordinates, never a hos
 
   it('the barricade refuses to ignite a pedestrian, a corpse or a bone', () => {
     const scene = new THREE.Scene();
-    const barricade = new Barricade(scene, site, 'dawn', 4);
+    const barricade = new Barricade(scene, site, 'dawn', 4, FLAT);
     const ped = { health: 60, state: 'idle', group: new THREE.Group(), takeDamage: () => false };
     const bone = new THREE.Bone();
     const corpse = { health: 0, state: 'down', group: new THREE.Group(), takeDamage: () => true };
@@ -80,7 +86,7 @@ describe('necklacing block: the tyre and fire APIs take coordinates, never a hos
 
   it('refuses a limb of a ragdoll, which is how a body actually arrives', () => {
     const scene = new THREE.Scene();
-    const barricade = new Barricade(scene, site, 'daytime', 3);
+    const barricade = new Barricade(scene, site, 'daytime', 3, FLAT);
     const bone = new THREE.Bone(); const hand = new THREE.Object3D(); bone.add(hand);
     expect(() => barricade.ignite([hand])).toThrow(ProhibitedTyreHostError);
     barricade.dispose();
@@ -98,7 +104,7 @@ describe('necklacing block: the tyre and fire APIs take coordinates, never a hos
 describe('barricade', () => {
   it('lays its junk ACROSS the lane, not along it', () => {
     const scene = new THREE.Scene();
-    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'dawn', 6);
+    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'dawn', 6, FLAT);
     // heading 0 means travelling +z, so the across-axis is x: the tyres must spread in x.
     const spreadX = Math.max(...barricade.scorchPlan.map((mark) => Math.abs(mark.x)));
     const spreadZ = Math.max(...barricade.scorchPlan.map((mark) => Math.abs(mark.z)));
@@ -110,8 +116,8 @@ describe('barricade', () => {
 
   it('is built deterministically — the same corner builds the same barricade twice', () => {
     const scene = new THREE.Scene();
-    const first = new Barricade(scene, { x: 123.5, y: 0, z: -88.25, heading: 1.1 }, 'dawn', 5);
-    const second = new Barricade(scene, { x: 123.5, y: 0, z: -88.25, heading: 1.1 }, 'dawn', 5);
+    const first = new Barricade(scene, { x: 123.5, y: 0, z: -88.25, heading: 1.1 }, 'dawn', 5, FLAT);
+    const second = new Barricade(scene, { x: 123.5, y: 0, z: -88.25, heading: 1.1 }, 'dawn', 5, FLAT);
     expect(second.scorchPlan).toEqual(first.scorchPlan);
     first.dispose(); second.dispose();
   });
@@ -235,5 +241,205 @@ describe('the loaded feature', () => {
     expect((system.serialize?.() as { scorch: number[] }).scorch).toEqual([5, 5, 2]);
     system.dispose();
     expect(outageLedger.hours).toBe(0);
+  });
+});
+
+/**
+ * THE OWNER'S FIRST REPORT: "tyres float in the air".
+ *
+ * The barricade group sits at ONE height — the road pose at the centre of the site — and the junk is
+ * laid out to nine units either side of the centreline. The tar rolls with the terrain, so resting
+ * every prop at a constant local height hangs the outer half of the barricade over the road. These
+ * two cases are the fix and its control on the SAME sloped world.
+ */
+describe('grounded on the tar, not floating over it', () => {
+  const SLOPE = 0.12; // 12 cm of climb per unit across the lane: an ordinary Joburg side street
+  const sloped = (x: number) => x * SLOPE;
+
+  /** Vertical gap between each prop's resting point and the ground under THAT prop. */
+  function propGaps(barricade: Barricade, height: (x: number, z: number) => number): number[] {
+    const origin = barricade.group.position;
+    return barricade.group.children
+      .filter((child) => child.name !== 'protest-plume')
+      .map((child) => origin.y + child.position.y - height(origin.x + child.position.x, origin.z + child.position.z));
+  }
+
+  it('rests every prop on the surface under it, on a road that is not flat', () => {
+    const scene = new THREE.Scene();
+    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'dawn', 6, sloped);
+    const gaps = propGaps(barricade, sloped);
+    expect(gaps.length).toBeGreaterThan(20);       // tyres, bricks, bin, mattress, branches, placards
+    expect(Math.min(...gaps)).toBeGreaterThan(-0.02); // nothing sunk into the tar
+    expect(Math.max(...gaps)).toBeLessThan(0.9);      // nothing higher than a stacked tyre
+    barricade.dispose();
+  });
+
+  it('CONTROL: one height for the lot is what put them in the air', () => {
+    // Exactly what shipped — a surface query that ignores where the prop actually is.
+    const scene = new THREE.Scene();
+    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'dawn', 6, () => 0);
+    const gaps = propGaps(barricade, sloped);
+    expect(Math.max(...gaps.map(Math.abs))).toBeGreaterThan(1); // over a metre of daylight
+    barricade.dispose();
+  });
+
+  it('still builds the same barricade twice on the same sloped corner', () => {
+    const scene = new THREE.Scene();
+    const site = { x: 123.5, y: 0, z: -88.25, heading: 1.1 };
+    const first = new Barricade(scene, site, 'dawn', 5, sloped);
+    const second = new Barricade(scene, site, 'dawn', 5, sloped);
+    expect(second.scorchPlan).toEqual(first.scorchPlan);
+    expect(propGaps(second, sloped)).toEqual(propGaps(first, sloped));
+    first.dispose(); second.dispose();
+  });
+});
+
+/**
+ * THE OWNER'S SECOND REPORT: "tyre throwing didn't seem to work but it could be me doing it wrong".
+ *
+ * Both halves of that sentence were true. The old `feed()` set a boolean and moved a HUD number: no
+ * tyre appeared, the plume did not change, nothing was said — and then the prompt vanished for three
+ * and a half seconds and came back as a different verb.
+ */
+describe('throwing a tyre on the fire', () => {
+  it('takes no arguments at all, so there is nothing a tyre could be thrown AT', () => {
+    // The necklacing block as a shape: a method with zero parameters cannot be handed a person.
+    expect(Barricade.prototype.addTyre.length).toBe(0);
+  });
+
+  it('puts a real tyre on the pile every time it is pressed', () => {
+    const scene = new THREE.Scene();
+    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'daytime', 3, () => 0);
+    const before = barricade.group.children.length;
+    barricade.addTyre(); barricade.addTyre();
+    expect(barricade.thrownTyres).toBe(2);
+    expect(barricade.group.children.length).toBe(before + 2); // two more meshes IN THE SCENE GRAPH
+    barricade.dispose();
+  });
+
+  it('bounds the pile instead of growing the scene graph forever', () => {
+    const scene = new THREE.Scene();
+    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'daytime', 3, () => 0);
+    const before = barricade.group.children.length;
+    for (let press = 0; press < 60; press++) barricade.addTyre();
+    expect(barricade.thrownTyres).toBe(60);
+    expect(barricade.group.children.length).toBeLessThan(before + 20);
+    expect(barricade.scorchPlan.length).toBeLessThanOrEqual(12); // and cannot flush the citywide FIFO
+    barricade.dispose();
+  });
+
+  it('grounds a thrown tyre on the tar under it, like every other prop', () => {
+    const scene = new THREE.Scene();
+    const sloped = (x: number) => x * 0.12;
+    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'dawn', 6, sloped);
+    const mark = barricade.addTyre();
+    const tyre = barricade.group.children[barricade.group.children.length - 1]!;
+    expect(tyre.position.y - sloped(tyre.position.x)).toBeGreaterThan(0);
+    expect(tyre.position.y - sloped(tyre.position.x)).toBeLessThan(0.9);
+    expect(mark.x).toBeCloseTo(tyre.position.x, 6);
+    barricade.dispose();
+  });
+
+  it('offers ONE stable prompt while picketing, whatever the cooldown is doing', () => {
+    roadClosures.clear();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {}); system.qa?.('join', {});
+    const rungs = system.interactions?.() ?? [];
+    const ctx = { context: 'foot' as const, position: new THREE.Vector3(), vehicle: undefined, hour: 5 };
+    const prompt = () => rungs.map((rung) => rung.test(ctx)).find(Boolean)?.prompt;
+    expect(prompt()).toBe('E  Throw a tyre on the fire');
+    rungs.find((rung) => rung.id === 'protest:feed')!.test(ctx)!.act();
+    // The old body dropped the rung here and the band flickered to a DIFFERENT verb mid-picket.
+    expect(prompt()).toBe('E  Throw a tyre on the fire');
+    system.dispose();
+  });
+
+  it('says something the first time, and moves the smoke every time', () => {
+    roadClosures.clear();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {}); system.qa?.('join', {});
+    for (let second = 0; second < 12; second++) system.update?.(1); // let the smoke bleed down
+    const before = Number(/^ok:(\d+)/.exec(system.qa?.('smoke', {}) ?? '')?.[1]);
+    expect(system.qa?.('feed', {})).toMatch(/^ok:\d+:tyres-on-the-pile-1$/);
+    const after = Number(/^ok:(\d+)/.exec(system.qa?.('smoke', {}) ?? '')?.[1]);
+    expect(after).toBeGreaterThan(before);
+    expect(api.notices).toContain('On the fire it goes');
+    system.dispose();
+  });
+});
+
+/**
+ * THE CROSS-FEATURE BUG, at the level it was actually found: through the real FeatureHost, with
+ * another feature registered above protest that offers a rung on every single frame.
+ */
+describe('the grievance clock with a feature registered above protest', () => {
+  const greedy = {
+    id: 'tuckshop', saveKey: 'tuckshop', label: 'Tuck shop',
+    approach: { context: 'foot' as const, order: 1, prompt: 'E  Buy a cooldrink', near: () => true },
+    load: () => Promise.resolve({ createFeature: () => ({ dispose: () => undefined }) }),
+  };
+
+  it('still ripens while a shop door wins the ladder every frame', () => {
+    outageLedger.reset();
+    setPower(true);
+    const api = stubApi();
+    const host = new FeatureHost(
+      { api, suspended: () => false, emit: () => undefined, reportError: () => undefined },
+      [greedy, ...FEATURES] as never,
+    );
+
+    // 600 frames of standing in a doorway. Protest's predicate is never even reached.
+    for (let frame = 0; frame < 600; frame++) expect(host.offer('foot')?.prompt).toBe('E  Buy a cooldrink');
+    expect(outageLedger.hours).toBe(0);
+
+    // Two load-shedding cycles, through powerGrid's own hook — the path Game.applyEskom takes.
+    // 38 real seconds is the middle of LoadSheddingSystem's 32-44 s shed; the stamp is rewritten so
+    // the credit is deterministic instead of depending on how fast the test runner got here.
+    for (let shed = 0; shed < 2; shed++) {
+      setPower(false);
+      outageLedger.beginOutage(performance.now() - 38_000);
+      setPower(true);
+    }
+    expect(outageLedger.ripe).toBe(true);
+
+    // The rung is now live; it is still (correctly) below the shop door, and it is there the moment
+    // the player steps off the doorstep — which is exactly what "0.00 outage-hours" prevented.
+    const rung = host.descriptors('foot').find((entry) => entry.id === 'protest:approach');
+    expect(rung?.test({ context: 'foot', position: new THREE.Vector3(), vehicle: undefined, hour: 2 })?.prompt)
+      .toBe('E  Follow the smoke');
+    host.dispose();
+    outageLedger.reset();
+  });
+});
+
+/** THE OWNER'S FOURTH REPORT: he could not reach a protest by hand at all. */
+describe('the review route', () => {
+  it('"feature protest now" raises one at your feet, hands you tyres, and prints the way back', () => {
+    roadClosures.clear();
+    outageLedger.reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    expect(outageLedger.ripe).toBe(false); // a cold start: no outage has ever been felt
+
+    const lines = system.command?.(['now']) ?? [];
+    expect(lines.join(' ')).toMatch(/Blockade up/);
+    expect(lines.join(' ')).toMatch(/tp -?\d+ -?\d+/); // the coordinates to get back to it
+    expect(system.qa?.('site', {})).toMatch(/^ok:/);
+    expect(system.qa?.('status', {})).toMatch(/tyres=2/);
+
+    // …and the whole loop is reachable from there, with no waiting on the grid.
+    expect(system.qa?.('join', {})).toBe('ok');
+    expect(system.qa?.('feed', {})).toMatch(/^ok:/);
+    expect(system.command?.(['where']).join(' ')).toMatch(/blockade/);
+    system.dispose();
+  });
+
+  it('lists itself first in the console help, so it is findable without reading the source', () => {
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    expect(system.command?.(['heeeelp'])?.[0]).toContain('now');
+    system.dispose();
   });
 });
