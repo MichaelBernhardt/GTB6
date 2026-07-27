@@ -90,12 +90,26 @@ into the marker list on their way to both surfaces, in the same visual language 
 `ShopSystem.mapIcons()`. Two rules: derive the positions from map data at runtime (never a typed
 table), and **never** import a feature body from there.
 
+There is a second, later blip path for things that only exist once the body is up — a staffed corner,
+a standing barricade. Implement `mapIcons(): FeatureMapIcon[]` on the object `createFeature` returns
+(the hook is structural, declared in `host.ts`; a feature that wants no blips changes nothing) and
+`FeatureHost.mapIcons()` collects it into `Game.mapMarkers()` beside `this.shops.mapIcons()`. Pick by
+what the blip is FOR: a fixed place the player must be able to find before the chunk exists is eager
+and belongs in `mapIcons.ts`; a live thing the loaded feature owns and moves belongs on the system.
+
+Walking into `approach.near`'s ring also LOADS the body — `FeatureHost.preloadNearby()` re-tests every
+unloaded feature's predicate every 0.4 s and opens each one whose ring the player is standing in, so a
+feature that puts people or scenery in the world is already populated by the time the player can see
+it. The prompt is then a fallback that only rejoins the ladder if the fetch itself failed. Two
+consequences: size the ring for "close enough that loading is worth it", not for "close enough to
+press E", and keep `near()` cheap and pure — it now runs whether or not any rung ever draws.
+
 And the world has to hold up its end. If a feature's location is a place — a forecourt, a shopfront —
 that place must be built by the **world**, not by the feature body: the fuel feature used to raise
 the dam-shore garage itself, which made it a garage nobody could ever reach, because the body only
-loads when you press E on a forecourt the eager list already knows about. It is a scattered model
-now (`ModelScatter.landmarkForecourtPass`), so the city builds it whether the feature ever loads or
-not, and the eager list gets it for free.
+loads once the player is standing on a forecourt the eager list already knows about. It is a
+scattered model now (`ModelScatter.landmarkForecourtPass`), so the city builds it whether the feature
+ever loads or not, and the eager list gets it for free.
 
 ## What you get for free
 
@@ -104,7 +118,7 @@ not, and the eager list gets it for free.
 | A key + a HUD prompt + a mobile touch pill | one `InteractionDescriptor` (or the eager `approach`) |
 | A readout the player sees before they find the feature | `eager: { hud }` in the registry entry |
 | A mechanic that runs before the player opts in | `eager: { tick }` — per sim step, never per frame |
-| A map + minimap blip the player can navigate to | one line in `src/features/mapIcons.ts` (eager) |
+| A map + minimap blip the player can navigate to | one line in `src/features/mapIcons.ts` (eager), or `mapIcons()` on the loaded system |
 | A menu screen | `api.showMenu({ featureId, eyebrow, title, rows })`, rows come back to `menu(actionId)` |
 | A HUD chip / gauge | return `FeatureHudEntry[]` from `hud()` |
 | Save state | return it from `serialize()`; it arrives back as the `state` argument |
