@@ -443,3 +443,72 @@ describe('the review route', () => {
     system.dispose();
   });
 });
+
+/**
+ * THE OTHER HALF OF "TYRES FLOAT IN THE AIR", and the half a measurement could never find.
+ *
+ * Grounding every prop on the surface under it fixed the barricades pitched on a slope. It did not
+ * fix this: a tyre marked "stacked" was lifted 0.5-0.85 u at its OWN random lateral offset, so on
+ * perfectly flat tar it hung in mid-air over nothing. It took an eye-height frame from the in-engine
+ * run to see it — the gap-to-ground numbers were all inside tolerance the whole time, because a
+ * stacked tyre is *supposed* to be off the ground. The rule it was missing is what this pins: off
+ * the ground is only allowed when there is another tyre underneath.
+ */
+describe('no tyre hangs in the air', () => {
+  const flat = () => 0;
+  const sloped = (x: number) => x * 0.12;
+
+  /** Every torus in the group, with how far it rests above the ground at its own position. */
+  function tyresOf(barricade: Barricade, height: (x: number, z: number) => number) {
+    return barricade.group.children
+      .filter((child): child is THREE.Mesh => child instanceof THREE.Mesh && child.geometry.type === 'TorusGeometry')
+      .map((mesh) => ({
+        x: mesh.position.x, z: mesh.position.z,
+        // Local y, minus the local ground under this prop: `restingY` works in WORLD coordinates.
+        rest: mesh.position.y - (height(barricade.site.x + mesh.position.x, barricade.site.z + mesh.position.z) - barricade.site.y),
+      }));
+  }
+
+  /** A tyre is legal if it lies flat, or if another tyre is directly beneath it. */
+  function unsupported(tyres: ReturnType<typeof tyresOf>) {
+    return tyres.filter((tyre) => {
+      if (tyre.rest <= 0.2) return false; // lying on the tar
+      return !tyres.some((other) => other !== tyre
+        && Math.hypot(other.x - tyre.x, other.z - tyre.z) < 0.45
+        && Math.abs(tyre.rest - other.rest - 0.34) < 0.06);
+    });
+  }
+
+  it('holds for every barricade size, on flat tar and on a slope', () => {
+    const scene = new THREE.Scene();
+    for (const height of [flat, sloped]) {
+      for (const [size, count] of [['dawn', 6], ['daytime', 3]] as const) {
+        for (const site of [{ x: 0, y: 0, z: 0, heading: 0 }, { x: 811.5, y: 0, z: -204.25, heading: 2.4 }]) {
+          const barricade = new Barricade(scene, site, size, count, height);
+          const tyres = tyresOf(barricade, height);
+          expect(tyres.length).toBe(count);
+          expect(unsupported(tyres), `${size} at ${site.x},${site.z}`).toEqual([]);
+          barricade.dispose();
+        }
+      }
+    }
+  });
+
+  it('holds for the tyres the player throws on, however many they throw', () => {
+    const scene = new THREE.Scene();
+    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'daytime', 3, sloped);
+    for (let press = 0; press < 40; press++) {
+      barricade.addTyre();
+      expect(unsupported(tyresOf(barricade, sloped)), `after ${press + 1} throws`).toEqual([]);
+    }
+    barricade.dispose();
+  });
+
+  it('retires a whole stack at a time, so recycling never pulls a tyre out from under another', () => {
+    const scene = new THREE.Scene();
+    const barricade = new Barricade(scene, { x: 0, y: 0, z: 0, heading: 0 }, 'daytime', 3, () => 0);
+    for (let press = 0; press < 60; press++) barricade.addTyre();
+    expect(unsupported(tyresOf(barricade, () => 0))).toEqual([]);
+    barricade.dispose();
+  });
+});

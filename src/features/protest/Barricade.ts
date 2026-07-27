@@ -109,7 +109,14 @@ function placardTexture(line: string): THREE.Texture {
   return texture;
 }
 
-/** Player-thrown tyres kept in the scene at once. Past this the oldest is recycled. */
+/** A tyre lying flat: half its tube thickness off the tar. */
+const TYRE_LIE_FLAT = 0.17;
+/** One tyre resting ON another: a whole tube thickness higher. Anything else hangs in mid-air. */
+const TYRE_STACK_RISE = 0.34;
+/** Tyres in one stack. Three is a heap somebody carried; six is a circus act. */
+const MAX_TYRE_STACK = 2;
+/** Player-thrown tyres kept in the scene at once. A multiple of the stack cycle, so recycling the
+ *  oldest whole stack can never delete the tyre another one is resting on. */
 const THROWN_TYRE_CAP = 12;
 /** Stains one barricade may plan. Bounds what a long picket can push out of the citywide FIFO. */
 const SCORCH_PLAN_CAP = 12;
@@ -337,9 +344,11 @@ export class Barricade {
   private geometries: THREE.BufferGeometry[] = [];
   private materials: THREE.Material[] = [];
   private tyres: THREE.Mesh[] = [];
-  /** Tyres the player threw on, oldest first. Bounded: past THROWN_TYRE_CAP the oldest is recycled. */
+  /** Tyres the player threw on, oldest first. Bounded: past THROWN_TYRE_CAP the oldest stack goes. */
   private thrown: THREE.Mesh[] = [];
   private thrownCount = 0;
+  /** The last tyre thrown on, so the next one can rest on it rather than hover beside it. */
+  private pile: { x: number; z: number; rest: number } | undefined;
   private tyreGeometry: THREE.TorusGeometry;
   private rubber: THREE.MeshLambertMaterial;
   private burning = true;
@@ -361,14 +370,32 @@ export class Barricade {
 
     const rubber = this.rubber = this.material(new THREE.MeshLambertMaterial({ color: 0x131313 }));
     const tyreGeometry = this.tyreGeometry = this.geometry(new THREE.TorusGeometry(0.44, 0.17, 6, 14));
+    // A stacked tyre is stacked ON the tyre before it. It used to be lifted half a metre at its own
+    // random lateral offset, which is a tyre hanging in mid-air over empty tar — the OTHER half of
+    // the owner's "tyres float in the air", and the half no surface query can fix. The eye-height
+    // frame from the first verification run is what caught it; the measurements never could.
+    let under: { x: number; z: number; rest: number } | undefined;
+    let stackHeight = 0;
     for (let index = 0; index < tyreTotal; index++) {
       const offset = (index / Math.max(tyreTotal - 1, 1) - 0.5) * span * 2;
-      const stacked = random() > 0.55;
+      const jitter = (random() - 0.5) * 1.2;
+      const stacked = random() > 0.55 && under !== undefined && stackHeight < MAX_TYRE_STACK;
       const tyre = new THREE.Mesh(tyreGeometry, rubber);
-      tyre.position.copy(across).multiplyScalar(offset + (random() - 0.5) * 1.2);
-      tyre.position.y = this.restingY(tyre.position.x, tyre.position.z, stacked ? 0.5 + random() * 0.35 : 0.17);
-      if (stacked) { tyre.rotation.x = Math.PI / 2 + (random() - 0.5) * 0.5; tyre.rotation.z = random() * 3; }
-      else tyre.rotation.x = Math.PI / 2;
+      let rest: number;
+      if (stacked && under) {
+        tyre.position.set(under.x + (random() - 0.5) * 0.24, 0, under.z + (random() - 0.5) * 0.24);
+        rest = under.rest + TYRE_STACK_RISE;
+        tyre.rotation.x = Math.PI / 2 + (random() - 0.5) * 0.35; // leaning, but leaning on something
+        tyre.rotation.z = random() * 3;
+        stackHeight += 1;
+      } else {
+        tyre.position.copy(across).multiplyScalar(offset + jitter);
+        rest = TYRE_LIE_FLAT;
+        tyre.rotation.x = Math.PI / 2;
+        stackHeight = 0;
+      }
+      tyre.position.y = this.restingY(tyre.position.x, tyre.position.z, rest);
+      under = { x: tyre.position.x, z: tyre.position.z, rest };
       this.tyres.push(tyre); this.group.add(tyre);
       this.scorchPlan.push({ x: site.x + tyre.position.x, z: site.z + tyre.position.z, r: 1.5 + random() * 1.3 });
     }
@@ -489,17 +516,33 @@ export class Barricade {
     const across = new THREE.Vector3(Math.cos(this.site.heading), 0, -Math.sin(this.site.heading));
     const span = this.size === 'dawn' ? 9 : 6.5;
     const tyre = new THREE.Mesh(this.tyreGeometry, this.rubber);
-    tyre.position.copy(across).multiplyScalar((random() - 0.5) * span * 1.1);
-    tyre.position.z += (random() - 0.5) * 1.6;
-    // They pile up as they land: flat, then leaning on the one before, then on top of that.
-    tyre.position.y = this.restingY(tyre.position.x, tyre.position.z, 0.17 + 0.33 * (this.thrownCount % 3));
-    tyre.rotation.x = Math.PI / 2 + (random() - 0.5) * 0.7;
+    // They pile up as they land — but ON each other, never hovering over bare tar. Every third one
+    // starts a fresh flat base, which is also what keeps the recycling below stack-aligned.
+    const under = this.thrownCount % (MAX_TYRE_STACK + 1) === 0 ? undefined : this.pile;
+    let rest: number;
+    if (under) {
+      tyre.position.set(under.x + (random() - 0.5) * 0.26, 0, under.z + (random() - 0.5) * 0.26);
+      rest = under.rest + TYRE_STACK_RISE;
+    } else {
+      tyre.position.copy(across).multiplyScalar((random() - 0.5) * span * 1.1);
+      tyre.position.z += (random() - 0.5) * 1.6;
+      rest = TYRE_LIE_FLAT;
+    }
+    tyre.position.y = this.restingY(tyre.position.x, tyre.position.z, rest);
+    tyre.rotation.x = Math.PI / 2 + (random() - 0.5) * (under ? 0.35 : 0.12);
     tyre.rotation.z = random() * 3;
+    this.pile = { x: tyre.position.x, z: tyre.position.z, rest };
     this.group.add(tyre);
     this.thrown.push(tyre);
     this.thrownCount++;
-    // Bounded: a player who stands there hammering E gets a bigger fire, not an unbounded scene graph.
-    while (this.thrown.length > THROWN_TYRE_CAP) { const old = this.thrown.shift(); if (old) this.group.remove(old); }
+    // Bounded: a player who stands there hammering E gets a bigger fire, not an unbounded scene
+    // graph. Retired a WHOLE stack at a time, or removing a base would leave its neighbours floating.
+    while (this.thrown.length > THROWN_TYRE_CAP) {
+      for (let n = 0; n <= MAX_TYRE_STACK && this.thrown.length; n++) {
+        const old = this.thrown.shift();
+        if (old) this.group.remove(old);
+      }
+    }
     const mark: ScorchMark = { x: this.site.x + tyre.position.x, z: this.site.z + tyre.position.z, r: 1.4 + random() * 0.9 };
     // Only the first few thrown tyres earn their own stain. Otherwise a long picket would push every
     // other scorch mark in the city out of the FIFO and the leopard-printed arterials would be lost.
