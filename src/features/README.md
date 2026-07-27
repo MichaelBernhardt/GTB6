@@ -77,6 +77,26 @@ Rules: keep both hooks in the eager `<id>.state.ts` (whatever they touch is boot
 player, forever), build the chips with the same function the body uses so the strip cannot change
 shape at the moment the chunk lands, and add no scene objects — the eager half has no `dispose()`.
 
+## Telling the player where the feature IS
+
+Same trap, one rung further out, and petrol walked into it twice. With the gauge fixed the owner
+drove another session and reported *"fuel level now, but I can't find a station"* — because nothing
+on the map said where petrol was, and an icon that only appears once the body loads is an icon for a
+place you have already found.
+
+Map and minimap blips therefore come out of `src/features/mapIcons.ts`, which is eager
+(`gameplay-rules`) and reads only from `<id>.state.ts`. `UIManager.drawMap` / `updateMap` merge them
+into the marker list on their way to both surfaces, in the same visual language as
+`ShopSystem.mapIcons()`. Two rules: derive the positions from map data at runtime (never a typed
+table), and **never** import a feature body from there.
+
+And the world has to hold up its end. If a feature's location is a place — a forecourt, a shopfront —
+that place must be built by the **world**, not by the feature body: the fuel feature used to raise
+the dam-shore garage itself, which made it a garage nobody could ever reach, because the body only
+loads when you press E on a forecourt the eager list already knows about. It is a scattered model
+now (`ModelScatter.landmarkForecourtPass`), so the city builds it whether the feature ever loads or
+not, and the eager list gets it for free.
+
 ## What you get for free
 
 | You want | You do |
@@ -84,6 +104,7 @@ shape at the moment the chunk lands, and add no scene objects — the eager half
 | A key + a HUD prompt + a mobile touch pill | one `InteractionDescriptor` (or the eager `approach`) |
 | A readout the player sees before they find the feature | `eager: { hud }` in the registry entry |
 | A mechanic that runs before the player opts in | `eager: { tick }` — per sim step, never per frame |
+| A map + minimap blip the player can navigate to | one line in `src/features/mapIcons.ts` (eager) |
 | A menu screen | `api.showMenu({ featureId, eyebrow, title, rows })`, rows come back to `menu(actionId)` |
 | A HUD chip / gauge | return `FeatureHudEntry[]` from `hud()` |
 | Save state | return it from `serialize()`; it arrives back as the `state` argument |
@@ -151,6 +172,7 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
 | The registry (the one eager module) | `src/features/registry.ts` |
 | The host: loading, generations, save merge, suspension | `src/features/host.ts` |
 | The eager slice (pre-load tick + HUD) | `FeatureEagerSlice` in `src/features/types.ts`, run by `FeatureHost.update`/`hud` |
+| The eager map + minimap blips | `src/features/mapIcons.ts`, merged by `UIManager.drawMap`/`updateMap` |
 | The ordered interaction ladder | `src/features/interactions.ts` |
 | The save sanitizer | `src/features/save.ts` |
 | The contract | `src/features/types.ts` |

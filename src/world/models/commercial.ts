@@ -72,7 +72,7 @@ export function buildFillingStation(seed: number, options: BuildOptions = {}): B
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) kit.box(M.steel, 0.45, canopyH, 0.45, sx * canopyW * 0.32, 0, sz * canopyD * 0.28);
   kit.box(M.whiteMetal, canopyW, 0.45, canopyD, 0, canopyH, 0, { collide: true }); // canopy slab — standable
   kit.box(brand.trim, canopyW + 0.1, 0.5, canopyD + 0.1, 0, canopyH + 0.45, 0, { cast: false }); // fascia band
-  kit.sign(brand.name, brand.accent, canopyW * 0.4, 0.5, 0, canopyH + 0.7, canopyD / 2 + 0.06);
+  kit.sign(brand.name, brand.accent, canopyW * 0.4, 0.5, 0, canopyH + 0.7, canopyD / 2 + 0.06, { genny: true });
   const islands = variant === 0 ? 1 : 2;
   for (let island = 0; island < islands; island++) {
     const x = (island - (islands - 1) / 2) * canopyW * 0.36;
@@ -83,7 +83,9 @@ export function buildFillingStation(seed: number, options: BuildOptions = {}): B
     }
   }
   kit.box(M.steel, 0.35, 6, 0.35, canopyW / 2 + 2.2, 0, canopyD / 2 + 1.5); // price totem
-  kit.sign(`${brand.name} 95: R25.99`, brand.accent, 2.6, 1.5, canopyW / 2 + 2.2, 6.9, canopyD / 2 + 1.5, { doubleSide: true });
+  // The pylon board and the brand fascia run off the genny: on a load-shedding night the forecourt
+  // is the one lit thing on the street, which is when a player with a red gauge most needs to see it.
+  kit.sign(`${brand.name} 95: R25.99`, brand.accent, 2.6, 1.5, canopyW / 2 + 2.2, 6.9, canopyD / 2 + 1.5, { doubleSide: true, genny: true });
   if (variant === 2) kit.box(M.corrBlue, 2.2, 2.2, 1.6, -canopyW / 2 - 2.4, 0, -canopyD / 2 - 2, { collide: true }); // car-wash bay hint
   return kit.done();
 }

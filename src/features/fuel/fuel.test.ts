@@ -7,6 +7,7 @@ import {
 } from '../fuel.state';
 import { CAN_PRICE, apronPoint, buildStations, shopSpot, stationAt, type Station } from './pump';
 import { hash } from '../../world/models/kit';
+import { LANDMARKS } from '../../world/mapData';
 import type { FeatureGameApi, FeatureMenuView, FeatureSystem } from '../types';
 import type { Pedestrian } from '../../entities/Pedestrian';
 import type { Vehicle } from '../../entities/Vehicle';
@@ -97,12 +98,18 @@ describe('petrol — the forecourt', () => {
     fuel = await createFeature(h.api, undefined);
   });
 
-  it('builds the Vaal shore garage the map has data for and nothing else', () => {
-    const built = h.api.scene.getObjectByName('FuelForecourts')!;
-    expect(built).toBeDefined();
-    expect(built.children).toHaveLength(1);
-    expect(built.children[0]!.name).toBe('Caltexx Bayshore Marina');
-    expect(built.children[0]!.children.length).toBeGreaterThan(10);
+  it('raises NO geometry: a garage this feature builds is a garage you can never reach', () => {
+    // The dam-shore station used to be built right here, and that made it unreachable. The body only
+    // loads when you press E on a forecourt the EAGER list knows about, and the eager list is derived
+    // from the world scatter — which did not contain this one. So the labelled gold star on the map
+    // had bare veld under it, which is exactly what the owner drove out there and found.
+    expect(h.api.scene.getObjectByName('FuelForecourts')).toBeUndefined();
+    expect(h.api.scene.children).toHaveLength(0);
+  });
+
+  it('takes the map\'s own name for the forecourt standing on the map\'s own fuel landmark', () => {
+    const pin = LANDMARKS.find((entry) => entry.kind === 'fuel')!;
+    expect(fuel.command!(['stations']).some((line) => line.startsWith(pin.name))).toBe(true);
   });
 
   it('offers nothing in a car that is nowhere near a garage, so E still exits the vehicle', () => {
@@ -427,11 +434,9 @@ describe('petrol — save, console, teardown', () => {
     setLitres(vehicle, 10);
     fuel.update!(0.016);
     expect(h.fixtures.size).toBe(1);
-    expect(h.api.scene.getObjectByName('FuelForecourts')).toBeDefined();
     fuel.dispose();
     fuel.dispose();
     expect(h.fixtures.size).toBe(0);
-    expect(h.api.scene.getObjectByName('FuelForecourts')).toBeUndefined();
     expect(h.api.scene.children).toHaveLength(0);
   });
 

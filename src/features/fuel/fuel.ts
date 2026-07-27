@@ -15,10 +15,8 @@
  * WHAT IS NOT HERE: the gauge and the burn. Both are eager (src/features/fuel.state.ts), because a
  * readout that only exists after you have pressed E at a garage is a readout the player never sees.
  */
-import * as THREE from 'three';
-import { buildModel } from '../../world/models/catalog';
 import { hash } from '../../world/models/kit';
-import { LANDMARKS, besideRoad, nearestRoadSpot } from '../../world/mapData';
+import { LANDMARKS } from '../../world/mapData';
 import type {
   FeatureGameApi, FeatureHudEntry, FeatureMenuRow, FeatureSystem, InteractionCtx,
   InteractionDescriptor, InteractionOffer,
@@ -32,7 +30,7 @@ import {
   type FuelSave,
 } from '../fuel.state';
 import {
-  CAN_PRICE, LEVIES, LEVY_CENTS, SHOP_REACH, apronPoint, attendantSpot, buildStation, buildStations,
+  CAN_PRICE, LEVIES, LEVY_CENTS, SHOP_REACH, apronPoint, attendantSpot, buildStations,
   centsText, gradeCents, litresFor, litresText, nearestStation, randFor, randText, shopSpot,
   stationAt, type Station,
 } from './pump';
@@ -43,8 +41,6 @@ const REGULAR_TIP_RAND = 25;
 const REGULAR_SPLASH_LITRES = 2;
 /** Litres the hand-written cardboard sign allows on price-hike night. */
 const HIKE_NIGHT_LIMIT = 30;
-/** Seed and variant for the one forecourt the feature builds itself. */
-const BAYSHORE_SEED = 913377;
 
 type Grade = 93 | 95;
 
@@ -58,24 +54,14 @@ interface Pending {
 }
 
 /**
- * The dam-shore garage, taken from the map's own `fuel` landmark rather than typed in. The Vaal graft
- * brought the real Bayshore Marina Petrol Station across as data, but nothing in the world builds it —
- * so we set it beside the nearest road, facing the carriageway, and raise the forecourt ourselves.
- * The eager half never sees it, so no prompt can appear at a garage that is not there yet.
+ * The sites the map names, so the pump prompt can read "Bayshore Marina Petrol Station" instead of
+ * "Caltexx Vaal Marina". The station itself is NOT built here and must never be again: it used to
+ * be, and that made it a garage you could not reach — the body only loads when you press E on a
+ * forecourt, and this one was invisible to the eager list that draws the prompt, so the labelled
+ * gold star on the map had bare veld under it. It is a scattered model in the world now
+ * (ModelScatter.landmarkForecourtPass). All this file does is put the map's name back on it.
  */
-function bayshoreSpot(): { x: number; z: number; heading: number } | undefined {
-  const landmark = LANDMARKS.find((entry) => entry.kind === 'fuel');
-  if (!landmark) return undefined;
-  const spot = nearestRoadSpot(landmark.x, landmark.z);
-  let best = { x: landmark.x, z: landmark.z, distance: Infinity };
-  for (const side of [1, -1] as const) {
-    const point = besideRoad(spot, side, 15);
-    const distance = Math.hypot(point.x - landmark.x, point.z - landmark.z);
-    if (distance < best.distance) best = { x: point.x, z: point.z, distance };
-  }
-  // Local +z faces the road: buildFillingStation opens the apron and hangs the pylon on +z.
-  return { x: best.x, z: best.z, heading: Math.atan2(spot.x - best.x, spot.z - best.z) };
-}
+const NAMED_SITES = LANDMARKS.filter((entry) => entry.kind === 'fuel');
 
 export async function createFeature(api: FeatureGameApi, state: unknown): Promise<FeatureSystem> {
   // The forecourt positions come out of the map through a dynamic import so the eager half can stay
@@ -86,16 +72,8 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
   const save: FuelSave = sanitizeFuelSave(state ?? DEFAULT_FUEL_SAVE);
   markRevealed(); // from here on the tank is allowed to actually reach zero
 
-  /** Every forecourt, named. The scattered ones the world already built, plus the one we build. */
-  const sites: Station[] = buildStations(forecourts(), hash, api.districtAt);
-  const shore = bayshoreSpot();
-  if (shore) {
-    sites.push(buildStation(hash, { id: 'bayshore', seed: BAYSHORE_SEED, variant: 1, ...shore }, api.districtAt(shore.x, shore.z), true, 'Caltexx Bayshore Marina'));
-  }
-
-  const group = new THREE.Group();
-  group.name = 'FuelForecourts';
-  api.scene.add(group);
+  /** Every forecourt the WORLD built, named — this feature raises no geometry of its own. */
+  const sites: Station[] = buildStations(forecourts(), hash, api.districtAt, NAMED_SITES);
 
   const fixtures: Pedestrian[] = [];
   let attendantSite: Station | undefined;
@@ -108,16 +86,6 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
   let elapsed = 0;
   let adoptPending = save.driving !== null;
   let lastReceipt = '';
-
-  // ---- the dam-shore garage the map has data for and no model for ---------------------------------
-
-  for (const site of sites.filter((entry) => entry.authored)) {
-    const built = buildModel('filling-station', BAYSHORE_SEED, { variant: 1 });
-    built.group.position.set(site.x, api.surfaceHeightAt(site.x, site.z), site.z);
-    built.group.rotation.y = site.heading;
-    built.group.name = site.name;
-    group.add(built.group);
-  }
 
   // ---- price ---------------------------------------------------------------------------------------
 
@@ -458,7 +426,7 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
     const [verb, value] = args;
     const vehicle = api.drivenVehicle();
     if (verb === 'stations') {
-      return sites.slice(0, 24).map((site) => `${site.name} @ ${Math.round(site.x)},${Math.round(site.z)}${site.authored ? ' (built by the feature)' : ''}`);
+      return sites.slice(0, 24).map((site) => `${site.name} @ ${Math.round(site.x)},${Math.round(site.z)}`);
     }
     if (verb === 'price') {
       if (value) save.cents = Math.max(1400, Math.round(Number(value) * 100));
@@ -558,15 +526,10 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
     command,
     qa,
     dispose: () => {
+      // Fixtures and bookkeeping, and that is the whole list: this feature adds NO meshes and NO
+      // colliders to the scene. Every forecourt it works with is a model the world scatter already
+      // built and the chunk streamer already owns, so there is nothing here to leak.
       clearFixtures();
-      // Every mesh this feature raised, and nothing else. We push ZERO colliders anywhere: a collider
-      // survives a scene removal as an invisible wall and the feature api has no seam to take one back.
-      // GEOMETRY ONLY. Kit builds a fresh BufferGeometry per box but hands out the shared `M` palette
-      // materials that every other scattered model in the city is also using — disposing those would
-      // white out the whole map on the first checkpoint reload.
-      group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
-      group.clear();
-      api.scene.remove(group);
       pending = undefined;
       resetLedger();
     },

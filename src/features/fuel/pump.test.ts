@@ -123,6 +123,15 @@ describe('petrol — the forecourt, derived from the map', () => {
     const b = buildStation(hash, spot, 'Melville');
     expect(a).toEqual(b);
     expect(a.name).toBe(`${a.brand} Melville`);
-    expect(a.authored).toBe(false);
+  });
+
+  it('gives a forecourt on a named map site the map\'s own name', () => {
+    const spot = forecourts()[0]!;
+    const named = [{ name: 'Bayshore Marina Petrol Station', x: spot.x + 20, z: spot.z - 10 }];
+    const [site] = buildStations([spot], hash, () => 'Vaal Marina', named);
+    expect(site!.name).toBe('Bayshore Marina Petrol Station');
+    // …and a pin on the other side of town leaves the brand-and-district name alone.
+    const far = buildStations([spot], hash, () => 'Vaal Marina', [{ name: 'Somewhere Else', x: spot.x + 4000, z: spot.z }]);
+    expect(far[0]!.name).toBe(`${site!.brand} Vaal Marina`);
   });
 });

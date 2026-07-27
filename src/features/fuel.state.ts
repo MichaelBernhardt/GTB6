@@ -16,6 +16,11 @@
  *  4. WHERE the garages roughly are, so `E  Pull in for petrol` can appear before the body exists.
  *     Roughly: a conservative circle strictly inside the smallest apron. The exact forecourt — its
  *     brand, its name, its pump islands, its kiosk door — is the body's business and is not here.
+ *  5. THE MAP AND MINIMAP ICONS. Same lesson as the gauge, one rung further out: an icon that only
+ *     appears once you are standing at a garage is an icon for a place you have already found. The
+ *     owner drove a session with a working gauge and could not find anywhere to spend it. So the
+ *     blips come from here (see fuelMapIcons -> src/features/mapIcons.ts), off the derived
+ *     forecourt list, with the body nowhere in sight.
  *
  * Everything else (brands, apron geometry, the attendant's spot, the levies, every string of copy)
  * lives in the lazy half: src/features/fuel/pump.ts and src/features/fuel/fuel.ts.
@@ -239,11 +244,18 @@ export function forecourts(): readonly Forecourt[] { return spots ?? EMPTY; }
 /**
  * Derive the forecourt positions, once.
  *
- * These are the filling-station models the scatter ALREADY placed and baked (18 of them on the
+ * These are the filling-station models the scatter ALREADY placed and baked (19 of them on the
  * current map, catalog spacing 260, walkable canopy, solid kiosk and pumps). Reusing them costs zero
  * geometry and zero map data — and it is mutually exclusive with reserving pads, because a reserved
  * pad feeds ModelScatter.craftedBlocks and would DELETE the very model we want to stand on. We chose
- * reuse. Nothing here touches placements.ts or the bake.
+ * reuse.
+ *
+ * The nineteenth is the dam-shore station the map names ("Bayshore Marina Petrol Station", a gold
+ * star on the M-map). It used to be built by the LAZY BODY, which made it a place you could never
+ * reach: the body only loads when you press E on a forecourt, and the eager list this function
+ * builds never contained it — so driving to the star showed bare veld, no prompt, no way in. It is
+ * a scattered model like the other eighteen now (ModelScatter.landmarkForecourtPass), which means
+ * the world builds it whether or not this feature ever loads, and it arrives here for free.
  *
  * ModelScatter is pulled in DYNAMICALLY: it already sits in the eager `simulation` chunk, so this
  * awaits nothing over the network and costs no bytes, but it keeps `gameplay-rules` out of a static
@@ -273,25 +285,57 @@ export function ensureForecourts(): Promise<readonly Forecourt[]> {
 /** World units to metres, the same conversion the street signs and the distance toasts use. */
 export const UNITS_TO_METRES = 1.359;
 
+/** The nearest forecourt to a point, or undefined until the list has been derived. */
+export function nearestForecourt(x: number, z: number): { spot: Forecourt; metres: number } | undefined {
+  let best: { spot: Forecourt; metres: number } | undefined;
+  for (const spot of forecourts()) {
+    const metres = Math.hypot(spot.x - x, spot.z - z) * UNITS_TO_METRES;
+    if (!best || metres < best.metres) best = { spot, metres };
+  }
+  return best;
+}
+
 /** Metres to the nearest forecourt, or undefined until the list has been derived. */
 export function metresToForecourt(x: number, z: number): number | undefined {
-  let best = Infinity;
-  for (const spot of forecourts()) best = Math.min(best, Math.hypot(spot.x - x, spot.z - z));
-  return Number.isFinite(best) ? best * UNITS_TO_METRES : undefined;
+  return nearestForecourt(x, z)?.metres;
+}
+
+/** Eight-point compass bearing from one world point to another. -Z is north, the same convention the
+ *  minimap's compass rose and the street signs use. */
+export function compassTo(fromX: number, fromZ: number, toX: number, toZ: number): string {
+  const points = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
+  const angle = Math.atan2(toX - fromX, -(toZ - fromZ)); // 0 = north, clockwise
+  const index = Math.round(((angle + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 4)) % 8;
+  return points[index]!;
 }
 
 /**
- * Below the low mark, say how far the nearest garage is.
+ * Below the low mark, say how far the nearest garage is and which way it lies.
  *
- * A red gauge with nowhere to take it is a punishment, and nothing marks a forecourt on the map. This
- * is the whole of the guidance the player gets before they have ever pulled in — after that the
- * attendant, the fuel-light toast and the E prompt take over. The body draws the SAME chip, so it
- * does not blink out of existence the moment the chunk lands.
+ * A red gauge with nowhere to take it is a punishment. The blips on the map and the minimap are the
+ * standing answer to "where is petrol"; this chip is the one that arrives unasked at the moment you
+ * need it, so it carries a heading as well as a distance — "410 m NE" is something you can act on
+ * without opening the map. The body draws the SAME chip, so it does not blink out of existence the
+ * moment the chunk lands.
  */
 export function garageHint(vehicle: Vehicle | undefined, x: number, z: number): FeatureHudEntry | undefined {
   if (!hasTank(vehicle) || fractionIn(vehicle) >= LOW_FRACTION) return undefined;
-  const metres = metresToForecourt(x, z);
-  return metres === undefined ? undefined : { id: 'fuel:hint', label: 'GARAGE', value: `${Math.round(metres)} m`, warn: true };
+  const near = nearestForecourt(x, z);
+  if (!near) return undefined;
+  return { id: 'fuel:hint', label: 'GARAGE', value: `${Math.round(near.metres)} m ${compassTo(x, z, near.spot.x, near.spot.z)}`, warn: true };
+}
+
+/**
+ * Every forecourt as a map blip, for src/features/mapIcons.ts.
+ *
+ * Kicks the derivation itself rather than waiting for a sim step behind the wheel: a player on foot
+ * with a jerry can and no vehicle still needs to see where petrol is, and `ensureForecourts` is
+ * idempotent and resolves against the already-loaded `simulation` chunk, so calling it from the map
+ * path costs nothing but the first frame's empty list.
+ */
+export function fuelMapIcons(): ReadonlyArray<{ x: number; z: number }> {
+  void ensureForecourts();
+  return forecourts();
 }
 
 /** The forecourt whose pumps this point is standing among, by the rough circle. */

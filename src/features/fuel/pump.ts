@@ -62,8 +62,6 @@ export interface Station {
   readonly offZ: number;
   /** Local x of each pump island; the attendant stands at the first one. */
   readonly islands: readonly number[];
-  /** True for the one station the feature has to build itself (see fuel.ts). */
-  readonly authored: boolean;
 }
 
 type Hash = (seed: number, salt: number) => number;
@@ -75,7 +73,7 @@ type Hash = (seed: number, salt: number) => number;
  * at z+1 — so the rectangle the game tests against is the rectangle the player can see under their
  * wheels. `district` is passed in rather than looked up: the body has it on FeatureGameApi already.
  */
-export function buildStation(hash: Hash, spot: Forecourt, district: string, authored = false, label?: string): Station {
+export function buildStation(hash: Hash, spot: Forecourt, district: string, label?: string): Station {
   const brand = BRANDS[Math.floor(hash(spot.seed, 3) * BRANDS.length) % BRANDS.length]!;
   const size = hash(spot.seed, 2);
   const canopyW = 14 + size * 4;
@@ -86,13 +84,25 @@ export function buildStation(hash: Hash, spot: Forecourt, district: string, auth
     name: label ?? `${brand.name} ${district}`,
     x: spot.x, z: spot.z, heading: spot.heading,
     halfW: (canopyW + 6) / 2, halfD: (canopyD + 8) / 2, offZ: APRON_OFFSET,
-    islands, authored,
+    islands,
   };
 }
 
-/** Every scattered forecourt, named. The body adds the one it builds itself on top of this list. */
-export function buildStations(spots: readonly Forecourt[], hash: Hash, district: (x: number, z: number) => string): Station[] {
-  return spots.map((spot) => buildStation(hash, spot, district(spot.x, spot.z)));
+/** A forecourt standing on a site the MAP names — the dam-shore station, today — takes the map's
+ *  name rather than "<Brand> <district>", so the label on the pump prompt is the label on the gold
+ *  star the player drove towards. Generous reach: the scatter sets the forecourt beside the nearest
+ *  road, which can be tens of units off the surveyed pin. */
+export const LANDMARK_NAME_REACH = 90;
+
+/** Every scattered forecourt, named. */
+export function buildStations(
+  spots: readonly Forecourt[], hash: Hash, district: (x: number, z: number) => string,
+  named: ReadonlyArray<{ name: string; x: number; z: number }> = [],
+): Station[] {
+  return spots.map((spot) => {
+    const pin = named.find((entry) => Math.hypot(entry.x - spot.x, entry.z - spot.z) <= LANDMARK_NAME_REACH);
+    return buildStation(hash, spot, district(spot.x, spot.z), pin?.name);
+  });
 }
 
 /** Squared distance helper that keeps the hot path allocation-free. */

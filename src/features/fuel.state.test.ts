@@ -1,13 +1,16 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   APPROACH_REACH, BASE_95_CENTS, CAN_LITRES, DEFAULT_FUEL_SAVE, IDLE_LPS, LOW_FRACTION,
-  SPUTTER_FRACTION, THIRST, THROTTLE_LPS, TANKS, approachNear, burn, ensureForecourts, forecourtNear,
-  forecourts, fractionIn, fuelHud, fuelTick, hasTank, isMetered, litresIn, markRevealed, resetLedger,
-  sanitizeFuelSave, seedFill, setLitres, tankGauge, tankSize,
+  SPUTTER_FRACTION, THIRST, THROTTLE_LPS, TANKS, approachNear, burn, compassTo, ensureForecourts,
+  forecourtNear, forecourts, fractionIn, fuelHud, fuelTick, hasTank, isMetered, litresIn,
+  markRevealed, nearestForecourt, resetLedger, sanitizeFuelSave, seedFill, setLitres, tankGauge,
+  tankSize,
 } from './fuel.state';
+import { FUEL_ICON_COLOR, featureMapIcons } from './mapIcons';
 import type { InteractionCtx } from './types';
 import type { Vehicle } from '../entities/Vehicle';
 import { VEHICLE_SPECS, type VehicleKind } from '../config';
+import { LANDMARKS } from '../world/mapData';
 
 /** A Vehicle stand-in: burn() only reads spec, speed, position and the two damage flags. */
 function car(kind: VehicleKind = 'compact', x = 0, z = 0, speed = 0): Vehicle {
@@ -218,7 +221,36 @@ describe('fuel — where the garages roughly are', () => {
     const chips = fuelHud(frame(vehicle));
     expect(chips).toHaveLength(2);
     expect(chips[1]).toMatchObject({ id: 'fuel:hint', label: 'GARAGE', warn: true });
-    expect(chips[1]!.value).toMatch(/^\d+ m$/);
+    // Distance AND a heading: "410 m NW" is something you can act on without opening the map.
+    expect(chips[1]!.value).toMatch(/^\d+ m (?:N|NE|E|SE|S|SW|W|NW)$/);
+  });
+
+  it('points the low-fuel chip at the garage, on the minimap\'s own compass (-z is north)', () => {
+    expect(compassTo(0, 0, 0, -100)).toBe('N');
+    expect(compassTo(0, 0, 100, 0)).toBe('E');
+    expect(compassTo(0, 0, 0, 100)).toBe('S');
+    expect(compassTo(0, 0, -100, 0)).toBe('W');
+    expect(compassTo(0, 0, 100, -100)).toBe('NE');
+    expect(compassTo(0, 0, -100, 100)).toBe('SW');
+  });
+
+  it('hands every forecourt to the map WITHOUT the body being loaded — the icon is the whole point', () => {
+    // The bug this feature keeps re-learning: anything that tells the player where a thing is cannot
+    // live behind the load that only happens once they are standing on it.
+    const icons = featureMapIcons();
+    expect(icons.length).toBe(forecourts().length);
+    expect(icons.length).toBeGreaterThanOrEqual(19);
+    for (const icon of icons) expect(icon).toMatchObject({ color: FUEL_ICON_COLOR, shape: 'fuel' });
+    // And they are the real derived positions, not a hand-typed table.
+    expect(icons.some((icon) => forecourts().some((spot) => spot.x === icon.x && spot.z === icon.z))).toBe(true);
+  });
+
+  it('marks the garage the MAP names, on the dam shore, so the labelled star has something under it', () => {
+    const pin = LANDMARKS.find((entry) => entry.kind === 'fuel')!;
+    const near = nearestForecourt(pin.x, pin.z)!;
+    expect(near).toBeDefined();
+    // Within a block of the surveyed pin — the scatter sets it beside the nearest road.
+    expect(near.metres).toBeLessThan(120);
   });
 
   it('offers the pull-in only to a tanked vehicle that has actually slowed down', () => {
