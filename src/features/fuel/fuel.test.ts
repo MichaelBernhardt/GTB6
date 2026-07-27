@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createFeature } from './fuel';
 import {
-  CAN_PRICE, LOW_FRACTION, SPUTTER_FRACTION, apronPoint, litresIn, resetLedger, setLitres,
-  ensureSites, shopSpot, stationAt, stations, tankSize,
+  LOW_FRACTION, SPUTTER_FRACTION, ensureForecourts, forecourts, fuelHud, litresIn, resetLedger,
+  setLitres, tankSize,
 } from '../fuel.state';
+import { CAN_PRICE, apronPoint, buildStations, shopSpot, stationAt, type Station } from './pump';
+import { hash } from '../../world/models/kit';
 import type { FeatureGameApi, FeatureMenuView, FeatureSystem } from '../types';
 import type { Pedestrian } from '../../entities/Pedestrian';
 import type { Vehicle } from '../../entities/Vehicle';
@@ -66,9 +68,12 @@ function harness(): Harness {
   return state;
 }
 
+/** The scattered forecourts exactly as the feature builds them (the harness district is fixed). */
+const scattered = (): Station[] => buildStations(forecourts(), hash, () => 'Joburg CBD');
+
 /** Park a car on a real derived forecourt. */
 function onForecourt(h: Harness, kind: VehicleKind = 'compact'): Vehicle {
-  const site = stations().find((entry) => !entry.authored)!;
+  const site = scattered()[0]!;
   const at = apronPoint(site, 0, site.offZ);
   const vehicle = car(kind, at.x, at.z, 0);
   h.vehicle = vehicle;
@@ -80,7 +85,7 @@ const rows = (view: FeatureMenuView): string[] => view.rows.map((row) => row.id)
 // Deriving the forecourts runs the whole map scatter the first time (the browser hydrates it from
 // the bake; a node test does not). Warm it ONCE, off the per-test hook budget, or the full suite's
 // four workers push the first beforeEach past its 10s timeout and the file goes flaky in CI.
-beforeAll(async () => { await ensureSites(); }, 180_000);
+beforeAll(async () => { await ensureForecourts(); }, 180_000);
 
 describe('petrol — the forecourt', () => {
   let h: Harness;
@@ -287,7 +292,7 @@ describe('petrol — running dry', () => {
   });
 
   it('sells a can at the kiosk door but never where it would trap you outside your own car', () => {
-    const site = stations().find((entry) => !entry.authored)!;
+    const site = scattered()[0]!;
     const pumps = apronPoint(site, 0, site.offZ);
     const rung = fuel.interactions!().find((entry) => entry.id === 'fuel:shop')!;
     // Standing at the pumps, where you park: E must stay free for "enter the vehicle".
@@ -310,14 +315,17 @@ describe('petrol — running dry', () => {
     expect(fuel.interactions!().find((rung) => rung.id === 'fuel:pour')!.test(ctx)).toBeUndefined();
   });
 
-  it('shows a gauge only in a car with a tank', () => {
+  it('shows a gauge only in a car with a tank, and the same chips the eager slice was drawing', () => {
     expect(fuel.hud!()).toEqual([]);
     const vehicle = car('compact', 10, 10);
     h.vehicle = vehicle;
     setLitres(vehicle, tankSize(vehicle) * 0.5);
     expect(fuel.hud!()).toEqual([{ id: 'fuel:tank', label: 'FUEL', value: '50%', fill: 50, warn: false }]);
     setLitres(vehicle, 0);
+    // Identical to fuelHud()'s output before the chunk landed: same ids, same builder, no blink.
+    expect(fuel.hud!()).toEqual(fuelHud({ context: 'vehicle', position: vehicle.group.position, vehicle, hour: 12 }));
     expect(fuel.hud!()![0]).toMatchObject({ value: 'DRY', warn: true });
+    expect(fuel.hud!()![1]).toMatchObject({ id: 'fuel:hint', label: 'GARAGE' });
     h.vehicle = car('bicycle', 10, 10);
     expect(fuel.hud!()).toEqual([]);
   });
@@ -436,8 +444,8 @@ describe('petrol — save, console, teardown', () => {
 
 describe('petrol — the map, not the code, decides where garages are', () => {
   it('derives every forecourt from data and never from a typed coordinate', () => {
-    const site = stationAt(stations()[0]!.x, stations()[0]!.z)!;
-    expect(site.id).toBe(stations()[0]!.id);
-    expect(stations().every((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.z))).toBe(true);
+    const sites = scattered();
+    expect(stationAt(sites, sites[0]!.x, sites[0]!.z)?.id).toBe(sites[0]!.id);
+    expect(sites.every((entry) => Number.isFinite(entry.x) && Number.isFinite(entry.z))).toBe(true);
   });
 });

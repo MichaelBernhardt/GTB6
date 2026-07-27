@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  BASE_95_CENTS, CAN_LITRES, DEFAULT_FUEL_SAVE, GRADE_93_DISCOUNT_CENTS, IDLE_LPS, LEVY_CENTS,
-  LOW_FRACTION, SPUTTER_FRACTION, THIRST, THROTTLE_LPS, TANKS, apronPoint, attendantSpot, burn,
-  centsText, fractionIn, gradeCents, hasTank, isMetered, litresFor, litresIn, markRevealed,
-  ensureSites, nearestStation, onApron, randFor, resetLedger, sanitizeFuelSave, seedFill, setLitres,
-  stationAt, tankSize,
+  APPROACH_REACH, BASE_95_CENTS, CAN_LITRES, DEFAULT_FUEL_SAVE, IDLE_LPS, LOW_FRACTION,
+  SPUTTER_FRACTION, THIRST, THROTTLE_LPS, TANKS, approachNear, burn, ensureForecourts, forecourtNear,
+  forecourts, fractionIn, fuelHud, fuelTick, hasTank, isMetered, litresIn, markRevealed, resetLedger,
+  sanitizeFuelSave, seedFill, setLitres, tankGauge, tankSize,
 } from './fuel.state';
+import type { InteractionCtx } from './types';
 import type { Vehicle } from '../entities/Vehicle';
 import { VEHICLE_SPECS, type VehicleKind } from '../config';
 
@@ -17,15 +17,12 @@ function car(kind: VehicleKind = 'compact', x = 0, z = 0, speed = 0): Vehicle {
   } as unknown as Vehicle;
 }
 
-describe('fuel — the reward test', () => {
-  it('anchors a vol-tank on the starter car to one mid-tier mission payout', () => {
-    // src/story/missions.ts pays 900 / 1100 / 1500 / 1800 / 2200 / 2600 / 2800 mid-tier.
-    const fill = randFor(TANKS.compact, BASE_95_CENTS);
-    expect(Math.round(fill)).toBe(1170);
-    expect(fill).toBeGreaterThan(900);
-    expect(fill).toBeLessThan(1500);
-  });
+/** The frame the host hands the eager hooks. */
+function frame(vehicle: Vehicle | undefined, x = vehicle?.group.position.x ?? 0, z = vehicle?.group.position.z ?? 0): InteractionCtx {
+  return { context: vehicle ? 'vehicle' : 'foot', position: { x, y: 0, z } as InteractionCtx['position'], vehicle, hour: 12 };
+}
 
+describe('fuel — the tank sizes', () => {
   it('gives every kind of car between eight and thirteen minutes of flat-out driving', () => {
     for (const kind of Object.keys(TANKS) as VehicleKind[]) {
       if (TANKS[kind] === 0) continue;
@@ -33,28 +30,6 @@ describe('fuel — the reward test', () => {
       expect(seconds, kind).toBeGreaterThan(400);
       expect(seconds, kind).toBeLessThan(800);
     }
-  });
-
-  it('never charges more than a late-game payout for a single fill', () => {
-    for (const kind of Object.keys(TANKS) as VehicleKind[]) {
-      expect(randFor(TANKS[kind], BASE_95_CENTS), kind).toBeLessThan(2200);
-    }
-  });
-
-  it('prices 93 below 95, because Johannesburg is inland and 93 is the inland grade', () => {
-    expect(gradeCents(BASE_95_CENTS, 93)).toBe(BASE_95_CENTS - GRADE_93_DISCOUNT_CENTS);
-    expect(gradeCents(BASE_95_CENTS, 95)).toBe(BASE_95_CENTS);
-  });
-
-  it('puts about a quarter of every litre in the state\'s pocket', () => {
-    expect(LEVY_CENTS / BASE_95_CENTS).toBeGreaterThan(0.22);
-    expect(LEVY_CENTS / BASE_95_CENTS).toBeLessThan(0.3);
-  });
-
-  it('turns R200 into a real but modest top-up', () => {
-    const litres = litresFor(200, BASE_95_CENTS);
-    expect(litres).toBeGreaterThan(7);
-    expect(litres / TANKS.compact).toBeLessThan(0.2);
   });
 });
 
@@ -66,6 +41,27 @@ describe('fuel — burn', () => {
     burn(idling, 1); burn(flat, 1);
     expect(litresIn(flat)).toBeLessThan(litresIn(idling));
     expect(litresIn(idling)).toBeCloseTo(40 - IDLE_LPS, 5);
+  });
+
+  /**
+   * The bug the owner's playtest exposed twice over. The burn used to take its own wall-clock delta
+   * once per RENDERED frame and clamp it to 0.1 s, so a slow machine quietly under-burned: measured
+   * in-engine at 0.0059 L/s against a design rate of 0.0825 — a 45 L tank lasting 127 minutes instead
+   * of nine. It is driven by the host's fixed sim sub-step now, so the same wall-clock second costs
+   * the same litres however the frame is sliced.
+   */
+  it('burns the same litres per second of SIMULATION however the frame is sliced', () => {
+    const total = 12;
+    const fills: number[] = [];
+    for (const step of [0.05, 0.016, 0.5, 2]) {
+      resetLedger(); markRevealed();
+      const vehicle = car('compact', 60, 60, VEHICLE_SPECS.compact.maxSpeed);
+      setLitres(vehicle, 40);
+      for (let elapsed = 0; elapsed < total - 1e-9; elapsed += step) burn(vehicle, step);
+      fills.push(litresIn(vehicle));
+    }
+    for (const fill of fills) expect(fill).toBeCloseTo(fills[0]!, 6);
+    expect(40 - fills[0]!).toBeCloseTo(total * (IDLE_LPS + THROTTLE_LPS * THIRST.compact), 6);
   });
 
   it('never lets a tank go negative and never burns a bicycle', () => {
@@ -89,6 +85,15 @@ describe('fuel — burn', () => {
     markRevealed();
     for (let step = 0; step < 4000; step++) burn(golf, 0.1);
     expect(litresIn(golf)).toBe(0);
+  });
+
+  it('never lets the reserve REFILL a tank that is already below it', () => {
+    resetLedger();
+    const golf = car('compact', 21, 21, 10);
+    setLitres(golf, tankSize(golf) * 0.03); // a can poured, a save adopted, a QA drain
+    const before = litresIn(golf);
+    burn(golf, 1);
+    expect(litresIn(golf)).toBeLessThanOrEqual(before);
   });
 
   it('does not burn a wrecked car', () => {
@@ -134,58 +139,96 @@ describe('fuel — the seeded starting tank', () => {
   });
 });
 
-describe('fuel — forecourts derived from the map', () => {
-  let sites: readonly import('./fuel.state').Station[] = [];
-  beforeAll(async () => { sites = await ensureSites(); }, 180_000);
-
-  it('finds enough garages, all from data the map already carries', () => {
-    expect(sites.length).toBeGreaterThanOrEqual(12);
-    expect(sites.filter((site) => site.authored)).toHaveLength(1); // the Vaal shore's Bayshore Marina
+/**
+ * The owner's report, verbatim: "5182 petrol: I don't see a guage". He drove and never saw one,
+ * because the chip was built inside the lazy body and the body only loads when you press E at a
+ * forecourt. These are the tests that say it exists before any of that.
+ */
+describe('fuel — the gauge is eager', () => {
+  it('reads out from the first frame behind the wheel, with no feature body anywhere', () => {
+    resetLedger();
+    const vehicle = car('compact', 700, -700);
+    setLitres(vehicle, tankSize(vehicle) * 0.5);
+    expect(fuelHud(frame(vehicle))).toEqual([{ id: 'fuel:tank', label: 'FUEL', value: '50%', fill: 50, warn: false }]);
   });
 
-  it('names each one after the sign above the pumps and the suburb it stands in', () => {
-    for (const site of sites) {
-      expect(site.name, site.id).toMatch(/^(Engine|Caltexx|Sasoil|Boerepetrol) .+/);
-    }
+  it('goes warning-coloured below the low mark and reads DRY at nothing', () => {
+    resetLedger();
+    const vehicle = car('compact', 10, 10);
+    setLitres(vehicle, tankSize(vehicle) * (LOW_FRACTION - 0.01));
+    expect(tankGauge(vehicle)).toMatchObject({ warn: true });
+    setLitres(vehicle, 0);
+    expect(tankGauge(vehicle)).toMatchObject({ value: 'DRY', fill: 0, warn: true });
   });
 
-  it('spreads them across the city rather than stacking them', () => {
-    for (let a = 0; a < sites.length; a++) {
-      for (let b = a + 1; b < sites.length; b++) {
-        const gap = Math.hypot(sites[a]!.x - sites[b]!.x, sites[a]!.z - sites[b]!.z);
-        expect(gap, `${sites[a]!.id}/${sites[b]!.id}`).toBeGreaterThan(120);
-      }
-    }
+  it('shows nothing on foot, and nothing on a bicycle', () => {
+    resetLedger();
+    expect(fuelHud(frame(undefined))).toEqual([]);
+    expect(fuelHud(frame(car('bicycle', 3, 3)))).toEqual([]);
+    expect(tankGauge(undefined)).toBeUndefined();
+  });
+});
+
+describe('fuel — the eager tick', () => {
+  it('burns while driving and leaves the world alone on foot', () => {
+    resetLedger(); markRevealed();
+    const vehicle = car('compact', 55, 55, VEHICLE_SPECS.compact.maxSpeed);
+    setLitres(vehicle, 30);
+    fuelTick(0.05, frame(vehicle));
+    expect(litresIn(vehicle)).toBeCloseTo(30 - 0.05 * (IDLE_LPS + THROTTLE_LPS * THIRST.compact), 6);
+    const before = litresIn(vehicle);
+    fuelTick(0.05, frame(undefined));
+    expect(litresIn(vehicle)).toBe(before);
   });
 
-  it('puts the apron under the pumps and not under the next street', () => {
-    for (const site of sites) {
-      expect(onApron(site, site.x, site.z)).toBe(true);
-      expect(stationAt(site.x, site.z)?.id).toBe(site.id);
-      const away = apronPoint(site, 0, site.offZ + site.halfD + 9);
-      expect(onApron(site, away.x, away.z)).toBe(false);
-      expect(site.halfW).toBeLessThan(15);
-      expect(site.halfD).toBeLessThan(12);
-    }
+  /** The predicate is the prompt resolver: it runs off the render loop and a lower rung can skip it
+   *  entirely. Anything that advances state has to be in the tick, not in here. */
+  it('leaves approachNear pure — asking where you are must not move the needle', () => {
+    resetLedger(); markRevealed();
+    const vehicle = car('compact', 500, 500, 30);
+    setLitres(vehicle, 20);
+    for (let call = 0; call < 50; call++) approachNear(vehicle, 500, 500);
+    expect(litresIn(vehicle)).toBe(20);
+  });
+});
+
+describe('fuel — where the garages roughly are', () => {
+  beforeAll(async () => { await ensureForecourts(); }, 180_000);
+
+  it('finds them all in the models the map already scattered', () => {
+    expect(forecourts().length).toBeGreaterThanOrEqual(12);
+    expect(forecourts().every((spot) => Number.isFinite(spot.x) && Number.isFinite(spot.z))).toBe(true);
   });
 
-  it('stands the attendant on the apron beside a pump island', () => {
-    for (const site of sites) {
-      const spot = attendantSpot(site);
-      expect(onApron(site, spot.x, spot.z), site.id).toBe(true);
-    }
+  it('answers "am I at a garage" inside the pumps and not from the next street', () => {
+    const spot = forecourts()[0]!;
+    const cx = spot.x + Math.sin(spot.heading) * 1;
+    const cz = spot.z + Math.cos(spot.heading) * 1;
+    expect(forecourtNear(cx, cz)?.id).toBe(spot.id);
+    expect(forecourtNear(cx + APPROACH_REACH + 4, cz)).toBeUndefined();
   });
 
-  it('answers "where is the nearest garage" from anywhere', () => {
-    const near = nearestStation(0, 0)!;
-    expect(near.site).toBeDefined();
-    expect(near.distance).toBeLessThan(4000);
+  it('tells a low tank how far the nearest garage is — a red gauge with nowhere to go is a punishment', () => {
+    resetLedger();
+    const spot = forecourts()[0]!;
+    const vehicle = car('compact', spot.x + 300, spot.z + 300);
+    setLitres(vehicle, tankSize(vehicle) * 0.5);
+    expect(fuelHud(frame(vehicle))).toHaveLength(1); // nothing to say while you have half a tank
+    setLitres(vehicle, tankSize(vehicle) * 0.1);
+    const chips = fuelHud(frame(vehicle));
+    expect(chips).toHaveLength(2);
+    expect(chips[1]).toMatchObject({ id: 'fuel:hint', label: 'GARAGE', warn: true });
+    expect(chips[1]!.value).toMatch(/^\d+ m$/);
   });
 
-  it('hides the feature-built forecourt from the eager approach, so no prompt appears at a garage that is not there yet', () => {
-    const bayshore = sites.find((site) => site.authored)!;
-    expect(stationAt(bayshore.x, bayshore.z, false)).toBeUndefined();
-    expect(stationAt(bayshore.x, bayshore.z, true)?.id).toBe('bayshore');
+  it('offers the pull-in only to a tanked vehicle that has actually slowed down', () => {
+    resetLedger(); markRevealed();
+    const spot = forecourts()[0]!;
+    const at = { x: spot.x + Math.sin(spot.heading), z: spot.z + Math.cos(spot.heading) };
+    expect(approachNear(car('compact', at.x, at.z, 0), at.x, at.z)).toBe(true);
+    expect(approachNear(car('compact', at.x, at.z, 30), at.x, at.z)).toBe(false);
+    expect(approachNear(car('bicycle', at.x, at.z, 0), at.x, at.z)).toBe(false);
+    expect(approachNear(undefined, at.x, at.z)).toBe(false);
   });
 });
 
@@ -212,8 +255,7 @@ describe('fuel — the save slice', () => {
     expect(wild.litresBought).toBe(0);
   });
 
-  it('formats rand the way a pump board does', () => {
-    expect(centsText(2599)).toBe('R25.99');
-    expect(centsText(2561)).toBe('R25.61');
+  it('opens at the inland pump price', () => {
+    expect(DEFAULT_FUEL_SAVE.cents).toBe(BASE_95_CENTS);
   });
 });

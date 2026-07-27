@@ -11,9 +11,14 @@
  * Everything else follows from that: the regulated price the whole city shares and the queue the
  * night before it goes up, the pylon board with the plastic digits, the litres and the levies on the
  * slip, and the fact that the man at the window is a person you can be decent to.
+ *
+ * WHAT IS NOT HERE: the gauge and the burn. Both are eager (src/features/fuel.state.ts), because a
+ * readout that only exists after you have pressed E at a garage is a readout the player never sees.
  */
 import * as THREE from 'three';
 import { buildModel } from '../../world/models/catalog';
+import { hash } from '../../world/models/kit';
+import { LANDMARKS, besideRoad, nearestRoadSpot } from '../../world/mapData';
 import type {
   FeatureGameApi, FeatureHudEntry, FeatureMenuRow, FeatureSystem, InteractionCtx,
   InteractionDescriptor, InteractionOffer,
@@ -21,12 +26,16 @@ import type {
 import type { Pedestrian } from '../../entities/Pedestrian';
 import type { Vehicle } from '../../entities/Vehicle';
 import {
-  CAN_LITRES, CAN_PRICE, DEFAULT_FUEL_SAVE, HIKE_PERIOD_DAYS, LEVIES, LEVY_CENTS,
-  LOW_FRACTION, SPUTTER_FRACTION, apronPoint, attendantSpot, burn, centsText, fractionIn, gradeCents,
-  SHOP_REACH, ensureSites, hasTank, isMetered, litresFor, litresIn, litresText, markRevealed, nearestStation,
-  randFor, randText, resetLedger, sanitizeFuelSave, setLitres, shopSpot, stationAt, stations, tankSize,
-  type FuelSave, type Station,
+  CAN_LITRES, DEFAULT_FUEL_SAVE, HIKE_PERIOD_DAYS, LOW_FRACTION, SPUTTER_FRACTION,
+  UNITS_TO_METRES, burn, ensureForecourts, forecourts, fractionIn, garageHint, hasTank, isMetered,
+  litresIn, markRevealed, resetLedger, sanitizeFuelSave, setLitres, tankGauge, tankSize,
+  type FuelSave,
 } from '../fuel.state';
+import {
+  CAN_PRICE, LEVIES, LEVY_CENTS, SHOP_REACH, apronPoint, attendantSpot, buildStation, buildStations,
+  centsText, gradeCents, litresFor, litresText, nearestStation, randFor, randText, shopSpot,
+  stationAt, type Station,
+} from './pump';
 
 /** Rand tips that turn you into a regular. The attendant's memory is cheap and generous on purpose. */
 const REGULAR_TIP_RAND = 25;
@@ -34,6 +43,8 @@ const REGULAR_TIP_RAND = 25;
 const REGULAR_SPLASH_LITRES = 2;
 /** Litres the hand-written cardboard sign allows on price-hike night. */
 const HIKE_NIGHT_LIMIT = 30;
+/** Seed and variant for the one forecourt the feature builds itself. */
+const BAYSHORE_SEED = 913377;
 
 type Grade = 93 | 95;
 
@@ -46,14 +57,41 @@ interface Pending {
   splash: number;
 }
 
+/**
+ * The dam-shore garage, taken from the map's own `fuel` landmark rather than typed in. The Vaal graft
+ * brought the real Bayshore Marina Petrol Station across as data, but nothing in the world builds it —
+ * so we set it beside the nearest road, facing the carriageway, and raise the forecourt ourselves.
+ * The eager half never sees it, so no prompt can appear at a garage that is not there yet.
+ */
+function bayshoreSpot(): { x: number; z: number; heading: number } | undefined {
+  const landmark = LANDMARKS.find((entry) => entry.kind === 'fuel');
+  if (!landmark) return undefined;
+  const spot = nearestRoadSpot(landmark.x, landmark.z);
+  let best = { x: landmark.x, z: landmark.z, distance: Infinity };
+  for (const side of [1, -1] as const) {
+    const point = besideRoad(spot, side, 15);
+    const distance = Math.hypot(point.x - landmark.x, point.z - landmark.z);
+    if (distance < best.distance) best = { x: point.x, z: point.z, distance };
+  }
+  // Local +z faces the road: buildFillingStation opens the apron and hangs the pylon on +z.
+  return { x: best.x, z: best.z, heading: Math.atan2(spot.x - best.x, spot.z - best.z) };
+}
+
 export async function createFeature(api: FeatureGameApi, state: unknown): Promise<FeatureSystem> {
-  // The forecourts come out of the map through a dynamic import so the eager half can stay out of a
-  // chunk cycle with `simulation` (see the header of fuel.state.ts). By the time a player has pressed
-  // E on a forecourt this has long since resolved; awaiting it makes the console and QA paths honest
-  // when they open the feature cold.
-  await ensureSites();
+  // The forecourt positions come out of the map through a dynamic import so the eager half can stay
+  // out of a chunk cycle with `simulation` (see the header of fuel.state.ts). By the time a player has
+  // pressed E on a forecourt this has long since resolved; awaiting it makes the console and QA paths
+  // honest when they open the feature cold.
+  await ensureForecourts();
   const save: FuelSave = sanitizeFuelSave(state ?? DEFAULT_FUEL_SAVE);
   markRevealed(); // from here on the tank is allowed to actually reach zero
+
+  /** Every forecourt, named. The scattered ones the world already built, plus the one we build. */
+  const sites: Station[] = buildStations(forecourts(), hash, api.districtAt);
+  const shore = bayshoreSpot();
+  if (shore) {
+    sites.push(buildStation(hash, { id: 'bayshore', seed: BAYSHORE_SEED, variant: 1, ...shore }, api.districtAt(shore.x, shore.z), true, 'Caltexx Bayshore Marina'));
+  }
 
   const group = new THREE.Group();
   group.name = 'FuelForecourts';
@@ -73,9 +111,8 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
 
   // ---- the dam-shore garage the map has data for and no model for ---------------------------------
 
-  const authored = stations().filter((site) => site.authored);
-  for (const site of authored) {
-    const built = buildModel('filling-station', 913377, { variant: 1 });
+  for (const site of sites.filter((entry) => entry.authored)) {
+    const built = buildModel('filling-station', BAYSHORE_SEED, { variant: 1 });
     built.group.position.set(site.x, api.surfaceHeightAt(site.x, site.z), site.z);
     built.group.rotation.y = site.heading;
     built.group.name = site.name;
@@ -308,7 +345,7 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
   // ---- interactions -------------------------------------------------------------------------------------
 
   function siteFor(ctx: InteractionCtx): Station | undefined {
-    return stationAt(ctx.position.x, ctx.position.z);
+    return stationAt(sites, ctx.position.x, ctx.position.z);
   }
 
   const rungs: InteractionDescriptor[] = [
@@ -345,7 +382,7 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
         if (save.can >= CAN_LITRES) return undefined;
         // A tight ring on the kiosk DOOR, not the apron: this rung sits one above "enter the nearest
         // vehicle" in Game.updateOnFoot, so a forecourt-wide offer would trap you outside your own car.
-        for (const site of stations()) {
+        for (const site of sites) {
           const door = shopSpot(site);
           if (Math.hypot(door.x - ctx.position.x, door.z - ctx.position.z) > SHOP_REACH) continue;
           return { prompt: `E  Buy a 5ℓ can · ${randText(CAN_PRICE)}`, act: () => buyCan() };
@@ -364,10 +401,12 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
     // Keyed off whichever body is actually at the pumps, so stepping out of the car to go into the
     // shop does not make the attendant vanish.
     const focus = hasTank(vehicle) ? vehicle.group.position : api.playerPosition();
-    syncFixtures(stationAt(focus.x, focus.z, true, 6));
+    syncFixtures(stationAt(sites, focus.x, focus.z, 6));
     if (!hasTank(vehicle)) { sputterPhase = 0; return; }
     adopt(vehicle);
     const before = fractionIn(vehicle);
+    // The eager slice stops ticking the moment this system exists (FeatureHost.update skips a
+    // feature's eager tick once its body is loaded), so the burn never doubles up.
     burn(vehicle, dt);
     const after = fractionIn(vehicle);
     save.driving = tank(vehicle);
@@ -375,8 +414,8 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
 
     if (before >= LOW_FRACTION && after < LOW_FRACTION && elapsed - lowToastAt > 20) {
       lowToastAt = elapsed;
-      const near = nearestStation(at.x, at.z);
-      api.notify('Fuel light', near ? `${near.site.name}, ${Math.round(near.distance * 1.359)} m away.` : 'Find a garage.', false);
+      const near = nearestStation(sites, at.x, at.z);
+      api.notify('Fuel light', near ? `${near.site.name}, ${Math.round(near.distance * UNITS_TO_METRES)} m away.` : 'Find a garage.', false);
       api.analytics('low_warning');
     }
 
@@ -385,8 +424,8 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
       vehicle.speed *= Math.exp(-1.9 * dt);
       if (elapsed - dryToastAt > 25) {
         dryToastAt = elapsed;
-        const near = nearestStation(at.x, at.z);
-        api.notify('Dry', near ? `${near.site.name} is ${Math.round(near.distance * 1.359)} m from here. Walk, or find another car — this is Joburg.` : 'Out of petrol.', false);
+        const near = nearestStation(sites, at.x, at.z);
+        api.notify('Dry', near ? `${near.site.name} is ${Math.round(near.distance * UNITS_TO_METRES)} m from here. Walk, or find another car — this is Joburg.` : 'Out of petrol.', false);
         api.analytics('ran_dry');
       }
       return;
@@ -398,17 +437,16 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
     } else sputterPhase = 0;
   }
 
+  /** The same gauge and the same garage hint the eager slice has been drawing since the first frame
+   *  of driving — built by the same functions, so nothing blinks when the chunk lands — plus the can. */
   function hud(): FeatureHudEntry[] {
     const entries: FeatureHudEntry[] = [];
     const vehicle = api.drivenVehicle();
-    if (hasTank(vehicle)) {
-      const fraction = fractionIn(vehicle);
-      entries.push({
-        id: 'fuel:tank', label: 'FUEL',
-        value: fraction <= 0 ? 'DRY' : `${Math.round(fraction * 100)}%`,
-        fill: fraction * 100,
-        warn: fraction < LOW_FRACTION,
-      });
+    const chip = tankGauge(vehicle);
+    if (chip) entries.push(chip);
+    if (chip && vehicle) {
+      const hint = garageHint(vehicle, vehicle.group.position.x, vehicle.group.position.z);
+      if (hint) entries.push(hint);
     }
     if (save.can > 0) entries.push({ id: 'fuel:can', label: 'CAN', value: litresText(save.can) });
     return entries;
@@ -420,7 +458,7 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
     const [verb, value] = args;
     const vehicle = api.drivenVehicle();
     if (verb === 'stations') {
-      return stations().slice(0, 24).map((site) => `${site.name} @ ${Math.round(site.x)},${Math.round(site.z)}${site.authored ? ' (built by the feature)' : ''}`);
+      return sites.slice(0, 24).map((site) => `${site.name} @ ${Math.round(site.x)},${Math.round(site.z)}${site.authored ? ' (built by the feature)' : ''}`);
     }
     if (verb === 'price') {
       if (value) save.cents = Math.max(1400, Math.round(Number(value) * 100));
@@ -451,27 +489,30 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
   function qa(action: string, args: Record<string, unknown>): string {
     const vehicle = api.drivenVehicle();
     if (action === 'sites') {
-      const all = stations();
-      if (all.length < 6) return `failed:only-${all.length}-forecourts`;
-      return `ok:${all.length}`;
+      if (sites.length < 6) return `failed:only-${sites.length}-forecourts`;
+      return `ok:${sites.length}`;
     }
     if (!hasTank(vehicle)) return 'stuck:not-driving-a-tanked-vehicle';
+    if (action === 'gauge') {
+      const chip = tankGauge(vehicle);
+      return chip ? `ok:${chip.label}:${chip.value}:${Math.round(chip.fill ?? 0)}${chip.warn ? ':warn' : ''}` : 'failed:no-gauge';
+    }
     if (action === 'drain') {
       setLitres(vehicle, tankSize(vehicle) * Number(args.fraction ?? 0.03));
       return `ok:${litresText(tank(vehicle))}`;
     }
     if (action === 'nearest') {
-      const near = nearestStation(vehicle.group.position.x, vehicle.group.position.z);
+      const near = nearestStation(sites, vehicle.group.position.x, vehicle.group.position.z);
       return near ? `ok:${near.site.name}:${Math.round(near.distance)}` : 'failed:no-stations';
     }
     if (action === 'pump') {
-      const site = stationAt(vehicle.group.position.x, vehicle.group.position.z);
+      const site = stationAt(sites, vehicle.group.position.x, vehicle.group.position.z);
       if (!site) return 'stuck:not-on-a-forecourt';
       openPump(site, vehicle);
       return `ok:${site.name}`;
     }
     if (action === 'buy') {
-      const site = stationAt(vehicle.group.position.x, vehicle.group.position.z);
+      const site = stationAt(sites, vehicle.group.position.x, vehicle.group.position.z);
       if (!site) return 'stuck:not-on-a-forecourt';
       const before = tank(vehicle);
       const amount = args.amount === 'r50' || args.amount === 'full' ? args.amount : 'r200';
@@ -484,7 +525,7 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
       // One full loop, no UI: drain, verify the sputter bites, fill, verify the money moved.
       setLitres(vehicle, 0);
       const cash = api.balance();
-      const site = stationAt(vehicle.group.position.x, vehicle.group.position.z) ?? stations()[0]!;
+      const site = stationAt(sites, vehicle.group.position.x, vehicle.group.position.z) ?? sites[0]!;
       buy('r200', site, vehicle);
       if (api.balance() !== cash - 200) return `failed:balance-${api.balance()}-expected-${cash - 200}`;
       const expected = litresFor(200, price());
@@ -507,7 +548,7 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
     },
     menu: (actionId) => {
       const vehicle = api.drivenVehicle();
-      const site = vehicle ? stationAt(vehicle.group.position.x, vehicle.group.position.z) : undefined;
+      const site = vehicle ? stationAt(sites, vehicle.group.position.x, vehicle.group.position.z) : undefined;
       if (actionId === 'grade') { grade = grade === 95 ? 93 : 95; if (site && hasTank(vehicle)) openPump(site, vehicle); return; }
       if (actionId === 'can') { buyCan(); if (site && hasTank(vehicle)) openPump(site, vehicle); return; }
       if (actionId.startsWith('tip')) { tip(Number(actionId.slice(3))); return; }

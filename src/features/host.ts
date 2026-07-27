@@ -82,14 +82,40 @@ export class FeatureHost {
 
   update(dt: number): void {
     if (this.context.suspended()) return;
+    // The eager slice ticks ONLY while the body is unloaded, and the loaded system's update() takes
+    // over the instant it is not — so a feature that must be true before the player opts in (petrol
+    // burning from the first metre driven) can never double up. This runs on the fixed sim sub-step,
+    // which is the whole point: the burn used to be a side effect inside the proximity predicate,
+    // called once per RENDERED frame off a wall clock, and was measurably frame-rate coupled.
+    let ctx: InteractionCtx | undefined;
+    for (const feature of this.registry) {
+      if (!feature.eager?.tick || this.systems.has(feature.id)) continue;
+      ctx ??= this.eagerFrame();
+      feature.eager.tick(dt, ctx);
+    }
     for (const system of this.systems.values()) system.update?.(dt);
   }
 
+  /** The HUD strip: each loaded feature's chips, and the eager chips of the ones still unloaded. A
+   *  permanently visible readout cannot be gated on a chunk that only arrives if the player happens
+   *  to walk into the right place — see FeatureEagerSlice. */
   hud(): FeatureHudEntry[] | undefined {
-    if (this.context.suspended() || this.systems.size === 0) return undefined;
+    if (this.context.suspended()) return undefined;
     const entries: FeatureHudEntry[] = [];
-    for (const system of this.systems.values()) entries.push(...(system.hud?.() ?? []));
+    let ctx: InteractionCtx | undefined;
+    for (const feature of this.registry) {
+      const system = this.systems.get(feature.id);
+      if (system) { entries.push(...(system.hud?.() ?? [])); continue; }
+      if (!feature.eager?.hud) continue;
+      ctx ??= this.eagerFrame();
+      entries.push(...(feature.eager.hud(ctx) ?? []));
+    }
     return entries.length > 0 ? entries : undefined;
+  }
+
+  /** One context per frame for the eager hooks, in whichever ladder the player is actually in. */
+  private eagerFrame(): InteractionCtx {
+    return this.frame(this.context.api.drivenVehicle() ? 'vehicle' : 'foot');
   }
 
   // ---- interactions ----------------------------------------------------------------------------

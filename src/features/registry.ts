@@ -1,4 +1,4 @@
-import { approachNear, sanitizeFuelSave } from './fuel.state';
+import { approachNear, fuelHud, fuelTick, sanitizeFuelSave } from './fuel.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -23,9 +23,13 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     sanitize: sanitizeFuelSave,
     load: () => import('./fuel/fuel'),
     // Petrol is the one feature that has to be TRUE before the player opts in — a tank that only
-    // starts draining once you have already pulled into a garage is a mechanic you can decline. So
-    // `near` also burns the step: it is the only per-frame hook a registry entry gets. See the
-    // comment on approachNear() and the honest gap it documents.
+    // starts draining once you have pulled into a garage is a mechanic you can decline, and a gauge
+    // that only appears once the chunk lands is a gauge nobody ever sees. Both live in the eager
+    // slice; the body takes over the moment it loads. See FeatureEagerSlice in types.ts.
+    eager: {
+      tick: (dt, ctx) => fuelTick(dt, ctx),
+      hud: (ctx) => fuelHud(ctx),
+    },
     approach: {
       context: 'vehicle', order: 12, prompt: 'E  Pull in for petrol',
       near: (ctx) => approachNear(ctx.vehicle, ctx.position.x, ctx.position.z),

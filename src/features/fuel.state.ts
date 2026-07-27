@@ -2,22 +2,27 @@
  * PETROL — the eager half.
  *
  * This is the ONE path segment under src/features/ (see vite.config.ts), so it is swept into the
- * `gameplay-rules` chunk rather than becoming a chunk of its own. It carries three things:
+ * `gameplay-rules` chunk rather than becoming a chunk of its own. Everything here has to earn its
+ * place in the boot payload, and only four things do:
  *
  *  1. the save slice + its sanitizer, which SaveManager runs synchronously at boot;
  *  2. the tank ledger and the burn maths, because fuel is the one feature that must be TRUE before
  *     the player has opted into it — a gauge that only starts draining once you have already pulled
  *     into a garage would be a mechanic you can decline;
- *  3. the forecourt sites, derived at runtime from the baked model scatter. No typed world
- *     coordinates: the map has moved once and will move again.
+ *  3. THE GAUGE. The owner drove a whole session and never saw one, because the chip was built inside
+ *     the lazy body and the body only loads when you press E at a forecourt. A permanently visible
+ *     readout cannot live behind a load that may never happen, so it lives here and the body reuses
+ *     the very same builder (tankGauge) — the strip does not change shape when the chunk lands.
+ *  4. WHERE the garages roughly are, so `E  Pull in for petrol` can appear before the body exists.
+ *     Roughly: a conservative circle strictly inside the smallest apron. The exact forecourt — its
+ *     brand, its name, its pump islands, its kiosk door — is the body's business and is not here.
  *
- * The lazy body (src/features/fuel/fuel.ts) imports this by VALUE on purpose. Rule 4 in the feature
- * README forbids that only for a state module living INSIDE src/features/<id>/, which would become
- * its own extra eager chunk; a top-level `<id>.state.ts` already has an explicit chunk assignment,
- * so the body simply references the eager chunk and adds no bytes to its own.
+ * Everything else (brands, apron geometry, the attendant's spot, the levies, every string of copy)
+ * lives in the lazy half: src/features/fuel/pump.ts and src/features/fuel/fuel.ts.
  */
 import type { Vehicle } from '../entities/Vehicle';
 import type { VehicleKind } from '../config';
+import type { FeatureHudEntry, InteractionCtx } from './types';
 
 /**
  * NOTHING under src/world/ may be imported here by VALUE, and this is not a style rule.
@@ -27,8 +32,8 @@ import type { VehicleKind } from '../config';
  * then the real bundle dies on boot with "Cannot access 'X' before initialization" — a
  * temporal-dead-zone fault that only a booted browser can show you. It cost this branch a boot.
  *
- * The forecourt data therefore arrives through a DYNAMIC import (see ensureSites), which resolves to
- * the already-loaded `simulation`/`world-data` chunks: no new chunk, no bytes, no cycle.
+ * The forecourt positions therefore arrive through a DYNAMIC import (see ensureForecourts), which
+ * resolves to the already-loaded `simulation` chunk: no new chunk, no bytes, no cycle.
  */
 
 // ---- the regulated price -------------------------------------------------------------------------
@@ -38,16 +43,10 @@ import type { VehicleKind } from '../config';
  *  25.99 is also literally what the price totem on the scattered filling-station model reads
  *  (src/world/models/commercial.ts), so the pylon board and the pump agree on day one. */
 export const BASE_95_CENTS = 2599;
-/** 93 unleaded: the inland grade, and cheaper. On the Highveld it is the sensible buy, not a trap. */
-export const GRADE_93_DISCOUNT_CENTS = 38;
 /** Regulated changes land at midnight; in the real world that is the first Wednesday of the month.
  *  A game day is 600s (DAY_CYCLE_SECONDS), so a real month would be five hours of play — compressed
  *  to three midnights, announced one midnight in advance, so the beat lands about twice an hour. */
 export const HIKE_PERIOD_DAYS = 3;
-
-/** The levies inside every litre, cents. Real 2026-ish numbers: the joke lands on the state. */
-export const LEVIES = { fuel: 429, raf: 225, carbon: 23 } as const;
-export const LEVY_CENTS = LEVIES.fuel + LEVIES.raf + LEVIES.carbon;
 
 // ---- tanks ---------------------------------------------------------------------------------------
 
@@ -87,8 +86,6 @@ export const SPUTTER_FRACTION = 0.055;
 export const LOW_FRACTION = 0.18;
 /** A jerry can from the shop, litres. Plastic, five litre, the one everybody owns. */
 export const CAN_LITRES = 5;
-/** Can + deposit, rand. */
-export const CAN_PRICE = 175;
 
 export function tankSize(vehicle: Vehicle): number { return TANKS[vehicle.spec.kind] ?? 0; }
 export function hasTank(vehicle: Vehicle | undefined): vehicle is Vehicle {
@@ -100,12 +97,12 @@ export function hasTank(vehicle: Vehicle | undefined): vehicle is Vehicle {
 /** Litres per live Vehicle. A WeakMap so a despawned car's entry dies with it — traffic churns hard
  *  and a Map keyed on vehicles would be a slow leak for the whole session. */
 const ledger = new WeakMap<Vehicle, number>();
-/** Set once the lazy body is live. Until then the tank floors at a limp reserve: a mechanic the
- *  player has never been shown must not be allowed to strand them. */
+/** Set once the lazy body is live. Until then the tank floors at a limp reserve: a player who has
+ *  never met a forecourt must not be stranded by one. The GAUGE is not gated on this — it shows from
+ *  the first frame behind the wheel — so the reserve is a kindness, not a secret. */
 let revealed = false;
 /** The very first car of a session is generously filled, so a fresh boot never opens on a chore. */
 let seenAnyVehicle = false;
-let lastTick = 0;
 
 export function markRevealed(): void { revealed = true; }
 export function isRevealed(): boolean { return revealed; }
@@ -156,8 +153,17 @@ export function fractionIn(vehicle: Vehicle): number {
   return size > 0 ? litresIn(vehicle) / size : 0;
 }
 
-/** Burn one step. Pure arithmetic — called from the eager approach predicate before the body loads,
- *  and from the body's update() after, which are mutually exclusive by construction. */
+/**
+ * Burn one step.
+ *
+ * `dt` is SIMULATION time and nothing else: fixed sub-steps of at most SIM_STEP_MAX, sliced from the
+ * wall clock by src/core/Timestep.ts. It used to be a wall-clock delta taken once per RENDERED frame
+ * from inside the approach predicate, and clamped to 0.1 s so a backgrounded tab could not empty the
+ * tank — which quietly made the whole mechanic frame-rate coupled. Measured in-engine on a slow box:
+ * 0.0059 L/s against a design rate of 0.0825 L/s, a 45 L tank lasting 127 minutes instead of 9. A
+ * fuel burn that depends on your frame rate is a bug, so the burn is driven from the host's per-sim
+ * tick now (see fuelTick) and this function never reads a clock of its own.
+ */
 export function burn(vehicle: Vehicle, dt: number): number {
   const size = tankSize(vehicle);
   if (size <= 0 || dt <= 0) return 0;
@@ -165,100 +171,73 @@ export function burn(vehicle: Vehicle, dt: number): number {
   const load = Math.min(1, Math.abs(vehicle.speed) / Math.max(1, vehicle.spec.maxSpeed));
   const used = dt * (IDLE_LPS + THROTTLE_LPS * THIRST[vehicle.spec.kind] * load);
   // Until the player has actually met the mechanic, the tank bottoms out at a limp reserve instead
-  // of stranding them for a rule nobody told them about.
-  const floor = revealed ? 0 : size * 0.09;
+  // of stranding them for a rule nobody told them about. Never a REFILL, though: min() against what
+  // is actually in there, or a tank already below the reserve would climb back up to it.
+  const floor = revealed ? 0 : Math.min(litresIn(vehicle), size * 0.09);
   return setLitres(vehicle, Math.max(floor, litresIn(vehicle) - used));
-}
-
-/** Wall-clock step for the eager path, which has no dt of its own. Clamped so a tab that was
- *  backgrounded for a minute does not empty the tank on the frame it comes back. */
-export function eagerStep(): number {
-  const now = typeof performance === 'undefined' ? Date.now() : performance.now();
-  const dt = lastTick === 0 ? 0 : Math.max(0, Math.min(0.1, (now - lastTick) / 1000));
-  lastTick = now;
-  return dt;
 }
 
 /** New game / checkpoint reload: forget the session-scoped bookkeeping. The WeakMap empties itself as
  *  the old vehicles are collected. */
-export function resetLedger(): void { revealed = false; seenAnyVehicle = false; lastTick = 0; }
+export function resetLedger(): void { revealed = false; seenAnyVehicle = false; }
 
-// ---- forecourts ------------------------------------------------------------------------------------
+// ---- the gauge ---------------------------------------------------------------------------------------
 
-/** Brands, in the same order buildFillingStation picks them, so the name on the prompt is the name on
- *  the sign above the pumps. Parody spellings are the model's, not ours. */
-const BRANDS: ReadonlyArray<{ name: string; accent: string }> = [
-  { name: 'Engine', accent: '#d64541' },
-  { name: 'Caltexx', accent: '#3d9970' },
-  { name: 'Sasoil', accent: '#3f78b5' },
-  { name: 'Boerepetrol', accent: '#e0a63c' },
-];
-
-export interface Station {
-  readonly id: string;
-  /** "Engine Melville" — brand off the sign, suburb off the district layer. */
-  readonly name: string;
-  readonly brand: string;
-  readonly accent: string;
-  readonly x: number;
-  readonly z: number;
-  readonly heading: number;
-  /** Half-extents of the drivable apron in the station's own frame. */
-  readonly halfW: number;
-  readonly halfD: number;
-  /** The apron is laid one unit forward of the model origin. */
-  readonly offZ: number;
-  /** Local x of each pump island; the attendant stands at the first one. */
-  readonly islands: readonly number[];
-  /** True for the one station the feature has to build itself (see fuel.ts). */
-  readonly authored: boolean;
-}
-
-type Hash = (seed: number, salt: number) => number;
-
-function station(hash: Hash, name: (x: number, z: number, brand: string) => string, id: string, x: number, z: number, heading: number, seed: number, variant: number, authored: boolean, label?: string): Station {
-  const brand = BRANDS[Math.floor(hash(seed, 3) * BRANDS.length) % BRANDS.length]!;
-  // Mirrors buildFillingStation exactly: size = kit.rnd(2), canopy 14+4s x 9+2s, apron +6 x +8 at z+1.
-  const size = hash(seed, 2);
-  const canopyW = 14 + size * 4;
-  const canopyD = 9 + size * 2;
-  const islands = variant % 3 === 0 ? [0] : [-canopyW * 0.18, canopyW * 0.18];
+/**
+ * The fuel chip, and the ONLY place it is built.
+ *
+ * The eager slice draws it from the first frame the player is behind the wheel; the loaded body calls
+ * this same function and appends the jerry-can chip. One builder means the readout cannot change
+ * shape, id or wording at the moment the chunk lands — the player sees one continuous gauge.
+ */
+export function tankGauge(vehicle: Vehicle | undefined): FeatureHudEntry | undefined {
+  if (!hasTank(vehicle)) return undefined;
+  const fraction = fractionIn(vehicle);
   return {
-    id, brand: brand.name, accent: brand.accent,
-    name: label ?? name(x, z, brand.name),
-    x, z, heading,
-    halfW: (canopyW + 6) / 2, halfD: (canopyD + 8) / 2, offZ: 1,
-    islands, authored,
+    id: 'fuel:tank', label: 'FUEL',
+    value: fraction <= 0 ? 'DRY' : `${Math.round(fraction * 100)}%`,
+    fill: fraction * 100,
+    warn: fraction < LOW_FRACTION,
   };
 }
 
-type MapModule = typeof import('../world/mapData');
+// ---- forecourts, roughly ------------------------------------------------------------------------------
 
-/**
- * The dam-shore garage, taken from the map's own `fuel` landmark rather than typed in. The Vaal graft
- * brought the real Bayshore Marina Petrol Station across as data, but nothing in the world builds it —
- * so we set it beside the nearest road, facing the carriageway, and the body raises the forecourt.
- */
-function bayshoreSite(map: MapModule): { x: number; z: number; heading: number } | undefined {
-  const landmark = map.LANDMARKS.find((entry) => entry.kind === 'fuel');
-  if (!landmark) return undefined;
-  const spot = map.nearestRoadSpot(landmark.x, landmark.z);
-  const sides: Array<1 | -1> = [1, -1];
-  let best = { x: landmark.x, z: landmark.z, distance: Infinity };
-  for (const side of sides) {
-    const point = map.besideRoad(spot, side, 15);
-    const distance = Math.hypot(point.x - landmark.x, point.z - landmark.z);
-    if (distance < best.distance) best = { x: point.x, z: point.z, distance };
-  }
-  // Local +z faces the road: buildFillingStation opens the apron and hangs the pylon on +z.
-  return { x: best.x, z: best.z, heading: Math.atan2(spot.x - best.x, spot.z - best.z) };
+/** A filling-station model the scatter already placed, straight off the bake. The eager half knows
+ *  only where one stands and which way it faces; pump.ts turns this into a named forecourt. */
+export interface Forecourt {
+  readonly id: string;
+  readonly x: number;
+  readonly z: number;
+  readonly heading: number;
+  /** Deterministic build seed and variant, so the body derives the same canopy the world built. */
+  readonly seed: number;
+  readonly variant: number;
 }
 
-let sites: Station[] | undefined;
-let warming: Promise<readonly Station[]> | undefined;
+/** The apron is laid one unit forward of the model origin (buildFillingStation). Shared with pump.ts
+ *  so the rough circle below and the exact rectangle up there are centred on the same point. */
+export const APRON_OFFSET = 1;
 
 /**
- * Every forecourt in the city, derived at runtime.
+ * Radius of the eager "you are at a garage" circle, metres.
+ *
+ * Deliberately CONSERVATIVE. buildFillingStation's smallest apron is 20 x 17.5 about the offset point,
+ * so a circle of 8 is strictly inside every forecourt on the map. That matters: pressing E on the
+ * eager prompt loads the body and immediately re-resolves against the body's own rungs, and if the
+ * exact apron test then disagreed the press would do nothing at all. Under-promise, then load.
+ */
+export const APPROACH_REACH = 8;
+
+const EMPTY: readonly Forecourt[] = [];
+let spots: Forecourt[] | undefined;
+let warming: Promise<readonly Forecourt[]> | undefined;
+
+/** Every filling-station model on the map, or nothing until the list has been derived. */
+export function forecourts(): readonly Forecourt[] { return spots ?? EMPTY; }
+
+/**
+ * Derive the forecourt positions, once.
  *
  * These are the filling-station models the scatter ALREADY placed and baked (18 of them on the
  * current map, catalog spacing 260, walkable canopy, solid kiosk and pumps). Reusing them costs zero
@@ -266,129 +245,100 @@ let warming: Promise<readonly Station[]> | undefined;
  * pad feeds ModelScatter.craftedBlocks and would DELETE the very model we want to stand on. We chose
  * reuse. Nothing here touches placements.ts or the bake.
  *
- * The one exception is the Bayshore Marina Petrol Station on the Vaal shore: it is a real OSM landmark
- * the map carries as data with no model built for it. The body builds that one at runtime and the
- * eager path skips it, so no prompt can appear at a garage that is not there yet.
+ * ModelScatter is pulled in DYNAMICALLY: it already sits in the eager `simulation` chunk, so this
+ * awaits nothing over the network and costs no bytes, but it keeps `gameplay-rules` out of a static
+ * cycle with `simulation` (see the file header). Kicked off by the first sim step the player spends
+ * driving; awaited by the lazy body before it runs.
  */
-export function stations(): readonly Station[] {
-  return sites ?? EMPTY;
-}
-const EMPTY: readonly Station[] = [];
-
-/**
- * Resolve the forecourts, once. The three world modules are pulled in DYNAMICALLY — they already sit
- * in the eager `simulation`/`world-data` chunks, so this awaits nothing over the network and costs no
- * bytes, but it keeps `gameplay-rules` out of a static cycle with `simulation` (see the file header).
- * Kicked off by the first frame the player spends driving; awaited by the lazy body before it runs.
- */
-export function ensureSites(): Promise<readonly Station[]> {
-  if (sites) return Promise.resolve(sites);
-  warming ??= Promise.all([
-    import('../world/ModelScatter'),
-    import('../world/mapData'),
-    import('../world/models/kit'),
-  ]).then(([scatter, map, kit]) => {
-    if (sites) return sites;
-    const name = (x: number, z: number, brand: string): string => `${brand} ${map.districtAt(x, z)}`;
-    const list: Station[] = [];
+export function ensureForecourts(): Promise<readonly Forecourt[]> {
+  if (spots) return Promise.resolve(spots);
+  warming ??= import('../world/ModelScatter').then((scatter) => {
+    if (spots) return spots;
+    const list: Forecourt[] = [];
     for (const model of scatter.allScatteredModels()) {
       if (model.name !== 'filling-station') continue;
-      list.push(station(kit.hash, name, `fs-${list.length}`, model.x, model.z, model.heading, model.seed, model.variant, false));
+      list.push({ id: `fs-${list.length}`, x: model.x, z: model.z, heading: model.heading, seed: model.seed, variant: model.variant });
     }
-    const shore = bayshoreSite(map);
-    if (shore) list.push(station(kit.hash, name, 'bayshore', shore.x, shore.z, shore.heading, 913377, 1, true, 'Caltexx Bayshore Marina'));
-    sites = list;
-    return sites;
+    spots = list;
+    return spots;
   }).catch((error: unknown) => {
     // A forecourt list we could not derive is a feature that quietly does nothing, not a dead city.
     console.warn('[fuel] could not derive forecourts; petrol stays off this session.', error);
-    sites = [];
-    return sites;
+    spots = [];
+    return spots;
   });
   return warming;
 }
 
-/** Squared distance helper that keeps the hot path allocation-free. */
-function localOffset(site: Station, x: number, z: number): { lx: number; lz: number } {
-  const dx = x - site.x; const dz = z - site.z;
-  const c = Math.cos(-site.heading); const s = Math.sin(-site.heading);
-  return { lx: dx * c + dz * s, lz: -dx * s + dz * c };
+/** World units to metres, the same conversion the street signs and the distance toasts use. */
+export const UNITS_TO_METRES = 1.359;
+
+/** Metres to the nearest forecourt, or undefined until the list has been derived. */
+export function metresToForecourt(x: number, z: number): number | undefined {
+  let best = Infinity;
+  for (const spot of forecourts()) best = Math.min(best, Math.hypot(spot.x - x, spot.z - z));
+  return Number.isFinite(best) ? best * UNITS_TO_METRES : undefined;
 }
 
-/** True when (x, z) is standing on this forecourt's apron. */
-export function onApron(site: Station, x: number, z: number, slack = 0): boolean {
-  if (Math.abs(x - site.x) > site.halfW + site.halfD + slack) return false; // cheap bbox reject
-  const { lx, lz } = localOffset(site, x, z);
-  return Math.abs(lx) <= site.halfW + slack && Math.abs(lz - site.offZ) <= site.halfD + slack;
+/**
+ * Below the low mark, say how far the nearest garage is.
+ *
+ * A red gauge with nowhere to take it is a punishment, and nothing marks a forecourt on the map. This
+ * is the whole of the guidance the player gets before they have ever pulled in — after that the
+ * attendant, the fuel-light toast and the E prompt take over. The body draws the SAME chip, so it
+ * does not blink out of existence the moment the chunk lands.
+ */
+export function garageHint(vehicle: Vehicle | undefined, x: number, z: number): FeatureHudEntry | undefined {
+  if (!hasTank(vehicle) || fractionIn(vehicle) >= LOW_FRACTION) return undefined;
+  const metres = metresToForecourt(x, z);
+  return metres === undefined ? undefined : { id: 'fuel:hint', label: 'GARAGE', value: `${Math.round(metres)} m`, warn: true };
 }
 
-/** The forecourt the given point is standing on, if any. */
-export function stationAt(x: number, z: number, includeAuthored = true, slack = 0): Station | undefined {
-  for (const site of stations()) {
-    if (!includeAuthored && site.authored) continue;
-    if (onApron(site, x, z, slack)) return site;
+/** The forecourt whose pumps this point is standing among, by the rough circle. */
+export function forecourtNear(x: number, z: number, reach = APPROACH_REACH): Forecourt | undefined {
+  const limit = reach * reach;
+  for (const spot of forecourts()) {
+    const cx = spot.x + Math.sin(spot.heading) * APRON_OFFSET;
+    const cz = spot.z + Math.cos(spot.heading) * APRON_OFFSET;
+    const dx = x - cx; const dz = z - cz;
+    if (dx * dx + dz * dz <= limit) return spot;
   }
   return undefined;
 }
 
-/** Nearest forecourt to a point, for the "your nearest garage is…" toast. */
-export function nearestStation(x: number, z: number): { site: Station; distance: number } | undefined {
-  let best: { site: Station; distance: number } | undefined;
-  for (const site of stations()) {
-    const distance = Math.hypot(site.x - x, site.z - z);
-    if (!best || distance < best.distance) best = { site, distance };
-  }
-  return best;
-}
-
-/** World position of the attendant's spot: beside the first pump island, on the driver's side. */
-export function attendantSpot(site: Station): { x: number; z: number } {
-  const lx = (site.islands[0] ?? 0) - 2.6;
-  const lz = site.offZ - 1.4;
-  const c = Math.cos(site.heading); const s = Math.sin(site.heading);
-  return { x: site.x + lx * c + lz * s, z: site.z - lx * s + lz * c };
-}
+// ---- the eager slice: one tick, one chip, one prompt ---------------------------------------------------
 
 /**
- * The kiosk door — where you buy the can, the Steri Stumpie and the airtime.
+ * Burn, every simulation step, whether or not the feature body has ever loaded.
  *
- * Deliberately a tight ring rather than the whole apron: `Game.updateOnFoot` runs the feature ladder
- * one rung ABOVE "enter the nearest vehicle", so an on-foot offer that covered the forecourt would
- * stop you getting back into your own car at the pumps. Cars park at the pumps; the shop is behind
- * them. Mirrors buildFillingStation, which sets the kiosk at z = -canopyD/2 - 3.4.
+ * This is the hook the feature foundation did not have and now does (FeatureDescriptor.eager) — see
+ * the note in registry.ts. It used to be a side effect smuggled into the proximity predicate, which
+ * ran once per RENDERED frame off a wall clock and was therefore frame-rate coupled; the predicate is
+ * pure again and the burn is where burns belong.
  */
-export function shopSpot(site: Station): { x: number; z: number } {
-  const canopyD = site.halfD * 2 - 8;
-  return apronPoint(site, 0, -canopyD / 2 - 0.9);
-}
-export const SHOP_REACH = 3.4;
-
-/** A point on the apron, in the station's own frame — used for the price-hike queue. */
-export function apronPoint(site: Station, lx: number, lz: number): { x: number; z: number } {
-  const c = Math.cos(site.heading); const s = Math.sin(site.heading);
-  return { x: site.x + lx * c + lz * s, z: site.z - lx * s + lz * c };
+export function fuelTick(dt: number, ctx: InteractionCtx): void {
+  const vehicle = ctx.vehicle;
+  if (!hasTank(vehicle)) return;
+  void ensureForecourts(); // first step behind the wheel warms the forecourt list; idempotent after
+  burn(vehicle, dt);
 }
 
-// ---- the eager approach predicate --------------------------------------------------------------------
+/** The gauge, before the body exists. On screen from the first frame of driving, every frame after. */
+export function fuelHud(ctx: InteractionCtx): readonly FeatureHudEntry[] {
+  const chip = tankGauge(ctx.vehicle);
+  if (!chip) return [];
+  const hint = garageHint(ctx.vehicle, ctx.position.x, ctx.position.z);
+  return hint ? [chip, hint] : [chip];
+}
 
 /**
- * Called every rendered frame while the player is driving and the feature is NOT loaded yet (the
- * host swaps in the body's own descriptors the moment it is). It does two jobs:
- *
- *   - burns fuel, so the tank is already honest when the player first pulls in;
- *   - answers "is there a garage under this car right now", which is what puts `E  Pull in for
- *     petrol` on the HUD and loads the chunk on the press.
- *
- * This is the workaround for the one seam the feature foundation does not have: there is no way for a
- * feature to be ticking before the player has opted into it. See honestGaps.
+ * "Is there a garage under this car right now" — the question that puts `E  Pull in for petrol` on the
+ * HUD and fetches the chunk on the press. PURE: it reads the world and answers, and burns nothing.
  */
 export function approachNear(vehicle: Vehicle | undefined, x: number, z: number): boolean {
-  const dt = eagerStep();
   if (!hasTank(vehicle)) return false;
-  burn(vehicle, dt);
-  void ensureSites(); // first frame behind the wheel warms the forecourt list; idempotent thereafter
   if (Math.abs(vehicle.speed) > 14) return false; // you have to actually pull in, not blast through
-  return stationAt(x, z, false) !== undefined;
+  return forecourtNear(x, z) !== undefined;
 }
 
 // ---- the save slice ----------------------------------------------------------------------------------
@@ -437,19 +387,4 @@ export function sanitizeFuelSave(raw: unknown): FuelSave {
     hikeCents: Math.round(number(source.hikeCents, 0, -400, 400)),
     litresBought: number(source.litresBought, 0, 0, 1_000_000),
   };
-}
-
-// ---- money + copy ------------------------------------------------------------------------------------
-
-export const randText = (rand: number): string =>
-  `R${Math.round(rand).toLocaleString('en-ZA')}`;
-export const centsText = (cents: number): string => `R${(cents / 100).toFixed(2)}`;
-export const litresText = (litres: number): string => `${litres.toFixed(1)} ℓ`;
-
-/** Litres you get for a given rand at a given price, and the rand a given number of litres costs. */
-export const litresFor = (rand: number, cents: number): number => (rand * 100) / cents;
-export const randFor = (litres: number, cents: number): number => (litres * cents) / 100;
-
-export function gradeCents(base: number, grade: 93 | 95): number {
-  return grade === 95 ? base : base - GRADE_93_DISCOUNT_CENTS;
 }
