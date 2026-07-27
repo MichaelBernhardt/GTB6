@@ -300,8 +300,9 @@ export function ribbon(from: { x: number; z: number }, to: { x: number; z: numbe
   const positions: number[] = []; const indices: number[] = [];
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    // Tapered like a real hole: narrow at the tee, wide through the landing zone, tight at the green.
-    const width = half * (0.55 + 0.9 * Math.sin(Math.PI * Math.min(1, t * 1.15)));
+    // Tapered like a real hole: narrow at the tee, widest through the landing zone, tight at the
+    // green — and never wider than `half`, which is the corridor lieAt() actually reads.
+    const width = half * (0.6 + 0.4 * Math.sin(Math.PI * Math.min(1, t * 1.15)));
     const cx = from.x + (to.x - from.x) * t; const cz = from.z + (to.z - from.z) * t;
     for (const side of [-1, 1]) {
       const x = cx + nx * width * side; const z = cz + nz * width * side;

@@ -220,7 +220,8 @@ export function routeCourse(polygon: MapPolygon, groundAt: (x: number, z: number
       tee, pin, lengthU, lengthM,
       dropU: groundAt(tee.x, tee.z) - groundAt(pin.x, pin.z),
       greenR, teeR: 4.5,
-      fairwayHalf: Math.min(20, Math.max(10, Math.min(teeCell.inset, pinCell.inset) * 0.75)),
+      // ~43 m across at the widest, which is a generous but recognisable parkland fairway.
+      fairwayHalf: Math.min(16, Math.max(10, Math.min(teeCell.inset, pinCell.inset) * 0.75)),
       bunkers,
     };
   });

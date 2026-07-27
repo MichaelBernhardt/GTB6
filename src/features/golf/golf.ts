@@ -520,8 +520,11 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
       entries.push({ id: 'golf:club', label: clubById(round.clubId).name, value: `${Math.round(round.toPinM)}m${plays} · ${round.lie.toUpperCase()}` });
       entries.push({ id: 'golf:aim', label: 'AIM', value: off > 12 ? `${Math.round(off)}° OFF` : 'ON LINE', fill: Math.round(Math.max(0, 100 - off * 2.2)), warn: off > 25 });
     }
-    const played = done + round.strokes;
-    const parSoFar = parDone + (round.phase === 'holed' || round.phase === 'signed' ? 0 : current.par);
+    // Once a hole is holed out its strokes are already in `scores`; adding the live counter as well
+    // showed a finished 7-stroke round as CARD 10 (caught in an end-of-round screenshot).
+    const settled = round.phase === 'holed' || round.phase === 'signed';
+    const played = done + (settled ? 0 : round.strokes);
+    const parSoFar = parDone + (settled ? 0 : current.par);
     entries.push({ id: 'golf:card', label: 'CARD', value: played === 0 ? 'E' : `${played} · ${relativeToPar(played, parSoFar)}` });
     if (round.caddie) entries.push({ id: 'golf:caddie', label: 'CADDIE', value: 'READING IT' });
     entries.push({ id: 'golf:alt', label: 'ALT', value: '+10%' });

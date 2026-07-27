@@ -282,6 +282,18 @@ describe('golf, end to end', () => {
     system.dispose();
   });
 
+  it('reads the card right the moment the last putt drops', () => {
+    const h = harness(5000, realGround);
+    standOnCourse(h, realGround);
+    const system = createFeature(h.api, undefined);
+    const verdict = system.qa!('run', {});
+    const strokes = Number(/strokes=(\d+)/.exec(verdict)![1]);
+    const card = system.hud!()!.find((chip) => chip.id === 'golf:card')!;
+    // A holed-out hole is already in `scores`; the live counter must not be added on top of it.
+    expect(card.value!.startsWith(`${strokes} `)).toBe(true);
+    system.dispose();
+  });
+
   it('banks the card into the save slice and survives the sanitizer', () => {
     const h = harness();
     standOnCourse(h);
