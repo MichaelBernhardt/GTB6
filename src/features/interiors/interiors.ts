@@ -458,7 +458,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const yaw = api.playerHeading();
     const eye = toLocal(current, current.heading, player.x, player.z);
     const back = toLocal(current, current.heading, player.x - Math.sin(yaw) * BOOM, player.z - Math.cos(yaw) * BOOM);
+    const onTheStair = withinRect(current.core.stair, eye.x, eye.z, 0.8);
     for (const partition of resident.built.partitions) {
+      if (partition.core && onTheStair) { partition.mesh.visible = true; continue; }
       partition.mesh.visible = !segmentCrossesBox(eye, back, partition);
     }
     // The floors either side of this one are only ever seen up the shaft; nothing of theirs should
