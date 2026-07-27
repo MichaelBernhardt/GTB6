@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   ASK_AROUND_RADIUS, DEFAULT_STREET_STATE, MIN_CORNER_GAP, nearestStreetSite, sanitizeStreetState,
-  STREET_BLOCK_COUNT, STREET_MAX_CARRY, STREET_PRODUCTS, streetSites,
+  STREET_BLOCK_COUNT, STREET_MAX_CARRY, STREET_PRODUCTS, STREET_STAFF_RADIUS, STREET_UNSTAFF_RADIUS,
+  streetSites,
 } from './street.state';
+import { PLAYER_SPAWN } from '../world/placements';
 
 describe('street save slice', () => {
   it('accepts nothing and returns a playable default', () => {
@@ -102,5 +104,38 @@ describe('derived kerb sites', () => {
     expect(Math.sqrt(near!.distanceSq)).toBeLessThan(ASK_AROUND_RADIUS);
     const far = nearestStreetSite(first.x + 5000, first.z + 5000);
     expect(Math.sqrt(far!.distanceSq)).toBeGreaterThan(ASK_AROUND_RADIUS);
+  });
+});
+
+/**
+ * The owner playtest this suite exists to stop repeating: "I hung around some for a while and never
+ * saw anything. It was 2300 at night." Nothing was wrong with the cast, the shifts or the corners —
+ * the ONLY thing that loads the feature body is pressing E inside the eager ring, and the ring was a
+ * 46 m bubble. He was standing about 97 m away from a staffed corner and the game never said a word.
+ */
+describe('the trade is findable from where a session actually begins', () => {
+  it('offers the ask-around prompt at the game’s own start point', () => {
+    const near = nearestStreetSite(PLAYER_SPAWN[0], PLAYER_SPAWN[2]);
+    expect(near, 'no corner derived at all').toBeDefined();
+    const metres = Math.sqrt(near!.distanceSq);
+    expect(metres, `nearest corner (${near!.site.id}) is ${metres.toFixed(0)} m from the spawn kerb — outside the ${ASK_AROUND_RADIUS} m ring, so a fresh session is never told the trade exists`)
+      .toBeLessThan(ASK_AROUND_RADIUS);
+  });
+
+  it('staffs a corner at least as far out as the ring that promised it', () => {
+    // Otherwise "Nomsa is on the kerb 240 m north-east" walks the player to an empty pavement, which
+    // reads as exactly the same bug all over again.
+    expect(STREET_STAFF_RADIUS).toBeGreaterThanOrEqual(ASK_AROUND_RADIUS);
+    expect(STREET_UNSTAFF_RADIUS).toBeGreaterThan(STREET_STAFF_RADIUS);
+  });
+
+  it('never asks the city for more than a handful of fixtures at once', () => {
+    // The block-sized staffing ring is only affordable because the corners are spread out. If a map
+    // rework ever bunches them, this fails before the frame rate does.
+    const corners = streetSites();
+    for (const site of corners) {
+      const crowd = corners.filter((other) => Math.hypot(other.x - site.x, other.z - site.z) <= STREET_STAFF_RADIUS).length;
+      expect(crowd, `${site.id} would staff ${crowd} corners at once`).toBeLessThanOrEqual(6);
+    }
   });
 });

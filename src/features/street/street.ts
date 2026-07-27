@@ -15,7 +15,8 @@
 import type { FeatureGameApi, FeatureHudEntry, FeatureMenuRow, FeatureSystem, InteractionCtx, InteractionDescriptor, InteractionOffer } from '../types';
 import type { Pedestrian } from '../../entities/Pedestrian';
 import {
-  ASK_AROUND_RADIUS, DEFAULT_STREET_STATE, sanitizeStreetState, STREET_PRODUCTS, streetSites,
+  ASK_AROUND_RADIUS, DEFAULT_STREET_STATE, sanitizeStreetState, STREET_PRODUCTS, STREET_STAFF_RADIUS,
+  STREET_UNSTAFF_RADIUS, streetSites,
   type StreetProduct, type StreetSaveState, type StreetSite,
 } from '../street.state';
 import { CALM_THRESHOLD } from '../../systems/FearSystem';
@@ -29,9 +30,11 @@ import {
   quoteBuy, quoteSell, recoverDemand, sellsToYou, supplyProduct, tierFor, tierSpec,
 } from './trade';
 
-/** How close before a corner is staffed. Comfortably past draw distance, well inside the ped budget. */
-const SPAWN_RADIUS = 190;
-const DESPAWN_RADIUS = 260;
+/** How close before a corner is staffed — and it must not be tighter than the ring that PROMISED you
+ *  the corner. Both live in ../street.state.ts so they cannot drift apart; see the note there. The
+ *  cost is bounded by the map: no point in the city has more than three corners inside this radius. */
+const SPAWN_RADIUS = STREET_STAFF_RADIUS;
+const DESPAWN_RADIUS = STREET_UNSTAFF_RADIUS;
 /** Reach of the on-foot conversation. Matches the game's own mug/melee reach so the two never disagree. */
 const TALK_RANGE = 3.4;
 /** Reach from a stopped car window. */
@@ -582,10 +585,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // The block itself, so a corner is findable before you can see anybody on it. Same ring the
       // eager registry approach uses, so the prompt does not change when the chunk lands.
       //
-      // ONE PRESS PER BLOCK, then it goes quiet for good. The on-foot feature rung sits above
-      // `E Enter vehicle`, so a rung that kept offering inside a 46 m ring would quietly stop the
-      // player getting into cars for a whole city block. Its only job is the gap before the chunk
-      // loads and before anybody is standing there.
+      // ONE PRESS PER BLOCK, then it goes quiet for good — `askAround` writes every corner on the
+      // block into save.met, and `met` is persisted. That gate is what makes a block-sized ring safe:
+      // the on-foot feature rung sits above `E Enter vehicle`, so a rung that kept offering would
+      // quietly stop the player getting into cars for a whole city block. It costs exactly one press.
       id: 'street:ask', order: 58, context: 'foot',
       test: (ctx) => {
         const near = nearestSite(ctx.position.x, ctx.position.z);

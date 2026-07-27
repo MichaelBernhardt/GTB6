@@ -99,6 +99,13 @@ describe('the sex workers are characters, not vending machines', () => {
     expect(longestGap, `${longestGap} in-game hours with nobody working`).toBeLessThanOrEqual(6);
     expect(WORKERS.some((worker) => onShift(12, worker.shift))).toBe(true); // somebody works middays
   });
+
+  it('is busiest at 23:00, because that is when the owner went looking', () => {
+    // The playtest read "It was 2300 at night" and found empty kerbs. The cast was never the cause —
+    // pin it anyway, so nobody ever "fixes" this by moving everyone onto a day shift.
+    const late = WORKERS.filter((worker) => onShift(23, worker.shift)).length;
+    expect(late, `${late}/${WORKERS.length} workers on the kerb at 23:00`).toBeGreaterThanOrEqual(Math.ceil(WORKERS.length / 2));
+  });
 });
 
 describe('the Body Corporate', () => {

@@ -198,8 +198,28 @@ export function nearestStreetSite(x: number, z: number): { site: StreetSite; dis
   return best ? { site: best, distanceSq: bestDistance } : undefined;
 }
 
-/** Radius of the eager "ask around" ring: you notice a block has a trade before you meet anyone on it. */
-export const ASK_AROUND_RADIUS = 46;
+/**
+ * THE DISCOVERY RINGS. These numbers are the whole reason the owner stood in town at 23:00 and saw
+ * nothing, so they are declared together, here, in the eager half where both sides can read them.
+ *
+ *  - ASK_AROUND_RADIUS is the eager approach ring in registry.ts, and pressing E inside it is the ONLY
+ *    thing that loads the feature body in ordinary play. Nothing else fetches the chunk: not driving
+ *    past, not the hour, not the district. It was 46 m — a paving slab around twelve invisible points
+ *    in a city kilometres across. The player's own starting kerb is ~97 m from the CBD corner, so at
+ *    the most likely place a session begins, on the densest block that carries a corner, the game
+ *    never mentioned the trade and never staffed it. A block is the unit here, not a slab.
+ *  - STAFF_RADIUS is how close before a corner is actually worked. It must be >= the ask ring, or the
+ *    ask-around toast names two people and a bearing and you walk to an empty kerb — the exact way to
+ *    turn a fixed feature back into a broken-looking one. street.state.test.ts pins both.
+ *
+ * Widening the ask ring is not free: the on-foot feature rung sits above `E  Enter vehicle`, so until
+ * the first press the prompt inside the ring reads "Ask around" instead. That costs ONE press — the
+ * press loads the body, `askAround` marks the whole block met, and the loaded rung stands down for
+ * good. One press, once, in exchange for the feature existing at all.
+ */
+export const ASK_AROUND_RADIUS = 260;
+export const STREET_STAFF_RADIUS = 300;
+export const STREET_UNSTAFF_RADIUS = 380;
 
 /** Only for tests that need a clean derivation after stubbing the map. */
 export function resetStreetSites(): void { cache = undefined; }

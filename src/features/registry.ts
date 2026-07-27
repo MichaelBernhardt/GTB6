@@ -22,11 +22,14 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     id: 'street', saveKey: 'street', label: 'Street economy',
     sanitize: sanitizeStreetState,
     load: () => import('./street/street'),
-    // The eager stand-in: you notice a block has a trade on it before anybody is standing there,
-    // and "ask around" is a real action, so pressing E keeps the promise the prompt made — it loads
-    // the feature, which staffs the corner and tells you which way to walk.
+    // The eager stand-in, and — this is the part that bit — the ONLY thing in the whole build that
+    // loads the street economy in ordinary play. There is no passive preload hook on FeatureApproach
+    // and only one context per feature, so a player who never presses E on foot inside this ring
+    // never fetches the chunk, and the twelve corners simply do not exist. The ring is therefore a
+    // BLOCK (see ASK_AROUND_RADIUS), not a doorstep: standing anywhere on a block that has a trade on
+    // it says so, and one press loads the feature, staffs the corner and tells you which way to walk.
     approach: {
-      context: 'foot', order: 58, prompt: 'E  Ask around · this block has a trade on it',
+      context: 'foot', order: 58, prompt: 'E  Ask around · somebody works this block',
       near: (ctx) => {
         const near = nearestStreetSite(ctx.position.x, ctx.position.z);
         return near !== undefined && near.distanceSq < ASK_AROUND_RADIUS * ASK_AROUND_RADIUS;
