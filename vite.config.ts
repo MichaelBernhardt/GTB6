@@ -76,6 +76,9 @@ function manualChunk(id: string): string | undefined {
   if (/(?:FlightSystem|SkyfallSystem|TaxiJobSystem|CourierJobSystem|LivingCitySystem|TrainRide|TrainSystem|TrafficAvoidance|FearSystem|BumpSystem|WantedSystem|LoadSheddingSystem|MeleeSystem|PoliceKnowledge|PedRagdoll|NpcCatalog)\.ts$/.test(path)) return 'gameplay-rules';
   // The code-built vehicle geometry is a fat, slow-changing leaf: its own cache unit keeps the
   // simulation chunk inside tools/check-bundle.mjs's 500 kB executable budget.
+  // Lofting is a pure three-only geometry helper shared by vehicle-models (BikeAssets) and
+  // simulation (Airport). In either of those it forms a cycle, so it gets its own leaf chunk.
+  if (path.endsWith('/src/world/Lofting.ts')) return 'geometry-lofting';
   if (/\/src\/entities\/(?:BikeAssets|Plane)\.ts$/.test(path)) return 'vehicle-models';
   // Tuning constants and the three pure modules layered straight on top of them. They must NOT sit in
   // `simulation`: gameplay-rules (TrainSystem -> GameRules) and vehicle-models (BikeAssets -> config,
