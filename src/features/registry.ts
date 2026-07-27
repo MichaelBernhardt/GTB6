@@ -24,6 +24,7 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     // Standing on ANY golf polygon is enough to make E mean something; which of the ten is actually
     // playable is decided inside the lazy body, so no site derivation is duplicated out here.
     approach: { context: 'foot', order: 55, prompt: 'E  Walk onto the golf course', near: (ctx) => nearGolfCourse(ctx.position.x, ctx.position.z) },
+  },
   {
     id: 'fuel', saveKey: 'fuel', label: 'Petrol',
     sanitize: sanitizeFuelSave,
