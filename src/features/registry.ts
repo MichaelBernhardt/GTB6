@@ -1,6 +1,7 @@
 import { approachNear, fuelHud, fuelTick, sanitizeFuelSave } from './fuel.state';
 import { nearGolfCourse, sanitizeGolfState } from './golf.state';
 import { sanitizeProtestState, shutdownPending } from './protest.state';
+import { nearestStreetSite, sanitizeStreetState, STREET_LOAD_RADIUS } from './street.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -60,6 +61,26 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     approach: {
       context: 'foot', order: 60, prompt: 'E  Follow the smoke',
       near: () => shutdownPending(false),
+    },
+  },
+  {
+    id: 'street', saveKey: 'street', label: 'Street economy',
+    sanitize: sanitizeStreetState,
+    load: () => import('./street/street'),
+    // The proximity ring. FeatureHost.preloadNearby() watches this every 0.4 s and loads the body
+    // the moment the player is inside it, so the corners are staffed, lit and blipped BEFORE the
+    // player is close enough to see anybody — which is the whole difference between "there are
+    // people on the street" and the owner's playtest, where pressing E on this prompt was the only
+    // thing in the entire build that could make them exist.
+    //
+    // The prompt below is now a fallback that a player should never see: it only rejoins the ladder
+    // if the chunk fetch itself fails. It stays because a failed fetch must not mean a dead street.
+    approach: {
+      context: 'foot', order: 58, prompt: 'E  Ask around · somebody works this block',
+      near: (ctx) => {
+        const near = nearestStreetSite(ctx.position.x, ctx.position.z);
+        return near !== undefined && near.distanceSq < STREET_LOAD_RADIUS * STREET_LOAD_RADIUS;
+      },
     },
   },
 ];

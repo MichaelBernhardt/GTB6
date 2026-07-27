@@ -322,3 +322,109 @@ describe('FeatureHost menu routing', () => {
     expect(menu).toHaveBeenCalledWith('buy-clubs');
   });
 });
+
+/**
+ * WALKING INTO THE RING LOADS THE FEATURE.
+ *
+ * The regression these pin is a design failure, not a crash: before this, pressing E on an eager
+ * stand-in was the only thing in the whole build that could bring a feature's world into existence.
+ * The owner's playtest of the street economy is what that costs — the people were not on the corners
+ * because the corners were never loaded, and he reasonably concluded the content did not work.
+ */
+describe('FeatureHost proximity loading', () => {
+  /** open() awaits the dynamic import AND createFeature, then settles a .finally and a .then, so a
+   *  single microtask turn is not enough to see the result. */
+  const settle = async (): Promise<void> => { for (let turn = 0; turn < 10; turn++) await Promise.resolve(); };
+  const ring = (near: () => boolean): FeatureDescriptor['approach'] => ({
+    context: 'foot', order: 50, prompt: 'E  Ask around', near,
+  });
+
+  it('loads a feature when the player walks into its ring, with no press at all', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const inside = { value: false };
+    const { host } = harness([feature({ load, approach: ring(() => inside.value) })]);
+    host.update(1);
+    expect(host.isLoaded('golf'), 'nothing loads while the player is elsewhere').toBe(false);
+    inside.value = true;
+    host.update(1);
+    await settle();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(host.isLoaded('golf')).toBe(true);
+  });
+
+  it('does not re-fetch on every tick while the player stands in the ring', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const { host } = harness([feature({ load, approach: ring(() => true) })]);
+    for (let tick = 0; tick < 20; tick++) host.update(1);
+    await settle();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the eager stand-in OFF the ladder while the load is in flight', () => {
+    // The on-foot stand-in sits above `E Enter vehicle`. Leaving it up during the fetch would take
+    // the car away from the player for a whole city block, to advertise a door that is opening anyway.
+    const { host } = harness([feature({ approach: ring(() => true) })]);
+    expect(host.descriptors('foot')).toHaveLength(1);
+    host.update(1);
+    expect(host.descriptors('foot'), 'the stand-in must stand down once the load starts').toHaveLength(0);
+  });
+
+  it('puts the stand-in back when the fetch fails, and never auto-retries', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const load = vi.fn(() => Promise.reject(new Error('network')));
+    const { host } = harness([feature({ load, approach: ring(() => true) })]);
+    host.update(1);
+    await settle();
+    expect(host.isLoaded('golf')).toBe(false);
+    expect(host.descriptors('foot'), 'a broken chunk must not leave the ring silent').toHaveLength(1);
+    for (let tick = 0; tick < 20; tick++) host.update(1);
+    await settle();
+    expect(load, 'a failed chunk must not be re-fetched every 0.4 s').toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('never loads anything while the player is online', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const { host, online } = harness([feature({ load, approach: ring(() => true) })]);
+    online.value = true;
+    for (let tick = 0; tick < 5; tick++) host.update(1);
+    await settle();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('re-earns the load from scratch after a new game', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const { host } = harness([feature({ load, approach: ring(() => true) })]);
+    host.update(1);
+    await settle();
+    host.reset({});
+    expect(host.isLoaded('golf')).toBe(false);
+    host.update(1);
+    await settle();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(host.isLoaded('golf')).toBe(true);
+  });
+});
+
+describe('FeatureHost map blips', () => {
+  it('collects every loaded feature’s blips for the radar and the city map', async () => {
+    const { host } = harness([
+      feature({ system: { mapIcons: () => [{ x: 5, z: 6, color: '#f0842a' }] } as Partial<FeatureSystem> }),
+      feature({ id: 'fuel', saveKey: 'fuel', label: 'Fuel', system: { mapIcons: () => [{ x: 1, z: 2, color: '#f5c542', objective: true }] } as Partial<FeatureSystem> }),
+    ]);
+    await host.open('golf'); await host.open('fuel');
+    expect(host.mapIcons()).toEqual([
+      { x: 5, z: 6, color: '#f0842a' },
+      { x: 1, z: 2, color: '#f5c542', objective: true },
+    ]);
+  });
+
+  it('is empty when nothing is loaded and while the player is online', async () => {
+    const { host, online } = harness([feature({ system: { mapIcons: () => [{ x: 5, z: 6, color: '#f0842a' }] } as Partial<FeatureSystem> })]);
+    expect(host.mapIcons()).toEqual([]);
+    await host.open('golf');
+    expect(host.mapIcons()).toHaveLength(1);
+    online.value = true;
+    expect(host.mapIcons(), 'a feature’s world does not exist in someone else’s PvP').toEqual([]);
+  });
+});

@@ -477,7 +477,7 @@ export class Game {
       ];
     }
     return [
-      ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
+      ...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...this.features.mapIcons(), // features blip themselves; the host returns [] while online and when nothing is loaded
       ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true }] : []),
       ...((area) => area ? [{ x: area.x, z: area.z, color: '#f5c542', area: area.radius }] : [])(this.riddleSearchArea()),
       ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : []),
