@@ -165,6 +165,14 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
   key on `InteractionDescriptor`, an `api.openMenu()` a feature can raise on its own, and
   `api.placePlayer(x, z, heading)` — position without facing means a feature can move you somewhere
   and leave the camera pointed at nothing.
+- **`test()` and `approach.near()` must be PURE.** `resolveInteraction` returns on the FIRST rung that
+  offers something, so anything you do as a side effect inside a predicate stops the moment another
+  feature ordered above you offers first — and the ladder is a merged array, so "above you" is a
+  property of a build you cannot see from your branch. Protest ticked its grievance clock in
+  `approach.near()`; on its own branch it ran, and the cross-feature verifier measured 3.90
+  outage-hours in the open street against **0.00** on a shop doorstep. It was that feature's only
+  unlock gate. If you need a per-frame hook before your body loads, find a real one (protest uses
+  `powerGrid.onPowerChange`) or ask for a seam — do not hide it in a predicate.
 - **Prompts must read `KEY<two spaces>Label`**, segments joined by ` · ` — that grammar is what
   `parsePromptActions` turns into the mobile context pill, and `interactions.test.ts` asserts every
   registered approach prompt produces one.

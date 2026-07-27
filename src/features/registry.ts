@@ -1,5 +1,6 @@
 import { approachNear, fuelHud, fuelTick, sanitizeFuelSave } from './fuel.state';
 import { nearGolfCourse, sanitizeGolfState } from './golf.state';
+import { sanitizeProtestState, shutdownPending } from './protest.state';
 import type { FeatureDescriptor } from './types';
 
 /**
@@ -40,6 +41,25 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     approach: {
       context: 'vehicle', order: 12, prompt: 'E  Pull in for petrol',
       near: (ctx) => approachNear(ctx.vehicle, ctx.position.x, ctx.position.z),
+    },
+  },
+  {
+    id: 'protest', saveKey: 'protest', label: 'Protests + burning tyres',
+    sanitize: sanitizeProtestState,
+    load: () => import('./protest/protest'),
+    // A PURE predicate — one read, no side effect, and that is load-bearing.
+    //
+    // This used to tick the grievance clock here, on the grounds that `near()` is the only per-frame
+    // hook an unloaded feature gets. It is, and it is also not reliable: `resolveInteraction` returns
+    // on the FIRST descriptor that offers something, and `order: 60` puts this one below every other
+    // feature. On a registry with only protest in it the clock ran; with anything else registered
+    // above it the clock stopped dead wherever the player was standing — the cross-feature verifier
+    // measured 3.90 outage-hours out in the open street and 0.00 on a street corner or a doorstep.
+    // Since the ledger is this feature's ONLY unlock gate, that would have shipped a feature that can
+    // never trigger. The clock now runs off powerGrid's own transition hook; see protest.state.ts.
+    approach: {
+      context: 'foot', order: 60, prompt: 'E  Follow the smoke',
+      near: () => shutdownPending(false),
     },
   },
 ];
