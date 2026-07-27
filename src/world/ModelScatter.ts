@@ -27,10 +27,13 @@
 import {
   AERODROME_POLYGONS,
   BEACH_POLYGONS,
+  besideRoad,
   FARM_POLYGONS,
   GREEN_POLYGONS,
   GENERATED_ROADS,
+  LANDMARKS,
   MAP_WORLD_SIZE,
+  nearestRoadSpot,
   pointInPolygon,
   pointInAnyPolygon,
   RAILWAY_STATION_SITES,
@@ -356,6 +359,46 @@ function tryPlace(
   return true;
 }
 
+/** Clearances (units beyond the kerb) tried in order until a 27x24 forecourt clears the carriageway. */
+const LANDMARK_FORECOURT_OFFSETS = [16, 20, 25, 31] as const;
+
+/**
+ * The forecourts the MAP already promises.
+ *
+ * `joburg-map.json` carries a landmark of kind 'fuel' — a filling station the OSM extract found on
+ * the dam shore — and the in-game map (mapRender's landmark layer) draws it as a labelled gold star.
+ * A labelled star with nothing under it is worse than no star at all: the owner drove to that exact
+ * spot looking for petrol and found bare veld. So the scatter puts a real forecourt there.
+ *
+ * It runs FIRST, before the frontage walk, because of the owner's crafted-first rule: a site the map
+ * names outranks a procedurally chosen verge slot, and claiming the ground first means the frontage
+ * pass flows around it instead of having to be pushed aside.
+ *
+ * Placed through the SAME tryPlace() as every other model — the same water, aerodrome, road, railway,
+ * crafted-pad, building and occupancy tests — so a landmark with nowhere legal to take a forecourt
+ * simply does not get one, rather than dropping a canopy into the dam. The nearer side of the road
+ * to the landmark is tried first, so the station lands on the side the map meant.
+ */
+function landmarkForecourtPass(occ: ScatterOccupancy, buildings: BuildingIndex, out: ScatteredModel[]): void {
+  for (const landmark of LANDMARKS) {
+    if (landmark.kind !== 'fuel') continue;
+    const spot = nearestRoadSpot(landmark.x, landmark.z);
+    const nearSide: 1 | -1 = Math.hypot(besideRoad(spot, 1, 4).x - landmark.x, besideRoad(spot, 1, 4).z - landmark.z)
+      <= Math.hypot(besideRoad(spot, -1, 4).x - landmark.x, besideRoad(spot, -1, 4).z - landmark.z) ? 1 : -1;
+    const sides: ReadonlyArray<1 | -1> = nearSide === 1 ? [1, -1] : [-1, 1];
+    for (const clearance of LANDMARK_FORECOURT_OFFSETS) {
+      let placed = false;
+      for (const side of sides) {
+        const at = besideRoad(spot, side, clearance);
+        // Local +z is the entrance: buildFillingStation opens the apron, hangs the brand fascia and
+        // stands the price totem on +z, so the forecourt has to face back at the carriageway.
+        if (tryPlace('filling-station', at.x, at.z, Math.atan2(spot.x - at.x, spot.z - at.z), STRUCT_ROAD_CLEARANCE, occ, buildings, out)) { placed = true; break; }
+      }
+      if (placed) break;
+    }
+  }
+}
+
 /** Densely walk a road centreline once, yielding arc-length-spaced frontage anchors per side. */
 /** Chunked: yields its completed fraction every few hundred roads (the whole-map scatter is the
  *  single biggest boot block on mobile). Iteration order untouched — the layout stays identical. */
@@ -451,6 +494,7 @@ export function* scatterStages(): Generator<number> {
   const buildings = new BuildingIndex();
   // Crafted claims are already fixed (RESERVED_PADS / MANICURED_FOOTPRINTS) and the procedural
   // buildings are indexed above — so both passes below flow deterministically AROUND them.
+  landmarkForecourtPass(occ, buildings, out); // a handful of sites the map names; claims first
   for (const f of frontagePass(occ, buildings, out)) yield f * 0.7;
   for (const f of areaPass(FARM_POLYGONS, AREA_FARM, occ, buildings, out)) yield 0.7 + f * 0.1;
   for (const f of areaPass(GREEN_POLYGONS, AREA_PARK, occ, buildings, out)) yield 0.8 + f * 0.15;

@@ -17,7 +17,7 @@
  */
 
 /** Bump when the drawing contract changes. Embedded verbatim into the emitted preview. */
-export const MAP_RENDER_VERSION = '1.4.0'; // 1.4.0: rail station ticks + high-zoom station names
+export const MAP_RENDER_VERSION = '1.5.0'; // 1.5.0: petrol-pump marker shape
 
 /** Raw composite metres ASL where the hillshade turns snowy (matches City.SNOWLINE_METRES — the
  *  in-game ground shader whitens the same tops; a unit test keeps the two constants equal). */
@@ -503,11 +503,14 @@ function drawStar(ctx: CanvasRenderingContext2D, x: number, y: number, r: number
 
 /**
  * Draw a live game marker in the minimap's visual language, in screen space.
- * Shapes mirror {@link MinimapView}: gold mission circles, teal shop diamonds, safehouse houses.
+ * Shapes mirror {@link MinimapView}: gold mission circles, teal shop diamonds, safehouse houses,
+ * orange petrol pumps. The pump path is written out here rather than imported from MinimapView
+ * because this file is inline-copied into the mapgen preview and may not import from src (see the
+ * header) — MinimapView.tracePumpGlyph is the same path, and a test keeps the two agreeing.
  */
 export function drawMarker(
   ctx: CanvasRenderingContext2D, sx: number, sy: number, color: string,
-  shape: 'circle' | 'diamond' | 'house' | 'square' = 'circle', size = 7,
+  shape: 'circle' | 'diamond' | 'house' | 'square' | 'fuel' = 'circle', size = 7,
 ): void {
   ctx.save(); ctx.translate(sx, sy);
   ctx.fillStyle = color; ctx.strokeStyle = '#111817'; ctx.lineWidth = 2; ctx.beginPath();
@@ -515,6 +518,10 @@ export function drawMarker(
   if (shape === 'diamond') { ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(0, s); ctx.lineTo(-s, 0); ctx.closePath(); }
   else if (shape === 'house') { ctx.moveTo(0, -s * 1.1); ctx.lineTo(s * 0.85, -s * 0.2); ctx.lineTo(s * 0.85, s * 0.85); ctx.lineTo(-s * 0.85, s * 0.85); ctx.lineTo(-s * 0.85, -s * 0.2); ctx.closePath(); }
   else if (shape === 'square') { ctx.rect(-s * 0.8, -s * 0.8, s * 1.6, s * 1.6); }
+  else if (shape === 'fuel') {
+    ctx.moveTo(-s * 0.62, -s * 0.85); ctx.lineTo(s * 0.20, -s * 0.85); ctx.lineTo(s * 0.20, s * 0.95); ctx.lineTo(-s * 0.62, s * 0.95); ctx.closePath();
+    ctx.moveTo(s * 0.34, -s * 0.30); ctx.lineTo(s * 0.80, -s * 0.30); ctx.lineTo(s * 0.80, s * 0.42); ctx.lineTo(s * 0.34, s * 0.42); ctx.closePath();
+  }
   else ctx.arc(0, 0, s, 0, Math.PI * 2);
   ctx.fill(); ctx.stroke(); ctx.restore();
 }

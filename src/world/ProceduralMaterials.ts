@@ -414,12 +414,13 @@ function signSlot(text: string, accent: string, background: string): SignSlot {
   signSlots.set(key, slot); return slot;
 }
 
-export function createSignMesh(geometry: THREE.BufferGeometry, text: string, accent: string, options: { background?: string; doubleSide?: boolean; powered?: boolean } = {}): THREE.Mesh {
+export function createSignMesh(geometry: THREE.BufferGeometry, text: string, accent: string, options: { background?: string; doubleSide?: boolean; powered?: boolean; genny?: boolean } = {}): THREE.Mesh {
   if (typeof document === 'undefined') return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x222831, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide }));
   const slot = signSlot(text, accent, options.background ?? '#10191c');
   const uv = geometry.getAttribute('uv');
   for (let index = 0; index < uv.count; index++) uv.setXY(index, THREE.MathUtils.lerp(slot.u0, slot.u1, uv.getX(index)), THREE.MathUtils.lerp(slot.v0, slot.v1, uv.getY(index)));
-  const materialKey = `${options.doubleSide ? 'double' : 'front'}-${options.powered ? 'powered' : 'plain'}`;
+  const mode = options.powered ? 'powered' : options.genny ? 'genny' : 'plain';
+  const materialKey = `${options.doubleSide ? 'double' : 'front'}-${mode}`;
   let material = signMaterials.get(materialKey);
   if (!material) {
     material = new THREE.MeshLambertMaterial({ map: signAtlas!.texture, emissive: 0xffffff, emissiveMap: signAtlas!.texture, emissiveIntensity: 0, side: options.doubleSide ? THREE.DoubleSide : THREE.FrontSide });
@@ -440,14 +441,30 @@ export const SIGN_RETRO_BOOST = 0.6; // blackout-only diffuse over-response: bea
 /** Emissive drive for every sign face: 0 by day (the sun lights them), full night glow on a healthy grid, sunk to 0 by the blackout ramp. */
 export function signEmissiveIntensity(night: number, blackout: number): number { return night * (1 - blackout) * SIGN_NIGHT_EMISSIVE; }
 
+/**
+ * The boards behind a generator: lit all night, blackout or no blackout.
+ *
+ * A filling station is the one business on the block that genuinely rides out load shedding — the
+ * genny goes on behind the shop, two of the six pumps stay lit, and the pylon board out on the verge
+ * is the brightest thing on a dark street. That is also the moment a player is most desperate to
+ * FIND one, and until now the price totem sank into the dark with every other sign in the city, so
+ * the only lit landmark in Joburg was invisible exactly when it mattered.
+ */
+export function gennySignEmissiveIntensity(night: number): number { return night * SIGN_NIGHT_EMISSIVE; }
+
 /** Diffuse scale (1 = untouched): boosted only while blacked out at night — the cheap retro-reflective feel under a beam. */
 export function signDiffuseScale(night: number, blackout: number): number { return 1 + night * blackout * SIGN_RETRO_BOOST; }
 
 export function setSignGlow(night: number, blackout: number): void {
   const emissive = signEmissiveIntensity(night, blackout);
+  const genny = gennySignEmissiveIntensity(night);
   const scale = signDiffuseScale(night, blackout);
   for (const [key, material] of signMaterials) {
-    material.emissiveIntensity = emissive;
-    if (!key.includes('powered')) material.color.setScalar(scale); // powered boards' colour belongs to the power grid (its instant on/off flip)
+    const onGenny = key.includes('genny');
+    material.emissiveIntensity = onGenny ? genny : emissive;
+    // Powered boards' colour belongs to the power grid (its instant on/off flip). Genny boards keep
+    // their own diffuse too: the retro-reflective boost is for a board catching a beam in the dark,
+    // and this one is making its own light.
+    if (!key.includes('powered')) material.color.setScalar(onGenny ? 1 : scale);
   }
 }

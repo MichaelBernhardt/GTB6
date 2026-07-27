@@ -1,3 +1,4 @@
+import { approachNear, fuelHud, fuelTick, sanitizeFuelSave } from './fuel.state';
 import { nearGolfCourse, sanitizeGolfState } from './golf.state';
 import type { FeatureDescriptor } from './types';
 
@@ -23,6 +24,22 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     // Standing on ANY golf polygon is enough to make E mean something; which of the ten is actually
     // playable is decided inside the lazy body, so no site derivation is duplicated out here.
     approach: { context: 'foot', order: 55, prompt: 'E  Walk onto the golf course', near: (ctx) => nearGolfCourse(ctx.position.x, ctx.position.z) },
+  {
+    id: 'fuel', saveKey: 'fuel', label: 'Petrol',
+    sanitize: sanitizeFuelSave,
+    load: () => import('./fuel/fuel'),
+    // Petrol is the one feature that has to be TRUE before the player opts in — a tank that only
+    // starts draining once you have pulled into a garage is a mechanic you can decline, and a gauge
+    // that only appears once the chunk lands is a gauge nobody ever sees. Both live in the eager
+    // slice; the body takes over the moment it loads. See FeatureEagerSlice in types.ts.
+    eager: {
+      tick: (dt, ctx) => fuelTick(dt, ctx),
+      hud: (ctx) => fuelHud(ctx),
+    },
+    approach: {
+      context: 'vehicle', order: 12, prompt: 'E  Pull in for petrol',
+      near: (ctx) => approachNear(ctx.vehicle, ctx.position.x, ctx.position.z),
+    },
   },
 ];
 

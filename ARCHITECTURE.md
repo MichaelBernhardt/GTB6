@@ -49,6 +49,8 @@ Delta time is clamped to 50 ms to prevent tab restoration from producing physics
 
 `UIManager` is the public facade for the DOM overlay and communicates menu actions through callbacks. `Game` supplies immutable primitive view models rather than entity or system instances. `HudView` constructs persistent HUD nodes once and incrementally updates their values, `MenuView` owns the explicit screen state and transient menu markup, and `MinimapView` owns the rotated canvas radar. This keeps per-frame DOM churn low and presentation concerns out of gameplay systems.
 
+Marker sources converge in two places. `Game.mapMarkers()` gathers the live ones — shops, safehouses, the mission objective, police, hostiles — and `UIManager.drawMap`/`updateMap` fold in the always-on feature blips from `src/features/mapIcons.ts` on their way to both the minimap and the full map. Feature blips are deliberately **eager**: they are derived from map data in a feature's `<id>.state.ts` and must be visible without that feature's lazy body ever loading, or the icon only ever appears to a player already standing on the thing it points at.
+
 ## Collision model
 
 San Cordova uses an intentionally predictable horizontal-plane model. Buildings and containers expose XZ rectangle bounds. Player and vehicle motion first resolves X, then Z, which permits sliding along walls. Vehicles reflect and reduce speed on impact. Vehicle-to-vehicle response separates bodies, damps speed, and applies damage behind a cooldown so contact does not damage every frame.

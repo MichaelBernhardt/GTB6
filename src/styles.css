@@ -63,15 +63,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-drunk__track em { display: block; height: 100%; background: rgba(0, 0, 0, .55); transition: width .25s ease; }
 .hud-items { position: absolute; left: 28px; bottom: 258px; display: flex; gap: 6px; }
 .hud-items i { padding: 5px 8px; background: rgba(17, 24, 23, .86); color: var(--paper); font: 900 9px Inter, sans-serif; font-style: normal; letter-spacing: 1.2px; border-left: 3px solid var(--teal); }
-.hud-features { position: absolute; left: 28px; bottom: 284px; display: flex; gap: 6px; }
-.hud-features i { min-width: 52px; padding: 5px 8px; background: rgba(17, 24, 23, .86); color: var(--paper); font-style: normal; border-left: 3px solid var(--yellow); }
-.hud-features i.is-warn { border-left-color: #d9534f; }
-.hud-features b { display: block; font: 900 8px Inter, sans-serif; letter-spacing: 1.2px; color: var(--yellow); }
+/* The shared feature strip. It sits above the minimap, which is where the eye already goes when you
+ * are driving — but at 52px wide with an 8px label it read as decoration and the owner drove a whole
+ * session without noticing the fuel gauge in it. Sized like a real gauge now: the number is as big as
+ * the vehicle-health readout opposite, the bar is thick enough to see fall, and the warning state
+ * breathes so an empty tank catches you in peripheral vision. */
+.hud-features { position: absolute; left: 28px; bottom: 288px; display: flex; gap: 7px; }
+.hud-features i { min-width: 82px; padding: 6px 10px 7px; background: rgba(17, 24, 23, .9); color: var(--paper); font-style: normal; border-left: 4px solid var(--yellow); box-shadow: 5px 5px 0 rgba(17, 24, 23, .24); }
+.hud-features i.is-warn { border-left-color: #d9534f; animation: hud-fuel-warn 1.6s ease-in-out infinite; }
+.hud-features b { display: block; font: 900 9px Inter, sans-serif; letter-spacing: 1.4px; color: var(--yellow); }
 .hud-features i.is-warn b { color: #f0938f; }
-.hud-features span { display: block; font: 900 12px Inter, sans-serif; letter-spacing: .5px; }
-.hud-features__track { display: block; height: 3px; margin-top: 3px; background: rgba(255, 255, 255, .18); }
+.hud-features span { display: block; margin-top: 1px; font: 900 19px/1 Inter, sans-serif; letter-spacing: .5px; }
+.hud-features__track { display: block; height: 5px; margin-top: 5px; background: rgba(255, 255, 255, .2); }
 .hud-features__track em { display: block; height: 100%; background: var(--yellow); transition: width .25s ease; }
 .hud-features i.is-warn .hud-features__track em { background: #d9534f; }
+@keyframes hud-fuel-warn { 0%, 100% { background: rgba(17, 24, 23, .9); } 50% { background: rgba(94, 30, 26, .92); } }
 .hud-cash { grid-column: 3; grid-row: 2; display: flex; align-items: baseline; gap: 6px; padding: 4px 8px; color: var(--ink); background: var(--yellow); }
 .hud-cash small { font: 900 8px Inter, sans-serif; letter-spacing: 1px; }
 .hud-cash b { font-size: 21px; }

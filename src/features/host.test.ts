@@ -256,9 +256,62 @@ describe('FeatureHost HUD and menu', () => {
     ]);
   });
 
-  it('returns undefined when nothing is loaded, so the HUD strip stays hidden', () => {
+  it('returns undefined when nothing is loaded and nothing is eager, so the strip stays hidden', () => {
     expect(harness([feature()]).host.hud()).toBeUndefined();
   });
+});
+
+/**
+ * The seam the owner's playtest bought. A feature whose body loads on approach cannot draw a
+ * permanently visible readout or advance a mechanic the player has not opted into yet — the fuel
+ * gauge simply did not exist until you pressed E at a garage, so a whole session of driving showed
+ * nothing. Both hooks run ONLY while the body is unloaded; the loaded system takes over untouched.
+ */
+describe('FeatureHost eager slice', () => {
+  it('draws an unloaded feature’s chip, and hands the strip back the moment the body lands', async () => {
+    const { host } = harness([feature({
+      eager: { hud: () => [{ id: 'fuel:tank', label: 'FUEL', value: '62%', fill: 62 }] },
+      system: { hud: () => [{ id: 'fuel:tank', label: 'FUEL', value: '62%', fill: 62 }, { id: 'fuel:can', label: 'CAN', value: '5.0 ℓ' }] },
+    })]);
+    expect(host.isLoaded('golf')).toBe(false);
+    expect(host.hud()).toEqual([{ id: 'fuel:tank', label: 'FUEL', value: '62%', fill: 62 }]);
+    await host.open('golf');
+    expect(host.hud()).toHaveLength(2);
+  });
+
+  it('ticks the eager slice on the sim step until the body loads, then never again', async () => {
+    const tick = vi.fn();
+    const update = vi.fn();
+    const { host } = harness([feature({ eager: { tick }, system: { update } })]);
+    host.update(0.05);
+    host.update(0.05);
+    expect(tick).toHaveBeenCalledTimes(2);
+    expect(tick.mock.calls[0]![0]).toBe(0.05);
+    await host.open('golf');
+    host.update(0.05);
+    expect(tick).toHaveBeenCalledTimes(2); // no double burn: exactly one of the two ever runs
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the eager hooks the ladder the player is actually in', () => {
+    const seen: string[] = [];
+    const vehicle = { spec: { kind: 'compact' }, group: { position: { x: 0, y: 0, z: 0 } } } as unknown as ReturnType<FeatureGameApi['drivenVehicle']>;
+    const { host } = harness([feature({ eager: { tick: (_dt, ctx) => { seen.push(ctx.context); } } })], stubApi({ drivenVehicle: () => vehicle }));
+    host.update(0.05);
+    expect(seen).toEqual(['vehicle']);
+  });
+
+  it('runs neither hook while the player is in PvP', () => {
+    const tick = vi.fn();
+    const live = harness([feature({ eager: { tick, hud: () => [{ id: 'fuel:tank', label: 'FUEL' }] } })]);
+    live.online.value = true;
+    live.host.update(0.05);
+    expect(tick).not.toHaveBeenCalled();
+    expect(live.host.hud()).toBeUndefined();
+  });
+});
+
+describe('FeatureHost menu routing', () => {
 
   it('routes a menu row to the feature that opened the menu', async () => {
     const menu = vi.fn();
