@@ -6,19 +6,31 @@
  *
  * What is here:
  *  - fixtures on derived kerb sites (`scripted`, never `contact`), pooled by proximity
+ *  - a lit pad and a beam over every worked corner, and a GOLD PILLAR over the one you were sent to
+ *  - a blip for every corner on the radar and the city map, and a gold objective pin for the tip
  *  - a dealer trade with district pricing, corner demand, a carry cap, arrear subs and three ranks
  *  - a kerb negotiation in the VEHICLE context with a stated price and a refusal ladder
  *  - a short-time ride that grants nothing physical: what you get is the conversation, and the
  *    conversation is worth more than the fare because she knows which corner is paying tonight
  *  - a bad-date list: hurt anyone here and the whole trade shuts on you, citywide, for hours
+ *
+ * THE RULE THIS FILE WAS REWRITTEN UNDER, from the owner's playtest: nothing the player needs may
+ * exist only in a toast. A toast is four seconds long and then the information is destroyed. Every
+ * direction, price, shift and destination in here is re-readable on demand — on the paused menu
+ * card, on the map, on the HUD chip, or as a beam of light standing over the place itself — and
+ * every character repeats themselves for free, for ever, because "the person stopped telling me" is
+ * the worst sentence in that report.
  */
+import * as THREE from 'three';
 import type { FeatureGameApi, FeatureHudEntry, FeatureMenuRow, FeatureSystem, InteractionCtx, InteractionDescriptor, InteractionOffer } from '../types';
+import type { FeatureMapIcon, FeatureMapSource } from '../host';
 import type { Pedestrian } from '../../entities/Pedestrian';
 import {
-  ASK_AROUND_RADIUS, DEFAULT_STREET_STATE, sanitizeStreetState, STREET_PRODUCTS, STREET_STAFF_RADIUS,
+  DEFAULT_STREET_STATE, sanitizeStreetState, STREET_PRODUCTS, STREET_STAFF_RADIUS,
   STREET_UNSTAFF_RADIUS, streetSites,
   type StreetProduct, type StreetSaveState, type StreetSite,
 } from '../street.state';
+import { KNOCKDOWN_DAMAGE } from '../../systems/BumpSystem';
 import { CALM_THRESHOLD } from '../../systems/FearSystem';
 import { cycle, dealerFor, FIXER, LEVY_NOTES, PROMOTIONS, RADIO_BLAME, workerFor, type Worker } from './cast';
 import {
@@ -35,20 +47,48 @@ import {
  *  cost is bounded by the map: no point in the city has more than three corners inside this radius. */
 const SPAWN_RADIUS = STREET_STAFF_RADIUS;
 const DESPAWN_RADIUS = STREET_UNSTAFF_RADIUS;
-/** Reach of the on-foot conversation. Matches the game's own mug/melee reach so the two never disagree. */
-const TALK_RANGE = 3.4;
+/** Reach of the on-foot conversation. Deliberately longer than the melee reach: walking up to a
+ *  person you can see and getting no prompt is the failure this whole rewrite is about, so the
+ *  generous number wins over the tidy one. */
+const TALK_RANGE = 5;
+
+/**
+ * THE COLOURS OF THE STREET. Distinct in hue AND in lightness from the teal shop diamonds
+ * (#3fd1c4) and the gold objective pin (#f5c542), so the radar stays legible to a colour-blind
+ * player: shops are teal diamonds, corners are coloured circles, the place you were SENT is gold.
+ */
+const DEALER_COLOR = '#f0842a';
+const WORKER_COLOR = '#c07bff';
+/** The game's own objective gold, taken from Game.buildMarker so a street destination looks exactly
+ *  like a mission destination — same pillar, same pin, same behaviour at the edge of the minimap. */
+const GOAL_COLOR = '#f5c542';
+/** Corner beams are short — a lit doorway you can see down the street. The GOAL pillar is the tall
+ *  one, and there is only ever one of those, because "go here" must not have to compete. */
+const CORNER_BEAM_HEIGHT = 26;
+const GOAL_BEAM_HEIGHT = 130;
 /** Reach from a stopped car window. */
 const WINDOW_RANGE = 8;
 /** A corner restocks its own supply on this clock. */
 const RESTOCK_SECONDS = 200;
 const SUPPLY_PER_CORNER = 40;
-/** After a fixture is killed, the block leaves that corner alone for a while. */
-const CORNER_COOLDOWN = 420;
+/** After a fixture is killed, the block leaves that corner alone for a while. Four minutes, not
+ *  seven: patience is a resource, and an unlucky corner should not read as a broken one. */
+const CORNER_COOLDOWN = 240;
+/** Damage a fixture shrugs off without calling it violence — the bump system's own knockdown figure,
+ *  imported rather than guessed so the two can never drift. Anything above this is a weapon. */
+const SHOVE_DAMAGE = KNOCKDOWN_DAMAGE;
+/** Health a fixture recovers per second after a survivable knock. Slow enough that gunfire still
+ *  kills, fast enough that a taxi clipping the kerb is forgotten by the time you walk over. */
+const FIXTURE_REGEN = 12;
+/** How far a fixture may drift from its corner before it is put back, player watching or not. */
+const STRAY_LIMIT = 8;
 
 interface Fixture {
   readonly site: StreetSite;
   readonly ped: Pedestrian;
-  /** Last seen health, so a single point of damage is enough to trip the bad-date list. */
+  /** Health this person spawned with — the ceiling the corner heals back up to. */
+  readonly full: number;
+  /** Last seen health, so damage can be told apart from a shrug. */
   health: number;
   dead: boolean;
 }
@@ -61,7 +101,7 @@ interface Ride {
   readonly paid: number;
 }
 
-export function createFeature(api: FeatureGameApi, state: unknown): FeatureSystem {
+export function createFeature(api: FeatureGameApi, state: unknown): FeatureSystem & FeatureMapSource {
   const save: StreetSaveState = sanitizeStreetState(state ?? DEFAULT_STREET_STATE);
   // A COPY of the memoized derivation: the QA driver restages a site in front of the player, and
   // mutating the module-level cache would leave that stage behind for the next session.
@@ -76,6 +116,14 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /** siteId → units the corner still has of the thing it is long. */
   const supply = new Map<string, number>();
   const visits = new Map<string, number>();
+  /** siteId → the lit pad standing over a worked corner. Built and torn down with the fixture. */
+  const beacons = new Map<string, THREE.Group>();
+  const beacon = new THREE.Group();
+  beacon.name = 'StreetCorners';
+  api.scene.add(beacon);
+  /** The single gold pillar over wherever the player was last SENT. One at a time, always. */
+  let goal: THREE.Group | undefined;
+  let beaconPhase = 0;
   let restockTimer = RESTOCK_SECONDS;
   let radio = 0;
   let sales = 0;
@@ -109,7 +157,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     ped.wallet = 0;
     ped.setHail(true);
     ped.group.rotation.y = entry.heading;
-    fixtures.set(entry.id, { site: entry, ped, health: ped.health, dead: false });
+    fixtures.set(entry.id, { site: entry, ped, full: ped.health, health: ped.health, dead: false });
   }
 
   function despawn(id: string): void {
@@ -119,12 +167,101 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     fixtures.delete(id);
   }
 
+  // ---- markers ----------------------------------------------------------------------------------
+
+  /**
+   * A lit pad under a worked corner, and a short beam over it.
+   *
+   * This is the ShopSystem entry-pad idiom (disc + torus + pulse) with a beam added, because a shop
+   * is a building you can see and a corner is a person you cannot — a pavement pad alone is invisible
+   * from the far side of a junction. `depthWrite: false` and MeshBasicMaterial keep it free: no
+   * lights, no shadows, no sorting cost worth measuring, and it reads through load shedding.
+   */
+  function buildBeacon(entry: StreetSite): THREE.Group {
+    const colour = new THREE.Color(entry.kind === 'dealer' ? DEALER_COLOR : WORKER_COLOR);
+    const group = new THREE.Group();
+    group.position.set(entry.x, api.surfaceHeightAt(entry.x, entry.z), entry.z);
+    const disc = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.8, 1.8, 0.06, 24),
+      new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.5, depthWrite: false }),
+    );
+    disc.position.y = 0.3;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(2.08, 0.09, 8, 26), new THREE.MeshBasicMaterial({ color: colour }));
+    ring.rotation.x = Math.PI / 2; ring.position.y = 0.32;
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.45, 1.5, CORNER_BEAM_HEIGHT, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.17, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    beam.position.y = CORNER_BEAM_HEIGHT / 2;
+    group.add(disc, ring, beam);
+    return group;
+  }
+
+  /** The owner asked for this by name: "perhaps a goal indicator (gold pillar of light) should appear
+   *  for it". Same geometry, same gold and same 130-unit height as Game.buildMarker, so a place the
+   *  street sent you to is indistinguishable from a place a mission sent you to. */
+  function buildGoal(): THREE.Group {
+    const group = new THREE.Group();
+    const gold = new THREE.Color(GOAL_COLOR);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 8, 28), new THREE.MeshBasicMaterial({ color: gold }));
+    ring.rotation.x = Math.PI / 2;
+    const core = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.55, 0.9, GOAL_BEAM_HEIGHT, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: gold, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    core.position.y = GOAL_BEAM_HEIGHT / 2;
+    const flare = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.6, 2.8, GOAL_BEAM_HEIGHT, 18, 1, true),
+      new THREE.MeshBasicMaterial({ color: gold, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    flare.position.y = GOAL_BEAM_HEIGHT / 2;
+    group.add(ring, core, flare);
+    return group;
+  }
+
+  function dropBeacon(id: string): void {
+    const group = beacons.get(id);
+    if (!group) return;
+    beacon.remove(group);
+    disposeTree(group);
+    beacons.delete(id);
+  }
+
+  function disposeTree(root: THREE.Object3D): void {
+    root.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.geometry.dispose();
+      const material = mesh.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(material)) for (const entry of material) entry.dispose();
+      else material.dispose();
+    });
+  }
+
+  /** The gold pillar follows the tip and NOTHING else, so it always means one thing: go there. It is
+   *  built the first time a destination exists and then simply moved — it never needs rebuilding. */
+  function syncGoal(): void {
+    const target = site(save.tipSite);
+    if (!target) { if (goal) goal.visible = false; return; }
+    if (!goal) { goal = buildGoal(); beacon.add(goal); }
+    goal.visible = true;
+    goal.position.set(target.x, api.surfaceHeightAt(target.x, target.z) + 0.25, target.z);
+  }
+
   /**
    * Somebody put hands on a person who works this street. The trade closes, citywide.
    *
    * Attribution is by PRESENCE, not by a damage-source hook the api does not expose: if the player
    * is not on the block, a stray traffic collision does not get blamed on them. Inside the ring it
    * is assumed to be yours, which in practice it always is.
+   *
+   * IT TAKES A DEATH, NOT A SCRATCH. This used to fire on any health drop at all, and the machine
+   * playthrough shows exactly what that costs: the player stood at Chidi's kerb, an ambient car
+   * clipped him, and the citywide trade shut on a player who had done nothing but walk up and buy a
+   * bankie of zol — R250 of security levy and five minutes of "the corner is closed to you" for
+   * somebody else's driving. A punishment you can incur by standing still is not a punishment, it is
+   * a trap. Deliberate violence still ends the trade, because that part of the design is right, and
+   * anyone who means it will finish the job.
    */
   const BLAME_RADIUS = 60;
 
@@ -144,27 +281,62 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     for (const entry of sites) {
       const distance = flat(entry, player);
       const live = fixtures.get(entry.id);
+      // A LIT PAD MEANS SOMEBODY WORKS THIS CORNER. The light tracks `working()` — the same
+      // predicate the fixture does — so an off-shift kerb is dark in the world while staying on the
+      // map, where the card can say when she is back. Marking an empty kerb would recreate the
+      // original bug with better lighting. The light reaches further than the fixture on purpose:
+      // you see it from across the junction, and she has spawned by the time you are close enough
+      // to tell there is nobody there.
+      const worked = working(entry, hour) && !live?.dead;
+      if (worked && distance < DESPAWN_RADIUS) { if (!beacons.has(entry.id)) { const built = buildBeacon(entry); beacons.set(entry.id, built); beacon.add(built); } }
+      else dropBeacon(entry.id);
       if (live?.dead) continue;
       if (!live && distance < SPAWN_RADIUS && working(entry, hour) && !(ride && ride.site.id === entry.id)) spawn(entry);
       else if (live && (distance > DESPAWN_RADIUS || (!working(entry, hour) && distance > 45))) despawn(entry.id);
     }
+    syncGoal();
   }
 
   /** Fixtures stand their post. Fear, bumps and gunfire still move them; this walks them back. */
-  function tendFixtures(): void {
+  function tendFixtures(dt: number): void {
     const player = api.playerPosition();
     for (const [id, fixture] of fixtures) {
       const ped = fixture.ped;
-      if (ped.health < fixture.health) { fixture.health = ped.health; harmed(fixture); }
+      // A SHOVE IS NOT AN ASSAULT, and being knocked over is not being killed. Both of those were
+      // wrong, and both turned "walk up to the person you can see" into a trap: a sprint-bump on
+      // arrival took 12 health, tripped the bad-date list, shut the entire citywide trade on the
+      // player, and — because any `down` state was read as a corpse — retired the corner for seven
+      // minutes. She now dusts herself off, remembers you as clumsy, and carries on working.
+      const lost = fixture.health - ped.health;
+      if (lost > 0 && lost <= SHOVE_DAMAGE && ped.health > 0) ped.health = fixture.health;
+      else if (lost > 0) fixture.health = ped.health; // wounded, and the road will judge that on the outcome
+      // …and a survivable knock heals off over a few seconds. Both fixtures came out of the machine
+      // playthrough on 60 health from passing traffic, and a corner that is permanently two shots
+      // from a citywide ban is a corner the player is quietly walking a tightrope beside. Sustained
+      // gunfire still outruns this by a wide margin, so a real attack still kills.
+      if (ped.state !== 'down' && ped.health > 0 && ped.health < fixture.full) {
+        ped.health = Math.min(fixture.full, ped.health + FIXTURE_REGEN * dt);
+        fixture.health = ped.health;
+      }
       if (ped.state === 'down') {
+        if (ped.health > 0) continue; // knocked over, not killed: Pedestrian stands her back up on its own clock
         if (!fixture.dead) { fixture.dead = true; cooldown.set(id, CORNER_COOLDOWN); harmed(fixture); }
         continue;
       }
+      // A FIXTURE NEVER FIGHTS AND NEVER LEAVES THE KERB. An ordinary ped clipped by a car goes to
+      // FEAR_MAX and can roll "fight" (Pedestrian.applyFear), and an enraged ped pursues the player
+      // for as long as the fear lasts. The machine playthrough found Chidi Nwosu 72 m off his own
+      // corner, hostile, standing where Gugu should have been — so E offered HIS card at HER kerb.
+      if (ped.enraged || ped.state === 'hostile') { ped.enraged = false; ped.fear = 0; ped.state = 'idle'; ped.idleTime = 999_999; ped.setHail(true); }
       // Fear, bumps and gunfire still move a fixture — they are ordinary peds in every respect but
       // the census. Once calm, they go back to standing their corner instead of wandering off it.
-      if (ped.state !== 'idle' && ped.fear < CALM_THRESHOLD) { ped.state = 'idle'; ped.idleTime = 999999; ped.setHail(true); }
+      if (ped.state !== 'idle' && ped.fear < CALM_THRESHOLD) { ped.state = 'idle'; ped.idleTime = 999_999; ped.setHail(true); }
       if (ped.state !== 'idle') continue;
-      if (flat(ped.group.position, fixture.site) > 1.2 && flat(player, fixture.site) > 40) {
+      // Home if they have strayed far, whatever the player is doing: a fixture eight metres off its
+      // pitch is already wrong, and hiding the correction behind "only when nobody is looking" is
+      // what let one of them end up answering for somebody else's corner.
+      const strayed = flat(ped.group.position, fixture.site);
+      if (strayed > STRAY_LIMIT || (strayed > 1.2 && flat(player, fixture.site) > 40)) {
         ped.group.position.set(fixture.site.x, api.surfaceHeightAt(fixture.site.x, fixture.site.z), fixture.site.z);
       }
       // Face whoever is talking to them, otherwise face the road like everyone waiting on a kerb.
@@ -256,7 +428,14 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     say(`Sold ${quote.units} ${quote.units === 1 ? spec.unit : spec.plural} · R${quote.total}`,
       `${dealer.sold} Service charge R${quote.levy}.`, true);
     api.analytics('sell', { detail: product, value: quote.total });
-    if (save.tipSite === entry.id && save.tipProduct === product) { save.tipSite = undefined; save.tipProduct = undefined; }
+    if (save.tipSite === entry.id && save.tipProduct === product) {
+      // The errand she sent you on, delivered. Clear the destination, take the pillar down in this
+      // frame rather than on the next reconcile, and SAY SO: an arrival that passes in silence is a
+      // reward the player never collects.
+      save.tipSite = undefined; save.tipProduct = undefined;
+      syncGoal();
+      say('That was the run she sent you on', 'Straight there, straight sold. Ask any of them where the next one is — they will tell you, and they will keep telling you.', true);
+    }
     sales += 1;
     promote();
     if (sales % 3 === 1) blame();
@@ -296,6 +475,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (save.banned > 0) {
       rows.push({ id: 'banned', label: `The corner is closed to you`, detail: `Every block on this side of town has your car. About ${banHours(save.banned)} hours left.`, note: 'CLOSED', disabled: true });
       if (save.levy > 0) rows.push({ id: 'levy', label: 'Pay the arrear subs', detail: 'The security levy is not optional and the trustees are not sympathetic.', price: save.levy });
+      // Being barred is a closed door, not a blindfold. The road stays readable while you wait it out.
+      rows.push({ id: 'block', label: 'Where is everyone else working', detail: 'Shut to you today is not the same as hidden from you. The whole road, with distances.', note: 'FREE' });
       api.showMenu({
         featureId: 'street', eyebrow: `THE BODY CORPORATE · ${entry.district.toUpperCase()}`,
         title: `${dealer.name} — ${dealer.tag}`, blurb: dealer.banned, balance: api.balance(), rows, leaveLabel: 'Walk on',
@@ -332,6 +513,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     }
 
     if (save.levy > 0) rows.push({ id: 'levy', label: 'Pay the arrear subs', detail: cycle(LEVY_NOTES, visits.get(entry.id) ?? 0), price: save.levy });
+    // The standing destination and the whole road, from any corner, free, every time. A dealer who
+    // will not tell you where the other corners are is a dead end with a shopfront.
+    const standing = tipRow();
+    if (standing) rows.push(standing);
+    rows.push({ id: 'block', label: 'Where is everyone else working', detail: 'The road, with distances from this kerb. He will draw you the whole map if you ask.', note: 'FREE' });
     if (save.tier >= 2) rows.push({ id: 'fixer', label: 'Ask where the wholesale actually comes from', detail: FIXER.tag, note: 'FREE' });
 
     const next = nextRank(save.tier, save.turnover);
@@ -407,8 +593,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         ? { id: 'ride-onfoot', label: 'Short time — not on foot', detail: 'Round the corner means a car. Come back with one and she is still here.', price: worker.price, disabled: true }
         : { id: 'ride', label: 'Short time — she sets the price', detail: 'Round the corner, ten minutes, and she keeps the money whatever happens.', price: worker.price },
       { id: 'info', label: 'Ask what is happening on this block', detail: 'She has stood here every night for years. It shows.', price: worker.infoPrice },
-      { id: 'street-status', label: `${worker.name} · ${worker.shift.start}h–${worker.shift.end}h`, detail: worker.tag, note: 'HER TERMS', disabled: true },
     ];
+    // FREE, PERMANENT, AND SHE NEVER GETS BORED OF IT. The owner lost a destination because an NPC
+    // told him once, in a toast, and then refused to say it again. Every person in this feature will
+    // now repeat the last thing they told you, from any corner, at no charge, for as long as it holds.
+    if (save.tipSite) rows.push({ id: 'tip-again', label: 'Say that again — where is it paying?', detail: `You were sent to ${district(save.tipSite)}. She will happily go through it again.`, note: 'FREE' });
+    rows.push({ id: 'block', label: 'Who else is working, and where', detail: 'Every corner on the road, with distances. She knows all of them.', note: 'FREE' });
+    rows.push({ id: 'street-status', label: `${worker.name} · ${worker.shift.start}h–${worker.shift.end}h`, detail: worker.tag, note: 'HER TERMS', disabled: true });
     api.showMenu({
       featureId: 'street',
       eyebrow: `${entry.district.toUpperCase()} · ${api.hour() >= 18 || api.hour() < 5 ? 'NIGHT SHIFT' : 'DAY SHIFT'}`,
@@ -420,17 +611,73 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     });
   }
 
-  /** The information she sells: a real, checkable corner price, worth several times the fee. */
-  function tipLine(): string {
+  /**
+   * The information she sells: a real, checkable corner price, worth several times the fee.
+   *
+   * DEALER CORNERS ONLY. This was a straight bug and it is the likeliest reason the owner called the
+   * description impossible to follow: `bestDemand` was handed every site, so she could name the
+   * district of a WORKER's kerb, quoting a bid price that no dealer in that district honours. You
+   * drove across town on a real-sounding number, found a woman on a corner who does not buy zol, and
+   * the tip never cleared because clearing it needs a sale at that exact site id.
+   */
+  function chooseTip(): string | undefined {
     const heaviest = STREET_PRODUCTS
       .map((product) => ({ product, held: save.stock[product] }))
       .sort((a, b) => b.held - a.held)[0]!;
     const product = heaviest.held > 0 ? heaviest.product : supplyProduct(sites[0]!.id, sites[0]!.cast);
-    const target = bestDemand(sites, product);
-    if (!target) return 'Nothing worth selling you tonight, and I am not going to invent something.';
+    const target = bestDemand(sites.filter((entry) => entry.kind === 'dealer'), product);
+    if (!target) return undefined;
     save.tipSite = target; save.tipProduct = product; dirty = true;
+    syncGoal(); // the gold pillar goes up the instant she says it, not on the next reconcile tick
     const spec = productSpec(product);
     return `${district(target)} is short of ${spec.name.toLowerCase()} — they are paying about R${bidPrice(product, target, demandOf(target, product))} a ${spec.unit} there. Not the busy corner. The quiet one.`;
+  }
+
+  /** The standing directions to the current destination, in the game's own voice rather than hers,
+   *  so her line stays a line and the navigation stays navigation. */
+  function tipRow(): FeatureMenuRow | undefined {
+    const target = site(save.tipSite);
+    if (!target || !save.tipProduct) return undefined;
+    const spec = productSpec(save.tipProduct);
+    return {
+      id: 'dir:tip',
+      label: `MARKED — ${target.district}, ${Math.round(flat(api.playerPosition(), target))} m ${bearing(api.playerPosition(), target)}`,
+      detail: `A gold pillar of light is standing over it, and a gold pin is on your map. Both stay up until you have sold ${spec.name.toLowerCase()} there.`,
+      note: 'ON MAP', disabled: true,
+    };
+  }
+
+  /**
+   * What she knows, on a card you can sit and read — not a toast that outruns you.
+   *
+   * Reached two ways: paid for once (`info`), and then repeated free for ever (`tip-again`). The
+   * repeat is the whole point. Nothing in this feature is ever said once.
+   */
+  function showTipCard(entry: StreetSite, paid: boolean): void {
+    openSite = entry;
+    const worker = workerFor(entry.cast);
+    const seen = visits.get(entry.id) ?? 0;
+    const line = paid || !save.tipSite ? chooseTip() : undefined;
+    const standing = tipRow();
+    const rows: FeatureMenuRow[] = [];
+    if (standing) rows.push(standing);
+    else rows.push({ id: 'dir:none', label: 'Nothing worth a drive tonight', detail: 'She will not invent a corner to keep you happy. Come back when you are carrying something.', note: '—', disabled: true });
+    rows.push({ id: 'block', label: 'And the rest of the road?', detail: 'Every corner she knows, with distances from here.', note: 'FREE' });
+    rows.push({ id: 'tip-done', label: 'Right. Thanks.', detail: 'The light will still be there. So will she.' });
+    api.showMenu({
+      featureId: 'street', eyebrow: `${worker.name.toUpperCase()} · WHAT SHE KNOWS`,
+      title: save.tipSite ? `${district(save.tipSite)} is paying` : 'Nothing tonight',
+      blurb: `${cycle(worker.info, seen)} ${line ?? standingLine()}`.trim(),
+      balance: api.balance(), rows, leaveLabel: 'Walk on',
+    });
+  }
+
+  /** Her own words for a tip she has already given, so the free repeat is a repeat, not a shrug. */
+  function standingLine(): string {
+    const target = site(save.tipSite);
+    if (!target || !save.tipProduct) return 'Nothing worth selling you tonight, and I am not going to invent something.';
+    const spec = productSpec(save.tipProduct);
+    return `Same as I said: ${target.district}, short of ${spec.name.toLowerCase()}, about R${bidPrice(save.tipProduct, target.id, demandOf(target.id, save.tipProduct))} a ${spec.unit}. I am not going to get bored of telling you.`;
   }
 
   function buyInfo(entry: StreetSite): void {
@@ -438,10 +685,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const reason = refuseWindow(windowState(entry, worker));
     if (reason) { api.notify(worker.name, refusal(worker, reason), false); return; }
     if (!api.spend(worker.infoPrice)) { api.notify(worker.name, worker.refuse.broke, false); return; }
-    const seen = visits.get(entry.id) ?? 0;
-    api.notify(worker.name, `${cycle(worker.info, seen)} ${tipLine()}`, true);
+    showTipCard(entry, true);
     api.analytics('info', { value: worker.infoPrice });
-    api.closeMenu();
     dirty = true;
   }
 
@@ -486,12 +731,18 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     ride = undefined;
     dirty = true;
     openSite = current.site;
+    const line = chooseTip();
+    const standing = tipRow();
     api.showMenu({
       featureId: 'street',
       eyebrow: 'LATER · ROUND THE CORNER',
       title: worker.name,
-      blurb: `${worker.after} ${cycle(worker.info, save.rides)} ${tipLine()}`,
-      rows: [{ id: 'ride-done', label: 'Drive on', detail: 'She is back on her corner before you have found first gear.' }],
+      blurb: `${worker.after} ${cycle(worker.info, save.rides)} ${line ?? standingLine()}`,
+      rows: [
+        ...(standing ? [standing] : []),
+        { id: 'block', label: 'Who else is working, and where', detail: 'Every corner she knows, with distances from here.', note: 'FREE' },
+        { id: 'ride-done', label: 'Drive on', detail: 'She is back on her corner before you have found first gear.' },
+      ],
       leaveLabel: 'Drive on',
     });
     api.analytics('ride_end', { detail: current.site.district, value: current.paid });
@@ -581,22 +832,18 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         return fixture ? workerOffer(fixture, 'Wind the window down ·') : undefined;
       },
     },
-    {
-      // The block itself, so a corner is findable before you can see anybody on it. Same ring the
-      // eager registry approach uses, so the prompt does not change when the chunk lands.
-      //
-      // ONE PRESS PER BLOCK, then it goes quiet for good — `askAround` writes every corner on the
-      // block into save.met, and `met` is persisted. That gate is what makes a block-sized ring safe:
-      // the on-foot feature rung sits above `E Enter vehicle`, so a rung that kept offering would
-      // quietly stop the player getting into cars for a whole city block. It costs exactly one press.
-      id: 'street:ask', order: 58, context: 'foot',
-      test: (ctx) => {
-        const near = nearestSite(ctx.position.x, ctx.position.z);
-        if (!near || near.distance > ASK_AROUND_RADIUS) return undefined;
-        if (save.met.includes(near.site.id) || fixtures.has(near.site.id)) return undefined;
-        return { prompt: `E  Ask around · ${near.site.district}`, act: () => askAround(near.site) };
-      },
-    },
+    // THERE IS DELIBERATELY NO "ASK AROUND" RUNG HERE ANY MORE.
+    //
+    // It used to sit at order 58 over a block-wide ring, and it was the only door into the feature:
+    // press E on a vague prompt, receive a bearing in a four-second toast, then find a corner from
+    // memory. The owner's report is what that costs — "a lot of work to find a clue", "the
+    // instructions toasted too quickly to follow", "then the person stopped telling me". Every one of
+    // those failures is a property of a treasure hunt whose only clue expires.
+    //
+    // What replaced it: the host loads this feature on proximity, the corner is staffed, lit and
+    // blipped before you can see it, and you walk up to a PERSON. Directions are a re-readable page
+    // on the menu card (`showDirectory`), not a toast. As a bonus the on-foot ladder is clear again,
+    // so `E  Enter vehicle` works everywhere except within arm's reach of somebody.
   ];
 
   function nearestSite(x: number, z: number): { site: StreetSite; distance: number } | undefined {
@@ -614,25 +861,68 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     return points[Math.round(((angle < 0 ? angle + Math.PI * 2 : angle) / (Math.PI * 2)) * 8) % 8]!;
   }
 
-  function askAround(entry: StreetSite): void {
+  /** One line of the directory: who, where, how far, which way, and what they will do with you. */
+  function directoryRow(entry: StreetSite, hour: number): FeatureMenuRow {
     const player = api.playerPosition();
-    const hour = api.hour();
-    const partner = sites.find((other) => other.district === entry.district && other.kind !== entry.kind);
-    const dealerSite = entry.kind === 'dealer' ? entry : partner;
-    const workerSite = entry.kind === 'worker' ? entry : partner;
-    const lines: string[] = [];
-    if (dealerSite) lines.push(`${dealerFor(dealerSite.cast).name} works the corner about ${Math.round(flat(player, dealerSite))} m ${bearing(player, dealerSite)}.`);
-    if (workerSite) {
-      const worker = workerFor(workerSite.cast);
-      lines.push(onShift(hour, worker.shift)
-        ? `${worker.name} is on the kerb ${Math.round(flat(player, workerSite))} m ${bearing(player, workerSite)}.`
-        : `${worker.name} works this block from ${worker.shift.start}h.`);
+    const away = `${Math.round(flat(player, entry))} m ${bearing(player, entry)}`;
+    if (entry.kind === 'dealer') {
+      const dealer = dealerFor(entry.cast);
+      const long = supplyProduct(entry.id, entry.cast);
+      const spec = productSpec(long);
+      const wants = PRODUCTS.filter((product) => buysHere(entry.id, entry.cast, product.id)).map((product) => product.name.toLowerCase()).join(' and ');
+      return {
+        id: `dir:${entry.id}`, label: `${entry.district} — ${dealer.name}`,
+        detail: `${away}. Sells ${spec.name.toLowerCase()}, buys ${wants}.`,
+        note: sellsToYou(entry.id, entry.cast, save.tier) ? `R${askPrice(long, { siteId: entry.id, tier: save.tier, levy: save.levy, blackout: api.blackout() })}` : tierSpec(spec.tier).name.toUpperCase(),
+        disabled: true,
+      };
     }
-    api.notify(entry.district, lines.join(' ') || 'Nobody is working this block right now.', true);
-    // The whole block counts as asked, so the rung stands down for both corners on it.
-    for (const other of sites) if (other.district === entry.district && !save.met.includes(other.id)) save.met.push(other.id);
-    dirty = true;
-    api.analytics('ask_around', { detail: entry.district });
+    const worker = workerFor(entry.cast);
+    const open = onShift(hour, worker.shift);
+    return {
+      id: `dir:${entry.id}`, label: `${entry.district} — ${worker.name}`,
+      // The shift is ALWAYS printed, open or shut. A closed corner with the hours on it is a plan;
+      // a closed corner with nothing on it is the empty pavement the owner walked to.
+      detail: `${away}. ${worker.shift.start}h–${worker.shift.end}h${open ? ', on the kerb now' : `, back at ${worker.shift.start}h`}.`,
+      note: open ? `R${worker.price}` : 'LATER',
+      disabled: true,
+    };
+  }
+
+  /**
+   * THE PAGE THAT REPLACED THE TOAST.
+   *
+   * Every corner the road will admit to: name, district, metres, compass point, what it sells, what
+   * it buys, and what hours she works. It is on a PAUSED card, it can be reopened from any corner
+   * for free, for ever, and it costs nothing. This is the direct answer to "then the person stopped
+   * telling me, so I can't find it" — nobody in this feature ever stops telling you.
+   */
+  /** Re-open whoever the player is standing in front of. The one place that knows which card. */
+  function reopen(entry: StreetSite): void {
+    if (entry.kind === 'dealer') showDealer(entry); else showWorker(entry);
+  }
+
+  function showDirectory(from: StreetSite): void {
+    openSite = from;
+    const hour = api.hour();
+    const player = api.playerPosition();
+    const ordered = [...sites].sort((a, b) => flat(player, a) - flat(player, b));
+    const standing = tipRow();
+    const rows: FeatureMenuRow[] = standing ? [standing] : [];
+    // UIManager.back() RESUMES PLAY on a feature card — there is no card stack — so a page whose only
+    // exit is "Back" would drop the player out of the conversation they opened it from.
+    if (fixtures.has(from.id)) {
+      const who = from.kind === 'dealer' ? dealerFor(from.cast).name : workerFor(from.cast).name;
+      rows.push({ id: 'back-to-corner', label: `Back to ${who}`, detail: 'You are still standing in front of them.' });
+    }
+    rows.push(...ordered.map((entry) => directoryRow(entry, hour)));
+    api.showMenu({
+      featureId: 'street', eyebrow: 'THE ROAD · WHO IS WHERE',
+      title: 'Every corner, and how far',
+      blurb: 'Nobody here minds being asked twice. Orange lights are corners, purple lights are kerbs, and the gold one is wherever you were last sent.',
+      rows, leaveLabel: 'Put it away and walk on',
+    });
+    api.analytics('directory', { detail: from.district });
   }
 
   // ---- frame ------------------------------------------------------------------------------------
@@ -644,8 +934,17 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const hour = api.hour();
     reconcileTimer -= dt;
     if (reconcileTimer <= 0) { reconcileTimer = 0.5; reconcile(hour); }
-    tendFixtures();
+    tendFixtures(dt);
     drainToasts(dt);
+    // The same pulse ShopSystem gives its entry pads, so a corner reads as the same kind of thing.
+    beaconPhase += dt;
+    const pulse = 0.42 + Math.sin(beaconPhase * 2.6) * 0.16;
+    for (const group of beacons.values()) {
+      const disc = group.children[0] as THREE.Mesh | undefined;
+      if (disc) (disc.material as THREE.MeshBasicMaterial).opacity = pulse;
+      group.rotation.y += dt * 0.9;
+    }
+    if (goal?.visible) { goal.rotation.y += dt * 0.7; }
 
     if (save.banned > 0) {
       const before = save.banned;
@@ -682,8 +981,28 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       if (held > 0) entries.push({ id: `street:${product.id}`, label: product.name.toUpperCase(), value: `${held}` });
     }
     if (save.banned > 0) entries.push({ id: 'street:banned', label: 'ON THE LIST', value: `${banHours(save.banned)}h`, warn: true });
-    else if (save.tipSite) entries.push({ id: 'street:tip', label: 'TIP', value: district(save.tipSite).slice(0, 12) });
+    else if (save.tipSite) {
+      // The destination is on the HUD as well as the map and the world, and it carries the LIVE
+      // distance. Three places, none of them a toast, so it cannot be lost by looking away.
+      const target = site(save.tipSite);
+      entries.push({ id: 'street:tip', label: district(save.tipSite).slice(0, 12).toUpperCase(), value: target ? `${Math.round(flat(api.playerPosition(), target))} m` : 'SELL' });
+    }
     return entries.length > 0 ? entries.slice(0, 3) : undefined;
+  }
+
+  /**
+   * Blips. Every corner, always, from the moment the feature loads — because a map that hides the
+   * shops is not a map, and the owner's whole report is about a thing he could not find. Plus one
+   * gold objective pin over the destination, which the minimap pins to its own edge with an arrow
+   * when it is out of range, so it is impossible to lose no matter how far you drive.
+   */
+  function mapIcons(): FeatureMapIcon[] {
+    const icons: FeatureMapIcon[] = sites.map((entry) => ({
+      x: entry.x, z: entry.z, color: entry.kind === 'dealer' ? DEALER_COLOR : WORKER_COLOR,
+    }));
+    const target = site(save.tipSite);
+    if (target) icons.push({ x: target.x, z: target.z, color: GOAL_COLOR, objective: true });
+    return icons;
   }
 
   function menu(actionId: string): void {
@@ -691,9 +1010,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (!entry) return;
     if (actionId === 'levy') { payLevy(entry); return; }
     if (actionId === 'fixer') { showFixer(entry); return; }
-    if (actionId === 'fixer-done' || actionId === 'ride-done') { api.closeMenu(); return; }
+    if (actionId === 'block') { showDirectory(entry); return; }
+    if (actionId === 'back-to-corner') { reopen(entry); return; }
+    if (actionId === 'tip-again') { showTipCard(entry, false); return; }
+    if (actionId === 'fixer-done' || actionId === 'ride-done' || actionId === 'tip-done') { api.closeMenu(); return; }
     if (actionId === 'ride') { beginRide(entry); return; }
     if (actionId === 'info') { buyInfo(entry); return; }
+    if (actionId.startsWith('dir:')) return; // directory lines are reading matter, not buttons
     const [verb, product] = actionId.split(':') as [string, StreetProduct];
     if (!STREET_PRODUCTS.includes(product)) return;
     if (verb === 'buy1') buy(entry, product, 1);
@@ -785,6 +1108,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   return {
     update,
     hud,
+    mapIcons,
     interactions: () => rungs,
     serialize: () => ({ ...save, stock: { ...save.stock }, met: [...save.met] }),
     restore: (next) => {
@@ -798,6 +1122,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     dispose: () => {
       disposed = true;
       for (const id of [...fixtures.keys()]) despawn(id);
+      // Beacons are meshes we made, so we own their geometry and materials too — a scene removal
+      // alone would leak both on every checkpoint reload. Idempotent: the maps are emptied.
+      for (const id of [...beacons.keys()]) dropBeacon(id);
+      if (goal) { beacon.remove(goal); disposeTree(goal); goal = undefined; }
+      api.scene.remove(beacon);
       fixtures.clear(); cooldown.clear(); busy.clear(); demand.clear(); supply.clear(); visits.clear();
       ride = undefined; openSite = undefined;
     },

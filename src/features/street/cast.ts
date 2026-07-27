@@ -155,15 +155,18 @@ export interface Worker {
 /** One worker per block. Named, shifted, priced, and able to say no. */
 export const WORKERS: readonly Worker[] = [
   {
-    name: 'Nomsa Dube', tag: 'Nights on this block for six years. Keeps a list of cars.',
-    shift: { start: 19, end: 5 }, price: 150, infoPrice: 60,
+    name: 'Nomsa Dube', tag: 'Six to six on this block for six years. Keeps a list of cars.',
+    // Six till six. Widened from 19h–5h so the introduction block's night half meets its day half
+    // (Gugu, RELIEF_WORKER_CAST) with no gap: at the nearest corner to the spawn kerb there is
+    // always somebody on the pavement, whatever time the player starts.
+    shift: { start: 18, end: 6 }, price: 150, infoPrice: 60,
     greet: [
       'Evening. R150, short time, and you drive round the corner — not here, here is where I stand.',
       'You are back. Fine. Same price. I do not do specials, this is not Checkers.',
       'Before anything: I write cars down. Not a threat, just admin. Everybody on this road keeps the same book.',
     ],
     agree: 'Right. Round the corner, kill the lights, and do not touch the radio, that station is a crime.',
-    after: 'Afterwards she talks, because she has been on this block since seven and you are the first person tonight who has not been an idiot. She tells you what she has actually seen from here.',
+    after: 'Afterwards she talks, because she has been on this block since six and you are the first person tonight who has not been an idiot. She tells you what she has actually seen from here.',
     info: [
       'The blue lights on the M2 tonight are not police. They are a metro cop moonlighting, and he only stops nice cars.',
       'That building with no windows on the corner — go in the side, never the lobby. The lobby has a man with a clipboard and a bad attitude.',
@@ -171,7 +174,7 @@ export const WORKERS: readonly Worker[] = [
     ],
     refuse: {
       banned: 'No. You are on the list, my friend. Somebody got hurt and the whole road has your car. Twelve hours, minimum, and that is the road being generous.',
-      'off-shift': 'I am not working yet. I start at seven. Go and do something legal for a few hours.',
+      'off-shift': 'I am not working yet. I start at six. Go and do something legal for a few hours.',
       moving: 'Stop the car properly. I am not talking to a moving vehicle, I have knees.',
       'police-car': 'A JMPD car. Are you serious. Coetzee took R200 off me on Tuesday and confiscated my condoms as evidence. Drive away.',
       wreck: 'That car is smoking. I am not getting into a story that ends with me pushing.',
@@ -302,6 +305,36 @@ export const WORKERS: readonly Worker[] = [
       wreck: 'Look at your car. Then look at me. Now you understand.',
       broke: 'You are short and I am tired. Both are fixable, yours first.',
       busy: 'Wait a bit. Even eleven years needs a sit down.',
+    },
+  },
+  // INDEX 6 — THE DAYLIGHT RELIEF, and by pinning (street.state.RELIEF_WORKER_CAST) the person you
+  // meet first. She works the introduction block opposite Nomsa's six-to-six, so that corner is
+  // never empty whatever the clock says, and her entire character is that she explains things and
+  // then explains them again. She is the answer to "the person stopped telling me".
+  {
+    name: 'Gugu Ndlovu', tag: 'Daylight on the CBD kerb. Will explain it twice and not make a thing of it.',
+    shift: { start: 6, end: 19 }, price: 120, infoPrice: 40,
+    greet: [
+      'R120, and before you ask — yes I am out here in the daylight, no I am not lost, this is a job with hours.',
+      'You look like you have been walking around trying to work out how this street works. Ask me. I am cheaper than finding out.',
+      'You again. Ask me anything twice, I do not charge for the second time. Half this road would still be lost otherwise.',
+      'Morning. The man on that corner sells, I stand on this one, and everybody pretends the building above us is flats.',
+    ],
+    agree: 'Round the corner then. Not far — I am back here for the school run and the school run does not wait.',
+    after: 'She talks all the way back, and it is not small talk: she lays out who is on which corner, what they will pay, and which one is a waste of petrol, twice, so it sticks.',
+    info: [
+      'Everything you want to know is on that kerb in front of you. The lights are corners. Follow one, there is a person under it.',
+      'Ask any of us where the money is and we will tell you, every time, for nothing. We are not a puzzle, we are a road.',
+      'Day shift sees the bakkie, night shift sees the buyers. Between us there is nothing about this street we do not know.',
+    ],
+    refuse: {
+      banned: 'No. You hurt somebody who works here and the whole road heard within the hour. Wait it out.',
+      'off-shift': 'I start at six. Come back when it is light, or go and see Nomsa — she has this kerb until then.',
+      moving: 'Stop the car first. I am not shouting at a moving vehicle in daylight.',
+      'police-car': 'A JMPD car, in the middle of town, at this hour. Be serious.',
+      wreck: 'That car is finished. Take it to the spray shop before somebody takes it off you.',
+      broke: 'R120 and you do not have R120. That is fine. Come back, I am here all day.',
+      busy: 'Give me a minute, I am a person. I will still be on this corner in five.',
     },
   },
 ];

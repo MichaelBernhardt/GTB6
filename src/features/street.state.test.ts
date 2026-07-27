@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ASK_AROUND_RADIUS, DEFAULT_STREET_STATE, MIN_CORNER_GAP, nearestStreetSite, sanitizeStreetState,
-  STREET_BLOCK_COUNT, STREET_MAX_CARRY, STREET_PRODUCTS, STREET_STAFF_RADIUS, STREET_UNSTAFF_RADIUS,
-  streetSites,
+  DEFAULT_STREET_STATE, MIN_CORNER_GAP, nearestStreetSite, PAVEMENT_CLEARANCE, RELIEF_WORKER_CAST,
+  sanitizeStreetState, STREET_BLOCK_COUNT, STREET_LOAD_RADIUS, STREET_MAX_CARRY, STREET_PRODUCTS,
+  STREET_STAFF_RADIUS, STREET_UNSTAFF_RADIUS, streetSites,
 } from './street.state';
+import { distanceToRoadEdge } from '../world/mapData';
 import { PLAYER_SPAWN } from '../world/placements';
 
 describe('street save slice', () => {
@@ -60,10 +61,10 @@ describe('street save slice', () => {
 describe('derived kerb sites', () => {
   const sites = streetSites();
 
-  it('derives one dealer and one worker per block from live map data', () => {
-    expect(sites).toHaveLength(STREET_BLOCK_COUNT * 2);
+  it('derives one dealer and one worker per block, plus the daylight relief on the first one', () => {
+    expect(sites).toHaveLength(STREET_BLOCK_COUNT * 2 + 1);
     expect(sites.filter((site) => site.kind === 'dealer')).toHaveLength(STREET_BLOCK_COUNT);
-    expect(sites.filter((site) => site.kind === 'worker')).toHaveLength(STREET_BLOCK_COUNT);
+    expect(sites.filter((site) => site.kind === 'worker')).toHaveLength(STREET_BLOCK_COUNT + 1);
     expect(new Set(sites.map((site) => site.id)).size).toBe(sites.length);
   });
 
@@ -80,13 +81,33 @@ describe('derived kerb sites', () => {
     }
   });
 
-  it('keeps the dealer and the worker on the same block but not on the same paving slab', () => {
+  it('keeps every corner on a block apart from every other corner on it', () => {
     for (const dealer of sites.filter((site) => site.kind === 'dealer')) {
-      const worker = sites.find((site) => site.kind === 'worker' && site.district === dealer.district);
-      expect(worker, dealer.district).toBeDefined();
-      const gap = Math.hypot(worker!.x - dealer.x, worker!.z - dealer.z);
-      expect(gap, `${dealer.district} gap ${gap.toFixed(1)}m`).toBeGreaterThanOrEqual(MIN_CORNER_GAP);
-      expect(gap, `${dealer.district} gap ${gap.toFixed(1)}m`).toBeLessThan(600);
+      const workers = sites.filter((site) => site.kind === 'worker' && site.district === dealer.district);
+      expect(workers.length, dealer.district).toBeGreaterThanOrEqual(1);
+      for (const worker of workers) {
+        const gap = Math.hypot(worker.x - dealer.x, worker.z - dealer.z);
+        expect(gap, `${worker.id} gap ${gap.toFixed(1)}m`).toBeGreaterThanOrEqual(MIN_CORNER_GAP);
+        expect(gap, `${worker.id} gap ${gap.toFixed(1)}m`).toBeLessThan(600);
+      }
+      // Two workers sharing a block must not share a paving slab either.
+      for (let a = 0; a < workers.length; a++) {
+        for (let b = a + 1; b < workers.length; b++) {
+          const gap = Math.hypot(workers[a]!.x - workers[b]!.x, workers[a]!.z - workers[b]!.z);
+          expect(gap, `${workers[a]!.id} vs ${workers[b]!.id}`).toBeGreaterThanOrEqual(MIN_CORNER_GAP);
+        }
+      }
+    }
+  });
+
+  it('stands every corner on the PAVEMENT, not in a carriageway', () => {
+    // The first machine playthrough found Gugu Ndlovu on 0 health and Chidi Nwosu on 60, both being
+    // run down by ambient traffic: offsetting past one road's kerb at a junction had put them inside
+    // the cross street. A corner in the road kills the person, retires the block for minutes, and —
+    // inside the blame radius — bans the player from the whole trade for something a taxi did.
+    for (const site of sites) {
+      const clear = distanceToRoadEdge(site.x, site.z);
+      expect(clear, `${site.id} stands ${clear.toFixed(1)} m from the nearest road edge`).toBeGreaterThanOrEqual(PAVEMENT_CLEARANCE);
     }
   });
 
@@ -97,35 +118,67 @@ describe('derived kerb sites', () => {
     }
   });
 
-  it('answers the eager approach ring without loading the feature body', () => {
+  it('answers the proximity ring without loading the feature body', () => {
     const first = sites[0]!;
     const near = nearestStreetSite(first.x + 3, first.z + 3);
     expect(near?.site.id).toBe(first.id);
-    expect(Math.sqrt(near!.distanceSq)).toBeLessThan(ASK_AROUND_RADIUS);
+    expect(Math.sqrt(near!.distanceSq)).toBeLessThan(STREET_LOAD_RADIUS);
     const far = nearestStreetSite(first.x + 5000, first.z + 5000);
-    expect(Math.sqrt(far!.distanceSq)).toBeGreaterThan(ASK_AROUND_RADIUS);
+    expect(Math.sqrt(far!.distanceSq)).toBeGreaterThan(STREET_LOAD_RADIUS);
   });
 });
 
 /**
- * The owner playtest this suite exists to stop repeating: "I hung around some for a while and never
- * saw anything. It was 2300 at night." Nothing was wrong with the cast, the shifts or the corners —
- * the ONLY thing that loads the feature body is pressing E inside the eager ring, and the ring was a
- * 46 m bubble. He was standing about 97 m away from a staffed corner and the game never said a word.
+ * THE OWNER PLAYTEST THIS SUITE EXISTS TO STOP REPEATING.
+ *
+ * First report: "I hung around some for a while and never saw anything. It was 2300 at night."
+ * Second report: "It took a lot of work to find a clue to see someone... the instructions toasted too
+ * quickly to follow... then the person stopped telling me, so I can't find it. Just unusable really."
+ *
+ * Both are the same failure at different depths: the content existed but was not REACHABLE. These
+ * pin the reachability numbers so no refactor can quietly make the street a treasure hunt again.
  */
 describe('the trade is findable from where a session actually begins', () => {
-  it('offers the ask-around prompt at the game’s own start point', () => {
+  it('puts a corner inside the ring that auto-loads the feature, at the game’s own start point', () => {
+    // FeatureHost.preloadNearby() watches this ring every 0.4 s and loads the body without a press,
+    // so a corner inside it at spawn means the street is staffed and blipped before the player moves.
     const near = nearestStreetSite(PLAYER_SPAWN[0], PLAYER_SPAWN[2]);
     expect(near, 'no corner derived at all').toBeDefined();
     const metres = Math.sqrt(near!.distanceSq);
-    expect(metres, `nearest corner (${near!.site.id}) is ${metres.toFixed(0)} m from the spawn kerb — outside the ${ASK_AROUND_RADIUS} m ring, so a fresh session is never told the trade exists`)
-      .toBeLessThan(ASK_AROUND_RADIUS);
+    expect(metres, `nearest corner (${near!.site.id}) is ${metres.toFixed(0)} m from the spawn kerb — outside the ${STREET_LOAD_RADIUS} m ring, so a fresh session never loads the trade at all`)
+      .toBeLessThan(STREET_LOAD_RADIUS);
   });
 
-  it('staffs a corner at least as far out as the ring that promised it', () => {
-    // Otherwise "Nomsa is on the kerb 240 m north-east" walks the player to an empty pavement, which
-    // reads as exactly the same bug all over again.
-    expect(STREET_STAFF_RADIUS).toBeGreaterThanOrEqual(ASK_AROUND_RADIUS);
+  it('keeps time-to-first-contact to a short walk, not an expedition', () => {
+    // "Someone should be visible and dealable-with within a short walk of the inner-city blocks."
+    // A brisk walk is about 4 m/s in this build, so 200 m is under a minute from a standing start.
+    const near = nearestStreetSite(PLAYER_SPAWN[0], PLAYER_SPAWN[2])!;
+    expect(Math.sqrt(near.distanceSq), `${near.site.id} is the first person you can reach`).toBeLessThan(200);
+  });
+
+  it('makes the FIRST block the nearest one, because block 0 is the block the design privileges', () => {
+    // trade.supplyProduct pins block 0 to the beginner product and RELIEF_WORKER_CAST staffs block 0
+    // through daylight. Both of those are wasted if block 0 is 1.7 km away, which is where the
+    // density ranking used to put it.
+    const sites = streetSites();
+    const first = sites.filter((site) => site.cast === 0 || site.id.endsWith('day-worker'))[0]!;
+    const nearest = [...sites].sort((a, b) =>
+      Math.hypot(a.x - PLAYER_SPAWN[0], a.z - PLAYER_SPAWN[2]) - Math.hypot(b.x - PLAYER_SPAWN[0], b.z - PLAYER_SPAWN[2]))[0]!;
+    expect(first.district, 'block 0 must be the district you start in').toBe(nearest.district);
+  });
+
+  it('staffs the introduction block around the clock by pairing two shifts on it', () => {
+    const sites = streetSites();
+    const home = sites[0]!.district;
+    const workers = sites.filter((site) => site.kind === 'worker' && site.district === home);
+    expect(workers.length, `${home} needs a day shift and a night shift`).toBe(2);
+    expect(workers.map((site) => site.cast)).toContain(RELIEF_WORKER_CAST);
+  });
+
+  it('staffs a corner at least as far out as the ring that loaded it', () => {
+    // Otherwise the map blip and the pillar of light point at an empty pavement, which reads as
+    // exactly the same bug all over again.
+    expect(STREET_STAFF_RADIUS).toBeGreaterThanOrEqual(STREET_LOAD_RADIUS);
     expect(STREET_UNSTAFF_RADIUS).toBeGreaterThan(STREET_STAFF_RADIUS);
   });
 

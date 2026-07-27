@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { DEALERS, FIXER, LEVY_NOTES, PROMOTIONS, RADIO_BLAME, WORKERS, cycle, dealerFor, workerFor } from './cast';
 import { onShift, type Refusal } from './rules';
 import { PRODUCTS, TIERS } from './trade';
-import { STREET_BLOCK_COUNT } from '../street.state';
+import { RELIEF_WORKER_CAST, STREET_BLOCK_COUNT } from '../street.state';
 
 const everyString = (value: unknown, out: string[] = []): string[] => {
   if (typeof value === 'string') out.push(value);
@@ -98,6 +98,20 @@ describe('the sex workers are characters, not vending machines', () => {
     }
     expect(longestGap, `${longestGap} in-game hours with nobody working`).toBeLessThanOrEqual(6);
     expect(WORKERS.some((worker) => onShift(12, worker.shift))).toBe(true); // somebody works middays
+  });
+
+  it('leaves no hour at all unstaffed on the introduction block', () => {
+    // Block 0 is the corner nearest the spawn kerb and it carries TWO workers: WORKERS[0] on nights
+    // and WORKERS[RELIEF_WORKER_CAST] on days (street.state.ts pins the second one). Between them
+    // there must be no gap, or a player who starts at the wrong time walks to an empty pavement and
+    // concludes — reasonably — that there is nothing here. That is the owner's playtest, twice over.
+    const night = WORKERS[0]!;
+    const day = WORKERS[RELIEF_WORKER_CAST % WORKERS.length]!;
+    expect(day.name, 'the relief slot must not be the same person as the night shift').not.toBe(night.name);
+    for (let hour = 0; hour < 24; hour++) {
+      expect(onShift(hour, night.shift) || onShift(hour, day.shift), `nobody works the first block at ${hour}h00`).toBe(true);
+    }
+    expect(onShift(12, day.shift), 'the relief worker must cover midday').toBe(true);
   });
 
   it('is busiest at 23:00, because that is when the owner went looking', () => {
