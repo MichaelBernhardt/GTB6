@@ -51,6 +51,15 @@ CAP = [
 ]
 
 SAND = [
+    # The strand is a BAND, so sample it at known distances from the waterline rather than only where
+    # a stand happens to fall: the bleached ring, the grit behind it, and the veld behind that. (The
+    # profile climbs 0.011 units of height per unit of ground, so these are the colour bands too.)
+    # (x solved from the measured foot height: the profile puts the waterline at y = OCEAN_Y and
+    #  climbs 0.011 units per unit inland, so y at the player's feet IS the distance to the water.)
+    ('sand-strand-13',     -2719, -3600, 250, EYE, 'NATURAL strand 13 u from the waterline: the bathtub ring'),
+    ('sand-strand-50',     -2669, -3600, 250, EYE, 'NATURAL strand 50 u from the waterline: drawdown grit'),
+    ('sand-strand-110',    -2571, -3600, 250, EYE, 'NATURAL strand 110 u inland: should be veld by here, not pan'),
+    ('sand-strand-180',    -2458, -3600, 250, EYE, 'NATURAL strand 180 u inland: ordinary ground mesh'),
     ('sand-natural',       -2700, -3600, 270, EYE, 'NATURAL strand, waterline -2764, outside every beach band'),
     ('sand-natural-down',  -2700, -3600, 250, EYE, 'NATURAL strand, oblique so the strand fills the lower frame'),
     ('sand-natural2',      -4120,     0, 270, EYE, 'NATURAL strand z=0, waterline -4185'),

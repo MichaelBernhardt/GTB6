@@ -32,7 +32,7 @@ import {
   type MapPolygon,
 } from './mapData';
 import { damSignedDistance } from './damField';
-import { beachBands, farWaterOutline, OCEAN_Y, shoreColourAt, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
+import { beachBands, farWaterOutline, isSandZ, OCEAN_Y, shoreColourAt, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
 import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
@@ -196,6 +196,25 @@ export const BED_Z_OVERRUN = 600;
  * VELD_TONE so the clip line is a colour match rather than a seam.
  */
 export const SHORE_VELD_BLEND = 190;
+/**
+ * WHERE THE PAINTED STRAND STOPS, at the resorts and everywhere else.
+ *
+ * BEACH_INLAND is the TERRAIN: 132 units of ground climbing out of the water, and it is not moving
+ * (the profile, the venue crests and the bake all hang off it). What was wrong is that the SHEET was
+ * painted as exposed lake bed for that whole width plus SHORE_VELD_BLEND behind it — 322 units, 430
+ * metres, of grit and bathtub ring round every bay in the reservoir. Measured in-engine it is the
+ * single largest thing in most shore frames, it is why Grooteiland reads as a pan rather than as an
+ * island, and it is why the west band reads as a pale plain rather than as veld.
+ *
+ * So the paint is separated from the profile. The natural shore now shows ~60 units of exposed bank
+ * and greens over the next 60; the RESORT bands keep the full BEACH_INLAND + SHORE_VELD_BLEND, so
+ * Misty Bay and Leboya Baai still have the wide warm beaches the owner picked the place for. The
+ * geometry is untouched either way: same lattice, same vertices, same heights — only the colours
+ * and how far east the sheet is worth drawing.
+ */
+export const STRAND_PAINT_INLAND = 60;
+/** Width (units) over which the natural strand's paint fades into VELD_TONE. */
+export const STRAND_PAINT_BLEND = 60;
 /** Vertices per side of the drawn ground mesh. The bed sheet reuses this lattice EXACTLY (same x/z,
  *  same heights) so the two surfaces cannot interpenetrate — see buildBeach. */
 export const GROUND_SEGMENTS = 256;
@@ -1879,7 +1898,14 @@ export class City {
     // looking at. Sharing the lattice makes the two surfaces agree at every vertex, so a small lift
     // is enough to settle the order for good.
     const step = WORLD_SIZE / GROUND_SEGMENTS;
-    const inlandLimit = BEACH_INLAND + SHORE_VELD_BLEND;
+    // The painted band is WIDE at the two resorts and NARROW everywhere else (see STRAND_PAINT_INLAND):
+    // one lookup by z, used both for how far the paint ramps and for how far the sheet is worth drawing.
+    // Past the sheet the ordinary ground mesh takes over, with its grass texture and its own colour —
+    // which is the point, because the sheet's dambed grain is exposed lake bed and the veld is not.
+    const paintInland = (z: number): number => (isSandZ(z, bands) ? BEACH_INLAND : STRAND_PAINT_INLAND);
+    const paintBlend = (z: number): number => (isSandZ(z, bands) ? SHORE_VELD_BLEND : STRAND_PAINT_BLEND);
+    const paintLimit = (z: number): number => paintInland(z) + paintBlend(z);
+    const inlandLimit = Math.max(BEACH_INLAND + SHORE_VELD_BLEND, STRAND_PAINT_INLAND + STRAND_PAINT_BLEND);
     const i0 = -Math.ceil(BED_OFFMAP_OVERHANG / step);
     const j0 = -Math.ceil(BED_Z_OVERRUN / step);
     const j1 = GROUND_SEGMENTS - j0;
@@ -1898,8 +1924,9 @@ export class City {
     const wanted = (i: number, j: number): boolean => {
       if (i < i0 || j < j0 || i >= i1 || j >= j1) return false;
       if (gx(i) < -half || gx(j) < -half || gx(j + 1) > half) return true;
-      return at(i, j) < inlandLimit || at(i + 1, j) < inlandLimit
-        || at(i, j + 1) < inlandLimit || at(i + 1, j + 1) < inlandLimit;
+      const limit = Math.max(paintLimit(gx(j)), paintLimit(gx(j + 1)));
+      return at(i, j) < limit || at(i + 1, j) < limit
+        || at(i, j + 1) < limit || at(i + 1, j + 1) < limit;
     };
     const positions: number[] = []; const uvs: number[] = []; const colors: number[] = []; const indices: number[] = [];
     const index = new Map<number, number>();
@@ -1912,7 +1939,7 @@ export class City {
       const inGrid = x >= -half && x <= half && z >= -half && z <= half;
       const y = inGrid ? terrainHeightAt(x, z) : analyticTerrainHeightAt(x, z);
       const d = at(i, j);
-      const fade = Math.min(1, Math.max(0, (d - BEACH_INLAND) / SHORE_VELD_BLEND));
+      const fade = Math.min(1, Math.max(0, (d - paintInland(z)) / paintBlend(z)));
       const id = positions.length / 3;
       positions.push(x, y + BED_SHEET_LIFT, z); uvs.push(x / 9, z / 9);
       const [cr, cg, cb] = shoreColourAt(y, z, OCEAN_Y, bands, fade);
