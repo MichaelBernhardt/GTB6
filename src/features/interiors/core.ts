@@ -72,9 +72,18 @@ export const CORE_GAP = 1.4;
  * warehouse floor should not be a stadium. The lower bound is DERIVED from the corridor and the
  * minimum room so the two cannot drift apart and quietly produce a floor with no rooms on it —
  * coreContinuity asserts the same relation, and floor.test.ts asserts that over the real city.
+ *
+ * The minimum DEPTH is 21 rather than 18 for a reason that only shows up citywide: a band has to be
+ * 2 × MIN_ROOM deep before it can hold two rooms, and at 18 it was 10.9, so every house on the
+ * minimum plate got exactly one room a side and a street of them all read alike. At 21 the band is
+ * 13.9, the hash can choose one room or two, and the street stops repeating.
  */
-export const MIN_PLATE: readonly [number, number] = [CORRIDOR + 2 * MIN_ROOM + 0.6, 18];
+export const MIN_PLATE: readonly [number, number] = [CORRIDOR + 2 * MIN_ROOM + 0.6, 21];
 export const MAX_PLATE: readonly [number, number] = [30, 34];
+/** A works gets a bigger ceiling than a flat: the point of a warehouse is the floor plate, and a
+ *  30 × 34 shed with racking down it reads as a shop storeroom rather than a hall. Not larger than
+ *  this: solveFloor flood-fills the plate once per solid prop, and the cost is the tile count. */
+export const MAX_HALL: readonly [number, number] = [36, 40];
 
 /** An axis-aligned rectangle in floor-local space: origin at the plate centre, +z deeper into the
  *  building (away from the street), +x to your left as you walk in. */
@@ -102,6 +111,17 @@ export interface BuildingFacts {
   readonly entrance: EntranceKind;
 }
 
+/**
+ * HOW WELL-KEPT THE INSIDE IS — the axis that stops two houses on one street reading alike.
+ *
+ * The owner's test is walking up to buildings at random, so the thing that has to vary is what you
+ * find when you do. Family alone does not do it: `suburban` is a third of this city's parcels and
+ * covers a two-room township house, a Melville semi and a Northcliff double-storey. So every
+ * building also carries a finish, drawn from its own hash and its own footprint, and the grammar
+ * reads it for palette, room count, what furniture is in the room and what is conspicuously missing.
+ */
+export type Finish = 'bare' | 'homely' | 'smart';
+
 export interface BuildingCore {
   readonly id: string;
   readonly seed: number;
@@ -119,6 +139,30 @@ export interface BuildingCore {
   /** Where the street door lands on the front wall (floor 0 only), in plate-local x. */
   readonly entryX: number;
   readonly entrance: EntranceKind;
+  /** The structural family the parcel was zoned as — what sort of building this is. */
+  readonly family: string;
+  /** How well-kept it is. See Finish. */
+  readonly finish: Finish;
+}
+
+/**
+ * The finish, from the building itself.
+ *
+ * Some families answer outright: an estate villa is smart, a works and a farm cottage are bare, a
+ * tower is smart unless its own hash says otherwise. The families that cover the whole city — houses
+ * and flats — take a weighted draw where the building's FOOTPRINT counts for a third: a small house
+ * on a low draw is a two-room place with a paraffin stove, a big one on a high draw is a semi with a
+ * sofa suite. Suburban footprints run 316 / 747 / 1085 m² at the tenth, half and ninetieth
+ * percentile, which is what the 1100 normalises against.
+ */
+export function finishFor(facts: BuildingFacts, seed: number): Finish {
+  if (facts.style === 'estate') return 'smart';
+  if (facts.style === 'industrial' || facts.style === 'rural') return 'bare';
+  const draw = coreRandom(seed, 21);
+  if (facts.style === 'downtown') return draw < 0.22 ? 'homely' : 'smart';
+  const size = Math.min(1, (facts.width * facts.depth) / 1100);
+  const score = draw * 0.64 + size * 0.36;
+  return score < 0.36 ? 'bare' : score < 0.74 ? 'homely' : 'smart';
 }
 
 /**
@@ -154,8 +198,9 @@ const clamp = (value: number, low: number, high: number): number => Math.max(low
  */
 export function buildCore(facts: BuildingFacts): BuildingCore {
   const seed = buildingSeed(facts);
-  const width = stableWorldFloat(clamp(facts.width - 0.9, MIN_PLATE[0], MAX_PLATE[0]));
-  const depth = stableWorldFloat(clamp(facts.depth - 0.9, MIN_PLATE[1], MAX_PLATE[1]));
+  const ceiling = facts.entrance === 'dock' ? MAX_HALL : MAX_PLATE;
+  const width = stableWorldFloat(clamp(facts.width - 0.9, MIN_PLATE[0], ceiling[0]));
+  const depth = stableWorldFloat(clamp(facts.depth - 0.9, MIN_PLATE[1], ceiling[1]));
   // Storeys from the height the bake actually generated, never a guess, counted at a real facade
   // storey so the number matches the bands of windows the player counted from the street. A 6 m
   // cottage is one storey; whatever the tallest thing in the CBD turns out to be gets exactly as
@@ -184,6 +229,8 @@ export function buildCore(facts: BuildingFacts): BuildingCore {
     // The street door lands on the spine, so walking in puts you in the corridor facing the core.
     entryX: corridorX,
     entrance: facts.entrance,
+    family: facts.style,
+    finish: finishFor(facts, seed),
   };
 }
 

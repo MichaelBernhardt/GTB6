@@ -32,8 +32,10 @@ export interface BuildingSpec {
   roof: THREE.Material;
 }
 
-/** One solid massing volume in world XZ and building-local Y (the city lifts y by the parcel's terrain height). */
-export interface MassingTier { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number; }
+/** One solid massing volume in world XZ and building-local Y (the city lifts y by the parcel's terrain height).
+ *  `kind` is 'wall' for a boundary/garden wall run — still a collider, but not part of the building, so
+ *  the entrance planner never hangs a front door on one (see planEntrance). */
+export interface MassingTier { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number; kind?: 'wall'; }
 
 export interface BuildingProfile {
   roofY: number;
@@ -80,7 +82,7 @@ export interface EntranceTag {
 export type EntranceKind = 'lobby' | 'shopfront' | 'porch' | 'dock';
 
 /** Which opening each structural family puts at street level. Mirrors the detail passes: mixed-use
- *  gets shop bays, downtown and dense-residential a glazed lobby, houses a porch, works a dock. */
+ *  gets shop bays, downtown and dense-residential a glazed lobby, houses a porch, works a roller dock. */
 const ENTRANCE_KIND: Record<BuildingStyle, EntranceKind> = {
   downtown: 'lobby',
   'mixed-use': 'shopfront',
@@ -93,21 +95,80 @@ const ENTRANCE_KIND: Record<BuildingStyle, EntranceKind> = {
 
 /** Height the leaf is centred at — the same 1.72 the facade pass has always used. */
 const ENTRANCE_Y = 1.72;
+/** Full head height of an opening, when the wall behind it is tall enough to carry one. */
+const ENTRANCE_H = 3.1;
+/** Below this the wall is a parapet, not a facade, and nothing is drawn on it. */
+const MIN_ENTRANCE_H = 2.15;
+/** A single leaf. Narrower than this is a hatch, and the interior's own doorway would not fit it. */
+const MIN_ENTRANCE_W = 1.6;
 
 /**
- * Whether this building carries a drawn entrance, and where. `detailed` is the facade pass's own
- * rule, repeated once here so the tag and the leaf are decided by one expression: undetailed
- * buildings get no leaf, so they must not offer a door either.
+ * WHERE THIS BUILDING'S WAY IN IS. Every building has one.
+ *
+ * It used to have a second clause — the facade pass's own `detailed` rule (`variant % 2 === 0`
+ * outside the three always-detailed families) — on the argument that a building with no drawn leaf
+ * must not offer a door. That was backwards. It shut 757 of this city's 3,722 parcels, nearly all of
+ * them houses, and a house is the building a player is most likely to walk up to. The tag is what
+ * City draws the leaf FROM, so tagging one more building does not make a door disagree with a model:
+ * it makes the model draw a door. The parity rule now governs only the ornament it was written for.
+ *
+ * TWO PLACES TO LOOK, in order:
+ *  1. The centre line. This is where the facade pass has always hung the leaf, so every building that
+ *     already had a tag keeps exactly the tag it had — byte for byte, same x, same z, same width.
+ *  2. Failing that, the street-facing span that can actually carry an opening. Winged, twin-shed,
+ *     split-slab and paired-cottage massings have no wall ACROSS their centre at all — the centre
+ *     line is the gap between two wings — and the three-unit walk-up's centre bay is a hair narrower
+ *     than the leaf it was asked to hold. Between them that left 131 buildings with a blank facade
+ *     and no way in. The door goes on the frontmost, then widest, then most central of the real
+ *     spans, NARROWED to the span that carries it; ties break left, so the answer is a pure function
+ *     of the massing.
+ *
+ * Boundary walls are excluded from both. A garden wall stands in FRONT of the house it encloses, so
+ * the frontmost span on an estate parcel is the wall, not the villa — and a front door hung on a
+ * garden wall is the doorstep-in-the-front-yard bug this tag was introduced to kill.
  */
 export function planEntrance(
-  width: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[],
+  width: number, style: BuildingStyle, tiers: readonly MassingTier[],
 ): EntranceTag | undefined {
-  const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
-  if (!detailed) return undefined;
-  const doorWidth = Math.min(5.5, width * 0.32);
-  const z = frontFacadeZAt(tiers, 0, ENTRANCE_Y, doorWidth / 2);
-  if (z === undefined) return undefined;
-  return { x: 0, z, width: doorWidth, height: 3.1, kind: ENTRANCE_KIND[style] };
+  const want = Math.min(5.5, width * 0.32);
+  const mass = tiers.filter((tier) => tier.kind !== 'wall');
+  const kind = ENTRANCE_KIND[style];
+  const centre = frontFacadeZAt(mass, 0, ENTRANCE_Y, want / 2);
+  if (centre !== undefined) return sized(0, centre, want, kind, mass);
+  let low = Infinity; let high = -Infinity;
+  for (const tier of mass) { if (tier.minX < low) low = tier.minX; if (tier.maxX > high) high = tier.maxX; }
+  if (!(high > low)) return undefined;
+  let best: FrontFacadeSpan | undefined;
+  for (const span of frontFacadeSpansAt(mass, ENTRANCE_Y, low, high)) {
+    if (span.maxX - span.minX < MIN_ENTRANCE_W + 0.3) continue;
+    if (!best || better(span, best, want)) best = span;
+  }
+  if (!best) return undefined;
+  return sized((best.minX + best.maxX) / 2, best.z, Math.min(want, best.maxX - best.minX - 0.3), kind, mass);
+}
+
+/** A span that carries the whole leaf beats one that does not — otherwise a 2 m bay window in front
+ *  of a 12 m wall would take the door. Then the frontmost, the widest, the most central, and finally
+ *  the left one, so a symmetrical massing still has exactly one answer. */
+function better(span: FrontFacadeSpan, best: FrontFacadeSpan, want: number): boolean {
+  const epsilon = 1e-4;
+  const width = span.maxX - span.minX; const bestWidth = best.maxX - best.minX;
+  const carries = width >= want + 0.3; const bestCarries = bestWidth >= want + 0.3;
+  if (carries !== bestCarries) return carries;
+  if (Math.abs(span.z - best.z) > epsilon) return span.z > best.z;
+  if (Math.abs(width - bestWidth) > epsilon) return width > bestWidth;
+  const centre = Math.abs(span.minX + span.maxX); const bestCentre = Math.abs(best.minX + best.maxX);
+  if (Math.abs(centre - bestCentre) > epsilon) return centre < bestCentre;
+  return span.minX < best.minX;
+}
+
+/** The opening, cut down to the wall that carries it: a 3.1 m head on a 2.6 m shed wall is a hole in
+ *  the roof. Under MIN_ENTRANCE_H there is no facade to hang anything on and the building has no tag. */
+function sized(x: number, z: number, width: number, kind: EntranceKind, mass: readonly MassingTier[]): EntranceTag | undefined {
+  const top = massingTopAt(mass, x, z - 1e-3);
+  const height = top === undefined ? ENTRANCE_H : Math.min(ENTRANCE_H, top - 0.35);
+  if (height < MIN_ENTRANCE_H) return undefined;
+  return { x, z, width, height, kind };
 }
 
 /** A gable (or thatch) roof in building-local coordinates: ridge along local z at lx=0, apex `rise`
@@ -245,7 +306,7 @@ export class BuildingArchitecture {
     if (this.drawing) this.addStructuralDetail(spec, massing, roofY);
     return {
       roofY, massing, tiers: this.tiers, gables: this.gables,
-      entrance: planEntrance(spec.width, spec.style, spec.variant, this.tiers),
+      entrance: planEntrance(spec.width, spec.style, this.tiers),
     };
   }
 
@@ -707,7 +768,7 @@ export class BuildingArchitecture {
 
   /** A plastered wall segment that is both a mesh and an axis-aligned collision tier (grounded at +0.2). */
   private addWall(cx: number, _cy: number, cz: number, w: number, h: number, d: number): void {
-    this.tiers.push({ minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2, y0: 0.2, y1: h + 0.2 });
+    this.tiers.push({ minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2, y0: 0.2, y1: h + 0.2, kind: 'wall' });
     this.decor(() => {
       const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this.plaster);
       wall.position.set(cx, h / 2 + 0.2, cz); wall.castShadow = true; wall.receiveShadow = true; return wall;

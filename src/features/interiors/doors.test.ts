@@ -29,7 +29,7 @@ describe('doors', () => {
   beforeEach(() => { resetDoorCache(); });
 
   it('puts the doorstep in front of the plane the model tagged, on the building it belongs to', () => {
-    let checked = 0;
+    let checked = 0; let tucked = 0;
     for (const building of allBuildings().filter((_, index) => index % 31 === 0)) {
       const door = doorFor(building);
       if (!door) continue;
@@ -39,31 +39,61 @@ describe('doors', () => {
       const c = Math.cos(building.heading); const s = Math.sin(building.heading);
       expect(door.faceX).toBeCloseTo(building.x + tag.x * c + tag.z * s, 6);
       expect(door.faceZ).toBeCloseTo(building.z - tag.x * s + tag.z * c, 6);
-      // ...and the step is one stride out along the building's own outward normal.
-      expect(Math.hypot(door.x - door.faceX, door.z - door.faceZ)).toBeCloseTo(2.1, 6);
+      // ...and the step is a stride out along the building's own outward normal, clear of the wall
+      // by more than CoverSystem's 2.5 snap unless the pavement is too narrow to allow it.
+      const standOff = Math.hypot(door.x - door.faceX, door.z - door.faceZ);
+      expect(standOff, door.name).toBeLessThanOrEqual(2.9 + 1e-6);
+      expect(standOff, door.name).toBeGreaterThan(0.3);
+      if (standOff < 2.6) tucked++;
       // The step belongs to THIS building: never further from its centre than its own half-diagonal
       // plus that stride.
-      const reach = Math.hypot(building.width, building.depth) / 2 + 2.2;
+      const reach = Math.hypot(building.width, building.depth) / 2 + 3.0;
       expect(Math.hypot(door.x - building.x, door.z - building.z)).toBeLessThanOrEqual(reach);
       expect(door.facts.id).toBe(`${Math.round(building.x)}:${Math.round(building.z)}`);
       expect(door.openWidth).toBe(tag.width);
     }
     expect(checked, 'no doors were checked at all').toBeGreaterThan(30);
+    // Almost every doorstep makes the full stand-off; only a pavement too narrow for it tucks in.
+    expect(tucked / checked, `${tucked}/${checked} doorsteps had to tuck against their wall`).toBeLessThan(0.05);
   }, 120000);
 
-  it('never opens a loading dock, and never a building the facade pass left plain', () => {
-    for (const building of allBuildings().filter((_, index) => index % 17 === 0)) {
-      const tag = planOf(building).entrance;
-      const door = doorFor(building);
-      if (!tag || tag.kind === 'dock') expect(door, `${building.style} opened a ${tag?.kind ?? 'blank wall'}`).toBeUndefined();
+  /**
+   * THE OWNER'S OWN TEST, as an assertion: walk up to buildings at random and get a prompt every
+   * time. This used to open 1,474 of the city's 3,722 parcels — a 0.62 lottery over the tagged ones,
+   * a ban on loading docks, a 30-a-cell ceiling and a facade-parity rule upstream. Every one of
+   * those has gone: nothing is generated until somebody walks in, so a shut building saves nothing
+   * and costs the player the belief that the feature works at all.
+   */
+  it('opens essentially every parcel in the city', () => {
+    const all = allBuildings();
+    const open = all.filter((building) => doorFor(building)).length;
+    expect(all.length).toBeGreaterThan(3000);
+    expect(open / all.length, `only ${open} of ${all.length} parcels open`).toBeGreaterThan(0.99);
+  }, 300000);
+
+  it('opens every structural family, works and houses included', () => {
+    const seen = new Map<string, { open: number; total: number }>();
+    for (const building of allBuildings()) {
+      const row = seen.get(building.style) ?? { open: 0, total: 0 };
+      row.total++;
+      if (doorFor(building)) row.open++;
+      seen.set(building.style, row);
     }
-  }, 120000);
+    // Every family the map zones has to be represented and has to be almost entirely open.
+    expect([...seen.keys()].sort()).toContain('industrial');
+    expect([...seen.keys()].sort()).toContain('suburban');
+    for (const [style, row] of seen) {
+      expect(row.open / row.total, `${style}: ${row.open}/${row.total} open`).toBeGreaterThan(0.95);
+    }
+  }, 300000);
 
   it('keeps every doorstep off the carriageway, so E still opens a car at the kerb', () => {
     const doors = doorsNear(0, 0, CELL_SIZE * 2);
     expect(doors.length).toBeGreaterThan(0);
     for (const door of doors) {
-      expect(distanceToRoadEdge(door.x, door.z), door.name).toBeGreaterThanOrEqual(2.4);
+      // 2.4 is the target; a pavement too narrow for it tucks the step against its own wall, and
+      // then all that is asked is that the step is not on the tar. See STAND_OFFS.
+      expect(distanceToRoadEdge(door.x, door.z), door.name).toBeGreaterThanOrEqual(0.5);
     }
   }, 300000);
 

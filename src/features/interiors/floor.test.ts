@@ -43,6 +43,21 @@ function sample(limit: number): BuildingFacts[] {
   return out;
 }
 
+/** Up to `each` parcels of EVERY structural family. A citywide stride is dominated by houses and
+ *  flats, so on its own it would prove nothing about the works and the villas this pass opened. */
+function perFamily(each: number): Map<string, BuildingFacts[]> {
+  const out = new Map<string, BuildingFacts[]>();
+  for (const building of allBuildings()) {
+    const bucket = out.get(building.style) ?? [];
+    if (bucket.length >= each) continue;
+    const facts = factsFor(building);
+    if (!facts) continue;
+    bucket.push(facts);
+    out.set(building.style, bucket);
+  }
+  return out;
+}
+
 describe('the floorplan solver', () => {
   it('leaves no unreachable spot on any floor of any building it opens', () => {
     const buildings = sample(220);
@@ -83,6 +98,81 @@ describe('the floorplan solver', () => {
       expect(coreContinuity(buildCore(facts)), facts.id).toBeUndefined();
     }
   }, 120000);
+
+  /**
+   * The citywide stride is four-fifths houses and flats, so it would pass happily while every works
+   * in the city generated a sealed floor. This walks every family the map zones, up and down.
+   */
+  it('leaves no unreachable spot in ANY structural family, works and villas included', () => {
+    const families = perFamily(30);
+    expect(families.size, 'the map stopped zoning a whole family').toBeGreaterThan(5);
+    for (const [style, buildings] of families) {
+      expect(buildings.length, `${style} has no openable parcels at all`).toBeGreaterThan(0);
+      for (const facts of buildings) {
+        const core = buildCore(facts);
+        const indices = [...new Set([0, 1, core.storeys - 1])].filter((index) => index >= 0 && index < core.storeys);
+        for (const index of indices) {
+          const plan = solveFloor(facts, index, core);
+          expect(plan.rooms.length, `${style} ${facts.id} floor ${index} has no rooms`).toBeGreaterThan(0);
+          expect(plan.walkable, `${style} ${facts.id} floor ${index} has no floor at all`).toBeGreaterThan(20);
+          expect(plan.unreachable, `${style} ${facts.id} floor ${index}: ${plan.unreachable} unreachable`).toBe(0);
+        }
+      }
+    }
+  }, 300000);
+
+  /** A shed must not generate a lounge, and a house must not generate a warehouse bay. */
+  it('gives each family its own grammar', () => {
+    const families = perFamily(12);
+    const works = families.get('industrial') ?? [];
+    expect(works.length).toBeGreaterThan(4);
+    for (const facts of works) {
+      const ground = solveFloor(facts, 0);
+      expect(ground.eyebrow).toBe('WORKS');
+      expect(ground.rooms.some((room) => room.kind === 'warehouse'), `${facts.id} has no bay`).toBe(true);
+      const domestic = new Set(['lounge', 'bedroom', 'kitchen', 'dining', 'bathroom']);
+      expect(ground.rooms.some((room) => domestic.has(room.kind)), `${facts.id} put a lounge in a works`).toBe(false);
+      expect(ground.props.some((prop) => prop.shape === 'rack'), `${facts.id} has no racking`).toBe(true);
+      const core = buildCore(facts);
+      if (core.storeys > 1) {
+        const up = solveFloor(facts, 1, core);
+        expect(up.eyebrow).toBe('MEZZANINE');
+      }
+    }
+    for (const style of ['suburban', 'estate'] as const) {
+      for (const facts of families.get(style) ?? []) {
+        const ground = solveFloor(facts, 0);
+        expect(ground.rooms.some((room) => room.kind === 'warehouse'), `${style} generated a warehouse bay`).toBe(false);
+        expect(ground.rooms.some((room) => room.kind === 'lounge'), `${style} ${facts.id} has no living room`).toBe(true);
+      }
+    }
+  }, 300000);
+
+  /**
+   * "Entering two houses on the same street should not produce the same lounge." A house is the most
+   * common building in this city, so sameness would be the first thing a player noticed.
+   */
+  it('does not give two houses on the same street the same interior', () => {
+    const houses = (perFamily(60).get('suburban') ?? []).slice(0, 40);
+    expect(houses.length).toBeGreaterThan(20);
+    const signatures = new Set<string>();
+    const finishes = new Set<string>();
+    for (const facts of houses) {
+      const core = buildCore(facts);
+      const plan = solveFloor(facts, 0, core);
+      finishes.add(core.finish);
+      signatures.add([
+        plan.rooms.length,
+        plan.rooms.map((room) => room.kind).join(','),
+        plan.props.length,
+        plan.palette.wall.toString(16),
+        plan.blurb.length,
+      ].join('|'));
+    }
+    // Not a promise of forty unique houses — a promise that walking into two is not walking into one.
+    expect(signatures.size, 'every house on the street is the same house').toBeGreaterThan(houses.length * 0.5);
+    expect(finishes.size, 'every house has the same finish').toBeGreaterThan(1);
+  }, 300000);
 
   it('gives a lift to every building tall enough to need one, and a stair to all of them', () => {
     let tall = 0;

@@ -27,30 +27,51 @@ import { stablePositionRandom } from '../../world/StableRandom';
 import { DOOR_RADIUS, type InteriorDoor } from '../interiors.state';
 import type { BuildingFacts } from './core';
 
-/** How far in front of the tagged wall plane the doorstep sits. One stride: close enough that the
- *  prompt reads as "this door", far enough that the player is not standing inside the wall. */
-const STAND_OFF = 2.1;
-/** Share of tagged buildings that actually open. Generous on purpose — the complaint was that a
- *  player who tried a bunch of buildings found nothing, and a door you have to hunt for is not one. */
-const OPEN_SHARE = 0.62;
-/** Ceiling per chunk cell, so a dense CBD cell cannot make the per-frame scan expensive. */
-const DOORS_PER_CELL = 30;
+/**
+ * How far in front of the tagged wall plane the doorstep sits, in order of preference.
+ *
+ * THE FIRST ONE CLEARS THE COVER SNAP, and that is the whole reason it is 2.9 and not the 2.1 it
+ * used to be. Game.renderHUD's on-foot ladder puts `Q  Take cover` ABOVE the feature offer, and
+ * CoverSystem's COVER_ENTER_RANGE is 2.5 from the wall face — which is exactly the face this tag
+ * names. A doorstep 2.1 out therefore sat inside the cover ring, so a player standing on the lit pad
+ * at a door was told to take cover and never told they could go in. The E press still worked (cover
+ * is Q), which is precisely how a feature comes to look broken: the door is there, the way in is
+ * there, and the only thing missing is the sentence that says so. Standing off 2.9 puts the pad
+ * outside the snap, so the prompt on the pad is the door's.
+ *
+ * The rest are fallbacks for a pavement too narrow to hold a stride. The interiors rung sits above
+ * `E  Enter vehicle`, so a step in the gutter would steal E from a car at the kerb; rather than shut
+ * such a building, the step tucks in against its own wall and takes the cover clash on the chin. The
+ * prompt ring is 4.2 u, so a step half a metre off the leaf is still one you walk onto.
+ */
+const STAND_OFFS = [2.9, 2.1, 1.4, 0.8, 0.35] as const;
+/** Clear of the carriageway by this much, or the doorstep and a parked car fight over one E press.
+ *  The last resort is the LAST one: on a pavement too narrow for even a 0.35 u step to make the full
+ *  clearance, the step goes against the wall and only has to be off the tar. A shut building fails
+ *  the player every single time; a shared E press fails only when a car happens to be parked on
+ *  that exact metre of kerb. */
+const ROAD_CLEARANCE = 2.4;
+const KERB_CLEARANCE = 0.5;
 /** A doorstep this close to an existing shop/safehouse pad would fight it for the same E press. */
 const PAD_CLEARANCE = 20;
+/** Two doorsteps closer than this are the same step, and only the first of them is a door. */
+const SAME_STEP = 2.6;
 
 /** Metres of building per storey — the interior's own STOREY_HEIGHT, repeated here only so the
  *  landmark filter can talk in storeys without importing the whole core. */
 const MIN_LANDMARK_STOREY = 3.5;
-
-/** A loading dock is not a way in. Everything else the facade pass draws, opens. */
-const OPENS = new Set(['lobby', 'shopfront', 'porch']);
 
 const SPAZA_NAMES = [
   'Sizwe se Spaza', 'Mama Dlamini Tuck Shop', 'Ekhaya Superette', 'Zwelethu Cash Store',
   'Kwa-Mnandi Spaza', 'Blue Sky Tuck Shop', 'Bhut Solly se Winkel', 'Corner Café',
 ];
 const HOUSE_NAMES = ['No. 12', 'No. 7', 'No. 41', 'No. 3', 'No. 88', 'No. 26', 'No. 15', 'No. 60'];
+const VILLA_NAMES = ['Kopje House', 'The Willows', 'Acacia Lodge', 'Mimosa House', 'Riverbend', 'Klipdrift House'];
 const BLOCK_NAMES = ['Ridge Court', 'Sunnyside Mansions', 'Kopje Heights', 'Vista Flats', 'Boundary House', 'Hilltop Court'];
+const WORKS_NAMES = [
+  'Unit 4 · Bracewell Works', 'Modderfontein Cold Store', 'Meyer & Sons Panelbeaters', 'Bay 2 · Reef Freight',
+  'Umgeni Steel Depot', 'Bay 7 · Kruger Haulage', 'Vaal Packaging Unit 9', 'Ndlovu Engineering',
+];
 
 // The plan-only architecture instance. It never draws, so this group stays empty forever; it exists
 // only because BuildingArchitecture takes a parent in its constructor.
@@ -76,29 +97,45 @@ function toWorld(building: GeneratedBuilding, lx: number, lz: number): { x: numb
   return { x: building.x + lx * c + lz * s, z: building.z - lx * s + lz * c };
 }
 
-function nameFor(kind: string, x: number, z: number): string {
-  const list = kind === 'shopfront' ? SPAZA_NAMES : kind === 'porch' ? HOUSE_NAMES : BLOCK_NAMES;
-  return list[Math.floor(stablePositionRandom(x, z, 94) * list.length) % list.length]!;
+function nameFor(building: GeneratedBuilding, kind: string): string {
+  const list = kind === 'shopfront' ? SPAZA_NAMES
+    : kind === 'dock' ? WORKS_NAMES
+      : kind === 'porch' ? (building.style === 'estate' ? VILLA_NAMES : HOUSE_NAMES)
+        : BLOCK_NAMES;
+  return list[Math.floor(stablePositionRandom(building.x, building.z, 94) * list.length) % list.length]!;
 }
 
-/** The door this building carries, or undefined when it carries none or its step is unusable. */
+/**
+ * The door this building carries, or undefined when it carries none or its step is unusable.
+ *
+ * EVERY TAG OPENS NOW. There used to be two more gates here: a 0.62 lottery over tagged buildings and
+ * a ban on loading docks. Between them, and the facade-parity rule in planEntrance, only 1,474 of the
+ * city's 3,722 parcels let you in — so the owner's own test, walk up to buildings at random, failed
+ * three times in five. Nothing is generated until somebody walks in and only one or two floors are
+ * ever resident, so an unopened building saves nothing; a locked door is not a saving, it is a player
+ * concluding the feature is broken. A works is not a compromise either: an empty floor plate with
+ * racking and a roller door is content the city did not have.
+ */
 export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoor | undefined {
   const profile = architecture.plan({
     x: 0, z: 0, width: building.width, depth: building.depth, height: building.height,
     style: building.style, variant: building.variant, facade: planFacade, roof: planRoof,
   });
   const tag = profile.entrance;
-  if (!tag || !OPENS.has(tag.kind)) return undefined;
+  if (!tag) return undefined;
 
   const face = toWorld(building, tag.x, tag.z);
-  // The step is one stride out along the building's own outward normal — local +z, which CityGen
-  // aims at the street the building fronts.
+  // The step is a stride out along the building's own outward normal — local +z, which CityGen aims
+  // at the street the building fronts — tucking closer to the wall rather than giving up when a
+  // building stands hard against the kerb.
   const outX = Math.sin(building.heading); const outZ = Math.cos(building.heading);
-  const x = face.x + outX * STAND_OFF;
-  const z = face.z + outZ * STAND_OFF;
-  // The interiors rung sits ABOVE `E  Enter vehicle` in Game's on-foot ladder, so a doorstep in the
-  // gutter would steal E from a car parked at the kerb. Keep the step a car's width off the road.
-  if (distanceToRoadEdge(x, z) < 2.4) return undefined;
+  let x = 0; let z = 0; let stepped = false;
+  for (const standOff of STAND_OFFS) {
+    x = face.x + outX * standOff; z = face.z + outZ * standOff;
+    const clearance = standOff === STAND_OFFS[STAND_OFFS.length - 1] ? KERB_CLEARANCE : ROAD_CLEARANCE;
+    if (distanceToRoadEdge(x, z) >= clearance) { stepped = true; break; }
+  }
+  if (!stepped) return undefined;
   if (pointInAnyPolygon(WATER_POLYGONS, x, z)) return undefined;
   for (const pad of pads()) if (Math.hypot(pad.x - x, pad.z - z) < PAD_CLEARANCE) return undefined;
 
@@ -110,7 +147,7 @@ export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoo
   };
   return {
     id: facts.id,
-    name: name ?? nameFor(tag.kind, building.x, building.z),
+    name: name ?? nameFor(building, tag.kind),
     x, z,
     faceX: face.x, faceZ: face.z,
     heading: building.heading,
@@ -161,14 +198,16 @@ function doorsInCell(cellX: number, cellZ: number): InteriorDoor[] {
     if (best && !claimed.has(best.id)) { claimed.add(best.id); out.push(best); }
   }
 
-  // 2. Everything else that opens, in cell order so the answer is a pure function of the map.
+  // 2. EVERY OTHER PARCEL IN THE CELL, in cell order so the answer is a pure function of the map.
+  // There is no per-cell ceiling: a cell holds at most CELL_BUILDING_CAP parcels by construction, the
+  // table is memoised per cell, and only STREAM_CAP of them are ever drawn as doorways, so the cap
+  // this used to carry bought nothing but 156 buildings a player could not walk into.
   for (const building of buildings) {
-    if (out.length >= DOORS_PER_CELL) break;
-    if (stablePositionRandom(building.x, building.z, 91) > OPEN_SHARE) continue;
     const door = doorFor(building);
     if (!door || claimed.has(door.id)) continue;
-    // Two doorsteps within a stride of each other would fight over one E press.
-    if (out.some((other) => Math.hypot(other.x - door.x, other.z - door.z) < DOOR_RADIUS * 2)) continue;
+    // Two steps on the SAME spot are one doorstep with two names; anything further apart resolves
+    // by nearest through doorNear(), so the second one is a door, not a conflict.
+    if (out.some((other) => Math.hypot(other.x - door.x, other.z - door.z) < SAME_STEP)) continue;
     claimed.add(door.id);
     out.push(door);
   }

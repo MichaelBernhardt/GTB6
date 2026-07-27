@@ -22,6 +22,8 @@ import type { InteriorDoor } from '../interiors.state';
 
 /** The camera boom this room has to stand inside. FOOT_VIEW_DISTANCES tops out here. */
 export const BOOM = 9.5;
+/** How many of the streamed doorways carry the standing beam of light. See buildDoorways. */
+const BEAMED = 6;
 const WALL_T = 0.16;
 /** Doorway head height. Partitions carry a lintel over the gap so a doorway reads as a doorway. */
 const DOOR_H = 2.25;
@@ -339,7 +341,7 @@ export function buildDoorways(
     depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
   }));
 
-  for (const door of doors) {
+  for (const [index, door] of doors.entries()) {
     const bay = new THREE.Group();
     bay.position.set(door.faceX, surfaceHeightAt(door.faceX, door.faceZ), door.faceZ);
     bay.rotation.y = door.heading; // local +z faces the street
@@ -369,11 +371,19 @@ export function buildDoorways(
     disc.position.set(door.x, stepY + 0.3, door.z);
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
     ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.02;
-    const beam = new THREE.Mesh(beamGeometry, beamMaterial);
-    beam.position.set(door.x, stepY + 4.5, door.z);
-    beam.renderOrder = 2;
     discs.push(disc);
-    group.add(bay, disc, ring, beam);
+    group.add(bay, disc, ring);
+    // THE BEAM IS FOR THE NEAREST FEW ONLY, and that is a consequence of opening every building.
+    // `doors` arrives sorted by distance. When a third of the street had a door, a nine-metre column
+    // of light on each of them said "this one, walk here"; with every house on the street open,
+    // twenty-two of them say nothing at all, because a signal every building carries is not a signal.
+    // The frame, the sign and the lit pad are still on every one, so the door is never hidden.
+    if (index < BEAMED) {
+      const beam = new THREE.Mesh(beamGeometry, beamMaterial);
+      beam.position.set(door.x, stepY + 4.5, door.z);
+      beam.renderOrder = 2;
+      group.add(beam);
+    }
   }
 
   return {
@@ -471,10 +481,69 @@ function buildProp(prop: Prop, kit: Kit): void {
       leaves.position.set(prop.x, base + prop.h * 0.68, prop.z); group.add(leaves);
       break;
     }
-    case 'bucket': case 'stool': {
+    case 'bucket': case 'stool': case 'drum': {
       const radius = prop.w / 2;
-      const mesh = new THREE.Mesh(keep(new THREE.CylinderGeometry(radius, radius * 0.86, prop.h, 12)), body);
+      const mesh = new THREE.Mesh(keep(new THREE.CylinderGeometry(radius, radius * (prop.shape === 'drum' ? 1 : 0.86), prop.h, prop.shape === 'drum' ? 14 : 12)), body);
       mesh.position.set(prop.x, base + prop.h / 2, prop.z); group.add(mesh);
+      if (prop.shape === 'drum') {
+        for (const t of [0.34, 0.66]) {
+          const band = new THREE.Mesh(keep(new THREE.CylinderGeometry(radius * 1.06, radius * 1.06, 0.06, 14)), solid(0x6a6f70, 0.6));
+          band.position.set(prop.x, base + prop.h * t, prop.z); group.add(band);
+        }
+      }
+      break;
+    }
+    case 'rack': {
+      // Pallet racking: uprights, a deck per level and a stacked load on it — the thing that makes a
+      // shed read as a warehouse rather than a big empty room. Deliberately few meshes per unit:
+      // there are up to sixteen of these on a works floor and every one of them is drawn at once.
+      const upright = solid(0x4a5254, 0.6);
+      for (const sz of [-1, 1]) {
+        box(0.11, prop.h, 0.11, upright, prop.x - prop.w / 2 + 0.07, base + prop.h / 2, prop.z + sz * (prop.d / 2 - 0.07));
+        box(0.11, prop.h, 0.11, upright, prop.x + prop.w / 2 - 0.07, base + prop.h / 2, prop.z + sz * (prop.d / 2 - 0.07));
+      }
+      const levels = Math.max(2, Math.round(prop.h / 1.2));
+      const deck = solid(0x8a7350, 0.9);
+      for (let level = 1; level <= levels; level++) {
+        const y = base + level * prop.h / (levels + 0.4);
+        box(prop.w, 0.09, prop.d, deck, prop.x, y, prop.z);
+        if (level < levels) box(prop.w - 0.34, 0.66, prop.d - 0.5, body, prop.x, y + 0.4, prop.z);
+      }
+      break;
+    }
+    case 'pallet': {
+      box(prop.w, 0.09, prop.d, body, prop.x, base + 0.05, prop.z);
+      for (const t of [-0.35, 0, 0.35]) box(prop.w, 0.07, 0.12, solid(0x7a5f3c, 0.95), prop.x, base + 0.13, prop.z + t * prop.d);
+      break;
+    }
+    case 'bench': {
+      box(prop.w, 0.1, prop.d, body, prop.x, base + prop.h, prop.z);
+      for (const sz of [-1, 1]) box(prop.w - 0.1, prop.h, 0.1, solid(0x454c4e, 0.7), prop.x, base + prop.h / 2, prop.z + sz * (prop.d / 2 - 0.1));
+      box(prop.w * 0.5, 0.42, prop.d * 0.35, solid(0x6a5a3c, 0.85), prop.x, base + prop.h + 0.26, prop.z + prop.d * 0.2);
+      break;
+    }
+    case 'rug': {
+      const rug = box(prop.w, 0.03, prop.d, body, prop.x, base + 0.015, prop.z);
+      rug.renderOrder = 1;
+      break;
+    }
+    case 'bath': {
+      box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
+      box(prop.w - 0.24, 0.12, prop.d - 0.24, solid(0x7f8f96, 0.4), prop.x, base + prop.h - 0.05, prop.z);
+      box(0.08, 0.34, 0.08, solid(0xb9c0c2, 0.35), prop.x, base + prop.h + 0.17, prop.z - prop.d / 2 + 0.2);
+      break;
+    }
+    case 'trunk': {
+      box(prop.w, prop.h * 0.8, prop.d, body, prop.x, base + prop.h * 0.4, prop.z);
+      box(prop.w + 0.06, prop.h * 0.2, prop.d + 0.06, solid(0x3f3a33, 0.7), prop.x, base + prop.h * 0.9, prop.z);
+      break;
+    }
+    case 'rail': {
+      box(prop.w, 0.07, prop.d, solid(0x39423f, 0.5), prop.x, base + prop.h, prop.z);
+      const posts = Math.max(2, Math.round(prop.d / 1.4));
+      for (let i = 0; i < posts; i++) {
+        box(0.07, prop.h, 0.07, solid(0x39423f, 0.5), prop.x, base + prop.h / 2, prop.z - prop.d / 2 + i * prop.d / Math.max(1, posts - 1));
+      }
       break;
     }
     case 'notice': {

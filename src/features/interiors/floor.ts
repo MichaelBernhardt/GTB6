@@ -19,14 +19,16 @@
  * about rooms.
  */
 import {
-  buildCore, CEILING, CORE_GAP, CORRIDOR, floorRandom, MIN_ROOM, rectMaxX, rectMaxZ, rectMinX, rectMinZ,
-  type BuildingCore, type BuildingFacts, type Rect,
+  buildCore, CEILING, coreRandom, CORE_GAP, CORRIDOR, floorRandom, MIN_ROOM, rectMaxX, rectMaxZ, rectMinX, rectMinZ,
+  type BuildingCore, type BuildingFacts, type Finish, type Rect,
 } from './core';
 import { stableWorldFloat } from '../../world/StableRandom';
 
 const q = stableWorldFloat;
 
-export type RoomKind = 'shop' | 'lounge' | 'bedroom' | 'kitchen' | 'office' | 'store' | 'lobby';
+export type RoomKind =
+  | 'shop' | 'lounge' | 'bedroom' | 'kitchen' | 'office' | 'store' | 'lobby'
+  | 'dining' | 'bathroom' | 'study' | 'warehouse' | 'mezzanine' | 'workshop';
 
 export interface Room {
   readonly id: string;
@@ -52,7 +54,8 @@ export interface Wall {
 
 export type PropShape =
   | 'counter' | 'shelf' | 'crate' | 'sack' | 'fridge' | 'bed' | 'wardrobe' | 'sofa' | 'table'
-  | 'stool' | 'stove' | 'basin' | 'bucket' | 'tv' | 'desk' | 'cabinet' | 'plant' | 'notice';
+  | 'stool' | 'stove' | 'basin' | 'bucket' | 'tv' | 'desk' | 'cabinet' | 'plant' | 'notice'
+  | 'rack' | 'pallet' | 'drum' | 'bench' | 'rug' | 'bath' | 'trunk' | 'rail';
 
 export interface Prop {
   readonly shape: PropShape;
@@ -103,9 +106,16 @@ const WALL_NAMES = ['Ngwenya', 'Marabastad', 'Kliptown', 'Alexandra', 'Vrededorp
 
 // ---- the plan --------------------------------------------------------------------------------
 
-/** The rooms either side of the spine, front to back. */
-function layoutRooms(core: BuildingCore, index: number, kinds: readonly RoomKind[]): Room[] {
-  const rooms: Room[] = [];
+/**
+ * The rooms either side of the spine, front to back — the rectangles first, then what each one IS.
+ *
+ * Splitting it that way is what lets the kind list be entered at a per-building offset (so two
+ * neighbours do not both put the lounge in the front-left corner) WITHOUT losing the room the floor
+ * is named after: once the rectangles are counted, the signature kind — `kinds[0]`, the lounge in a
+ * house, the shop behind a shopfront — is dropped back into one of them if the rotation walked past
+ * it. A house whose ground floor is a kitchen and a bedroom is not a house.
+ */
+function layoutRooms(core: BuildingCore, index: number, kinds: readonly RoomKind[], split: number, rotate: boolean): Room[] {
   const spineMin = core.corridorX - CORRIDOR / 2;
   const spineMax = core.corridorX + CORRIDOR / 2;
   const frontZ = -core.depth / 2;
@@ -113,7 +123,7 @@ function layoutRooms(core: BuildingCore, index: number, kinds: readonly RoomKind
   // no room wall can ever stand across the mouth of the stair. See CORE_GAP.
   const backZ = rectMinZ(core.stair) - CORE_GAP;
   const bandDepth = backZ - frontZ;
-  let kindAt = 0;
+  const slots: { id: string; rect: Rect; side: 'left' | 'right' }[] = [];
   for (const side of ['left', 'right'] as const) {
     const outer = side === 'left' ? core.width / 2 : -core.width / 2;
     const inner = side === 'left' ? spineMax : spineMin;
@@ -121,7 +131,7 @@ function layoutRooms(core: BuildingCore, index: number, kinds: readonly RoomKind
     if (bandWidth < MIN_ROOM || bandDepth < MIN_ROOM) continue;
     // How many rooms fit down this band, from the floor's own hash. Bounded so no room is a cupboard.
     const most = Math.max(1, Math.floor(bandDepth / MIN_ROOM));
-    const count = Math.max(1, Math.min(most, 1 + Math.floor(floorRandom(core.seed, index, side === 'left' ? 11 : 12) * 3)));
+    const count = Math.max(1, Math.min(most, 1 + Math.floor(floorRandom(core.seed, index, side === 'left' ? 11 : 12) * split)));
     // Uneven splits, but every share is at least a fair third of an even one, so nothing degenerates.
     const shares: number[] = [];
     let total = 0;
@@ -132,20 +142,19 @@ function layoutRooms(core: BuildingCore, index: number, kinds: readonly RoomKind
     let z = frontZ;
     for (let i = 0; i < count; i++) {
       const d = q(bandDepth * shares[i]! / total);
-      const rect: Rect = { x: q((outer + inner) / 2), z: q(z + d / 2), w: q(bandWidth), d };
-      const kind = kinds[kindAt % kinds.length]!;
-      kindAt++;
-      rooms.push({
-        id: `${side}${i}`, kind, name: roomName(kind, core, index, kindAt),
-        rect,
-        // The doorway sits in the middle of the room's share of the spine wall, always reachable.
-        doorZ: q(rect.z),
-        doorSide: side,
-      });
+      slots.push({ id: `${side}${i}`, side, rect: { x: q((outer + inner) / 2), z: q(z + d / 2), w: q(bandWidth), d } });
       z += d;
     }
   }
-  return rooms;
+  const offset = rotate ? Math.floor(floorRandom(core.seed, index, 55) * kinds.length) % kinds.length : 0;
+  const chosen = slots.map((_, i) => kinds[(i + offset) % kinds.length]!);
+  if (!chosen.includes(kinds[0]!)) chosen[Math.floor(floorRandom(core.seed, index, 56) * chosen.length) % chosen.length] = kinds[0]!;
+  return slots.map((slot, i) => ({
+    id: slot.id, kind: chosen[i]!, name: roomName(chosen[i]!, core, index, i + 1), rect: slot.rect,
+    // The doorway sits in the middle of the room's share of the spine wall, always reachable.
+    doorZ: q(slot.rect.z),
+    doorSide: slot.side,
+  }));
 }
 
 function roomName(kind: RoomKind, core: BuildingCore, index: number, salt: number): string {
@@ -155,52 +164,220 @@ function roomName(kind: RoomKind, core: BuildingCore, index: number, salt: numbe
   if (kind === 'store') return 'Store room';
   if (kind === 'bedroom') return 'Bedroom';
   if (kind === 'kitchen') return 'Kitchen';
+  if (kind === 'dining') return 'Dining room';
+  if (kind === 'bathroom') return 'Bathroom';
+  if (kind === 'study') return 'Study';
+  if (kind === 'warehouse') return `Bay ${salt % 4 + 1}`;
+  if (kind === 'mezzanine') return 'Mezzanine';
+  if (kind === 'workshop') return 'Workshop';
   return WALL_NAMES[Math.floor(floorRandom(core.seed, index, 70 + salt) * WALL_NAMES.length) % WALL_NAMES.length] + ' lounge';
 }
 
+/** What one floor is: the rooms it can hold, what to call it, how many rooms a band may split into,
+ *  and whether the kind list may be entered off its first entry. */
+interface FloorGrammar {
+  kinds: RoomKind[];
+  eyebrow: string;
+  blurb: string;
+  findLine: string;
+  /** Palette family — the finish then picks which of that family's palettes. */
+  paint: 'shop' | 'flat' | 'office' | 'house' | 'works';
+  /** Upper bound on rooms per band (the draw is 1 .. split, capped by how many actually fit). */
+  split: number;
+  rotate: boolean;
+}
+
 /**
- * What sort of floor this is. Ground floors are what the model's own entrance says they are — a
- * shopfront has a shop behind it, a porch has somebody's front room, a lobby has a lobby. Upstairs
- * is flats over a shop, offices over a lobby, more house over a porch. Short on purpose: a spaza, a
- * flat and an office are enough variety to start.
+ * WHAT SORT OF FLOOR THIS IS — and every family answers differently, because every family of
+ * building now opens and a shed that generates a lounge is worse than a shed that stays shut.
+ *
+ * The ground floor is what the model's own entrance says it is: a shopfront has a spaza behind it, a
+ * roller door has a warehouse bay, a porch has somebody's front room, a lobby has a lobby. What is
+ * UPSTAIRS is then the family's own answer — flats over a shop, offices over a lobby, bedrooms over
+ * a front room, and the works office on its mezzanine over the warehouse floor, which is where a
+ * works office actually is.
+ *
+ * The finish (see core.ts) decides the rest: how many rooms the plate splits into, which palette,
+ * and — in furnish() — what is in the room and what is missing from it.
  */
-function floorKinds(core: BuildingCore, index: number): { kinds: RoomKind[]; eyebrow: string; blurb: string; findLine: string } {
+function floorKinds(core: BuildingCore, index: number): FloorGrammar {
+  const { finish } = core;
+  const split = finish === 'bare' ? 2 : finish === 'homely' ? 3 : 4;
+  if (core.entrance === 'dock') return works(core, index);
+  if (core.entrance === 'porch') return house(core, index, split);
   if (index === 0) {
     if (core.entrance === 'shopfront') {
-      return { kinds: ['shop', 'store'], eyebrow: 'SPAZA', blurb: 'Burglar bars, a cold fridge, and everything you actually need at 22:00.',
+      return { kinds: ['shop', 'store'], eyebrow: 'SPAZA', paint: 'shop', split, rotate: false,
+        blurb: 'Burglar bars, a cold fridge, and everything you actually need at 22:00.',
         findLine: 'Change on the counter — she waves it off.' };
     }
-    if (core.entrance === 'lobby') {
-      return { kinds: ['lobby', 'office'], eyebrow: 'LOBBY', blurb: 'A security desk, a dead lift button, and a directory nobody has updated since 2011.',
+    // A block of flats and an office tower share a front door and share nothing else behind it: one
+    // has a caretaker's flat and a store off the lobby, the other has let suites.
+    if (core.family === 'dense-residential') {
+      return { kinds: ['lobby', 'store', 'lounge'], eyebrow: 'LOBBY', paint: 'flat', split, rotate: true,
+        blurb: 'A postbox wall half hanging off, a dead lift button, and levies pinned up since 2011.',
         findLine: 'Loose notes under the visitors book.' };
     }
-    return { kinds: ['lounge', 'kitchen', 'bedroom'], eyebrow: 'FLAT', blurb: 'No water in the taps, no lift, and one extension cord doing the work of a substation.',
-      findLine: 'Coins in a jam tin on the sill.' };
+    return { kinds: ['lobby', 'office'], eyebrow: 'LOBBY', paint: 'office', split, rotate: true,
+      blurb: 'A security desk, a dead lift button, and a directory nobody has updated since 2011.',
+      findLine: 'Loose notes under the visitors book.' };
   }
   if (core.entrance === 'lobby' && core.storeys >= OFFICE_FROM_STOREYS) {
-    return { kinds: ['office', 'office', 'store'], eyebrow: 'OFFICES', blurb: 'Half the suites are let, the other half have a phone still ringing in them.',
+    return { kinds: ['office', 'office', 'store'], eyebrow: 'OFFICES', paint: 'office', split, rotate: true,
+      blurb: 'Half the suites are let, the other half have a phone still ringing in them.',
       findLine: 'Petty cash, in a tin marked PETTY CASH.' };
   }
-  return { kinds: ['lounge', 'bedroom', 'kitchen'], eyebrow: 'FLAT', blurb: 'Somebody is cooking, somebody is arguing, and the lift has not worked since you were born.',
-    findLine: 'Coins in a jam tin on the sill.' };
+  const spare = finish === 'bare';
+  return {
+    kinds: spare ? ['lounge', 'bedroom', 'kitchen'] : ['lounge', 'bedroom', 'kitchen', 'bathroom'],
+    eyebrow: 'FLAT', paint: 'flat', split, rotate: true,
+    blurb: spare
+      ? 'Somebody is cooking, somebody is arguing, and the lift has not worked since you were born.'
+      : 'Net curtains, a wall unit, and a burglar gate on a door nobody locks.',
+    findLine: 'Coins in a jam tin on the sill.',
+  };
+}
+
+/**
+ * A HOUSE, and there are 1,138 of them: this is the family a player is most likely to walk up to, so
+ * it is the one that most needs not to repeat. Three readable grades, and inside each the hash still
+ * moves the room count, the kind order and the furniture.
+ */
+function house(core: BuildingCore, index: number, split: number): FloorGrammar {
+  const upstairs = index > 0;
+  if (core.family === 'estate') {
+    return {
+      kinds: upstairs ? ['bedroom', 'bathroom', 'study', 'bedroom'] : ['lounge', 'dining', 'kitchen', 'study'],
+      eyebrow: upstairs ? 'UPSTAIRS' : 'HOUSE', paint: 'house', split, rotate: true,
+      blurb: upstairs
+        ? 'Carpet up the stairs, a linen cupboard, and an alarm panel blinking in the passage.'
+        : 'Underfloor heating nobody switches on, and a beam that cost more than the car outside.',
+      findLine: upstairs ? 'A roll of notes in the bedside drawer.' : 'Housekeeping money in the bowl by the door.',
+    };
+  }
+  if (core.family === 'rural') {
+    return {
+      kinds: upstairs ? ['bedroom', 'store'] : ['kitchen', 'lounge', 'bedroom'],
+      eyebrow: 'PLOT', paint: 'house', split: 2, rotate: true,
+      blurb: 'A coal stove, a radio on the windowsill, and the nearest neighbour eleven kilometres off.',
+      findLine: 'Notes folded into the tea caddy.',
+    };
+  }
+  if (core.finish === 'bare') {
+    return {
+      kinds: upstairs ? ['bedroom', 'store'] : ['lounge', 'kitchen', 'bedroom'],
+      eyebrow: 'HOUSE', paint: 'house', split: 2, rotate: true,
+      blurb: 'One room doing four jobs, a paraffin stove, and a prepaid meter counting down.',
+      findLine: 'Coins in a jam tin on the sill.',
+    };
+  }
+  if (core.finish === 'smart') {
+    return {
+      kinds: upstairs ? ['bedroom', 'bathroom', 'study'] : ['lounge', 'dining', 'kitchen'],
+      eyebrow: upstairs ? 'UPSTAIRS' : 'HOUSE', paint: 'house', split, rotate: true,
+      blurb: upstairs
+        ? 'Three doors off a landing and a geyser you can hear from all of them.'
+        : 'Wooden floors, a pressed ceiling, and a bakkie key hook by the kitchen door.',
+      findLine: 'A twenty under the fruit bowl.',
+    };
+  }
+  return {
+    kinds: upstairs ? ['bedroom', 'bathroom'] : ['lounge', 'kitchen', 'bedroom'],
+    eyebrow: 'HOUSE', paint: 'house', split, rotate: true,
+    blurb: 'A lounge suite in plastic, a display cabinet, and the kettle permanently on.',
+    findLine: 'Change in the mug on the shelf.',
+  };
+}
+
+/**
+ * A WORKS. The owner is right that this is content and not a compromise: an empty floor plate with
+ * racking down it and a roller door at the end of it is a room this city has never had. The plate is
+ * clamped larger (MAX_HALL), the bands are ONE bay each rather than a run of rooms, and the storey
+ * above the floor is the works office on its mezzanine.
+ */
+function works(core: BuildingCore, index: number): FloorGrammar {
+  if (index === 0) {
+    // The other side of the floor is another bay more often than not, and otherwise the fitting shop
+    // or the goods store — which is what a works of this size actually has off its floor.
+    const draw = floorRandom(core.seed, 0, 61);
+    const mate: RoomKind = draw < 0.55 ? 'warehouse' : draw < 0.82 ? 'workshop' : 'store';
+    return {
+      kinds: ['warehouse', mate], eyebrow: 'WORKS', paint: 'works', split: 1, rotate: false,
+      blurb: mate === 'workshop'
+        ? 'Racking to the roof, a fitting shop off the floor, and a radio nobody has retuned since 1994.'
+        : 'Racking to the roof, a forklift on charge, and a radio nobody has retuned since 1994.',
+      findLine: 'Wage packet still in the pigeonhole.',
+    };
+  }
+  return {
+    kinds: ['mezzanine', 'office', 'workshop', 'store'], eyebrow: 'MEZZANINE', paint: 'works', split: 3, rotate: true,
+    blurb: 'A works office over the floor, with a window onto it and a kettle furred solid.',
+    findLine: 'Petty cash, in a tin marked PETTY CASH.',
+  };
 }
 
 /** From this many storeys up, a lobby building is offices rather than flats. */
 const OFFICE_FROM_STOREYS = 6;
 
-const PALETTES: Record<string, { wall: number; floor: number; ceiling: number; trim: number }> = {
-  shop: { wall: 0xd8c9a4, floor: 0x6d5a48, ceiling: 0xe6e2d8, trim: 0x2f3a3d },
-  flat: { wall: 0xc4c8c2, floor: 0x8a8378, ceiling: 0xd8d4cb, trim: 0x39413f },
-  office: { wall: 0xb9c0c4, floor: 0x5f6668, ceiling: 0xdfe3e4, trim: 0x2b3335 },
+/**
+ * Palettes, by family and then by finish. Three per family so a street of houses is not one colour,
+ * and the finish keeps them honest: bare is unpainted plaster and a bare screed, smart is a painted
+ * wall over a wooden floor.
+ */
+const PALETTES: Record<string, Record<Finish, { wall: number; floor: number; ceiling: number; trim: number }>> = {
+  shop: {
+    bare: { wall: 0xd8c9a4, floor: 0x6d5a48, ceiling: 0xe6e2d8, trim: 0x2f3a3d },
+    homely: { wall: 0xd8c9a4, floor: 0x6d5a48, ceiling: 0xe6e2d8, trim: 0x2f3a3d },
+    smart: { wall: 0xe2d9bd, floor: 0x7b6650, ceiling: 0xeeeae0, trim: 0x2f3a3d },
+  },
+  flat: {
+    bare: { wall: 0xbcb7a8, floor: 0x77706a, ceiling: 0xcac5ba, trim: 0x3a403e },
+    homely: { wall: 0xc4c8c2, floor: 0x8a8378, ceiling: 0xd8d4cb, trim: 0x39413f },
+    smart: { wall: 0xd5d8d0, floor: 0x94836a, ceiling: 0xe2e0d6, trim: 0x333b3a },
+  },
+  office: {
+    bare: { wall: 0xaeb4b6, floor: 0x585e60, ceiling: 0xcdd2d3, trim: 0x2b3335 },
+    homely: { wall: 0xb9c0c4, floor: 0x5f6668, ceiling: 0xdfe3e4, trim: 0x2b3335 },
+    smart: { wall: 0xc7cfd2, floor: 0x6b5c48, ceiling: 0xe8ecec, trim: 0x25302f },
+  },
+  house: {
+    bare: { wall: 0xb9ae99, floor: 0x8a8073, ceiling: 0xc6bcaa, trim: 0x4a4034 },
+    homely: { wall: 0xcfc3a8, floor: 0x8b6b4a, ceiling: 0xded6c4, trim: 0x46392c },
+    smart: { wall: 0xe0dbcb, floor: 0x9c7448, ceiling: 0xefebe0, trim: 0x3b3128 },
+  },
+  works: {
+    bare: { wall: 0x9aa0a0, floor: 0x6e7272, ceiling: 0xb3b8b8, trim: 0x39423f },
+    homely: { wall: 0xa4aaa8, floor: 0x74797a, ceiling: 0xbcc0bf, trim: 0x39423f },
+    smart: { wall: 0xacb2b0, floor: 0x7b807f, ceiling: 0xc3c7c5, trim: 0x39423f },
+  },
 };
+
+/**
+ * WHAT COLOUR SOMEBODY PAINTED IT. The finish decides the floor, the ceiling and the trim; the wall
+ * is the building's own choice, from its own hash, out of its family's range. It is the cheapest
+ * variation in the file and the one a player reads first: the difference between walking into two
+ * houses is largely the difference between a green passage and a cream one.
+ */
+const WALL_TINTS: Record<string, readonly number[]> = {
+  shop: [0xd8c9a4, 0xcdd0bd, 0xdcc0a4, 0xc9cbc4],
+  flat: [0xc4c8c2, 0xcfc9b8, 0xbcc4c8, 0xcdc4c4],
+  office: [0xb9c0c4, 0xc4c4bc, 0xb4bec0, 0xc8c4b8],
+  house: [0xcfc3a8, 0xc0cbbe, 0xd6c4bc, 0xbfc6cd, 0xd4cdb2, 0xc8bda6],
+  works: [0x9aa0a0, 0xa2a09a, 0x99a2a6, 0xa6a2a0],
+};
+
+function paletteFor(paint: string, core: BuildingCore): { wall: number; floor: number; ceiling: number; trim: number } {
+  const base = PALETTES[paint]![core.finish];
+  const tints = WALL_TINTS[paint]!;
+  return { ...base, wall: tints[Math.floor(coreRandom(core.seed, 33) * tints.length) % tints.length]! };
+}
 
 // ---- the solver ------------------------------------------------------------------------------
 
 export function solveFloor(facts: BuildingFacts, index: number, core = buildCore(facts)): FloorPlan {
-  const { kinds, eyebrow, blurb, findLine } = floorKinds(core, index);
-  const rooms = layoutRooms(core, index, kinds);
+  const { kinds, eyebrow, blurb, findLine, paint, split, rotate } = floorKinds(core, index);
+  const rooms = layoutRooms(core, index, kinds, split, rotate);
   const walls = buildWalls(core, rooms);
-  const paletteKey = eyebrow === 'SPAZA' ? 'shop' : eyebrow === 'OFFICES' || eyebrow === 'LOBBY' ? 'office' : 'flat';
 
   // The landing: on the spine just in front of the shaft, which is where a stair or a lift puts you
   // down and, on the ground floor, where the street door leaves you facing the building.
@@ -227,7 +404,7 @@ export function solveFloor(facts: BuildingFacts, index: number, core = buildCore
     width: core.width, depth: core.depth, height: CEILING,
     rooms, walls, props,
     lamps: lampsFor(core, rooms),
-    palette: PALETTES[paletteKey]!,
+    palette: paletteFor(paint, core),
     landing,
     fixture: fixtureFor(core, index, rooms),
     unreachable: reach.walkable - reach.reached,
@@ -268,18 +445,27 @@ function lampsFor(core: BuildingCore, rooms: readonly Room[]): Lamp[] {
   return lamps;
 }
 
+const FIXTURE_NAMES: Partial<Record<RoomKind, string>> = {
+  shop: 'Shopkeeper', lobby: 'Security', warehouse: 'Storeman', lounge: 'Tenant', dining: 'Tenant',
+};
+
 function fixtureFor(core: BuildingCore, index: number, rooms: readonly Room[]): { x: number; z: number; name: string } | undefined {
   // One person per floor at most, and only where somebody would actually be standing.
   const host = rooms.find((room) => room.kind === 'shop') ?? rooms.find((room) => room.kind === 'lobby')
-    ?? (floorRandom(core.seed, index, 91) < 0.55 ? rooms.find((room) => room.kind === 'lounge') : undefined);
+    ?? rooms.find((room) => room.kind === 'warehouse')
+    ?? (floorRandom(core.seed, index, 91) < 0.55
+      ? rooms.find((room) => room.kind === 'lounge') ?? rooms.find((room) => room.kind === 'dining')
+      : undefined);
   if (!host) return undefined;
-  const name = host.kind === 'shop' ? 'Shopkeeper' : host.kind === 'lobby' ? 'Security' : 'Tenant';
-  return { x: q(host.rect.x), z: q(host.rect.z + host.rect.d * 0.22), name };
+  return { x: q(host.rect.x), z: q(host.rect.z + host.rect.d * 0.22), name: FIXTURE_NAMES[host.kind] ?? 'Tenant' };
 }
 
 // ---- furniture --------------------------------------------------------------------------------
 
 const STOCK = [0xd8563f, 0xe4a72c, 0x3f7fbf, 0x4f9d5a, 0xd9d2c2, 0x8b5a3c];
+
+/** Rooms somebody lives or works in every day, and therefore rooms that accumulate one more thing. */
+const LIVED_IN = new Set<RoomKind>(['lounge', 'bedroom', 'kitchen', 'dining', 'study', 'office']);
 
 /** Everything this floor would LIKE to have, in a fixed order. The solver takes them one at a time
  *  and keeps only those that do not seal a doorway, so what comes back is both furnished and open. */
@@ -287,6 +473,8 @@ function furnish(core: BuildingCore, index: number, rooms: readonly Room[]): Pro
   const out: Prop[] = [];
   const rnd = (salt: number): number => floorRandom(core.seed, index, salt);
   const pick = <T>(list: readonly T[], salt: number): T => list[Math.floor(rnd(salt) * list.length) % list.length]!;
+  const bare = core.finish === 'bare';
+  const smart = core.finish === 'smart';
   let salt = 200;
   for (const room of rooms) {
     const { rect } = room;
@@ -314,20 +502,101 @@ function furnish(core: BuildingCore, index: number, rooms: readonly Room[]): Pro
       }
       case 'bedroom': {
         out.push({ shape: 'bed', x: wallX(1.4), z: q(rect.z), y: 0, w: 2.3, d: 1.9, h: 0.5, color: pick([0x8a4a52, 0x3f5f77, 0x6a6f4a], salt), solid: true });
-        out.push({ shape: 'wardrobe', x: wallX(0.5), z: q(rectMinZ(rect) + 1.1), y: 0, w: 0.6, d: 1.7, h: 2.3, color: 0x6a5340, solid: true });
+        out.push(bare
+          ? { shape: 'trunk', x: wallX(0.6), z: q(rectMinZ(rect) + 1.1), y: 0, w: 0.7, d: 1.3, h: 0.62, color: 0x5f4a34, solid: true }
+          : { shape: 'wardrobe', x: wallX(0.5), z: q(rectMinZ(rect) + 1.1), y: 0, w: 0.6, d: 1.7, h: 2.3, color: 0x6a5340, solid: true });
+        if (smart) {
+          out.push({ shape: 'rug', x: q(rect.x), z: q(rect.z), y: 0, w: q(Math.min(2.6, rect.w - 3.4)), d: 1.8, h: 0.03, color: pick([0x6b4a3a, 0x3f5560], salt + 4), solid: false });
+          out.push({ shape: 'cabinet', x: wallX(0.5), z: q(rectMaxZ(rect) - 1.1), y: 0, w: 0.5, d: 0.8, h: 0.7, color: 0x6d5236, solid: true });
+        }
         break;
       }
       case 'kitchen': {
-        out.push({ shape: 'stove', x: wallX(0.6), z: q(rect.z - 0.9), y: 0, w: 0.9, d: 0.7, h: 0.9, color: 0x3c4245, solid: true });
+        out.push({ shape: 'stove', x: wallX(0.6), z: q(rect.z - 0.9), y: 0, w: 0.9, d: 0.7, h: 0.9, color: bare ? 0x6f6a5e : 0x3c4245, solid: true });
         out.push({ shape: 'basin', x: wallX(0.6), z: q(rect.z + 0.9), y: 0, w: 1.1, d: 0.7, h: 0.95, color: 0xb8bcbb, solid: true });
-        for (let i = 0; i < 3; i++) out.push({ shape: 'bucket', x: wallX(1.6), z: q(rectMaxZ(rect) - 1.0 - i * 0.6), y: 0, w: 0.42, d: 0.42, h: 0.46, color: pick([0x2f6fa8, 0xd8563f, 0x3f8a4c], salt + i), solid: false });
+        if (!bare) out.push({ shape: 'fridge', x: wallX(0.7), z: q(rectMinZ(rect) + 1.3), y: 0, w: 0.9, d: 0.9, h: 1.7, color: 0xdfe6e4, solid: true });
+        if (smart) out.push({ shape: 'table', x: q(rect.x), z: q(rectMaxZ(rect) - 1.6), y: 0, w: 1.3, d: 0.9, h: 0.76, color: 0x8a6a44, solid: true });
+        for (let i = 0; i < (bare ? 4 : 2); i++) out.push({ shape: 'bucket', x: wallX(1.6), z: q(rectMaxZ(rect) - 1.0 - i * 0.6), y: 0, w: 0.42, d: 0.42, h: 0.46, color: pick([0x2f6fa8, 0xd8563f, 0x3f8a4c], salt + i), solid: false });
         break;
       }
       case 'lounge': {
-        out.push({ shape: 'sofa', x: wallX(1.2), z: q(rect.z), y: 0, w: 0.95, d: 2.2, h: 0.8, color: pick([0x6a5a4a, 0x4a5a63, 0x7a6a52], salt), solid: true });
-        out.push({ shape: 'table', x: q(rect.x), z: q(rect.z), y: 0, w: 1.2, d: 0.9, h: 0.5, color: 0x9a7b52, solid: true });
-        out.push({ shape: 'tv', x: q(outer - inward * (rect.w - 1.0)), z: q(rect.z), y: 0.75, w: 0.2, d: 1.2, h: 0.75, color: 0x1b1f22, solid: false });
-        for (let i = 0; i < 2; i++) out.push({ shape: 'stool', x: q(rect.x + inward * 1.1), z: q(rect.z - 0.8 + i * 1.6), y: 0, w: 0.44, d: 0.44, h: 0.48, color: pick([0xd6d0c4, 0x2f4f4a, 0xb03a2e], salt + i), solid: false });
+        // The room the finish shows up in most: a plastic chair and a paraffin lamp, a lounge suite
+        // in its wrapper, or a rug and a wall unit. Same room, three houses.
+        out.push({ shape: 'sofa', x: wallX(1.2), z: q(rect.z), y: 0, w: 0.95, d: 2.2, h: 0.8, color: pick(bare ? [0x6f6a5e, 0x5f5a52, 0x77705f] : [0x6a5a4a, 0x4a5a63, 0x7a6a52], salt), solid: true });
+        if (smart) out.push({ shape: 'rug', x: q(rect.x), z: q(rect.z), y: 0, w: q(Math.min(3.4, rect.w - 2.4)), d: q(Math.min(2.6, rect.d - 2.2)), h: 0.03, color: pick([0x8a4438, 0x3f5560, 0x6b5a34], salt + 2), solid: false });
+        out.push(bare
+          ? { shape: 'crate', x: q(rect.x), z: q(rect.z), y: 0, w: 0.85, d: 0.85, h: 0.5, color: 0xa07a4c, solid: false }
+          : { shape: 'table', x: q(rect.x), z: q(rect.z), y: 0, w: 1.2, d: 0.9, h: 0.5, color: 0x9a7b52, solid: true });
+        if (!bare) out.push({ shape: 'tv', x: q(outer - inward * (rect.w - 1.0)), z: q(rect.z), y: 0.75, w: 0.2, d: 1.2, h: 0.75, color: 0x1b1f22, solid: false });
+        if (smart) out.push({ shape: 'cabinet', x: q(outer - inward * (rect.w - 0.5)), z: q(rectMinZ(rect) + 1.4), y: 0, w: 0.5, d: 1.6, h: 1.8, color: 0x6d5236, solid: true });
+        for (let i = 0; i < (bare ? 3 : 2); i++) out.push({ shape: 'stool', x: q(rect.x + inward * 1.1), z: q(rect.z - 0.8 + i * (bare ? 1.05 : 1.6)), y: 0, w: 0.44, d: 0.44, h: 0.48, color: pick([0xd6d0c4, 0x2f4f4a, 0xb03a2e], salt + i), solid: false });
+        if (bare) out.push({ shape: 'bucket', x: wallX(2.6), z: q(rectMaxZ(rect) - 0.9), y: 0, w: 0.42, d: 0.42, h: 0.46, color: 0x2f6fa8, solid: false });
+        if (smart) out.push({ shape: 'plant', x: q(outer - inward * (rect.w - 0.7)), z: q(rectMaxZ(rect) - 0.9), y: 0, w: 0.8, d: 0.8, h: 1.6, color: 0x3f6a3a, solid: false });
+        break;
+      }
+      case 'dining': {
+        out.push({ shape: 'table', x: q(rect.x), z: q(rect.z), y: 0, w: q(Math.min(2.4, rect.w - 2.6)), d: 1.1, h: 0.76, color: 0x7a5636, solid: true });
+        for (let i = 0; i < 4; i++) {
+          out.push({ shape: 'stool', x: q(rect.x + (i < 2 ? -1 : 1) * 0.95), z: q(rect.z - 0.55 + (i % 2) * 1.1), y: 0, w: 0.46, d: 0.46, h: 0.5, color: 0x5b4630, solid: false });
+        }
+        out.push({ shape: 'cabinet', x: wallX(0.45), z: q(rect.z), y: 0, w: 0.55, d: q(Math.min(2.2, rect.d - 1.8)), h: 1.9, color: 0x6a4f34, solid: true });
+        if (smart) out.push({ shape: 'plant', x: q(rect.x), z: q(rectMinZ(rect) + 0.9), y: 0, w: 0.8, d: 0.8, h: 1.5, color: 0x3f6a3a, solid: false });
+        break;
+      }
+      case 'bathroom': {
+        out.push({ shape: 'bath', x: wallX(1.0), z: q(rect.z), y: 0, w: 1.5, d: 2.0, h: 0.62, color: 0xe4e6e2, solid: true });
+        out.push({ shape: 'basin', x: wallX(0.55), z: q(rectMinZ(rect) + 1.2), y: 0, w: 0.9, d: 0.6, h: 0.92, color: 0xd8dcdb, solid: true });
+        if (bare) out.push({ shape: 'bucket', x: q(rect.x), z: q(rectMaxZ(rect) - 1.0), y: 0, w: 0.44, d: 0.44, h: 0.48, color: 0x3f8a4c, solid: false });
+        break;
+      }
+      case 'study': {
+        out.push({ shape: 'desk', x: wallX(1.3), z: q(rect.z - 0.5), y: 0, w: 1.7, d: 0.9, h: 0.74, color: 0x7c6446, solid: true });
+        out.push({ shape: 'stool', x: wallX(2.5), z: q(rect.z - 0.5), y: 0, w: 0.5, d: 0.5, h: 0.48, color: 0x3a3430, solid: false });
+        out.push({ shape: 'shelf', x: wallX(0.5), z: q(rectMaxZ(rect) - 1.5), y: 0, w: 0.5, d: q(Math.min(2.2, rect.d - 2.4)), h: 2.1, color: 0x8b5a3c, solid: false });
+        break;
+      }
+      case 'warehouse': {
+        // Racking down the outer wall with a real aisle behind it, pallets on the floor, drums in
+        // the corner and a bench by the door. Anything that would close the aisle is refused by the
+        // solver, so the bay is always walkable however the hash lays it out. Few LONG racks rather
+        // than many short ones: at a metre a unit this bay was 700 boxes and forty flood fills, and
+        // the solver pays a full fill for every solid piece it tries.
+        const runs = rect.w > 9.5 ? [1.05, 4.2] : [1.05];
+        let bay = 0;
+        for (const inset of runs) {
+          const count = Math.max(2, Math.min(4, Math.round(rect.d / 9)));
+          const unit = q(Math.min(6.5, (rect.d - 2.4) / count - 0.9));
+          for (let i = 0; i < count; i++) {
+            out.push({
+              shape: 'rack', x: wallX(inset), z: q(rectMinZ(rect) + 1.2 + unit / 2 + i * (rect.d - 2.4 - unit) / Math.max(1, count - 1)),
+              y: 0, w: 1.4, d: unit, h: q(Math.min(3.6, CEILING - 1.2)), color: pick([0xb4622f, 0x3f6f9a, 0x8a8f92], salt + i + bay), solid: true,
+            });
+          }
+          bay += 7;
+        }
+        for (let i = 0; i < 4; i++) {
+          out.push({ shape: 'pallet', x: q(rect.x + inward * (0.4 + (i % 2) * 1.5)), z: q(rectMinZ(rect) + 1.6 + i * 1.4), y: 0, w: 1.2, d: 1.0, h: 0.18, color: 0x9c7b4c, solid: false });
+        }
+        for (let i = 0; i < 3; i++) {
+          out.push({ shape: 'drum', x: q(outer - inward * (rect.w - 0.85)), z: q(rectMaxZ(rect) - 1.0 - i * 0.75), y: 0, w: 0.62, d: 0.62, h: 0.88, color: pick([0x2f6a4a, 0x8a3a2c, 0x2f4f7a], salt + i), solid: false });
+        }
+        out.push({ shape: 'bench', x: q(outer - inward * (rect.w - 1.1)), z: q(rectMinZ(rect) + 1.6), y: 0, w: 0.8, d: 2.2, h: 0.9, color: 0x5f6a6c, solid: true });
+        out.push({ shape: 'notice', x: wallX(0.1), z: q(rect.z), y: 2.1, w: 0.05, d: 1.5, h: 0.9, color: 0xf2e6c8, solid: false, text: pick(['HARD HATS', 'NO SMOKING', 'BAY CLEAR'], salt + 5) });
+        break;
+      }
+      case 'mezzanine': {
+        // The lip onto the floor below, at knee height so it reads as a rail and never blocks a body.
+        out.push({ shape: 'rail', x: q(outer - inward * (rect.w - 0.25)), z: q(rect.z), y: 0.5, w: 0.1, d: q(rect.d - 1.2), h: 0.55, color: 0x39423f, solid: false });
+        for (let i = 0; i < 3; i++) {
+          out.push({ shape: 'crate', x: wallX(0.9), z: q(rectMinZ(rect) + 1.2 + i * 1.5), y: q(i === 1 ? 0.62 : 0), w: 1.0, d: 1.0, h: 0.62, color: pick([0xc8452f, 0x2f6fa8, 0x3f8a4c], salt + i), solid: false });
+        }
+        out.push({ shape: 'desk', x: q(rect.x), z: q(rectMaxZ(rect) - 1.4), y: 0, w: 1.7, d: 0.9, h: 0.74, color: 0x7a6a52, solid: true });
+        break;
+      }
+      case 'workshop': {
+        out.push({ shape: 'bench', x: wallX(0.9), z: q(rect.z), y: 0, w: 0.9, d: q(Math.min(3.2, rect.d - 1.6)), h: 0.92, color: 0x5f6a6c, solid: true });
+        out.push({ shape: 'shelf', x: wallX(0.4), z: q(rectMinZ(rect) + 1.2), y: 0, w: 0.45, d: 1.6, h: 2.2, color: 0x6f6a5e, solid: false });
+        for (let i = 0; i < 2; i++) out.push({ shape: 'drum', x: q(rect.x + inward * 0.8), z: q(rectMaxZ(rect) - 1.1 - i * 0.8), y: 0, w: 0.62, d: 0.62, h: 0.88, color: pick([0x8a3a2c, 0x2f4f7a], salt + i), solid: false });
         break;
       }
       case 'office': {
@@ -343,6 +612,17 @@ function furnish(core: BuildingCore, index: number, rooms: readonly Room[]): Pro
         out.push({ shape: 'notice', x: wallX(0.1), z: q(rectMaxZ(rect) - 1.4), y: 1.9, w: 0.05, d: 1.3, h: 1.0, color: 0xf4efdc, solid: false, text: 'LEVIES DUE' });
         break;
       }
+    }
+    // ONE THING THAT IS ONLY IN THIS ROOM, in this building. Every room of a kind is otherwise laid
+    // out the same way, and the owner's test is walking into two of them and telling them apart —
+    // so each lived-in room draws one extra piece, or none, from its own slot in the hash.
+    if (LIVED_IN.has(room.kind)) {
+      const extra = Math.floor(rnd(salt + 13) * (smart ? 5 : bare ? 3 : 4));
+      const backZ = q(rectMaxZ(rect) - 1.2);
+      if (extra === 1) out.push({ shape: 'shelf', x: wallX(0.45), z: backZ, y: 0, w: 0.45, d: 1.4, h: 2.0, color: 0x7a6144, solid: false });
+      else if (extra === 2) out.push({ shape: 'trunk', x: q(rect.x + inward * 1.3), z: backZ, y: 0, w: 0.8, d: 1.2, h: 0.55, color: pick([0x5f4a34, 0x46505a, 0x6a5f4a], salt + 14), solid: false });
+      else if (extra === 3) out.push({ shape: 'plant', x: q(outer - inward * (rect.w - 0.75)), z: backZ, y: 0, w: 0.75, d: 0.75, h: 1.35, color: 0x3f6a3a, solid: false });
+      else if (extra === 4) out.push({ shape: 'rug', x: q(rect.x), z: q(rect.z + 0.4), y: 0, w: q(Math.min(2.8, rect.w - 2.8)), d: 1.7, h: 0.03, color: pick([0x7a4638, 0x3f5560, 0x6b5a34], salt + 15), solid: false });
     }
   }
   return out;
