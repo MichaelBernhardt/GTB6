@@ -10,6 +10,12 @@
 import * as THREE from 'three';
 import type { CourseLayout, Hole } from './layout';
 
+/** Vertices in the aim polyline. Enough to hug a fairway that rolls; cheap enough to rewrite every
+ *  frame while the power bar sweeps. */
+const AIM_POINTS = 26;
+const AIM_YELLOW = 0xffe066;
+const AIM_GREEN = 0x7bf07b;
+
 const FAIRWAY_LIFT = 0.12;
 const BUNKER_LIFT = 0.18;
 const GREEN_LIFT = 0.24;
@@ -56,20 +62,36 @@ export class CourseScene {
     this.ball.visible = false;
     this.group.add(this.ball);
 
-    const aimGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, 1)]);
-    const aimMat = new THREE.LineBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.85 });
+    // The aim aid is a POLYLINE, not a segment: golf.ts walks it along the ground so the line lies
+    // on the grass all the way to the ring. A straight segment over the Braamfontein Spruit valley
+    // hangs in the air pointing at nothing, which is half of why aiming read as guesswork.
+    const aimGeom = new THREE.BufferGeometry();
+    aimGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(AIM_POINTS * 3), 3));
+    const aimMat = new THREE.LineBasicMaterial({ color: AIM_YELLOW, transparent: true, opacity: 0.92 });
     this.disposables.push(aimGeom, aimMat);
     this.aim = new THREE.Line(aimGeom, aimMat);
     this.aim.visible = false;
+    this.aim.frustumCulled = false;
     this.group.add(this.aim);
 
-    const ringGeom = new THREE.RingGeometry(1.6, 2.3, 24);
-    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false });
+    // Big enough to read from behind the player's shoulder at 200 m: this ring IS the aiming now.
+    const ringGeom = new THREE.RingGeometry(2.4, 3.6, 28);
+    const ringMat = new THREE.MeshBasicMaterial({ color: AIM_YELLOW, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false });
     this.disposables.push(ringGeom, ringMat);
     this.targetRing = new THREE.Mesh(ringGeom, ringMat);
     this.targetRing.rotation.x = -Math.PI / 2;
     this.targetRing.visible = false;
     this.group.add(this.targetRing);
+  }
+
+  /** Paint the line and the ring green the moment the shot they are drawing finishes on the green —
+   *  the one bit of feedback that tells you the power is right before you have played it. */
+  setAimTone(onTheGreen: boolean): void {
+    const colour = onTheGreen ? AIM_GREEN : AIM_YELLOW;
+    const line = this.aim.material as THREE.LineBasicMaterial;
+    const ring = this.targetRing.material as THREE.MeshBasicMaterial;
+    if (line.color.getHex() !== colour) line.color.setHex(colour);
+    if (ring.color.getHex() !== colour) ring.color.setHex(colour);
   }
 
   private material(color: number, roughness: number): THREE.Material {

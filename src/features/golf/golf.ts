@@ -10,6 +10,25 @@
  * to spend carefully; short, easy, generous, celebrated. So every hole pays a skin the moment the
  * putt drops, eight strokes is the most a hole can ever cost you, and the ball-hunters hand your
  * ball back over the fence for twenty rand instead of a penalty stroke.
+ *
+ * TWO THINGS THE FIRST PLAYTEST BROKE, and how they are answered here:
+ *
+ *  1. THERE WAS NO WAY OUT. Once a round started every rung of the golf ladder was the swing, so E
+ *     could only ever be the next click of a swing — the player was held by the feature until the
+ *     card was signed. Now: step off your ball (WALK_IN_RADIUS) and E stops meaning "swing" and
+ *     starts meaning "walk in", which opens a two-row menu — back to your ball, or end the round
+ *     here — that says on screen exactly what walking in costs. Backing off mid-meter cancels the
+ *     swing instead of leaving the bar spinning, and nothing ever drags you back to a ball you
+ *     deliberately walked away from. The prompt and the HUD both carry it; it is not a secret key.
+ *
+ *  2. AIMING WAS INHERITED FROM THE GAME'S AIM VERB and it did not work. See aimHeading(): the
+ *     shot now goes straight at the flag, always, and the only aim aid left is a ring on the grass
+ *     showing where THIS shot finishes. Aim stopped being a thing you do.
+ *
+ * A FEATURE ONLY GETS ONE KEY. FeatureGameApi hands a feature the E ladder, a menu and the player's
+ * position — no second binding, no input seam — so "walk off the ball" is the only quit gesture
+ * that works on a keyboard and a phone at once. See honestGaps: the foundation wants either a
+ * second key on InteractionDescriptor or an api.openMenu() a feature can raise on its own.
  */
 import * as THREE from 'three';
 import type { FeatureGameApi, FeatureHudEntry, FeatureMenuRow, FeatureSystem, InteractionDescriptor } from '../types';
@@ -51,9 +70,13 @@ interface Round {
   flight?: Ball;
   /** Rand won this round, before the lay-by cut. */
   gross: number;
+  /** What the boom charged for this round, kept so walking in can price itself on screen. */
+  fee: number;
   /** Green fee the marshal let you walk in on. Comes off the winnings. */
   feeOwing: number;
   elapsed: number;
+  /** The player has walked off their ball and means it: nothing may drag them back. */
+  walkedOff: boolean;
 }
 
 const SUB_STEP = 1 / 120;
@@ -64,6 +87,15 @@ const SWING_SECONDS = 4;
 /** The cup itself, in units (~0.75 m). Generous against a real 108 mm hole, tight enough that an
  *  approach shot holing out stays the once-a-week story it should be. */
 const HOLE_RADIUS = 0.55;
+/**
+ * Step this far off your ball (~9.5 m) and E stops meaning "swing" and starts meaning "walk in".
+ * Further than a shuffle round the ball, close enough that one second of walking reaches it. This
+ * is the ONLY quit gesture a feature can offer that works identically on a keyboard and a phone:
+ * a feature owns exactly one key and the touch pills are built from the prompt string.
+ */
+const WALK_IN_RADIUS = 7;
+/** Tail every in-round prompt carries, so the way out is on screen at the moment of being stuck. */
+const QUIT_TAIL = ' · STEP BACK TO QUIT';
 
 export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSystem {
   const state: GolfState = normalise(saved);
@@ -74,8 +106,9 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
   let round: Round | undefined;
   let pendingCaddie = false;
   let disposed = false;
-  /** QA only: overrides the player's facing so a machine playthrough can aim at the flag. */
-  let aimOverride: number | undefined;
+  /** QA only: radians of aim error a machine driver injects to model a human who is NOT dead on the
+   *  flag. Zero in the shipped game — see aimHeading — and non-zero only in the sensitivity runs. */
+  let aimError = 0;
 
   // ---- setup ------------------------------------------------------------------------------------
 
@@ -134,7 +167,39 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
   function hole(): Hole | undefined { return round && layout ? layout.holes[round.holeIndex] : undefined; }
   /** Reads `round` through a call so control-flow narrowing cannot go stale across press()/fire(). */
   function liveRound(): Round | undefined { return round; }
-  function aimHeading(): number { return aimOverride ?? api.playerHeading(); }
+
+  /**
+   * Where the shot goes: STRAIGHT AT THE FLAG, always.
+   *
+   * This used to be `api.playerHeading()` — the game's own aim verb, "hold right mouse and look".
+   * The owner could not work out what to do with it, and the in-engine trace says why: Player.update
+   * only turns the body when `input.aiming && weapon !== 'fists'`, so anyone who walked onto the
+   * course bare-handed could not turn the shot AT ALL, and mouse-look alone never moves the body.
+   * Every ball left the club at whatever bearing the body happened to be frozen at — the verifier's
+   * keyboard-only round teed off 30° off line, reached 111° off, and posted the worst card the
+   * eight-stroke cap allows. Aim was never a decision, only a tax.
+   *
+   * So golf aims itself. The meters are the game; the ring on the grass is the only aid left.
+   */
+  function aimHeading(): number {
+    const current = hole();
+    if (!round || !current) return api.playerHeading();
+    return Math.atan2(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z) + aimError;
+  }
+
+  /** How far the player has wandered from their ball — with E and the menu, the whole of the input
+   *  vocabulary a feature is given. */
+  function distanceFromBall(): number {
+    const active = round; if (!active) return 0;
+    const at = api.playerPosition();
+    return Math.hypot(at.x - active.ballAt.x, at.z - active.ballAt.z);
+  }
+
+  /** True while the player is standing off their ball: E means "walk in", not "swing". */
+  function steppedBack(): boolean {
+    const active = round;
+    return Boolean(active) && active!.phase !== 'signed' && distanceFromBall() > WALK_IN_RADIUS;
+  }
 
   /**
    * The only way a feature can reposition the player. Game.featureApi hands back the LIVE vector
@@ -158,17 +223,16 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
       holeIndex: 0, strokes: 0, scores: [], phase: 'ready', meter: 0, meterDir: 1, power: 0,
       caddie: pendingCaddie, clubId: 'driver', lie: 'tee', toPinM: 0, playsM: 0,
       ballAt: new THREE.Vector3(first.tee.x, api.surfaceHeightAt(first.tee.x, first.tee.z), first.tee.z),
-      gross: 0, feeOwing: paid ? 0 : fee, elapsed: 0,
+      gross: 0, fee, feeOwing: paid ? 0 : fee, elapsed: 0, walkedOff: false,
     };
     pendingCaddie = false;
-    movePlayerTo(first.tee.x, first.tee.z);
-    placeForShot();
+    placeForShot();   // stands you BEHIND the ball on the line to the flag, not on top of it
     api.closeMenu();
     api.analytics('round_started', { value: fee });
     if (!paid) api.notify('Settle at the turn', `Short at the boom, so the marshal waves you through. R${fee} comes off your winnings.`);
     api.notify(
       `${built.name} · ${built.holes.length} holes`,
-      `Par ${built.parTotal}. Hold RIGHT MOUSE to aim at the flag, then E three times: start, power, tempo.`,
+      `Par ${built.parTotal}. It aims itself at the flag: E starts the swing, E stops the ring on the pin, E stops the tempo bar on empty. Step off your ball any time and E walks you in.`,
       true,
     );
   }
@@ -188,13 +252,21 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     round.playsM = playsLikeM(round.toPinM, metres(rise));
     round.lie = puttableFrom(current, round.ballAt.x, round.ballAt.z) ? 'green' : lieAt(layout, current, round.ballAt.x, round.ballAt.z);
     round.clubId = pickClub(bag(), round.playsM, round.lie);
-    const at = api.playerPosition();
-    if (Math.hypot(at.x - round.ballAt.x, at.z - round.ballAt.z) > 5.5) {
-      const bearing = Math.atan2(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z);
-      movePlayerTo(round.ballAt.x - Math.sin(bearing) * 3.4, round.ballAt.z - Math.cos(bearing) * 3.4);
-    }
+    // Walking you to your own drive is the whole reason golf teleports at all — but never against
+    // your will: a player who has deliberately stepped off the ball is on their way to the gate.
+    if (!round.walkedOff) walkToBall();
     round.phase = 'ready'; round.meter = 0; round.meterDir = 1;
     if (scene) { scene.ball.visible = true; scene.ball.position.set(round.ballAt.x, round.ballAt.y + 0.22, round.ballAt.z); }
+  }
+
+  /** Stand the player behind their ball, on the line to the pin, close enough that E swings again. */
+  function walkToBall(): void {
+    const current = hole(); if (!round || !current) return;
+    const at = api.playerPosition();
+    if (Math.hypot(at.x - round.ballAt.x, at.z - round.ballAt.z) <= 5.5) return;
+    const bearing = Math.atan2(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z);
+    movePlayerTo(round.ballAt.x - Math.sin(bearing) * 3.4, round.ballAt.z - Math.cos(bearing) * 3.4);
+    round.walkedOff = false;
   }
 
   /** One press of E. The whole swing is this function three times — it has to work on a phone. */
@@ -275,6 +347,13 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     round.gross += skin;
     if (skin > 0) api.earn(skin);
     round.phase = 'holed';
+    // Walk up to the cup with the ball. Without this the player is left standing back at their last
+    // shot while the hole is 130 m away, which reads to the walk-in rung as having left the round.
+    round.ballAt.set(current.pin.x, api.surfaceHeightAt(current.pin.x, current.pin.z), current.pin.z);
+    if (!round.walkedOff) {
+      const bearing = Math.atan2(current.pin.x - current.tee.x, current.pin.z - current.tee.z);
+      movePlayerTo(current.pin.x - Math.sin(bearing) * 2.6, current.pin.z - Math.cos(bearing) * 2.6);
+    }
     if (scene) { scene.ball.visible = false; scene.aim.visible = false; scene.targetRing.visible = false; }
     api.analytics('hole_out', { detail: scoreName(strokes, current.par).toLowerCase(), value: strokes });
     api.notify(
@@ -325,11 +404,76 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     api.persist();
   }
 
-  function abandon(reason: string): void {
-    if (!round) return;
+  /**
+   * The way out, and the only one there is. Never silent: what the round cost, what you keep and
+   * what happens to the card all go on screen in the same breath as the round ending.
+   *
+   * The deal, decided here and stated there:
+   *  - every skin you already won at a green is YOURS — it was paid at the hole, not at the card;
+   *  - no card bonus, no course record, and the round does not go on your record;
+   *  - the green fee stays with the club once you have hit a shot, and comes straight back if you
+   *    have not — walking off the first tee cannot cost you money;
+   *  - a fee you were waved through on is settled if you can cover it, written off if you cannot;
+   *  - a caddie you have already paid for stays hired for the next round rather than evaporating.
+   */
+  function walkIn(headline: string, alarming = false): void {
+    const active = round; if (!active) return;
+    const played = active.scores.reduce((sum, value) => sum + value, 0) + active.strokes;
+    const kept = active.gross;
+    let feeLine: string;
+    if (played === 0) {
+      const back = active.fee - active.feeOwing;
+      if (back > 0) api.earn(back);
+      feeLine = back > 0 ? `Your R${back} green fee comes straight back — you never hit a shot.` : 'You owe the club nothing.';
+    } else if (active.feeOwing > 0) {
+      const settled = Math.min(active.feeOwing, api.balance());
+      if (settled > 0) api.spend(settled);
+      feeLine = settled > 0 ? `R${settled} settles the green fee they waved you through on.` : 'The marshal writes off the green fee you never paid.';
+    } else {
+      feeLine = `The R${active.fee} green fee stays with the club.`;
+    }
+    const holesDone = active.scores.length;
+    // A caddie you paid R235 for is not spent by a round you did not finish: he waits at the gate
+    // and goes back on the bag next time. Losing him to a walk-in is exactly the silent charge the
+    // owner told us not to make.
+    const caddieHeld = active.caddie;
+    if (caddieHeld) pendingCaddie = true;
     round = undefined;
     if (scene) { scene.ball.visible = false; scene.aim.visible = false; scene.targetRing.visible = false; }
-    api.notify('Round abandoned', reason, false);
+    api.analytics('round_walked_in', { value: played, detail: `hole-${Math.min(holesDone + 1, 3)}` });
+    api.notify(
+      'Walked in',
+      `${headline} ${holesDone} hole${holesDone === 1 ? '' : 's'} in the book, no card and no bonus. ${feeLine}${kept > 0 ? ` The R${kept} you won at the greens is yours.` : ''}${caddieHeld ? ' Tebogo waits at the gate — still on your bag next round.' : ''}`,
+      !alarming, // choosing to leave is not a failure; being dragged out by the 260 m rule is a warning
+    );
+  }
+
+  /** The two-row menu the walk-in prompt opens. Reversible on purpose: stepping off your ball must
+   *  not be able to end a round by accident, and the row that ends it has to price itself first. */
+  function openRoundMenu(): void {
+    const active = round; if (!active) { openShop(); return; }
+    const played = active.scores.reduce((sum, value) => sum + value, 0) + active.strokes;
+    const back = played === 0 ? active.fee - active.feeOwing : 0;
+    api.showMenu({
+      featureId: 'golf',
+      eyebrow: `${(layout?.name ?? 'GOLF').toUpperCase()} · HOLE ${hole()?.number ?? 1}`,
+      title: 'Walk in, or play on?',
+      blurb: 'Nobody is holding you here. The bakkie is at the gate whenever you want it.',
+      balance: api.balance(),
+      rows: [
+        {
+          id: 'resume', label: 'Back to your ball', note: 'PLAY ON',
+          detail: `Hole ${hole()?.number ?? 1}, ${played} stroke${played === 1 ? '' : 's'} played${active.gross > 0 ? `, R${active.gross} won so far` : ''}. You get walked back to your ball.`,
+        },
+        {
+          id: 'walkin', label: 'Walk in — end the round here', note: 'QUIT',
+          detail: back > 0
+            ? `You have not hit a shot, so your R${back} green fee comes straight back. No card, no bonus, nothing on your record.`
+            : `${active.gross > 0 ? `The R${active.gross} you won at the greens stays yours. ` : ''}No card, no bonus, nothing on your record${active.feeOwing > 0 ? `, and R${active.feeOwing} of green fee to settle` : `, and the R${active.fee} green fee stays with the club`}.`,
+        },
+      ],
+      leaveLabel: 'Never mind',
+    });
   }
 
   // ---- the pro shop -------------------------------------------------------------------------------
@@ -338,8 +482,8 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     const built = ensureCourse();
     const rows: FeatureMenuRow[] = [];
     if (round) {
-      rows.push({ id: 'resume', label: 'Back out to the round', detail: `Hole ${hole()?.number ?? 1}, ${round.strokes} strokes played`, note: 'PLAY' });
-      rows.push({ id: 'abandon', label: 'Walk in', detail: 'Give it up. The green fee stays with the club.', note: 'QUIT' });
+      rows.push({ id: 'resume', label: 'Back to your ball', detail: `Hole ${hole()?.number ?? 1}, ${round.strokes} strokes played on it`, note: 'PLAY ON' });
+      rows.push({ id: 'walkin', label: 'Walk in — end the round here', detail: `Skins already won stay yours. No card, no bonus${round.gross > 0 ? `, R${round.gross} in your pocket` : ''}.`, note: 'QUIT' });
     } else {
       rows.push({
         id: 'play', label: `Play ${built?.holes.length ?? 3} holes`, price: greenFee(state),
@@ -407,19 +551,26 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
 
   const rungs: InteractionDescriptor[] = [
     {
+      // ABOVE the swing: the moment you step off your ball, E is the way out. This is the rung the
+      // first playtest was missing entirely — there was no state in which E meant anything but
+      // "next click of this swing", so a round could only end by being finished.
+      id: 'golf:walkin', order: 38, context: 'foot',
+      test: () => (steppedBack() ? { prompt: 'E  Walk in · quit the round', act: openRoundMenu } : undefined),
+    },
+    {
       id: 'golf:swing', order: 40, context: 'foot',
       test: () => {
         const current = hole(); if (!round || !current) return undefined;
-        if (round.phase === 'flight') return { prompt: 'E  Skip the flight', act: press };
+        if (round.phase === 'flight') return { prompt: `E  Skip the flight${QUIT_TAIL}`, act: press };
         if (round.phase === 'holed') {
           const last = round.holeIndex + 1 >= (layout?.holes.length ?? 3);
-          return { prompt: last ? 'E  Sign your card' : 'E  Walk to the next tee', act: nextHole };
+          return { prompt: `${last ? 'E  Sign your card' : 'E  Walk to the next tee'}${QUIT_TAIL}`, act: nextHole };
         }
         if (round.phase === 'signed') return { prompt: 'E  Back to the pro shop', act: () => { round = undefined; openShop(); } };
-        if (round.phase === 'power') return { prompt: 'E  Set the power', act: press };
+        if (round.phase === 'power') return { prompt: 'E  Stop the ring on the flag', act: press };
         if (round.phase === 'tempo') return { prompt: 'E  Stop the bar on empty', act: press };
         const plays = Math.abs(round.playsM - round.toPinM) > 8 ? ` · plays ${Math.round(round.playsM)}` : '';
-        return { prompt: `E  Swing · ${clubById(round.clubId).name} · ${Math.round(round.toPinM)} m${plays}`, act: press };
+        return { prompt: `E  Swing · ${clubById(round.clubId).name} · ${Math.round(round.toPinM)} m${plays}${QUIT_TAIL}`, act: press };
       },
     },
     {
@@ -456,6 +607,13 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
   function tickSwing(dt: number): void {
     const current = hole(); if (!round || !current) return;
     round.elapsed += dt;
+    // Walking away mid-meter used to leave the power bar ping-ponging forever with E owned by a
+    // swing you had already left. Backing off the ball is what a golfer does; it costs no stroke.
+    if ((round.phase === 'power' || round.phase === 'tempo') && steppedBack()) {
+      round.phase = 'ready'; round.meter = 0; round.meterDir = 1; round.power = 0;
+      api.notify('Backed off the ball', 'No stroke played. Step back up to it, or E walks you in.');
+      return;
+    }
     if (round.phase === 'power') {
       round.meter += round.meterDir * (dt / POWER_SWEEP);
       if (round.meter >= 1) { round.meter = 1; round.meterDir = -1; }
@@ -476,6 +634,38 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     }
   }
 
+  /** What this club, off this lie, at this much of the bar, PLAYS to — in metres, the same number
+   *  the club picker and the machine driver both work in. */
+  function shotPlaysM(power: number): number {
+    if (!round) return 0;
+    const full = round.clubId === 'putter' ? puttReachM(round.playsM) : clubReachM(bag(), round.clubId, round.lie);
+    return full * Math.min(1, Math.max(0.12, power));
+  }
+
+  /**
+   * How far down the aim line that shot actually FINISHES, in units. Inverts playsLikeM against the
+   * real ground by fixed point — six height samples, cheap enough to run every frame — so the ring
+   * sits where the ball stops on a hole that drops 27 m, not where a flat-earth number would put it.
+   */
+  function previewDistanceU(playsM: number): number {
+    const active = round; if (!active) return 0;
+    const dirX = Math.sin(aimHeading()); const dirZ = Math.cos(aimHeading());
+    const fromY = api.surfaceHeightAt(active.ballAt.x, active.ballAt.z);
+    let guess = playsM / METRES_PER_UNIT;
+    for (let i = 0; i < 6; i++) {
+      const rise = metres(api.surfaceHeightAt(active.ballAt.x + dirX * guess, active.ballAt.z + dirZ * guess) - fromY);
+      guess = guess * 0.35 + (Math.max(playsM * 0.35, playsM - rise) / METRES_PER_UNIT) * 0.65;
+    }
+    return Math.max(2, guess);
+  }
+
+  /**
+   * The whole aim aid, and the whole of what replaced "hold right mouse and look": a line along the
+   * grass to a ring where THIS shot finishes. During the power sweep the ring slides, so setting the
+   * power is visibly "stop the ring on the flag" instead of a percentage nobody can convert into
+   * metres. The line follows the ground rather than floating, because a floating line over a valley
+   * points at the sky.
+   */
   function drawAids(): void {
     const current = hole();
     if (!scene) return;
@@ -484,14 +674,25 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     scene.targetRing.visible = aiming;
     if (!aiming || !round || !current) return;
     const heading = aimHeading();
-    const y = round.ballAt.y + 0.4;
-    const reach = Math.min(70, Math.max(18, Math.hypot(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z) * 0.8));
+    // At address the ring sits ON THE FLAG: that is the answer to "where am I aiming". The moment
+    // the bar starts it becomes the live distance instead — the same ring, now answering "how far".
+    const addressing = round.phase === 'ready';
+    const reachU = addressing
+      ? Math.hypot(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z)
+      : previewDistanceU(shotPlaysM(round.phase === 'power' ? round.meter : round.power));
     const points = scene.aim.geometry.getAttribute('position') as THREE.BufferAttribute;
-    points.setXYZ(0, round.ballAt.x, y, round.ballAt.z);
-    points.setXYZ(1, round.ballAt.x + Math.sin(heading) * reach, y + reach * 0.05, round.ballAt.z + Math.cos(heading) * reach);
+    for (let i = 0; i < points.count; i++) {
+      const along = (i / (points.count - 1)) * reachU;
+      const x = round.ballAt.x + Math.sin(heading) * along;
+      const z = round.ballAt.z + Math.cos(heading) * along;
+      points.setXYZ(i, x, api.surfaceHeightAt(x, z) + 0.5, z);
+    }
     points.needsUpdate = true;
     scene.aim.geometry.computeBoundingSphere();
-    scene.targetRing.position.set(current.pin.x, api.surfaceHeightAt(current.pin.x, current.pin.z) + 0.45, current.pin.z);
+    const ringX = round.ballAt.x + Math.sin(heading) * reachU;
+    const ringZ = round.ballAt.z + Math.cos(heading) * reachU;
+    scene.targetRing.position.set(ringX, api.surfaceHeightAt(ringX, ringZ) + 0.45, ringZ);
+    scene.setAimTone(!addressing && Math.hypot(current.pin.x - ringX, current.pin.z - ringZ) <= current.greenR);
   }
 
   // ---- HUD ------------------------------------------------------------------------------------------
@@ -507,18 +708,18 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
       { id: 'golf:hole', label: `H${current.number}`, value: `PAR ${current.par} · ${Math.round(current.lengthM)}m` },
     ];
     if (round.phase === 'power' || round.phase === 'tempo') {
+      // Metres, not a percentage: the number under the bar is the number on the ring out on the
+      // grass, so the two aids teach each other.
+      const playing = Math.round(shotPlaysM(round.phase === 'power' ? round.meter : round.power));
       entries.push({
         id: 'golf:meter', label: round.phase === 'power' ? 'POWER' : 'TEMPO',
-        value: round.phase === 'tempo' ? `${Math.round(round.power * 100)}%` : undefined,
+        value: `${playing}m`,
         fill: Math.round(Math.max(0, Math.min(1, round.meter)) * 100),
         warn: round.meter < 0,
       });
     } else if (round.phase === 'ready') {
-      const bearing = Math.atan2(current.pin.x - round.ballAt.x, current.pin.z - round.ballAt.z);
-      const off = Math.abs(Math.atan2(Math.sin(aimHeading() - bearing), Math.cos(aimHeading() - bearing))) * (180 / Math.PI);
       const plays = Math.abs(round.playsM - round.toPinM) > 8 ? ` · PLAYS ${Math.round(round.playsM)}` : '';
       entries.push({ id: 'golf:club', label: clubById(round.clubId).name, value: `${Math.round(round.toPinM)}m${plays} · ${round.lie.toUpperCase()}` });
-      entries.push({ id: 'golf:aim', label: 'AIM', value: off > 12 ? `${Math.round(off)}° OFF` : 'ON LINE', fill: Math.round(Math.max(0, 100 - off * 2.2)), warn: off > 25 });
     }
     // Once a hole is holed out its strokes are already in `scores`; adding the live counter as well
     // showed a finished 7-stroke round as CARD 10 (caught in an end-of-round screenshot).
@@ -527,7 +728,9 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     const parSoFar = parDone + (settled ? 0 : current.par);
     entries.push({ id: 'golf:card', label: 'CARD', value: played === 0 ? 'E' : `${played} · ${relativeToPar(played, parSoFar)}` });
     if (round.caddie) entries.push({ id: 'golf:caddie', label: 'CADDIE', value: 'READING IT' });
-    entries.push({ id: 'golf:alt', label: 'ALT', value: '+10%' });
+    // The way out, on screen for every frame of every phase of every round. A player who has already
+    // stepped back gets told what E does right now instead of what it would do.
+    if (round.phase !== 'signed') entries.push({ id: 'golf:quit', label: 'QUIT', value: steppedBack() ? 'PRESS E' : 'STEP BACK' });
     return entries;
   }
 
@@ -539,44 +742,111 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
   }
 
   /**
-   * Drives the REAL swing, flight, out-of-bounds, scoring and payout path. Only the two things a
-   * human supplies are synthesized: where the meter stops, and where the player is aiming.
+   * How a driver plays. The default is the old PERFECT driver — every number in this feature was
+   * tuned against it, which the first playtest exposed as a lie: it stops both bars on the exact
+   * frame it wants and it always aimed dead at the flag, and a keyboard round scored the worst card
+   * the cap allows. `human()` below is the profile the round is now tuned against.
    */
-  function machineRound(maxPower: number, tempoMiss = 1 / (TEMPO_SWEEP * 60)): string {
+  interface Driver {
+    /** Cap on the power the driver ever asks for. */
+    maxPower: number;
+    /** Radians of aim error, 1σ. ZERO for the shipped game: golf aims itself now, so the aim error
+     *  a player can commit is exactly nil. Non-zero only in the sensitivity runs. */
+    aimSigma: number;
+    /** Fraction of the power bar this driver misses its intended stop by, 1σ. */
+    powerSigma: number;
+    /** Where the tempo bar is stopped, 1σ, in bar units — 0.10 is the whole pure window. */
+    tempoSigma: number;
+    /** Systematic lateness on the tempo bar: eyes see the mark, thumb arrives after it. */
+    tempoBias: number;
+    /** Chance per shot of a complete mistime — the hadeda screamed, the phone rang. */
+    fluffChance: number;
+    seed: number;
+  }
+
+  const FRAME = 1 / 60;
+
+  /** The old PERFECT driver: dead on the flag, both bars stopped on the frame it wanted. Kept
+   *  because several regressions are written against it — never again as the tuning authority. */
+  function perfect(maxPower = SMASH_LIMIT, tempoMiss = FRAME / TEMPO_SWEEP): Driver {
+    return { maxPower, aimSigma: 0, powerSigma: 0, tempoSigma: 0, tempoBias: tempoMiss, fluffChance: 0, seed: 1 };
+  }
+
+  /**
+   * A HUMAN-PLAUSIBLE golfer, and the profile every number in this feature is now tuned against.
+   *
+   * Aim error: 0°, because there is no longer any aiming to be wrong at — the shot goes at the flag
+   * and the player's only job is the two bars. (`feature golf human 1 6` re-runs the whole round
+   * with 6° of aim error to prove the round survives it anyway.)
+   *
+   * Timing error: a person stopping a moving bar lands within about 70 ms of where they meant to,
+   * with a systematic ~40 ms of lateness on top, and blows it completely about one shot in twenty.
+   * Those milliseconds are converted into bar units by each bar's own sweep, so re-timing a bar
+   * automatically re-tunes the difficulty instead of silently invalidating it.
+   */
+  function human(seed: number, aimDegrees = 0): Driver {
+    return {
+      maxPower: SMASH_LIMIT,
+      aimSigma: (aimDegrees * Math.PI) / 180,
+      powerSigma: 0.07 / POWER_SWEEP,     // 70 ms of a bar that sweeps 0→1 in POWER_SWEEP seconds
+      tempoSigma: 0.07 / TEMPO_SWEEP,
+      tempoBias: -0.04 / TEMPO_SWEEP,     // 40 ms late: the bar has already passed empty
+      fluffChance: 0.05,
+      seed,
+    };
+  }
+
+  /**
+   * Drives the REAL swing, flight, out-of-bounds, scoring and payout path. Only what a human
+   * supplies is synthesized: where each bar stops, and (for the sensitivity runs) how far off the
+   * flag the shot is pointed.
+   */
+  function machineRound(profile: Driver): string {
     const built = ensureCourse(); if (!built) return 'stuck:no-course';
     round = undefined;
+    let bits = profile.seed >>> 0 || 1;
+    /** mulberry32 — a seeded round is a reproducible round, so a tuning number can be re-checked. */
+    const random = (): number => {
+      bits = (bits + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(bits ^ (bits >>> 15), 1 | bits);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const gauss = (): number => (random() + random() + random() + random() - 2) * 1.1; // ~N(0,1)
     startRound();
     let guard = 0;
     let ballSeconds = 0;
     let strokes = 0;
+    const done = (verdict: string): string => { aimError = 0; return verdict; };
     for (;;) {
       const active = liveRound();
-      if (!active) return 'stuck:round-vanished';
+      if (!active) return done('stuck:round-vanished');
       if (active.phase === 'signed') {
-        aimOverride = undefined;
         const total = active.scores.reduce((sum, value) => sum + value, 0);
         // Modelled wall clock: every second the ball was live, plus SWING_SECONDS of human input
-        // per stroke (aim, then three taps). This is the number the four-minute budget is judged on.
+        // per stroke (settle, then three taps). The four-minute budget is judged on this number.
         const budget = ballSeconds + strokes * SWING_SECONDS;
-        return `ok:strokes=${total} par=${built.parTotal} holes=${active.scores.join('/')} earned=R${active.gross} ballSeconds=${ballSeconds.toFixed(1)} roundSeconds=${budget.toFixed(0)} best=${state.best}`;
+        return done(`ok:strokes=${total} par=${built.parTotal} holes=${active.scores.join('/')} earned=R${active.gross} ballSeconds=${ballSeconds.toFixed(1)} roundSeconds=${budget.toFixed(0)} best=${state.best}`);
       }
-      if (guard++ > 400) { aimOverride = undefined; return `stuck:phase-${active.phase}-after-${guard}-steps`; }
-      const current = hole(); if (!current) { aimOverride = undefined; return 'stuck:no-hole'; }
+      if (guard++ > 400) return done(`stuck:phase-${active.phase}-after-${guard}-steps`);
+      const current = hole(); if (!current) return done('stuck:no-hole');
       if (active.phase === 'holed') { nextHole(); continue; }
       if (active.phase === 'flight') { ballSeconds += runOutShot(); continue; }
-      if (active.phase !== 'ready') { aimOverride = undefined; return `stuck:unexpected-phase-${active.phase}`; }
-      aimOverride = Math.atan2(current.pin.x - active.ballAt.x, current.pin.z - active.ballAt.z);
+      if (active.phase !== 'ready') return done(`stuck:unexpected-phase-${active.phase}`);
+      aimError = gauss() * profile.aimSigma;
       const toPin = active.playsM;
       strokes += 1;
       press();                                                    // start the backswing
       const reach = active.clubId === 'putter' ? puttReachM(toPin) : fullReach(active.clubId, active.lie);
-      // Quantise to a frame: a human can only stop the bar on a rendered frame, so a driver is
-      // always a couple of metres out. Without this the machine plays a perfection nobody can.
-      const frame = 1 / (POWER_SWEEP * 60);
-      const wanted = Math.min(maxPower, Math.max(0.15, toPin / reach));
-      active.meter = Math.round(wanted / frame) * frame;
-      press();                                                    // set the power
-      active.meter = tempoMiss;                                   // where this driver stops the tempo bar
+      // Quantise to a frame: nobody can stop a bar between two rendered frames.
+      const wanted = Math.min(profile.maxPower, Math.max(0.15, toPin / reach)) + gauss() * profile.powerSigma;
+      const frame = FRAME / POWER_SWEEP;
+      active.meter = Math.max(0.05, Math.min(1, Math.round(wanted / frame) * frame));
+      press();                                                    // stop the ring on the flag
+      const fluffed = random() < profile.fluffChance;
+      active.meter = fluffed
+        ? (random() < 0.5 ? -1 : 1) * (0.25 + random() * 0.35)
+        : profile.tempoBias + gauss() * profile.tempoSigma;
       press();                                                    // strike
     }
   }
@@ -597,9 +867,17 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
       if (!round) return;
       tickSwing(dt);
       drawAids();
-      if (round.phase === 'signed') return; // the card is already banked; wander off if you like
-      const at = api.playerPosition();
-      if (Math.hypot(at.x - round.ballAt.x, at.z - round.ballAt.z) > 260) abandon('You walked off the course. The card does not count.');
+      const gap = distanceFromBall();
+      if (round.phase === 'signed') {
+        // The card is banked; walking away from a finished round just ends it, rather than leaving
+        // "E  Back to the pro shop" following you across the suburb.
+        if (gap > 40) round = undefined;
+        return;
+      }
+      // Sticky, so a shot that settles 200 m away cannot silently drag a departing player back to it.
+      if (gap > WALK_IN_RADIUS) round.walkedOff = true;
+      else if (gap < WALK_IN_RADIUS * 0.7) round.walkedOff = false;
+      if (gap > 260) walkIn('You walked off the course.', true);
     },
     hud,
     interactions: () => rungs,
@@ -615,8 +893,9 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
     },
     menu: (actionId) => {
       if (actionId === 'play') { startRound(); return; }
-      if (actionId === 'resume') { api.closeMenu(); return; }
-      if (actionId === 'abandon') { api.closeMenu(); abandon('You walked in at the turn.'); return; }
+      if (actionId === 'resume') { walkToBall(); api.closeMenu(); return; }
+      // 'abandon' is the pro-shop row's old id; both land on the same accounted, announced exit.
+      if (actionId === 'walkin' || actionId === 'abandon') { api.closeMenu(); walkIn('You walked in.'); return; }
       if (actionId === 'caddie') {
         if (!api.spend(CADDIE_FEE)) { api.notify('Short', `A caddie is R${CADDIE_FEE} for the round.`, false); openShop(); return; }
         if (round) round.caddie = true; else pendingCaddie = true;
@@ -654,8 +933,11 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
         if (!state.owned.includes(item.id)) state.owned.push(item.id);
         return [`${item.label} in the bag.`];
       }
-      if (verb === 'qa') return [machineRound(SMASH_LIMIT)];
-      return ['feature golf [where|rank|tee|shop|give <gear>|qa]'];
+      if (verb === 'qa') return [machineRound(perfect())];
+      // `feature golf human [seed] [aim°]` — the round as a person plays it. This is the driver the
+      // difficulty is tuned against; `qa` is the old perfect one, kept only as a ceiling.
+      if (verb === 'human') return [machineRound(human(Number(value) || 1, Number(args[2]) || 0))];
+      return ['feature golf [where|rank|tee|shop|give <gear>|qa|human [seed] [aim°]]'];
     },
     qa: (action, args) => {
       if (action === 'course') {
@@ -670,10 +952,20 @@ export function createFeature(api: FeatureGameApi, saved: unknown): FeatureSyste
         api.closeMenu();
         return state.owned.includes('glove') ? `ok:glove spent=${before - api.balance()} balance=${api.balance()}` : `stuck:glove-not-bought balance=${before}`;
       }
-      return machineRound(
+      if (action === 'human') {
+        const base = human(typeof args.seed === 'number' ? args.seed : 1, typeof args.aim === 'number' ? args.aim : 0);
+        const number = (key: string, fallback: number): number => (typeof args[key] === 'number' ? args[key] as number : fallback);
+        return machineRound({
+          ...base,
+          powerSigma: number('powerSigma', base.powerSigma),
+          tempoSigma: number('tempoSigma', base.tempoSigma),
+          fluffChance: number('fluff', base.fluffChance),
+        });
+      }
+      return machineRound(perfect(
         typeof args.power === 'number' ? args.power : SMASH_LIMIT,
         typeof args.tempo === 'number' ? args.tempo : undefined,
-      );
+      ));
     },
     dispose: () => {
       disposed = true;

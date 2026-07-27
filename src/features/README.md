@@ -101,6 +101,17 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
   fixture ped you forgot leaks its mesh. Keep your own roster and `api.removeFixture()` each one.
 - **Return `undefined` from `test()` when there is nothing to do.** In the `vehicle` context your rung
   sits *above* `E  Exit vehicle`, so a rung that always offers something traps the player in the car.
+- **A feature owns exactly ONE key, and that is a design constraint, not a detail.** `E` is the whole
+  input vocabulary: there is no second binding, no `api.onKey`, and the mobile pills are built from
+  the prompt string by `parsePromptActions`, so a key the host does not handle is a pill that does
+  nothing. If your feature has a mode a player can get *stuck in*, the way out cannot be a second key
+  — it has to be a state your rung can see. Golf shipped a round in which every rung was the swing,
+  so `E` could only ever be the next click of a swing, and the first playtest reported "no way to
+  quit"; the fix was a rung that watches `api.playerPosition()` and turns `E` into the way out the
+  moment you step off your ball. **Missing seams, if anyone is extending the foundation:** a second
+  key on `InteractionDescriptor`, an `api.openMenu()` a feature can raise on its own, and
+  `api.placePlayer(x, z, heading)` — position without facing means a feature can move you somewhere
+  and leave the camera pointed at nothing.
 - **Prompts must read `KEY<two spaces>Label`**, segments joined by ` · ` — that grammar is what
   `parsePromptActions` turns into the mobile context pill, and `interactions.test.ts` asserts every
   registered approach prompt produces one.
