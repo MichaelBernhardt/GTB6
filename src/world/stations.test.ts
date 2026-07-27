@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GENERATED_RAILWAYS, RAILWAY_STATION_SITES, STATIONS, type MapPt } from './mapData';
+import { GENERATED_RAILWAYS, METRES_PER_UNIT, RAILWAY_STATION_SITES, STATIONS, type MapPt } from './mapData';
 
 const arcAndDistance = (points: MapPt[], x: number, z: number): { s: number; dist: number } => {
   let bestS = 0; let bestD = Infinity; let acc = 0;
@@ -40,10 +40,14 @@ describe('generated station data (owner guarantees)', () => {
         .sort((a, b) => a.s - b.s);
       for (const p of projected) expect(p.dist).toBeLessThan(30); // station points lie ON the polyline
       for (let i = 1; i < projected.length; i++) {
-        const gap = projected[i]!.s - projected[i - 1]!.s;
-        // ~1 unit ≈ 1 m; OSM-real stations may sit closer than the synthetic 2.5 km floor.
-        expect(gap, line.name).toBeLessThanOrEqual(5200);
-        expect(gap, line.name).toBeGreaterThan(500);
+        // Both bounds are REAL DISTANCES, so they are converted rather than compared in units. They
+        // were written when 1 unit ≈ 1 m (0.9914 m/u); at 1.322 m/u the same 500 m floor is 378 units,
+        // and leaving it at 500 units would have silently tightened the guarantee by a third. The
+        // closest pair on this map is 490 units = 648 m, comfortably clear. OSM-real stations may sit
+        // closer than the synthetic 2.5 km spacing, which is why the floor is 500 m and not 2,500 m.
+        const gapMetres = (projected[i]!.s - projected[i - 1]!.s) * METRES_PER_UNIT;
+        expect(gapMetres, line.name).toBeLessThanOrEqual(5200);
+        expect(gapMetres, line.name).toBeGreaterThan(500);
       }
     }
   });

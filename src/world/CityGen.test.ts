@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintRailwayClearance, footprintRoadClearance, generateCell, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, type GeneratedBuilding } from './CityGen';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
-import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_WORLD_SIZE, RAILWAY_STATION_SITES, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
+import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_STATS, MAP_WORLD_SIZE, METRES_PER_UNIT, RAILWAY_STATION_SITES, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 
 const HALF = MAP_WORLD_SIZE / 2;
@@ -14,8 +14,16 @@ describe('citywide parcel layout', () => {
   it('populates the whole map, not just the CBD test patch', () => {
     // Before the density pass only 5,158 capped parcels could stream. Keep the promised 60–80%
     // increase explicit while retaining an upper bound for streaming/collider memory.
-    expect(all.length).toBeGreaterThanOrEqual(Math.ceil(5158 * 1.6));
-    expect(all.length).toBeLessThanOrEqual(9000);
+    //
+    // The 5,158 was counted on the 19,200-unit map: 333.3 km² of land, which at 0.9914 m/unit is
+    // 339.4 million square UNITS. Parcels are laid out in world units, so the comparable baseline on
+    // any map is that same parcels-per-square-unit rate over its own buildable area (1,370 on this
+    // 90.2-million-u² crop). The 1.6x is the thing this assertion is about and it is unchanged — an
+    // absolute count would only be asserting how big the map is.
+    const PRE_DENSITY_PARCELS_PER_SQUARE_UNIT = 5158 / 339.4e6;
+    const landSquareUnits = ((MAP_STATS.landKm2 ?? 333.3) * 1e6) / METRES_PER_UNIT ** 2;
+    expect(all.length).toBeGreaterThanOrEqual(Math.ceil(PRE_DENSITY_PARCELS_PER_SQUARE_UNIT * landSquareUnits * 1.6));
+    expect(all.length).toBeLessThanOrEqual(9000); // absolute runtime cap: streaming + collider memory, not a map-size figure
     // buildings must reach well beyond the CBD in every quadrant (inhabited citywide)
     const quadrants = new Set(all.map((b) => `${Math.sign(b.x)},${Math.sign(b.z)}`));
     expect(quadrants.size).toBeGreaterThanOrEqual(4);

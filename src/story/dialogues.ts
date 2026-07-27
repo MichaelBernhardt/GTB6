@@ -122,7 +122,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Auntie Portia', text: 'Take something with a working radio and don\'t eat the order. I counted every pastry. I always count.' },
   ] },
   'pier-pressure': { id: 'pier-pressure:intro', lines: [
-    { speaker: 'Candice', text: 'A fare ran on Ricardo. Airport run, coastal tolls, waiting time — a BIG fare. Now he\'s bragging at Seepunt Pier before his boat leaves.' },
+    { speaker: 'Candice', text: 'A fare ran on Ricardo. Airport run, coastal tolls, waiting time — a BIG fare. Now he\'s bragging at the Vaalpunt Slipway before his boat leaves.' },
     { speaker: 'You', text: 'And the interest rate?' },
     { speaker: 'Candice', text: 'Whatever his face can afford. Go collect, sweetie.' },
   ] },

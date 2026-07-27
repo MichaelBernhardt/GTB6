@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { moveSpeed } from '../core/GameRules';
 import { STATIONS } from '../world/mapData';
 import type { City } from '../world/City';
@@ -8,7 +9,7 @@ import { cabAt, nearestArcOnSpan, stepAboard, stepDrive, stitchRailPaths } from 
  * Passenger trains shuttling back and forth along the generated rail lines (City.railPaths).
  *
  * Purely scenic kinematics: each line ≥ MIN_LINE_LENGTH gets one Gautrain-styled consist
- * (gold flanks, dark window band, blue skirt) that accelerates out of its terminus, cruises,
+ * (gold flanks, full-height glazing on both sides, blue skirt) that accelerates out of its terminus, cruises,
  * brakes into every station along the line (mapData.STATIONS), dwells DWELL_S with the boarding
  * countdown showing, and reverses at the far end. Cars are placed independently by arc length
  * so the train articulates around curves and pitches with the relief.
@@ -137,7 +138,7 @@ const MAX_SPEED = 21; // ~75 km/h at 1 u ≈ 1 m
 const ACCEL = 1.35;
 const DWELL_S = 30; // station + terminus dwell: matches the owner's "departs in 00:30" boarding window
 
-const GOLD = 0xc7a13b; const NAVY = 0x24356b; const GLASS = 0x141a20; const ROOF = 0x8e949a; const SKIRT = 0x2a2f36;
+const GOLD = 0xc7a13b; const NAVY = 0x24356b; const ROOF = 0x8e949a; const SKIRT = 0x2a2f36;
 
 // ---- Riding & driving (see TrainRide.ts for the pure math) --------------------------------
 const RIDE_MARGIN = 0.8; // rider's stop short of the very nose/tail
@@ -430,46 +431,199 @@ export class TrainSystem {
   }
 }
 
-/** One Gautrain-flavoured EMU car out of primitive geometry (no external assets, ~40 tris). */
-function buildCar(leading: boolean, trailing: boolean): { group: THREE.Group; noses: Partial<Record<1 | -1, THREE.Object3D[]>> } {
-  const group = new THREE.Group();
-  // Opaque shell renders double-sided so the interior reads as walls/roof/floor for a rider walking
-  // the corridor; the glass band stays front-side only, so from inside it is an open view strip.
-  const gold = new THREE.MeshStandardMaterial({ color: GOLD, roughness: 0.35, metalness: 0.45, side: THREE.DoubleSide });
-  const navy = new THREE.MeshStandardMaterial({ color: NAVY, roughness: 0.6, side: THREE.DoubleSide });
-  const glass = new THREE.MeshStandardMaterial({ color: GLASS, roughness: 0.15, metalness: 0.2 });
-  const roof = new THREE.MeshStandardMaterial({ color: ROOF, roughness: 0.7, side: THREE.DoubleSide });
-  const skirt = new THREE.MeshStandardMaterial({ color: SKIRT, roughness: 0.9, side: THREE.DoubleSide });
+// ---- Carriage construction ------------------------------------------------------------------
 
-  const body = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.5, CAR_LENGTH - 0.4), gold);
-  body.position.y = 2.15; body.castShadow = true; group.add(body);
-  const windows = new THREE.Mesh(new THREE.BoxGeometry(3.06, 0.85, CAR_LENGTH - 2.2), glass);
-  windows.position.y = 2.7; group.add(windows);
-  const top = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.5, CAR_LENGTH - 1.2), roof);
-  top.position.y = 3.55; group.add(top);
-  const under = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.9, CAR_LENGTH - 0.8), skirt);
-  under.position.y = 0.55; group.add(under);
-  const band = new THREE.Mesh(new THREE.BoxGeometry(3.04, 0.42, CAR_LENGTH - 0.4), navy);
-  band.position.y = 1.12; group.add(band);
+const BODY_HALF = 1.5; // outer skin at x = ±1.5
+const WALL = 0.06; // panel thickness
+const SILL_Y = 1.90; // 0.90 above the floor: a SEATED passenger's eye (2.22) clears it by 0.32
+const HEAD_Y = 3.05; // top of the glazed aperture
+const ROOF_Y = 3.30; // where the flank meets the crown
+const PILLAR = 0.30; // slim pillars between window bays
+const DOOR_Z = 4.2; const DOOR_HALF = 0.65; // two double doors per side
+const BODY_END = CAR_LENGTH / 2 - 0.2;
+const BOGIE_Z = 4.6; const WHEEL_R = 0.42;
+
+const LIGHT_GREY = 0xb9bec4; const FLOOR_C = 0x5a6068; const YELLOW = 0xe8b52a; const CEIL = 0xd9dde1;
+
+/** Shared across every car: identical for all sixteen, never recoloured per consist. */
+const CAR_MATS = {
+  // A little emissive on the double-sided shell: the interior faces point outward, so with sun and
+  // sky alone the panels above the windows and under the racks read as pure black from a seat.
+  gold: new THREE.MeshStandardMaterial({ color: GOLD, roughness: 0.35, metalness: 0.45, side: THREE.DoubleSide, emissive: GOLD, emissiveIntensity: 0.16 }),
+  navy: new THREE.MeshStandardMaterial({ color: NAVY, roughness: 0.6, side: THREE.DoubleSide, emissive: NAVY, emissiveIntensity: 0.2 }),
+  roof: new THREE.MeshStandardMaterial({ color: ROOF, roughness: 0.7, side: THREE.DoubleSide, emissive: ROOF, emissiveIntensity: 0.12 }),
+  skirt: new THREE.MeshStandardMaterial({ color: SKIRT, roughness: 0.9, side: THREE.DoubleSide }),
+  trim: new THREE.MeshStandardMaterial({ color: LIGHT_GREY, roughness: 0.4, metalness: 0.5, emissive: LIGHT_GREY, emissiveIntensity: 0.14 }),
+  yellow: new THREE.MeshStandardMaterial({ color: YELLOW, roughness: 0.45 }),
+  floor: new THREE.MeshStandardMaterial({ color: FLOOR_C, roughness: 0.85, emissive: FLOOR_C, emissiveIntensity: 0.18 }),
+  ceiling: new THREE.MeshStandardMaterial({ color: CEIL, roughness: 0.9, emissive: 0x767c84, emissiveIntensity: 1, side: THREE.DoubleSide }),
+  strip: new THREE.MeshStandardMaterial({ color: 0xfdf6e2, emissive: 0xfff3d0, emissiveIntensity: 1.6 }),
+  // Real glazing: transparent both ways, so the corridor sees the city and the platform sees the
+  // passengers. Depth-written so near panes occlude far ones instead of double-tinting.
+  glass: new THREE.MeshPhysicalMaterial({
+    color: 0x9fc0cc, roughness: 0.06, metalness: 0.1, transparent: true, opacity: 0.34,
+    side: THREE.DoubleSide, clearcoat: 1, clearcoatRoughness: 0.04,
+  }),
+  lamp: new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a8, emissiveIntensity: 1.4 }),
+} as const;
+
+type MatKey = keyof typeof CAR_MATS;
+
+/** Per-material geometry batching: a detailed carriage still lands in ~a dozen draw calls. */
+class CarBatch {
+  private buckets = new Map<MatKey, THREE.BufferGeometry[]>();
+
+  add(geometry: THREE.BufferGeometry, key: MatKey): void {
+    const bucket = this.buckets.get(key);
+    if (bucket) bucket.push(geometry); else this.buckets.set(key, [geometry]);
+  }
+
+  /** Convenience: an axis-aligned box given its centre and size. */
+  box(key: MatKey, cx: number, cy: number, cz: number, w: number, h: number, d: number): void {
+    this.add(new THREE.BoxGeometry(w, h, d).translate(cx, cy, cz), key);
+  }
+
+  flush(group: THREE.Group, shadow = true): void {
+    for (const [key, parts] of this.buckets) {
+      const geometry = parts.length === 1 ? parts[0]! : mergeGeometries(parts, false)!;
+      const mesh = new THREE.Mesh(geometry, CAR_MATS[key]);
+      mesh.name = `car_${key}`; mesh.castShadow = shadow && key !== 'glass'; mesh.receiveShadow = shadow;
+      group.add(mesh);
+    }
+    this.buckets.clear();
+  }
+}
+
+/** Split a run of side wall into window bays of roughly `target` metres separated by pillars. */
+function windowBays(z0: number, z1: number, target: number): Array<[number, number]> {
+  const span = z1 - z0;
+  const count = Math.max(1, Math.round((span + PILLAR) / (target + PILLAR)));
+  const width = (span - (count - 1) * PILLAR) / count;
+  const bays: Array<[number, number]> = [];
+  for (let i = 0; i < count; i++) { const a = z0 + i * (width + PILLAR); bays.push([a, a + width]); }
+  return bays;
+}
+
+/**
+ * One Gautrain-flavoured EMU car out of primitive geometry (no external assets).
+ *
+ * The flank is built as separate panels — sill strip, slim pillars, header — so the glazing is a
+ * genuine hole in the wall on BOTH sides rather than a dark stripe bolted to a solid tube. The sill
+ * sits 0.90 m above the interior floor, which is below both the seated eye (car-local 2.22) and the
+ * standing first-person eye (2.62), so a rider actually sees Johannesburg go past from either.
+ */
+export function buildCar(leading: boolean, trailing: boolean): { group: THREE.Group; noses: Partial<Record<1 | -1, THREE.Object3D[]>> } {
+  const group = new THREE.Group();
+  const B = new CarBatch();
+
+  // ---- Underframe, floor, bogies ----
+  B.box('skirt', 0, 0.55, 0, 2.6, 0.9, CAR_LENGTH - 0.8);
+  B.box('floor', 0, 0.96, 0, 2 * BODY_HALF - 0.12, 0.08, 2 * BODY_END - 0.1);
+  for (const sign of [1, -1]) {
+    B.box('skirt', 0, 0.72, sign * BOGIE_Z, 2.0, 0.34, 0.8); // bolster
+    for (const side of [1, -1]) {
+      B.box('skirt', side * 0.98, 0.62, sign * BOGIE_Z, 0.14, 0.36, 2.5); // sideframe
+      for (const axle of [1, -1]) B.box('trim', side * 0.98, WHEEL_R, sign * BOGIE_Z + axle * 0.95, 0.2, 0.24, 0.24); // axlebox
+    }
+  }
+  // Eight wheels on the railhead — without them the consist visibly hovers over the sleepers.
+  const wheel = new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, 0.14, 16);
+  wheel.rotateZ(Math.PI / 2);
+  const wheels = new THREE.InstancedMesh(wheel, CAR_MATS.skirt, 8);
+  const place = new THREE.Matrix4(); let index = 0;
+  for (const sign of [1, -1]) for (const side of [1, -1]) for (const axle of [1, -1]) {
+    place.makeTranslation(side * 0.82, WHEEL_R, sign * BOGIE_Z + axle * 0.95);
+    wheels.setMatrixAt(index++, place);
+  }
+  wheels.instanceMatrix.needsUpdate = true; wheels.castShadow = true; wheels.name = 'car_wheels';
+  group.add(wheels);
+
+  // ---- Flanks: sill strip, pillars, header, doors ----
+  const sections: Array<[number, number]> = [
+    [-BODY_END + 0.15, -DOOR_Z - DOOR_HALF],
+    [-DOOR_Z + DOOR_HALF, DOOR_Z - DOOR_HALF],
+    [DOOR_Z + DOOR_HALF, BODY_END - 0.15],
+  ];
+  const panes: Array<[number, number]> = [];
+  for (const [z0, z1] of sections) for (const bay of windowBays(z0, z1, 2.2)) panes.push(bay);
+
+  for (const side of [1, -1]) {
+    const x = side * (BODY_HALF - WALL / 2);
+    B.box('gold', x, (1.0 + SILL_Y) / 2, 0, WALL, SILL_Y - 1.0, 2 * BODY_END); // sill strip, floor to sill
+    B.box('gold', x, (HEAD_Y + ROOF_Y) / 2, 0, WALL, ROOF_Y - HEAD_Y, 2 * BODY_END); // header, above the glass
+    B.box('navy', side * BODY_HALF, 1.12, 0, 0.04, 0.42, 2 * BODY_END); // waist band
+    B.box('gold', side * BODY_HALF, 1.80, 0, 0.03, 0.10, 2 * BODY_END); // sill highlight stripe
+    // Pillars: one at each aperture edge and one at each body end.
+    const edges = new Set<number>([-BODY_END + 0.075, BODY_END - 0.075]);
+    for (const [a, b] of panes) { edges.add(a - PILLAR / 2); edges.add(b + PILLAR / 2); }
+    for (const z of edges) B.box('gold', x, (SILL_Y + HEAD_Y) / 2, z, WALL, HEAD_Y - SILL_Y, PILLAR);
+    // Glazing: one pane per bay, inset so the pillars read as a frame.
+    for (const [a, b] of panes) B.box('glass', side * (BODY_HALF - 0.045), (SILL_Y + HEAD_Y) / 2 + 0.01, (a + b) / 2, 0.02, HEAD_Y - SILL_Y - 0.06, b - a);
+    // Doors: two leaves, a glazed upper half and a yellow surround you can spot from the platform.
+    for (const sign of [1, -1]) {
+      const cz = sign * DOOR_Z;
+      B.box('yellow', side * (BODY_HALF + 0.012), (1.0 + HEAD_Y) / 2, cz, 0.03, HEAD_Y - 1.0, 2 * DOOR_HALF + 0.09); // surround
+      B.box('navy', x, 1.28, cz, WALL, 0.56, 2 * DOOR_HALF); // door lower panel
+      B.box('gold', x, 2.98, cz, WALL, 0.14, 2 * DOOR_HALF); // door header
+      B.box('trim', x, 2.0, cz, WALL + 0.01, 1.9, 0.05); // centre split between the leaves
+      for (const leaf of [1, -1]) {
+        B.box('glass', side * (BODY_HALF - 0.045), 2.28, cz + leaf * DOOR_HALF / 2, 0.02, 1.30, DOOR_HALF - 0.1);
+        B.box('gold', x, 1.62, cz + leaf * DOOR_HALF / 2, WALL, 0.12, DOOR_HALF - 0.06);
+      }
+    }
+  }
+
+  // ---- Ends: bulkheads with a gangway wide enough for the corridor clamp (±1.05) ----
+  for (const sign of [1, -1]) {
+    for (const side of [1, -1]) B.box('gold', side * 1.27, 2.15, sign * BODY_END, 0.44, 2.3, WALL);
+    B.box('gold', 0, 3.10, sign * BODY_END, 2.6, 0.4, WALL); // gangway header
+  }
+
+  // ---- Roof: a shallow crown, plus equipment and the cable duct ----
+  const crownR = 3.6; const crownY = ROOF_Y - Math.sqrt(crownR * crownR - BODY_HALF * BODY_HALF);
+  const half = Math.asin(BODY_HALF / crownR);
+  // thetaStart centres the arc overhead: THREE lays cylinder vertices at x = r sin t, z = r cos t, so PI/2 would
+  // put the arc out at +x and the later rotateX would drop it beside the car instead of on top of it.
+  const crown = new THREE.CylinderGeometry(crownR, crownR, 2 * BODY_END, 20, 1, true, Math.PI - half, 2 * half);
+  crown.rotateX(Math.PI / 2); crown.translate(0, crownY, 0);
+  B.add(crown, 'roof');
+  for (const z of [-4.6, 0.6, 4.2]) B.box('roof', 0, ROOF_Y + 0.30, z, 1.5, 0.24, 1.9); // HVAC blisters
+  for (const side of [1, -1]) B.box('trim', side * 0.95, ROOF_Y + 0.30, 0, 0.14, 0.12, 2 * BODY_END - 1); // cable duct
+
+  // ---- Interior: ceiling, strip lights, poles, racks ----
+  B.box('ceiling', 0, 3.22, 0, 2.86, 0.05, 2 * BODY_END - 0.2);
+  for (const side of [1, -1]) {
+    B.box('strip', side * 0.56, 3.16, 0, 0.16, 0.05, 2 * BODY_END - 1.2);
+    B.box('trim', side * 1.22, 2.86, 0, 0.42, 0.04, 2 * BODY_END - 1.6); // luggage rack
+    B.box('trim', side * 0.80, 3.06, 0, 0.05, 0.05, 2 * BODY_END - 1.2); // longitudinal grab rail
+    for (let z = -4.15; z <= 4.2; z += 1.9) {
+      B.box('trim', side * 1.12, (1.0 + 3.19) / 2, z, 0.05, 2.19, 0.05); // floor-to-ceiling pole
+      B.box('trim', side * 0.80, 2.96, z + 0.9, 0.03, 0.16, 0.03); // hanging strap, clear of a standing head
+    }
+  }
+  B.flush(group);
   addSeating(group);
 
-  // Sloped nose cone + headlights on the leading car (and the mirrored tail on the last).
+  // ---- Cab noses (hidden for the driver's windscreen view) ----
   const noses: Partial<Record<1 | -1, THREE.Object3D[]>> = {};
   for (const [isNose, sign] of [[leading, 1], [trailing, -1]] as Array<[boolean, 1 | -1]>) {
     if (!isNose) continue;
     const parts: THREE.Object3D[] = [];
-    const nose = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 3.0, 12, 1, false, 0, Math.PI), gold);
-    nose.rotation.z = Math.PI / 2; nose.rotation.y = sign > 0 ? 0 : Math.PI;
-    nose.scale.set(1, 1.2, 1.66); // stretched half-cylinder reads as a streamlined cab
-    nose.position.set(0, 2.1, sign * (CAR_LENGTH / 2 - 0.4));
-    nose.castShadow = true; group.add(nose); parts.push(nose);
-    const light = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6),
-      new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0xffe9a8, emissiveIntensity: 1.4 }));
+    const cab = new THREE.Group(); cab.name = 'cab';
+    const C = new CarBatch();
+    const nose = new THREE.CylinderGeometry(1.5, 1.5, 3.0, 14, 1, false, 0, Math.PI);
+    nose.rotateZ(Math.PI / 2); if (sign < 0) nose.rotateY(Math.PI);
+    nose.scale(1, 1.2, 1.66); nose.translate(0, 2.1, sign * (CAR_LENGTH / 2 - 0.4));
+    C.add(nose, 'gold');
+    C.box('glass', 0, 2.62, sign * (CAR_LENGTH / 2 + 1.0), 2.0, 0.86, 0.06); // cab windscreen
+    C.box('navy', 0, 1.32, sign * (CAR_LENGTH / 2 + 1.05), 2.3, 0.5, 0.1); // cab skirt flash
+    C.flush(cab);
     for (const side of [-0.7, 0.7]) {
-      const lamp = light.clone();
-      lamp.position.set(side, 1.5, sign * (CAR_LENGTH / 2 + 1.7));
-      group.add(lamp); parts.push(lamp);
+      const lampGeometry = new THREE.SphereGeometry(0.16, 10, 7).translate(side, 1.5, sign * (CAR_LENGTH / 2 + 1.7));
+      const lamp = new THREE.Mesh(lampGeometry, CAR_MATS.lamp); lamp.name = 'cablamp';
+      cab.add(lamp);
     }
+    group.add(cab); parts.push(cab);
     noses[sign] = parts;
   }
   return { group, noses };

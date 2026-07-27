@@ -20,6 +20,8 @@ export interface OsmRelationMember {
   type: 'node' | 'way' | 'relation';
   ref: number;
   role: string;
+  /** Present only when the query used `out geom` (the Vaal Dam extract) — inline member geometry. */
+  geometry?: Array<{ lat: number; lon: number }>;
 }
 
 export interface OsmRelation {
@@ -128,18 +130,34 @@ export interface MapPort {
   apron: [number, number][];
 }
 
-/** The fantastical west coast: real Cape Town seaboard geometry grafted onto the map. */
+/** The west edge: a strip of the REAL Vaal Dam shoreline grafted onto the map (tools/mapgen/vaal.ts). */
 export interface MapCoast {
-  /** South-to-north shoreline polyline; everything west of it is ocean. */
+  /** The reservoir's in-game name — the water body must read as a named dam, not "Ocean". */
+  name?: string;
+  /** South-to-north shoreline polyline; everything west of it is water. */
   coastline: [number, number][];
-  /** Closed ocean polygon (coastline closed off to the west). */
+  /** Closed water polygon: the REAL Vaal outline under the placement, clipped to a box that lies
+   *  wholly outside the world square. Its boundary inside the square is undeformed real shoreline. */
   ocean: [number, number][];
+  /** The real waterline pieces of `ocean` — the polygon minus the clip box's own walls. The map
+   *  strokes THIS as the coast; a wall is not a shore (R1). */
+  shore: [number, number][][];
+  /** The real inner rings that survived the clip — Grooteiland first. Holes in `ocean`: the runtime
+   *  terrain lifts them out of the water, so they are land you can land a boat on. */
+  islands: [number, number][][];
   beaches: Array<{ name: string; points: [number, number][] }>;
   /** V&A-style working waterfront anchor on the coastal road. */
   harbour: { x: number; z: number };
   /** Rural corridor band between the Joburg block and the coast (game-unit extents; the
    *  z clamp keeps the map tint on the corridor's actual land, not the full square). */
   corridor: { eastX: number; westX: number; northZ: number; southZ: number };
+  /** REAL traced building footprints on the dam shore, as oriented boxes in world units: the
+   *  minimum-area rectangle of each OSM way, so a house that really stands at 20 degrees to its
+   *  street stands at 20 degrees in game. These used to be collapsed into a district density
+   *  scalar and never appeared as geometry at all; CityGen now lays them down before the
+   *  procedural frontage pass and marks them occupied, so the procedural massing infills AROUND
+   *  the real village instead of replacing it. */
+  shoreBuildings?: Array<{ x: number; z: number; w: number; d: number; heading: number; kind: string }>;
 }
 
 export interface MapRuralBuilding { x: number; z: number; kind: 'farmhouse' | 'barn' | 'silo' | 'windmill'; }
@@ -216,6 +234,8 @@ export interface MapStats {
   bbox: { south: number; west: number; north: number; east: number };
   targetSize: number;
   metresPerUnit: number;
+  /** Exact projected-metres -> game-units fit: game = (metres - c) * scale. */
+  fit?: { scale: number; cx: number; cz: number };
   /** Composite (coast) additions. */
   oceanKm2?: number;
   landKm2?: number;

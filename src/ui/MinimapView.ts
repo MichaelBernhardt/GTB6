@@ -9,7 +9,14 @@ export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 
  *  map (240/scale = MAP_WORLD_SIZE across) whatever the mapgen TARGET_SIZE — though at that scale
  *  the in-game MapView (M key) is the real whole-map view; 'Metro'/'District' cover longer driving
  *  radii, and 'Standard'..'Street' keep the original on-foot fixed scales for local navigation. */
-export const MINIMAP_ZOOM_SCALES = [240 / MAP_WORLD_SIZE, 0.02, 0.045, 0.095, 0.2, 0.29, 0.4, 0.54] as const;
+/** Level 0 fits the WHOLE world into the 240px minimap; every level above it must be strictly closer.
+ *  On the 19,200-unit world that fit was 0.0125, comfortably under the authored 0.02 "Metro" step —
+ *  but the 2/3 crop takes it to 0.0245, which overtook Metro and left the ladder out of order (level 1
+ *  showed 12,000 units of a 9,806-unit world: strictly wider than the map, and a duplicate of level 0).
+ *  Metro is therefore floored at a fixed multiple of the whole-world fit. At 19,200u the max() still
+ *  picks 0.02, so the ladder is unchanged on any map big enough for the authored value to mean something. */
+const WHOLE_WORLD_SCALE = 240 / MAP_WORLD_SIZE;
+export const MINIMAP_ZOOM_SCALES = [WHOLE_WORLD_SCALE, Math.max(0.02, WHOLE_WORLD_SCALE * 1.35), 0.045, 0.095, 0.2, 0.29, 0.4, 0.54] as const;
 export const MINIMAP_ZOOM_NAMES = ['City', 'Metro', 'District', 'Far', 'Wide', 'Standard', 'Close', 'Street'] as const;
 export const DEFAULT_MINIMAP_ZOOM = 5; // Standard (on-foot fixed scale)
 
