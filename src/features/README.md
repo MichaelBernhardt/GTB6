@@ -106,6 +106,27 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
   registered approach prompt produces one.
 - **Features are suspended while the player is online.** No ticks, no prompts, no loading. Do not try
   to work around it: protest crowds and street fixtures must never appear in someone else's PvP.
+- **A lazy feature cannot put anything in the world until its body loads.** If your feature is meant
+  to be *seen* — a lit doorway, a marker, a fixture — a proximity `approach` is a catch-22: nothing
+  is visible until somebody presses a key at an invisible ring, and nobody presses a key at an
+  invisible ring. Add `preload(x, z)` to your approach and the host fetches the body as soon as the
+  test passes, offering nothing and stealing no press. Keep the test coarse and cheap (interiors
+  asks "is there a street within ~110 u"); the host only polls it while the feature is unloaded.
+  **It is not on `FeatureApproach` yet** — `types.ts` was frozen while five branches landed, so it
+  rides as a duck-typed optional and `registry.ts` casts. Fold it into the type when the freeze
+  lifts.
+- **The camera boom is 9.5 units and you cannot shorten it.** `Game.updateCamera` special-cases the
+  plane, the train and a skydive; a feature cannot add a case, and `CameraController` only shortens
+  the boom against `City.colliders`, which a feature cannot register. So anything that encloses the
+  player has to be built for a camera that will end up outside it: interiors use an inside-out
+  (`THREE.BackSide`) shell so the worst case is a cutaway rather than an opaque wall in front of the
+  lens, keep every room wider than a boom, and hide interior partitions that fall between the player
+  and where the camera is. **If you need the boom itself, say so** — that is a `Game.ts` change.
+- **Moving the player far is a trap, not a shortcut.** A teleport re-streams `updateBuildingChunks`,
+  and every player-position-keyed system (police/wanted, the `LifecycleSystem` census and its
+  `REFRESH_RADIUS` recycling, mission distances, `city.updateVisibility`) sees the player leave the
+  city. Interiors avoid it entirely by building over the player's own building — same x, same z,
+  above the roof, where `City.clampMoveAt`'s y-aware collider test finds nothing to freeze them on.
 - **Do not touch anything derived into `public/baked/`** — `src/world/placements.ts`,
   `src/world/data/manicured.ts`, `tools/mapgen/`. Derive your sites from map data at runtime; never
   type absolute world coordinates, which the map rework invalidates.
@@ -118,6 +139,7 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
 | --- | --- |
 | The registry (the one eager module) | `src/features/registry.ts` |
 | The host: loading, generations, save merge, suspension | `src/features/host.ts` |
+| The preload ring (`approach.preload`) | `FeatureHost.descriptors` |
 | The ordered interaction ladder | `src/features/interactions.ts` |
 | The save sanitizer | `src/features/save.ts` |
 | The contract | `src/features/types.ts` |

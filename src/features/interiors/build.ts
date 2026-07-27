@@ -1,63 +1,69 @@
 /**
- * Turns an InteriorLayout into three.js. Everything is built on FIRST ENTRY and disposed on exit —
- * nothing here is reachable from City.buildStages or prepareAssets, so an interior costs boot
- * exactly nothing.
+ * A solved floor, in three.js. Built on first use, disposed on the way out — nothing here is
+ * reachable from City.buildStages or prepareAssets, so an interior costs boot exactly nothing.
  *
- * THE SHELL IS INSIDE-OUT ON PURPOSE. City's camera boom only shortens against City.colliders
- * (CameraController probes city.collidesAt), and a feature cannot register a collider — so in a room
- * 6 m across the boom WILL swing out through a wall. A front-faced shell would put an opaque wall
- * between the camera and the player. A THREE.BackSide shell disappears from outside instead, so the
- * worst case degrades to a dollhouse cutaway rather than a black screen. The dark void cylinder
- * around it hides the veld and the sky from the same outside camera, so the cutaway reads as an
- * interior rather than a shed in a field.
+ * THE SHELL IS INSIDE-OUT ON PURPOSE. The camera boom only shortens against City's own colliders
+ * (CameraController probes city.collidesAt) and a feature cannot register one, so if the player hugs
+ * an outer wall the boom WILL swing through it. A front-faced shell would put an opaque wall between
+ * the camera and the player; a BackSide shell disappears from outside instead, so the worst case
+ * degrades to a cutaway rather than the black screen this feature shipped with the first time.
  *
- * Load shedding is polled from api.blackout() by the caller rather than registered with
- * world/powerGrid.registerPowered: that registry is module-global with no way to unregister, so a
- * room that registered its lamps would leak an entry every time you walked through the door.
+ * PARTITIONS ARE A DIFFERENT PROBLEM and get a different answer. An interior wall stands BETWEEN two
+ * rooms, so inside-out does not help: whichever room the camera is in, it sees a face. So every
+ * partition is handed back with its footprint (see `partitions`) and the feature hides the ones that
+ * stand between the player and where the camera is. That is the standard third-person interior
+ * treatment and it is the only one available while the boom is not ours to shorten.
  */
 import * as THREE from 'three';
 import { createSignMesh } from '../../world/ProceduralMaterials';
-import type { InteriorLayout, InteriorProp } from './grammar';
-import { PLOT_RADIUS, type StagePlot } from './stage';
+import { rectMaxX, rectMaxZ, rectMinX, rectMinZ, STOREY_HEIGHT, type Rect } from './core';
+import type { FloorPlan, Prop, Wall } from './floor';
+import type { InteriorDoor } from '../interiors.state';
 
-/** How far the black void reaches. See the note where the shroud is built. */
-const SHROUD_RADIUS = PLOT_RADIUS + 6;
+/** The camera boom this room has to stand inside. FOOT_VIEW_DISTANCES tops out here. */
+export const BOOM = 9.5;
+const WALL_T = 0.16;
+/** Doorway head height. Partitions carry a lintel over the gap so a doorway reads as a doorway. */
+const DOOR_H = 2.25;
 
-export interface BuiltInterior {
+/** A partition, with the footprint the occlusion cull tests against. */
+export interface Partition {
+  readonly mesh: THREE.Mesh;
+  readonly minX: number; readonly maxX: number;
+  readonly minZ: number; readonly maxZ: number;
+}
+
+export interface BuiltFloor {
   readonly group: THREE.Group;
   readonly lamps: readonly THREE.PointLight[];
-  /** Emissive materials that die with the grid (lamp shades, the TV, the window glow), each with
-   *  the intensity it was built at so load shedding is a multiplier and never a one-way ratchet. */
   readonly powered: readonly { material: THREE.MeshStandardMaterial; base: number }[];
+  readonly partitions: readonly Partition[];
   dispose(): void;
 }
 
-const WALL_T = 0.16;
-
-/** Local room point -> world, for the caller's clamp and the fixture spawn. group.rotation.y = h
- *  maps local (lx, lz) to world (lx·cos h + lz·sin h, −lx·sin h + lz·cos h). */
-export function toWorld(plot: StagePlot, heading: number, lx: number, lz: number): { x: number; z: number } {
+/** Local room point -> world. group.rotation.y = h maps local (lx, lz) to
+ *  world (lx·cos h + lz·sin h, −lx·sin h + lz·cos h). */
+export function toWorld(at: { x: number; z: number }, heading: number, lx: number, lz: number): { x: number; z: number } {
   const c = Math.cos(heading); const s = Math.sin(heading);
-  return { x: plot.x + lx * c + lz * s, z: plot.z - lx * s + lz * c };
+  return { x: at.x + lx * c + lz * s, z: at.z - lx * s + lz * c };
 }
 
-/** World point -> local room space. Exact inverse of toWorld. */
-export function toLocal(plot: StagePlot, heading: number, x: number, z: number): { x: number; z: number } {
+/** World point -> local floor space. Exact inverse of toWorld. */
+export function toLocal(at: { x: number; z: number }, heading: number, x: number, z: number): { x: number; z: number } {
   const c = Math.cos(heading); const s = Math.sin(heading);
-  const dx = x - plot.x; const dz = z - plot.z;
+  const dx = x - at.x; const dz = z - at.z;
   return { x: dx * c - dz * s, z: dx * s + dz * c };
 }
 
-export function buildInterior(layout: InteriorLayout, plot: StagePlot, heading: number): BuiltInterior {
+export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolean }): BuiltFloor {
   const group = new THREE.Group();
-  group.name = `Interior:${layout.id}`;
-  group.position.set(plot.x, plot.y, plot.z);
-  group.rotation.y = heading;
+  group.name = `Floor:${plan.core.id}:${plan.index}`;
 
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
   const lamps: THREE.PointLight[] = [];
   const powered: { material: THREE.MeshStandardMaterial; base: number }[] = [];
+  const partitions: Partition[] = [];
   const keep = <T extends THREE.BufferGeometry>(geometry: T): T => { geometries.push(geometry); return geometry; };
   const mat = <T extends THREE.Material>(material: T): T => { materials.push(material); return material; };
   const solid = (color: number, roughness = 0.82): THREE.MeshStandardMaterial => mat(new THREE.MeshStandardMaterial({ color, roughness }));
@@ -66,79 +72,76 @@ export function buildInterior(layout: InteriorLayout, plot: StagePlot, heading: 
     mesh.position.set(x, y, z); group.add(mesh); return mesh;
   };
 
-  // ---- the void: everything outside this room is black, whichever way the boom swings ----------
+  const { width, depth, height, palette, core } = plan;
+
+  // ---- the void: everything outside this floor is black, whichever way the boom swings ----------
+  const shroudRadius = Math.hypot(width, depth) / 2 + BOOM + 2;
   const voidMaterial = mat(new THREE.MeshBasicMaterial({ color: 0x05070a, side: THREE.BackSide, fog: false }));
-  // Wider than the plot's clear radius on purpose: the boom only reaches ~16u out in the steady
-  // state, but it LERPS in after a teleport, and a headless capture caught it mid-flight outside a
-  // 20u shroud with the veld and the sky in frame. Six metres of margin costs nothing.
-  const shroud = new THREE.Mesh(keep(new THREE.CylinderGeometry(SHROUD_RADIUS, SHROUD_RADIUS, 30, 20, 1, false)), voidMaterial);
-  // Bottom cap one centimetre under the floor plane: above every blade of terrain inside the plot
-  // (findStagePlot pins the floor to the highest ground it sampled), so no veld leaks in.
-  shroud.position.y = 15 - 0.01;
+  const shroud = new THREE.Mesh(keep(new THREE.CylinderGeometry(shroudRadius, shroudRadius, height + 34, 24, 1, false)), voidMaterial);
+  shroud.position.y = (height + 34) / 2 - 17;
   group.add(shroud);
 
-  // ---- the shell: one inside-out box, six faces, three colours --------------------------------
-  const { width, depth, height, palette } = layout;
+  // ---- the shell: one inside-out box, six faces, three colours ---------------------------------
   const wall = mat(new THREE.MeshStandardMaterial({ color: palette.wall, roughness: 0.92, side: THREE.BackSide }));
-  const floor = mat(new THREE.MeshStandardMaterial({ color: palette.floor, roughness: 0.95, side: THREE.BackSide }));
-  const ceiling = mat(new THREE.MeshStandardMaterial({ color: palette.ceiling, roughness: 0.95, side: THREE.BackSide }));
-  const shell = new THREE.Mesh(keep(new THREE.BoxGeometry(width, height, depth)), [wall, wall, ceiling, floor, wall, wall]);
+  const floorMaterial = mat(new THREE.MeshStandardMaterial({ color: palette.floor, roughness: 0.95, side: THREE.BackSide }));
+  const ceilingMaterial = mat(new THREE.MeshStandardMaterial({ color: palette.ceiling, roughness: 0.95, side: THREE.BackSide }));
+  const shell = new THREE.Mesh(keep(new THREE.BoxGeometry(width, height, depth)), [wall, wall, ceilingMaterial, floorMaterial, wall, wall]);
   shell.position.y = height / 2;
   group.add(shell);
 
   const trim = solid(palette.trim, 0.7);
-  // Skirting all the way round, so the wall/floor join reads as a room and not as a texture change.
-  box(width, 0.12, WALL_T, trim, 0, 0.06, depth / 2 - WALL_T / 2);
-  box(width, 0.12, WALL_T, trim, 0, 0.06, -depth / 2 + WALL_T / 2);
-  box(WALL_T, 0.12, depth, trim, width / 2 - WALL_T / 2, 0.06, 0);
-  box(WALL_T, 0.12, depth, trim, -width / 2 + WALL_T / 2, 0.06, 0);
+  box(width, 0.14, WALL_T, trim, 0, 0.07, depth / 2 - WALL_T / 2);
+  box(width, 0.14, WALL_T, trim, 0, 0.07, -depth / 2 + WALL_T / 2);
+  box(WALL_T, 0.14, depth, trim, width / 2 - WALL_T / 2, 0.07, 0);
+  box(WALL_T, 0.14, depth, trim, -width / 2 + WALL_T / 2, 0.07, 0);
 
-  // ---- the way out: a recessed dark opening in the front wall with a steel gate over it --------
-  const doorW = 1.24; const doorH = 2.12;
-  const mouth = mat(new THREE.MeshBasicMaterial({ color: 0x0a0d10, fog: false }));
-  box(doorW, doorH, 0.05, mouth, 0, doorH / 2, -depth / 2 + 0.03);
-  const frame = solid(0x37403f, 0.6);
-  box(0.14, doorH + 0.16, 0.16, frame, -doorW / 2 - 0.07, (doorH + 0.16) / 2, -depth / 2 + 0.1);
-  box(0.14, doorH + 0.16, 0.16, frame, doorW / 2 + 0.07, (doorH + 0.16) / 2, -depth / 2 + 0.1);
-  box(doorW + 0.28, 0.16, 0.16, frame, 0, doorH + 0.08, -depth / 2 + 0.1);
-  const bar = solid(0x6d7679, 0.5);
-  for (let i = 0; i < 5; i++) box(0.05, doorH, 0.05, bar, -doorW / 2 + 0.14 + i * (doorW - 0.28) / 4, doorH / 2, -depth / 2 + 0.14);
-  // The mat you stand on to leave — the only visual cue that this square metre is the exit.
-  const matMaterial = solid(0x3b3530, 0.98);
-  box(1.5, 0.03, 0.9, matMaterial, 0, 0.02, -depth / 2 + 0.85);
+  // ---- partitions -------------------------------------------------------------------------------
+  const partitionMaterial = mat(new THREE.MeshStandardMaterial({ color: palette.wall, roughness: 0.9 }));
+  const jamb = solid(palette.trim, 0.6);
+  for (const run of plan.walls) buildWall(run, height, { box, partitionMaterial, jamb, partitions });
 
-  // ---- a window that glows rather than sees: no view out, honestly, in v1 ----------------------
-  const glow = mat(new THREE.MeshStandardMaterial({ color: 0xdcc79a, emissive: 0xdcc79a, emissiveIntensity: 0.85, roughness: 0.5 }));
-  powered.push({ material: glow, base: glow.emissiveIntensity });
-  const windowSide = layout.kind === 'spaza' ? 1 : -1;
-  box(0.06, 1.05, 1.5, glow, windowSide * (width / 2 - 0.05), 1.55, depth * 0.1);
-  for (let i = 0; i < 5; i++) box(0.06, 1.12, 0.05, bar, windowSide * (width / 2 - 0.09), 1.55, depth * 0.1 - 0.68 + i * 0.34);
-  box(0.06, 0.06, 1.6, bar, windowSide * (width / 2 - 0.09), 1.55, depth * 0.1);
+  // ---- the core: the same shaft on every storey, which is why they line up ----------------------
+  buildStair(core.stair, height, { box, solid, keep, group, mat });
+  // A stair has to stop somewhere: there is no storey over the top one and no basement under the
+  // ground, so the half flight that would lead nowhere is shuttered. Drawn here and clamped against
+  // in interiors.ts from the SAME rectangle, so a locked stair looks locked and behaves locked.
+  const shutter = solid(0x5b625f, 0.7);
+  for (const [enabled, direction] of [[ends.top, 1], [ends.ground, -1]] as [boolean, 1 | -1][]) {
+    if (!enabled) continue;
+    const cap = stairCap(core.stair, direction);
+    box(cap.w, 2.1, cap.d, shutter, cap.x, 1.05, cap.z);
+  }
+  if (core.lift) buildLift(core.lift, height, { box, solid, keep, group, mat, powered });
 
-  // ---- props ----------------------------------------------------------------------------------
-  for (const prop of layout.props) buildProp(prop, { box, solid, mat, keep, group, powered });
+  // ---- the way out, on the ground floor only ----------------------------------------------------
+  if (ends.ground) buildExit(core.entryX, depth, { box, solid, keep, group, mat });
 
-  // ---- light -----------------------------------------------------------------------------------
+  // ---- props ------------------------------------------------------------------------------------
+  for (const prop of plan.props) buildProp(prop, { box, solid, mat, keep, group, powered });
+
+  // ---- light --------------------------------------------------------------------------------------
+  // A room you cannot see is the bug this feature shipped with. Belt (an ambient the grid cannot take
+  // away entirely), braces (the lamps), and the shroud keeps neither from leaking into the city.
+  group.add(new THREE.AmbientLight(0xffe9cc, 0.62));
   const shade = mat(new THREE.MeshStandardMaterial({ color: 0xfff0cf, emissive: 0xfff0cf, emissiveIntensity: 1.1, roughness: 0.6 }));
   powered.push({ material: shade, base: shade.emissiveIntensity });
-  for (const spot of layout.lamps) {
-    const lamp = new THREE.PointLight(spot.color, 12, 16, 1.7);
+  for (const spot of plan.lamps) {
+    const lamp = new THREE.PointLight(spot.color, 26, 22, 1.5);
     lamp.position.set(spot.x, spot.y, spot.z);
     group.add(lamp); lamps.push(lamp);
-    box(0.05, 0.34, 0.05, trim, spot.x, spot.y + 0.17, spot.z);
-    const bulb = new THREE.Mesh(keep(new THREE.SphereGeometry(0.11, 10, 8)), shade);
-    bulb.position.set(spot.x, spot.y - 0.04, spot.z); group.add(bulb);
+    const bulb = new THREE.Mesh(keep(new THREE.SphereGeometry(0.13, 10, 8)), shade);
+    bulb.position.set(spot.x, spot.y - 0.06, spot.z); group.add(bulb);
   }
-  // A dim fill so the corners are never pure black even with the grid down — you must always be
-  // able to find the door.
-  const fill = new THREE.PointLight(0x6f7f9a, 2.2, 22, 1.2);
-  fill.position.set(0, height * 0.75, -depth * 0.25);
+  // A dim fill so the corners are never pure black even with the grid down — you must always be able
+  // to find the way out.
+  const fill = new THREE.PointLight(0x9fb0c8, 8, 44, 1.1);
+  fill.position.set(0, height * 0.82, -depth * 0.2);
   group.add(fill);
 
   group.traverse((object) => { object.castShadow = false; object.receiveShadow = false; });
 
   return {
-    group, lamps, powered,
+    group, lamps, powered, partitions,
     dispose: () => {
       group.removeFromParent();
       group.traverse((object) => { if (object instanceof THREE.Light) object.dispose(); });
@@ -149,24 +152,149 @@ export function buildInterior(layout: InteriorLayout, plot: StagePlot, heading: 
   };
 }
 
+interface WallKit {
+  box(w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh;
+  partitionMaterial: THREE.Material;
+  jamb: THREE.Material;
+  partitions: Partition[];
+}
+
+/** One partition run: the solid stretches either side of its doorway, plus a lintel over it. */
+function buildWall(run: Wall, height: number, kit: WallKit): void {
+  const { box, partitionMaterial, jamb, partitions } = kit;
+  const span = (from: number, to: number, h: number, y: number): void => {
+    const length = to - from;
+    if (length < 0.02) return;
+    const mid = (from + to) / 2;
+    const mesh = run.axis === 'x'
+      ? box(WALL_T, h, length, partitionMaterial, run.at, y + h / 2, mid)
+      : box(length, h, WALL_T, partitionMaterial, mid, y + h / 2, run.at);
+    // Only full-height stretches occlude; a lintel over a doorway is above the sightline anyway.
+    if (y > 0.01) return;
+    partitions.push(run.axis === 'x'
+      ? { mesh, minX: run.at - WALL_T, maxX: run.at + WALL_T, minZ: from, maxZ: to }
+      : { mesh, minX: from, maxX: to, minZ: run.at - WALL_T, maxZ: run.at + WALL_T });
+  };
+  if (run.gapWidth === undefined) { span(run.from, run.to, height, 0); return; }
+  const gapMin = run.gapCentre! - run.gapWidth / 2;
+  const gapMax = run.gapCentre! + run.gapWidth / 2;
+  span(run.from, gapMin, height, 0);
+  span(gapMax, run.to, height, 0);
+  span(gapMin, gapMax, height - DOOR_H, DOOR_H);
+  // A dark frame around the opening, so a doorway reads as one from across the room.
+  const post = (along: number): void => {
+    if (run.axis === 'x') box(WALL_T + 0.06, DOOR_H, 0.12, jamb, run.at, DOOR_H / 2, along);
+    else box(0.12, DOOR_H, WALL_T + 0.06, jamb, along, DOOR_H / 2, run.at);
+  };
+  post(gapMin); post(gapMax);
+}
+
+interface Kit {
+  box(w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh;
+  solid(color: number, roughness?: number): THREE.MeshStandardMaterial;
+  mat<T extends THREE.Material>(material: T): T;
+  keep<T extends THREE.BufferGeometry>(geometry: T): T;
+  group: THREE.Group;
+  powered?: { material: THREE.MeshStandardMaterial; base: number }[];
+}
+
+/**
+ * THE SWITCHBACK. Two half flights side by side: up the +x half from the front to the mid landing at
+ * the back, then up the −x half from the back to the front again, arriving one storey higher at the
+ * spot you set off from. That shape is why the stair works on every storey with no special case at
+ * either end — the top of one flight IS the bottom of the next, in the same shaft, at the same x.
+ *
+ * See interiors.ts stairHeight() for the matching altitude function: this draws it, that walks it.
+ */
+function buildStair(shaft: Rect, height: number, kit: Kit): void {
+  const { box, solid } = kit;
+  const tread = solid(0x77726a, 0.9);
+  const nose = solid(0x3b4143, 0.7);
+  const steps = 9;
+  const halfW = shaft.w / 2;
+  for (let half = 0; half < 2; half++) {
+    const sign = half === 0 ? 1 : -1;           // +x half rises front→back, −x half back→front
+    const x = shaft.x + sign * halfW / 2;
+    for (let i = 0; i < steps; i++) {
+      const t = (i + 0.5) / steps;
+      const along = half === 0 ? -shaft.d / 2 + t * shaft.d : shaft.d / 2 - t * shaft.d;
+      const y = (half * 0.5 + t * 0.5) * STOREY_HEIGHT;
+      box(halfW - 0.1, 0.14, shaft.d / steps, tread, x, y, shaft.z + along);
+      box(halfW - 0.1, 0.06, 0.06, nose, x, y + 0.1, shaft.z + along + (half === 0 ? shaft.d / steps / 2 : -shaft.d / steps / 2));
+    }
+  }
+  // The spine wall between the two flights: it is what stops you stepping sideways off a half
+  // landing, and it is the thing that makes the shaft read as a stairwell rather than a ramp.
+  box(0.12, height, shaft.d * 0.62, solid(0x8d877c, 0.9), shaft.x, height / 2, shaft.z - shaft.d * 0.19);
+  // A handrail down the outside of each flight.
+  for (const sign of [-1, 1]) {
+    box(0.07, 0.07, shaft.d, solid(0x4a5254, 0.5), shaft.x + sign * (halfW - 0.08), STOREY_HEIGHT * (sign > 0 ? 0.25 : 0.75) + 1.0, shaft.z);
+  }
+}
+
+function buildLift(shaft: Rect, height: number, kit: Kit): void {
+  const { box, solid, mat, powered } = kit;
+  const car = solid(0x4d5457, 0.55);
+  box(shaft.w + 0.2, height, 0.14, car, shaft.x, height / 2, rectMaxZ(shaft) + 0.07);
+  box(0.14, height, shaft.d, car, rectMinX(shaft) - 0.07, height / 2, shaft.z);
+  box(0.14, height, shaft.d, car, rectMaxX(shaft) + 0.07, height / 2, shaft.z);
+  // The doors, closed, on the corridor side, with the call panel lit beside them.
+  const doors = solid(0x9aa2a4, 0.4);
+  for (const sign of [-1, 1]) box(shaft.w / 2 - 0.04, 2.4, 0.1, doors, shaft.x + sign * shaft.w / 4, 1.2, rectMinZ(shaft) - 0.05);
+  const panel = mat(new THREE.MeshStandardMaterial({ color: 0xf0c657, emissive: 0xf0c657, emissiveIntensity: 1.4, roughness: 0.4 }));
+  powered?.push({ material: panel, base: panel.emissiveIntensity });
+  box(0.18, 0.3, 0.06, panel, rectMinX(shaft) - 0.28, 1.3, rectMinZ(shaft) - 0.05);
+}
+
+/** The way back to the street: a recessed dark opening in the front wall, lit, labelled, with a mat
+ *  under it you cannot miss walking back down the spine. */
+function buildExit(entryX: number, depth: number, kit: Kit): void {
+  const { box, solid, mat, keep, group } = kit;
+  const doorW = 2.2; const doorH = 3.0;
+  const mouth = mat(new THREE.MeshBasicMaterial({ color: 0x0a0d10, fog: false }));
+  box(doorW, doorH, 0.06, mouth, entryX, doorH / 2, -depth / 2 + 0.04);
+  const frame = solid(0x37403f, 0.6);
+  box(0.22, doorH + 0.22, 0.24, frame, entryX - doorW / 2 - 0.11, (doorH + 0.22) / 2, -depth / 2 + 0.13);
+  box(0.22, doorH + 0.22, 0.24, frame, entryX + doorW / 2 + 0.11, (doorH + 0.22) / 2, -depth / 2 + 0.13);
+  box(doorW + 0.44, 0.22, 0.24, frame, entryX, doorH + 0.11, -depth / 2 + 0.13);
+  const bar = solid(0x6d7679, 0.5);
+  for (let i = 0; i < 6; i++) box(0.06, doorH, 0.06, bar, entryX - doorW / 2 + 0.2 + i * (doorW - 0.4) / 5, doorH / 2, -depth / 2 + 0.18);
+  const exitSign = createSignMesh(keep(new THREE.PlaneGeometry(1.9, 0.5)), 'EXIT', '#ffe08a', { background: '#16211d' });
+  exitSign.position.set(entryX, doorH + 0.58, -depth / 2 + 0.1);
+  group.add(exitSign);
+  const matGlow = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.34, fog: false }));
+  const matDisc = new THREE.Mesh(keep(new THREE.CylinderGeometry(1.5, 1.5, 0.05, 20)), matGlow);
+  matDisc.position.set(entryX, 0.03, -depth / 2 + EXIT_MAT_IN);
+  group.add(matDisc);
+  box(2.2, 0.04, 1.4, solid(0x3b3530, 0.98), entryX, 0.02, -depth / 2 + EXIT_MAT_IN);
+}
+
+/** How far in from the front wall the exit mat sits. */
+export const EXIT_MAT_IN = 1.7;
+
+/** The shutter across the half flight that leads nowhere: +1 caps the way up, −1 the way down.
+ *  Exported so the containment clamp blocks exactly the rectangle that was drawn. */
+export function stairCap(shaft: Rect, direction: 1 | -1): Rect {
+  return { x: shaft.x + direction * shaft.w / 4, z: rectMinZ(shaft) + 0.25, w: shaft.w / 2, d: 0.3 };
+}
+
+// ---- the street side -------------------------------------------------------------------------
+
 export interface BuiltDoorways {
   readonly group: THREE.Group;
-  /** Pulsed from the feature's update() — the same trick ShopSystem uses to make a pad findable. */
   readonly discs: readonly THREE.Mesh[];
+  readonly ids: readonly string[];
   dispose(): void;
 }
 
 /**
- * The street side of the feature: a steel gate, an open doorway and a pulsing pad at every derived
- * doorstep, so there is something to WALK UP TO and not just an invisible trigger ring.
- *
- * These appear the first time the feature loads, which is the honest cost of a lazy chunk: until
- * somebody presses E on a doorstep the registry's eager `approach` is all that exists. The gate is
- * modelled OPEN and the frame is thin, because a feature cannot register a collider — walking
- * through the opening is the correct move, and clipping a 14 cm post is the price.
+ * A doorway on the FRONT WALL of a real building, plus the pad you stand on. The frame is mounted on
+ * the plane BuildingArchitecture tagged and scaled to the opening it tagged, so it lands on the
+ * building's own glazed leaf rather than somewhere near it. Nothing is drawn behind the wall plane:
+ * if a building were ever missing you would see a frame on nothing, never a facade in a field.
  */
 export function buildDoorways(
-  doors: readonly { id: string; name: string; x: number; z: number; heading: number }[],
+  doors: readonly InteriorDoor[],
   surfaceHeightAt: (x: number, z: number) => number,
 ): BuiltDoorways {
   const group = new THREE.Group();
@@ -176,48 +304,64 @@ export function buildDoorways(
   const discs: THREE.Mesh[] = [];
   const keep = <T extends THREE.BufferGeometry>(geometry: T): T => { geometries.push(geometry); return geometry; };
   const mat = <T extends THREE.Material>(material: T): T => { materials.push(material); return material; };
-  const steel = mat(new THREE.MeshStandardMaterial({ color: 0x39423f, roughness: 0.62, metalness: 0.35 }));
-  const gate = mat(new THREE.MeshStandardMaterial({ color: 0x6d7679, roughness: 0.5, metalness: 0.5 }));
+
+  const unitBox = keep(new THREE.BoxGeometry(1, 1, 1));
+  const discGeometry = keep(new THREE.CylinderGeometry(1.6, 1.6, 0.06, 20));
+  const ringGeometry = keep(new THREE.TorusGeometry(1.9, 0.09, 8, 22));
+  // A soft column of light standing on the pad. This is the thing you see from the far end of the
+  // street: a 3 m doorway is a smudge at 150 u, a 9 m beam is a landmark.
+  const beamGeometry = keep(new THREE.CylinderGeometry(1.15, 1.5, 9, 14, 1, true));
+
+  const steel = mat(new THREE.MeshStandardMaterial({ color: 0x2f3735, roughness: 0.6, metalness: 0.35 }));
+  const gate = mat(new THREE.MeshStandardMaterial({ color: 0x8d9699, roughness: 0.45, metalness: 0.5 }));
   const mouth = mat(new THREE.MeshBasicMaterial({ color: 0x090c0f }));
-  const plaster = mat(new THREE.MeshStandardMaterial({ color: 0xcdbfa4, roughness: 0.95 }));
-  const plinth = mat(new THREE.MeshStandardMaterial({ color: 0x4d5250, roughness: 0.9 }));
+  const glow = mat(new THREE.MeshBasicMaterial({ color: 0xffd98a, transparent: true, opacity: 0.75 }));
+  const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.5 }));
+  const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451 }));
+  const beamMaterial = mat(new THREE.MeshBasicMaterial({
+    color: 0xffc861, transparent: true, opacity: 0.17, side: THREE.DoubleSide,
+    depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+  }));
 
   for (const door of doors) {
     const bay = new THREE.Group();
-    // Set the frame back off the pad so the player stands in FRONT of the doorway, not inside it.
-    bay.position.set(door.x - Math.sin(door.heading) * 0.9, surfaceHeightAt(door.x, door.z), door.z - Math.cos(door.heading) * 0.9);
+    bay.position.set(door.faceX, surfaceHeightAt(door.faceX, door.faceZ), door.faceZ);
     bay.rotation.y = door.heading; // local +z faces the street
     const add = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): void => {
-      const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
-      mesh.position.set(x, y, z); bay.add(mesh);
+      const mesh = new THREE.Mesh(unitBox, material);
+      mesh.scale.set(w, h, d); mesh.position.set(x, y, z); bay.add(mesh);
     };
-    // A slab of wall behind the gate. The doorstep is derived from the ROAD network, so there is no
-    // guarantee CityGen put a building behind it — without this, a door on a vacant plot reads as a
-    // frame standing in a field. Where there IS a facade the slab simply sits inside it.
-    add(3.9, 3.15, 0.42, plaster, 0, 1.575, -0.22);
-    add(4.1, 0.22, 0.5, plinth, 0, 0.11, -0.2);
-    add(4.1, 0.26, 0.52, plinth, 0, 3.05, -0.2);
-    add(1.34, 2.24, 0.06, mouth, 0, 1.12, 0.02);
-    add(0.16, 2.4, 0.22, steel, -0.75, 1.2, 0.06);
-    add(0.16, 2.4, 0.22, steel, 0.75, 1.2, 0.06);
-    add(1.66, 0.18, 0.22, steel, 0, 2.4, 0.06);
-    add(1.66, 0.08, 0.5, steel, 0, 2.56, 0.2); // a lip of awning over the step
-    // The gate, swung open flat against the right post: four bars, so the way in is unmistakably clear.
-    for (let i = 0; i < 4; i++) add(0.05, 2.1, 0.05, gate, 0.6 + i * 0.055, 1.05, 0.24 + i * 0.02);
-    const sign = createSignMesh(keep(new THREE.PlaneGeometry(1.62, 0.42)), door.name.toUpperCase(), '#f0d9a4', { background: '#20262b' });
-    sign.position.set(0, 2.02, 0.13); bay.add(sign);
-    // Pad marker, same shape as ShopSystem.addPadMarker so a door reads like every other doorway
-    // worth walking to in this city.
-    const disc = new THREE.Mesh(keep(new THREE.CylinderGeometry(1.5, 1.5, 0.06, 22)), mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.5 })));
-    disc.position.set(door.x, surfaceHeightAt(door.x, door.z) + 0.3, door.z);
-    const ring = new THREE.Mesh(keep(new THREE.TorusGeometry(1.78, 0.08, 8, 22)), mat(new THREE.MeshBasicMaterial({ color: 0xf5c451 })));
+    // The opening the MODEL drew, not one we invented — a narrow cottage keeps its narrow door.
+    const openW = Math.max(1.9, Math.min(4.2, door.openWidth));
+    const openH = 3.4;
+    // Everything sits PROUD of the tagged plane (+z), never inside it — the wall is the city's.
+    add(openW, openH, 0.08, mouth, 0, openH / 2, 0.05);
+    add(0.28, openH + 0.3, 0.3, steel, -openW / 2 - 0.14, (openH + 0.3) / 2, 0.14);
+    add(0.28, openH + 0.3, 0.3, steel, openW / 2 + 0.14, (openH + 0.3) / 2, 0.14);
+    add(openW + 0.56, 0.3, 0.3, steel, 0, openH + 0.15, 0.14);
+    add(openW + 1.1, 0.16, 1.5, steel, 0, openH + 0.42, 0.7);
+    // The security gate, folded open against the right post: the way in is unmistakably clear.
+    for (let i = 0; i < 5; i++) add(0.06, openH - 0.2, 0.06, gate, openW / 2 - 0.12 - i * 0.075, (openH - 0.2) / 2, 0.22 + i * 0.03);
+    add(openW - 0.3, 0.12, 0.06, glow, 0, openH - 0.35, 0.09);
+    const sign = createSignMesh(keep(new THREE.PlaneGeometry(Math.min(3.6, openW + 1.0), 0.62)), door.name.toUpperCase(), '#f0d9a4', { background: '#20262b' });
+    sign.position.set(0, openH + 0.9, 0.16);
+    bay.add(sign);
+    // Pad marker on the step itself, the same shape as ShopSystem.addPadMarker, so a door reads like
+    // every other doorway worth walking to in this city.
+    const stepY = surfaceHeightAt(door.x, door.z);
+    const disc = new THREE.Mesh(discGeometry, discMaterial);
+    disc.position.set(door.x, stepY + 0.3, door.z);
+    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
     ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.02;
+    const beam = new THREE.Mesh(beamGeometry, beamMaterial);
+    beam.position.set(door.x, stepY + 4.5, door.z);
+    beam.renderOrder = 2;
     discs.push(disc);
-    group.add(bay, disc, ring);
+    group.add(bay, disc, ring, beam);
   }
 
   return {
-    group, discs,
+    group, discs, ids: doors.map((door) => door.id),
     dispose: () => {
       group.removeFromParent();
       for (const geometry of geometries) geometry.dispose();
@@ -227,66 +371,91 @@ export function buildDoorways(
   };
 }
 
-interface Kit {
-  box(w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh;
-  solid(color: number, roughness?: number): THREE.MeshStandardMaterial;
-  mat<T extends THREE.Material>(material: T): T;
-  keep<T extends THREE.BufferGeometry>(geometry: T): T;
-  group: THREE.Group;
-  powered: { material: THREE.MeshStandardMaterial; base: number }[];
-}
+// ---- furniture ---------------------------------------------------------------------------------
 
-function buildProp(prop: InteriorProp, kit: Kit): void {
+function buildProp(prop: Prop, kit: Kit): void {
   const { box, solid, mat, keep, group, powered } = kit;
   const body = solid(prop.color, 0.8);
   const base = prop.y;
   switch (prop.shape) {
     case 'counter': {
       box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
-      box(prop.w + 0.1, 0.06, prop.d + 0.12, solid(0xd8cdb6, 0.55), prop.x, base + prop.h + 0.03, prop.z);
+      box(prop.w + 0.14, 0.08, prop.d + 0.16, solid(0xd8cdb6, 0.55), prop.x, base + prop.h + 0.04, prop.z);
       break;
     }
     case 'shelf': {
+      const alongZ = prop.d > prop.w;
       box(prop.w, prop.h, prop.d, solid(0x6f6a5e, 0.9), prop.x, base + prop.h / 2, prop.z);
       const tins = solid(prop.color, 0.55);
-      for (let shelf = 0; shelf < 3; shelf++) {
-        const y = base + 0.35 + shelf * (prop.h - 0.4) / 3;
-        for (let i = 0; i < 4; i++) box(0.16, 0.2, 0.16, tins, prop.x - prop.w / 2 + 0.2 + i * (prop.w - 0.4) / 3, y + 0.1, prop.z - 0.1); // proud of the shelf on the ROOM side
+      const span = alongZ ? prop.d : prop.w;
+      const count = Math.max(3, Math.round(span / 0.42));
+      for (let shelf = 0; shelf < 4; shelf++) {
+        const y = base + 0.4 + shelf * (prop.h - 0.5) / 4;
+        for (let i = 0; i < count; i++) {
+          const t = -span / 2 + 0.22 + i * (span - 0.44) / Math.max(1, count - 1);
+          if (alongZ) box(0.2, 0.24, 0.2, tins, prop.x + (prop.x > 0 ? -0.18 : 0.18), y + 0.12, prop.z + t);
+          else box(0.2, 0.24, 0.2, tins, prop.x + t, y + 0.12, prop.z - 0.18);
+        }
       }
-      break;
-    }
-    case 'cage': {
-      const wire = solid(prop.color, 0.5);
-      const bars = Math.max(3, Math.round(prop.w / 0.32));
-      for (let i = 0; i < bars; i++) box(0.035, prop.h, 0.035, wire, prop.x - prop.w / 2 + i * prop.w / (bars - 1), base + prop.h / 2, prop.z);
-      box(prop.w, 0.045, 0.045, wire, prop.x, base + prop.h - 0.05, prop.z);
-      box(prop.w, 0.045, 0.045, wire, prop.x, base + prop.h / 2, prop.z);
       break;
     }
     case 'bed': {
       box(prop.w, prop.h, prop.d, solid(0x5a4a3c, 0.9), prop.x, base + prop.h / 2, prop.z);
-      box(prop.w - 0.1, 0.16, prop.d - 0.1, body, prop.x, base + prop.h + 0.08, prop.z);
-      box(0.5, 0.12, prop.d - 0.4, solid(0xe6ded0, 0.9), prop.x - prop.w / 2 + 0.3, base + prop.h + 0.2, prop.z);
+      box(prop.w - 0.12, 0.2, prop.d - 0.12, body, prop.x, base + prop.h + 0.1, prop.z);
+      box(0.55, 0.14, prop.d - 0.5, solid(0xe6ded0, 0.9), prop.x - prop.w / 2 + 0.34, base + prop.h + 0.26, prop.z);
+      break;
+    }
+    case 'sofa': {
+      box(prop.w, prop.h * 0.55, prop.d, body, prop.x, base + prop.h * 0.28, prop.z);
+      box(prop.w * 0.4, prop.h, prop.d, body, prop.x + (prop.x > 0 ? prop.w * 0.3 : -prop.w * 0.3), base + prop.h / 2, prop.z);
+      break;
+    }
+    case 'wardrobe': case 'cabinet': case 'fridge': {
+      box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
+      box(0.08, 0.3, 0.06, solid(0xb8b0a0, 0.4), prop.x + (prop.x > 0 ? -prop.w * 0.55 : prop.w * 0.55), base + prop.h * 0.55, prop.z);
+      break;
+    }
+    case 'sack': {
+      const mesh = new THREE.Mesh(keep(new THREE.SphereGeometry(0.5, 10, 8)), body);
+      mesh.scale.set(prop.w, prop.h * 1.6, prop.d);
+      mesh.position.set(prop.x, base + prop.h / 2, prop.z); group.add(mesh);
       break;
     }
     case 'stove': {
       box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
       const plate = mat(new THREE.MeshStandardMaterial({ color: 0x6a2a22, emissive: 0x8a2010, emissiveIntensity: 0.7, roughness: 0.5 }));
-      powered.push({ material: plate, base: plate.emissiveIntensity });
+      powered?.push({ material: plate, base: plate.emissiveIntensity });
       for (let i = 0; i < 2; i++) {
-        const ring = new THREE.Mesh(keep(new THREE.CylinderGeometry(0.12, 0.12, 0.03, 12)), plate);
-        ring.position.set(prop.x - 0.16 + i * 0.32, base + prop.h + 0.02, prop.z); group.add(ring);
+        const ring = new THREE.Mesh(keep(new THREE.CylinderGeometry(0.15, 0.15, 0.04, 12)), plate);
+        ring.position.set(prop.x - 0.2 + i * 0.4, base + prop.h + 0.02, prop.z); group.add(ring);
       }
       break;
     }
     case 'tv': {
       box(prop.w, prop.h, prop.d, solid(0x1b1f22, 0.6), prop.x, base + prop.h / 2, prop.z);
       const screen = mat(new THREE.MeshStandardMaterial({ color: 0x9fc4d8, emissive: 0x6f9fc4, emissiveIntensity: 0.9, roughness: 0.4 }));
-      powered.push({ material: screen, base: screen.emissiveIntensity });
-      box(prop.w * 0.4, prop.h - 0.1, prop.d - 0.1, screen, prop.x - prop.w * 0.35, base + prop.h / 2, prop.z);
+      powered?.push({ material: screen, base: screen.emissiveIntensity });
+      box(prop.w * 0.4, prop.h - 0.12, prop.d - 0.12, screen, prop.x, base + prop.h / 2, prop.z);
       break;
     }
-    case 'bucket': case 'drum': case 'stool': {
+    case 'desk': {
+      box(prop.w, 0.08, prop.d, body, prop.x, base + prop.h, prop.z);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        box(0.07, prop.h, 0.07, solid(0x4a4640, 0.7), prop.x + sx * (prop.w / 2 - 0.1), base + prop.h / 2, prop.z + sz * (prop.d / 2 - 0.1));
+      }
+      const screen = mat(new THREE.MeshStandardMaterial({ color: 0x8fb8cc, emissive: 0x5f8fb4, emissiveIntensity: 0.8, roughness: 0.4 }));
+      powered?.push({ material: screen, base: screen.emissiveIntensity });
+      box(0.5, 0.36, 0.05, screen, prop.x, base + prop.h + 0.28, prop.z);
+      break;
+    }
+    case 'plant': {
+      const pot = new THREE.Mesh(keep(new THREE.CylinderGeometry(prop.w * 0.32, prop.w * 0.26, prop.h * 0.3, 10)), solid(0x8a5a3c, 0.9));
+      pot.position.set(prop.x, base + prop.h * 0.15, prop.z); group.add(pot);
+      const leaves = new THREE.Mesh(keep(new THREE.SphereGeometry(prop.w * 0.42, 9, 7)), body);
+      leaves.position.set(prop.x, base + prop.h * 0.68, prop.z); group.add(leaves);
+      break;
+    }
+    case 'bucket': case 'stool': {
       const radius = prop.w / 2;
       const mesh = new THREE.Mesh(keep(new THREE.CylinderGeometry(radius, radius * 0.86, prop.h, 12)), body);
       mesh.position.set(prop.x, base + prop.h / 2, prop.z); group.add(mesh);
@@ -301,12 +470,8 @@ function buildProp(prop: InteriorProp, kit: Kit): void {
       group.add(sign);
       break;
     }
-    case 'curtain': {
-      box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
-      box(prop.w + 0.04, 0.05, prop.d + 0.1, solid(0x4a4a48, 0.7), prop.x, base + prop.h, prop.z);
-      break;
-    }
     default:
       box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
   }
 }
+

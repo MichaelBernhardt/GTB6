@@ -1,5 +1,5 @@
-import { doorNear, sanitizeInteriorsState } from './interiors.state';
-import type { FeatureDescriptor } from './types';
+import { sanitizeInteriorsState, streetsHere } from './interiors.state';
+import type { FeatureApproach, FeatureDescriptor } from './types';
 
 /**
  * The ONE eager module in the feature system. Everything here is loaded at boot, so keep it to
@@ -16,14 +16,27 @@ import type { FeatureDescriptor } from './types';
  *    inside `src/features/<id>/` imported from BOTH here and the lazy body becomes its own extra
  *    eager chunk — import it with `import type` from the body.
  */
+
+/** See host.descriptors(). An approach may ask to be loaded BEFORE the player is close enough to
+ *  press anything, so a feature that puts things in the world has something to be seen. It is not on
+ *  FeatureApproach yet — types.ts is frozen while five branches land — so it rides along as an
+ *  optional extra the host duck-types. */
+type PreloadingApproach = FeatureApproach & { preload(x: number, z: number): boolean };
+
 export const FEATURES: readonly FeatureDescriptor[] = [
   {
     id: 'interiors', saveKey: 'interiors', label: 'Building interiors',
     sanitize: sanitizeInteriorsState,
     load: () => import('./interiors/interiors'),
-    // Something to walk up to before the chunk lands: the doorsteps are derived from the generated
-    // road network, so this ring is the same ring the loaded rung uses.
-    approach: { context: 'foot', order: 50, prompt: 'E  Go inside', near: (ctx) => doorNear(ctx.position.x, ctx.position.z) !== undefined },
+    // `near` stays false on purpose: this feature's prompt belongs to real doors on real buildings,
+    // and only the body knows where those are — CityGen cannot be reached from an eager chunk
+    // without making gameplay-rules and simulation mutually uninitialisable (see interiors.state.ts).
+    // `preload` is what makes the doorways EXIST to be walked up to: standing in a street is enough.
+    approach: {
+      context: 'foot', order: 50, prompt: 'E  Go inside',
+      near: () => false,
+      preload: (x, z) => streetsHere(x, z),
+    } as PreloadingApproach,
   },
 ];
 

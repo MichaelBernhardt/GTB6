@@ -122,6 +122,18 @@ export class FeatureHost {
       if (system) { list.push(...(system.interactions?.() ?? [])); continue; }
       const approach = feature.approach;
       if (!approach || approach.context !== context) continue;
+      // PRELOAD RING. A lazy feature cannot put ANYTHING in the world until its body arrives, so a
+      // feature whose whole point is "see it from down the street" — a lit doorway, a marker, a
+      // fixture — is invisible until the first key press, and the player never learns there was
+      // something to press. An approach may therefore declare `preload(x, z)`: return true and the
+      // host fetches the body now, offering nothing and stealing no press. Opt-in and duck-typed
+      // (it is not on FeatureApproach yet); features that do not declare it are untouched, and
+      // open() is idempotent and de-duplicated by `inflight`, so this is one map lookup per frame.
+      const preload = (approach as { preload?(x: number, z: number): boolean }).preload;
+      if (preload) {
+        const at = this.context.api.playerPosition();
+        if (preload(at.x, at.z)) void this.open(feature.id);
+      }
       list.push({
         id: `${feature.id}:approach`, order: approach.order, context: approach.context,
         test: (ctx) => approach.near(ctx) ? { prompt: approach.prompt, act: () => this.openFromApproach(feature.id, context) } : undefined,

@@ -1,13 +1,20 @@
+/**
+ * The feature, driven end to end without a browser: walk onto a real doorstep, press E, be inside a
+ * lit floor of that building, climb the stair a storey, ride the lift, come out on the same slab.
+ *
+ * The bar is set by what went wrong. The previous attempt shipped a black void with the camera
+ * outside the room, so this asserts the floor is IN THE SCENE, that it has lights in it, that the
+ * player is inside its footprint, and that the plate is wide enough to hold the 9.5 unit boom.
+ */
 import * as THREE from 'three';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { createFeature } from './interiors';
-import { findStagePlot, PLOT_FLATNESS, PLOT_RADIUS } from './stage';
-import { interiorDoors } from '../interiors.state';
-import type { FeatureGameApi, FeatureSystem, InteractionCtx } from '../types';
-import { distanceToRoadEdge, ROAD_EDGE_CAP } from '../../world/mapData';
+import { buildCore } from './core';
+import { doorsNear, nearestDoor, resetDoorCache } from './doors';
+import type { FeatureGameApi, FeatureMenuView, FeatureSystem, InteractionCtx } from '../types';
 
-/** Flat ground everywhere: the plot search's road/building/water tests still run against the real
- *  generated map, which is the half worth exercising. */
+/** Flat ground: the door search still runs against the real generated map, which is the half worth
+ *  exercising, and a flat world makes the interior's own heights easy to assert. */
 const flat = (): number => 0;
 
 interface Harness {
@@ -15,15 +22,16 @@ interface Harness {
   scene: THREE.Scene;
   player: THREE.Vector3;
   earned: number;
-  events: Array<{ event: string; detail?: string }>;
+  events: { event: string; detail?: string; value?: number }[];
   notes: string[];
-  persists: number;
+  menus: FeatureMenuView[];
+  fixtures: number;
 }
 
 function harness(): Harness {
   const scene = new THREE.Scene();
   const player = new THREE.Vector3();
-  const state: Harness = { scene, player, earned: 0, events: [], notes: [], persists: 0, api: undefined as never };
+  const state: Harness = { scene, player, earned: 0, events: [], notes: [], menus: [], fixtures: 0, api: undefined as never };
   state.api = {
     scene,
     surfaceHeightAt: flat,
@@ -39,19 +47,20 @@ function harness(): Harness {
     earn: (amount) => { state.earned += amount; },
     spend: () => true,
     notify: (title) => { state.notes.push(title); },
-    showMenu: () => undefined,
+    showMenu: (view) => { state.menus.push(view); },
     closeMenu: () => undefined,
-    persist: () => { state.persists += 1; },
-    analytics: (event, props) => { state.events.push({ event, detail: props?.detail }); },
-    spawnFixture: () => undefined,
-    removeFixture: () => undefined,
+    persist: () => undefined,
+    analytics: (event, props) => { state.events.push({ event, detail: props?.detail, value: props?.value }); },
+    // A stand-in ped: the feature pins its y every frame (see placeFixture), so it must have a group.
+    spawnFixture: () => { state.fixtures += 1; return { group: new THREE.Group() } as never; },
+    removeFixture: () => { state.fixtures -= 1; },
   };
   return state;
 }
 
 const ctx = (position: THREE.Vector3): InteractionCtx => ({ context: 'foot', position, vehicle: undefined, hour: 13 });
 
-/** The offer the on-foot ladder would show right now, from the same resolver E goes through. */
+/** The offer the on-foot ladder would show right now, through the same resolver E goes through. */
 function offer(system: FeatureSystem, position: THREE.Vector3): { prompt: string; act(): void } | undefined {
   for (const rung of [...(system.interactions?.() ?? [])].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))) {
     const found = rung.test(ctx(position));
@@ -60,165 +69,156 @@ function offer(system: FeatureSystem, position: THREE.Vector3): { prompt: string
   return undefined;
 }
 
-describe('interior stage plots', () => {
-  // The first call warms CityGen's parcel pass and ModelScatter's scatter pass, which the running
-  // game has already paid for at boot. Everything after it runs against warm caches.
-  beforeAll(() => { findStagePlot(interiorDoors()[0]!, flat); }, 120000);
+function floorGroups(scene: THREE.Scene): THREE.Object3D[] {
+  return scene.children.filter((child) => child.name.startsWith('Floor:'));
+}
 
-  it('finds a buildable plot for every derived doorstep, close enough that nothing re-streams', () => {
-    for (const door of interiorDoors()) {
-      const plot = findStagePlot(door, flat);
-      expect(plot, `no plot for ${door.id}`).toBeDefined();
-      const distance = Math.hypot(plot!.x - door.x, plot!.z - door.z);
-      // ChunkVisibility.CHUNK_VISIBLE_RANGE is 2500 world units: stay well inside it and not one
-      // building chunk, ambient pedestrian or mission distance changes while the player is indoors.
-      expect(distance, `${door.id} plot is ${distance.toFixed(0)}u away`).toBeLessThan(1200);
-    }
-  });
+/** A door on a building with more than one storey, so the stair has somewhere to go. */
+function tallDoor(from: { x: number; z: number }) {
+  return doorsNear(from.x, from.z, 2000)
+    .map((door) => ({ door, core: buildCore(door.facts) }))
+    .filter((entry) => entry.core.storeys >= 2)
+    .sort((a, b) => b.core.storeys - a.core.storeys)[0];
+}
 
-  it('puts plots clear of every road surface, so nothing drives or walks through the lounge', () => {
-    for (const door of interiorDoors()) {
-      const plot = findStagePlot(door, flat)!;
-      expect(distanceToRoadEdge(plot.x, plot.z)).toBeGreaterThanOrEqual(ROAD_EDGE_CAP - 0.1);
-    }
-  });
+describe('a visit', () => {
+  beforeEach(() => { resetDoorCache(); });
 
-  it('is deterministic — the same door resolves to the same plot every time', () => {
-    for (const door of interiorDoors()) {
-      expect(findStagePlot(door, flat)).toEqual(findStagePlot(door, flat));
-    }
-  });
+  it('opens on a real doorstep and builds the ground floor of that building, lit', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    expect(door).toBeDefined();
+    test.player.set(door.x, 0, door.z);
 
-  it('costs a fraction of a frame once the world is built, so entering never hitches', () => {
-    const door = interiorDoors()[0]!;
-    const started = performance.now();
-    for (let i = 0; i < 5; i++) findStagePlot({ x: door.x + i * 3, z: door.z + i * 3 }, flat);
-    const each = (performance.now() - started) / 5;
-    expect(each, `${each.toFixed(1)}ms per search`).toBeLessThan(16);
-  });
+    const prompt = offer(system, test.player);
+    expect(prompt?.prompt).toBe(`E  Go inside · ${door.name}`);
+    expect(system.qa!('enter', {})).toBe('ok');
 
-  it('rejects sloping ground', () => {
-    const door = interiorDoors()[0]!;
-    const slope = (x: number, z: number): number => (x + z) * 0.5; // way past PLOT_FLATNESS over PLOT_RADIUS
-    expect(PLOT_FLATNESS).toBeLessThan(0.55); // under PLAYER.stepUp, or the player falls off the floor
-    expect(PLOT_RADIUS).toBeGreaterThan(12);
-    expect(findStagePlot(door, slope)).toBeUndefined();
-  });
-});
+    const groups = floorGroups(test.scene);
+    expect(groups, 'no floor in the scene').toHaveLength(1);
+    // Lit: an ambient plus at least one lamp, or you get the void this feature shipped with.
+    const lights: THREE.Light[] = [];
+    groups[0]!.traverse((object) => { if (object instanceof THREE.Light) lights.push(object); });
+    expect(lights.filter((light) => light instanceof THREE.AmbientLight).length).toBeGreaterThan(0);
+    expect(lights.filter((light) => light instanceof THREE.PointLight).length).toBeGreaterThan(1);
 
-describe('interiors feature', () => {
-  let world: Harness;
-  let system: FeatureSystem;
-
-  beforeEach(() => {
-    world = harness();
-    system = createFeature(world.api, { visited: [] }) as FeatureSystem;
-  });
-
-  it('offers nothing until you are standing on a doorstep', () => {
-    world.player.set(0, 0, 0);
-    expect(offer(system, world.player)).toBeUndefined();
-    expect(system.hud?.()).toBeUndefined();
-  });
-
-  it('offers the way in from the doorstep, in the prompt grammar the mobile pill parses', () => {
-    const door = interiorDoors()[0]!;
-    world.player.set(door.x, 0, door.z);
-    const found = offer(system, world.player);
-    expect(found?.prompt.startsWith('E  ')).toBe(true);
-    expect(found?.prompt).toContain(door.name);
-  });
-
-  it('walks the whole loop and lands you back on the exact slab you left', () => {
-    expect(system.qa?.('run', {})).toBe('ok');
-  });
-
-  it('runs the loop for every door on the map', () => {
-    for (const door of interiorDoors()) {
-      expect(system.qa?.('run', { door: door.id }), `${door.id} playthrough`).toBe('ok');
-    }
-  });
-
-  const rooms = (): number => world.scene.children.filter((child) => child.name.startsWith('Interior:')).length;
-
-  it('puts a doorway in the street the moment the chunk lands, and no room until you go in', () => {
-    expect(world.scene.children.map((child) => child.name)).toEqual(['InteriorDoors']);
-    expect(rooms()).toBe(0);
-    expect(system.qa?.('enter', {})).toBe('ok');
-    expect(rooms()).toBe(1);
-    expect(system.qa?.('leave', {})).toBe('ok');
-    expect(rooms()).toBe(0);
-  });
-
-  it('leaks nothing across ten trips through the same door', () => {
-    for (let i = 0; i < 10; i++) {
-      expect(system.qa?.('enter', {})).toBe('ok');
-      expect(system.qa?.('leave', {})).toBe('ok');
-    }
-    expect(rooms()).toBe(0);
-  });
-
-  it('shows a HUD chip while you are inside and nothing when you are not', () => {
-    expect(system.hud?.()).toBeUndefined();
-    system.qa?.('enter', {});
-    const chips = system.hud?.();
-    expect(chips).toHaveLength(1);
-    expect(chips?.[0]?.label).toBe('SPAZA');
-    system.qa?.('leave', {});
-    expect(system.hud?.()).toBeUndefined();
-  });
-
-  it('keeps you in the room however hard you push at the walls', () => {
-    system.qa?.('enter', {});
-    const inside = world.player.clone();
-    for (let i = 0; i < 24; i++) {
-      const angle = (i / 24) * Math.PI * 2;
-      world.player.x += Math.cos(angle) * 40;
-      world.player.z += Math.sin(angle) * 40;
-      system.update?.(1 / 60);
-      expect(world.player.distanceTo(inside)).toBeLessThan(12);
-    }
-  });
-
-  it('pays the first-visit find once, remembers it, and hands it back through the save slice', () => {
-    system.qa?.('run', {});
-    const first = world.earned;
-    expect(first).toBeGreaterThan(0);
-    const slice = system.serialize?.() as { visited: string[] };
-    expect(slice.visited).toContain(interiorDoors()[0]!.id);
-    system.qa?.('run', {});
-    expect(world.earned).toBe(first);
-
-    // A reload with that slice must not pay again.
-    const second = createFeature(world.api, slice) as FeatureSystem;
-    world.earned = 0;
-    second.qa?.('run', {});
-    expect(world.earned).toBe(0);
-    second.dispose();
-  });
-
-  it('lets go rather than dragging you back when the world teleports you out', () => {
-    system.qa?.('enter', {});
-    expect(system.qa?.('status', {})).toMatch(/^inside:/);
-    world.player.set(9000, 0, -9000); // a respawn, a checkpoint reload, a console teleport
-    system.update?.(1 / 60);
-    expect(system.qa?.('status', {})).toBe('outside');
-    expect(world.player.x).toBe(9000);
-    expect(rooms()).toBe(0);
-  });
-
-  it('has an idempotent dispose that empties the scene', () => {
-    system.qa?.('enter', {});
+    // The player is above the roof of their own building, at the same x and z they walked in on.
+    const status = system.qa!('status', {});
+    expect(status).toMatch(/^inside\|/);
+    expect(status).toContain('unreachable=0');
+    expect(Math.hypot(test.player.x - door.facts.x, test.player.z - door.facts.z))
+      .toBeLessThan(Math.hypot(door.facts.width, door.facts.depth));
+    expect(test.player.y).toBeGreaterThan(door.roofY);
     system.dispose();
-    system.dispose();
-    expect(world.scene.children.length).toBe(0); // the doorways go too
-    expect(system.hud?.()).toBeUndefined();
-  });
+  }, 120000);
 
-  it('answers the console', () => {
-    expect(system.command?.(['doors'])).toHaveLength(interiorDoors().length);
-    expect(system.command?.(['where'])).toEqual(['Outside.']);
-    system.qa?.('enter', {});
-    expect(system.command?.(['where'])[0]).toContain('Inside');
-  });
+  it('never moves the player in x or z beyond their own building, so the city never restreams', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    system.qa!('enter', {});
+    // The whole footprint plus the plate clamp: nothing like the hundreds of units a far plot moved.
+    expect(Math.hypot(test.player.x - door.x, test.player.z - door.z)).toBeLessThan(40);
+    system.dispose();
+  }, 120000);
+
+  it('walks the whole loop — in, contained, up the stair, back down, out on the same slab', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const tall = tallDoor({ x: 0, z: 0 });
+    expect(tall, 'no multi-storey building anywhere near the origin').toBeDefined();
+    test.player.set(tall!.door.x, 0, tall!.door.z);
+    expect(system.qa!('run', {})).toBe('ok');
+    expect(floorGroups(test.scene), 'floors left behind after leaving').toHaveLength(0);
+    system.dispose();
+  }, 300000);
+
+  it('holds at most two floors at once, and only while the flight needs both', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const tall = tallDoor({ x: 0, z: 0 })!;
+    test.player.set(tall.door.x, 0, tall.door.z);
+    expect(system.qa!('run', {})).toBe('ok');
+    // `run` climbs a storey and comes back; the driver fails itself above two, and the status line
+    // reports the peak it actually measured.
+    system.qa!('enter', {});
+    const peak = /peak=(\d+)/.exec(system.qa!('status', {}))![1]!;
+    expect(Number(peak)).toBeLessThanOrEqual(2);
+    system.dispose();
+  }, 300000);
+
+  it('gives a tall building a lift, and the lift is a menu of every floor', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const lifted = doorsNear(0, 0, 4000)
+      .map((door) => ({ door, core: buildCore(door.facts) }))
+      .find((entry) => entry.core.lift);
+    if (!lifted) return; // no tower near the origin on this map; floor.test.ts covers the rule
+    test.player.set(lifted.door.x, 0, lifted.door.z);
+    system.qa!('enter', {});
+    const top = lifted.core.storeys - 1;
+    expect(system.command!(['lift', String(top)])[0]).toContain(`floor ${top}`);
+    system.dispose();
+  }, 300000);
+
+  it('rebuilds the identical floor on a second visit', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    system.qa!('enter', {});
+    const first = system.command!(['where']).join('\n');
+    const shape = floorGroups(test.scene)[0]!.children.length;
+    system.qa!('leave', {});
+    test.player.set(door.x, 0, door.z);
+    system.qa!('enter', {});
+    expect(system.command!(['where']).join('\n')).toBe(first);
+    expect(floorGroups(test.scene)[0]!.children.length).toBe(shape);
+    system.dispose();
+  }, 120000);
+
+  it('pays the first visit once, and never past the cap', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    system.qa!('enter', {});
+    const paid = test.earned;
+    expect(paid).toBeGreaterThan(0);
+    system.qa!('leave', {});
+    test.player.set(door.x, 0, door.z);
+    system.qa!('enter', {});
+    expect(test.earned).toBe(paid);
+    system.dispose();
+  }, 120000);
+
+  it('leaves nothing in the scene, and no fixture, after dispose', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    system.update?.(0.016);          // streams the street doorways
+    system.qa!('enter', {});
+    expect(test.scene.children.length).toBeGreaterThan(0);
+    system.dispose();
+    system.dispose();                 // idempotent
+    expect(test.scene.children).toHaveLength(0);
+    expect(test.fixtures).toBe(0);
+  }, 120000);
+
+  it('offers the way out from the mat and puts the player back where they were standing', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    const outside = test.player.clone();
+    system.qa!('enter', {});
+    const inside = offer(system, test.player);
+    expect(inside?.prompt, 'landing on the mat must offer the way out').toBe('E  Step outside');
+    system.qa!('leave', {});
+    expect(test.player.distanceTo(outside)).toBeLessThan(0.001);
+    system.dispose();
+  }, 120000);
 });

@@ -43,6 +43,71 @@ export interface BuildingProfile {
   tiers: MassingTier[];
   /** Pitched roof volumes (decorative, no collider) so dressing can find the real surface under it. */
   gables: GableSpec[];
+  /** Where this building's front door is — undefined when the massing offers no street-facing
+   *  ground-floor wall wide enough to hang one on. See EntranceTag. */
+  entrance?: EntranceTag;
+}
+
+/**
+ * THE DOOR, RECORDED BY THE PASS THAT DRAWS IT.
+ *
+ * The facade pass already decides where a building's entrance goes — City.addEntrance hangs a glazed
+ * leaf and a canopy on the front wall, and it has always known the answer at the moment it draws it.
+ * It used to keep that to itself, so anything else that wanted to know where a door was had to guess
+ * from the parcel rectangle, and guessing is how you end up with a doorstep floating in a front yard
+ * eleven units clear of the wall it belongs to (the front plane is set back from `depth/2` on about a
+ * third of this city's massings, by up to half the parcel depth).
+ *
+ * So the entrance is a FACT now: planned here, drawn from here, and read from here. A door cannot
+ * disagree with the model that drew it, because there is only one of them.
+ *
+ * Coordinates are building-local, exactly like MassingTier: the chunk builder rotates the whole
+ * building by its heading, and CityGen aims local +z at the street it fronts.
+ */
+export interface EntranceTag {
+  /** Along the front wall. Zero — the centre — is where the facade pass hangs the leaf. */
+  readonly x: number;
+  /** The wall plane the leaf is mounted on: the real front face, not the parcel edge. */
+  readonly z: number;
+  /** Clear width of the opening. */
+  readonly width: number;
+  /** Head height of the opening. */
+  readonly height: number;
+  /** What the model drew there. The interior grammar reads this to decide what is behind it. */
+  readonly kind: EntranceKind;
+}
+
+export type EntranceKind = 'lobby' | 'shopfront' | 'porch' | 'dock';
+
+/** Which opening each structural family puts at street level. Mirrors the detail passes: mixed-use
+ *  gets shop bays, downtown and dense-residential a glazed lobby, houses a porch, works a dock. */
+const ENTRANCE_KIND: Record<BuildingStyle, EntranceKind> = {
+  downtown: 'lobby',
+  'mixed-use': 'shopfront',
+  'dense-residential': 'lobby',
+  suburban: 'porch',
+  estate: 'porch',
+  rural: 'porch',
+  industrial: 'dock',
+};
+
+/** Height the leaf is centred at — the same 1.72 the facade pass has always used. */
+const ENTRANCE_Y = 1.72;
+
+/**
+ * Whether this building carries a drawn entrance, and where. `detailed` is the facade pass's own
+ * rule, repeated once here so the tag and the leaf are decided by one expression: undetailed
+ * buildings get no leaf, so they must not offer a door either.
+ */
+export function planEntrance(
+  width: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[],
+): EntranceTag | undefined {
+  const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
+  if (!detailed) return undefined;
+  const doorWidth = Math.min(5.5, width * 0.32);
+  const z = frontFacadeZAt(tiers, 0, ENTRANCE_Y, doorWidth / 2);
+  if (z === undefined) return undefined;
+  return { x: 0, z, width: doorWidth, height: 3.1, kind: ENTRANCE_KIND[style] };
 }
 
 /** A gable (or thatch) roof in building-local coordinates: ridge along local z at lx=0, apex `rise`
@@ -162,6 +227,9 @@ export class BuildingArchitecture {
 
   private tiers: MassingTier[] = [];
   private gables: GableSpec[] = [];
+  /** False while planning: the massing arithmetic runs exactly as it does for a real build, but no
+   *  geometry is allocated. See plan(). */
+  private drawing = true;
 
   constructor(private parent: THREE.Group) {}
 
@@ -173,23 +241,62 @@ export class BuildingArchitecture {
     this.tiers = [];
     this.gables = [];
     const massing = spec.variant % ARCHITECTURE_VARIANTS[spec.style];
-    const roofY = spec.style === 'downtown' ? this.buildDowntown(spec, massing)
+    const roofY = this.massing(spec, massing);
+    if (this.drawing) this.addStructuralDetail(spec, massing, roofY);
+    return {
+      roofY, massing, tiers: this.tiers, gables: this.gables,
+      entrance: planEntrance(spec.width, spec.style, spec.variant, this.tiers),
+    };
+  }
+
+  /**
+   * The massing and the door WITHOUT the meshes — the same arithmetic, none of the allocation.
+   *
+   * Anything that needs to know a building's shape before (or without) the player being close enough
+   * for the chunk builder to have drawn it goes through here: the interior feature asks every parcel
+   * on the block where its front door is, which at ~2.7 ms of RoundedBoxGeometry per building would
+   * have been a visible hitch on every cell you walk into. Planning is arithmetic, so it is ~200×
+   * cheaper, and because it is the SAME code path the plan cannot drift from the build.
+   *
+   * Decorative meshes are skipped wholesale (they are never collision tiers); the handful of massing
+   * volumes that push a tier directly still do so, so `tiers` is identical either way — the test
+   * suite holds plan() and build() to exactly equal tiers across every family and variant.
+   */
+  plan(spec: BuildingSpec): BuildingProfile {
+    this.drawing = false;
+    try { return this.build(spec); } finally { this.drawing = true; }
+  }
+
+  private massing(spec: BuildingSpec, massing: number): number {
+    return spec.style === 'downtown' ? this.buildDowntown(spec, massing)
       : spec.style === 'mixed-use' ? this.buildMixedUse(spec, massing)
         : spec.style === 'dense-residential' ? this.buildDenseResidential(spec, massing)
           : spec.style === 'suburban' ? this.buildSuburban(spec, massing)
             : spec.style === 'industrial' ? this.buildIndustrial(spec, massing)
               : spec.style === 'estate' ? this.buildEstate(spec, massing)
                 : this.buildRural(spec, massing);
-    this.addStructuralDetail(spec, massing, roofY);
-    return { roofY, massing, tiers: this.tiers, gables: this.gables };
+  }
+
+  /** Decorative mesh sink: swallowed while planning, added to the building group while drawing.
+   *  Every mesh in this class goes through here or through decor(), so a plan() adds nothing to any
+   *  scene — which is the whole reason the interior feature can ask a whole block for its doors. */
+  private place(object: THREE.Object3D): void {
+    if (this.drawing) this.parent.add(object);
+  }
+
+  /** As place(), but the mesh is not even constructed while planning. Used where construction is
+   *  expensive enough to be worth the closure (gable geometry, walls). */
+  private decor<T extends THREE.Object3D>(make: () => T): void {
+    if (this.drawing) this.parent.add(make());
   }
 
   /** Every massing box doubles as a collision tier; decorative details are plain meshes and stay out of the registry. */
-  private addBox(spec: BuildingSpec, width: number, height: number, depth: number, x: number, y: number, z: number, rounded = false): THREE.Mesh {
+  private addBox(spec: BuildingSpec, width: number, height: number, depth: number, x: number, y: number, z: number, rounded = false): void {
+    this.tiers.push({ minX: x - width / 2, maxX: x + width / 2, minZ: z - depth / 2, maxZ: z + depth / 2, y0: y - height / 2, y1: y + height / 2 });
+    if (!this.drawing) return;
     const radius = Math.min(1.25, width * 0.06, depth * 0.06);
     const geometry = rounded ? new RoundedBoxGeometry(width, height, depth, 5, radius) : new THREE.BoxGeometry(width, height, depth);
-    this.tiers.push({ minX: x - width / 2, maxX: x + width / 2, minZ: z - depth / 2, maxZ: z + depth / 2, y0: y - height / 2, y1: y + height / 2 });
-    const mesh = new THREE.Mesh(geometry, boxMaterials(spec.facade, spec.roof)); mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; this.parent.add(mesh); return mesh;
+    const mesh = new THREE.Mesh(geometry, boxMaterials(spec.facade, spec.roof)); mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; this.place(mesh);
   }
 
   private buildDowntown(spec: BuildingSpec, massing: number): number {
@@ -207,14 +314,14 @@ export class BuildingArchitecture {
       const towerH = h - podiumH;
       this.addBox(spec, w * 0.43, towerH, d * 0.82, x - w * 0.23, podiumH + towerH / 2 + 0.2, z);
       this.addBox(spec, w * 0.37, towerH * 0.84, d * 0.72, x + w * 0.25, podiumH + towerH * 0.42 + 0.2, z + d * 0.06, true);
-      const bridge = new THREE.Mesh(new THREE.BoxGeometry(w * 0.28, 3.2, d * 0.42), this.glass); bridge.position.set(x, podiumH + towerH * 0.57, z + d * 0.04); bridge.castShadow = true; this.parent.add(bridge);
+      const bridge = new THREE.Mesh(new THREE.BoxGeometry(w * 0.28, 3.2, d * 0.42), this.glass); bridge.position.set(x, podiumH + towerH * 0.57, z + d * 0.04); bridge.castShadow = true; this.place(bridge);
       return h + 0.2;
     }
     if (massing === 2) {
       const podiumH = Math.min(8, h * 0.16); this.addBox(spec, w, podiumH, d, x, podiumH / 2 + 0.2, z, true);
       this.addBox(spec, w * 0.72, h - podiumH, d * 0.78, x, podiumH + (h - podiumH) / 2 + 0.2, z, true);
       for (const side of [-1, 1]) {
-        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.38, h - podiumH + 1.6, d * 0.83), this.stone); fin.position.set(x + side * w * 0.37, podiumH + (h - podiumH) / 2 + 0.2, z); fin.castShadow = true; this.parent.add(fin);
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.38, h - podiumH + 1.6, d * 0.83), this.stone); fin.position.set(x + side * w * 0.37, podiumH + (h - podiumH) / 2 + 0.2, z); fin.castShadow = true; this.place(fin);
       }
       return h + 0.2;
     }
@@ -229,9 +336,9 @@ export class BuildingArchitecture {
     if (massing === 4) {
       const podiumH = Math.min(9, h * 0.2); this.addBox(spec, w, podiumH, d, x, podiumH / 2 + 0.2, z, true);
       const radius = d * 0.39;
-      const tower = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 1.04, h - podiumH, 32), spec.facade); tower.scale.set(w / Math.max(d, 1), 1, 1); tower.position.set(x, podiumH + (h - podiumH) / 2 + 0.2, z); tower.castShadow = true; tower.receiveShadow = true; this.parent.add(tower);
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 1.04, h - podiumH, 32), spec.facade); tower.scale.set(w / Math.max(d, 1), 1, 1); tower.position.set(x, podiumH + (h - podiumH) / 2 + 0.2, z); tower.castShadow = true; tower.receiveShadow = true; this.place(tower);
       this.tiers.push({ minX: x - w * 0.39, maxX: x + w * 0.39, minZ: z - radius, maxZ: z + radius, y0: podiumH + 0.2, y1: h + 0.2 }); // scaled cylinder tower, boxed
-      const crown = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.78, radius, 3.2, 32), spec.roof); crown.scale.x = w / Math.max(d, 1); crown.position.set(x, h + 1.8, z); crown.castShadow = true; this.parent.add(crown);
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.78, radius, 3.2, 32), spec.roof); crown.scale.x = w / Math.max(d, 1); crown.position.set(x, h + 1.8, z); crown.castShadow = true; this.place(crown);
       return h + 3.4;
     }
     if (massing === 5) {
@@ -260,7 +367,7 @@ export class BuildingArchitecture {
         if (share !== 0.16) this.addSetbackBand(x, z, tw * 1.02, td * 1.02, y);
         tw *= 0.78; td *= 0.78;
       }
-      const finial = new THREE.Mesh(new THREE.BoxGeometry(1.1, 3.4, 1.1), this.stone); finial.position.set(x, h + 1.7, z); finial.castShadow = true; this.parent.add(finial);
+      const finial = new THREE.Mesh(new THREE.BoxGeometry(1.1, 3.4, 1.1), this.stone); finial.position.set(x, h + 1.7, z); finial.castShadow = true; this.place(finial);
       return h + 0.2;
     }
     if (massing === 8) {
@@ -273,12 +380,12 @@ export class BuildingArchitecture {
       // Arcade deck across the full footprint: the walkway and its columns get a real floor tier, and
       // foundationTiers levels it downhill — columns used to hang over the slope on tilted parcels.
       const deck = new THREE.Mesh(new THREE.BoxGeometry(w, 0.3, d), this.stone);
-      deck.position.set(x, 0.35, z); deck.receiveShadow = true; this.parent.add(deck);
+      deck.position.set(x, 0.35, z); deck.receiveShadow = true; this.place(deck);
       this.tiers.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, y0: 0.2, y1: 0.5 });
       const cols = Math.max(4, Math.min(8, Math.floor(w / 3.5)));
       for (let index = 0; index < cols; index++) {
         const px = x - w * 0.44 + index * (w * 0.88 / (cols - 1));
-        const column = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, 3.4, 12), this.stone); column.position.set(px, 2.15, z + d / 2 - 0.5); column.castShadow = true; this.parent.add(column);
+        const column = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, 3.4, 12), this.stone); column.position.set(px, 2.15, z + d / 2 - 0.5); column.castShadow = true; this.place(column);
       }
       this.addBox(spec, w * 0.7, h - podiumH, d * 0.76, x, podiumH + (h - podiumH) / 2 + 0.2, z, true);
       this.addSetbackBand(x, z, w * 1.01, d * 1.01, podiumH + 0.22);
@@ -292,7 +399,7 @@ export class BuildingArchitecture {
       const towerW = Math.min(w, d) * 0.42;
       const tx = x + w / 2 - towerW / 2; const tz = z + d / 2 - towerW / 2;
       this.addBox(spec, towerW, h, towerW, tx, h / 2 + 0.2, tz, true);
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(towerW * 0.32, towerW * 0.44, 2.6, 18), spec.roof); cap.position.set(tx, h + 1.5, tz); cap.castShadow = true; this.parent.add(cap);
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(towerW * 0.32, towerW * 0.44, 2.6, 18), spec.roof); cap.position.set(tx, h + 1.5, tz); cap.castShadow = true; this.place(cap);
       this.addSetbackBand(x, z - d * 0.2, w * 1.02, d * 0.57, blockH + 0.2);
       return h + 2.8;
     }
@@ -300,10 +407,10 @@ export class BuildingArchitecture {
     this.addBox(spec, w * 0.46, h, d * 0.9, x - w * 0.24, h / 2 + 0.2, z, true);
     this.addBox(spec, w * 0.46, h * 0.78, d * 0.9, x + w * 0.24, h * 0.39 + 0.2, z);
     this.addBox(spec, w * 0.18, h * 0.88, d * 0.5, x, h * 0.44 + 0.2, z - d * 0.1);
-    const plant = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, 2.3, d * 0.34), this.steel); plant.position.set(x - w * 0.24, h + 1.35, z - d * 0.14); plant.castShadow = true; this.parent.add(plant);
+    const plant = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, 2.3, d * 0.34), this.steel); plant.position.set(x - w * 0.24, h + 1.35, z - d * 0.14); plant.castShadow = true; this.place(plant);
     for (const dz of [-0.18, 0.16]) {
-      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 2.1, 16), this.steel); tank.position.set(x + w * 0.24, h * 0.78 + 1.75, z + d * dz); tank.castShadow = true; this.parent.add(tank);
-      for (const lx of [-0.9, 0.9]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.9, 0.14), this.darkMetal); leg.position.set(x + w * 0.24 + lx, h * 0.78 + 0.65, z + d * dz); this.parent.add(leg); }
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.35, 1.35, 2.1, 16), this.steel); tank.position.set(x + w * 0.24, h * 0.78 + 1.75, z + d * dz); tank.castShadow = true; this.place(tank);
+      for (const lx of [-0.9, 0.9]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.9, 0.14), this.darkMetal); leg.position.set(x + w * 0.24 + lx, h * 0.78 + 0.65, z + d * dz); this.place(leg); }
     }
     return h + 0.2;
   }
@@ -357,10 +464,10 @@ export class BuildingArchitecture {
       const blockH = Math.max(h, 8.6);
       this.addBox(spec, w, blockH, d * 0.8, x, blockH / 2 + 0.2, z - d * 0.06, true);
       this.addBox(spec, w * 0.22, blockH + 1.1, d * 0.32, x - w * 0.29, (blockH + 1.1) / 2 + 0.2, z + d * 0.28);
-      const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.3, 0.5, d * 0.8 + 0.3), this.plaster); parapet.position.set(x, blockH + 0.4, z - d * 0.06); parapet.castShadow = true; this.parent.add(parapet);
+      const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.3, 0.5, d * 0.8 + 0.3), this.plaster); parapet.position.set(x, blockH + 0.4, z - d * 0.06); parapet.castShadow = true; this.place(parapet);
       for (let level = 1; level * 2.9 < blockH - 1.2; level++) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.14, 1.15), this.stone); slab.position.set(x, level * 2.9 + 0.2, z - d * 0.06 + d * 0.4 + 0.58); slab.castShadow = true; this.parent.add(slab);
-        const rail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.08, 0.06), this.darkMetal); rail.position.set(x, level * 2.9 + 1.15, z - d * 0.06 + d * 0.4 + 1.1); this.parent.add(rail);
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.14, 1.15), this.stone); slab.position.set(x, level * 2.9 + 0.2, z - d * 0.06 + d * 0.4 + 0.58); slab.castShadow = true; this.place(slab);
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.08, 0.06), this.darkMetal); rail.position.set(x, level * 2.9 + 1.15, z - d * 0.06 + d * 0.4 + 1.1); this.place(rail);
       }
       return blockH + 1.3 + 0.2;
     }
@@ -405,8 +512,8 @@ export class BuildingArchitecture {
       const stoepD = Math.min(2.6, d * 0.24);
       this.addBox(spec, w * 0.86, 0.5, stoepD, x, 0.2, z + d * 0.28 + stoepD / 2 - d * 0.1);
       const stoepZ = z + d * 0.28 + stoepD / 2 - d * 0.1;
-      const stoepRoof = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.16, stoepD + 0.6), variant % 2 ? this.terracotta : this.darkMetal); stoepRoof.position.set(x, h * 0.66 + 0.2, stoepZ); stoepRoof.rotation.x = -0.09; stoepRoof.castShadow = true; this.parent.add(stoepRoof);
-      for (const px of [-w * 0.36, -w * 0.12, w * 0.12, w * 0.36]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, h * 0.62, 10), this.timber); post.position.set(x + px, h * 0.31 + 0.6, stoepZ + stoepD / 2 - 0.2); post.castShadow = true; this.parent.add(post); }
+      const stoepRoof = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.16, stoepD + 0.6), variant % 2 ? this.terracotta : this.darkMetal); stoepRoof.position.set(x, h * 0.66 + 0.2, stoepZ); stoepRoof.rotation.x = -0.09; stoepRoof.castShadow = true; this.place(stoepRoof);
+      for (const px of [-w * 0.36, -w * 0.12, w * 0.12, w * 0.36]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, h * 0.62, 10), this.timber); post.position.set(x + px, h * 0.31 + 0.6, stoepZ + stoepD / 2 - 0.2); post.castShadow = true; this.place(post); }
       const wx = w * 0.5 + 0.9; const wz = d * 0.5 + 0.9; const wallH = 1.4; const th = 0.32;
       this.addWall(x, wallH, z - wz, wx * 2 + th, wallH, th);
       for (const side of [-1, 1]) this.addWall(x + side * wx, wallH, z, th, wallH, wz * 2 + th);
@@ -424,9 +531,9 @@ export class BuildingArchitecture {
       this.addBox(spec, w, lower, d, x, lower / 2 + 0.2, z, true);
       this.addBox(spec, w * 0.86, h - lower, d * 0.8, x, lower + (h - lower) / 2 + 0.2, z - d * 0.06);
       this.addGableRoof(spec, x, z - d * 0.06, w * 0.9, d * 0.86, h + 0.2, roofRise);
-      const balcony = new THREE.Mesh(new THREE.BoxGeometry(w * 0.44, 0.14, 1.5), this.stone); balcony.position.set(x, lower + 0.3, z + d / 2 + 0.72); balcony.castShadow = true; this.parent.add(balcony);
-      for (const px of [-w * 0.2, 0, w * 0.2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1, 0.07), this.darkMetal); post.position.set(x + px, lower + 0.85, z + d / 2 + 1.4); this.parent.add(post); }
-      const handRail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.44, 0.07, 0.07), this.darkMetal); handRail.position.set(x, lower + 1.35, z + d / 2 + 1.4); this.parent.add(handRail);
+      const balcony = new THREE.Mesh(new THREE.BoxGeometry(w * 0.44, 0.14, 1.5), this.stone); balcony.position.set(x, lower + 0.3, z + d / 2 + 0.72); balcony.castShadow = true; this.place(balcony);
+      for (const px of [-w * 0.2, 0, w * 0.2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1, 0.07), this.darkMetal); post.position.set(x + px, lower + 0.85, z + d / 2 + 1.4); this.place(post); }
+      const handRail = new THREE.Mesh(new THREE.BoxGeometry(w * 0.44, 0.07, 0.07), this.darkMetal); handRail.position.set(x, lower + 1.35, z + d / 2 + 1.4); this.place(handRail);
     }
     return massing === 5 ? h + 0.2 : h + roofRise + 0.2;
   }
@@ -456,7 +563,7 @@ export class BuildingArchitecture {
       const naveH = h * 1.1; const aisleH = h * 0.55;
       this.addBox(spec, w * 0.5, naveH, d, x, naveH / 2 + 0.2, z);
       for (const side of [-1, 1]) this.addBox(spec, w * 0.25, aisleH, d * 0.94, x + side * w * 0.375, aisleH / 2 + 0.2, z);
-      const clerestory = new THREE.Mesh(new THREE.BoxGeometry(w * 0.42, 1.1, d * 0.9), this.glass); clerestory.position.set(x, naveH - 0.9, z); this.parent.add(clerestory);
+      const clerestory = new THREE.Mesh(new THREE.BoxGeometry(w * 0.42, 1.1, d * 0.9), this.glass); clerestory.position.set(x, naveH - 0.9, z); this.place(clerestory);
       this.addGableRoof(spec, x, z, w * 0.54, d + 0.5, naveH + 0.2, roofRise * 0.8);
       return naveH + roofRise * 0.8 + 0.2;
     } else if (massing === 6) {
@@ -465,11 +572,11 @@ export class BuildingArchitecture {
       this.addGableRoof(spec, x - w * 0.2, z, w * 0.6, d + 0.5, h + 0.2, roofRise);
       const siloR = Math.min(w * 0.11, d * 0.16); const siloH = h * 1.35; const sx = x + w * 0.33;
       for (const dz of [-0.3, 0, 0.3]) {
-        const silo = new THREE.Mesh(new THREE.CylinderGeometry(siloR, siloR, siloH, 18), this.steel); silo.position.set(sx, siloH / 2 + 0.2, z + d * dz); silo.castShadow = true; silo.receiveShadow = true; this.parent.add(silo);
+        const silo = new THREE.Mesh(new THREE.CylinderGeometry(siloR, siloR, siloH, 18), this.steel); silo.position.set(sx, siloH / 2 + 0.2, z + d * dz); silo.castShadow = true; silo.receiveShadow = true; this.place(silo);
         this.tiers.push({ minX: sx - siloR, maxX: sx + siloR, minZ: z + d * dz - siloR, maxZ: z + d * dz + siloR, y0: 0.2, y1: siloH + 0.2 });
-        const cone = new THREE.Mesh(new THREE.CylinderGeometry(0.24, siloR, siloR * 1.1, 18), this.steel); cone.position.set(sx, siloH + siloR * 0.55 + 0.2, z + d * dz); cone.castShadow = true; this.parent.add(cone);
+        const cone = new THREE.Mesh(new THREE.CylinderGeometry(0.24, siloR, siloR * 1.1, 18), this.steel); cone.position.set(sx, siloH + siloR * 0.55 + 0.2, z + d * dz); cone.castShadow = true; this.place(cone);
       }
-      const catwalk = new THREE.Mesh(new THREE.BoxGeometry(w * 0.45, 0.16, 1.1), this.darkMetal); catwalk.position.set(x + w * 0.08, h + 0.4, z); catwalk.castShadow = true; this.parent.add(catwalk);
+      const catwalk = new THREE.Mesh(new THREE.BoxGeometry(w * 0.45, 0.16, 1.1), this.darkMetal); catwalk.position.set(x + w * 0.08, h + 0.4, z); catwalk.castShadow = true; this.place(catwalk);
       return siloH + 0.4;
     } else if (massing === 7) {
       // Twin long sheds: two parallel gabled halls with a service lane and a gantry frame between them.
@@ -480,8 +587,8 @@ export class BuildingArchitecture {
       for (const dz of [-0.32, 0.32]) {
         // Posts run 3u below grade so the service-lane gantry still reaches the ground on the
         // downhill side of a sloped parcel (the building itself sits on the highest corner).
-        for (const side of [-1, 1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, h + 4.6, 0.22), this.steel); post.position.set(x + side * w * 0.09, (h - 1) / 2, z + d * dz); post.castShadow = true; this.parent.add(post); }
-        const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, 0.3, 0.3), this.steel); beam.position.set(x, h + 1.5, z + d * dz); beam.castShadow = true; this.parent.add(beam);
+        for (const side of [-1, 1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, h + 4.6, 0.22), this.steel); post.position.set(x + side * w * 0.09, (h - 1) / 2, z + d * dz); post.castShadow = true; this.place(post); }
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.2, 0.3, 0.3), this.steel); beam.position.set(x, h + 1.5, z + d * dz); beam.castShadow = true; this.place(beam);
       }
       return h + roofRise + 0.2;
     } else if (massing === 8) {
@@ -490,10 +597,10 @@ export class BuildingArchitecture {
       this.addGableRoof(spec, x - w * 0.15, z, w * 0.66, d + 0.5, h + 0.2, roofRise);
       const boilerH = h * 0.78; this.addBox(spec, w * 0.28, boilerH, d * 0.6, x + w * 0.3, boilerH / 2 + 0.2, z - d * 0.14);
       const stackR = Math.min(1.6, w * 0.05); const stackH = h * 2.1; const kx = x + w * 0.3; const kz = z + d * 0.28;
-      const stack = new THREE.Mesh(new THREE.CylinderGeometry(stackR * 0.72, stackR, stackH, 16), this.terracotta); stack.position.set(kx, stackH / 2 + 0.2, kz); stack.castShadow = true; this.parent.add(stack);
+      const stack = new THREE.Mesh(new THREE.CylinderGeometry(stackR * 0.72, stackR, stackH, 16), this.terracotta); stack.position.set(kx, stackH / 2 + 0.2, kz); stack.castShadow = true; this.place(stack);
       this.tiers.push({ minX: kx - stackR, maxX: kx + stackR, minZ: kz - stackR, maxZ: kz + stackR, y0: 0.2, y1: stackH + 0.2 });
-      const band = new THREE.Mesh(new THREE.CylinderGeometry(stackR * 0.78, stackR * 0.82, 0.5, 16), this.stone); band.position.set(kx, stackH - 1.4, kz); this.parent.add(band);
-      for (let py = 1.4; py < boilerH; py += 1.6) { const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, w * 0.42, 10), this.steel); pipe.rotation.z = Math.PI / 2; pipe.position.set(x + w * 0.07, py, z - d * 0.14); this.parent.add(pipe); }
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(stackR * 0.78, stackR * 0.82, 0.5, 16), this.stone); band.position.set(kx, stackH - 1.4, kz); this.place(band);
+      for (let py = 1.4; py < boilerH; py += 1.6) { const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, w * 0.42, 10), this.steel); pipe.rotation.z = Math.PI / 2; pipe.position.set(x + w * 0.07, py, z - d * 0.14); this.place(pipe); }
       return stackH + 0.2;
     }
     return massing === 2 ? Math.max(h * 0.72 + roofRise, h * 0.9) + 0.2 : massing === 4 ? h * 1.18 + 0.2 : h + roofRise + 0.2;
@@ -510,7 +617,7 @@ export class BuildingArchitecture {
       this.addBox(spec, w * 0.62, h * 0.58, d * 0.68, x - w * 0.08, h * 0.29 + 0.2, z - d * 0.04, true);
       this.addBox(spec, w * 0.48, h * 0.42, d * 0.5, x + w * 0.1, h * 0.79 + 0.2, z - d * 0.08, true);
       this.addBox(spec, w * 0.26, h * 0.46, d * 0.36, x + w * 0.32, h * 0.23 + 0.2, z + d * 0.2);
-      const pool = new THREE.Mesh(new THREE.BoxGeometry(Math.min(w * 0.32, 13), 0.3, Math.min(d * 0.24, 8)), this.pool); pool.position.set(x - w * 0.2, 0.12, z + d * 0.3); pool.receiveShadow = true; this.parent.add(pool);
+      const pool = new THREE.Mesh(new THREE.BoxGeometry(Math.min(w * 0.32, 13), 0.3, Math.min(d * 0.24, 8)), this.pool); pool.position.set(x - w * 0.2, 0.12, z + d * 0.3); pool.receiveShadow = true; this.place(pool);
       return h + 0.4;
     }
     const wingSide = massing === 1 ? -1 : 1;
@@ -533,28 +640,28 @@ export class BuildingArchitecture {
       // Modern flat-roof double storey: stacked offset boxes, cantilevered upper floor, glass band.
       this.addBox(spec, mainW, h * 0.55, mainD, x, h * 0.275 + 0.2, z - d * 0.04, true);
       this.addBox(spec, mainW * 0.86, h * 0.5, mainD * 0.92, x + w * 0.06, h * 0.55 + h * 0.25 + 0.2, z + d * 0.02, true);
-      const glassBand = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.8, 1.1, 0.1), this.glass); glassBand.position.set(x + w * 0.06, h * 0.72, z + d * 0.02 + mainD * 0.46 + 0.06); this.parent.add(glassBand);
-      const brise = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.9, 0.14, 2), this.timber); brise.position.set(x + w * 0.06, h * 1.05 + 0.35, z + d * 0.02 + mainD * 0.3); brise.castShadow = true; this.parent.add(brise);
+      const glassBand = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.8, 1.1, 0.1), this.glass); glassBand.position.set(x + w * 0.06, h * 0.72, z + d * 0.02 + mainD * 0.46 + 0.06); this.place(glassBand);
+      const brise = new THREE.Mesh(new THREE.BoxGeometry(mainW * 0.9, 0.14, 2), this.timber); brise.position.set(x + w * 0.06, h * 1.05 + 0.35, z + d * 0.02 + mainD * 0.3); brise.castShadow = true; this.place(brise);
       roofY = h * 1.05 + 0.2;
     } else if (massing === 6) {
       // Thatch-look lodge: steep grass-brown gables over a plastered body, plus a rondavel-ish lapa.
       this.addBox(spec, mainW, h * 0.86, mainD, x - w * 0.02, h * 0.43 + 0.2, z - d * 0.04, true);
       const thatchRise = Math.max(roofRise * 1.7, h * 0.5);
-      const thatchRoof = new THREE.Mesh(createGableGeometry(mainW + 0.8, mainD + 0.8, thatchRise), this.thatch); thatchRoof.position.set(x - w * 0.02, h * 0.86 + 0.2, z - d * 0.04); thatchRoof.castShadow = true; thatchRoof.receiveShadow = true; this.parent.add(thatchRoof);
+      const thatchRoof = new THREE.Mesh(createGableGeometry(mainW + 0.8, mainD + 0.8, thatchRise), this.thatch); thatchRoof.position.set(x - w * 0.02, h * 0.86 + 0.2, z - d * 0.04); thatchRoof.castShadow = true; thatchRoof.receiveShadow = true; this.place(thatchRoof);
       this.gables.push({ x: x - w * 0.02, z: z - d * 0.04, width: mainW + 0.8, depth: mainD + 0.8, y: h * 0.86 + 0.2, rise: thatchRise, ry: 0 });
       const lapaR = Math.min(3.2, w * 0.12); const lx = x + w * 0.28; const lz = z + d * 0.18;
-      const lapa = new THREE.Mesh(new THREE.CylinderGeometry(lapaR, lapaR, 2.4, 14), this.plaster); lapa.position.set(lx, 1.4, lz); lapa.castShadow = true; this.parent.add(lapa);
+      const lapa = new THREE.Mesh(new THREE.CylinderGeometry(lapaR, lapaR, 2.4, 14), this.plaster); lapa.position.set(lx, 1.4, lz); lapa.castShadow = true; this.place(lapa);
       this.tiers.push({ minX: lx - lapaR, maxX: lx + lapaR, minZ: lz - lapaR, maxZ: lz + lapaR, y0: 0.2, y1: 2.6 });
-      const lapaRoof = new THREE.Mesh(new THREE.CylinderGeometry(0.2, lapaR + 0.7, 2.2, 14), this.thatch); lapaRoof.position.set(lx, 3.7, lz); lapaRoof.castShadow = true; this.parent.add(lapaRoof);
+      const lapaRoof = new THREE.Mesh(new THREE.CylinderGeometry(0.2, lapaR + 0.7, 2.2, 14), this.thatch); lapaRoof.position.set(lx, 3.7, lz); lapaRoof.castShadow = true; this.place(lapaRoof);
       roofY = h * 0.86 + thatchRise + 0.2;
     } else {
       // massing 7 — tennis-court estate: compact double villa beside a fenced practice court.
       this.addBox(spec, w * 0.44, h, mainD, x - w * 0.24, h / 2 + 0.2, z - d * 0.04, true);
       this.addGableRoof(spec, x - w * 0.24, z - d * 0.04, w * 0.48, mainD + 0.6, h + 0.2, roofRise);
       const courtW = Math.min(w * 0.4, 15); const courtD = Math.min(d * 0.52, 8.2); const cx = x + w * 0.22; const czz = z - d * 0.08;
-      const court = new THREE.Mesh(new THREE.BoxGeometry(courtW, 0.14, courtD), this.court); court.position.set(cx, 0.28, czz); court.receiveShadow = true; this.parent.add(court);
-      const netLine = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.9, courtD), this.plaster); netLine.position.set(cx, 0.8, czz); this.parent.add(netLine);
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.8, 0.1), this.darkMetal); post.position.set(cx + sx * courtW / 2, 1.6, czz + sz * courtD / 2); this.parent.add(post); }
+      const court = new THREE.Mesh(new THREE.BoxGeometry(courtW, 0.14, courtD), this.court); court.position.set(cx, 0.28, czz); court.receiveShadow = true; this.place(court);
+      const netLine = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.9, courtD), this.plaster); netLine.position.set(cx, 0.8, czz); this.place(netLine);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.8, 0.1), this.darkMetal); post.position.set(cx + sx * courtW / 2, 1.6, czz + sz * courtD / 2); this.place(post); }
     }
 
     // Perimeter garden wall (kept inside the reserved building radius), gated on the +z street face.
@@ -565,13 +672,13 @@ export class BuildingArchitecture {
     const gateHalf = Math.min(3, w * 0.14);                               // gate opening on the street side
     const frontRun = (wx * 2 - gateHalf * 2) / 2;
     for (const side of [-1, 1]) this.addWall(x + side * (gateHalf + frontRun / 2), wallH, z + wz, frontRun, wallH, th);
-    for (const side of [-1, 1]) { const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3, 0.8), this.stone); pillar.position.set(x + side * gateHalf, 1.5, z + wz); pillar.castShadow = true; this.parent.add(pillar); }
-    const gate = new THREE.Mesh(new THREE.BoxGeometry(gateHalf * 2, 2, 0.12), this.darkMetal); gate.position.set(x, 1, z + wz); this.parent.add(gate);
+    for (const side of [-1, 1]) { const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3, 0.8), this.stone); pillar.position.set(x + side * gateHalf, 1.5, z + wz); pillar.castShadow = true; this.place(pillar); }
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(gateHalf * 2, 2, 0.12), this.darkMetal); gate.position.set(x, 1, z + wz); this.place(gate);
 
     // Pool in the front yard, between house and gate.
     const poolW = Math.min(w * 0.34, 12); const poolD = Math.min(d * 0.3, 8);
-    const pool = new THREE.Mesh(new THREE.BoxGeometry(poolW, 0.3, poolD), this.pool); pool.position.set(x + wingSide * -w * 0.16, 0.12, z + d * 0.24); pool.receiveShadow = true; this.parent.add(pool);
-    const coping = new THREE.Mesh(new THREE.BoxGeometry(poolW + 0.8, 0.16, poolD + 0.8), this.plaster); coping.position.set(pool.position.x, 0.06, pool.position.z); coping.receiveShadow = true; this.parent.add(coping);
+    const pool = new THREE.Mesh(new THREE.BoxGeometry(poolW, 0.3, poolD), this.pool); pool.position.set(x + wingSide * -w * 0.16, 0.12, z + d * 0.24); pool.receiveShadow = true; this.place(pool);
+    const coping = new THREE.Mesh(new THREE.BoxGeometry(poolW + 0.8, 0.16, poolD + 0.8), this.plaster); coping.position.set(pool.position.x, 0.06, pool.position.z); coping.receiveShadow = true; this.place(coping);
     return roofY;
   }
 
@@ -600,19 +707,25 @@ export class BuildingArchitecture {
 
   /** A plastered wall segment that is both a mesh and an axis-aligned collision tier (grounded at +0.2). */
   private addWall(cx: number, _cy: number, cz: number, w: number, h: number, d: number): void {
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this.plaster);
-    wall.position.set(cx, h / 2 + 0.2, cz); wall.castShadow = true; wall.receiveShadow = true; this.parent.add(wall);
     this.tiers.push({ minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2, y0: 0.2, y1: h + 0.2 });
+    this.decor(() => {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this.plaster);
+      wall.position.set(cx, h / 2 + 0.2, cz); wall.castShadow = true; wall.receiveShadow = true; return wall;
+    });
   }
 
   private addGableRoof(spec: BuildingSpec, x: number, z: number, width: number, depth: number, y: number, rise: number, ry = 0): void {
-    const tiled = spec.style === 'suburban' || spec.style === 'estate';
-    const roof = new THREE.Mesh(createGableGeometry(width, depth, rise), tiled ? this.terracotta : spec.roof); roof.position.set(x, y, z); roof.rotation.y = ry; roof.castShadow = true; roof.receiveShadow = true; this.parent.add(roof);
     this.gables.push({ x, z, width, depth, y, rise, ry });
+    this.decor(() => {
+      const tiled = spec.style === 'suburban' || spec.style === 'estate';
+      const roof = new THREE.Mesh(createGableGeometry(width, depth, rise), tiled ? this.terracotta : spec.roof); roof.position.set(x, y, z); roof.rotation.y = ry; roof.castShadow = true; roof.receiveShadow = true; return roof;
+    });
   }
 
   private addSetbackBand(x: number, z: number, width: number, depth: number, y: number): void {
-    const band = new THREE.Mesh(new THREE.BoxGeometry(width, 0.28, depth), this.stone); band.position.set(x, y, z); band.castShadow = true; this.parent.add(band);
+    this.decor(() => {
+      const band = new THREE.Mesh(new THREE.BoxGeometry(width, 0.28, depth), this.stone); band.position.set(x, y, z); band.castShadow = true; return band;
+    });
   }
 
   private addStructuralDetail(spec: BuildingSpec, massing: number, roofY: number): void {
@@ -629,13 +742,13 @@ export class BuildingArchitecture {
     const canopyW = w * 0.74; const canopyZ = frontFacadeZAt(this.tiers, x, 3.25, canopyW / 2);
     if (canopyZ !== undefined) {
       const canopy = new THREE.Mesh(new THREE.BoxGeometry(canopyW, 0.18, 1.5), variant % 2 ? this.darkMetal : this.terracotta);
-      canopy.position.set(x, 3.25, canopyZ + 0.7); canopy.castShadow = true; this.parent.add(canopy);
+      canopy.position.set(x, 3.25, canopyZ + 0.7); canopy.castShadow = true; this.place(canopy);
     }
     const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
     for (let bay = 0; bay < bays; bay++) {
       const px = x - w * 0.36 + bay * (w * 0.72 / Math.max(1, bays - 1));
       const shopW = Math.min(3.2, w / bays * 0.72); const shopZ = frontFacadeZAt(this.tiers, px, 1.35, shopW / 2); if (shopZ === undefined) continue;
-      const shop = new THREE.Mesh(new THREE.BoxGeometry(shopW, 2.2, 0.12), this.glass); shop.position.set(px, 1.35, shopZ + 0.02); this.parent.add(shop);
+      const shop = new THREE.Mesh(new THREE.BoxGeometry(shopW, 2.2, 0.12), this.glass); shop.position.set(px, 1.35, shopZ + 0.02); this.place(shop);
     }
     if (massing === 4) this.addSetbackBand(x, z, w * 0.7, d * 0.74, spec.height + 0.3);
   }
@@ -645,12 +758,12 @@ export class BuildingArchitecture {
     for (let y = 4; y < h - 1; y += 3.1) {
       const balconyX = x + (massing % 2 ? w * 0.08 : 0); const balconyW = w * 0.56;
       const facadeZ = frontFacadeZAt(this.tiers, balconyX, y, balconyW / 2); if (facadeZ === undefined) continue;
-      const balcony = new THREE.Mesh(new THREE.BoxGeometry(balconyW, 0.14, 1.05), this.stone); balcony.position.set(balconyX, y, facadeZ + 0.45); balcony.castShadow = true; this.parent.add(balcony);
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(balconyW, 0.65, 0.06), this.darkMetal); rail.position.set(balconyX, y + 0.42, facadeZ + 0.95); this.parent.add(rail);
+      const balcony = new THREE.Mesh(new THREE.BoxGeometry(balconyW, 0.14, 1.05), this.stone); balcony.position.set(balconyX, y, facadeZ + 0.45); balcony.castShadow = true; this.place(balcony);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(balconyW, 0.65, 0.06), this.darkMetal); rail.position.set(balconyX, y + 0.42, facadeZ + 0.95); this.place(rail);
     }
     const tankX = x - w * 0.25; const tankZ = z - d * 0.18;
     const tankBase = massingTopAt(this.tiers, tankX, tankZ); if (tankBase === undefined) return;
-    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.8, 1.5, 14), this.darkMetal); tank.position.set(tankX, tankBase + 0.75, tankZ); tank.castShadow = true; this.parent.add(tank);
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.8, 1.5, 14), this.darkMetal); tank.position.set(tankX, tankBase + 0.75, tankZ); tank.castShadow = true; this.place(tank);
   }
 
   private addDowntownDetail(spec: BuildingSpec, massing: number, roofY: number): void {
@@ -675,7 +788,7 @@ export class BuildingArchitecture {
           for (const segment of segments) {
             const fin = new THREE.Mesh(new THREE.BoxGeometry(0.16, segment.y1 - segment.y0, 0.16), this.stone);
             fin.position.set(px, (segment.y0 + segment.y1) / 2, segment.z + 0.04); fin.castShadow = true;
-            fin.name = 'planar-facade-mullion'; fin.userData.planarFacadeDetail = 'mullion'; this.parent.add(fin);
+            fin.name = 'planar-facade-mullion'; fin.userData.planarFacadeDetail = 'mullion'; this.place(fin);
           }
         }
       }
@@ -683,7 +796,7 @@ export class BuildingArchitecture {
         for (const span of frontFacadeSpansAt(this.tiers, y, x - w * 0.41, x + w * 0.41)) {
           const band = new THREE.Mesh(new THREE.BoxGeometry(span.maxX - span.minX, 0.18, 0.16), this.darkMetal);
           band.position.set((span.minX + span.maxX) / 2, y, span.z + 0.04);
-          band.name = 'planar-facade-band'; band.userData.planarFacadeDetail = 'band'; this.parent.add(band);
+          band.name = 'planar-facade-band'; band.userData.planarFacadeDetail = 'band'; this.place(band);
         }
       }
       if (variant % 3 === 0 && h > 30) this.addFireEscape(x, z, w, d, h);
@@ -691,7 +804,7 @@ export class BuildingArchitecture {
     if (massing === 2 || massing === 4) {
       const crown = new THREE.Group(); crown.position.set(x, roofY, z);
       for (const px of [-w * 0.2, w * 0.2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 3.5, 0.16), this.darkMetal); post.position.set(px, 1.75, 0); crown.add(post); }
-      const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.52, 0.18, 0.18), this.darkMetal); beam.position.y = 3.45; crown.add(beam); this.parent.add(crown);
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.52, 0.18, 0.18), this.darkMetal); beam.position.y = 3.45; crown.add(beam); this.place(crown);
     }
   }
 
@@ -707,7 +820,7 @@ export class BuildingArchitecture {
       const { rx, rz } = this.cylindricalTowerRadii(spec, y);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(rz - 0.07, 0.09, 6, 32), this.darkMetal);
       ring.position.set(x, y, z); ring.rotation.x = Math.PI / 2; ring.scale.x = rx / rz;
-      ring.castShadow = true; ring.name = 'cylindrical-facade-ring'; ring.userData.curvedFacadeDetail = 'ring'; this.parent.add(ring);
+      ring.castShadow = true; ring.name = 'cylindrical-facade-ring'; ring.userData.curvedFacadeDetail = 'ring'; this.place(ring);
     }
 
     if (variant % 2 !== 0) return;
@@ -726,7 +839,7 @@ export class BuildingArchitecture {
         const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.18, y1 - y0, 0.28), this.stone);
         mullion.position.set(x + px - normal.x * 0.1, cy, z + pz - normal.y * 0.1);
         mullion.rotation.y = Math.atan2(normal.x, normal.y); mullion.castShadow = true;
-        mullion.name = 'cylindrical-facade-mullion'; mullion.userData.curvedFacadeDetail = 'mullion'; this.parent.add(mullion);
+        mullion.name = 'cylindrical-facade-mullion'; mullion.userData.curvedFacadeDetail = 'mullion'; this.place(mullion);
       }
     }
   }
@@ -741,10 +854,10 @@ export class BuildingArchitecture {
   private addFireEscape(x: number, z: number, w: number, d: number, h: number): void {
     const sideX = x + w / 2 + 0.55;
     for (let y = 8; y < h - 3; y += 10) {
-      const platform = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.12, 3.1), this.darkMetal); platform.position.set(sideX, y, z + d * 0.16); this.parent.add(platform);
-      for (const pz of [-1.35, 1.35]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.9, 0.07), this.darkMetal); rail.position.set(sideX + 0.55, y + 0.45, z + d * 0.16 + pz); this.parent.add(rail); }
-      const ladder = new THREE.Mesh(new THREE.BoxGeometry(0.08, 8.7, 0.08), this.darkMetal); ladder.position.set(sideX + 0.55, y + 4.35, z + d * 0.16 + 1.25); this.parent.add(ladder);
-      for (let rung = 0; rung < 5; rung++) { const bar = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, 0.05), this.darkMetal); bar.position.set(sideX + 0.55, y + 0.8 + rung * 1.75, z + d * 0.16 + 1.25); this.parent.add(bar); }
+      const platform = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.12, 3.1), this.darkMetal); platform.position.set(sideX, y, z + d * 0.16); this.place(platform);
+      for (const pz of [-1.35, 1.35]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.9, 0.07), this.darkMetal); rail.position.set(sideX + 0.55, y + 0.45, z + d * 0.16 + pz); this.place(rail); }
+      const ladder = new THREE.Mesh(new THREE.BoxGeometry(0.08, 8.7, 0.08), this.darkMetal); ladder.position.set(sideX + 0.55, y + 4.35, z + d * 0.16 + 1.25); this.place(ladder);
+      for (let rung = 0; rung < 5; rung++) { const bar = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, 0.05), this.darkMetal); bar.position.set(sideX + 0.55, y + 0.8 + rung * 1.75, z + d * 0.16 + 1.25); this.place(bar); }
     }
   }
 
@@ -752,16 +865,16 @@ export class BuildingArchitecture {
     const { x, z, width: w, depth: d, height: h, variant } = spec;
     const porchW = w * 0.48; const facadeZ = frontFacadeZAt(this.tiers, x, 1.8, porchW / 2);
     if (facadeZ !== undefined) {
-      const porch = new THREE.Mesh(new THREE.BoxGeometry(porchW, 0.28, 2.3), this.timber); porch.position.set(x, 0.45, facadeZ + 1); porch.castShadow = true; this.parent.add(porch);
-      const porchRoof = new THREE.Mesh(new THREE.BoxGeometry(w * 0.56, 0.18, 2.55), variant % 2 ? this.terracotta : this.darkMetal); porchRoof.position.set(x, 3.15, facadeZ + 1); porchRoof.rotation.x = -0.08; porchRoof.castShadow = true; this.parent.add(porchRoof);
-      for (const px of [-w * 0.2, w * 0.2]) { const column = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.15, 2.7, 14), this.stone); column.position.set(x + px, 1.8, facadeZ + 1.75); column.castShadow = true; this.parent.add(column); }
+      const porch = new THREE.Mesh(new THREE.BoxGeometry(porchW, 0.28, 2.3), this.timber); porch.position.set(x, 0.45, facadeZ + 1); porch.castShadow = true; this.place(porch);
+      const porchRoof = new THREE.Mesh(new THREE.BoxGeometry(w * 0.56, 0.18, 2.55), variant % 2 ? this.terracotta : this.darkMetal); porchRoof.position.set(x, 3.15, facadeZ + 1); porchRoof.rotation.x = -0.08; porchRoof.castShadow = true; this.place(porchRoof);
+      for (const px of [-w * 0.2, w * 0.2]) { const column = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.15, 2.7, 14), this.stone); column.position.set(x + px, 1.8, facadeZ + 1.75); column.castShadow = true; this.place(column); }
     }
     // Chimney rises out of the actual roof under it (pitched or flat) — never the building-wide roofY,
     // which on winged massings is the tallest ridge, leaving a chimney over a lower wing hanging in air.
     const chimneyX = x - w * 0.25; const chimneyZ = z - d * 0.18;
     const chimneySurface = roofSurfaceAt(this.tiers, this.gables, chimneyX, chimneyZ);
     if (chimneySurface !== undefined) {
-      const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.2, 0.9), this.terracotta); chimney.position.set(chimneyX, chimneySurface + 0.4, chimneyZ); chimney.castShadow = true; this.parent.add(chimney);
+      const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.2, 0.9), this.terracotta); chimney.position.set(chimneyX, chimneySurface + 0.4, chimneyZ); chimney.castShadow = true; this.place(chimney);
     }
     if (massing !== 2 && h > 8) {
       for (const side of [-1, 1]) {
@@ -769,8 +882,8 @@ export class BuildingArchitecture {
         // skip spots no gable covers (flat-roof massings used to leave them floating beside the box).
         const dormerX = x + side * w * 0.22; const dormerZ = z + d * 0.28;
         const surface = gableSurfaceAt(this.gables, dormerX, dormerZ); if (surface === undefined) continue;
-        const dormer = new THREE.Mesh(new THREE.BoxGeometry(Math.min(2.4, w * 0.2), 1.75, 1.35), boxMaterials(spec.facade, spec.roof)); dormer.position.set(dormerX, surface + 0.5, dormerZ); dormer.castShadow = true; this.parent.add(dormer);
-        const window = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.92), this.glass); window.position.set(dormer.position.x, dormer.position.y, dormer.position.z + 0.681); this.parent.add(window);
+        const dormer = new THREE.Mesh(new THREE.BoxGeometry(Math.min(2.4, w * 0.2), 1.75, 1.35), boxMaterials(spec.facade, spec.roof)); dormer.position.set(dormerX, surface + 0.5, dormerZ); dormer.castShadow = true; this.place(dormer);
+        const window = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.92), this.glass); window.position.set(dormer.position.x, dormer.position.y, dormer.position.z + 0.681); this.place(window);
       }
     }
   }
@@ -779,24 +892,24 @@ export class BuildingArchitecture {
     const { x, z, width: w, depth: d, height: h, variant } = spec;
     const dockW = w * 0.58; const dockZ = frontFacadeZAt(this.tiers, x, 0.7, dockW / 2);
     if (dockZ !== undefined) {
-      const dock = new THREE.Mesh(new THREE.BoxGeometry(dockW, 1.1, 2.4), this.steel); dock.position.set(x, 0.7, dockZ + 1.1); dock.castShadow = true; this.parent.add(dock);
+      const dock = new THREE.Mesh(new THREE.BoxGeometry(dockW, 1.1, 2.4), this.steel); dock.position.set(x, 0.7, dockZ + 1.1); dock.castShadow = true; this.place(dock);
     }
     const pipeHeight = Math.min(8, h * 0.65);
     for (const side of [-1, 1]) {
       const pipeX = x + side * w * 0.36; const pipeY = pipeHeight / 2 + 0.5; const pipeZ = frontFacadeZAt(this.tiers, pipeX, pipeY, 0.17); if (pipeZ === undefined) continue;
-      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, pipeHeight, 12), this.steel); pipe.position.set(pipeX, pipeY, pipeZ + 0.1); pipe.castShadow = true; this.parent.add(pipe);
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, pipeHeight, 12), this.steel); pipe.position.set(pipeX, pipeY, pipeZ + 0.1); pipe.castShadow = true; this.place(pipe);
     }
     const ductW = w * 0.42; const ductY = h * 0.62; const ductZ = frontFacadeZAt(this.tiers, x, ductY, ductW / 2);
-    if (ductZ !== undefined) { const duct = new THREE.Mesh(new THREE.BoxGeometry(ductW, 0.8, 0.85), this.steel); duct.position.set(x, ductY, ductZ + 0.36); this.parent.add(duct); }
+    if (ductZ !== undefined) { const duct = new THREE.Mesh(new THREE.BoxGeometry(ductW, 0.8, 0.85), this.steel); duct.position.set(x, ductY, ductZ + 0.36); this.place(duct); }
     if (variant % 2 === 1) {
-      const tank = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.25, Math.min(8, h * 0.65), 24), this.steel); tank.position.set(x + w * 0.28, Math.min(8, h * 0.65) / 2 + 0.25, z - d * 0.22); tank.castShadow = true; this.parent.add(tank);
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(2.1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), this.steel); dome.position.set(tank.position.x, tank.position.y + Math.min(8, h * 0.65) / 2, tank.position.z); dome.castShadow = true; this.parent.add(dome);
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.25, Math.min(8, h * 0.65), 24), this.steel); tank.position.set(x + w * 0.28, Math.min(8, h * 0.65) / 2 + 0.25, z - d * 0.22); tank.castShadow = true; this.place(tank);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(2.1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), this.steel); dome.position.set(tank.position.x, tank.position.y + Math.min(8, h * 0.65) / 2, tank.position.z); dome.castShadow = true; this.place(dome);
       // Concrete ring foundation running 3u below grade: the yard tank stands outside the massing, so
       // on a sloped parcel this fills the gap under its downhill rim instead of leaving it airborne.
-      const pad = new THREE.Mesh(new THREE.CylinderGeometry(2.35, 2.55, 3.2, 24), this.stone); pad.position.set(tank.position.x, -1.3, tank.position.z); pad.receiveShadow = true; this.parent.add(pad);
+      const pad = new THREE.Mesh(new THREE.CylinderGeometry(2.35, 2.55, 3.2, 24), this.stone); pad.position.set(tank.position.x, -1.3, tank.position.z); pad.receiveShadow = true; this.place(pad);
     }
     if (massing === 3) {
-      const monitor = new THREE.Mesh(new THREE.BoxGeometry(w * 0.5, 1.5, d * 0.24), this.glass); monitor.position.set(x, roofY - 0.7, z); monitor.castShadow = true; this.parent.add(monitor);
+      const monitor = new THREE.Mesh(new THREE.BoxGeometry(w * 0.5, 1.5, d * 0.24), this.glass); monitor.position.set(x, roofY - 0.7, z); monitor.castShadow = true; this.place(monitor);
     }
   }
 }

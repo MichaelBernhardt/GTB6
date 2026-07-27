@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type GableSpec, type MassingTier } from './BuildingArchitecture';
+import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
   BEACH_POLYGONS,
   COASTLINE,
@@ -2235,7 +2235,7 @@ export class City {
     }
     const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
     this.addLedge(profile.tiers, Math.min(h - 0.5, 3.6));
-    if (detailed) this.addEntrance(0, w, style, profile.tiers);
+    if (profile.entrance) this.addEntrance(style, profile.entrance);
     if (detailed && style === 'dense-residential') this.addBalconies(0, w, h, profile.tiers);
     if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables);
     if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers);
@@ -2313,11 +2313,13 @@ export class City {
     }
   }
 
-  private addEntrance(x: number, w: number, style: BuildingStyle, tiers: readonly MassingTier[]): void {
+  /** The glazed leaf and its canopy, hung on the entrance the architecture TAGGED. The tag is the
+   *  single source: nothing here recomputes where the door is, so the door the player walks up to and
+   *  the door the interior feature opens are the same fact by construction. */
+  private addEntrance(style: BuildingStyle, entrance: EntranceTag): void {
     const glass = new THREE.MeshPhysicalMaterial({ color: style === 'industrial' ? 0x4a5353 : 0x3a6672, roughness: 0.16, metalness: 0.18, clearcoat: 0.6 });
-    const doorW = Math.min(5.5, w * 0.32); const facadeZ = frontFacadeZAt(tiers, x, 1.72, doorW / 2); if (facadeZ === undefined) return;
-    const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, 3.1, 0.12), glass); door.position.set(x, 1.72, facadeZ + 0.02); this.target.add(door);
-    const canopy = new THREE.Mesh(new THREE.BoxGeometry(doorW + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(x, 3.35, facadeZ + 0.7); canopy.castShadow = true; this.target.add(canopy);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(entrance.width, entrance.height, 0.12), glass); door.position.set(entrance.x, 1.72, entrance.z + 0.02); this.target.add(door);
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(entrance.width + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(entrance.x, 3.35, entrance.z + 0.7); canopy.castShadow = true; this.target.add(canopy);
   }
 
   private addBalconies(x: number, w: number, h: number, tiers: readonly MassingTier[]): void {

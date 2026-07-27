@@ -1,149 +1,98 @@
 /**
- * Building interiors — the EAGER half: the save slice and the doorsteps.
+ * Building interiors — the EAGER half: the save slice, the shared types, and the one cheap test that
+ * decides when the body is worth fetching.
  *
  * This file sits one path segment under src/features/, so vite.config.ts sweeps it into the
- * `gameplay-rules` chunk. It must stay small and free of three.js: everything that builds a room
- * lives in src/features/interiors/, which matches no chunk rule and ships as its own async chunk
- * fetched the first time somebody walks up to a door.
+ * `gameplay-rules` chunk. Everything that knows where a door IS lives in src/features/interiors/,
+ * which matches no chunk rule and ships as its own async chunk.
  *
- * Every doorstep is DERIVED from the generated map at runtime — a landmark anchor, a district
- * centre, and the road network's own vertices — and memoised on first use. Nothing here is a typed
- * world coordinate: mapgen is re-run against OSM and the world is being reshaped, so a literal
- * would be wrong by the next bake.
+ * WHY NO DOOR TABLE LIVES HERE ANY MORE. A door has to sit on a real BUILDING, and buildings come
+ * from src/world/CityGen.ts, which vite.config.ts puts in the `simulation` chunk — and `simulation`
+ * already imports `gameplay-rules` (PopulationSystem -> FearSystem). Importing CityGen from this file
+ * would make the two chunks mutually uninitialisable and `npm run build` would (correctly) fail with
+ * CIRCULAR_CHUNK. So the door table moved into the lazy body, which may import anything, and what is
+ * left here is a road-distance test: "is the player standing in a street at all".
  */
-import { DISTRICT_CENTERS, distanceToRoadEdge, GENERATED_ROADS, landmark, pointInAnyPolygon, WATER_POLYGONS, type MapPt } from '../world/mapData';
-import { ARMS_SITE, BOTTLE_STORES, GARAGE_SITE, HOTDOG_SITE, SAFEHOUSE_SITE, SPAWN_POINT, SPRAY_SITE } from '../world/placements';
+import { distanceToRoadEdge, pointInAnyPolygon, ROAD_EDGE_CAP, WATER_POLYGONS } from '../world/mapData';
 
-export type InteriorKind = 'spaza' | 'flat' | 'ponte';
-
+/** Structural, not decorative: this is the type only, so it costs the eager chunk nothing. Every
+ *  field is read off BuildingArchitecture's own entrance tag — see interiors/doors.ts. */
 export interface InteriorDoor {
+  /** Stable across builds: the building's own rounded footprint centre. */
   readonly id: string;
-  readonly kind: InteriorKind;
-  /** Shown on the prompt, the HUD chip and the notification. */
+  /** Shown on the prompt, the sign over the door and the HUD chip. */
   readonly name: string;
-  /** Doorstep, on the building line beside the kerb. */
+  /** The doorstep you stand on — a stride in front of the tagged wall plane. */
   readonly x: number;
   readonly z: number;
-  /** Yaw of the way OUT: stand on the step facing this and the street is in front of you. */
+  /** The tagged wall plane itself: where the model's own glazed leaf is mounted. */
+  readonly faceX: number;
+  readonly faceZ: number;
+  /** Yaw of the way OUT. Stand on the step facing this and the street is in front of you; the
+   *  building is behind you. Equal to the building's own heading, which CityGen already aims at the
+   *  street it fronts. */
   readonly heading: number;
+  /** Clear width of the opening the model drew, so the frame matches the wall it is on. */
+  readonly openWidth: number;
+  /** Top of the building's massing, in building-local y. The interior stands above it. */
+  readonly roofY: number;
+  /** Everything the interior generator needs about the host building. */
+  readonly facts: import('./interiors/core').BuildingFacts;
 }
 
-/** How close you must be for the doorway prompt. A shade wider than a shop pad (3.6) because there
- *  is no pulsing marker to aim at until the feature's own chunk has landed. */
-export const DOOR_RADIUS = 7;
+/** How close to the doorstep the prompt lights up. Deliberately close to a shop pad's 3.6: the
+ *  feature sits ABOVE `E  Enter vehicle` in Game's on-foot ladder, so a wide ring would stop the
+ *  player getting into a car parked at the kerb. */
+export const DOOR_RADIUS = 4.2;
 
-/** Kerbside anchors already spoken for by shops, the safehouse and the depot — a door must not
- *  land on top of one, or two prompts fight over the same square metre of pavement. */
-function claims(): MapPt[] {
-  return [ARMS_SITE.pad, SPRAY_SITE.pad, GARAGE_SITE.pad, HOTDOG_SITE.pad, SAFEHOUSE_SITE.pad, ...BOTTLE_STORES.map((store) => store.site.pad)];
-}
-
-interface RoadVertex { x: number; z: number; dirX: number; dirZ: number; width: number; d2: number }
-
-/** The `count` road vertices nearest an anchor, nearest first. One pass over the generated network. */
-function nearestVertices(x: number, z: number, count: number): RoadVertex[] {
-  const best: RoadVertex[] = [];
-  for (const road of GENERATED_ROADS) {
-    for (let index = 0; index < road.points.length; index++) {
-      const point = road.points[index]!;
-      const d2 = (point.x - x) ** 2 + (point.z - z) ** 2;
-      if (best.length === count && d2 >= best[best.length - 1]!.d2) continue;
-      const previous = road.points[Math.max(0, index - 1)]!;
-      const next = road.points[Math.min(road.points.length - 1, index + 1)]!;
-      const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
-      const vertex: RoadVertex = { x: point.x, z: point.z, dirX: dx / length, dirZ: dz / length, width: road.width, d2 };
-      const at = best.findIndex((entry) => entry.d2 > d2);
-      if (at === -1) best.push(vertex); else best.splice(at, 0, vertex);
-      if (best.length > count) best.pop();
+/** Ring of probes around the player. distanceToRoadEdge saturates at ROAD_EDGE_CAP (14u), so "is
+ *  there a street near here" has to be asked at several points, not scaled up from one. */
+const PROBES: readonly (readonly [number, number])[] = (() => {
+  const out: [number, number][] = [];
+  for (const radius of [55, 110]) {
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      out.push([Math.cos(angle) * radius, Math.sin(angle) * radius]);
     }
   }
-  return best;
-}
+  return out;
+})();
 
-/** A doorstep on the building line: the kerb vertex nearest the anchor, stepped back off the road
- *  on the side the anchor sits, skipping anything another system has already claimed. */
-function doorstep(anchor: MapPt, taken: MapPt[]): { x: number; z: number; heading: number } | undefined {
-  for (const vertex of nearestVertices(anchor.x, anchor.z, 48)) {
-    // besideRoad's own perpendicular step, inlined so this module needs no RoadSpot value import.
-    const beside = (side: 1 | -1): MapPt => {
-      const offset = side * (vertex.width / 2 + 3.4);
-      return { x: vertex.x - vertex.dirZ * offset, z: vertex.z + vertex.dirX * offset };
-    };
-    const a = beside(1); const b = beside(-1);
-    const step = Math.hypot(a.x - anchor.x, a.z - anchor.z) <= Math.hypot(b.x - anchor.x, b.z - anchor.z) ? a : b;
-    // The kerb offset only clears the road this vertex belongs to. In the CBD grid a second road
-    // crosses within metres, so the step has to be re-tested against the whole network or a door
-    // lands in the middle of the carriageway (caught by interiors.state.test.ts).
-    if (distanceToRoadEdge(step.x, step.z) < 1.2) continue;
-    if (pointInAnyPolygon(WATER_POLYGONS, step.x, step.z)) continue;
-    if (taken.some((pad) => Math.hypot(pad.x - step.x, pad.z - step.z) < 26)) continue;
-    return { x: step.x, z: step.z, heading: Math.atan2(vertex.x - step.x, vertex.z - step.z) };
-  }
-  return undefined;
-}
-
-function district(name: string): MapPt | undefined {
-  const found = DISTRICT_CENTERS.find((entry) => entry.name === name);
-  return found ? { x: found.x, z: found.z } : undefined;
-}
-
-/** Densest district that is not the one the player spawns in — the fallback anchor when a named
- *  suburb has been renamed or dropped by a map rebuild. */
-function densestAway(from: MapPt): MapPt | undefined {
-  let best: MapPt | undefined; let bestDensity = -1;
-  for (const entry of DISTRICT_CENTERS) {
-    if (Math.hypot(entry.x - from.x, entry.z - from.z) < 900) continue;
-    if (entry.density > bestDensity) { bestDensity = entry.density; best = { x: entry.x, z: entry.z }; }
-  }
-  return best;
-}
-
-let memo: readonly InteriorDoor[] | undefined;
-
-/** The doorsteps, derived once per session from map data. Memoised because `near()` runs every
- *  rendered frame from the registry's eager approach. */
-export function interiorDoors(): readonly InteriorDoor[] {
-  if (memo) return memo;
-  const taken = claims();
-  const doors: InteriorDoor[] = [];
-  const add = (id: string, kind: InteriorKind, name: string, anchor: MapPt | undefined): void => {
-    if (!anchor) return;
-    const step = doorstep(anchor, taken);
-    if (!step) return;
-    taken.push({ x: step.x, z: step.z });
-    doors.push({ id, kind, name, x: step.x, z: step.z, heading: step.heading });
-  };
-  // A spaza a short walk from the spawn kerb, so the first door is one you actually trip over.
-  add('spaza', 'spaza', 'Sizwe se Spaza', { x: SPAWN_POINT.x + 120, z: SPAWN_POINT.z - 60 });
-  add('flat', 'flat', 'Flat 704', district('Hillbrow') ?? district('Yeoville') ?? densestAway(SPAWN_POINT));
-  add('ponte', 'ponte', 'Ponte Tower', landmark('Ponte Tower') ?? landmark('Hillbrow tower'));
-  memo = doors;
-  return memo;
-}
-
-/** The doorstep under a point, or undefined. Shared by the eager approach and the loaded rung so
- *  the ring the prompt appears in and the ring E acts in are the same ring. */
-export function doorNear(x: number, z: number): InteriorDoor | undefined {
-  let best: InteriorDoor | undefined; let bestDistance = DOOR_RADIUS;
-  for (const door of interiorDoors()) {
-    const distance = Math.hypot(door.x - x, door.z - z);
-    if (distance < bestDistance) { best = door; bestDistance = distance; }
-  }
-  return best;
+/**
+ * The preload ring — see the note in host.descriptors(). A lazily loaded feature cannot put anything
+ * in the world until its body arrives, so a feature whose whole point is "you can see it from down
+ * the street" is invisible until the first key press. This says: there is a street within about
+ * 110 u, so the doorways are worth fetching. Seventeen grid lookups, no allocation beyond the cell
+ * keys, and it stops asking the moment the body lands (the host only polls unloaded features).
+ */
+export function streetsHere(x: number, z: number): boolean {
+  if (pointInAnyPolygon(WATER_POLYGONS, x, z)) return false;
+  if (distanceToRoadEdge(x, z) < ROAD_EDGE_CAP - 0.01) return true;
+  for (const [dx, dz] of PROBES) if (distanceToRoadEdge(x + dx, z + dz) < ROAD_EDGE_CAP - 0.01) return true;
+  return false;
 }
 
 // ---- save ---------------------------------------------------------------------------------------
 
 export interface InteriorsSave {
-  /** Door ids whose first-visit find has already been paid out. */
+  /** Door ids whose first-visit find has already been paid out (most recent 32). */
   visited: string[];
+  /** How many finds have been paid, ever. Caps the payout so a city full of doors is a discovery,
+   *  never a farm. */
+  finds: number;
 }
+
+/** How many first visits pay out. Small, generous, and then it stops mattering. */
+export const FIND_CAP = 12;
 
 /** Runs inside SaveManager's synchronous deserialize, on an already generically-sanitised blob. */
 export function sanitizeInteriorsState(raw: unknown): InteriorsSave {
-  const source = (raw ?? {}) as { visited?: unknown };
+  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown };
   const visited = Array.isArray(source.visited)
     ? source.visited.filter((entry): entry is string => typeof entry === 'string' && entry.length < 32).slice(0, 32)
     : [];
-  return { visited };
+  const finds = typeof source.finds === 'number' && Number.isFinite(source.finds)
+    ? Math.max(0, Math.min(FIND_CAP, Math.floor(source.finds)))
+    : 0;
+  return { visited, finds };
 }
