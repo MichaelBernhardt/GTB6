@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
 import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import type { CheatSettings, GameSettings, Inventory, SavedVehicle, SavedWeapons } from '../types';
+import { MAP_WORLD_SIZE } from '../world/mapData';
 
 class MemoryStorage implements StorageLike {
   value = new Map<string, string>();
@@ -25,9 +26,14 @@ describe('SaveManager', () => {
 
   it('round trips the live player position and facing, kept separate from the respawn anchor', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
-    manager.save({ ...DEFAULT_SAVE, position: [1234, 2, -5678], heading: 1.25 }); // spawn stays the (valid) default anchor
+    // An arbitrary in-bounds point well off any road, sized from the world rather than pinned: the old
+    // literal (1234, 2, -5678) was inside the 19,200-unit world and outside the 9,806-unit one, so
+    // sanitizePosition correctly re-anchored it and the round trip looked broken when it was not.
+    const edge = MAP_WORLD_SIZE / 2 - 10;
+    const off: [number, number, number] = [Math.round(edge * 0.25), 2, -Math.round(edge * 0.58)];
+    manager.save({ ...DEFAULT_SAVE, position: off, heading: 1.25 }); // spawn stays the (valid) default anchor
     const loaded = manager.load();
-    expect(loaded.position).toEqual([1234, 2, -5678]); // full x/y/z resume, even off-road
+    expect(loaded.position).toEqual(off); // full x/y/z resume, even off-road
     expect(loaded.heading).toBeCloseTo(1.25); // facing is restored too
     expect(loaded.spawn).toEqual(DEFAULT_SAVE.spawn); // death still sends you to the safehouse anchor, independent of position
   });

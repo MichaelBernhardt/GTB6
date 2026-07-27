@@ -2,6 +2,14 @@ import { readFileSync } from 'node:fs';
 
 const rawMap = JSON.parse(readFileSync(new URL('../src/world/generated/joburg-map.json', import.meta.url), 'utf8'));
 
+/**
+ * The committed map's own similarity fit (projected metres -> game units), and the world square it
+ * was fitted into. Re-exported so the server can transform authored coordinates without parsing the
+ * 640 KB map a second time. Mirrors MAP_STATS.fit / MAP_WORLD_SIZE on the client.
+ */
+export const MAP_FIT = rawMap.stats?.fit;
+export const MAP_WORLD_SIZE = rawMap.stats?.targetSize ?? 19200;
+
 const CELL_SIZE = 36;
 const SEARCH_REACH = 64;
 
@@ -58,6 +66,14 @@ export class RoadSegmentIndex {
     return true;
   }
 
+  /**
+   * Nearest point on the nearest carriageway, or `undefined` when nothing is in reach.
+   *
+   * It DELIBERATELY DOES NOT THROW. This runs at module load in server/multiplayer.mjs, so a single
+   * anchor left behind by a map re-crop used to take down `npm start` itself:
+   *   server.mjs FAILED: No generated road near 3064.998846076018, 5094.102261759049
+   * A stale coordinate is a content problem. Callers warn and skip; the process keeps serving.
+   */
   nearestPose(x, z) {
     let best; let bestDistanceSq = Infinity;
     for (const segment of this.candidates(x, z)) {
@@ -67,10 +83,9 @@ export class RoadSegmentIndex {
       const distanceSq = (x - px) ** 2 + (z - pz) ** 2;
       if (distanceSq < bestDistanceSq) {
         bestDistanceSq = distanceSq;
-        best = { x: px, z: pz, heading: Math.atan2(dx, dz), road: segment.road };
+        best = { x: px, z: pz, heading: Math.atan2(dx, dz), road: segment.road, half: segment.half };
       }
     }
-    if (!best) throw new Error(`No generated road near ${x}, ${z}`);
     return best;
   }
 }

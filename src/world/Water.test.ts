@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { DETAIL_WAVES, FOUNTAIN_RIPPLE, OCEAN_WAVES, POND_RIPPLE, REFLECTOR_FAR_INTERVAL, REFLECTOR_RANGE, WATER_KEYFRAMES, createWaterNormalTexture, rectDistanceSq, reflectorShouldRender, rippleEnvelope, ripplePhase, rippleSlope, rippleSlopeGlsl, sampleWaterColor, tileableNoise, waterNoiseHeight, waterTier, waveHeight, waveHeightGlsl, waveSlope, waveSlopeGlsl } from './Water';
+import { DETAIL_WAVES, FOUNTAIN_RIPPLE, OCEAN_GRAZE_POWER, OCEAN_HAZE_DENSITY, OCEAN_SKY_MIX, oceanHazeGlsl, OCEAN_WAVES, POND_RIPPLE, REFLECTOR_FAR_INTERVAL, REFLECTOR_RANGE, WATER_KEYFRAMES, createWaterNormalTexture, rectDistanceSq, reflectorShouldRender, rippleEnvelope, ripplePhase, rippleSlope, rippleSlopeGlsl, sampleWaterColor, tileableNoise, waterNoiseHeight, waterTier, waveHeight, waveHeightGlsl, waveSlope, waveSlopeGlsl } from './Water';
 
 describe('water tier selection', () => {
   it('maps quality presets onto distinct tiers', () => {
@@ -141,5 +141,84 @@ describe('procedural water normal texture', () => {
       expect(length).toBeGreaterThan(0.94); expect(length).toBeLessThan(1.06);
     }
     texture.dispose();
+  });
+});
+
+describe("the dam's horizon haze (D2)", () => {
+  it('splices onto a chunk three actually emits', () => {
+    // applyOceanHaze inserts after `#include <fog_fragment>`. If three ever renames or reorders that
+    // chunk the String.replace silently does nothing, the haze disappears and the black horizon line
+    // comes straight back with no error anywhere — so pin the anchor, and pin that it comes AFTER
+    // tonemapping/colour space, which is what lets the haze reuse three's own fogColor uniform.
+    const fragment = THREE.ShaderLib.physical.fragmentShader;
+    expect(fragment).toContain('#include <fog_fragment>');
+    expect(fragment.indexOf('#include <fog_fragment>')).toBeGreaterThan(fragment.indexOf('#include <colorspace_fragment>'));
+    expect(THREE.ShaderChunk.fog_fragment).toContain('fogColor');
+    expect(THREE.ShaderChunk.fog_pars_fragment).toContain('vFogDepth');
+  });
+
+  it('builds GLSL around whatever view-facing term the tier can supply', () => {
+    const glsl = oceanHazeGlsl('eyeDir.y');
+    expect(glsl).toContain('abs( eyeDir.y )');
+    expect(glsl).toContain('uOceanHaze');
+    expect(glsl).toContain('uOceanSky');
+    expect(glsl).toContain('vFogDepth');
+    expect(glsl).toContain('gl_FragColor');
+  });
+
+  it('keeps the haze strong enough to matter and the sky mix short of washing the dam out', () => {
+    // Distance term at the scene fog's own scale: several times denser, or it does nothing at the
+    // ranges a shore view actually spans.
+    expect(OCEAN_HAZE_DENSITY).toBeGreaterThan(0.00025 * 3);
+    expect(OCEAN_HAZE_DENSITY).toBeLessThan(0.01);
+    // Uncapped grazing fresnel is physically right and loses the water against the strand.
+    expect(OCEAN_SKY_MIX).toBeGreaterThan(0.3);
+    expect(OCEAN_SKY_MIX).toBeLessThan(0.9);
+    // Schlick's own exponent is 5. The 14 this started at was chosen to keep the water at the
+    // player's feet dark, but it also suppressed the reflection over 30-200 units, which from eye
+    // height is the band that fills the frame.
+    expect(OCEAN_GRAZE_POWER).toBeGreaterThanOrEqual(5);
+    expect(OCEAN_GRAZE_POWER).toBeLessThanOrEqual(10);
+  });
+
+  it('lands the DISTANCE haze on the untinted fog colour, which is what kills the horizon line', () => {
+    // THE D2 INVARIANT, and the residual the first fix left behind. Every other surface in the world
+    // resolves at distance to `fogColor`; the sky dome's own horizon IS uHorizonColor = the same fog
+    // colour. While the ocean's distance term mixed toward a TINTED fog it could never arrive there:
+    // measured in-engine at noon, fogColor * vec3(0.80,0.92,1.25) renders (157,166,175) against a
+    // horizon of (212,203,176), so the far water sat 38/255 under the sky however far away it was,
+    // and the worst level step across 18 shore viewpoints was 101/255.
+    //
+    // So: the sky reflection may be tinted (it is a reflection of the cool half of the light), but
+    // the distance term must be applied LAST and must mix toward bare `fogColor`.
+    const glsl = oceanHazeGlsl('eyeDir.y');
+    const skyMix = glsl.indexOf('hazeSky );');
+    const distanceMix = glsl.indexOf('fogColor, hazeDistance );');
+    expect(skyMix).toBeGreaterThan(-1);
+    expect(distanceMix).toBeGreaterThan(skyMix); // distance composes last, so the horizon is the sky
+    // ...and its target carries no tint: the mix argument is `fogColor` on its own.
+    expect(glsl).toMatch(/mix\( gl_FragColor\.rgb, fogColor, hazeDistance \)/);
+  });
+
+  it('gates BOTH haze terms on the grazing angle, so looking down at the dam still shows water', () => {
+    // THE DEFECT THIS PINS. The distance term used to be omnidirectional. At 0.0026 it is 96% at
+    // 700 units and 100% at 1.2 km whatever direction you look from, so from 260 units over Misty
+    // Bay EVERY water pixel measured rgb(196,180,140) — the fog colour to the unit, the same tan as
+    // the veld beside it. The review's words were "there is no blue anywhere in the frame".
+    //
+    // Extinction cannot be 5x the scene fog for the water and 1x for the land seen through the same
+    // air. What actually pales the far end of a lake is FRESNEL, which is a function of angle, so
+    // both terms hang off one `grazing` weight. At pitch 0 from eye height grazing is 0.99+ (D2's
+    // numbers are unchanged); at 20-30 degrees of depression it is 0.01-0.10 and the water keeps its
+    // own colour. If anyone deletes the multiply, the dam goes back to being a tan smear from the air.
+    const glsl = oceanHazeGlsl('eyeDir.y');
+    expect(glsl).toMatch(/float grazing = pow\( 1\.0 - min\( 1\.0, abs\( eyeDir\.y \) \), uOceanGraze \);/);
+    expect(glsl).toMatch(/float hazeDistance = \(.*\) \* grazing;/);
+    expect(glsl).toMatch(/float hazeSky = uOceanSky \* grazing;/);
+    // and the value of it, in numbers rather than in source: eye height at the horizon keeps ~all of
+    // the haze, a camera 260 u up looking at water 900 u away keeps a tenth of it.
+    const graze = (viewY: number): number => (1 - Math.min(1, Math.abs(viewY))) ** OCEAN_GRAZE_POWER;
+    expect(graze(1.3 / 2000)).toBeGreaterThan(0.99); // shore, water 2 km out
+    expect(graze(260 / 900)).toBeLessThan(0.12);     // 260 u up, water 900 u out
   });
 });

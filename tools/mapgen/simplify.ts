@@ -40,6 +40,24 @@ export function simplifyPolyline(points: Pt[], tolerance: number): Pt[] {
 }
 
 /**
+ * Douglas-Peucker on a CLOSED ring. A ring's first and last vertex coincide, so a single DP call
+ * has a degenerate base segment and keeps nothing; the ring is split at the vertex farthest from
+ * the first and each half is reduced. Like DP generally, this only ever DELETES vertices — it never
+ * moves one and never invents one, which is why it is allowed on the imported dam outline.
+ */
+export function simplifyRing(ring: Pt[], tolerance: number): Pt[] {
+  if (ring.length <= 4) return ring.slice();
+  let far = 0; let fd = -1;
+  for (let i = 1; i < ring.length; i++) {
+    const d = (ring[i]!.x - ring[0]!.x) ** 2 + (ring[i]!.z - ring[0]!.z) ** 2;
+    if (d > fd) { fd = d; far = i; }
+  }
+  const a = simplifyPolyline(ring.slice(0, far + 1), tolerance);
+  const b = simplifyPolyline(ring.slice(far), tolerance);
+  return a.concat(b.slice(1));
+}
+
+/**
  * Simplify a polyline while pinning specific vertex indices (junctions):
  * the line is split at every pinned index and each piece is simplified
  * independently, so pinned vertices always survive.

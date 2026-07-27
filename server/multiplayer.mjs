@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createProfileStore, tokenHash } from './profile-store.mjs';
 import { ROAD_INDEX } from './road-network.mjs';
+import { insideNewWorld, toNewWorld } from './coord-transform.mjs';
 
 export const PROTOCOL_VERSION = 3;
 export const TICK_RATE = 20;
@@ -39,14 +40,53 @@ export const ONLINE_APPEARANCES = [
   'newtown-producer', 'fordsburg-restaurateur', 'maboneng-courier', 'parkhurst-architect',
 ];
 
-// Authored against src/world/placements.ts. Pedestrian spawns remain on the pavement while route and
-// vehicle points below are snapped to the actual committed road segments at module load.
-export const ONLINE_SPAWNS = [
-  { x: 2908.520609556788, z: 5319.355453015495, heading: Math.PI },
-  { x: 2790.9037863490075, z: 5128.913773836396, heading: Math.PI / 2 },
-  { x: 3022.6820274177016, z: 5406.92275983807, heading: 0 },
-  { x: 2741.1572774468827, z: 5136.03018107958, heading: -Math.PI / 2 },
+/**
+ * EVERY COORDINATE IN THIS BLOCK IS AUTHORED IN THE OLD 19,200-UNIT WORLD, snapshotted out of
+ * src/world/placements.ts, and is transformed through server/coord-transform.mjs at module load.
+ * Do not re-type them in current-world units — the transform would then be applied twice.
+ *
+ * They are also SOFT. Any one of them can miss (a re-crop deletes the street it named), and when it
+ * does the affected route is dropped with a warning. This module used to throw at import instead,
+ * which took down `npm start` — the production entry point — for one stale anchor.
+ */
+/** Warn once per dead anchor, then carry on without it. */
+const missingAnchors = new Set();
+const dropAnchor = (label, why) => {
+  if (!missingAnchors.has(label)) { missingAnchors.add(label); console.warn(`[multiplayer] ${label}: ${why} — dropping it from the online world.`); }
+  return undefined;
+};
+export function missingMultiplayerAnchors() { return [...missingAnchors].sort(); }
+
+/**
+ * Pedestrian spawns must stand ON THE PAVEMENT. The transform moves the point but cannot preserve
+ * its kerb clearance: gaps between authored points shrink by k (0.75) while road widths are authored
+ * in units and did not shrink at all, so two of these four landed 0.2 u off the tar — close enough
+ * that a player's own body overlapped the carriageway. Walk each one out from the nearest kerb until
+ * it has a real body-width of pavement under it.
+ */
+const PAVEMENT_CLEARANCE = 1;
+const pavementSpot = (old, heading, label) => {
+  const point = toNewWorld(old);
+  if (!insideNewWorld(point)) return dropAnchor(label, `transforms to (${point.x.toFixed(0)}, ${point.z.toFixed(0)}), outside the world square`);
+  const pose = ROAD_INDEX.nearestPose(point.x, point.z);
+  if (!pose) return dropAnchor(label, `has no generated road within reach of (${point.x.toFixed(0)}, ${point.z.toFixed(0)})`);
+  let nx = point.x - pose.x; let nz = point.z - pose.z;
+  const length = Math.hypot(nx, nz);
+  if (length < 1e-6) { nx = Math.cos(pose.heading); nz = -Math.sin(pose.heading); } else { nx /= length; nz /= length; }
+  let { x, z } = point;
+  for (let step = 0; step < 48 && ROAD_INDEX.edgeDistance(x, z) < PAVEMENT_CLEARANCE; step += 1) { x += nx * 0.25; z += nz * 0.25; }
+  return { x, z, heading };
+};
+
+const AUTHORED_SPAWNS = [
+  { x: 2908.520609556788, z: 5319.355453015495, heading: Math.PI, label: 'the Anderson Street pavement' },
+  { x: 2790.9037863490075, z: 5128.913773836396, heading: Math.PI / 2, label: 'the Commissioner Street pavement' },
+  { x: 3022.6820274177016, z: 5406.92275983807, heading: 0, label: 'the You-Bet Street pavement' },
+  { x: 2741.1572774468827, z: 5136.03018107958, heading: -Math.PI / 2, label: 'the rank pavement' },
 ];
+const PAVEMENT_SPAWNS = AUTHORED_SPAWNS
+  .map((spawn) => pavementSpot({ x: spawn.x, z: spawn.z }, spawn.heading, spawn.label))
+  .filter(Boolean);
 
 const ANCHORS = {
   portia: { x: 3022.6820274177016, z: 5406.92275983807, label: 'Portia on You-Bet Street' },
@@ -58,23 +98,48 @@ const ANCHORS = {
   lockup: { x: 2752.494320310464, z: 5428.054705168942, label: 'the Anderson Street lock-up' },
 };
 
+/** Transformed and snapped to the nearest committed carriageway, or undefined if this map has none there. */
+const ROUTE_POINTS = new Map(Object.entries(ANCHORS).map(([key, anchor]) => {
+  const point = toNewWorld(anchor);
+  if (!insideNewWorld(point)) return [key, dropAnchor(anchor.label, `transforms to (${point.x.toFixed(0)}, ${point.z.toFixed(0)}), outside the world square`)];
+  const pose = ROAD_INDEX.nearestPose(point.x, point.z);
+  if (!pose) return [key, dropAnchor(anchor.label, `has no generated road within reach of (${point.x.toFixed(0)}, ${point.z.toFixed(0)})`)];
+  return [key, { x: pose.x, z: pose.z, heading: pose.heading, label: anchor.label }];
+}));
+
 const routePoint = (key, delivery = false) => {
-  const anchor = ANCHORS[key]; const pose = ROAD_INDEX.nearestPose(anchor.x, anchor.z);
-  return { x: pose.x, z: pose.z, heading: pose.heading, label: anchor.label, delivery };
+  const point = ROUTE_POINTS.get(key);
+  return point ? { ...point, delivery } : undefined;
 };
 
-export const HOT_BAKKIE_ROUTES = [
-  { name: 'Commissioner Shuffle', spawn: routePoint('gti'), checkpoints: [routePoint('portia'), routePoint('candice'), routePoint('padstal'), routePoint('lockup', true)] },
-  { name: 'Wemmer Yard Dash', spawn: routePoint('tanker'), checkpoints: [routePoint('kelvin'), routePoint('padstal'), routePoint('gti'), routePoint('portia', true)] },
-  { name: 'Rank to Yard', spawn: routePoint('candice'), checkpoints: [routePoint('lockup'), routePoint('portia'), routePoint('gti'), routePoint('kelvin', true)] },
-  { name: 'Padstal Lock-up', spawn: routePoint('padstal'), checkpoints: [routePoint('tanker'), routePoint('kelvin'), routePoint('candice'), routePoint('lockup', true)] },
+const ROUTE_PLANS = [
+  { name: 'Commissioner Shuffle', spawn: 'gti', checkpoints: ['portia', 'candice', 'padstal', 'lockup'] },
+  { name: 'Wemmer Yard Dash', spawn: 'tanker', checkpoints: ['kelvin', 'padstal', 'gti', 'portia'] },
+  { name: 'Rank to Yard', spawn: 'candice', checkpoints: ['lockup', 'portia', 'gti', 'kelvin'] },
+  { name: 'Padstal Lock-up', spawn: 'padstal', checkpoints: ['tanker', 'kelvin', 'candice', 'lockup'] },
 ];
+
+/** A route is only shipped when EVERY one of its five points survived. A half-route is unwinnable. */
+export const HOT_BAKKIE_ROUTES = ROUTE_PLANS.map((plan) => {
+  const spawn = routePoint(plan.spawn);
+  const checkpoints = plan.checkpoints.map((key, index) => routePoint(key, index === plan.checkpoints.length - 1));
+  if (!spawn || checkpoints.some((point) => !point)) {
+    console.warn(`[multiplayer] route "${plan.name}" lost an anchor to the current map — skipping it.`);
+    return undefined;
+  }
+  return { name: plan.name, spawn, checkpoints };
+}).filter(Boolean);
+
+/** If every authored pavement spot died, land players on a surviving route spawn rather than at the origin. */
+export const ONLINE_SPAWNS = PAVEMENT_SPAWNS.length > 0 ? PAVEMENT_SPAWNS
+  : [HOT_BAKKIE_ROUTES[0]?.spawn ?? { x: 0, z: 0, heading: 0 }];
 
 const VEHICLE_ANCHORS = ['portia', 'gti', 'candice', 'tanker', 'padstal', 'lockup'];
 const VEHICLE_SPAWNS = VEHICLE_ANCHORS.map((key, index) => {
-  const point = routePoint(key); const offset = 10 + (index % 2) * 4;
-  return ROAD_INDEX.nearestPose(point.x + Math.sin(point.heading) * offset, point.z + Math.cos(point.heading) * offset);
-});
+  const point = routePoint(key); if (!point) return undefined;
+  const offset = 10 + (index % 2) * 4;
+  return ROAD_INDEX.nearestPose(point.x + Math.sin(point.heading) * offset, point.z + Math.cos(point.heading) * offset) ?? point;
+}).filter(Boolean);
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
 const quantize = (value, places = 2) => {
@@ -108,8 +173,9 @@ export class MultiplayerWorld {
       const id = `vehicle-${index + 1}`;
       return [id, { id, kind: ['compact', 'sport', 'bakkie'][index % 3], x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, speed: 0, gameSpeed: 0, health: 100, driverId: undefined, isHot: false }];
     }));
-    const spawn = HOT_BAKKIE_ROUTES[0].spawn;
-    this.vehicles.set('hot-bakkie', { id: 'hot-bakkie', kind: 'bakkie', x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, speed: 0, gameSpeed: 0, health: 145, driverId: undefined, isHot: true });
+    // No surviving route means no hot bakkie: the shard still serves free-roam and combat.
+    const spawn = HOT_BAKKIE_ROUTES[0]?.spawn;
+    if (spawn) this.vehicles.set('hot-bakkie', { id: 'hot-bakkie', kind: 'bakkie', x: spawn.x, y: 0, z: spawn.z, heading: spawn.heading, speed: 0, gameSpeed: 0, health: 145, driverId: undefined, isHot: true });
   }
 
   async init() { await this.store.init(); }
@@ -294,6 +360,7 @@ export class MultiplayerWorld {
   }
 
   beginCountdown(now = this.now(), nextRound = true) {
+    if (HOT_BAKKIE_ROUTES.length === 0) return; // stays in 'waiting' forever — the event is simply absent from this map
     if (nextRound || this.hot.round === 0) this.hot.round += 1;
     this.hot.phase = 'countdown'; this.hot.routeIndex = (this.hot.round - 1) % HOT_BAKKIE_ROUTES.length;
     this.hot.progress = 0; this.hot.carrier = undefined; this.hot.lastCarrier = undefined; this.hot.winner = undefined; this.hot.phaseEndsAt = now + HOT_BAKKIE_COUNTDOWN_MS;
@@ -327,7 +394,7 @@ export class MultiplayerWorld {
     if (this.hot.phase !== 'active' || !this.hot.carrier) return;
     const carrier = this.players.get(this.hot.carrier); const vehicle = this.vehicles.get('hot-bakkie');
     if (!carrier || carrier.deadUntil || carrier.vehicleId !== vehicle?.id || vehicle.driverId !== carrier.id) { this.hot.carrier = undefined; return; }
-    const route = HOT_BAKKIE_ROUTES[this.hot.routeIndex]; const checkpoint = route.checkpoints[this.hot.progress];
+    const route = HOT_BAKKIE_ROUTES[this.hot.routeIndex]; const checkpoint = route?.checkpoints[this.hot.progress];
     if (!checkpoint) return;
     const radius = checkpoint.delivery ? HOT_BAKKIE_DROP_RADIUS : HOT_BAKKIE_CHECKPOINT_RADIUS;
     if (Math.hypot(vehicle.x - checkpoint.x, vehicle.z - checkpoint.z) > radius) return;
