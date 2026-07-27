@@ -72,6 +72,8 @@ export interface FloorPlan {
   readonly label: string;
   readonly eyebrow: string;
   readonly blurb: string;
+  /** What the first visit finds. Small, celebrated, and true to the room it was found in. */
+  readonly findLine: string;
   readonly width: number;
   readonly depth: number;
   readonly height: number;
@@ -162,24 +164,29 @@ function roomName(kind: RoomKind, core: BuildingCore, index: number, salt: numbe
  * is flats over a shop, offices over a lobby, more house over a porch. Short on purpose: a spaza, a
  * flat and an office are enough variety to start.
  */
-function floorKinds(core: BuildingCore, index: number): { kinds: RoomKind[]; eyebrow: string; blurb: string } {
+function floorKinds(core: BuildingCore, index: number): { kinds: RoomKind[]; eyebrow: string; blurb: string; findLine: string } {
   if (index === 0) {
     if (core.entrance === 'shopfront') {
-      return { kinds: ['shop', 'store'], eyebrow: 'SPAZA', blurb: 'Burglar bars, a cold fridge, and everything you actually need at 22:00.' };
+      return { kinds: ['shop', 'store'], eyebrow: 'SPAZA', blurb: 'Burglar bars, a cold fridge, and everything you actually need at 22:00.',
+        findLine: 'Change on the counter — she waves it off.' };
     }
     if (core.entrance === 'lobby') {
-      return { kinds: ['lobby', 'office'], eyebrow: 'LOBBY', blurb: 'A security desk, a dead lift button, and a directory nobody has updated since 2011.' };
+      return { kinds: ['lobby', 'office'], eyebrow: 'LOBBY', blurb: 'A security desk, a dead lift button, and a directory nobody has updated since 2011.',
+        findLine: 'Loose notes under the visitors book.' };
     }
-    return { kinds: ['lounge', 'kitchen', 'bedroom'], eyebrow: 'FLAT', blurb: 'No water in the taps, no lift, and one extension cord doing the work of a substation.' };
+    return { kinds: ['lounge', 'kitchen', 'bedroom'], eyebrow: 'FLAT', blurb: 'No water in the taps, no lift, and one extension cord doing the work of a substation.',
+      findLine: 'Coins in a jam tin on the sill.' };
   }
-  if (core.entrance === 'lobby' && core.storeys >= LIFT_FLOOR_OFFICE) {
-    return { kinds: ['office', 'office', 'store'], eyebrow: 'OFFICES', blurb: 'Half the suites are let, the other half have a phone still ringing in them.' };
+  if (core.entrance === 'lobby' && core.storeys >= OFFICE_FROM_STOREYS) {
+    return { kinds: ['office', 'office', 'store'], eyebrow: 'OFFICES', blurb: 'Half the suites are let, the other half have a phone still ringing in them.',
+      findLine: 'Petty cash, in a tin marked PETTY CASH.' };
   }
-  return { kinds: ['lounge', 'bedroom', 'kitchen'], eyebrow: 'FLAT', blurb: 'Somebody is cooking, somebody is arguing, and the lift has not worked since you were born.' };
+  return { kinds: ['lounge', 'bedroom', 'kitchen'], eyebrow: 'FLAT', blurb: 'Somebody is cooking, somebody is arguing, and the lift has not worked since you were born.',
+    findLine: 'Coins in a jam tin on the sill.' };
 }
 
-/** Above this many storeys a lobby building reads as offices rather than flats. */
-const LIFT_FLOOR_OFFICE = 6;
+/** From this many storeys up, a lobby building is offices rather than flats. */
+const OFFICE_FROM_STOREYS = 6;
 
 const PALETTES: Record<string, { wall: number; floor: number; ceiling: number; trim: number }> = {
   shop: { wall: 0xd8c9a4, floor: 0x6d5a48, ceiling: 0xe6e2d8, trim: 0x2f3a3d },
@@ -190,7 +197,7 @@ const PALETTES: Record<string, { wall: number; floor: number; ceiling: number; t
 // ---- the solver ------------------------------------------------------------------------------
 
 export function solveFloor(facts: BuildingFacts, index: number, core = buildCore(facts)): FloorPlan {
-  const { kinds, eyebrow, blurb } = floorKinds(core, index);
+  const { kinds, eyebrow, blurb, findLine } = floorKinds(core, index);
   const rooms = layoutRooms(core, index, kinds);
   const walls = buildWalls(core, rooms);
   const paletteKey = eyebrow === 'SPAZA' ? 'shop' : eyebrow === 'OFFICES' || eyebrow === 'LOBBY' ? 'office' : 'flat';
@@ -216,7 +223,7 @@ export function solveFloor(facts: BuildingFacts, index: number, core = buildCore
   return {
     core, index,
     label: index === 0 ? 'Ground floor' : `Floor ${index}`,
-    eyebrow, blurb,
+    eyebrow, blurb, findLine,
     width: core.width, depth: core.depth, height: CEILING,
     rooms, walls, props,
     lamps: lampsFor(core, rooms),

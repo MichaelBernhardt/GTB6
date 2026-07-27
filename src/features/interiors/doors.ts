@@ -40,7 +40,7 @@ const PAD_CLEARANCE = 20;
 
 /** Metres of building per storey — the interior's own STOREY_HEIGHT, repeated here only so the
  *  landmark filter can talk in storeys without importing the whole core. */
-const MIN_LANDMARK_STOREY = 3.9;
+const MIN_LANDMARK_STOREY = 3.5;
 
 /** A loading dock is not a way in. Everything else the facade pass draws, opens. */
 const OPENS = new Set(['lobby', 'shopfront', 'porch']);
@@ -115,8 +115,6 @@ export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoo
     faceX: face.x, faceZ: face.z,
     heading: building.heading,
     openWidth: tag.width,
-    /** The roof of the massing: the interior stands above it. See stage() in interiors.ts. */
-    roofY: profile.roofY,
     facts,
   };
 }

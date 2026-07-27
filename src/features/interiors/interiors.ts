@@ -11,17 +11,27 @@
  *   back on the exact paving slab you left, in the same street with the same people in it.
  *
  * WHERE THE ROOM LIVES, and this is the decision the whole feature turns on.
- * The interior stands DIRECTLY OVER ITS OWN BUILDING — same x, same z, at roof level plus a
- * clearance, one storey per floor. It cannot be built inside the massing: City pushes a collider per
- * massing tier and City.clampMoveAt would freeze the player solid. But clampMoveAt is y-AWARE, and
- * above the roof there is no tier, so above the roof is free.
+ * The interior stands DIRECTLY UNDER ITS OWN BUILDING — same x, same z, well below the terrain, one
+ * storey per floor with the top storey nearest the surface. It cannot be built inside the massing:
+ * City pushes a collider per massing tier and City.clampMoveAt would freeze the player solid.
  *
- * That choice is what makes the far-teleport trap go away rather than be worked around. The player's
- * x and z never change by a single unit, so updateBuildingChunks streams nothing, the LifecycleSystem
- * census sees nobody leave, REFRESH_RADIUS recycles nothing, mission distances do not move and
- * city.updateVisibility keeps exactly the chunks it had. Stepping out puts you back in the street you
- * left because you never left it. Nothing had to be frozen behind a modal flag, so nothing can be
- * left frozen.
+ * SAME X, SAME Z is what makes the far-teleport trap go away rather than be worked around. The
+ * player's position never changes by a single unit horizontally, so updateBuildingChunks streams
+ * nothing, the LifecycleSystem census sees nobody leave, REFRESH_RADIUS recycles nothing, mission
+ * distances do not move and city.updateVisibility keeps exactly the chunks it had. Stepping out puts
+ * you back in the street you left because you never left it. Nothing had to be frozen behind a modal
+ * flag, so nothing can be left frozen.
+ *
+ * BELOW rather than above, and this one is physics, not taste. Player.update asks
+ * City.supportHeight for the standable surface underfoot and hands it to stepVertical, which snaps
+ * the player DOWN onto anything within a step and starts a FALL off anything further. Above a roof
+ * the interior floor is thirteen units clear of the highest collider, so the player is permanently
+ * airborne: a falling animation, and a velocityY that grows every frame against our y-pin until the
+ * stutter is a metre a frame. Below the terrain, supportHeight returns the ground far ABOVE the
+ * player, `motion.y - support <= stepUp` is trivially true, and stepVertical snaps and zeroes the
+ * velocity — grounded, still, and silent. Player.update runs before features.update, so the last
+ * word on the player's height each frame is this feature's, and the camera never sees the snap.
+ * A feature-owned standable surface would be the honest fix; that seam does not exist. See report.
  *
  * THE CAMERA, which is why the first attempt rendered a black void. Game.updateCamera special-cases
  * plane, train and airborne for the view ladder and the boom, and a feature cannot add a case: the
@@ -38,7 +48,7 @@ import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescrip
 import { PLAYER } from '../../config';
 import { FIND_CAP, type InteriorDoor, type InteriorsSave } from '../interiors.state';
 import {
-  buildDoorways, buildFloor, EXIT_MAT_IN, toLocal, toWorld,
+  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, toLocal, toWorld,
   type BuiltDoorways, type BuiltFloor,
 } from './build';
 import {
@@ -53,9 +63,10 @@ import { solveFloor, type FloorPlan } from './floor';
 const FADE_MS = 260;
 /** Standing this close to the exit mat offers the way out. Generous: leaving is never a hunt. */
 const EXIT_RADIUS = 2.4;
-/** Clear air between the top of the building's massing and the ground floor of its interior. Bigger
- *  than the whole camera boom, so the boom can never dip into the roof it is standing over. */
-const ROOF_CLEARANCE = 13;
+/** How far under the terrain the TOP storey sits. Big enough that the black shroud around a floor
+ *  (which reaches ~22 units over its own slab) never pokes out of a hillside, and that the camera,
+ *  4.7 units above the player, stays well under the ground it is standing beneath. */
+const BASEMENT_DROP = 30;
 /** If anything else (death, a checkpoint reload, a cheat teleport) moves the player further than
  *  this from the building, the interior lets go rather than yanking them back. */
 const ABANDON_DISTANCE = 90;
@@ -222,7 +233,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   const install = (door: InteriorDoor): void => {
     const core = buildCore(door.facts);
     const heading = door.heading + Math.PI; // local +z runs away from the street, into the building
-    const baseY = api.surfaceHeightAt(door.facts.x, door.facts.z) + door.roofY + ROOF_CLEARANCE;
+    // Floor 0 is the DEEPEST, so climbing a storey raises you and the top floor is the one just
+    // under the pavement — the building, the right way up, buried.
+    const baseY = api.surfaceHeightAt(door.facts.x, door.facts.z) - BASEMENT_DROP - (core.storeys - 1) * STOREY_HEIGHT;
     const origin = api.playerPosition().clone();
     visit = {
       door, core, x: door.facts.x, z: door.facts.z, baseY, heading, origin,
@@ -241,7 +254,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       finds += 1;
       const find = 30 + Math.floor(stableFind(core.seed) * 5) * 10;
       api.earn(find);
-      api.notify(door.name, `Change on the counter — she waves it off. +R${find}`, true);
+      api.notify(door.name, `${ground.plan.findLine} +R${find}`, true);
       api.analytics('first_visit', { detail: core.entrance, value: find });
     } else {
       api.notify(door.name, ground.plan.blurb, true);
@@ -430,8 +443,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
    * Hide the partitions standing between the player and where the camera is. The boom is 9.5 units
    * and not ours to shorten, so in a room narrower than that the camera is in the next room along —
    * and a wall in front of the lens is exactly the black screen this feature shipped with. The
-   * camera's own position is not on the feature API either, so it is reconstructed from the player's
-   * heading and the boom, which is where CameraController puts it.
+   * The camera's own pose is not on the feature API, so it is ESTIMATED: CameraController puts the
+   * camera at focus + (sin yaw, cos yaw)·boom, and on foot the player faces AWAY from it (Player
+   * turns toward its camera-relative move direction), so the camera sits a boom behind the player's
+   * heading. That is exact while walking and approximate while turning on the spot, which is the
+   * right way round — the frames that matter are the ones where the player is moving through a
+   * doorway. A real `api.cameraPosition()` would remove the estimate: noted in the report.
    */
   const cullPartitions = (current: Visit): void => {
     const resident = current.resident.get(current.floor);
@@ -439,7 +456,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const player = api.playerPosition();
     const yaw = api.playerHeading();
     const eye = toLocal(current, current.heading, player.x, player.z);
-    const back = toLocal(current, current.heading, player.x + Math.sin(yaw) * 9.5, player.z + Math.cos(yaw) * 9.5);
+    const back = toLocal(current, current.heading, player.x - Math.sin(yaw) * BOOM, player.z - Math.cos(yaw) * BOOM);
     for (const partition of resident.built.partitions) {
       partition.mesh.visible = !segmentCrossesBox(eye, back, partition);
     }
@@ -616,16 +633,23 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         // Pipe-separated: door ids contain a colon, and the harness vocabulary already owns ':'.
         return `ok|${door.id}|${door.name}|${door.heading.toFixed(4)}|${door.x.toFixed(2)}|${door.z.toFixed(2)}|${buildCore(door.facts).storeys}`;
       }
-      // Walk the player to a floor-local point, through the clamp, so the answer is the real one.
+      // ONE STRIDE toward a floor-local point, through the same clamp a player meets. A stride, not
+      // a teleport: a driver that jumps to its destination proves nothing about whether you could
+      // have walked there, and the doorway it skipped over is exactly the thing under test.
       if (action === 'walk') {
         if (!visit) return 'failed:not-inside';
         const x = typeof args.x === 'number' ? args.x : 0;
         const z = typeof args.z === 'number' ? args.z : 0;
-        const spot = toWorld(visit, visit.heading, x, z);
+        const from = visit.last;
+        const dx = x - from.x; const dz = z - from.z;
+        const distance = Math.hypot(dx, dz);
+        const stride = Math.min(0.16, distance);
+        const step = distance < 1e-4 ? from : { x: from.x + dx / distance * stride, z: from.z + dz / distance * stride };
+        const spot = toWorld(visit, visit.heading, step.x, step.z);
         player.set(spot.x, player.y, spot.z);
         clamp(visit, 1 / 60);
         const local = toLocal(visit, visit.heading, player.x, player.z);
-        return `ok|${local.x.toFixed(2)}|${local.z.toFixed(2)}|y=${player.y.toFixed(2)}|floor=${visit.floor}`;
+        return `ok|${local.x.toFixed(2)}|${local.z.toFixed(2)}|y=${player.y.toFixed(2)}|floor=${visit.floor}|to=${distance.toFixed(2)}`;
       }
       if (action === 'enter' || action === 'run') {
         const door = pick();

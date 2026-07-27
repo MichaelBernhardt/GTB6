@@ -34,8 +34,6 @@ export interface InteriorDoor {
   readonly heading: number;
   /** Clear width of the opening the model drew, so the frame matches the wall it is on. */
   readonly openWidth: number;
-  /** Top of the building's massing, in building-local y. The interior stands above it. */
-  readonly roofY: number;
   /** Everything the interior generator needs about the host building. */
   readonly facts: import('./interiors/core').BuildingFacts;
 }

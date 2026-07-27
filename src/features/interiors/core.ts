@@ -20,10 +20,33 @@
 import type { EntranceKind } from '../../world/BuildingArchitecture';
 import { stablePositionRandom, stableWorldFloat } from '../../world/StableRandom';
 
-/** Floor-to-floor height. A storey you walk up, not a storey you read about. */
-export const STOREY_HEIGHT = 3.9;
-/** Interior clear height inside one storey (the rest is slab). */
-export const CEILING = 3.15;
+/**
+ * ROOMS ARE OVERSIZED, AND THE CAMERA IS THE REASON.
+ *
+ * CameraController sits the camera at the player's eye plus sin(pitch)·boom, and on foot that is a
+ * 0.35 rad pitch on a 9.5 unit boom — 4.7 units ABOVE the floor the player is standing on, with no
+ * way for a feature to shorten either. A room with a real 3 m ceiling therefore has the camera above
+ * its ceiling in literally every frame, which is the doll's-house shot the last attempt shipped.
+ *
+ * So the clear height is set to hold the camera instead: 5.2 units, with the slab making it 5.7
+ * floor to floor. It is a tall room. Every interior in every game of this shape is, for exactly this
+ * reason. The inside-out shell is still there as the fallback for the frames where the player is
+ * halfway up a flight and the camera does clear the ceiling.
+ */
+export const STOREY_HEIGHT = 5.7;
+/** Interior clear height inside one storey (the rest is slab). Must exceed 1.45 + sin(0.35)·9.5. */
+export const CEILING = 5.2;
+
+/**
+ * How tall a storey is ON THE FACADE — which is a different number, and deliberately so.
+ *
+ * How many floors a building HAS is a fact about the building the player is looking at: count the
+ * bands of windows. Counting them at the interior's inflated 5.7 would give a twenty-storey tower
+ * eleven floors, and the player can see that is wrong from the street. So the count comes from a
+ * real storey, and only the STACKING of the interiors uses the oversized one — which nobody can see,
+ * because the interiors stand above the roof.
+ */
+export const FACADE_STOREY = 3.5;
 /** From this many storeys up, the building gets a lift as well as a stair. Below it, a stair is
  *  honestly the way people get about; above it, nobody is walking to floor 40. */
 export const LIFT_FROM_STOREYS = 6;
@@ -133,9 +156,11 @@ export function buildCore(facts: BuildingFacts): BuildingCore {
   const seed = buildingSeed(facts);
   const width = stableWorldFloat(clamp(facts.width - 0.9, MIN_PLATE[0], MAX_PLATE[0]));
   const depth = stableWorldFloat(clamp(facts.depth - 0.9, MIN_PLATE[1], MAX_PLATE[1]));
-  // Storeys from the height the bake actually generated, never a guess. A 6 m cottage is one storey;
-  // whatever the tallest thing in the CBD turns out to be gets exactly as many floors as it is tall.
-  const storeys = Math.max(1, Math.floor((facts.height - 0.4) / STOREY_HEIGHT));
+  // Storeys from the height the bake actually generated, never a guess, counted at a real facade
+  // storey so the number matches the bands of windows the player counted from the street. A 6 m
+  // cottage is one storey; whatever the tallest thing in the CBD turns out to be gets exactly as
+  // many floors as it is tall.
+  const storeys = Math.max(1, Math.floor((facts.height - 0.4) / FACADE_STOREY));
 
   // The spine is offset off centre so two neighbouring buildings do not read as the same plan. It
   // stays far enough from both side walls to leave a room-sized band either side.

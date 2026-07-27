@@ -103,13 +103,15 @@ describe('a visit', () => {
     expect(lights.filter((light) => light instanceof THREE.AmbientLight).length).toBeGreaterThan(0);
     expect(lights.filter((light) => light instanceof THREE.PointLight).length).toBeGreaterThan(1);
 
-    // The player is above the roof of their own building, at the same x and z they walked in on.
+    // The player is under their own building, at the same x and z they walked in on — and BELOW the
+    // ground, which is the only band where City.supportHeight leaves them grounded rather than
+    // permanently falling. See the header of interiors.ts.
     const status = system.qa!('status', {});
     expect(status).toMatch(/^inside\|/);
     expect(status).toContain('unreachable=0');
     expect(Math.hypot(test.player.x - door.facts.x, test.player.z - door.facts.z))
       .toBeLessThan(Math.hypot(door.facts.width, door.facts.depth));
-    expect(test.player.y).toBeGreaterThan(door.roofY);
+    expect(test.player.y, 'the interior must sit under the terrain').toBeLessThan(-20);
     system.dispose();
   }, 120000);
 
