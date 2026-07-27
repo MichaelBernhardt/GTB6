@@ -24,6 +24,8 @@ export class HudView {
   private armour: HTMLElement;
   private armourFill: HTMLElement;
   private items: HTMLElement;
+  private featureStrip: HTMLElement;
+  private featureKey = '';
   private stims: HTMLElement;
   private chutes: HTMLElement;
   private torch: HTMLElement;
@@ -94,6 +96,7 @@ export class HudView {
       <section class="hud-dialogue" data-hud="dialogue" role="status" aria-live="polite" hidden><small data-hud="dialogue-speaker"></small><p data-hud="dialogue-text"></p><em data-hud="dialogue-more"></em></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
       <div class="hud-items" data-hud="items" aria-label="Carried items" hidden><i data-hud="stims" hidden></i><i data-hud="chutes" hidden></i><i data-hud="torch" hidden></i></div>
+      <div class="hud-features" data-hud="features" aria-label="Feature status" role="status" hidden></div>
       <div class="hud-fps" data-hud="fps"></div>
       <div class="hud-perf" data-hud="perf" hidden><canvas class="hud-perf__graph" data-hud="perf-graph" width="200" height="60"></canvas><div class="hud-perf__legend" data-hud="perf-legend"></div></div>
       <div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
@@ -103,6 +106,7 @@ export class HudView {
     this.healthBox = required(root, '.hud-health');
     this.armourBox = required(root, '[data-hud="armour-box"]'); this.armour = required(root, '[data-hud="armour"]'); this.armourFill = required(root, '[data-hud="armour-fill"]');
     this.items = required(root, '[data-hud="items"]'); this.stims = required(root, '[data-hud="stims"]'); this.chutes = required(root, '[data-hud="chutes"]'); this.torch = required(root, '[data-hud="torch"]');
+    this.featureStrip = required(root, '[data-hud="features"]');
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i')); this.unseen = required(root, '[data-hud="unseen"]');
     this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
@@ -131,6 +135,7 @@ export class HudView {
     setHidden(this.chutes, state.parachutes <= 0); if (state.parachutes > 0) setText(this.chutes, `CHUTE ×${state.parachutes}`);
     setHidden(this.torch, !state.torch); if (state.torch) setText(this.torch, 'TORCH · L');
     setHidden(this.items, state.stims <= 0 && state.parachutes <= 0 && !state.torch);
+    this.renderFeatures(state);
     setText(this.cash, formatMoney(state.money)); setText(this.weaponName, state.weaponName);
     setText(this.ammo, state.melee ? '—' : String(state.ammo)); setText(this.reserve, state.melee ? '' : `/ ${state.reserve}`); setHidden(this.reload, !state.reloading);
     this.wanted.forEach((star, index) => star.classList.toggle('is-hot', index < state.wanted)); const unseen = Boolean(state.unseen);
@@ -165,6 +170,21 @@ export class HudView {
     this.renderPerfChart(state);
     setHidden(this.cheats, !state.cheatsOn); setHidden(this.crosshair, !state.crosshair);
     setHidden(this.scope, !state.scope); if (state.scope) setText(this.scopeZoom, state.scope.zoom);
+  }
+
+  /** The one HUD strip every lazily loaded feature shares (fuel gauge, golf card, lay-by clock). The
+   *  DOM is rebuilt only when the rendered text actually changes, so an idle chip costs nothing. */
+  private renderFeatures(state: HudState): void {
+    const entries = state.features ?? [];
+    setHidden(this.featureStrip, entries.length === 0);
+    if (entries.length === 0) { this.featureKey = ''; return; }
+    const key = entries.map((entry) => `${entry.id}${entry.label}${entry.value ?? ''}${entry.fill ?? ''}${entry.warn ? 1 : 0}`).join('');
+    if (key === this.featureKey) return;
+    this.featureKey = key;
+    this.featureStrip.innerHTML = entries.map((entry) => {
+      const bar = entry.fill === undefined ? '' : `<span class="hud-features__track"><em style="width:${clampPercent(entry.fill)}%"></em></span>`;
+      return `<i class="${entry.warn ? 'is-warn' : ''}"><b>${entry.label}</b>${entry.value ? `<span>${entry.value}</span>` : ''}${bar}</i>`;
+    }).join('');
   }
 
   /** Feed the scrolling game-loop chart one column per frame and keep its colour legend in step. Gated by the

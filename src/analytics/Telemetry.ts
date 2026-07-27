@@ -1,5 +1,5 @@
 export type AnalyticsMode = 'loading' | 'menu' | 'singleplayer' | 'multiplayer' | 'paused';
-export type AnalyticsEventType = 'session_end' | 'player_death' | 'mission_start' | 'mission_complete' | 'mission_fail' | 'vehicle_collision' | 'aircraft_crash' | 'technical_error';
+export type AnalyticsEventType = 'session_end' | 'player_death' | 'mission_start' | 'mission_complete' | 'mission_fail' | 'vehicle_collision' | 'aircraft_crash' | 'technical_error' | 'feature_event';
 
 const BROWSER_ID_KEY = 'groot-theft-bakkie-anonymous-browser-id';
 const HEARTBEAT_MS = 30_000;
@@ -161,6 +161,16 @@ export class TelemetryClient {
       eventId: this.randomId(), sessionId: this.sessionId, mode, visible,
       elapsedSeconds, fps: fps ? Math.round(fps * 10) / 10 : undefined, quality,
     });
+  }
+
+  /** The ONE event catalogue for lazily loaded features (src/features/). Six features would otherwise
+   *  each negotiate their own AnalyticsEventType member and their own server payload branch; instead
+   *  every feature emits `feature_event` with its id, and the server bounds the payload once. */
+  feature(id: string, event: string, props: { detail?: string; value?: number } = {}): void {
+    const data: Record<string, string | number> = { feature: id, event };
+    if (props.detail !== undefined) data.detail = props.detail;
+    if (props.value !== undefined) data.value = props.value;
+    this.record('feature_event', data);
   }
 
   record(type: Exclude<AnalyticsEventType, 'technical_error' | 'session_end'>, data: Record<string, string | number> = {}): void {

@@ -15,15 +15,21 @@ import { fileURLToPath } from 'node:url';
 import { DISTRICT_RADIUS_M } from './config';
 import { fetchElevationGrid } from './elevation';
 import { applyNameOverrides, loadNameOverrides } from './emit';
-import { fetchBuildingCounts, fetchCape, fetchOsm, fetchStations } from './overpass';
+import { fetchBuildingCounts, fetchCape, fetchOsm, fetchStations, fetchVaal, fetchVaalShore } from './overpass';
 import { buildPreviewHtml } from './preview';
-import { extractDistrictNodes, processOsm } from './process';
+import { extractDistrictNodes, inBbox as inCropBbox, processOsm } from './process';
+import { parseVaal } from './vaal';
+import { parseVaalShore } from './vaalshore';
+
+const round2 = (v: number): number => Math.round(v * 100) / 100;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Output paths default to the committed map + preview; MAPGEN_OUT / MAPGEN_PREVIEW_OUT let a
 // determinism harness (or a dry run) emit elsewhere without clobbering the approved map.
 const OUTPUT_JSON = process.env.MAPGEN_OUT ?? resolve(HERE, '../../src/world/generated/joburg-map.json');
 const OUTPUT_PREVIEW = process.env.MAPGEN_PREVIEW_OUT ?? join(HERE, 'preview.html');
+/** Build artifact, not shipped: the real shoreline stretch the dam fit cut (see measure-orientation). */
+const OUTPUT_SOURCE_STRETCH = join(HERE, 'source-stretch.json');
 
 async function main(): Promise<void> {
   const refresh = process.argv.includes('--refresh');
@@ -34,19 +40,45 @@ async function main(): Promise<void> {
   const cape = await fetchCape({ refresh });
   console.log(`[mapgen] Cape seaboard extract: ${cape.data.elements.length} elements${cape.fromCache ? ' (from cache)' : ''}`);
 
+  // The real Vaal Dam shoreline, ~70 km south of the city box. Cached and committed: this fetch
+  // must never run on a re-build (see overpass.ts fetchVaal).
+  const vaalExtract = await fetchVaal({ refresh });
+  console.log(`[mapgen] Vaal Dam extract: ${vaalExtract.data.elements.length} elements${vaalExtract.fromCache ? ' (from cache)' : ''}`);
+  const vaal = parseVaal(vaalExtract.data);
+  for (const line of vaal.log) console.log(`[mapgen] ${line}`);
+
+  // The real north-shore infrastructure: Deneysville, Refengkgotso, Misty Bay, Vaal Marina and the
+  // marinas. Second one-off cached-and-committed query; like fetchVaal it must never run on rebuild.
+  const shoreExtract = await fetchVaalShore({ refresh });
+  console.log(`[mapgen] Vaal north-shore extract: ${shoreExtract.data.elements.length} elements${shoreExtract.fromCache ? ' (from cache)' : ''}`);
+  const vaalShore = parseVaalShore(shoreExtract.data);
+  for (const line of vaalShore.log) console.log(`[mapgen] ${line}`);
+
   const osmStations = await fetchStations({ refresh });
   console.log(osmStations
     ? `[mapgen] rail stations: ${osmStations.nodes.length} nodes${osmStations.fromCache ? ' (from cache)' : ''}`
     : '[mapgen] rail stations: OSM fetch unavailable — synthesizing every stop');
 
-  const districtNodes = extractDistrictNodes(data);
-  const [elevation, buildingCounts] = [
+  // Building counts are cached under a key that embeds EVERY district's lat/lon in order, so
+  // the query must keep seeing the FULL district list or it misses the cache and re-queries.
+  // Crop the returned counts instead, with the same predicate process.ts uses — a silent
+  // misalignment here attaches the wrong building density to every district and is invisible
+  // in the JSON.
+  const allDistrictNodes = extractDistrictNodes(data);
+  const [elevation, allBuildingCounts] = [
     await fetchElevationGrid(),
-    await fetchBuildingCounts(districtNodes, DISTRICT_RADIUS_M),
+    await fetchBuildingCounts(allDistrictNodes, DISTRICT_RADIUS_M),
   ];
+  const keepDistrict = allDistrictNodes.map((d) => inCropBbox(d.lat, d.lon));
+  const buildingCounts = allBuildingCounts ? allBuildingCounts.filter((_, i) => keepDistrict[i]) : null;
+  const keptDistricts = keepDistrict.filter(Boolean).length;
+  if (buildingCounts && buildingCounts.length !== keptDistricts) {
+    throw new Error(`building-count crop misaligned: ${buildingCounts.length} counts for ${keptDistricts} districts`);
+  }
+  console.log(`[mapgen] crop: ${keptDistricts}/${allDistrictNodes.length} place nodes inside CROP_BBOX`);
 
   const overrides = loadNameOverrides();
-  const { map, log } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, stations: osmStations?.nodes ?? null });
+  const { map, log, damSourceWindow } = processOsm(data, { elevation, buildingCounts, protectedNames: Object.keys(overrides), cape: cape.data, vaal, vaalShore, stations: osmStations?.nodes ?? null });
   for (const line of log) console.log(`[process] ${line}`);
 
   const finalMap = applyNameOverrides(map, overrides);
@@ -58,6 +90,9 @@ async function main(): Promise<void> {
 
   writeFileSync(OUTPUT_PREVIEW, buildPreviewHtml(finalMap));
   console.log(`[emit] wrote ${OUTPUT_PREVIEW}`);
+
+  writeFileSync(OUTPUT_SOURCE_STRETCH, JSON.stringify(damSourceWindow.map((p) => [round2(p.x), round2(p.z)])));
+  console.log(`[emit] wrote ${OUTPUT_SOURCE_STRETCH} (${damSourceWindow.length} real shoreline pts)`);
 
   const s = finalMap.stats;
   console.log(

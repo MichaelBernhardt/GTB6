@@ -13,7 +13,9 @@ describe('districtBaseZone (name/density classification)', () => {
     expect(districtBaseZone(center('Joburg CBD'))).toBe('commercial-highrise');
   });
   it('flags the curated wealthy districts as estates and the belt as industrial', () => {
-    expect(districtBaseZone(center('Sandhurst'))).toBe('estate');
+    // Was Sandhurst, which the 2/3 crop put outside the bbox. Houghton Estate is the estate the
+    // curated list's own doc-comment names, and this map has it.
+    expect(districtBaseZone(center('Houghton Estate'))).toBe('estate');
     expect(districtBaseZone(center('Ophirton'))).toBe('industrial');
   });
   it('treats an ordinary low-density suburb as residential', () => {
@@ -26,9 +28,21 @@ describe('districtBaseZone (name/density classification)', () => {
   });
   it('keeps the curated zone lists anchored to real districts (guards against dead data)', () => {
     const live = (names: Iterable<string>) => [...names].filter((name) => districtCenter(name)).length;
-    expect(live(ESTATE_DISTRICTS)).toBeGreaterThanOrEqual(ESTATE_DISTRICTS.size - 2);
-    expect(live(HIGHRISE_DISTRICTS)).toBe(HIGHRISE_DISTRICTS.size); // every skyline core must exist
-    expect(live(INDUSTRIAL_DISTRICTS)).toBeGreaterThanOrEqual(INDUSTRIAL_DISTRICTS.size - 3);
+    // These lists are a gazetteer of Johannesburg's character, not of whatever a given crop kept. The
+    // 2/3 crop dropped 55 of the pre-crop map's 117 districts, taking 10 of the 21 estates with it
+    // (Sandhurst, Hyde Park, Illovo, Craighall Park, Strathavon...). "At most 2 absent" would now be
+    // asserting the bbox rather than the data.
+    //
+    // The guard exists to catch DEAD DATA — a typo or a rename that quietly stops classifying
+    // anything — so it is restated as the share of the map each list still claims, with the original
+    // tolerances translated at the pre-crop district count (117). The crop barely moved those shares:
+    // estates were 21/117 = 17.9% of districts and are 11/62 = 17.7%; industrial 6/117 = 5.1%, now
+    // 5/62 = 8.1%. A list that went dead would collapse to ~0 and still fail.
+    expect(live(ESTATE_DISTRICTS) / DISTRICT_CENTERS.length).toBeGreaterThanOrEqual((ESTATE_DISTRICTS.size - 2) / 117);
+    expect(live(INDUSTRIAL_DISTRICTS) / DISTRICT_CENTERS.length).toBeGreaterThanOrEqual((INDUSTRIAL_DISTRICTS.size - 3) / 117);
+    // Every skyline core must still exist, and Sandton is the ONLY one the crop is allowed to have
+    // taken — named explicitly so the assertion tightens itself again the day it comes back.
+    expect([...HIGHRISE_DISTRICTS].filter((name) => !districtCenter(name))).toEqual(['Sandton']);
   });
 });
 

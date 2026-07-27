@@ -27,6 +27,7 @@ import {
   WATER_POLYGONS,
   nearestDistrict,
   pointInAnyPolygon,
+  REAL_FOOTPRINTS,
   RAILWAY_STATION_SITES,
   type GeneratedRoad,
 } from './mapData';
@@ -289,12 +290,54 @@ function commitBuilding(
   return true;
 }
 
+/** OSM `building=*` value -> the zone/style a real dam-shore footprint masses as. */
+const REAL_FOOTPRINT_ZONE: Record<string, Exclude<Zone, 'none'>> = {
+  house: 'residential', detached: 'residential', residential: 'residential', bungalow: 'residential',
+  semidetached_house: 'residential', apartments: 'residential', hut: 'residential', cabin: 'residential',
+  commercial: 'commercial-strip', retail: 'commercial-strip', hotel: 'commercial-strip',
+  industrial: 'industrial', warehouse: 'industrial', shed: 'industrial', service: 'industrial',
+  boathouse: 'industrial', garage: 'industrial', garages: 'industrial', farm_auxiliary: 'rural',
+  barn: 'rural', farm: 'rural', church: 'commercial-strip', school: 'commercial-strip',
+};
+const REAL_FOOTPRINT_STYLE: Record<string, BuildingStyle> = {
+  commercial: 'mixed-use', retail: 'mixed-use', hotel: 'mixed-use', church: 'mixed-use', school: 'mixed-use',
+  industrial: 'industrial', warehouse: 'industrial', shed: 'industrial', boathouse: 'industrial',
+  garage: 'industrial', garages: 'industrial', service: 'industrial',
+  barn: 'rural', farm: 'rural', farm_auxiliary: 'rural',
+};
+/** A real footprint stands where it really stands, so it is allowed nearer a kerb than a
+ *  procedural mass — real plots front the street closely and the shore lanes are narrow. It still
+ *  has to clear the carriageway itself, which CityGen.test asserts citywide at 1 unit. */
+const REAL_FOOTPRINT_ROAD_CLEARANCE = 1.2;
+
 const INFILL_ACCEPT: Partial<Record<Exclude<Zone, 'none'>, number>> = {
   'commercial-highrise': 0.55,
   'commercial-strip': 0.45,
   residential: 0.35,
   industrial: 0.3,
 };
+
+/**
+ * The REAL dam-shore buildings, laid down BEFORE the procedural frontage pass.
+ *
+ * These are traced OSM footprints from Deneysville, Refengkgotso and the marina frontage
+ * (mapData.REAL_FOOTPRINTS) — the actual houses, the actual boat sheds, at their actual positions
+ * and angles. They go first so they win every conflict: the occupancy grid then makes the
+ * procedural pass infill AROUND the real village instead of laying a synthetic suburb over it.
+ * Everything else (road/railway clearance, unbuilt polygons, the world edge) is checked exactly as
+ * for a procedural mass, so a real footprint that would sit in the water or across a street is
+ * still refused rather than shipped.
+ */
+function layoutRealFootprints(occ: Occupancy, out: GeneratedBuilding[]): void {
+  for (const f of REAL_FOOTPRINTS) {
+    const zone: Exclude<Zone, 'none'> = REAL_FOOTPRINT_ZONE[f.kind] ?? 'residential';
+    const style = REAL_FOOTPRINT_STYLE[f.kind] ?? 'suburban';
+    // A real footprint is already the right size and angle; it is never shrunk to fit, only refused.
+    if (footprintRoadClearance(f.x, f.z, f.w, f.d, f.heading) < REAL_FOOTPRINT_ROAD_CLEARANCE) continue;
+    if (footprintRailwayClearance(f.x, f.z, f.w, f.d, f.heading) < RAILWAY_BUILDING_CLEARANCE) continue;
+    commitBuilding({ x: f.x, z: f.z, width: f.w, depth: f.d }, f.heading, zone, 120, style, f.x, f.z, 7, occ, out);
+  }
+}
 
 function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, walk: WalkPoint[], occ: Occupancy, out: GeneratedBuilding[]): void {
   const half = road.width / 2;
@@ -367,6 +410,7 @@ export function* parcelStages(): Generator<number> {
   if (parcelCells) return;
   const out: GeneratedBuilding[] = [];
   const occ = new Occupancy();
+  layoutRealFootprints(occ, out);
   const stride = Math.max(60, Math.ceil(GENERATED_ROADS.length / 24));
   for (let ri = 0; ri < GENERATED_ROADS.length; ri++) {
     if (ri > 0 && ri % stride === 0) yield ri / GENERATED_ROADS.length;

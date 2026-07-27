@@ -4,7 +4,7 @@
  * lights. The layout (footprint, dressing picks, non-overlapping table arrangement) is the PURE
  * venuePlan in beachfront.ts so vitest asserts it headlessly; this file only turns a plan into kit
  * geometry. Registered in the catalog, so the crafted strips place them explicitly and ModelScatter
- * reuses the same models on any beach frontage (Sea Point) — and anywhere else a zone wants them.
+ * reuses the same models on any water frontage (Vaalpunt) — and anywhere else a zone wants them.
  */
 import * as THREE from 'three';
 import { Kit, M, paint, type BuildOptions, type BuiltModel } from './kit';

@@ -16,6 +16,15 @@ window.__qa = (() => {
   const STEP = 0.15; // sim step used for fast-forwarding
   const state = { mission: null, log: [], findings: [], shots: [] };
 
+  /**
+   * Metres per world unit, read from the committed map's own stats and stashed on the window by
+   * mission-harness.py before this file is installed — never hard-coded, so the tier bands below
+   * stay honest across any future re-crop or rescale. The design bands are real DISTANCES; units
+   * and metres stopped being interchangeable when the 2/3 crop moved the scale off ~1 m/unit.
+   */
+  const METRES_PER_UNIT = window.__metresPerUnit;
+  if (!METRES_PER_UNIT) throw new Error('__qa: window.__metresPerUnit not set — the driver must publish the map scale before installing the harness');
+
   // SwiftShader dies under the continuous background RAF render of a 3.2M-triangle scene across a
   // long sweep. The harness drives via direct sim steps and doesn't need the live view, so suppress
   // the renderer entirely (restored only for a screenshot). This removes the crash source.
@@ -191,15 +200,23 @@ window.__qa = (() => {
         result.roadDistance = Math.round(routeLength(pts));
         // Distance TIERS (owner: effort must scale with the perceived goal — not one flat cap that
         // makes every job feel like the end of a short street). Per-mission band; a declared journey
-        // objective is exempt (the sanctioned long hauls). Numbers are road distance ceilings.
+        // objective is exempt (the sanctioned long hauls).
+        //
+        // The bands are REAL DISTANCES — how far the player actually drives — and they were authored
+        // on the 19,200-unit map, where 1 unit was 0.9914 m and units and metres were interchangeable.
+        // They are not any more: the 2/3 crop rescaled to 1.322 m per unit, so comparing a unit count
+        // against them silently loosened every ceiling by a third (a "standard" 1,800 became 2,380 m
+        // of driving). Converted at the live map scale, so this stays honest at any future rescale.
         const script = window.__scripts?.[g.missions.active?.id] ?? {};
         const journeys = script.journeys ?? [];
         const isJourney = journeys.includes(objIndex());
         const tier = script.tier ?? 'standard';
-        const CEIL = { favour: 1000, standard: 1800, substantial: 2800, journey: 99999 };
-        const ceil = CEIL[tier] ?? 1800;
-        if (isJourney || tier === 'journey') { note(`journey objective: ${result.roadDistance}u to "${destination.label}"`); }
-        else if (result.roadDistance > ceil) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u — over the ${tier} tier ceiling (${ceil}u); re-anchor or re-tier`);
+        const CEIL_M = { favour: 1000, standard: 1800, substantial: 2800, journey: 99999 };
+        const ceilMetres = CEIL_M[tier] ?? 1800;
+        const metres = Math.round(result.roadDistance * METRES_PER_UNIT);
+        result.roadMetres = metres;
+        if (isJourney || tier === 'journey') { note(`journey objective: ${result.roadDistance}u (${metres}m) to "${destination.label}"`); }
+        else if (metres > ceilMetres) finding('fail', `route to "${destination.label}" is ${result.roadDistance}u (${metres}m) — over the ${tier} tier ceiling (${ceilMetres}m); re-anchor or re-tier`);
         result.tier = tier;
         if (o.timeLimit && !isJourney) {
           // Bumbling pace (owner): 50% of cruise, with a 1.25x wrong-turn detour on the route.
@@ -211,7 +228,9 @@ window.__qa = (() => {
           // block away — he walked it in a minute). The clean signal is a TRIVIALLY SHORT route wearing
           // a journey-scale timer: the copy sells a trip the geometry doesn't deliver. (A generous timer
           // on a genuinely long route isn't this defect, so key on absolute route length, not a ratio.)
-          if (result.roadDistance < 700 && o.timeLimit >= 400) finding('fail', `promise/geometry: "${o.text}" is a ${result.roadDistance}u hop but carries a ${o.timeLimit}s journey-scale timer — the copy promises a trip the geometry doesn't deliver; lengthen the drive (declare journeys[]) or cut the timer`);
+          // "A block away" is a real-world judgement, so the 700 is METRES like the tier bands above —
+          // in units it called a 924 m walk trivial on this map's scale.
+          if (metres < 700 && o.timeLimit >= 400) finding('fail', `promise/geometry: "${o.text}" is a ${result.roadDistance}u (${metres}m) hop but carries a ${o.timeLimit}s journey-scale timer — the copy promises a trip the geometry doesn't deliver; lengthen the drive (declare journeys[]) or cut the timer`);
         }
         // The other direction: a genuine journey-length drive with no timer and no en-route beat is a
         // long empty haul. Declared journeys should carry a timer or a wave/beat to justify the distance.
@@ -277,6 +296,7 @@ window.__qa = (() => {
         }
         if (o.conditions?.drivingTrain || o.conditions?.onTrain) return 'needs:train';
         if (o.conditions?.inPlane) return 'needs:plane';
+        if (o.conditions?.feature) return `needs:feature:${o.conditions.feature}`;
         if (!marker) return 'stuck:no-target';
         let sim = -1;
         const near = Math.hypot(marker.position.x - focus().x, marker.position.z - focus().z) < 45 && !g.activeVehicle;
@@ -660,10 +680,34 @@ window.__qa = (() => {
     });
   }
 
+  /**
+   * GENERIC feature driver — the resolver behind `needs:feature:<id>`.
+   *
+   * The owner's gate is that player-facing content ships only after an in-engine machine
+   * playthrough, and "tests green" is explicitly not "playable". Rather than teach this harness
+   * about golf or petrol, each feature ships its own driver as `qa(action, args)` on its loaded
+   * system; this function loads the feature through the REAL lazy path and hands the drive over.
+   * A feature is therefore machine-playtestable without editing the harness core.
+   *
+   * Returns the usual verdict vocabulary: 'ok', 'stuck:<why>', 'failed:<why>'.
+   */
+  async function feature(id, action = 'run', args = {}) {
+    if (!g.features) return 'stuck:no-feature-host';
+    const verdict = await g.features.qa(id, action, args);
+    note(`feature ${id} ${action} -> ${verdict}`);
+    if (typeof verdict === 'string' && verdict.startsWith('stuck:')) finding('fail', `feature "${id}" could not be driven: ${verdict}`);
+    return verdict;
+  }
+
+  /** What the game says E would do right now, for either ladder — the string the HUD shows. */
+  function featurePrompt(context = 'foot') {
+    return g.features?.offer(context)?.prompt ?? '';
+  }
+
   // capture the last failure reason for reporting
   const origFail = g.missions.fail.bind(g.missions);
   g.missions.fail = (reason) => { state.lastFail = reason; return origFail(reason); };
 
   suppressRender();
-  return { g, state, prep, accept, audit, resolve, trainTo, flyTo, bailAndLand, breachYard, escapeYard, shot, step, note, finding, objIndex };
+  return { g, state, prep, accept, audit, resolve, feature, featurePrompt, trainTo, flyTo, bailAndLand, breachYard, escapeYard, shot, step, note, finding, objIndex };
 })();

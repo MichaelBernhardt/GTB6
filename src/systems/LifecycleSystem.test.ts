@@ -217,10 +217,18 @@ describe('lifecycle simulation', () => {
     const city = makeCity();
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const lifecycle = new LifecycleSystem(city, population);
-    const farView = { x: 2000, z: 2000, dirX: 0, dirZ: 1 }; // everything is >500u away
     const victim = population.pedestrians.find((p) => isAmbientPedestrian(p));
     const wreck = population.traffic[0];
     if (!victim || !wreck) throw new Error('fixture missing');
+    // Stand a full streaming ring away FROM THE BODIES, measured, instead of at a bare (2000, 2000):
+    // the re-crop moved the CBD onto that literal (CBD_CENTER is now 2050, 2067), so the "far"
+    // viewpoint ended up 83u from the city centre, in plain sight of the corpse, and it was never
+    // cleaned. Deriving it means the fixture cannot silently rot again — and the assertion below
+    // proves the premise rather than assuming it.
+    const farView = { x: Math.max(victim.group.position.x, wreck.group.position.x) + 2000, z: Math.max(victim.group.position.z, wreck.group.position.z) + 2000, dirX: 0, dirZ: 1 };
+    for (const [label, body] of [['corpse', victim], ['wreck', wreck]] as const) {
+      expect(Math.hypot(body.group.position.x - farView.x, body.group.position.z - farView.z), label).toBeGreaterThan(500);
+    }
     victim.takeDamage(999); wreck.wreck();
     for (let i = 0; i < CLEANUP_REAL_SECONDS - 20; i++) lifecycle.update(1, 12, farView, new Set());
     expect(population.pedestrians).toContain(victim); // too fresh

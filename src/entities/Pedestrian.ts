@@ -23,6 +23,12 @@ export class Pedestrian {
   police = false;
   contact = false;
   carGuard = false;
+  /** A placed fixture owned by a feature (src/features/): a dealer on his corner, a protester, a
+   *  forecourt attendant. Excluded from the ambient census, from despawn recycling and from taxi
+   *  hailing — but otherwise an ordinary ped: damageable, frightenable, muggable.
+   *  Do NOT reach for `contact` instead. It makes the ped invulnerable AND Game.updateContactPresence
+   *  hides any contact ped whose name isn't a live mission giver — the #1 "my NPC doesn't appear" trap. */
+  scripted = false;
   hailing = false;
   aggressive = false;
   mugged = false;
