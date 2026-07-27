@@ -442,7 +442,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /**
    * Hide the partitions standing between the player and where the camera is. The boom is 9.5 units
    * and not ours to shorten, so in a room narrower than that the camera is in the next room along —
-   * and a wall in front of the lens is exactly the black screen this feature shipped with. The
+   * and a wall in front of the lens is exactly the black screen this feature shipped with.
+   *
    * The camera's own pose is not on the feature API, so it is ESTIMATED: CameraController puts the
    * camera at focus + (sin yaw, cos yaw)·boom, and on foot the player faces AWAY from it (Player
    * turns toward its camera-relative move direction), so the camera sits a boom behind the player's

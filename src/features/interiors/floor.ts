@@ -12,7 +12,7 @@
  * the player actually lands on, and reports how many walkable tiles it could not reach. Furniture is
  * placed under that same test: a chair that would seal a doorway is refused before it is ever
  * returned, in a fixed order, so the refusal is as deterministic as the placement. `plan.unreachable`
- * is 0 or the floor is a bug, and interiors.test.ts asserts exactly that over hundreds of floors.
+ * is 0 or the floor is a bug, and floor.test.ts asserts exactly that over hundreds of real floors.
  *
  * WHAT IS NOT SOLVED HERE, deliberately: nothing about the world. A floor plan does not know where
  * the building stands, how high off the ground it is, or which way it faces. That keeps this file

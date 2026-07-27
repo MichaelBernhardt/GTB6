@@ -101,7 +101,7 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   for (const run of plan.walls) buildWall(run, height, { box, partitionMaterial, jamb, partitions });
 
   // ---- the core: the same shaft on every storey, which is why they line up ----------------------
-  buildStair(core.stair, height, { box, solid, keep, group, mat });
+  buildStair(core.stair, height, { box, solid, keep, group, mat }, partitions);
   // A stair has to stop somewhere: there is no storey over the top one and no basement under the
   // ground, so the half flight that would lead nowhere is shuttered. Drawn here and clamped against
   // in interiors.ts from the SAME rectangle, so a locked stair looks locked and behaves locked.
@@ -206,7 +206,7 @@ interface Kit {
  *
  * See interiors.ts stairHeight() for the matching altitude function: this draws it, that walks it.
  */
-function buildStair(shaft: Rect, height: number, kit: Kit): void {
+function buildStair(shaft: Rect, height: number, kit: Kit, partitions: Partition[]): void {
   const { box, solid } = kit;
   const tread = solid(0x77726a, 0.9);
   const nose = solid(0x3b4143, 0.7);
@@ -224,8 +224,16 @@ function buildStair(shaft: Rect, height: number, kit: Kit): void {
     }
   }
   // The spine wall between the two flights: it is what stops you stepping sideways off a half
-  // landing, and it is the thing that makes the shaft read as a stairwell rather than a ramp.
-  box(0.12, height, shaft.d * 0.62, solid(0x8d877c, 0.9), shaft.x, height / 2, shaft.z - shaft.d * 0.19);
+  // landing, and it is the thing that makes the shaft read as a stairwell rather than a ramp. It is
+  // also full height in a shaft barely wider than the player, so it goes in the cull set — step off
+  // a flight and the boom is INSIDE the stairwell, and an unculled spine wall fills the frame.
+  const spineZ = shaft.z - shaft.d * 0.19; const spineD = shaft.d * 0.62;
+  const spine = box(0.12, height, spineD, solid(0x8d877c, 0.9), shaft.x, height / 2, spineZ);
+  partitions.push({
+    mesh: spine,
+    minX: shaft.x - 0.12, maxX: shaft.x + 0.12,
+    minZ: spineZ - spineD / 2, maxZ: spineZ + spineD / 2,
+  });
   // A handrail down the outside of each flight.
   for (const sign of [-1, 1]) {
     box(0.07, 0.07, shaft.d, solid(0x4a5254, 0.5), shaft.x + sign * (halfW - 0.08), STOREY_HEIGHT * (sign > 0 ? 0.25 : 0.75) + 1.0, shaft.z);

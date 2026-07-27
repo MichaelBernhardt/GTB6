@@ -127,8 +127,9 @@ const cells = new Map<string, InteriorDoor[]>();
  * The map pins Ponte Tower, and the parcel pass puts whatever the zoning asked for on that spot. On
  * the current map that is a three-storey block, and calling a three-storey block Ponte Tower is a
  * lie the player catches in four seconds. So an anchor states the least it will accept: the tallest
- * opening building within `radius` of the pin that is at least `storeys` tall. If nothing there
- * qualifies, the landmark simply has no door and the ordinary doors around it still do.
+ * opening building in the pin's own chunk cell, within `radius` of it, that is at least `storeys`
+ * tall. If nothing there qualifies the landmark simply has no door, and the ordinary doors around it
+ * still do.
  */
 function anchors(): { at: { x: number; z: number }; name: string; radius: number; storeys: number }[] {
   const out: { at: { x: number; z: number }; name: string; radius: number; storeys: number }[] = [];
