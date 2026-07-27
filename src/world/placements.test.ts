@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CBD_CENTER, districtAt, distanceToRoadEdge, MAP_WORLD_SIZE, ROAD_EDGE_CAP } from './mapData';
+import { CBD_CENTER, districtAt, distanceToRoadEdge, MAP_WORLD_SIZE, METRES_PER_UNIT, ROAD_EDGE_CAP } from './mapData';
 import {
   ARMS_SITE,
   CANDICE_START,
@@ -33,6 +33,17 @@ const HALF = MAP_WORLD_SIZE / 2;
 // Distance thresholds authored on the 6000u map scale with the footprint (roads/blocks are ~6x further
 // apart at 36000u). Real kerb clearances (edge, pad-fronts-building) are NOT scaled.
 const SCALE = MAP_WORLD_SIZE / 6000;
+/**
+ * One unit of the original 6000u / 2.94 m-per-unit layout, expressed in today's units — the same `P`
+ * placements.ts scales its authored offsets and search radii by.
+ *
+ * SCALE (world size / 6000) and P agreed while the map only ever grew in units at a fixed 2.94 m/u.
+ * The 2/3 crop broke that: it made the world SMALLER in units (1.63x the 6000u map) while making each
+ * unit BIGGER in metres (2.22x), so SCALE now under-reads real distance by 27%. Where an assertion is
+ * checking a bound that placements.ts itself enforces in P, it has to be written in P or it asserts a
+ * promise the code never made.
+ */
+const BLOCK = 2.94 / METRES_PER_UNIT;
 const inBounds = ({ x, z }: { x: number; z: number }): boolean => Math.abs(x) < HALF && Math.abs(z) < HALF;
 
 describe('data-driven anchors', () => {
@@ -107,7 +118,10 @@ describe('data-driven anchors', () => {
     const named = SPAWN_SIGN_JUNCTIONS.filter((junction) => parody.test(junction.roadA) || parody.test(junction.roadB));
     expect(named.length).toBeGreaterThanOrEqual(3);
     for (const junction of SPAWN_SIGN_JUNCTIONS) {
-      expect(Math.hypot(junction.x - PLAYER_SPAWN[0], junction.z - PLAYER_SPAWN[2])).toBeLessThan(160 * SCALE);
+      // SPAWN_SIGN_JUNCTIONS is filtered at 150 * P by placements.ts; 160 keeps the original 6.7%
+      // slack over that cap. In SCALE units the same 160 came to 261u — TIGHTER than the 334u filter,
+      // so the test was demanding something the module does not guarantee.
+      expect(Math.hypot(junction.x - PLAYER_SPAWN[0], junction.z - PLAYER_SPAWN[2])).toBeLessThan(160 * BLOCK);
     }
   });
 

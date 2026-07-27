@@ -37,6 +37,12 @@ def boot(browser, port):
         if page.evaluate("() => !!window.__game"):
             break
     page.evaluate("() => { window.__game.startGame(true); return 0; }")
+    # Publish the map's own scale before installing the harness: the tier bands are real distances,
+    # and units stopped meaning metres when the 2/3 crop rescaled the world. Read from the live map
+    # module so a future re-crop needs no edit here (and so the JS and Python edges cannot disagree).
+    page.metres_per_unit = page.evaluate(
+        "async () => { const md = await import('/src/world/mapData.ts');"
+        " window.__metresPerUnit = md.METRES_PER_UNIT; return md.METRES_PER_UNIT; }")
     # NB: never let evaluate() return the __qa object itself — serializing the Game graph hangs Playwright
     page.evaluate("(src) => { new Function(src)(); return typeof window.__qa; }", HARNESS_JS)
     page.evaluate("() => { const q = window.__qa; q.g.update(1/60); return 0; }")
@@ -128,6 +134,11 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
         # edges are law). A mission's longest routed leg must meet its tier floor; ceilings alone let a
         # mission implode below its band. Applies per-mission (the longest leg), not per-objective, so
         # short legs like "escape the perimeter" don't false-fail. Journeys are exempt (already long).
+        #
+        # The floors are METRES, as the owner's own "~20m" framing says. They were authored when the
+        # map ran at 0.9914 m/unit and the two were interchangeable; at 1.322 m/unit they are not, and
+        # comparing units against them false-failed The Audition at 1,138 u — which is 1,504 m of real
+        # driving, comfortably past the 1,388 m the 'substantial' floor was actually asking for.
         FLOOR = {'favour': 250, 'standard': 700, 'substantial': 1400, 'journey': 0}
         tier = page.evaluate(f"() => window.__scripts?.['{mission}']?.tier ?? 'standard'")
         journeys = page.evaluate(f"() => window.__scripts?.['{mission}']?.journeys ?? []") or []
@@ -140,9 +151,10 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
         # mission that already carries a sanctioned journey leg (a long drive by construction).
         objs = page.evaluate(f"() => (window.__qa.g.missions.missions.find(m => m.id === '{mission}')?.objectives ?? []).map(o => ({{ kind: o.kind, hidden: !!o.hidden, carrier: !!(o.conditions && (o.conditions.onTrain || o.conditions.drivingTrain || o.conditions.inPlane)), stealth: !!(o.conditions && o.conditions.undetected) }}))") or []
         non_drive = bool(journeys) or any(o['kind'] == 'follow' or o['carrier'] or o['stealth'] for o in objs) or (bool(objs) and objs[0]['hidden'])
-        if routed and floor and max(routed) < floor and not non_drive:
+        longest_metres = round(max(routed) * page.metres_per_unit) if routed else 0
+        if routed and floor and longest_metres < floor and not non_drive:
             all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail',
-                'what': f'tier floor: longest routed leg is {max(routed)}u but the {tier} floor is {floor}u — the mission collapsed below its band (make the drive do real work)'})
+                'what': f'tier floor: longest routed leg is {max(routed)}u ({longest_metres}m) but the {tier} floor is {floor}m — the mission collapsed below its band (make the drive do real work)'})
 
 
 def run(port: int, out: Path, missions: list[str]) -> int:

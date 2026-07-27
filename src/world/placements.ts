@@ -25,6 +25,7 @@ import {
   type SignalJunctionDef,
 } from './mapData';
 import { BEACHFRONT_PADS } from './beachfront';
+import { toNewWorld } from './coordTransform';
 
 export interface PlacedSite {
   x: number;
@@ -49,6 +50,23 @@ export interface ReservedPad { x: number; z: number; radius: number; }
  * Small kerb clearances (clearance/ownRadius/minEdge) are real geometry and stay unscaled.
  */
 const P = 2.94 / METRES_PER_UNIT;
+
+/**
+ * SEARCH SEEDS AUTHORED IN THE OLD 19,200-UNIT WORLD.
+ *
+ * Everything else in this file is CBD/district/landmark-relative and follows a re-crop for free.
+ * These five are raw coordinates, and after the 2/3 crop + 0.75x rescale the raw literals point at
+ * empty veld: three fell outside the world square altogether and the nearest carriageway to any of
+ * them was 100–1,060 u away, so `bestKerbSpot` silently fell through to its last-resort "nearest
+ * vertex of the named road" branch and dumped the site wherever that happened to be.
+ *
+ * `toNewWorld` is the exact old->new similarity (src/world/coordTransform.ts), so wrapping the
+ * literal keeps its provenance, re-derives it against whatever map is committed, and — because the
+ * transform is a projection change, not a resize — preserves REAL-WORLD METRES exactly
+ * (k = 0.74997 units, metres-per-unit rises by 1/k). Every mission-tier distance these seeds imply
+ * is therefore the same drive it always was.
+ */
+const authored = toNewWorld;
 
 // ---- Claims-aware kerbside search ------------------------------------------------
 
@@ -89,8 +107,33 @@ interface SpotQuery {
   minRoadWidth?: number;
 }
 
+/**
+ * Roads whose name an anchor asked for and the map does not have. A named-road anchor used to
+ * THROW here, which meant a re-crop that dropped one street took down this whole module — and
+ * with it src/world/City.ts and 38 test files — at import time. A missing street is a content
+ * problem, not a structural one: warn once, drop the name constraint and place the site on
+ * whatever road is nearest its intended point. Only a map with no usable road at all still
+ * throws, because that really is a broken map.
+ */
+const missingRoads = new Set<string>();
+export function missingAnchorRoads(): string[] { return [...missingRoads].sort(); }
+
+const ROAD_NAMES = new Set(GENERATED_ROADS.map((road) => road.name));
+
 /** Walks the matching polylines around `near` (samples every ~8u) and returns the clearest kerbside spot. */
-function bestKerbSpot(query: SpotQuery): KerbSpot {
+function bestKerbSpot(request: SpotQuery): KerbSpot {
+  let query = request;
+  if (query.name !== undefined && !ROAD_NAMES.has(query.name)) {
+    if (!missingRoads.has(query.name)) {
+      missingRoads.add(query.name);
+      console.warn(`[placements] no road named "${query.name}" in this map — anchoring to the nearest road instead`);
+    }
+    // Widen the reach too: the intended point was authored beside a street that is gone, so the
+    // nearest surviving carriageway can be a block or three away.
+    const rest: SpotQuery = { ...query };
+    delete rest.name;
+    query = { ...rest, searchRadius: (query.searchRadius ?? 200) * 3 };
+  }
   const { near, clearance, ownRadius, searchRadius = 200 } = query;
   const effRadius = searchRadius * P; // reach scales with the footprint so named roads stay findable
   const searchSq = effRadius * effRadius;
@@ -135,7 +178,7 @@ function bestKerbSpot(query: SpotQuery): KerbSpot {
   if (!best) scan(Math.min(query.minEdge, 0.2), false); // relax edge clearance
   if (!best) { // last resort: nearest vertex of the matching road, claims ignored — but simplification
     // pins surviving vertices AT junctions, so prefer one whose spot doesn't sit in a crossing road
-    // (the Sip ’n Save landed dead-centre in the Victoria Road / Madiba Meander intersection this way).
+    // (the Sip ’n Save landed dead-centre in the Dam Wal Road / Madiba Meander intersection this way).
     let bestAny: KerbSpot | undefined; let bestAnyD = Infinity; let bestCleanD = Infinity;
     for (const road of GENERATED_ROADS) {
       if (query.name !== undefined && road.name !== query.name) continue;
@@ -153,14 +196,26 @@ function bestKerbSpot(query: SpotQuery): KerbSpot {
     }
     best ??= bestAny;
   }
-  if (!best) throw new Error(`placements: no road matches ${query.name ?? 'any'}`);
+  // Reachable only when GENERATED_ROADS itself is empty or degenerate — every named lookup has
+  // already fallen back to "any road" above.
+  if (!best) throw new Error(`placements: the map has no usable road for an anchor near (${near.x.toFixed(0)}, ${near.z.toFixed(0)})`);
   claim(best.x, best.z, ownRadius);
   return best;
 }
 
+/**
+ * Search seed taken from a district centre, so anchors follow the map through a re-crop instead
+ * of being frozen at coordinates authored against an older footprint. The literal is only the
+ * fallback for a district the current map does not carry.
+ */
+function near(district: string, fallback: MapPt): MapPt {
+  const centre = districtCenter(district as Parameters<typeof districtCenter>[0]);
+  return centre ? { x: centre.x, z: centre.z } : fallback;
+}
+
 /** Storefront site: pad near the kerb, building behind it, door facing the road. */
-function shopSite(roadName: string, near: MapPt, buildingClearance: number, padClearance: number, buildingRadius: number, minEdge: number): ShopSite {
-  const spot = bestKerbSpot({ name: roadName, near, clearance: buildingClearance, ownRadius: buildingRadius, minEdge });
+function shopSite(roadName: string, near: MapPt, buildingClearance: number, padClearance: number, buildingRadius: number, minEdge: number, searchRadius?: number): ShopSite {
+  const spot = bestKerbSpot({ name: roadName, near, clearance: buildingClearance, ownRadius: buildingRadius, minEdge, searchRadius });
   const toRoadX = spot.roadX - spot.x; const toRoadZ = spot.roadZ - spot.z;
   const toRoadLength = Math.hypot(toRoadX, toRoadZ) || 1;
   const pad = {
@@ -229,14 +284,25 @@ export interface BottleStore { name: string; sign: string; site: ShopSite; }
 export const BOTTLE_STORES: BottleStore[] = [
   // CBD & inner ring
   { name: 'Tops-ish Bottle Store', sign: 'TOPS-ISH', site: shopSite('Commissioner Street', { x: CBD_CENTER.x + 58 * P, z: CBD_CENTER.z + 14 * P }, 8, 3.6, 7.5, 3) },
-  { name: 'Maboneng Dop Shop', sign: 'DOP SHOP', site: shopSite('Maritzburg Street', { x: 4838, z: 5010 }, 8, 3.6, 7.5, 3) },
-  { name: 'Melville Bottle Bar', sign: 'DRANK', site: shopSite('Main Road', { x: -1150, z: 1870 }, 8, 3.6, 7.5, 3) },
-  // Outlying towns
-  { name: 'Rivonia Cellars', sign: 'CELLARS', site: shopSite('South Road', { x: 5444, z: -7670 }, 8, 3.6, 7.5, 3) },
-  { name: 'Randburg Drankwinkel', sign: 'LIQUORS', site: shopSite('Republic Road', { x: -2650, z: -6920 }, 8, 3.6, 7.5, 3) },
-  // Coast promenade (inland side of the beachfront road so they sit on land, not sand)
-  { name: 'Sea Point Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Victoria Road', { x: -7360, z: -2689 }, 8, 3.6, 7.5, 3) },
-  { name: 'Green Point Grog', sign: 'GROG', site: shopSite('Madiba Meander', { x: -5100, z: -2560 }, 8, 3.6, 7.5, 3) },
+  { name: 'Maboneng Dop Shop', sign: 'DOP SHOP', site: shopSite('Maritzburg Street', authored({ x: 4838, z: 5010 }), 8, 3.6, 7.5, 3) },
+  { name: 'Melville Bottle Bar', sign: 'DRANK', site: shopSite('Main Road', authored({ x: -1150, z: 1870 }), 8, 3.6, 7.5, 3) },
+  // Northern suburbs. These two were pinned to South Road (Sandton) and Republic Road
+  // (Randburg) at hard-coded points 2,700 units past the north world edge; the 2/3 crop removed
+  // both streets and bestKerbSpot threw at module import, which took down this file, City.ts and
+  // 38 test files with it. Anchored on district centres now, so a re-crop moves them with the
+  // map instead of stranding them — the brands keep their suburb names, which is how a bottle
+  // store off the Randburg road is named anyway.
+  { name: 'Rivonia Cellars', sign: 'CELLARS', site: shopSite('Oxfraud Road', near('Dunkeld', { x: 1824, z: -3997 }), 8, 3.6, 7.5, 3) },
+  { name: 'Randburg Drankwinkel', sign: 'LIQUORS', site: shopSite('Beyers Naudé Drive', near('Montgomery Park', { x: -2220, z: -2086 }), 8, 3.6, 7.5, 3) },
+  // Dam promenade (inland side of the shore road so they sit on land, not in the water). The two
+  // fallbacks are the districts' own measured centres on the committed map: the previous literals
+  // were left over from the synthetic sea shoreline and put Groenpunt 4.4 km away on the WRONG side
+  // of the map, which would have been invisible until the day a re-crop dropped the district.
+  // Dam Wal Road is a 14 km hull along the whole dam shore and the Vaalpunt district centre now
+  // sits on the widest part of the reach, where the road's own nodes are 600 u apart and every kerb
+  // spot within the default 200 u reach lands in a junction. A wider search finds real kerb.
+  { name: 'Vaalpunt Sip ’n Save', sign: 'SIP N SAVE', site: shopSite('Dam Wal Road', near('Vaalpunt', { x: -3209, z: 40 }), 8, 3.6, 7.5, 3, 900) },
+  { name: 'Groenpunt Grog', sign: 'GROG', site: shopSite('Madiba Meander', near('Groenpunt', { x: -4234, z: 2042 }), 8, 3.6, 7.5, 3) },
 ];
 
 /** Stored vehicle pose inside the garage, nose pointing out the door. */
@@ -265,7 +331,11 @@ export const COURIER_DEPOT = walkSpot('Commissioner Street', { x: CBD_CENTER.x +
 const braamfontein = districtCenter('Braamfontein') ?? CBD_CENTER;
 const newtown = districtCenter('Newtown') ?? CBD_CENTER;
 const hillbrow = districtCenter('Hillbrow') ?? CBD_CENTER;
-const sandton = districtCenter('Sandton') ?? CBD_CENTER;
+// The 2/3 crop cut Sandton and Sandhurst off the top of the map. Dunkeld is the northernmost
+// surviving northern-suburbs district, so it inherits the "far north, moneyed" role Sandton played
+// as a fallback anchor. Falling through to CBD_CENTER instead would have quietly parked the padstal
+// in the middle of town.
+const northernSuburbs = districtCenter('Dunkeld') ?? districtCenter('Parktown') ?? CBD_CENTER;
 const zooLake = WATER_POLYGONS.find((water) => /zoo/i.test(water.name));
 const zooLakeCenter: MapPt = zooLake ? { x: zooLake.cx, z: zooLake.cz } : { x: braamfontein.x, z: braamfontein.z };
 
@@ -374,7 +444,7 @@ export const KELVIN_FENCE_RADIUS = 26;
 /** The Ophirton feeder substation Sindi works (Pull the Plug, Catch Them Cutting, The Switch all key
  *  off it). Sited so it's a real ~1-1.3km night drive from BOTH Solly (SE) and Sindi (NW) — above the
  *  standard floor for all three, not the ~260m collapse a Solly-adjacent spot gave Pull the Plug. */
-export const SUBSTATION_SPOT = walkSpotNear({ x: 2424, z: 5314 }, 4, 6);
+export const SUBSTATION_SPOT = walkSpotNear(authored({ x: 2424, z: 5314 }), 4, 6);
 export const SUBSTATION_BREAKER: MapPt = { x: SUBSTATION_SPOT.x + 6, z: SUBSTATION_SPOT.z + 4 };
 /** Sindi's flat on the Braamfontein edge (~0.7km, central to her three jobs: the Park Station drop,
  *  the Ophirton feeder, and the Constitution Hill handover). */
@@ -404,21 +474,21 @@ export const PONTE_FORECOURT = walkSpotNear(PONTE_POINT, 3, 5);
 
 /** Constitution Hill handover (Carcass) and the coastal pier (Pier Pressure). */
 export const CON_HILL_SPOT = walkSpotNear(landmarkPoint('Constitution Hill', { x: hillbrow.x, z: hillbrow.z }), 3, 5);
-export const PIER_POINT = landmarkPoint('Seepunt Pier', { x: CBD_CENTER.x, z: CBD_CENTER.z });
+export const PIER_POINT = landmarkPoint('Vaalpunt Slipway', { x: CBD_CENTER.x, z: CBD_CENTER.z });
 export const PIER_SPOT: MapPt = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 65 * P, z: CBD_CENTER.z + 135 * P }, 3, 5);
 /** Ouma se Padstal doorstep (long-haul side run). */
-export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: sandton.x, z: sandton.z });
+export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: northernSuburbs.x, z: northernSuburbs.z });
 // The farm-stall run is the arc's one sanctioned SCENIC JOURNEY (optional side piece): a real drive
 // out over the northern ridge, ~6.6km each way, which the 900s timers and "over the mountain" copy
 // already describe. Round 2 crushed it to a block away (Eish-loff Street) — a promise/geometry lie.
-export const PADSTAL_SPOT: MapPt = walkSpot('Houghton Drive', { x: 4896, z: 1149 }, 3, 5);
+export const PADSTAL_SPOT: MapPt = walkSpot('Houghton Drive', authored({ x: 4896, z: 1149 }), 3, 5);
 
 /** Sindi's evidence van, parked on a CBD-north side street just below Braamfontein (~0.9km from
  *  Solly). Road-agnostic kerb anchored in the dense grid: a named road detoured to 3.3km, and a
  *  raw Braamfontein-edge point sat in a road-sparse block that snapped 1.4km off-target. */
 export const EVIDENCE_VAN_SPOT = kerbVehicleSpot(undefined, { x: CBD_CENTER.x - 10 * P, z: CBD_CENTER.z - 45 * P });
 /** The cartel's diesel tanker on the industrial belt (The Audition). */
-export const TANKER_SPOT = kerbVehicleSpot('De Villiers Street', { x: 2985, z: 4403 }); // ~1.5km careful haul from Kelvin Yard (the audition is the drive)
+export const TANKER_SPOT = kerbVehicleSpot('De Villiers Street', authored({ x: 2985, z: 4403 })); // ~1.5km careful haul from Kelvin Yard (the audition is the drive)
 
 /** Cartel stash sweep (Carcass): three lock-ups across the belt. */
 export const STASH_SPOTS: MapPt[] = [
@@ -433,7 +503,10 @@ export const DIARY_SPOTS: Array<{ page: number; x: number; z: number }> = (() =>
   const conHill = landmarkPoint('Constitution Hill', { x: hillbrow.x, z: hillbrow.z });
   const parkStation = landmarkPoint('Park Station', { x: CBD_CENTER.x, z: CBD_CENTER.z });
   const airportPt = landmarkPoint('O.R. Tambourine Regional', AIRPORT_APRON);
-  const sandtonStation = stationPoint('Sandton Station');
+  // Sandton Station went with Sandton in the crop, and stationPoint() falls back to CBD_CENTER —
+  // which would have stacked page 11 on top of the CBD (and inside a building) instead of sending
+  // the player to the far end of a rail line. Dunkeld Station is the surviving northern terminus.
+  const northStation = stationPoint('Dunkeld Station');
   return [
     { page: 3, x: tower.x + 8, z: tower.z + 5 },
     { page: 4, x: conHill.x - 7, z: conHill.z + 6 },
@@ -443,7 +516,7 @@ export const DIARY_SPOTS: Array<{ page: number; x: number; z: number }> = (() =>
     { page: 8, x: PADSTAL_POINT.x - 5, z: PADSTAL_POINT.z + 7 },
     { page: 9, x: PIER_POINT.x + 4, z: PIER_POINT.z - 6 },
     { page: 10, x: airportPt.x + 15, z: airportPt.z + 10 },
-    { page: 11, x: sandtonStation.x - 10, z: sandtonStation.z + 7 },
+    { page: 11, x: northStation.x - 10, z: northStation.z + 7 },
     { page: 12, x: KELVIN_GATE_SPOT.x - 8, z: KELVIN_GATE_SPOT.z + 10 },
   ];
 })();
@@ -594,5 +667,5 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: PONTE_SPOT.x, z: PONTE_SPOT.z, radius: 30 },
   { x: HILLBROW_TOWER_SPOT.x, z: HILLBROW_TOWER_SPOT.z, radius: 14 },
   { x: WATER_TOWER_SPOT.x, z: WATER_TOWER_SPOT.z, radius: 10 },
-  ...BEACHFRONT_PADS, // Kaapstad Quay pier + seafront venue strips + beach clutter (beachfront.ts)
+  ...BEACHFRONT_PADS, // Deneys Quay pier + dam-front venue strips + beach clutter (beachfront.ts)
 ];

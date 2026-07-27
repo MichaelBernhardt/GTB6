@@ -9,8 +9,22 @@ describe('streetlamp placement (buildStreetlampPoints)', () => {
   it('lines the whole generated map, far denser than the old wide-road-only selection', () => {
     const lamps = buildStreetlampPoints(ROAD_NETWORK);
     // The old rule (index % 7 === 1 && width >= 9) picked ~3.8k anchors and skipped every narrow road;
-    // arc-length staggering across all 774km of road puts a lamp roughly every STREETLAMP_SPACING.
-    expect(lamps.length).toBeGreaterThan(15000);
+    // arc-length staggering puts a lamp roughly every STREETLAMP_SPACING of eligible carriageway.
+    //
+    // That claim is now asserted directly against the network instead of through a count pinned to the
+    // 19,200-unit map (818,695 units of road then, 384,856 now — a flat 15,000 floor would just be
+    // asserting the map's size). Measuring the eligible arc length and dividing by the spacing is a
+    // far tighter test anyway: it catches a road class silently going dark, which a floor never could.
+    let eligibleUnits = 0;
+    for (const road of ROAD_NETWORK) {
+      if (road.width < STREETLAMP_MIN_WIDTH) continue; // only sub-road dirt tracks stay dark
+      for (let index = 0; index < road.points.length - 1; index += 1) {
+        eligibleUnits += Math.hypot(road.points[index + 1]!.x - road.points[index]!.x, road.points[index + 1]!.z - road.points[index]!.z);
+      }
+    }
+    const predicted = eligibleUnits / STREETLAMP_SPACING;
+    expect(lamps.length).toBeGreaterThan(predicted * 0.95); // every eligible road lit end to end
+    expect(lamps.length).toBeLessThan(predicted * 1.05); // and never double-lit
     expect(lamps.length).toBeLessThan(40000); // still a sane instance budget for the chunk system
   });
 

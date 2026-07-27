@@ -4,6 +4,7 @@ import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
 import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
+  BEACH_POLYGONS,
   COASTLINE,
   COAST_CORRIDOR,
   distanceToRailwayCorridor,
@@ -29,9 +30,9 @@ import {
   RAILWAY_STATION_SITES,
   WATER_POLYGONS,
   type MapPolygon,
-  type MapPt,
 } from './mapData';
-import { OCEAN_Y } from './coast';
+import { damSignedDistance } from './damField';
+import { beachBands, farWaterOutline, isSandZ, OCEAN_Y, shoreColourAt, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
 import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
@@ -151,30 +152,84 @@ export const SNOWLINE_METRES = 2400;
 export const RIDGE_BASE_METRES = 1730;
 /** In-game Y where snow begins (fbm-dithered in the ground shader; full cover one band higher). */
 export const SNOW_Y = (SNOWLINE_METRES - RIDGE_BASE_METRES) * TERRAIN_RIDGE_SCALE;
-/** Coastline vertices sorted by z, for a per-z land/sea boundary lookup: the synthetic shore meanders
- *  across x by ~1.6 km, so a single global coast x would sink real coastal land (roads, beach) below sea
- *  level. terrain crosses 0 at coastlineXAt(z); seaward of it the ground sinks into the seabed slope. */
-const COAST_BY_Z: readonly MapPt[] = COASTLINE.length ? [...COASTLINE].sort((a, b) => a.z - b.z) : [];
-
-/** The coastline x at world z (interpolated), i.e. where the land meets the sea on this east-west line. */
-function coastlineXAt(z: number): number {
-  const pts = COAST_BY_Z; const n = pts.length;
-  if (n === 0) return Number.NEGATIVE_INFINITY;
-  if (z <= pts[0]!.z) return pts[0]!.x;
-  if (z >= pts[n - 1]!.z) return pts[n - 1]!.x;
-  let lo = 0; let hi = n - 1;
-  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid]!.z <= z) lo = mid; else hi = mid; }
-  const a = pts[lo]!; const b = pts[hi]!;
-  return a.x + (b.x - a.x) * ((z - a.z) / (b.z - a.z || 1));
-}
+// The per-latitude shoreline lookup (COAST_BY_Z / coastlineXAt) is GONE. It answered "which x is the
+// shore at this z", which is a question only a straight coast has an answer to; on a drowned dendritic
+// valley it returned one arbitrary crossing out of the thirty a scanline makes, and every consumer
+// inherited that. The terrain moved to the signed distance field one pass ago; buildBeach was the last
+// caller and now shares the same field, so the envelope has no callers left.
 
 /** Coastal beach/seabed profile: the sand's landward crest sits just above sea level and the ground slopes
  *  continuously down to SEA_FLOOR_Y at the map's west edge — never flat, so the waving ocean can't z-fight
  *  it, and it's a sandy sea floor all the way out (for diving later). */
 export const BEACH_TOP_Y = 1.5;
 export const SEA_FLOOR_Y = -30;
-/** How far inland (east of the OSM coastline) the sand's landward crest sits. */
-export const BEACH_INLAND = 40;
+/**
+ * How far inland (east of the mapped shoreline) the drawdown strand's landward crest sits.
+ *
+ * 40 units used to be the whole exposed shore, and on a single linear ramp from +BEACH_TOP_Y at
+ * the crest to SEA_FLOOR_Y at the map edge the coloured banding above the waterline collapsed into
+ * an average of TWELVE units — sixteen metres — so a reservoir shore whose whole point is its
+ * bathtub ring read on foot as a featureless plain. The strand is now the width a real drawdown
+ * strand is (this reservoir swung from near-empty in 2025 to over 102% in 2026), and the profile
+ * below is split so that width is spent above the water rather than under it.
+ */
+export const BEACH_INLAND = 132;
+/** Run (units) the bed uses to fall from the waterline to SEA_FLOOR_Y at latitudes where the shoreline
+ *  is already west of the map edge — there is no in-map run left to spend, and a wall reads as a cliff. */
+export const BED_OFFMAP_RUN = 620;
+/** How far past the waterline the drawn bed sheet carries where the shore sits west of the map edge,
+ *  so the strand and its lip are drawn rather than dropping into empty space. */
+export const BED_OFFMAP_OVERHANG = 900;
+/** How far past the world square (in z) the bed sheet runs, so standing in a dry corner and looking
+ *  along the shore does not show the sheet's own end. */
+export const BED_Z_OVERRUN = 600;
+/**
+ * How far inland of the strand crest the bed sheet fades into the surrounding veld and stops.
+ *
+ * The sheet used to run from the map edge to a per-latitude crest line — a solid pale sheet 1,600
+ * units wide down the whole west side, drawn over ridges, over dry veld and over latitudes the dam
+ * never reaches (at z = -4,400 the reservoir is 800 units off-map and the sheet still covered the
+ * NW corner). On foot that was a featureless pan from the shore to the farm corridor, which is the
+ * cheap half of the "blackness" complaint: not darkness, ABSENCE — no grass, no scrub, no foliage
+ * colour, one flat tone to the horizon. It is now clipped to the shore band by the signed distance
+ * field, so everything further inland is ordinary ground again, and the last stretch of it fades to
+ * VELD_TONE so the clip line is a colour match rather than a seam.
+ */
+export const SHORE_VELD_BLEND = 190;
+/**
+ * WHERE THE PAINTED STRAND STOPS, at the resorts and everywhere else.
+ *
+ * BEACH_INLAND is the TERRAIN: 132 units of ground climbing out of the water, and it is not moving
+ * (the profile, the venue crests and the bake all hang off it). What was wrong is that the SHEET was
+ * painted as exposed lake bed for that whole width plus SHORE_VELD_BLEND behind it — 322 units, 430
+ * metres, of grit and bathtub ring round every bay in the reservoir. Measured in-engine it is the
+ * single largest thing in most shore frames, it is why Grooteiland reads as a pan rather than as an
+ * island, and it is why the west band reads as a pale plain rather than as veld.
+ *
+ * So the paint is separated from the profile. The natural shore now shows ~60 units of exposed bank
+ * and greens over the next 60; the RESORT bands keep the full BEACH_INLAND + SHORE_VELD_BLEND, so
+ * Misty Bay and Leboya Baai still have the wide warm beaches the owner picked the place for. The
+ * geometry is untouched either way: same lattice, same vertices, same heights — only the colours
+ * and how far east the sheet is worth drawing.
+ */
+export const STRAND_PAINT_INLAND = 60;
+/** Width (units) over which the natural strand's paint fades into VELD_TONE. */
+export const STRAND_PAINT_BLEND = 60;
+/** Vertices per side of the drawn ground mesh. The bed sheet reuses this lattice EXACTLY (same x/z,
+ *  same heights) so the two surfaces cannot interpenetrate — see buildBeach. */
+export const GROUND_SEGMENTS = 256;
+/** Lift of the bed sheet above the ground mesh. With the lattices shared the only disagreement left
+ *  is which way each cell's diagonal runs, so this only has to beat the cell twist — but it also has
+ *  to stay under the water's own 0.045, or the sheet's lip would stand proud of the waterline. */
+export const BED_SHEET_LIFT = 0.022;
+/** Where the terrain crosses the water surface, relative to the mapped shoreline (units, negative
+ *  = seaward). Zero would put the rendered waterline exactly on the polyline; a few units seaward
+ *  keeps the ocean's lapping edge over sand rather than over grass. */
+export const WATERLINE_OFFSET = -6;
+/** How far inland of the strand crest the coastal profile blends into the city's own relief
+ *  (units). Measured from the WATERLINE, not from a fixed x, so the blend band follows the coast
+ *  into every inlet and around every headland instead of cutting a straight seam across them. */
+export const COAST_BLEND = 520;
 /** How far the ocean surface reaches past the shoreline into the beach, so waves lap up and down the slope. */
 export const BEACH_WATER_INLAND = 60;
 
@@ -188,24 +243,42 @@ function landRelief(x: number, z: number): number {
   return regional * TERRAIN_REGIONAL_SCALE + local * TERRAIN_LOCAL_SCALE + ridgeMetresAt(x, z) * TERRAIN_RIDGE_SCALE;
 }
 
-function analyticTerrainHeightAt(x: number, z: number): number {
+/**
+ * The smooth terrain profile, before the drawn mesh's grid is captured. Exported so the coast tests
+ * can ask whether a given off-map point is above or below the waterline without a renderer.
+ *
+ * THE SEAM. The coastal profile used to be a function of x alone (distance east of a per-latitude
+ * shoreline) and the inland blend ran from the sand crest to a fixed corridor line, so the imported
+ * shore and the city's own relief met on a straight north-south seam. It is now a function of the
+ * SIGNED DISTANCE TO THE WATERLINE, and the blend to full relief happens over a fixed band measured
+ * from that same waterline. The consequences are all the ones we wanted:
+ *   - a ridge peninsula between two drowned valleys is land, because it is outside the polygon;
+ *   - Grooteiland is land, because an island is a hole in the polygon;
+ *   - the transition band follows the coast rather than cutting across it, so there is no seam;
+ *   - the bed slopes away from the waterline in every direction, so no shore is ever a wall.
+ */
+export function analyticTerrainHeightAt(x: number, z: number): number {
   if (!HAS_ELEVATION) return 0;
   const eastX = COAST_CORRIDOR?.eastX;
-  // Fast path — well inland of any coast: full relief, no per-z coastline lookup.
+  // Fast path — well inland of any coast: full relief, no distance-field lookup.
   if (eastX === undefined || x >= eastX) return landRelief(x, z);
-  const beachTopX = coastlineXAt(z) + BEACH_INLAND; // landward crest of the sand
-  // Seaward of the sand crest: one continuous sand slope from +BEACH_TOP_Y down to SEA_FLOOR_Y at the map
-  // edge. Always sloped, never flat — the ocean surface laps it without z-fighting, and it's a sandy sea
-  // floor all the way out.
-  if (x < beachTopX) {
-    const westEdge = -WORLD_SIZE / 2;
-    const t = beachTopX > westEdge ? Math.min(1, (beachTopX - x) / (beachTopX - westEdge)) : 0;
-    return BEACH_TOP_Y + (SEA_FLOOR_Y - BEACH_TOP_Y) * t;
+  // Distance to the waterline, positive on land. WATERLINE_OFFSET keeps the rendered lapping edge
+  // a few units over sand rather than over grass, exactly as before.
+  const d = damSignedDistance(x, z) + WATERLINE_OFFSET;
+  if (d <= 0) {
+    // THE BED. Falls away from the waterline to SEA_FLOOR_Y over a fixed run, in every direction —
+    // around an island, into an inlet, out past the map edge. No per-latitude special case left.
+    const t = Math.min(1, -d / BED_OFFMAP_RUN);
+    return OCEAN_Y + (SEA_FLOOR_Y - OCEAN_Y) * t;
   }
-  // Coastal land: rise from the sand crest (+BEACH_TOP_Y) up to full inland relief at the city edge. The
-  // relief contribution is floored at 0 so the mean-zero relief's negative lobes can't drag the immediate
-  // hinterland below the waterline and flood the beach; genuine relief (hills) still comes through.
-  const f = (x - beachTopX) / (eastX - beachTopX);
+  if (d < BEACH_INLAND) {
+    // THE STRAND. The whole BEACH_INLAND width is spent above the water, so the drawdown ring reads.
+    const t = 1 - d / BEACH_INLAND;
+    return BEACH_TOP_Y + (OCEAN_Y - BEACH_TOP_Y) * t;
+  }
+  // THE BLEND. Crest -> full inland relief over COAST_BLEND units of distance from the waterline.
+  // Floored at 0 so the mean-zero relief's negative lobes cannot drag the hinterland under water.
+  const f = Math.min(1, (d - BEACH_INLAND) / COAST_BLEND);
   return BEACH_TOP_Y * (1 - f) + Math.max(0, landRelief(x, z)) * f;
 }
 
@@ -607,6 +680,9 @@ export class City {
   private colliderCellSize = 48;
   private collidersIndexed = 0;
   private buildingMaterial = new Map<string, THREE.MeshStandardMaterial>();
+  /** Current lit-window emissive level, so a facade material created mid-flight is born already lit
+   *  (see setFacadeGlow). The day/night cycle owns the value; City only remembers it. */
+  private facadeGlow = 0;
   private asphalt = createGeneratedSurfaceTexture('/textures/asphalt-gpt.jpg', 'asphalt', 1);
   private concrete = createGeneratedSurfaceTexture('/textures/concrete-gpt.jpg', 'concrete', 10);
   private foundationMaterial = new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 });
@@ -620,6 +696,12 @@ export class City {
   private farmSoil = createGrassTexture('soil', 1 / 6); // tilled-field earth for farmland polygons
   private grassWind?: { advance(dt: number): void };
   private sand = createSurfaceTexture('sand', 14);
+  /** The dam bed's own map — near-neutral, so the vertex palette in coast.ts reaches the screen
+   *  unmultiplied instead of being re-tinted golden by the beach sand texture (see C5).
+   *  Repeat 1, NOT 14: buildBeach writes uv = world/9, so 14 tiled the grain every 64 cm and the
+   *  whole shore averaged out to one flat fill — from a roof at Misty Bay the beach had literally no
+   *  texture in it, which is most of why the band read as a painted desert rather than as ground. */
+  private damBed = createSurfaceTexture('dambed', 1);
   private facades = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeTexture(style));
   private facadeGlows = Array.from({ length: FACADE_VARIANTS }, (_, style) => createFacadeGlowTexture(style));
   private roofMaterial = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86, metalness: 0.08 });
@@ -811,6 +893,31 @@ export class City {
   /** Shared facade materials (buildings are merged per material): the day/night cycle animates their emissiveIntensity for lit windows. */
   facadeMaterials(): THREE.MeshStandardMaterial[] { return [...this.buildingMaterial.values()]; }
 
+  /**
+   * Window glow for every facade material there is, and for every facade material there ever will be.
+   *
+   * D4, "large empty unlit areas". Facade materials are created LAZILY, one per `style-facadeIndex`
+   * pair, the first time a chunk containing that pair is streamed in — and DayNight used to take a
+   * one-time snapshot of the map at construction and walk that array every frame. Anything whose
+   * style/variant pair had not been built by the time the day/night cycle came up therefore had its
+   * emissiveIntensity left at the 0 it was constructed with, permanently: dark windows at midnight,
+   * for good, however long you stood there.
+   *
+   * And the map is EMPTY when DayNight is constructed — building chunks stream in afterwards — so the
+   * snapshot was a zero-length array and the loop over it did nothing at all. Counted in-engine
+   * (tools/qa/shore/facades.py): 0 facade materials at boot, still 0 after two teleports, 19 by the
+   * time the tour reached the third town. Not one window in the world had ever lit up. On the dam
+   * shore at 22:00, pixels over 120/255 go from 0.01% of the frame to 2.85% once the level is pushed
+   * instead of the list walked; those towns had been rendering as unlit black slabs.
+   *
+   * Storing the level instead of the list fixes both halves: existing materials are updated here, and
+   * a material born later is constructed already carrying it (see the facade cache in buildBuilding).
+   */
+  setFacadeGlow(intensity: number): void {
+    this.facadeGlow = intensity;
+    for (const material of this.buildingMaterial.values()) material.emissiveIntensity = intensity;
+  }
+
   streetlightLampsXZ(): Float32Array { return this.infrastructure.lampsXZ; }
 
   setStreetlightGlow(factor: number): void { this.infrastructure.setLampGlow(factor); }
@@ -991,7 +1098,7 @@ export class City {
     // A tessellated grass sheet displaced by the heightgrid — the relief every wired system samples via
     // terrainHeightAt. Segment pitch (~70u at 256) oversamples the ~140u heightgrid cells for smooth slopes.
     // Flagged `far` so it never culls: the always-visible earth that carries to the horizon behind the fog.
-    const SEGMENTS = 256;
+    const SEGMENTS = GROUND_SEGMENTS;
     const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, SEGMENTS, SEGMENTS);
     geometry.rotateX(-Math.PI / 2); // into the XZ plane, +Y up — vertex (x, 0, z) now maps straight to world XZ
     const pos = geometry.attributes.position as THREE.BufferAttribute;
@@ -1740,67 +1847,135 @@ export class City {
 
   // ---- Coast: ocean fancy-water + beach/rock shore --------------------------
 
-  /** The Atlantic seaboard graft: a dark seabed, the ocean registered as one premium far-water site
+  /** The Vaalpunt Dam graft: a dark bed, the reservoir registered as one premium far-water site
    *  (planar mirror on high, cheaper tiers below), a drivable sand/rock shore along the waterline, and
    *  a small harbour apron. Built before the static merge so seabed/shore/apron chunk-cull with the rest;
    *  the ocean surface itself is a live water site (see buildWaterBodies' premium dams). */
   private buildCoast(): void {
     if (!OCEAN_POLYGON) return;
-    const ocean = OCEAN_POLYGON;
 
     // The ocean surface: one huge premium water site. Its shape is shoved BEACH_WATER_INLAND past the
     // shoreline so the water laps up INTO the sloping sand — as the waves rise and fall, the waterline runs
     // in and out over the slope like a tide. The sandy sea floor is the terrain itself (see buildBeach and
     // analyticTerrainHeightAt's continuous slope), so there's no flat seabed plane to z-fight the swell.
+    //
+    // The RENDERED outline is not the mapgen polygon: mapgen closes the dam ~4.2 km past the west edge,
+    // which is inside the fog AND inside the camera's far plane, so the closure showed from the shore as
+    // a dead-level water/sky line. farWaterOutline keeps the real shoreline and carries the far side out
+    // past the far plane instead (see coast.ts). OCEAN_POLYGON itself is untouched — areas, stats and the
+    // minimap still read the surveyed polygon.
+    // width/depth/centre stay the SURVEYED dam: they drive the planar mirror's proximity throttle
+    // (Water.reflectorShouldRender), and a bounding rect stretched to the horizon would hold the
+    // mirror at full rate from every street in the city.
+    const ocean = OCEAN_POLYGON;
     this.waterSites.push({
       kind: 'ocean', x: ocean.cx + BEACH_WATER_INLAND, y: OCEAN_Y, z: ocean.cz,
       width: ocean.maxX - ocean.minX, depth: ocean.maxZ - ocean.minZ,
-      shape: ocean.points.map((point) => ({ x: point.x + BEACH_WATER_INLAND, z: point.z })),
+      shape: farWaterOutline(COASTLINE, WORLD_SIZE / 2, WATER_HORIZON_CLEARANCE, WATER_HORIZON_BLEND, BEACH_WATER_INLAND),
     });
 
     this.buildBeach();
     this.buildBeachfront();
   }
 
-  /** The sandy sea floor: a single draped sheet from the sand crest out to the west map edge, stuck to the
-   *  terrain (which slopes from +BEACH_TOP_Y down to SEA_FLOOR_Y). Replaces the old flat seabed + shore
-   *  ribbon — a continuous slope the ocean laps over without z-fighting, and a real bottom to dive to. */
+  /** The dam bed and its drawdown strand: a single draped sheet from the grass line out to the west
+   *  map edge, stuck to the terrain (which slopes from +BEACH_TOP_Y down to SEA_FLOOR_Y). Vertex-
+   *  coloured rather than uniformly golden — silt below the waterline, a bleached bathtub ring right
+   *  above it, pale drawdown grit above that, and proper resort sand ONLY inside the beach z-bands
+   *  (see coast.ts shoreColourAt). A reservoir that swings between near-empty and 102% full looks
+   *  like this; a seaside does not. */
   private buildBeach(): void {
-    if (COASTLINE.length < 2) return;
-    const westEdge = -WORLD_SIZE / 2;
-    const zs = COASTLINE.map((point) => point.z);
-    const zMin = Math.min(...zs); const zMax = Math.max(...zs);
-    const CELL = 45; const COLS = 48;
-    const rows = Math.max(1, Math.ceil((zMax - zMin) / CELL));
-    const dzRow = (zMax - zMin) / rows;
-    const positions: number[] = []; const uvs: number[] = [];
-    for (let r = 0; r <= rows; r++) {
-      const z = zMin + r * dzRow;
-      const crest = coastlineXAt(z) + BEACH_INLAND + 3; // a touch past the crest so the sand tucks under the grass
-      for (let c = 0; c <= COLS; c++) {
-        const x = westEdge + (c / COLS) * (crest - westEdge); // columns fan from the map edge to the meandering crest
-        positions.push(x, terrainHeightAt(x, z) + 0.03, z); uvs.push(x / 9, z / 9);
-      }
+    if (COASTLINE.length < 2 || !OCEAN_POLYGON) return;
+    const bands = beachBands(BEACH_POLYGONS);
+    const half = WORLD_SIZE / 2;
+    // THE SHEET NOW LIVES ON THE GROUND MESH'S OWN LATTICE. It used to be a 45 x 26 unit fan between
+    // the map edge and a per-latitude crest, i.e. a second triangulation of the same terrain at a
+    // different pitch — so wherever the ground was convex the sheet's chords cut the corner and sank
+    // beneath it, and the golden DRY-VELD ground poked up through the shore in hard-edged wedges.
+    // That, not the palette, is what "the shore renders golden" was: measured in-engine, the pixel at
+    // the player's feet on the strand was rgb(216,196,125), hue 47, saturation 0.42 — and repainting
+    // every vertex of the sheet did not change it by one unit, because the sheet was not what you were
+    // looking at. Sharing the lattice makes the two surfaces agree at every vertex, so a small lift
+    // is enough to settle the order for good.
+    const step = WORLD_SIZE / GROUND_SEGMENTS;
+    // The painted band is WIDE at the two resorts and NARROW everywhere else (see STRAND_PAINT_INLAND):
+    // one lookup by z, used both for how far the paint ramps and for how far the sheet is worth drawing.
+    // Past the sheet the ordinary ground mesh takes over, with its grass texture and its own colour —
+    // which is the point, because the sheet's dambed grain is exposed lake bed and the veld is not.
+    const paintInland = (z: number): number => (isSandZ(z, bands) ? BEACH_INLAND : STRAND_PAINT_INLAND);
+    const paintBlend = (z: number): number => (isSandZ(z, bands) ? SHORE_VELD_BLEND : STRAND_PAINT_BLEND);
+    const paintLimit = (z: number): number => paintInland(z) + paintBlend(z);
+    const inlandLimit = Math.max(BEACH_INLAND + SHORE_VELD_BLEND, STRAND_PAINT_INLAND + STRAND_PAINT_BLEND);
+    const i0 = -Math.ceil(BED_OFFMAP_OVERHANG / step);
+    const j0 = -Math.ceil(BED_Z_OVERRUN / step);
+    const j1 = GROUND_SEGMENTS - j0;
+    // East limit: the furthest east the water reaches, plus the whole inland band, in whole cells.
+    const i1 = Math.min(GROUND_SEGMENTS, Math.ceil((OCEAN_POLYGON.maxX + inlandLimit + half) / step) + 1);
+    const cols = i1 - i0 + 1;
+    const gx = (i: number): number => -half + i * step;
+    /** Signed distance to the waterline and the inland fade, per lattice point (built once, reused). */
+    const dist = new Float32Array(cols * (j1 - j0 + 1));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) dist[(j - j0) * cols + (i - i0)] = damSignedDistance(gx(i), gx(j)) + WATERLINE_OFFSET;
     }
-    const stride = COLS + 1; const indices: number[] = [];
-    for (let r = 0; r < rows; r++) for (let c = 0; c < COLS; c++) {
-      const a = r * stride + c; const b = r * stride + c + 1; const d = (r + 1) * stride + c; const e = (r + 1) * stride + c + 1;
-      indices.push(a, b, d, b, e, d);
+    const at = (i: number, j: number): number => dist[(j - j0) * cols + (i - i0)]!;
+    // A cell is drawn when any corner is inside the shore band, or when it is off the west edge (past
+    // the square there is no ground mesh at all, so the sheet is the only thing covering the bed).
+    const wanted = (i: number, j: number): boolean => {
+      if (i < i0 || j < j0 || i >= i1 || j >= j1) return false;
+      if (gx(i) < -half || gx(j) < -half || gx(j + 1) > half) return true;
+      const limit = Math.max(paintLimit(gx(j)), paintLimit(gx(j + 1)));
+      return at(i, j) < limit || at(i + 1, j) < limit
+        || at(i, j + 1) < limit || at(i + 1, j + 1) < limit;
+    };
+    const positions: number[] = []; const uvs: number[] = []; const colors: number[] = []; const indices: number[] = [];
+    const index = new Map<number, number>();
+    const vertex = (i: number, j: number): number => {
+      const key = (i - i0) * 100000 + (j - j0);
+      const found = index.get(key); if (found !== undefined) return found;
+      const x = gx(i); const z = gx(j);
+      // Inside the square the captured grid IS this lattice, so terrainHeightAt returns the ground
+      // mesh's own vertex height exactly; outside it the grid clamps, so use the analytic profile.
+      const inGrid = x >= -half && x <= half && z >= -half && z <= half;
+      const y = inGrid ? terrainHeightAt(x, z) : analyticTerrainHeightAt(x, z);
+      const d = at(i, j);
+      const fade = Math.min(1, Math.max(0, (d - paintInland(z)) / paintBlend(z)));
+      const id = positions.length / 3;
+      positions.push(x, y + BED_SHEET_LIFT, z); uvs.push(x / 9, z / 9);
+      const [cr, cg, cb] = shoreColourAt(y, z, OCEAN_Y, bands, fade);
+      colors.push(cr, cg, cb);
+      index.set(key, id);
+      return id;
+    };
+    for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+      if (!wanted(i, j)) continue;
+      const a = vertex(i, j); const b = vertex(i + 1, j); const c = vertex(i, j + 1); const e = vertex(i + 1, j + 1);
+      indices.push(a, b, c, b, e, c);
     }
+    if (indices.length === 0) return;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geometry.setIndex(indices); geometry.computeVertexNormals();
     const normals = geometry.attributes.normal.array; let sumY = 0;
     for (let i = 1; i < normals.length; i += 3) sumY += normals[i]!;
     if (sumY < 0) { for (let i = 0; i < indices.length; i += 3) { const t = indices[i]!; indices[i] = indices[i + 2]!; indices[i + 2] = t; } geometry.setIndex(indices); geometry.computeVertexNormals(); }
-    const sand = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xd8c8a0, map: this.sand, roughness: 0.97 }));
-    sand.receiveShadow = true; sand.userData.far = true; // the always-visible sea floor, carries to the horizon
+    // White base colour AND a near-neutral map: the vertex colours ARE the palette, and BOTH the
+    // tint and the texture multiply into them. Using the golden beach `sand` map here was the whole
+    // of C5 — it pushed the shore from grey-brown (saturation ~0.19) to golden (~0.57).
+    // polygonOffset is the belt to the shared lattice's braces: 0.022 of a unit is thin cover at
+    // 2 km, so bias the depth as well and let the shore win the tie at every distance.
+    const sand = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      color: 0xffffff, vertexColors: true, map: this.damBed, roughness: 0.97,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+    }));
+    sand.receiveShadow = true; sand.userData.far = true; // the always-visible dam bed, carries to the horizon
     this.group.add(sand);
   }
 
-  /** The beachfront manicure (replaces the old placeholder harbour slab): the Kaapstad Quay
-   *  pleasure pier + paved quay forecourt, seafront venue strips at the quay and Bantry Bay,
+  /** The dam-front manicure (replaces the old placeholder harbour slab): the Deneys Quay
+   *  pleasure pier + paved quay forecourt, water's-edge venue strips at the quay and Leboya Baai,
    *  beach clutter (loungers, lifeguard tower, towels) and moored boats — all placed from the
    *  pure plan in beachfront.ts, whose pads CityGen/ModelScatter already keep clear. Venues and
    *  clutter reuse the catalog path (buildOneModel) so slope plinths + oriented colliders come
@@ -1810,7 +1985,7 @@ export class City {
     if (plan.apron) { // paved quay forecourt draped over the shore terrain
       const { minX, maxX, minZ, maxZ } = plan.apron;
       const polygon: MapPolygon = {
-        name: 'Kaapstad Quay apron', kind: 'beach', minX, maxX, minZ, maxZ,
+        name: 'Deneys Quay apron', kind: 'beach', minX, maxX, minZ, maxZ,
         points: [{ x: minX, z: minZ }, { x: maxX, z: minZ }, { x: maxX, z: maxZ }, { x: minX, z: maxZ }],
         cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, area: (maxX - minX) * (maxZ - minZ),
       };
@@ -2047,7 +2222,9 @@ export class City {
     const palette = BUILDING_PALETTES[style];
     const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
     const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);
-    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: 0, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
+    // emissiveIntensity starts at the CURRENT window-glow level, not 0: this material may be born at
+    // midnight, halfway across the map from wherever the cycle last walked the list (see setFacadeGlow).
+    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: this.facadeGlow, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
     const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
     const foundations = foundationTiers(profile.tiers, -plinthDrop);
     for (const foundation of foundations) {

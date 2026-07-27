@@ -26,10 +26,13 @@ describe('districtAnchors', () => {
   it('derives one anchor per district from the lookup, each landing inside its own district', () => {
     const anchors = districtAnchors(districtAt);
     const names = anchors.map((anchor) => anchor.name);
-    // Generated map: one anchor per district (117 on the current build), all unique, key districts present.
+    // Generated map: one anchor per district (62 on the current 2/3 crop), all unique, key districts
+    // present. Sandton is north of the crop bbox and no longer exists on this map at all; Dunkeld is
+    // the northernmost surviving northern-suburbs district, so it takes over as the "not the CBD,
+    // genuinely far away" probe. It has to be a district the map really has or the test proves nothing.
     expect(new Set(names).size).toBe(names.length);
     expect(names.length).toBeGreaterThanOrEqual(5);
-    for (const expected of ['braamfontein', 'sandton']) expect(names).toContain(expected);
+    for (const expected of ['braamfontein', 'dunkeld']) expect(names).toContain(expected);
     for (const anchor of anchors) expect(slugify(districtAt(anchor.x, anchor.z)), anchor.name).toBe(anchor.name);
   });
 });
@@ -38,7 +41,7 @@ describe('buildTeleportTargets', () => {
   it('assembles spawn, districts, shops, safehouses and missions from live data', () => {
     const names = gazetteer().map((target) => target.name);
     expect(names).toContain('spawn');
-    expect(names).toContain('sandton');
+    expect(names).toContain('dunkeld'); // was 'sandton', which the crop removed from the map
     expect(names).toContain('jozi-arms');
     expect(names).toContain('main-main-mansions'); // the safehouse (id 'brixton', renamed on the generated map)
     expect(names).toContain('delivery-run');
@@ -63,9 +66,12 @@ describe('resolveTeleport', () => {
   });
 
   it('accepts an unambiguous prefix and rejects an ambiguous one', () => {
-    expect(resolveTeleport('sandt', targets)?.name).toBe('sandton'); // 'sand' is ambiguous now: Sandton vs Sandhurst
+    // Sandton/Sandhurst were the ambiguous pair before the crop removed both. Park* is the live
+    // equivalent and a harder case: 'park' matches five districts (Parkhurst, Parktown,
+    // Parktown North, Parkview, Parkwood), 'parkh' matches exactly one.
+    expect(resolveTeleport('parkh', targets)?.name).toBe('parkhurst');
     expect(resolveTeleport('main-main', targets)?.name).toBe('main-main-mansions');
-    expect(resolveTeleport('sand', targets)).toBeUndefined(); // ambiguous prefix rejected
+    expect(resolveTeleport('park', targets)).toBeUndefined(); // ambiguous prefix rejected
     const ambiguous = resolveTeleport('j', targets); // jozi-arms, joburg-cbd, jan-smuts-garage
     expect(ambiguous).toBeUndefined();
   });

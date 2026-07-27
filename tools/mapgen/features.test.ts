@@ -130,7 +130,7 @@ describe('sea port / pier on the NW coast', () => {
     for (const p of port.apron) expect(pointInPolygon(ocean, p[0], p[1])).toBe(false);
   });
 
-  it('does not crowd Kaapstad Quay (they sit well apart)', () => {
+  it('does not crowd Deneys Quay (they sit well apart)', () => {
     const quay = map.coast!.harbour;
     const mid = { x: (port.apron[0]![0] + port.apron[2]![0]) / 2, z: (port.apron[0]![1] + port.apron[2]![1]) / 2 };
     expect(Math.hypot(mid.x - quay.x, mid.z - quay.z)).toBeGreaterThan(map.stats.targetSize * 0.2);

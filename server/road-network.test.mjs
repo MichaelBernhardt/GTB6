@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HOT_BAKKIE_ROUTES, ONLINE_SPAWNS } from './multiplayer.mjs';
+import { HOT_BAKKIE_ROUTES, ONLINE_SPAWNS, missingMultiplayerAnchors } from './multiplayer.mjs';
 import { ROAD_INDEX, RoadSegmentIndex } from './road-network.mjs';
 
 describe('authoritative road segment index', () => {
@@ -30,5 +30,20 @@ describe('authoritative road segment index', () => {
     const index = new RoadSegmentIndex([{ name: 'Test Road', width: 8, points: [[0, 0], [20, 0]] }], 10, 20);
     expect(index.onRoad(10, 3.5, 0)).toBe(true); expect(index.onRoad(10, 4.5, 0)).toBe(false);
     expect(index.nearestPose(12, 9)).toMatchObject({ x: 12, z: 0, road: 'Test Road' });
+  });
+
+  it('degrades instead of throwing when nothing is in reach — a stale anchor must never kill npm start', () => {
+    const index = new RoadSegmentIndex([{ name: 'Test Road', width: 8, points: [[0, 0], [20, 0]] }], 10, 20);
+    expect(index.nearestPose(5000, 5000)).toBeUndefined();
+    // The exact coordinate that used to abort `node server.mjs` at import: the pre-crop GTI anchor.
+    expect(() => ROAD_INDEX.nearestPose(3064.998846076018, 5094.102261759049)).not.toThrow();
+    expect(ROAD_INDEX.nearestPose(3064.998846076018, 5094.102261759049)).toBeUndefined();
+  });
+
+  it('keeps all four hot-bakkie routes alive on the committed map (a silent drop is a content bug)', () => {
+    expect(HOT_BAKKIE_ROUTES.map((route) => route.name)).toEqual([
+      'Commissioner Shuffle', 'Wemmer Yard Dash', 'Rank to Yard', 'Padstal Lock-up',
+    ]);
+    expect(missingMultiplayerAnchors()).toEqual([]);
   });
 });
