@@ -68,14 +68,31 @@ export type Rgb = readonly [number, number, number];
 /** Resort sand: the two beach polygons only. Screen target rgb(216,190,138) — hue 40, sat 0.36,
  *  deliberately the warmest and most saturated thing on the shore. */
 export const RESORT_SAND: Rgb = [0.375, 0.261, 0.158];
+// THE TABLE ABOVE IS STALE AND THE VALUES BELOW WERE RE-MEASURED AGAINST THE SHIPPING LIGHTING.
+// It was sampled before the veld went green, and the hemisphere's ground bounce moved with the veld
+// (DayNight 0x8a7c4d -> 0x74804a). Re-run at noon, fog 0.00025, on the shipped sheet from a real
+// strand stand (tools/qa/shore/calibrate.py), the transfer is now, neutral albedo -> sRGB pixel:
+//     0.020->(69,59,45)   0.030->(82,71,55)    0.042->(96,83,66)   0.055->(109,96,77)
+//     0.068->(121,107,87) 0.085->(134,120,99)  0.105->(147,133,111) 0.130->(160,146,125)
+// Note what that says about the shipped palette: HIGH_WATER_MARK at 0.122-0.152 renders ~155/255,
+// and because the ring covered every rise up to 0.62 — which on this strand profile is 56 units of
+// ground — the "pale concrete pan" in every shore frame WAS the bathtub ring, not the grit.
+
 /** Drawdown strand: the grey-brown grit between the grass line and the bathtub ring. Screen target
- *  rgb(132,120,103) — hue 30, sat 0.22, val 0.52. Desaturated and mid-toned: grit, not bone. (The
- *  first pass at the inverted table aimed 15% higher and measured 174,167,155 at the player's feet,
- *  still too close to bone, so both natural tones were taken down a stop.) */
-export const DRAWDOWN_GRIT: Rgb = [0.068, 0.071, 0.077];
-/** The bathtub ring itself — a bleached band right above the current waterline. Screen target
- *  rgb(155,148,135), sat 0.13: paler than the grit above it, which is how a drawdown ring reads. */
-export const HIGH_WATER_MARK: Rgb = [0.122, 0.135, 0.152];
+ *  rgb(120,104,82) — hue 33, HSV sat 0.32, val 0.47. Grit, not bone; the warm sun does the hue, so
+ *  the albedo only has to be near-neutral with the blue taken out of it. */
+export const DRAWDOWN_GRIT: Rgb = [0.067, 0.064, 0.059];
+/** The bathtub ring itself — a bleached band right above the current waterline, and PALER than the
+ *  grit above it, which is how a drawdown ring reads. Screen target rgb(139,125,103), sat 0.26.
+ *  It used to be 0.122/0.135/0.152 = rgb(155,147,133) at sat 0.15, which is bone: measured on the
+ *  natural strand it was indistinguishable from concrete, and it is what three passes of "the shore
+ *  is still golden/pale" were actually looking at. */
+export const HIGH_WATER_MARK: Rgb = [0.094, 0.093, 0.090];
+/** The same bleach seen from UNDER the surface. Kept at the old (paler, bluer) value on purpose:
+ *  the last pass tuned the near-surface lift to give the shallows their turquoise fringe, that
+ *  reading is verified, and darkening the above-water ring must not drag it back toward the "jagged
+ *  black shallows" the review rejected. Two surfaces, two constants. */
+export const SHALLOW_BLEACH: Rgb = [0.122, 0.135, 0.152];
 /**
  * Silt bed in DEEP water. Screen target rgb(80,78,68).
  *
@@ -92,19 +109,33 @@ export const SUBMERGED_BED: Rgb = [0.022, 0.030, 0.038];
 export const SHALLOW_BED: Rgb = [0.079, 0.119, 0.134];
 /** Depth (units below the surface) over which SHALLOW_BED gives way to SUBMERGED_BED. */
 export const BED_DEPTH_RAMP = 6;
-/** The veld the shore band abuts. Screen target rgb(176,194,122): MEASURED off the ground mesh
- *  at the player's feet, so the sheet's inland edge fades into the ground instead of ending on a
- *  line. Without this the clipped sheet drew a straight north-south colour seam at the map edge.
- *  (Moved with the ground when the veld went from straw to summer green — see GRASS_PALETTES.dry.) */
-export const VELD_TONE: Rgb = [0.164, 0.285, 0.121];
 /**
- * Height above the waterline (world units) that the bathtub ring covers, and the height at which
- * resort sand gives way to normal cover. These are HEIGHTS, but what the player sees is a WIDTH,
- * and the width is height / slope: City's strand profile now spends the whole BEACH_INLAND width
- * on the drop from BEACH_TOP_Y to the waterline, so a 0.75-unit ring is tens of units across
- * instead of the two or three it was on the old single ramp to SEA_FLOOR_Y.
+ * The veld the shore band abuts — the colour the sheet's inland fade has to ARRIVE at, so its edge
+ * is a colour match and not a line.
+ *
+ * MEASURED IN ONE FRAME, both surfaces at once, rather than derived: the sheet was painted each
+ * candidate and the sheet patch and the neighbouring ground-mesh patch read out of the same render
+ * from the NW dry corner (tools/qa/shore/calibrate.py --veld). The shipped 0.164/0.285/0.121 was
+ * carried across from the straw veld on paper and it does NOT match: it renders rgb(180,194,133)
+ * against a ground mesh at rgb(140,174,71) — 65 units of RGB distance, i.e. a pale-green band lying
+ * along the whole inland edge of the sheet. This value measures 4. If GRASS_PALETTES.dry ever moves
+ * again, re-run the sweep; do not re-derive it.
  */
-export const HIGH_WATER_RISE = 0.62;
+export const VELD_TONE: Rgb = [0.081, 0.212, 0.022];
+/**
+ * Height above the waterline (world units) that the bathtub ring covers.
+ *
+ * This is a HEIGHT, but what the player sees is a WIDTH, and the width is height / slope. City's
+ * strand profile spends the whole BEACH_INLAND width climbing from the waterline to BEACH_TOP_Y,
+ * i.e. 0.011 units of rise per unit of ground — so 0.62 was a bleached band FIFTY-SIX UNITS across,
+ * and with the grit ramp behind it the exposed shore ran 120 units before the veld fade even began.
+ * From the air that is a mud collar round every bay; on Grooteiland it swallowed the island. 0.22 is
+ * a ring 20 units wide, which is what a reservoir near full supply actually shows.
+ */
+export const HIGH_WATER_RISE = 0.22;
+/** Rise over which the bleached ring gives way to the grit above it (units). With the profile's
+ *  0.011 rise-per-unit that puts full grit 50 units inland of the waterline. */
+export const HIGH_WATER_FADE = 0.33;
 /** Height above the waterline at which the resort sand gives way to normal ground cover. */
 export const SAND_TOP_RISE = 1.15;
 
@@ -130,14 +161,14 @@ export function shoreColourAt(y: number, z: number, waterY: number, bands: reado
     // then hit water, so every bay was drawn with a burnt-looking outline. A drawdown lake bleaches
     // in the other direction: the shallows are the PALEST part of it.
     const bed = mix(SHALLOW_BED, SUBMERGED_BED, Math.min(1, -rise / BED_DEPTH_RAMP));
-    return mix(bed, HIGH_WATER_MARK, Math.max(0, 1 + rise / 2.5) * 0.6);
+    return mix(bed, SHALLOW_BLEACH, Math.max(0, 1 + rise / 2.5) * 0.6);
   }
   const fade = Math.min(1, Math.max(0, veldFade));
   const shore = isSandZ(z, bands)
     ? mix(RESORT_SAND, DRAWDOWN_GRIT, Math.min(1, Math.max(0, (rise - SAND_TOP_RISE) / 0.9)))
     : rise <= HIGH_WATER_RISE
       ? HIGH_WATER_MARK
-      : mix(HIGH_WATER_MARK, DRAWDOWN_GRIT, Math.min(1, (rise - HIGH_WATER_RISE) / 0.7));
+      : mix(HIGH_WATER_MARK, DRAWDOWN_GRIT, Math.min(1, (rise - HIGH_WATER_RISE) / HIGH_WATER_FADE));
   return fade > 0 ? mix(shore, VELD_TONE, fade) : shore;
 }
 

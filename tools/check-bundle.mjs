@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseAst } from 'vite';
 
 const DIST = new URL('../dist/', import.meta.url);
 const DIST_PATH = fileURLToPath(DIST);
@@ -23,6 +24,37 @@ for (const name of files) {
   }
 }
 if (!mapBytes) throw new Error('Generated map chunk was not emitted as an independent cache unit.');
+
+// A static import cycle between chunks is a shipped crash, not advice. Rollup only *warns*
+// ("Circular chunk: a -> b -> a"), exits 0 and emits the bundle; the dev server is fine because it
+// serves unbundled modules, every unit test is fine because vitest never bundles, and the deployed
+// page then dies on load with "Cannot access 'X' before initialization" while every HTTP request
+// returns 200. This walks the real emitted files, so the gate holds even if that warning is silenced
+// or a cycle arrives by some route rollup does not warn about. Dynamic imports are excluded on
+// purpose: they are ordinary lazy edges and cannot deadlock initialisation.
+const label = (name) => name.replace(/-[A-Za-z0-9_-]{8}\.js$/, '');
+const staticImports = new Map(files.map((name) => {
+  const targets = new Set();
+  for (const node of parseAst(readFileSync(new URL(name, ASSETS), 'utf8')).body) {
+    const isImportEdge = node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration';
+    if (isImportEdge && node.source) targets.add(basename(node.source.value));
+  }
+  return [name, targets];
+}));
+const settled = new Set();
+const onStack = new Set();
+const walkChunk = (name, trail) => {
+  if (settled.has(name)) return;
+  if (onStack.has(name)) {
+    const cycle = [...trail.slice(trail.indexOf(name)), name].map(label).join(' -> ');
+    throw new Error(`Circular chunk: ${cycle}. These chunks import each other statically, so no initialisation order exists and the production bundle throws "Cannot access 'X' before initialization" on load. A chunk split out of another may only be a genuine leaf — nothing in it may import back. Fix the manualChunk() layering in vite.config.ts.`);
+  }
+  onStack.add(name);
+  for (const target of staticImports.get(name)) if (staticImports.has(target)) walkChunk(target, [...trail, name]);
+  onStack.delete(name);
+  settled.add(name);
+};
+for (const name of files) walkChunk(name, []);
 
 const html = readFileSync(new URL('index.html', DIST), 'utf8');
 const bootRefs = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?]+\.js)"/g)].map((match) => match[1]);
@@ -53,4 +85,4 @@ for (const id of featureIds) {
 
 const kb = (bytes) => `${(bytes / 1000).toFixed(1)} kB`;
 const features = featureIds.length === 0 ? 'none' : `${featureIds.length} lazy (${featureIds.join(', ')})`;
-console.log(`Bundle budgets valid: boot ${kb(bootBytes)}, largest code ${basename(largestCode.name)} ${kb(largestCode.bytes)}, map data ${kb(mapBytes)}, features ${features}.`);
+console.log(`Bundle budgets valid: ${files.length} chunks acyclic, boot ${kb(bootBytes)}, largest code ${basename(largestCode.name)} ${kb(largestCode.bytes)}, map data ${kb(mapBytes)}, features ${features}.`);
