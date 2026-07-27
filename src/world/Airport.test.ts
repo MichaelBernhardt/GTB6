@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { AIRPORT, GENERATED_ROADS } from './mapData';
 import { buildLightAircraft, fenceRuns, lineDashes, rectFromQuad, rectPoint } from './Airport';
@@ -80,13 +81,17 @@ describe('fenceRuns', () => {
   });
 });
 
+/** Every vertex of an airframe, in its own local space. */
+const hull = (craft: { group: THREE.Object3D }): THREE.Box3 => new THREE.Box3().setFromObject(craft.group);
+
 describe('buildLightAircraft', () => {
+  // Compares the actual vertex data, not a child count: the airframe merges per material, so counting
+  // children would have measured how the parts happened to be batched rather than what was built.
   it('is deterministic per seed', () => {
-    const first = buildLightAircraft(7); const second = buildLightAircraft(7);
-    expect(first.group.children.length).toBe(second.group.children.length);
-    first.group.children.forEach((child, index) => {
-      expect(child.position.toArray()).toEqual(second.group.children[index]!.position.toArray());
-    });
+    const first = hull(buildLightAircraft(7)); const second = hull(buildLightAircraft(7));
+    expect(first.min.toArray()).toEqual(second.min.toArray());
+    expect(first.max.toArray()).toEqual(second.max.toArray());
+    expect(buildLightAircraft(7).prop.position.toArray()).toEqual(buildLightAircraft(7).prop.position.toArray());
   });
 
   it('reports a sane parked footprint (wheels on y=0, nose along +z)', () => {
@@ -94,6 +99,26 @@ describe('buildLightAircraft', () => {
     expect(craft.halfSpan).toBeGreaterThan(3);
     expect(craft.halfLength).toBeGreaterThan(3);
     expect(craft.height).toBeLessThan(5);
-    expect(craft.group.children.length).toBeGreaterThan(10);
+    const box = hull(craft);
+    expect(box.min.y).toBeGreaterThan(-0.02); // wheels sit ON the apron, nothing buried under it
+    expect(box.min.y).toBeLessThan(0.05);
+    expect(box.max.y).toBeLessThan(craft.height); // the declared collider height really covers the fin
+    expect(box.max.x).toBeLessThanOrEqual(craft.halfSpan); // and the declared span really covers the tips
+    expect(box.max.x).toBeGreaterThan(craft.halfSpan * 0.8);
+    // Nose toward +z: the prop sits at the front of the airframe and the tail runs further aft.
+    expect(craft.prop.position.z).toBeGreaterThan(box.max.z * 0.8);
+    expect(-box.min.z).toBeGreaterThan(box.max.z);
+  });
+
+  it('draws the whole airframe in a handful of meshes', () => {
+    let meshes = 0; let tris = 0;
+    buildLightAircraft(5).group.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      meshes++;
+      tris += (mesh.geometry.index ? mesh.geometry.index.count : mesh.geometry.attributes.position!.count) / 3;
+    });
+    expect(meshes).toBeLessThanOrEqual(6); // five of these are parked on the apron: draw calls are paid per plane
+    expect(tris).toBeLessThan(2000);
   });
 });

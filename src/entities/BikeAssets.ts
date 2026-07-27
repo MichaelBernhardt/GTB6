@@ -21,6 +21,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { VEHICLE_SPECS } from '../config';
+import { capSection, loft, ovalSection, sweepZ, ushellSection, type ZStation } from '../world/Lofting';
 import { createSignMesh } from '../world/ProceduralMaterials';
 
 export type TwoWheelerKind = 'bicycle' | 'motorbike' | 'courier' | 'superbike';
@@ -727,103 +728,264 @@ function buildCourier(M: Palette): { root: THREE.Group; lamp: THREE.Mesh; tail: 
   root.add(buildRider({ saddle: VEHICLE_SPECS.courier.saddle!, hips: [0, 0.85, -0.40], grip: [0.25, 1.12, 0.31], foot: [0.27, 0.32, -0.16], lean: 0.20, helmet: true }, M));
   return { root, lamp: lampMesh, tail: tailMesh };
 }
-
 // ---- Sandton Rocket: the litre sportbike, the quality bar for the other three -------------------
+
+/**
+ * A sportbike is ONE CONTINUOUS MASS LINE — nose fairing over the tank, dipping at the seat, kicking
+ * up to a tapered tail — pitched nose-down with the visual weight forward. That line is the single
+ * thing that makes the archetype legible, and no stack of boxes has ever produced it: the seams are
+ * the shape. So the bodywork here is lofted, not assembled. Three swept surfaces carry the whole
+ * silhouette:
+ *   BODY    a closed section swept from the tail tip to the nose tip, its top and bottom lines
+ *           drawn out station by station exactly the way a side elevation is drawn;
+ *   FLANK   a U-shell (outer arc + inner arc, closed) swept along the engine so the fairing WRAPS
+ *           and tapers in plan as well as in side view — the opposite of a flat slab;
+ *   NOSE    the same shell carried over the front wheel as a lip, so the wheel arch is a cutaway in
+ *           one mass rather than a gap between two parts.
+ * Everything else — frame, forks, swingarm, exhaust — hangs off that line.
+ *
+ * Geometry comes to the pose, not the other way round: the frozen ride_superbike clip puts the
+ * player's hands at (±0.234, 0.883, 0.440) and feet at (±0.311, 0.301, −0.155) relative to the
+ * rider mount, and spec.saddle (the only lever) is [0.03, −0.03]. So GRIP and PEG below are exactly
+ * where the hands and boots land, and the bars and rearsets are built onto those points.
+ */
+const SB = {
+  frontRadius: 0.33,
+  /** Fatter AND fractionally taller than the front — the archetype's rear wheel is never the small one. */
+  rearRadius: 0.352,
+  /** Shorter than the 0.36 the other three use: a sportbike's wheels are close together under a
+   *  compact mass, and a long wheelbase is what makes a faired bike read as a cafe racer. */
+  axleZ: 2.2 * 0.335,
+  rake: 25 * Math.PI / 180,
+} as const;
+
+/** Bike-local hand and boot targets for the frozen ride clip, with spec.saddle already added. */
+const SB_GRIP: P3 = [0.234, 0.913, 0.410];
+const SB_PEG: P3 = [0.311, 0.331, -0.185];
+
+/**
+ * A body station written the way a side elevation is: top line, bottom line, half-width. The section
+ * is domed above and almost flat below (`fill` for the crown, 2.6 for the floor) so the flanks stay
+ * near-vertical right down to the bottom edge. A rounded underside would turn away from the light in
+ * a band a few centimetres deep, and that dark band is exactly what makes a tank read as a separate
+ * sausage floating above the fairing instead of the top of one continuous mass.
+ */
+const bodyStation = (z: number, top: number, bottom: number, halfWidth: number, fill = 1.25): ZStation => {
+  const centre = (top + bottom) / 2; const half = (top - bottom) / 2;
+  const section: THREE.Vector2[] = [];
+  for (let index = 0; index < 14; index++) {
+    const angle = (index / 14) * Math.PI * 2;
+    const c = Math.cos(angle); const s = Math.sin(angle);
+    const power = 1 / (s >= 0 ? fill : 3.2);
+    section.push(new THREE.Vector2(halfWidth * Math.sign(c) * Math.abs(c) ** power, half * Math.sign(s) * Math.abs(s) ** power));
+  }
+  return { z, y: centre, section };
+};
+
+/** A fairing station: the rim its top edge hangs from, how far it wraps out, how deep it hangs.
+ *  rimFrac 0.9 pulls the lip very slightly inboard so the widest point sits just under the top edge —
+ *  enough shoulder to catch light along a curve, not so much that the panel's silhouette drops away
+ *  from the tank it is supposed to meet. */
+const flankStation = (z: number, rim: number, halfWidth: number, depth: number, rimFrac = 0.9): ZStation =>
+  ({ z, y: rim, section: ushellSection(halfWidth, depth, 0.017, 8, rimFrac) });
+
+/** The painted upper mass: tail → seat dip → tank → dash → nose, one swept surface. */
+const SB_BODY: ZStation[] = [
+  bodyStation(-0.780, 1.006, 0.936, 0.058, 1.55),
+  bodyStation(-0.720, 1.030, 0.898, 0.082, 1.5),
+  bodyStation(-0.640, 1.038, 0.862, 0.102, 1.45),
+  bodyStation(-0.525, 1.010, 0.826, 0.118, 1.4),
+  bodyStation(-0.395, 0.950, 0.810, 0.126, 1.35),
+  bodyStation(-0.255, 0.900, 0.814, 0.134, 1.3),
+  bodyStation(-0.110, 0.910, 0.806, 0.158, 1.3),
+  bodyStation(0.035, 0.958, 0.796, 0.186, 1.25),
+  bodyStation(0.165, 0.996, 0.788, 0.204, 1.2),
+  bodyStation(0.300, 0.992, 0.786, 0.196, 1.2),
+  bodyStation(0.410, 0.966, 0.788, 0.170, 1.2),
+  bodyStation(0.510, 0.938, 0.792, 0.144, 1.2),
+  bodyStation(0.605, 0.914, 0.780, 0.136, 1.2),
+  bodyStation(0.690, 0.884, 0.756, 0.142, 1.25),
+  bodyStation(0.760, 0.848, 0.722, 0.124, 1.3),
+  bodyStation(0.810, 0.814, 0.704, 0.070, 1.4),
+];
+/**
+ * The upper fairing flank: rim tracking the tank's underside so the two read as ONE wedge of mass
+ * rather than a sausage floating over a slab, widest over the engine, and dying away to nothing
+ * behind it instead of stopping at a hard vertical edge.
+ */
+const SB_FLANK: ZStation[] = [
+  flankStation(-0.340, 0.700, 0.068, 0.130),
+  flankStation(-0.230, 0.772, 0.132, 0.250),
+  flankStation(-0.110, 0.828, 0.184, 0.352),
+  flankStation(0.020, 0.846, 0.212, 0.386),
+  flankStation(0.160, 0.842, 0.220, 0.376),
+  flankStation(0.295, 0.838, 0.218, 0.346),
+  flankStation(0.400, 0.840, 0.204, 0.300),
+  flankStation(0.455, 0.842, 0.190, 0.282),
+];
+/** The dark lower fairing, inset under the painted flank. Two-tone bodywork is what stops a fully
+ *  faired flank reading as one enormous painted wall. */
+const SB_BELLY: ZStation[] = [
+  flankStation(-0.285, 0.556, 0.086, 0.150, 1),
+  flankStation(-0.120, 0.502, 0.150, 0.142, 1),
+  flankStation(0.050, 0.500, 0.186, 0.140, 1),
+  flankStation(0.220, 0.516, 0.190, 0.142, 1),
+  flankStation(0.340, 0.556, 0.172, 0.140, 1),
+  flankStation(0.410, 0.604, 0.138, 0.120, 1),
+];
+/**
+ * The nose is an ARCH, not a shelf: its crown rides clear over the front tyre while its side panels
+ * hang down past the fork on either side of it. That is the only way to give the upper fairing real
+ * depth over a wheel — a closed floor would have to sit above the tyre's sweep, leaving a thin beak.
+ * The rising lower edge is the wheel arch, cut out of one mass rather than left as a gap.
+ */
+const noseStation = (z: number, side: number, halfWidth: number, arch: number): ZStation =>
+  ({ z, y: side, section: capSection(halfWidth, arch, 0.018, 8, 0.94) });
+const SB_NOSE: ZStation[] = [
+  noseStation(0.430, 0.548, 0.208, 0.300),
+  noseStation(0.545, 0.562, 0.200, 0.272),
+  noseStation(0.645, 0.602, 0.182, 0.216),
+  noseStation(0.725, 0.654, 0.150, 0.138),
+  noseStation(0.798, 0.708, 0.086, 0.050),
+];
 
 function buildSuperbike(M: Palette): { root: THREE.Group; lamp: THREE.Mesh; tail: THREE.Mesh } {
   const root = new THREE.Group();
-  const R = 0.315; const axleZ = 2.20 * 0.36;
+  const { frontRadius: RF, rearRadius: RR, axleZ, rake } = SB;
+  const forkX = Math.sin(rake); const forkY = Math.cos(rake); // fork axis in the steer group's own frame
+
   const frontWheel: WheelSpec = {
-    radius: R, tyre: 0.082, width: 0.125, style: 'cast', spokes: 5, hubRadius: 0.065, hubWidth: 0.12,
-    rimMaterial: 'alloy', discRadius: 0.20, discSides: [-1, 1],
+    radius: RF, tyre: 0.060, width: 0.125, style: 'cast', spokes: 5, hubRadius: 0.062, hubWidth: 0.115,
+    rimMaterial: 'alloy', discRadius: 0.19, discSides: [-1, 1],
   };
   const rearWheel: WheelSpec = {
-    radius: R, tyre: 0.105, width: 0.195, style: 'cast', spokes: 5, hubRadius: 0.075, hubWidth: 0.16,
-    rimMaterial: 'alloy', discRadius: 0.13, discSides: [1], sprocket: 0.10, sprocketSide: -1,
+    radius: RR, tyre: 0.070, width: 0.225, style: 'cast', spokes: 5, hubRadius: 0.078, hubWidth: 0.175,
+    rimMaterial: 'alloy', discRadius: 0.125, discSides: [1], sprocket: 0.105, sprocketSide: -1,
   };
 
-  const rear = buildWheel('wheel_rear', rearWheel, M); rear.position.set(0, R, -axleZ);
-  const steer = new THREE.Group(); steer.name = 'steer'; steer.position.set(0, R, axleZ);
+  const rear = buildWheel('wheel_rear', rearWheel, M); rear.position.set(0, RR, -axleZ);
+  const steer = new THREE.Group(); steer.name = 'steer'; steer.position.set(0, RF, axleZ);
   steer.add(buildWheel('wheel_front', frontWheel, M));
 
-  // ---- Front end: upside-down forks, clip-ons, hugger. The FAIRING stays body-fixed (below). ----
+  // ---- Front end (turns with the bars). Steer-local: the origin IS the front axle. -------------
   const S = new Batch();
+  const onFork = (height: number): number => -height * (forkX / forkY); // z offset up the raked fork line
   for (const side of [-1, 1]) {
-    S.add(rod(side * 0.115, 0.005, 0, side * 0.115, 0.245, -0.072, 0.028, 0.026), M.chrome); // slider
-    S.add(rod(side * 0.115, 0.215, -0.063, side * 0.115, 0.575, -0.172, 0.0375, 0.0375, 14), M.dark); // fat USD upper
-    S.add(at(new THREE.BoxGeometry(0.055, 0.115, 0.075), side * 0.155, 0.145, -0.045, 0, 0, side * -0.2), M.alloy); // radial caliper
+    S.add(rod(side * 0.108, 0.004, 0.002, side * 0.108, 0.250, onFork(0.246), 0.030, 0.028), M.dark); // slider
+    S.add(rod(side * 0.108, 0.222, onFork(0.218), side * 0.108, 0.600, onFork(0.596), 0.038, 0.038, 14), M.chrome); // fat USD stanchion
+    S.add(at(new THREE.BoxGeometry(0.05, 0.11, 0.075), side * 0.152, 0.135, -0.048, 0, 0, side * -0.18), M.alloy); // radial caliper
+    S.add(at(new THREE.BoxGeometry(0.055, 0.085, 0.10), side * 0.108, 0.245, onFork(0.241)), M.dark); // seal head
   }
-  S.add(at(rbox(0.31, 0.05, 0.10, 0.06, 1), 0, 0.415, -0.126), M.alloy);
-  S.add(at(rbox(0.29, 0.042, 0.095, 0.06, 1), 0, 0.565, -0.171), M.alloy);
-  S.add(rod(0, 0.38, -0.115, 0, 0.60, -0.182, 0.026, 0.026, 10), M.dark);
+  S.add(at(rbox(0.305, 0.055, 0.11, 0.06, 1), 0, 0.395, onFork(0.391)), M.alloy); // lower yoke
+  S.add(at(rbox(0.285, 0.046, 0.10, 0.06, 1), 0, 0.560, onFork(0.556)), M.alloy); // upper yoke
+  S.add(rod(0, 0.360, onFork(0.356), 0, 0.600, onFork(0.596), 0.028, 0.028, 10), M.dark); // steerer
   for (const side of [-1, 1]) {
-    S.add(rod(side * 0.10, 0.560, -0.235, side * 0.235, 0.610, -0.430, 0.018, 0.018, 10), M.alloy); // clip-on
-    S.add(rod(side * 0.185, 0.599, -0.393, side * 0.244, 0.621, -0.478, 0.023, 0.023, 10), M.rubber); // grip
-    S.add(at(new THREE.BoxGeometry(0.022, 0.016, 0.115), side * 0.15, 0.585, -0.345, 0.2, side * 0.36, 0), M.alloy);
+    // Clip-ons rise off the stanchion tops and sweep back to exactly where the frozen clip's hands are.
+    S.add(rod(side * 0.108, 0.578, onFork(0.574), side * 0.190, 0.586, SB_GRIP[2] - axleZ + 0.022, 0.019, 0.019, 10), M.alloy);
+    S.add(rod(side * 0.186, SB_GRIP[1] - RF - 0.004, SB_GRIP[2] - axleZ + 0.011, side * 0.282, SB_GRIP[1] - RF + 0.004, SB_GRIP[2] - axleZ - 0.011, 0.023, 0.023, 10), M.rubber); // grip
+    S.add(at(new THREE.CylinderGeometry(0.021, 0.026, 0.03, 10), side * 0.294, SB_GRIP[1] - RF + 0.005, SB_GRIP[2] - axleZ - 0.014, 0, 0, Math.PI / 2), M.alloy); // bar end
+    S.add(at(new THREE.BoxGeometry(0.02, 0.014, 0.115), side * 0.152, SB_GRIP[1] - RF - 0.014, SB_GRIP[2] - axleZ + 0.048, 0.16, side * 0.34, 0), M.alloy); // lever
+    S.add(at(rbox(0.055, 0.05, 0.075, 0.16, 1), side * 0.148, SB_GRIP[1] - RF + 0.012, SB_GRIP[2] - axleZ + 0.010), M.dark); // master cylinder
   }
-  S.add(guard(R + 0.045, 0.135, 0.012, 0.55, 1.45), M.paint); // fork-mounted hugger
+  S.add(guard(RF + 0.040, 0.148, 0.014, 1.15, 1.05), M.paint); // fork-mounted hugger over the tyre's crown
   S.flush(steer, 'front');
 
-  // ---- Chassis, engine, bodywork ----
+  // ---- Chassis, engine, bodywork ---------------------------------------------------------------
   const F = new Batch();
-  const pivot: P3 = [0, 0.44, -0.10];
-  F.add(rod(0, 0.735, 0.66, 0, 0.885, 0.615, 0.05), M.dark); // headstock
+  const pivot: P3 = [0, 0.470, -0.120];
+  F.add(rod(0, 0.650, 0.643, 0, 0.908, 0.523, 0.050), M.dark); // headstock, on the steering axis
   for (const side of [-1, 1]) {
-    F.add(at(rbox(0.075, 0.16, 0.62, 0.05, 1), side * 0.155, 0.685, 0.24, 0, 0, 0), M.alloy); // twin beam spar
-    F.add(at(rbox(0.055, 0.20, 0.16, 0.12, 1), side * 0.135, 0.545, -0.09), M.alloy); // pivot plate
-    F.add(rod(pivot[0] + side * 0.10, pivot[1], pivot[2], side * 0.10, R, -axleZ, 0.042, 0.03), M.alloy); // swingarm
-    F.add(rod(side * 0.10, 0.50, -0.35, side * 0.10, 0.365, -0.62, 0.016, 0.016, 8), M.alloy); // swingarm brace
-    F.add(rod(side * 0.26, 0.395, -0.44, side * 0.135, 0.475, -0.30, 0.014, 0.014, 8), M.alloy); // rearset hanger
-    F.add(at(new THREE.BoxGeometry(0.05, 0.026, 0.10), side * 0.265, 0.385, -0.44), M.steel); // rearset peg
-    F.add(rod(side * 0.155, 0.585, 0.545, side * 0.20, 0.735, 0.40, 0.012, 0.012, 6), M.dark); // mirror stalk
-    F.add(at(rbox(0.145, 0.055, 0.02, 0.06, 1), side * 0.215, 0.752, 0.392, 0, side * -0.55, 0.2), M.paint);
-    F.add(at(new THREE.BoxGeometry(0.125, 0.042, 0.008), side * 0.217, 0.752, 0.383, 0, side * -0.55, 0.2), M.chrome);
+    // Twin beam spar: lofted so it swells over the engine and necks into the headstock and the pivot.
+    F.add(loft([
+      [0.560, 0.840, 0.126, 0.030, 0.058], [0.330, 0.762, 0.170, 0.036, 0.082],
+      [0.060, 0.690, 0.178, 0.038, 0.090], [-0.120, 0.562, 0.152, 0.034, 0.088],
+    ].map(([z, y, x, hw, hh]) => ({
+      origin: new THREE.Vector3(side * x!, y!, z!), right: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 1, 0),
+      section: ovalSection(hw!, hh!, hh!, 8, 1.5),
+    }))), M.alloy);
+    F.add(at(rbox(0.05, 0.20, 0.16, 0.12, 1), side * 0.150, 0.540, -0.100), M.alloy); // pivot plate
+    F.add(rod(pivot[0] + side * 0.168, pivot[1], pivot[2], side * 0.170, RR, -axleZ, 0.044, 0.032), M.alloy); // swingarm
+    F.add(rod(side * 0.170, 0.470, -0.360, side * 0.170, 0.400, -0.620, 0.020, 0.018, 8), M.alloy); // swingarm brace
+    F.add(at(rbox(0.045, 0.115, 0.13, 0.08, 1), side * 0.176, 0.360, -0.760), M.alloy); // axle plate
+    // Rearsets: the hanger reaches out to the boot the frozen clip actually plants.
+    F.add(rod(side * 0.152, 0.470, -0.150, side * SB_PEG[0] - side * 0.030, SB_PEG[1] + 0.012, SB_PEG[2], 0.016, 0.013, 8), M.alloy);
+    F.add(rod(side * (SB_PEG[0] - 0.036), SB_PEG[1], SB_PEG[2], side * (SB_PEG[0] + 0.044), SB_PEG[1], SB_PEG[2], 0.014, 0.014, 8), M.steel); // peg
+    F.add(at(rbox(0.016, 0.075, 0.075, 0.14, 1), side * (SB_PEG[0] - 0.046), SB_PEG[1] + 0.022, SB_PEG[2]), M.dark); // heel guard
+    F.add(rod(side * 0.118, 0.922, 0.478, side * 0.206, 0.968, 0.452, 0.010, 0.010, 6), M.dark); // mirror stalk
+    F.add(at(rbox(0.105, 0.042, 0.024, 0.16, 1), side * 0.220, 0.976, 0.446, 0, side * -0.45, 0.2), M.paint);
+    F.add(at(new THREE.BoxGeometry(0.088, 0.032, 0.008), side * 0.222, 0.976, 0.439, 0, side * -0.45, 0.2), M.chrome); // mirror glass
   }
-  // Engine block: inline-four, exhaust headers curling under the belly.
-  F.add(at(rbox(0.34, 0.26, 0.36, 0.17, 1), 0, 0.44, 0.06), M.dark);
-  F.add(at(rbox(0.30, 0.20, 0.24, 0.13, 1), 0, 0.63, 0.16, -0.28, 0, 0), M.alloy);
-  F.add(at(new THREE.CylinderGeometry(0.10, 0.10, 0.06, 16), 0.185, 0.435, 0.03, 0, 0, Math.PI / 2), M.alloy);
-  for (const x of [-0.105, -0.035, 0.035, 0.105]) F.add(bent([[x, 0.575, 0.26], [x * 1.15, 0.40, 0.36], [x * 1.2, 0.295, 0.10], [x * 0.8, 0.30, -0.16]], 0.019, 6, 10), M.chrome);
-  F.add(at(rbox(0.28, 0.28, 0.055, 0.06, 1), 0, 0.585, 0.415), M.dark); // radiator
-  for (let i = 0; i < 8; i++) F.add(at(new THREE.BoxGeometry(0.26, 0.012, 0.012), 0, 0.475 + i * 0.031, 0.445), M.steel);
-  // Fairing: nose, flanks, belly pan, screen.
-  F.add(at(shell(0.215, 0.30, 0.022, 2.3, 16), 0, 0.700, 0.345, 0.10, 0, 0), M.paint); // nose fairing
-  F.add(at(new THREE.ConeGeometry(0.205, 0.42, 14, 1, false), 0, 0.735, 0.545, Math.PI / 2 - 0.30, 0, 0, 1, 1, 0.62), M.paint);
+  // Engine: inline-four block, head, clutch cover — glimpsed through the fairing's cutaway, not hidden.
+  F.add(at(rbox(0.32, 0.26, 0.36, 0.17, 1), 0, 0.500, 0.100), M.dark);
+  F.add(at(rbox(0.28, 0.20, 0.24, 0.13, 1), 0, 0.680, 0.195, -0.26, 0, 0), M.alloy);
+  F.add(at(new THREE.CylinderGeometry(0.098, 0.098, 0.055, 16), 0.175, 0.495, 0.060, 0, 0, Math.PI / 2), M.alloy);
+  F.add(at(new THREE.CylinderGeometry(0.062, 0.062, 0.05, 12), -0.175, 0.500, 0.020, 0, 0, Math.PI / 2), M.alloy);
+  // Four headers curling out under the belly pan and collecting into a short underslung can.
+  for (const x of [-0.108, -0.036, 0.036, 0.108]) {
+    F.add(bent([[x, 0.645, 0.290], [x * 1.12, 0.470, 0.395], [x * 1.15, 0.335, 0.140], [x * 0.62, 0.330, -0.180]], 0.019, 6, 11), M.chrome);
+  }
+  F.add(bent([[0, 0.335, -0.190], [0.110, 0.390, -0.300], [0.190, 0.470, -0.400]], 0.036, 8, 9), M.steel);
+  F.add(at(new THREE.CylinderGeometry(0.064, 0.056, 0.28, 14), 0.198, 0.520, -0.510, Math.PI / 2 - 0.24, 0.05, 0), M.chrome); // underslung silencer, outboard of the fat rear tyre
+  F.add(at(new THREE.CylinderGeometry(0.058, 0.058, 0.03, 12), 0.202, 0.554, -0.642, Math.PI / 2 - 0.24, 0.05, 0), M.dark); // outlet
+  // Rear suspension: the shock sits between the spars under the seat with an airbox capping it, so
+  // the spring reads as a glimpse of engineering rather than a bare coil hanging in open air.
+  F.add(rod(0, 0.788, -0.152, 0, 0.516, -0.208, 0.020, 0.020, 8), M.dark);
+  F.add(coil(0, 0.772, -0.155, 0, 0.548, -0.201, 0.045, 0.010, 6), M.paint);
+  F.add(at(rbox(0.20, 0.15, 0.28, 0.16, 1), 0, 0.700, -0.145), M.dark); // airbox / battery box over the shock head
+  for (const side of [-1, 1]) F.add(rod(side * 0.052, 0.500, -0.215, side * 0.075, 0.452, -0.330, 0.014, 0.014, 6), M.alloy); // linkage
+  F.add(rod(-0.06, 0.452, -0.330, 0.06, 0.452, -0.330, 0.014, 0.014, 6), M.alloy);
+  // Chain and rear brake.
+  F.add(rod(-0.118, 0.522, -0.060, -0.118, 0.452, -axleZ, 0.011, 0.011, 4), M.steel);
+  F.add(rod(-0.118, 0.418, -0.060, -0.118, 0.246, -axleZ, 0.011, 0.011, 4), M.steel);
+  F.add(at(new THREE.CylinderGeometry(0.052, 0.052, 0.016, 14), -0.118, 0.470, -0.060, 0, 0, Math.PI / 2), M.steel);
+  F.add(at(rbox(0.05, 0.045, 0.34, 0.06, 1), -0.126, 0.545, -0.230, 0.06, 0, 0), M.paint); // chain guard
+  F.add(at(new THREE.BoxGeometry(0.05, 0.085, 0.07), 0.150, 0.415, -0.640, 0, 0, -0.3), M.alloy); // rear caliper
+
+  // ---- The mass line: three lofted surfaces, smooth-shaded, that carry the whole silhouette. ----
+  F.add(sweepZ(SB_BODY), M.paint);
+  F.add(sweepZ(SB_FLANK, false, false), M.paint);
+  F.add(sweepZ(SB_NOSE, false, false), M.paint);
+  F.add(sweepZ(SB_BELLY, false, false), M.dark);
+  // Seat and pillion pads follow the dip and the kick-up rather than sitting on them as blocks.
+  F.add(sweepZ([
+    [0.030, 0.964, 0.114], [-0.080, 0.936, 0.128], [-0.200, 0.918, 0.134],
+    [-0.310, 0.938, 0.124], [-0.398, 0.966, 0.110],
+  ].map(([z, top, hw]) => ({ z: z!, y: top! - 0.016, section: ovalSection(hw!, 0.016, 0.05, 10, 1.7) }))), M.rubber);
+  F.add(sweepZ([
+    [-0.455, 0.996, 0.102], [-0.540, 1.020, 0.096], [-0.630, 1.032, 0.084],
+  ].map(([z, top, hw]) => ({ z: z!, y: top! - 0.014, section: ovalSection(hw!, 0.014, 0.045, 10, 1.7) }))), M.rubber);
+  // Bubble screen: a lofted arch, so it wraps the dash instead of standing up like a wiper blade.
+  F.add(sweepZ([
+    [0.395, 0.950, 0.118, 0.128], [0.470, 0.946, 0.130, 0.140], [0.548, 0.930, 0.132, 0.120],
+    [0.618, 0.908, 0.126, 0.072], [0.678, 0.888, 0.108, 0.024],
+  ].map(([z, y, hw, arch]) => ({ z: z!, y: y!, section: capSection(hw!, arch!, 0.010, 6, 0.7) })), false, false), M.glass);
+  // Fairing duct: one dark inset per flank, the break line a single moulded panel needs.
+  for (const side of [-1, 1]) F.add(at(rbox(0.05, 0.12, 0.25, 0.2, 1), side * 0.196, 0.700, 0.335, 0, side * 0.2, 0.2), M.dark);
+  // Tail hardware: undertray, plate hanger, indicators, and a hugger over the rear tyre.
+  F.add(guard(RR + 0.055, 0.215, 0.014, 0.72, 1.55).translate(0, RR, -axleZ), M.paint);
+  F.add(at(rbox(0.125, 0.085, 0.012, 0.04, 1), 0, 0.780, -0.836, -0.75, 0, 0), M.plate); // hung clear of the tyre's sweep
+  F.add(rod(0, 0.868, -0.782, 0, 0.808, -0.822, 0.011, 0.011, 6), M.dark);
+  F.add(at(rbox(0.125, 0.05, 0.19, 0.12, 1), 0, 0.900, -0.722, 0.2, 0, 0), M.dark); // undertray
   for (const side of [-1, 1]) {
-    F.add(at(rbox(0.075, 0.34, 0.56, 0.10, 2), side * 0.163, 0.560, 0.285, 0, side * 0.16, 0.30), M.paint); // side fairing
-    F.add(at(rbox(0.05, 0.12, 0.26, 0.12, 1), side * 0.196, 0.685, 0.435, 0, side * 0.18, 0.18), M.dark); // duct
+    F.add(rod(side * 0.044, 0.930, -0.742, side * 0.090, 0.910, -0.782, 0.008, 0.008, 5), M.dark);
+    F.add(at(new THREE.SphereGeometry(0.026, 8, 6), side * 0.100, 0.907, -0.789, 0, 0, 0, 1, 1, 0.7), M.amber);
   }
-  F.add(at(rbox(0.30, 0.075, 0.68, 0.05, 1), 0, 0.315, 0.14, 0.06, 0, 0), M.paint); // belly pan
-  F.add(at(shell(0.19, 0.135, 0.012, 1.6, 12), 0, 0.930, 0.290, -0.60, 0, 0), M.glass); // screen
-  // Tank and tail.
-  const tankProfile: Array<[number, number]> = [[0.02, -0.32], [0.11, -0.22], [0.165, -0.02], [0.16, 0.16], [0.10, 0.28], [0.02, 0.32]];
-  F.add(at(new THREE.LatheGeometry(tankProfile.map(([r, y]) => new THREE.Vector2(r, y)), 20), 0, 0.815, 0.155, Math.PI / 2, 0, 0, 1.0, 1, 0.66), M.paint);
-  F.add(at(new THREE.CylinderGeometry(0.036, 0.04, 0.02, 14), 0, 0.895, 0.24), M.chrome);
-  F.add(at(rbox(0.25, 0.08, 0.40, 0.10, 1), 0, 0.800, -0.235, 0.07, 0, 0), M.rubber); // rider seat
-  F.add(at(rbox(0.27, 0.20, 0.40, 0.14, 2), 0, 0.830, -0.435, 0.34, 0, 0), M.paint); // tail unit
-  F.add(at(rbox(0.16, 0.13, 0.26, 0.16, 1), 0, 0.930, -0.655, 0.34, 0, 0), M.paint); // tapered tail tip
-  F.add(at(rbox(0.19, 0.06, 0.22, 0.10, 1), 0, 0.900, -0.545, 0.34, 0, 0), M.rubber); // pillion pad
-  for (const side of [-1, 1]) {
-    F.add(at(new THREE.CylinderGeometry(0.052, 0.058, 0.26, 14), side * 0.095, 0.695, -0.735, Math.PI / 2 - 0.26, side * 0.10, 0), M.chrome); // underseat can
-    F.add(at(new THREE.TorusGeometry(0.053, 0.007, 4, 16), side * 0.098, 0.727, -0.858, Math.PI / 2 - 0.26, side * 0.10, 0), M.dark);
-  }
-  F.add(rod(0, 0.70, -0.62, 0, 0.44, -0.36, 0.022, 0.022, 8), M.dark); // monoshock
-  F.add(coil(0, 0.68, -0.605, 0, 0.475, -0.393, 0.043, 0.0095, 6), M.paint);
-  F.add(at(rbox(0.155, 0.105, 0.012, 0.04, 1), 0, 0.520, -0.815, -0.35, 0, 0), M.plate);
-  F.add(rod(0, 0.72, -0.72, 0, 0.575, -0.80, 0.010, 0.010, 6), M.dark);
-  F.add(at(new THREE.BoxGeometry(0.055, 0.09, 0.07), -0.135, 0.415, -0.60, 0, 0, 0.35), M.alloy); // rear caliper
-  F.add(at(new THREE.BoxGeometry(0.012, 0.015, 0.62), -0.115, 0.395, -0.44), M.steel); // chain
-  F.add(at(new THREE.BoxGeometry(0.012, 0.015, 0.62), -0.115, 0.275, -0.46), M.steel);
+  // Side stand on the left: the parked bike rests on rotation.z = +0.15, which drops that side.
+  F.add(rod(-0.145, 0.455, -0.055, -0.205, 0.030, -0.170, 0.014, 0.011, 6), M.dark);
+  F.add(at(new THREE.BoxGeometry(0.055, 0.014, 0.075), -0.212, 0.024, -0.180, 0, 0.25, 0), M.dark);
   F.flush(root, 'frame');
 
-  // Stacked twin projectors, merged into one lens mesh so there is exactly one headlight material.
-  const lensL = at(new THREE.SphereGeometry(0.072, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.45), -0.072, 0.700, 0.560, Math.PI / 2 - 0.24, 0.22, 0, 1, 1, 0.5);
-  const lensR = at(new THREE.SphereGeometry(0.072, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.45), 0.072, 0.700, 0.560, Math.PI / 2 - 0.24, -0.22, 0, 1, 1, 0.5);
-  const lampMesh = lamp(mergeGeometries([mergeVertices(lensL), mergeVertices(lensR)], false)!);
-  const tailMesh = taillight(at(new THREE.BoxGeometry(0.115, 0.045, 0.02), 0, 0.955, -0.755, 0.34, 0, 0));
+  // Stacked twin projectors set into the nose face, merged so there is exactly one headlight material.
+  const lens = (x: number, y: number, z: number, radius: number): THREE.BufferGeometry =>
+    mergeVertices(at(new THREE.SphereGeometry(radius, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.48), x, y, z, Math.PI / 2 - 0.34, 0, 0, 1, 1, 0.55));
+  const lampMesh = lamp(mergeGeometries([lens(-0.038, 0.772, 0.800, 0.052), lens(0.038, 0.772, 0.800, 0.052),
+    lens(-0.036, 0.716, 0.790, 0.040), lens(0.036, 0.716, 0.790, 0.040)], false)!);
+  const tailMesh = taillight(at(new THREE.BoxGeometry(0.092, 0.030, 0.022), 0, 0.980, -0.788, 0.18, 0, 0));
 
   root.add(rear, steer, lampMesh, tailMesh); // lamp is fairing-mounted, so it does NOT steer
-  root.add(buildRider({ saddle: VEHICLE_SPECS.superbike.saddle!, hips: [0, 0.87, -0.30], grip: [0.235, 0.935, 0.33], foot: [0.265, 0.42, -0.44], lean: 0.80, helmet: true }, M));
+  root.add(buildRider({
+    saddle: VEHICLE_SPECS.superbike.saddle!, hips: [0, 0.995, -0.023], grip: SB_GRIP, foot: SB_PEG, lean: 0.75, helmet: true,
+  }, M));
   return { root, lamp: lampMesh, tail: tailMesh };
 }
 
@@ -841,7 +1003,9 @@ function template(kind: TwoWheelerKind): Template {
   const built: Template = kind === 'bicycle' ? { root: buildBicycle(M), rollRadius: 0.34 }
     : kind === 'motorbike' ? { root: buildScrambler(M).root, rollRadius: 0.32 }
       : kind === 'courier' ? { root: buildCourier(M).root, rollRadius: 0.27 }
-        : { root: buildSuperbike(M).root, rollRadius: 0.315 };
+        // Front 0.330, rear 0.352 (fatter and no smaller than the front, per the archetype): one
+        // spin rate for both, so the roll radius is their mean — a 3% error nobody can see.
+        : { root: buildSuperbike(M).root, rollRadius: 0.341 };
   built.root.name = `bike-${kind}`;
   built.root.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
   templates.set(kind, built);
