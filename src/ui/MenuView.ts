@@ -1,6 +1,6 @@
 import type { MissionChoice } from '../systems/MissionSystem';
 import type { CheatSettings, GameSettings } from '../types';
-import { clampPercent, formatMoney, reputationLabel, type CheatWeaponEntry, type DrinkCatalogEntry, type LoadingState, type MainMenuSummary, type MenuScreen, type ShopArmourEntry, type ShopCatalogEntry } from './UIModels';
+import { clampPercent, formatMoney, reputationLabel, type CheatWeaponEntry, type DrinkCatalogEntry, type FeatureMenuView, type LoadingState, type MainMenuSummary, type MenuScreen, type ShopArmourEntry, type ShopCatalogEntry } from './UIModels';
 import { inebriationLabel, INEBRIATION_MAX } from '../core/DrinkRules';
 
 export class MenuView {
@@ -81,6 +81,22 @@ export class MenuView {
     const gauge = `<div class="drunk-gauge${tag?.warn ? ' is-babalas' : ''}"><span>DOP LEVEL</span><div class="drunk-gauge__track"><i style="width:${meter}%"></i></div><b>${tag ? tag.text : 'STONE SOBER'}</b></div>`;
     this.set('bottle', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">${storeName.toUpperCase()} · LIQUOR</p><h2>Wet your whistle.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header>${gauge}<div class="shop-list">${rows}</div><button data-action="leave">Cap it off &amp; leave</button></section>`);
     for (const entry of entries) this.bind(`[data-drink="${entry.id}"]`, () => actions.buy(entry.id));
+    this.bind('[data-action="leave"]', actions.leave);
+  }
+
+  /** The ONE generic feature screen. Reuses the shop card classes so styles.css needs no per-feature
+   *  rule, and routes every row back through a single onFeatureMenuAction(featureId, rowId) — so no
+   *  feature adds a MenuScreen member, a MenuView method, a UIManager.show*, a back() entry or a
+   *  bindUI callback. Adding a feature costs zero lines in this file. */
+  feature(view: FeatureMenuView, actions: { choose: (actionId: string) => void; leave: () => void }): void {
+    const rows = view.rows.map((row) => {
+      const right = row.price !== undefined ? formatMoney(row.price) : row.note ?? '';
+      return `<button class="shop-row" data-feature-row="${row.id}" ${row.disabled ? 'disabled' : ''}><span><b>${row.label}</b><small>${row.detail ?? ''}</small></span><em>${right}</em></button>`;
+    }).join('');
+    const balance = view.balance === undefined ? '' : `<div class="balance-stamp">ON HAND <b>${formatMoney(view.balance)}</b></div>`;
+    const blurb = view.blurb ? `<span>${view.blurb}</span>` : '';
+    this.set('feature', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">${view.eyebrow}</p><h2>${view.title}</h2>${blurb}${balance}</header><div class="shop-list">${rows}</div><button data-action="leave">${view.leaveLabel ?? 'Leave'}</button></section>`);
+    for (const row of view.rows) this.bind(`[data-feature-row="${row.id}"]`, () => actions.choose(row.id));
     this.bind('[data-action="leave"]', actions.leave);
   }
 

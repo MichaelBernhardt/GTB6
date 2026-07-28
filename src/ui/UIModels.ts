@@ -1,9 +1,12 @@
 import type { WeaponId } from '../config';
 import type { DrinkId } from '../core/DrinkRules';
+import type { FeatureHudEntry } from '../features/types';
 import type { CheatSettings, GameSettings } from '../types';
 
+export type { FeatureHudEntry, FeatureMenuRow, FeatureMenuView } from '../features/types';
+
 export type NotificationTone = 'success' | 'danger' | 'reputation' | 'info' | 'radio' | 'music';
-export type MenuScreen = 'none' | 'loading' | 'asset-failed' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' | 'bottle' | 'choice' | 'safehouse';
+export type MenuScreen = 'none' | 'loading' | 'asset-failed' | 'main' | 'pause' | 'controls' | 'cheats' | 'shop' | 'bottle' | 'choice' | 'safehouse' | 'feature';
 
 export interface LoadingState {
   progress: number;
@@ -63,6 +66,7 @@ export interface HudState {
   settings: GameSettings;
   cheatsOn: boolean;
   inebriation: number; // 0..100 skinful; the HUD shows a dop badge once it climbs off zero
+  features?: FeatureHudEntry[]; // host-owned strip: every lazily loaded feature's chips share this one key
 }
 
 export interface MainMenuSummary {

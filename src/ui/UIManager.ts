@@ -1,5 +1,6 @@
 import type { WeaponId } from '../config';
 import type { DrinkId } from '../core/DrinkRules';
+import { featureMapIcons } from '../features/mapIcons';
 import type { MissionChoice } from '../systems/MissionSystem';
 import type { CheatSettings, GameSettings } from '../types';
 import type { RoadPoint } from '../world/City';
@@ -9,9 +10,9 @@ import { HudView } from './HudView';
 import { MapView, type MapViewFrame } from './MapView';
 import { MenuView } from './MenuView';
 import { MinimapView, type MapMarker, type MapPoint } from './MinimapView';
-import { TOAST_MS, toastVisibleAt, type CheatWeaponEntry, type DrinkCatalogEntry, type HudState, type LoadingState, type MainMenuSummary, type NotificationTone, type ShopArmourEntry, type ShopCatalogEntry, type WheelEntry } from './UIModels';
+import { TOAST_MS, toastVisibleAt, type CheatWeaponEntry, type DrinkCatalogEntry, type FeatureMenuView, type HudState, type LoadingState, type MainMenuSummary, type NotificationTone, type ShopArmourEntry, type ShopCatalogEntry, type WheelEntry } from './UIModels';
 
-export type { CheatWeaponEntry, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
+export type { CheatWeaponEntry, FeatureHudEntry, FeatureMenuView, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
 
 export class UIManager {
   root = document.createElement('div');
@@ -50,6 +51,8 @@ export class UIManager {
   onBuyArmour?: () => void;
   onBuyDrink?: (id: DrinkId) => void;
   onMissionChoice?: (id: MissionChoice['id']) => void;
+  /** The ONE callback every feature menu routes through — bound once in Game.bindUI(). */
+  onFeatureMenuAction?: (featureId: string, actionId: string) => void;
   onSafehouseSave?: () => void;
   onSafehouseSleep?: () => void;
   onConsoleCommand?: (text: string) => void;
@@ -71,9 +74,22 @@ export class UIManager {
   consolePrint(lines: string[]): void { this.consoleView.print(lines); }
 
   get mapOpen(): boolean { return this.mapView.open; }
-  openMap(frame: MapViewFrame): void { this.mapView.show(frame); }
+  openMap(frame: MapViewFrame): void { this.mapView.show(this.withFeatureIcons(frame)); }
   closeMap(): void { this.mapView.hide(); }
-  updateMap(frame: MapViewFrame): void { this.mapView.update(frame); }
+  updateMap(frame: MapViewFrame): void { this.mapView.update(this.withFeatureIcons(frame)); }
+
+  /**
+   * Fold in the always-on feature blips (petrol forecourts today) on their way to BOTH map surfaces.
+   *
+   * They join here rather than in Game.mapMarkers() beside the shop and safehouse icons because
+   * this branch may not touch Game.ts; see the seam note at the top of src/features/mapIcons.ts.
+   * The merge is additive and last, so a mission objective or a live player blip always draws over
+   * a garage rather than under it.
+   */
+  private withFeatureIcons(frame: MapViewFrame): MapViewFrame {
+    const icons = featureMapIcons();
+    return icons.length === 0 ? frame : { ...frame, markers: [...icons, ...frame.markers] };
+  }
 
   update(state: HudState): void {
     this.hudView.update(state); if (!toastVisibleAt(performance.now(), this.toastDeadline)) this.toast.classList.remove('is-visible');
@@ -81,7 +97,10 @@ export class UIManager {
 
   damageFlash(): void { this.vignette.classList.remove('is-flashing'); void this.vignette.offsetWidth; this.vignette.classList.add('is-flashing'); }
   screenFade(): void { this.fade.classList.add('is-active'); clearTimeout(this.fadeTimer); this.fadeTimer = setTimeout(() => this.fade.classList.remove('is-active'), 620); }
-  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom?: number): void { this.minimapView.draw(x, z, heading, roads, markers, police, hostiles, zoom); }
+  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom?: number): void {
+    const icons = featureMapIcons();
+    this.minimapView.draw(x, z, heading, roads, icons.length === 0 ? markers : [...icons, ...markers], police, hostiles, zoom);
+  }
 
   showWeaponWheel(entries: WheelEntry[]): void {
     const radius = 150; const step = (Math.PI * 2) / Math.max(1, entries.length);
@@ -100,7 +119,7 @@ export class UIManager {
   hideMenu(): void { this.menuView.hide(); }
 
   back(): boolean {
-    if (this.menuView.screen === 'shop' || this.menuView.screen === 'bottle' || this.menuView.screen === 'safehouse') { this.onResume?.(); return true; }
+    if (this.menuView.screen === 'shop' || this.menuView.screen === 'bottle' || this.menuView.screen === 'safehouse' || this.menuView.screen === 'feature') { this.onResume?.(); return true; }
     if (this.menuView.screen === 'choice') return true;
     if (this.menuView.screen === 'controls') { if (this.controlsFromMain || !this.lastSettings) this.showMainMenu(); else this.showPause(this.lastSettings); return true; }
     if (this.menuView.screen === 'cheats') { if (this.lastSettings) this.showPause(this.lastSettings); else this.showMainMenu(); return true; }
@@ -144,6 +163,8 @@ export class UIManager {
   showShop(entries: ShopCatalogEntry[], balance: number, armour?: ShopArmourEntry): void { this.menuView.shop(entries, balance, { buy: (id) => this.onBuyWeapon?.(id), ammo: (id) => this.onBuyAmmo?.(id), armour: () => this.onBuyArmour?.(), leave: () => this.back() }, armour); }
   showBottleStore(name: string, entries: DrinkCatalogEntry[], balance: number, inebriation: number): void { this.menuView.bottle(name, entries, balance, inebriation, { buy: (id) => this.onBuyDrink?.(id), leave: () => this.back() }); }
   showMissionChoice(title: string, choices: MissionChoice[]): void { this.menuView.choice(title, choices, (id) => this.onMissionChoice?.(id)); }
+  /** Host-owned feature screen: one show, one action callback, for every feature there will ever be. */
+  showFeatureMenu(view: FeatureMenuView): void { this.menuView.feature(view, { choose: (actionId) => this.onFeatureMenuAction?.(view.featureId, actionId), leave: () => this.back() }); }
   showSafehouse(name: string, sleepHours: number): void { this.menuView.safehouse(name, sleepHours, { save: () => this.onSafehouseSave?.(), sleep: () => this.onSafehouseSleep?.(), leave: () => this.back() }); }
   showCheats(weapons: CheatWeaponEntry[], cheats: CheatSettings): void {
     this.menuView.cheats(weapons, cheats, { weapon: (id) => { this.onGiveWeapon?.(id); this.onShowCheats?.(); }, maxAmmo: () => this.onMaxAmmo?.(), toggle: (value) => this.onCheats?.(value), back: () => this.back() });

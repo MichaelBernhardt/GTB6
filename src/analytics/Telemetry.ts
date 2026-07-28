@@ -1,5 +1,5 @@
 export type AnalyticsMode = 'loading' | 'menu' | 'singleplayer' | 'multiplayer' | 'paused';
-export type AnalyticsEventType = 'session_end' | 'player_death' | 'mission_start' | 'mission_complete' | 'mission_fail' | 'vehicle_collision' | 'aircraft_crash' | 'technical_error';
+export type AnalyticsEventType = 'session_end' | 'player_death' | 'mission_start' | 'mission_complete' | 'mission_fail' | 'vehicle_collision' | 'aircraft_crash' | 'technical_error' | 'feature_event';
 
 const BROWSER_ID_KEY = 'groot-theft-bakkie-anonymous-browser-id';
 const HEARTBEAT_MS = 30_000;
@@ -19,6 +19,24 @@ interface TelemetryOptions {
   uuid?: () => string;
   setInterval?: IntervalScheduler;
   clearInterval?: IntervalCanceller;
+}
+
+/**
+ * A v4 UUID that also works outside a secure context. `crypto.randomUUID` is secure-context-only, so
+ * it is undefined when the build is opened over plain http on a LAN address — which is exactly how a
+ * preview gets tested from another device on the network. `getRandomValues` carries no such
+ * restriction, and the shape must satisfy UUID above because a stored browser id is revalidated
+ * against it on the next visit.
+ */
+export function randomUuid(source: Crypto | undefined = typeof crypto === 'undefined' ? undefined : crypto): string {
+  if (source?.randomUUID) return source.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (source?.getRandomValues) source.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index++) bytes[index] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80; // variant 10xx
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export function coarseBrowser(userAgent: string): 'chromium' | 'firefox' | 'safari' | 'other' {
@@ -84,7 +102,7 @@ export class TelemetryClient {
     this.storage = browserStorage;
     this.request = options.fetch ?? (this.win?.fetch ? this.win.fetch.bind(this.win) : fetch);
     this.clock = options.now ?? (() => performance.now());
-    this.randomId = options.uuid ?? (() => crypto.randomUUID());
+    this.randomId = options.uuid ?? (() => randomUuid());
     this.schedule = options.setInterval ?? (this.win?.setInterval ? this.win.setInterval.bind(this.win) : () => 0);
     this.unschedule = options.clearInterval ?? (this.win?.clearInterval ? this.win.clearInterval.bind(this.win) : () => undefined);
     this.browserId = this.persistentBrowserId(); this.sessionId = this.randomId();
@@ -143,6 +161,16 @@ export class TelemetryClient {
       eventId: this.randomId(), sessionId: this.sessionId, mode, visible,
       elapsedSeconds, fps: fps ? Math.round(fps * 10) / 10 : undefined, quality,
     });
+  }
+
+  /** The ONE event catalogue for lazily loaded features (src/features/). Six features would otherwise
+   *  each negotiate their own AnalyticsEventType member and their own server payload branch; instead
+   *  every feature emits `feature_event` with its id, and the server bounds the payload once. */
+  feature(id: string, event: string, props: { detail?: string; value?: number } = {}): void {
+    const data: Record<string, string | number> = { feature: id, event };
+    if (props.detail !== undefined) data.detail = props.detail;
+    if (props.value !== undefined) data.value = props.value;
+    this.record('feature_event', data);
   }
 
   record(type: Exclude<AnalyticsEventType, 'technical_error' | 'session_end'>, data: Record<string, string | number> = {}): void {

@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_MINIMAP_ZOOM, MinimapRoadIndex, MINIMAP_ZOOM_NAMES, MINIMAP_ZOOM_SCALES, minimapNorthAngle, sanitizeMinimapZoom, stepMinimapZoom } from './MinimapView';
+import { DEFAULT_MINIMAP_ZOOM, MinimapRoadIndex, MINIMAP_ZOOM_NAMES, MINIMAP_ZOOM_SCALES, minimapNorthAngle, sanitizeMinimapZoom, stepMinimapZoom, tracePumpGlyph } from './MinimapView';
 
 // Screen position (0 = up, clockwise) the compass 'N' lands at for a given player heading.
 const northScreenDir = (heading: number) => { const p = minimapNorthAngle(heading); return { x: Math.sin(p), y: -Math.cos(p) }; };
@@ -20,6 +23,39 @@ describe('minimap compass', () => {
     expect(minimapNorthAngle(1.2) - minimapNorthAngle(0.5)).toBeCloseTo(0.7);
     const east = northScreenDir(Math.PI + Math.PI / 2); // quarter-turn right of facing-north
     expect(east.x).toBeCloseTo(1); expect(east.y).toBeCloseTo(0); // N swings to the right edge
+  });
+});
+
+describe('the petrol-pump blip', () => {
+  /** A Path2D stand-in that just records the traced points, so the glyph can be measured in node. */
+  function tracer(): { pts: Array<[number, number]>; moveTo(x: number, y: number): void; lineTo(x: number, y: number): void; closePath(): void } {
+    const pts: Array<[number, number]> = [];
+    return { pts, moveTo: (x, y) => { pts.push([x, y]); }, lineTo: (x, y) => { pts.push([x, y]); }, closePath: () => {} };
+  }
+
+  it('traces a pump, not another dot: two closed parts, taller than wide, inside the blip radius', () => {
+    const t = tracer();
+    tracePumpGlyph(t as unknown as Path2D, 6.5);
+    expect(t.pts.length).toBe(8); // body quad + nozzle quad
+    const xs = t.pts.map(([x]) => x); const ys = t.pts.map(([, y]) => y);
+    const w = Math.max(...xs) - Math.min(...xs); const h = Math.max(...ys) - Math.min(...ys);
+    expect(h).toBeGreaterThan(w * 0.9);                 // upright, like a pump
+    expect(Math.max(...xs.map(Math.abs))).toBeLessThanOrEqual(6.5);
+    expect(Math.max(...ys.map(Math.abs))).toBeLessThanOrEqual(6.5);
+  });
+
+  it('is the same path the full-screen map draws — mapRender cannot import it, so it is copied', () => {
+    // mapRender.ts is inline-copied into the mapgen preview and may not import from src (see its
+    // header), so the pump path exists twice. This keeps the copies honest.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const mapRender = readFileSync(join(here, 'mapRender.ts'), 'utf8');
+    const minimap = readFileSync(join(here, 'MinimapView.ts'), 'utf8');
+    for (const coefficient of ['0.62', '0.20', '0.95', '0.34', '0.80', '0.42', '0.30', '0.85']) {
+      expect(mapRender, coefficient).toContain(`s * ${coefficient}`);
+      expect(minimap, coefficient).toContain(`s * ${coefficient}`);
+    }
+    expect(mapRender).toContain("shape === 'fuel'");
+    expect(minimap).toContain("marker.shape === 'fuel'");
   });
 });
 

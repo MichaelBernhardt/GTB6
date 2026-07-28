@@ -17,7 +17,7 @@
  */
 
 /** Bump when the drawing contract changes. Embedded verbatim into the emitted preview. */
-export const MAP_RENDER_VERSION = '1.4.0'; // 1.4.0: rail station ticks + high-zoom station names
+export const MAP_RENDER_VERSION = '1.5.0'; // 1.5.0: petrol-pump marker shape
 
 /** Raw composite metres ASL where the hillshade turns snowy (matches City.SNOWLINE_METRES — the
  *  in-game ground shader whitens the same tops; a unit test keeps the two constants equal). */
@@ -38,7 +38,9 @@ export interface RenderMapData {
   junctions: Array<{ x: number; z: number }>;
   elevation?: { cols: number; rows: number; x0: number; z0: number; dx: number; dz: number; data: number[] };
   coast?: {
-    coastline: Poly2; ocean: Poly2; beaches: Array<{ name: string; points: Poly2 }>;
+    name?: string; coastline: Poly2; ocean: Poly2; beaches: Array<{ name: string; points: Poly2 }>;
+    /** The REAL waterline pieces of `ocean` — the polygon minus the clip box's own walls. */
+    shore?: Poly2[];
     harbour: { x: number; z: number };
     /** Corridor band extents (metadata for zoning; the map draws no band tint). */
     corridor: { eastX: number; westX: number; northZ?: number; southZ?: number };
@@ -81,6 +83,25 @@ const APRON_COLOR = '#6b6f78';
 const WATER_COLOR = '#2e6f9e';
 const WATER_PREMIUM_COLOR = '#3d89bd';
 const OCEAN_COLOR = '#173e63';
+/** How far past the world square the map paints off-map cover (units). Only has to exceed the
+ *  widest view the map screen can be zoomed out to. */
+const OFFMAP_REACH = 20000;
+/**
+ * R1. What is off the west edge is NOT ocean, it is more of the same country: the Vaal is 320 km2
+ * and the world square crops 154. Painting that margin flat navy put a dead-straight hue boundary
+ * — rgb(22,59,93) against rgb(42,62,50), 6.1 km of it — exactly on the world square's west edge,
+ * which is the water-cap defect relocated to the land's termination. So the margin gets the LAND
+ * tone, matching the darkest ground inside the square, and the real water polygon (which overhangs
+ * the square) paints the bays across it. Land continues into land, water into water, and the only
+ * thing that ends at the boundary is the detail.
+ */
+const OFFMAP_LAND_COLOR = '#20262a';
+/** Ramp floor for the ground tone — see buildHillshade. */
+const TONE_FLOOR = 0.38;
+/** Veld tint along the real waterline, matching the border veld's scrub. */
+const SHORE_VELD_COLOR = '#3d5a3a';
+/** [width in units, alpha] — widest and faintest first, so the band falls off outward. */
+const SHORE_VELD_BANDS: Array<[number, number]> = [[900, 0.16], [520, 0.16], [260, 0.16]];
 const BEACH_COLOR = '#d9c184';
 const FARMLAND_COLOR = '#5a4630'; // tilled soil brown, matching the 3D farmland fill (createGrassTexture 'soil')
 const DISTRICT_COLOR = '#b9c7d6';
@@ -151,7 +172,7 @@ interface Prebuilt {
   pondWaterPath: Path2D | null;
   railPath: Path2D | null;
   oceanPath: Path2D | null;
-  coastlinePath: Path2D | null;
+  shorePath: Path2D | null;
   beachPath: Path2D | null;
   farmlandPath: Path2D | null;
   runwayPath: Path2D | null;
@@ -194,6 +215,25 @@ function snowNoise(x: number, z: number): number {
   return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
 }
 
+/**
+ * Maps an elevation to its rank in the grid, 0..1 — a plain histogram equalisation over a bounded
+ * sample of the values, so it is O(1) per pixel and deterministic. Sampling every value would be
+ * fine at 128x128 too; the stride is there so the cost does not grow if the grid ever does.
+ */
+export function elevationRanker(data: readonly number[]): (value: number) => number {
+  const stride = Math.max(1, Math.floor(data.length / 4096));
+  const sample: number[] = [];
+  for (let i = 0; i < data.length; i += stride) sample.push(data[i]!);
+  sample.sort((a, b) => a - b);
+  const n = sample.length;
+  if (n < 2 || sample[0] === sample[n - 1]) return () => 0.5;
+  return (value: number): number => {
+    let lo = 0; let hi = n; // first index with sample[i] >= value
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sample[mid]! < value) lo = mid + 1; else hi = mid; }
+    return Math.min(1, lo / (n - 1)); // lo reaches n above the grid's own maximum
+  };
+}
+
 function buildHillshade(map: RenderMapData): Prebuilt['hillshade'] {
   const e = map.elevation;
   if (!e || e.data.every((v) => v === e.data[0])) return null;
@@ -201,7 +241,17 @@ function buildHillshade(map: RenderMapData): Prebuilt['hillshade'] {
   c.width = e.cols; c.height = e.rows;
   const g = c.getContext('2d'); if (!g) return null;
   const img = g.createImageData(e.cols, e.rows);
-  const min = map.stats.minElevation; const max = Math.max(map.stats.maxElevation, min + 1);
+  // GROUND TONE COMES FROM THE GRID'S OWN DISTRIBUTION, NOT FROM min..max.
+  // It used to be t = (v - stats.minElevation) / (stats.maxElevation - stats.minElevation), which is
+  // only stable while the encoding is. The old map wrote 0 metres for water and off-map, so min was 0,
+  // the range was 0..2949 and ordinary land at 1659 m sat at t = 0.56 — mid-ramp, legible. The dam
+  // build writes real metres everywhere, so min became 1480: the identical land dropped to t = 0.16,
+  // the dark end of the ramp, and the WHOLE MAP went dark with it (measured on the two renders: median
+  // luminance 41 -> 34 over the city, 51 -> 39 in the west band, and the share of pixels under 35 went
+  // from 8% to 57%). That is the "large empty unlit areas" on the map screen, and it was never about
+  // the dam. Ranking the values instead makes the tone independent of the encoding: the median of the
+  // land is always mid-grey, whether water is stored as 0 m or as full supply level.
+  const rank = elevationRanker(e.data);
   const cell = Math.abs(e.dx) * map.stats.metresPerUnit;
   const at = (col: number, row: number): number =>
     e.data[Math.max(0, Math.min(e.rows - 1, row)) * e.cols + Math.max(0, Math.min(e.cols - 1, col))]!;
@@ -211,7 +261,13 @@ function buildHillshade(map: RenderMapData): Prebuilt['hillshade'] {
       const dzdy = (at(col, row + 1) - at(col, row - 1)) / (2 * cell);
       let shade = 0.72 - 2.2 * (dzdx * -0.707 + dzdy * -0.707);
       shade = Math.max(0.25, Math.min(1.15, shade));
-      const t = (at(col, row) - min) / (max - min);
+      // GROUND TONE SAYS "THIS IS LAND"; RELIEF IS THE SHADING'S JOB. Ranking fixed the encoding
+      // dependency but the ramp still started at black, and the reservoir's shore is by definition
+      // the lowest ground on the map — so the peninsulas between the drowned valleys came out as
+      // void (D4, measured at rgb(25,31,33) against water at rgb(26,65,100)). The floor keeps the
+      // lowest land a legible veld; altitude still lightens it, just from a base rather than from
+      // nothing.
+      const t = TONE_FLOOR + (1 - TONE_FLOOR) * rank(at(col, row));
       let r = 46 + 44 * t; let bg = 56 + 40 * t; let bb = 52 + 30 * t;
       // Snowy tops: blend toward white above the (noise-dithered) snowline, keeping the relief shading.
       const metres = at(col, row); // grid values are metres ASL already
@@ -256,7 +312,7 @@ function prebuild(map: RenderMapData): Prebuilt {
     pondWaterPath: pondWater.length ? polyPathOf(pondWater) : null,
     railPath: map.railways.length ? pathOf(map.railways) : null,
     oceanPath: coast ? polyPathOf([{ points: coast.ocean }]) : null,
-    coastlinePath: coast ? pathOf([{ points: coast.coastline }]) : null,
+    shorePath: coast?.shore?.length ? pathOf(coast.shore.map((points) => ({ points }))) : (coast ? polyPathOf([{ points: coast.ocean }]) : null),
     beachPath: coast && coast.beaches.length ? polyPathOf(coast.beaches) : null,
     farmlandPath: farmFields.length ? polyPathOf(farmFields) : null,
     runwayPath: airport ? pathOf([airport.runway]) : null,
@@ -297,9 +353,37 @@ export function renderMap(ctx: CanvasRenderingContext2D, map: RenderMapData, cam
     ctx.drawImage(g.hillshade.canvas, g.hillshade.x, g.hillshade.z, g.hillshade.w, g.hillshade.h); ctx.restore();
   }
   if (layers.coast && map.coast) {
+    if (g.hillshade) {
+      // Off-map cover on all four sides, in the LAND tone (see OFFMAP_LAND_COLOR). It stops dead on
+      // the world square, so nothing inside the map is touched; what it removes is the boundary.
+      const h = g.hillshade;
+      ctx.fillStyle = OFFMAP_LAND_COLOR;
+      ctx.fillRect(h.x - OFFMAP_REACH, h.z - OFFMAP_REACH, OFFMAP_REACH, h.h + 2 * OFFMAP_REACH);
+      ctx.fillRect(h.x + h.w, h.z - OFFMAP_REACH, OFFMAP_REACH, h.h + 2 * OFFMAP_REACH);
+      ctx.fillRect(h.x, h.z - OFFMAP_REACH, h.w, OFFMAP_REACH);
+      ctx.fillRect(h.x, h.z + h.h, h.w, OFFMAP_REACH);
+    }
+    // SHORE VELD (D4). Everywhere else on the map, ground that reads as land reads that way because
+    // a landuse polygon tints it — the border veld, the parks, the farm fields. The dam's shore has
+    // none: it arrived as raw geometry, so the peninsulas between the drowned valleys were bare
+    // hillshade at rgb(31,36,37) next to water at rgb(24,60,94), and against that they read as
+    // black holes. A wide soft band of veld along the real waterline is what the drawdown zone
+    // actually is, and it is drawn UNDER the water, so only the land keeps it.
+    if (g.shorePath) {
+      ctx.strokeStyle = SHORE_VELD_COLOR; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (const [w, a] of SHORE_VELD_BANDS) {
+        ctx.lineWidth = w; ctx.globalAlpha = a; ctx.stroke(g.shorePath);
+      }
+      ctx.globalAlpha = 1;
+    }
     if (g.oceanPath) { ctx.fillStyle = OCEAN_COLOR; ctx.globalAlpha = 0.92; ctx.fill(g.oceanPath); ctx.globalAlpha = 1; }
     if (g.beachPath) { ctx.fillStyle = BEACH_COLOR; ctx.globalAlpha = 0.9; ctx.fill(g.beachPath); ctx.globalAlpha = 1; }
-    if (g.coastlinePath) { ctx.strokeStyle = '#8fc7e8'; ctx.lineWidth = Math.max(3, 1.6 / zoom); ctx.stroke(g.coastlinePath); }
+    // Stroke the REAL SHORELINE ONLY. Two things are wrong with stroking the water polygon whole:
+    // `coast.coastline` is a per-latitude eastmost envelope that cuts straight across every inlet,
+    // and the polygon itself carries the clip box's own walls, which get drawn as a bright ruler-
+    // straight "coast" out in the margin (R1's second line, a 96-110 luminance step). `coast.shore`
+    // is the polygon minus those walls: real waterline, and nothing the clip invented.
+    if (g.shorePath) { ctx.strokeStyle = '#8fc7e8'; ctx.lineWidth = Math.max(3, 1.6 / zoom); ctx.stroke(g.shorePath); }
     ctx.fillStyle = '#ffd75e';
     ctx.beginPath(); ctx.arc(map.coast.harbour.x, map.coast.harbour.z, Math.max(9, 5 / zoom), 0, Math.PI * 2); ctx.fill();
   }
@@ -419,11 +503,14 @@ function drawStar(ctx: CanvasRenderingContext2D, x: number, y: number, r: number
 
 /**
  * Draw a live game marker in the minimap's visual language, in screen space.
- * Shapes mirror {@link MinimapView}: gold mission circles, teal shop diamonds, safehouse houses.
+ * Shapes mirror {@link MinimapView}: gold mission circles, teal shop diamonds, safehouse houses,
+ * orange petrol pumps. The pump path is written out here rather than imported from MinimapView
+ * because this file is inline-copied into the mapgen preview and may not import from src (see the
+ * header) — MinimapView.tracePumpGlyph is the same path, and a test keeps the two agreeing.
  */
 export function drawMarker(
   ctx: CanvasRenderingContext2D, sx: number, sy: number, color: string,
-  shape: 'circle' | 'diamond' | 'house' | 'square' = 'circle', size = 7,
+  shape: 'circle' | 'diamond' | 'house' | 'square' | 'fuel' = 'circle', size = 7,
 ): void {
   ctx.save(); ctx.translate(sx, sy);
   ctx.fillStyle = color; ctx.strokeStyle = '#111817'; ctx.lineWidth = 2; ctx.beginPath();
@@ -431,6 +518,10 @@ export function drawMarker(
   if (shape === 'diamond') { ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(0, s); ctx.lineTo(-s, 0); ctx.closePath(); }
   else if (shape === 'house') { ctx.moveTo(0, -s * 1.1); ctx.lineTo(s * 0.85, -s * 0.2); ctx.lineTo(s * 0.85, s * 0.85); ctx.lineTo(-s * 0.85, s * 0.85); ctx.lineTo(-s * 0.85, -s * 0.2); ctx.closePath(); }
   else if (shape === 'square') { ctx.rect(-s * 0.8, -s * 0.8, s * 1.6, s * 1.6); }
+  else if (shape === 'fuel') {
+    ctx.moveTo(-s * 0.62, -s * 0.85); ctx.lineTo(s * 0.20, -s * 0.85); ctx.lineTo(s * 0.20, s * 0.95); ctx.lineTo(-s * 0.62, s * 0.95); ctx.closePath();
+    ctx.moveTo(s * 0.34, -s * 0.30); ctx.lineTo(s * 0.80, -s * 0.30); ctx.lineTo(s * 0.80, s * 0.42); ctx.lineTo(s * 0.34, s * 0.42); ctx.closePath();
+  }
   else ctx.arc(0, 0, s, 0, Math.PI * 2);
   ctx.fill(); ctx.stroke(); ctx.restore();
 }

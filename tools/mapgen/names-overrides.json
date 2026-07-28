@@ -25,10 +25,9 @@
   "_district_renames": "Game-facing district identities (Marshalltown is the CBD core, Sandown is Sandton CBD):",
   "Marshalltown": "Joburg CBD",
   "Sandown": "Sandton",
-  "_coast": "Jozi-by-the-Sea seeds (owner to curate):",
+  "_coast": "Vaalpunt Dam shore seeds (owner to curate):",
   "Padstal": "Ouma se Padstal",
-  "Sea Point": "Sea Pointe",
   "_features": "Airport / sea port parody names (owner to curate):",
   "OR Tambourine Field": "O.R. Tambourine Regional",
-  "Seepunt Pier": "Seepunt Pier"
+  "Vaalpunt Slipway": "Vaalpunt Slipway"
 }

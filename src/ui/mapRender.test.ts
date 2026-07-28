@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  clampZoom, fitZoom, MAP_MAX_ZOOM, MAP_MIN_ZOOM, markerScreen, screenToWorld,
+  clampZoom, elevationRanker, fitZoom, MAP_MAX_ZOOM, MAP_MIN_ZOOM, markerScreen, screenToWorld,
   weaponWheelResponds, worldToScreen, type MapCamera,
 } from './mapRender';
 
@@ -62,5 +62,39 @@ describe('weaponWheelResponds', () => {
   it('gates weapon-cycle scroll while the full-screen map is open', () => {
     expect(weaponWheelResponds(false)).toBe(true);
     expect(weaponWheelResponds(true)).toBe(false);
+  });
+});
+
+describe('hillshade tone (D4)', () => {
+  // The map's ground tone used to be (v - minElevation) / (max - min). The old build stored 0 metres
+  // for water and off-map, so ordinary land at 1659 m sat mid-ramp; the dam build stores real metres
+  // everywhere, min became 1480, the identical land dropped to t = 0.16 and the WHOLE MAP went dark.
+  // Ranking the values instead is invariant to that, which is the property these tests pin.
+  const land = Array.from({ length: 400 }, (_, i) => 1480 + (i % 40) * 12);
+
+  it('puts the median of the grid in the middle of the ramp', () => {
+    const rank = elevationRanker(land);
+    const sorted = [...land].sort((a, b) => a - b);
+    expect(rank(sorted[Math.floor(sorted.length / 2)]!)).toBeGreaterThan(0.4);
+    expect(rank(sorted[Math.floor(sorted.length / 2)]!)).toBeLessThan(0.6);
+    expect(rank(Math.min(...land))).toBe(0);
+    expect(rank(Math.max(...land))).toBeGreaterThan(0.95); // ties resolve to the lower bound
+    expect(rank(9999)).toBe(1);
+  });
+
+  it('gives the same tone whether water is encoded as 0 m or as full supply level', () => {
+    const asZero = elevationRanker([...land, ...Array<number>(120).fill(0)]);
+    const asLevel = elevationRanker([...land, ...Array<number>(120).fill(1480)]);
+    for (const metres of [1500, 1600, 1700, 1900]) {
+      expect(Math.abs(asZero(metres) - asLevel(metres))).toBeLessThan(0.02);
+    }
+  });
+
+  it('is monotone, and survives a flat grid without dividing by zero', () => {
+    const rank = elevationRanker(land);
+    let previous = -1;
+    for (let m = 1400; m < 2100; m += 25) { const t = rank(m); expect(t).toBeGreaterThanOrEqual(previous); previous = t; }
+    expect(elevationRanker([7, 7, 7])(7)).toBe(0.5);
+    expect(elevationRanker([])(0)).toBe(0.5);
   });
 });

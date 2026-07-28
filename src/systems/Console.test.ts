@@ -180,6 +180,7 @@ describe('runConsoleCommand', () => {
     giveArmour: () => 'armoured',
     giveItem: (item, count) => `item:${item}:${count}`,
     setInebriation: (level) => `drunk:${level ?? 'max'}`,
+    feature: (args) => [`feature:${args.join(' ') || 'list'}`],
   };
 
   it('routes parsed commands to host handlers and echoes their feedback', () => {

@@ -13,6 +13,8 @@ import { InputManager } from './core/InputManager';
 import { MultiplayerOverlay } from './multiplayer/MultiplayerOverlay';
 import { OnlineSession, type OnlineReport } from './multiplayer/OnlineSession';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
+import { FeatureHost, type FeatureHostContext } from './features/host';
+import type { FeatureGameApi } from './features/types';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { FrameProfiler } from './core/FrameProfiler';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
@@ -224,10 +226,14 @@ export class Game {
   private planes: Plane[] = [];
   private activePlane?: Plane;
   private districtTargets!: TeleportTarget[];
+  /** Every lazily loaded feature (src/features/) reaches the game through this one field. See
+   *  src/features/README.md — a new feature adds a FILE plus one line in an ARRAY, and zero lines here. */
+  private features: FeatureHost;
 
   constructor(private container: HTMLElement) {
     bootMark('boot: settings');
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
+    this.features = new FeatureHost(this.featureHostContext()); this.features.restore(this.save.features); // lazy features: nothing loads until the player walks into one
     if (this.touchMode) this.settings.quality = touchQuality(this.saveExists, this.settings.quality, 'potato'); // phones start on the Skorokoro tier; a saved choice from the settings menu wins
     analytics.setQuality(this.settings.quality);
     bootMark('boot: renderer');
@@ -431,6 +437,7 @@ export class Game {
       const update = this.missions.choose(id); this.mode = 'playing'; analytics.setMode('singleplayer'); this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
       this.processMissionUpdate(update);
     };
+    this.ui.onFeatureMenuAction = (featureId, actionId) => this.features.menuAction(featureId, actionId); // one callback for every feature menu there will ever be
     this.ui.onConsoleCommand = (text) => this.ui.consolePrint(runConsoleCommand(text, this.consoleHost));
     this.ui.onConsoleClose = () => this.closeConsole();
     this.ui.onMapClose = () => this.closeMap();
@@ -470,7 +477,7 @@ export class Game {
       ];
     }
     return [
-      ...this.shops.mapIcons(), ...this.safehouses.mapIcons(),
+      ...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...this.features.mapIcons(), // features blip themselves; the host returns [] while online and when nothing is loaded
       ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true }] : []),
       ...((area) => area ? [{ x: area.x, z: area.z, color: '#f5c542', area: area.radius }] : [])(this.riddleSearchArea()),
       ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : []),
@@ -555,6 +562,7 @@ export class Game {
       this.player.inebriation = Math.max(0, Math.min(INEBRIATION_MAX, level ?? INEBRIATION_MAX));
       return this.player.inebriation <= 0 ? 'Sobered up. Straight as an arrow.' : `Inebriation set to ${Math.round(this.player.inebriation)}/100. Mind the lampposts.`;
     },
+    feature: (args) => this.features.command(args),
     missionList: () => MISSIONS.map((mission, index) =>
       `${index + 1}. ${mission.name} — ${mission.contact}${this.missions.active?.id === mission.id ? ' ← active' : this.missions.completed.has(mission.id) ? ' ✓ done' : ''}`),
     missionStart: (index) => {
@@ -701,7 +709,7 @@ export class Game {
   private startGame(fresh: boolean): void {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; this.features.reset(this.save.features); }
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
   }
@@ -875,6 +883,7 @@ export class Game {
     for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition && !this.airborne)) this.applyPickup(item);
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
     this.updateInebriation(dt);
+    this.features.update(dt); // lazily loaded features; the host no-ops while online, so PvP never ticks them
     this.saveTimer += dt; if (this.saveTimer > 8 && !this.activePlane) { this.persist(); this.saveTimer = 0; } // no autosave mid-flight: a resumed save would float the player at altitude
     if (this.player.health <= 0) this.die();
   }
@@ -1072,6 +1081,7 @@ export class Game {
       const plane = this.nearestPlane();
       if (plane) { this.enterPlane(plane); return; }
       if (this.trains.tryBoard(this.player.group.position)) { this.cover = undefined; this.ui.notify('All aboard', 'WASD walks the aisle. E steps off — or takes the controls from a cab.'); return; }
+      if (this.features.act('foot')) return; // the feature registry sits at the bottom of the ladder: it never steals E from a mission, shop, safehouse, plane or train
       if (shop?.driveIn && !vehicle && !cruiser) { this.ui.notify(shop.name, shop.kind === 'spray' ? 'They only detail vehicles. Drive one onto the marker.' : 'Drive a vehicle onto the marker to store it.', false); return; }
       const pick = cruiser && (!vehicle || cruiser.group.position.distanceToSquared(this.player.group.position) < vehicle.group.position.distanceToSquared(this.player.group.position)) ? cruiser : vehicle;
       if (pick === cruiser && cruiser) { this.police.release(cruiser); this.population.vehicles.push(cruiser); } // stolen cruiser leaves the JMPD fleet
@@ -1387,6 +1397,7 @@ export class Game {
       const shop = this.shops.shopNear(vehicle.group.position);
       if (shop?.kind === 'spray') { this.useSpray(vehicle); return; }
       if (shop?.kind === 'garage') { this.storeVehicle(vehicle); return; }
+      if (this.features.act('vehicle')) return; // a feature MUST offer nothing when it has nothing to do, or E could never exit the car
       this.beginExit(vehicle);
     }
     if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify(vehicle.spec.twoWheeler ? 'Bike recovered' : 'Bakkie recovered', vehicle.spec.name); }
@@ -2442,6 +2453,9 @@ export class Game {
     if (this.mode === 'playing' && !this.transition && !this.player.knockedDown) { // a floored player gets no interaction prompts — nothing they could act on
       const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
+      // The SAME resolver the two E branches run, so the prompt on screen always belongs to the
+      // branch the key will take. Returns undefined while online — features are suspended in PvP.
+      const featureOffer = this.features.offer(this.activeVehicle ? 'vehicle' : 'foot');
       const contactPrompt = this.contactPrompt(); // offer / riddle re-state / job re-brief — undefined when E would do nothing
       if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat'
         : this.online.enterableVehicleNear(this.player.group.position.x, this.player.group.position.z) ? 'E  Enter vehicle  ·  ENTER  Global chat'
@@ -2458,7 +2472,7 @@ export class Game {
           const courierHint = this.activeVehicle.spec.kind !== 'courier' ? '' : `  ·  Y  ${this.courierJob.active ? 'Clock out' : 'Clock in'}`;
           const sirenHint = this.activeVehicle.police ? '  ·  G  Siren' : '';
           const radioHint = this.activeVehicle.spec.twoWheeler ? '' : '  ·  N  Radio';
-          prompt = `E  Exit vehicle  ·  F  Recover${radioHint}${taxiHint}${courierHint}${sirenHint}`;
+          prompt = `${featureOffer ? featureOffer.prompt : 'E  Exit vehicle'}  ·  F  Recover${radioHint}${taxiHint}${courierHint}${sirenHint}`;
         }
       }
       else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  V  Camera  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
@@ -2476,6 +2490,7 @@ export class Game {
       else if (this.nearbyDiaryPage()) prompt = 'E  Take the torn page';
       else if (this.coverAvailable) prompt = 'Q  Take cover';
       else if (this.nearestPlane()) prompt = 'E  Enter plane';
+      else if (featureOffer) prompt = featureOffer.prompt; // above 'F Mug / melee': a dealer fixture must read as a trade, not a target
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus) || this.police.stealableNear(focus)) prompt = 'E  Enter vehicle';
     }
@@ -2508,7 +2523,7 @@ export class Game {
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
     const onlineState = this.online?.localState;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: this.features.hud() });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,
@@ -2563,6 +2578,7 @@ export class Game {
     if (!checkpoint) return 'No checkpoint yet — type `save` to stamp one, then `reload` returns to it.';
     this.closeConsole();
     this.save = checkpoint;
+    this.features.reset(this.save.features); // drop live feature state; the checkpoint's slices load again on demand
     this.economy.balance = this.save.money;
     this.inventory = { ...this.save.inventory };
     Object.assign(this.cheats, this.save.cheats);
@@ -2628,8 +2644,72 @@ export class Game {
   private persist(): void {
     const at = this.activeVehicle?.group.position ?? this.player.group.position; // live location (the vehicle is the player while driving)
     const heading = this.activeVehicle?.heading ?? this.player.heading;
-    this.save = { version: 3, money: this.economy.balance, completedMissions: [...this.missions.completed], storyFlags: this.story.serializeFlags(), diaryPages: this.story.serializeDiaryPages(), spawn: this.save.spawn, position: [at.x, at.y, at.z], heading, settings: this.settings, weapons: this.combat.serialize(), cheats: { ...this.cheats }, garage: this.save.garage, livingCity: this.livingCity.state, timeOfDay: this.dayNight.hour, safehouses: this.save.safehouses, inventory: { ...this.inventory } };
+    // One key per line, deliberately: this used to be a single ~700-character physical line, which
+    // made every feature that wanted a save key a merge conflict on the identical line.
+    this.save = {
+      version: 3,
+      money: this.economy.balance,
+      completedMissions: [...this.missions.completed],
+      storyFlags: this.story.serializeFlags(),
+      diaryPages: this.story.serializeDiaryPages(),
+      spawn: this.save.spawn,
+      position: [at.x, at.y, at.z],
+      heading,
+      settings: this.settings,
+      weapons: this.combat.serialize(),
+      cheats: { ...this.cheats },
+      garage: this.save.garage,
+      livingCity: this.livingCity.state,
+      timeOfDay: this.dayNight.hour,
+      safehouses: this.save.safehouses,
+      inventory: { ...this.inventory },
+      // Per-KEY merge, never a wholesale replace: serialize() returns only the features loaded this
+      // session, so an unloaded feature's stored slice must survive the autosave untouched.
+      features: { ...this.save.features, ...this.features.serialize() },
+    };
     this.saveManager.save(this.save);
   }
   private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.postProcessing?.composer.setSize(innerWidth, innerHeight); }
+
+  /** What the FeatureHost needs beyond the feature-facing api: the online suspension verdict and the
+   *  two analytics routes. Features are SUSPENDED while `this.online` — no ticks, no prompts, no
+   *  loading — because ui.update() is guarded on nearly every field and protest crowds or street
+   *  fixtures must never spawn into someone else's PvP session. */
+  private featureHostContext(): FeatureHostContext {
+    return {
+      api: this.featureApi(),
+      suspended: () => Boolean(this.online),
+      emit: (id, event, props) => analytics.feature(id, event, props),
+      // Same shape as setupComposer's degraded path: the feature is optional, the city carries on.
+      reportError: (error, asset) => analytics.captureError(error, { source: 'runtime', severity: 'recoverable', asset }),
+    };
+  }
+
+  /** The whole surface a feature may touch. Flat and all-callable on purpose: every volatile value is
+   *  a method, so a feature cannot accidentally cache a stale position or balance. */
+  private featureApi(): FeatureGameApi {
+    return {
+      scene: this.scene,
+      surfaceHeightAt: (x, z) => this.city.surfaceHeightAt(x, z),
+      districtAt: (x, z) => this.city.districtAt(x, z),
+      isPark: (x, z) => this.city.isPark(x, z),
+      nearestRoadPose: (at) => this.city.nearestRoadPose(at),
+      playerPosition: () => this.player.group.position,
+      playerHeading: () => this.player.heading,
+      drivenVehicle: () => this.activeVehicle,
+      hour: () => this.dayNight.hour,
+      blackout: () => this.dayNight.blackoutDarkness,
+      balance: () => this.economy.balance,
+      earn: (amount) => { this.economy.earn(amount); },
+      spend: (amount) => this.economy.spend(amount),
+      notify: (title, detail, success) => this.ui.notify(title, detail, success),
+      // Mirrors openWeaponShop/enterSafehouse exactly, so a feature menu pauses the world the same way.
+      showMenu: (view) => { this.mode = 'paused'; analytics.setMode('paused'); this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock(); this.ui.showFeatureMenu(view); },
+      closeMenu: () => { this.ui.onResume?.(); },
+      persist: () => this.persist(),
+      analytics: () => undefined, // replaced per feature by the host, which binds the feature id
+      spawnFixture: (x, z, name) => this.population.spawnFixture(x, z, name),
+      removeFixture: (ped) => this.population.removePedestrian(ped),
+    };
+  }
 }

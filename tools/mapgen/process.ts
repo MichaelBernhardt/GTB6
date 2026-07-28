@@ -1,13 +1,23 @@
 import {
+  DAM_CLIP_OVERSHOOT_M,
+  DAM_OVERHANG_M,
+  HARBOUR_DISTRICT_NAME,
+  PORT_ACCESS_ROAD_NAME,
+  SHORE_BUILDING_MAX_GROWTH,
+  SHORE_BUILDING_MIN_UNITS,
   BBOX,
   BRIDGE_DISTANCE_M,
   CBD_CENTER,
+  CROP_BBOX,
+  DAM_ISLAND_NAME,
+  DAM_NAME,
   CUL_DE_SAC_NAMES,
   DEADEND_CONNECT_M,
   DEADEND_JOIN_M,
   DEADEND_PRUNE_M,
   DEADEND_PRUNE_MAJOR_M,
   DISTRICT_RADIUS_M,
+  VAAL_SHORE_MAX_DENSITY,
   EDGE_MARGIN_UNITS,
   LANDMARK_CANONICAL,
   MIN_LANDUSE_AREA_M2,
@@ -34,6 +44,8 @@ import {
   TRACK_WIDTHS,
 } from './config';
 import { buildBorderVeld, closeCoastalLoop, compositeElevation, graftCoastAndCorridor, smoothCurve, type CoastGraftResult } from './coast';
+import type { VaalStrip } from './vaal';
+import type { VaalShoreExtract } from './vaalshore';
 import { resolveDeadEnds } from './deadends';
 import { thinRailways } from './railways';
 import { buildStations } from './stations';
@@ -65,13 +77,43 @@ import type {
 
 const CLIP_MARGIN_DEG = 0.003; // ~300 m of slack around the bbox
 
-function inBbox(lat: number, lon: number): boolean {
+/**
+ * THE CROP. Everything derived from the fetched vector data is filtered through this, so the
+ * whole organify chain downstream (run-splitting, thinning, orbital, dead ends, meander) sees
+ * the new boundary and treats it exactly like the old one. Note this is CROP_BBOX, not BBOX:
+ * BBOX stays frozen at the fetch extent so every disk cache still hits.
+ */
+export function inBbox(lat: number, lon: number): boolean {
   return (
-    lat >= BBOX.south - CLIP_MARGIN_DEG &&
-    lat <= BBOX.north + CLIP_MARGIN_DEG &&
-    lon >= BBOX.west - CLIP_MARGIN_DEG &&
-    lon <= BBOX.east + CLIP_MARGIN_DEG
+    lat >= CROP_BBOX.south - CLIP_MARGIN_DEG &&
+    lat <= CROP_BBOX.north + CLIP_MARGIN_DEG &&
+    lon >= CROP_BBOX.west - CLIP_MARGIN_DEG &&
+    lon <= CROP_BBOX.east + CLIP_MARGIN_DEG
   );
+}
+
+/** True when any vertex of a projected ring falls inside the crop (used for area features). */
+function ringInCrop(nodes: Array<OsmNode | undefined>): boolean {
+  for (const node of nodes) if (node && inBbox(node.lat, node.lon)) return true;
+  return false;
+}
+
+/**
+ * Split a way's nodes into RUNS of consecutive in-crop nodes, exactly as the road extractor
+ * does. Filtering nodes out of a polyline instead (which tracks and rail chains used to do)
+ * leaves a ruler-straight chord wherever a way leaves and re-enters the box — invisible at the
+ * old boundary, very visible when the crop line runs through dense suburbs.
+ */
+function inCropRuns(ids: number[], osmNodes: Map<number, OsmNode>): OsmNode[][] {
+  const runs: OsmNode[][] = [];
+  let run: OsmNode[] = [];
+  for (const id of ids) {
+    const node = osmNodes.get(id);
+    if (node && inBbox(node.lat, node.lon)) run.push(node);
+    else if (run.length > 0) { runs.push(run); run = []; }
+  }
+  if (run.length > 0) runs.push(run);
+  return runs;
 }
 
 function roadName(tags: Record<string, string>, kind: RoadKind): string {
@@ -101,6 +143,10 @@ const round2 = (v: number): number => Math.round(v * 100) / 100;
 export interface ProcessResult {
   map: JoburgMap;
   log: string[];
+  /** The stretch of REAL Vaal shoreline the dam fit cut, rotated into the map frame but unscaled.
+   *  Written out beside the map so tools/mapgen/measure-orientation.mjs can grade the emitted
+   *  shore's orientation histogram against the source it was actually cut from. */
+  damSourceWindow: Pt[];
 }
 
 /**
@@ -157,10 +203,14 @@ export interface ProcessExtras {
   buildingCounts?: number[] | null;
   /** Real OSM road names that must survive density thinning (names-overrides keys). */
   protectedNames?: Iterable<string>;
-  /** Cape Town seaboard extract: enables the Jozi-by-the-Sea coast + rural corridor graft. */
+  /** Cape Town seaboard extract: now only supplies the two beach outlines (see coast.ts). */
   cape?: OsmResponse;
+  /** Real Vaal Dam strip (vaal.ts parseVaal): the shoreline the west edge is cut from. */
+  vaal?: VaalStrip;
   /** railway=station/halt nodes (fetchStations) — null/absent when the network was unavailable. */
   stations?: OsmNode[] | null;
+  /** Real Vaal north-shore infrastructure (vaalshore.ts parseVaalShore): the towns on the dam. */
+  vaalShore?: VaalShoreExtract | null;
 }
 
 function landuseKind(tags: Record<string, string>): MapArea['kind'] | null {
@@ -268,9 +318,41 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   // City-block bounds BEFORE the graft: the ring must wrap the city, not the stretched
   // composite (otherwise it runs along the far corners and city-edge stubs miss its margin).
   const cityBounds = boundsOf(net.nodes.values());
+  // Golf courses and parks the synthetic reservoir must not be dropped on top of. Computed
+  // here (rather than reusing the landuse pass below) purely so the graft can see them —
+  // landuse proper is assembled after the graft because it also collects graft farmland.
+  const avoidCircles: Array<{ x: number; z: number; r: number }> = [];
+  {
+    const consider = (name: string | undefined, kind: MapArea['kind'] | null, pts: Pt[]): void => {
+      if (kind !== 'golf_course' && kind !== 'park' && kind !== 'nature_reserve') return;
+      if (pts.length < 4 || shoelaceArea(pts) < MIN_LANDUSE_AREA_M2) return;
+      const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+      const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+      let r = 0;
+      for (const p of pts) r = Math.max(r, Math.hypot(p.x - cx, p.z - cz));
+      avoidCircles.push({ x: cx, z: cz, r });
+      void name;
+    };
+    for (const relation of relations) {
+      const kind = relation.tags ? landuseKind(relation.tags) : null;
+      if (!kind) continue;
+      const outers = relation.members.filter((m) => m.type === 'way' && (m.role === 'outer' || m.role === ''));
+      for (const ring of assembleRings(outers.map((m) => ways.find((w) => w.id === m.ref)).filter((w): w is OsmWay => Boolean(w)))) {
+        const ringNodes = ring.map((id) => osmNodes.get(id));
+        if (!ringInCrop(ringNodes)) continue;
+        consider(relation.tags?.name, kind, ringNodes.filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon)));
+      }
+    }
+    for (const way of ways) {
+      const kind = way.tags ? landuseKind(way.tags) : null;
+      if (!kind || !way.nodes || way.nodes[0] !== way.nodes[way.nodes.length - 1]) continue;
+      if (!ringInCrop(way.nodes.map((id) => osmNodes.get(id)))) continue;
+      consider(way.tags?.name, kind, way.nodes.slice(0, -1).map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon)));
+    }
+  }
   let coast: CoastGraftResult | undefined;
-  if (extras.cape) {
-    coast = graftCoastAndCorridor(net, extras.cape);
+  if (extras.cape && extras.vaal) {
+    coast = graftCoastAndCorridor(net, extras.cape, extras.vaal, extras.vaalShore ?? null, 420, avoidCircles);
     for (const line of coast.log) log.push(line);
   }
 
@@ -309,7 +391,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     connectDistance: DEADEND_CONNECT_M,
     pruneLength: DEADEND_PRUNE_M,
     pruneLengthMajor: DEADEND_PRUNE_MAJOR_M,
-    culDeSacNames: new Set(CUL_DE_SAC_NAMES),
+    // Real Vaal streets are REAL cul-de-sacs. Left in the pass, 66 of them were welded into
+    // loops or T-junctions across open veld and 33 were deleted outright.
+    culDeSacNames: new Set<string>([...CUL_DE_SAC_NAMES, ...(coast?.shore?.roadNames ?? [])]),
   });
   log.push(
     `dead ends: joined ${deadEnds.joined} pairs into loops, tied ${deadEnds.connected} into nearby roads, ` +
@@ -319,6 +403,38 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   // ---- Organic curvature for the synthetic roads --------------------------
   const curvedRoads = meanderSyntheticRoads(net);
   log.push(`meander: curved ${curvedRoads} synthetic spine road(s) with perpendicular fBm noise + Chaikin smoothing`);
+
+  // ---- OVERLAP REPAIR: nothing may be left standing in the imported water ------------------
+  // Merge sub-problem (d). The graft, the corridor and the shore road are all built against the
+  // water polygon, but the passes that run AFTERWARDS are not: the meander bends a road by up to
+  // 105 m perpendicular, and beside a drowned-valley arm that is enough to put Plaaspad's frontage
+  // in the dam. Repair rather than forbid — walk the offending vertex EAST until it is ashore, the
+  // same rule coast.ts uses for grafted street nodes. Quays and jetties are excepted by name:
+  // they are supposed to end at the water.
+  if (coast) {
+    const damWater = coast.ocean; const damIslands = coast.damIslands;
+    const wetRoad = new Set([HARBOUR_DISTRICT_NAME, PORT_ACCESS_ROAD_NAME]);
+    const inRing = (ring: Pt[], p: Pt): boolean => {
+      let c = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = ring[i]!; const b = ring[j]!;
+        if ((a.z > p.z) !== (b.z > p.z) && p.x < ((b.x - a.x) * (p.z - a.z)) / (b.z - a.z) + a.x) c = !c;
+      }
+      return c;
+    };
+    const inWater = (p: Pt): boolean => inRing(damWater, p) && !damIslands.some((r) => inRing(r, p));
+    const protectedIds = new Set<number>();
+    for (const road of net.roads) if (wetRoad.has(road.name)) for (const id of road.nodeIds) protectedIds.add(id);
+    let moved = 0;
+    for (const [id, p] of net.nodes) {
+      if (protectedIds.has(id) || !inWater(p)) continue;
+      for (let d = 25; d <= 1400; d += 25) {
+        const q = { x: p.x + d, z: p.z };
+        if (!inWater(q) && !inWater({ x: q.x + 60, z: q.z })) { net.nodes.set(id, q); moved++; break; }
+      }
+    }
+    if (moved) log.push(`overlap: pushed ${moved} road vertex/vertices out of the dam after the meander`);
+  }
 
   // ---- Junctions + simplification (junction vertices pinned) --------------
   const junctionInfos = findJunctions(net);
@@ -349,7 +465,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     const outers = relation.members.filter((m) => m.type === 'way' && (m.role === 'outer' || m.role === ''));
     const rings = assembleRings(outers.map((m) => ways.find((w) => w.id === m.ref)).filter((w): w is OsmWay => Boolean(w)));
     for (const ring of rings) {
-      const points = ring.map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
+      const ringNodes = ring.map((id) => osmNodes.get(id));
+      if (!ringInCrop(ringNodes)) continue; // CROP: water had no bbox filter at all
+      const points = ringNodes.filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
       if (points.length >= 4 && shoelaceArea(points) >= MIN_WATER_AREA_M2) {
         water.push({ name: relation.tags?.name ?? 'Water', points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
       }
@@ -359,12 +477,16 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   for (const way of ways) {
     const isWater = way.tags?.natural === 'water' || (way.tags?.water !== undefined && !way.tags?.highway);
     if (!isWater || waterWayIds.has(way.id) || !way.nodes || way.nodes[0] !== way.nodes[way.nodes.length - 1]) continue;
+    if (!ringInCrop(way.nodes.map((id) => osmNodes.get(id)))) continue; // CROP
     const points = way.nodes.slice(0, -1).map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
     if (points.length >= 4 && shoelaceArea(points) >= MIN_WATER_AREA_M2) {
       water.push({ name: way.tags?.name ?? 'Water', points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
     }
   }
   if (coast) water.push({ name: coast.lake.name, points: coast.lake.polygon });
+  // The wastewater works' settling ponds. Emitted as water bodies so they read as ponds in-game
+  // and on the map; each is well under PREMIUM_WATER_AREA, so they get the cheap rippling basin.
+  if (coast) coast.sewage.ponds.forEach((points, i) => water.push({ name: `${coast!.sewage.name} pond ${i + 1}`, points }));
   log.push(`water: ${water.length} polygons >= ${MIN_WATER_AREA_M2} m2 (${water.filter((w) => w.name !== 'Water').map((w) => w.name).slice(0, 8).join(', ')})`);
 
   // ---- Railways (thinned to a few real lines; the yards are 600+ ways of spaghetti) -------
@@ -407,14 +529,18 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   for (const way of ways) {
     const kind = way.tags?.highway;
     if ((kind !== 'track' && kind !== 'path') || !way.nodes) continue;
-    const points = way.nodes
-      .map((id) => osmNodes.get(id))
-      .filter((n): n is OsmNode => n !== undefined && inBbox(n.lat, n.lon))
-      .map((n) => project(n.lat, n.lon));
-    if (points.length < 2 || polylineLength(points) < MIN_ROAD_LENGTH_M) continue;
-    tracks.push({ name: way.tags?.name ?? (kind === 'track' ? 'Dirt track' : 'Trail'), kind, width: TRACK_WIDTHS[kind], points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
+    // Run-split, don't node-filter: a track that leaves and re-enters the crop must become two
+    // tracks, not one with a ruler-straight chord across the gap.
+    for (const run of inCropRuns(way.nodes, osmNodes)) {
+      const points = run.map((n) => project(n.lat, n.lon));
+      if (points.length < 2 || polylineLength(points) < MIN_ROAD_LENGTH_M) continue;
+      tracks.push({ name: way.tags?.name ?? (kind === 'track' ? 'Dirt track' : 'Trail'), kind, width: TRACK_WIDTHS[kind], points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
+    }
   }
   if (coast) for (const track of coast.tracks) tracks.push({ name: track.name, kind: track.kind, width: track.width, points: track.points });
+  // The outfall pipe run: an unpaved service track down to the water. It is the reason one stretch
+  // of this shore is grim, and it is the only bit of the works the player can walk along.
+  if (coast) tracks.push({ name: `${coast.sewage.name} outfall`, kind: 'path', width: TRACK_WIDTHS.path ?? 3, points: coast.sewage.outfall });
   const trackKm = tracks.reduce((sum, t) => sum + polylineLength(t.points), 0) / 1000;
   log.push(`tracks: ${tracks.length} off-road track/path polylines, ${trackKm.toFixed(1)} km`);
 
@@ -427,7 +553,9 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     const outers = relation.members.filter((m) => m.type === 'way' && (m.role === 'outer' || m.role === ''));
     const rings = assembleRings(outers.map((m) => ways.find((w) => w.id === m.ref)).filter((w): w is OsmWay => Boolean(w)));
     for (const ring of rings) {
-      const points = ring.map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
+      const ringNodes = ring.map((id) => osmNodes.get(id));
+      if (!ringInCrop(ringNodes)) continue; // CROP: this filter is what decides golf survival
+      const points = ringNodes.filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
       if (points.length >= 4 && shoelaceArea(points) >= MIN_LANDUSE_AREA_M2) {
         landuse.push({ name: relation.tags?.name ?? kind, kind, points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
       }
@@ -437,6 +565,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   for (const way of ways) {
     const kind = way.tags ? landuseKind(way.tags) : null;
     if (!kind || landuseWayIds.has(way.id) || !way.nodes || way.nodes[0] !== way.nodes[way.nodes.length - 1]) continue;
+    if (!ringInCrop(way.nodes.map((id) => osmNodes.get(id)))) continue; // CROP
     const points = way.nodes.slice(0, -1).map((id) => osmNodes.get(id)).filter((n): n is OsmNode => Boolean(n)).map((n) => project(n.lat, n.lon));
     if (points.length >= 4 && shoelaceArea(points) >= MIN_LANDUSE_AREA_M2) {
       landuse.push({ name: way.tags?.name ?? kind, kind, points: simplifyPolyline(points, SIMPLIFY_TOLERANCE_M) });
@@ -444,13 +573,57 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   }
   if (coast) for (const field of coast.farmland) landuse.push({ name: field.name, kind: 'farmland', points: field.points });
   if (coast) landuse.push({ name: coast.airport.name, kind: 'aerodrome', points: coast.airport.boundary });
+  // The works' yard: brownfield, so the runtime paints dirt rather than veld grass.
+  if (coast) landuse.push({ name: coast.sewage.name, kind: 'brownfield', points: coast.sewage.boundary });
+  // Real Vaal-shore landuse: the reserves, pitches, cemeteries and farmland people actually mapped.
+  if (coast?.shore) for (const area of coast.shore.areas) landuse.push({ name: area.name, kind: area.kind, points: area.points });
+  // The dam's islands: scrub landuse rather than holes in the water polygon, so Water.ts needs
+  // no new plumbing. compositeElevation lifts the terrain under them out of the water. The first
+  // and largest is Grooteiland (OSM way 6139539); the rest are its unnamed neighbours.
+  if (coast) {
+    coast.damIslands.forEach((points, i) => {
+      landuse.push({ name: i === 0 ? DAM_ISLAND_NAME : `${DAM_ISLAND_NAME} ${i + 1}`, kind: 'scrub', points });
+    });
+  }
   const mineDumps = landuse.filter((a) => a.kind === 'mine_dump').length;
   log.push(`landuse: ${landuse.length} polygons (${mineDumps} mine dumps/quarries, ${coast?.farmland.length ?? 0} farmland fields)`);
 
   // ---- Districts ---------------------------------------------------------
-  const districtNodes = extractDistrictNodes(data);
-  const districts = districtNodes.map(({ name, lat, lon }) => ({ name, p: project(lat, lon) }));
+  // CROP: districts had no bbox filter either. Every leaked place node is also a
+  // nearestDistrict attractor and a station-naming source, so this matters beyond the labels.
+  const districtNodes = extractDistrictNodes(data).filter((d) => inBbox(d.lat, d.lon));
+  const districts: Array<{ name: string; p: Pt; density?: number }> =
+    districtNodes.map(({ name, lat, lon }) => ({ name, p: project(lat, lon) }));
   if (coast) districts.push(...coast.districts);
+  // REAL dam-shore settlements. Their building density is measured off the extract rather than left
+  // to the runtime's default, because the two facts that matter here are opposite and both real:
+  // Deneysville is mapped building by building, and Refengkgotso is 250 streets with almost no
+  // building footprints at all (OSM simply has not traced them). Taking the greater of the mapped
+  // footprint density and a street-frontage estimate keeps the township dense — which it is — while
+  // still letting the sparsely-built marinas read as sparse.
+  if (coast?.shore) {
+    const areaKm2 = Math.PI * (DISTRICT_RADIUS_M / 1000) ** 2;
+    const graftNames = coast.shore.roadNames;
+    const graftRoads = net.roads.filter((r) => graftNames.has(r.name));
+    for (const place of coast.shore.places) {
+      const near = coast.shore.buildings.filter((b) => Math.hypot(b.p.x - place.p.x, b.p.z - place.p.z) <= DISTRICT_RADIUS_M);
+      let frontageM = 0;
+      for (const road of graftRoads) {
+        const pts = road.nodeIds.map((id) => net.nodes.get(id)).filter((q): q is Pt => Boolean(q));
+        for (let i = 1; i < pts.length; i++) {
+          const mid = { x: (pts[i]!.x + pts[i - 1]!.x) / 2, z: (pts[i]!.z + pts[i - 1]!.z) / 2 };
+          if (Math.hypot(mid.x - place.p.x, mid.z - place.p.z) <= DISTRICT_RADIUS_M) {
+            frontageM += Math.hypot(pts[i]!.x - pts[i - 1]!.x, pts[i]!.z - pts[i - 1]!.z);
+          }
+        }
+      }
+      // Two sides of every street at a ~28 m plot frontage; that is what a Highveld dorp looks like.
+      const fromStreets = (frontageM * 2) / 28 / areaKm2;
+      // Capped: the Joburg CBD itself measures 244 buildings/km2 in this pipeline, so anything much
+      // above that would mass a Highveld dorp like Braamfontein.
+      districts.push({ name: place.name, p: place.p, density: Math.min(VAAL_SHORE_MAX_DENSITY, Math.round(Math.max(near.length / areaKm2, fromStreets))) });
+    }
+  }
 
   // ---- Rail stations (OSM-snapped where possible, synthesized elsewhere; both ends always) ----
   const osmStationNodes = (extras.stations ?? [])
@@ -485,10 +658,22 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     landmarks.push({ name, p: project(lat, lon), kind });
   }
   if (coast) landmarks.push({ name: coast.padstal.name, p: coast.padstal.p, kind: 'padstal' });
+  if (coast) landmarks.push({ name: coast.sewage.name, p: coast.sewage.p, kind: 'sewage_works' });
+  if (coast?.damWall) landmarks.push({ name: coast.damWall.name, p: coast.damWall.p, kind: 'dam_wall' });
   if (coast) {
     landmarks.push({ name: coast.airport.name, p: coast.airport.center, kind: 'airport' });
     const portMid = { x: (coast.port.apron[0]!.x + coast.port.apron[2]!.x) / 2, z: (coast.port.apron[0]!.z + coast.port.apron[2]!.z) / 2 };
     landmarks.push({ name: coast.port.name, p: portMid, kind: 'port' });
+  }
+  // Real Vaal-shore POIs: the yacht clubs, marinas, slipways, camp sites, the croc ranch, the
+  // Deneysville pharmacy and SAPS. These are the "etc." in the owner's complaint.
+  if (coast?.shore) {
+    for (const poi of coast.shore.pois) {
+      const key = poi.name.toLowerCase();
+      if (seenLandmarks.has(key)) continue;
+      seenLandmarks.add(key);
+      landmarks.push({ name: poi.name, p: poi.p, kind: poi.kind });
+    }
   }
   // The stadium sometimes appears under both names; keep "FNB Stadium".
   if (landmarks.some((l) => /fnb stadium/i.test(l.name))) {
@@ -511,6 +696,70 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       `1 unit = ${fit.metresPerUnit.toFixed(2)} m`,
   );
 
+  // ---- The dam must be a LOBE, not a sea --------------------------------------
+  // D1 regression guard, inverted. The dam polygon closes with two horizontal caps. The FIRST cut
+  // put one 4,276 units inside the north edge — a 2,831-unit ruler-straight line across the middle
+  // of the playable map. The fix then was to run the band off the top and bottom of the world; the
+  // owner's verdict on that was that it read as a sea, not a reservoir. So the band now ends INSIDE
+  // the world square in z (land in both west corners) and the caps are hidden the other way: the
+  // shore has already run WEST past the world edge before either cap is reached.
+  //
+  // Both halves of that are asserted here, because both are load-bearing and both are one config
+  // tweak away from silently failing:
+  //   - land clearance north and south, or the lobe becomes the sea again;
+  //   - end vertices west of the world edge, or a cap becomes a visible ruler-straight edge.
+  if (coast) {
+    const half = worldSize / 2;
+    const nw = fit.invert({ x: -half, z: -half });
+    const se = fit.invert({ x: half, z: half });
+    const worldRect = { minX: Math.min(nw.x, se.x), maxX: Math.max(nw.x, se.x), minZ: Math.min(nw.z, se.z), maxZ: Math.max(nw.z, se.z) };
+    // Re-clip the placed dam against the EXACT world square. The clip box is the closure: three
+    // walls (west, north, south), each of them outside the square, and no east wall at all. So the
+    // only straight edges the water polygon carries are provably out of frame — that is D2 solved by
+    // construction rather than by a margin constant, and it is asserted right here.
+    const reclipped = coast.dam.clipTo(worldRect);
+    coast.ocean = reclipped.water;
+    coast.damIslands = reclipped.islands;
+    coast.oceanShore = reclipped.shore;
+    const clipWestU = fit.apply({ x: worldRect.minX - DAM_OVERHANG_M, z: 0 }).x;
+    const clipNorthU = fit.apply({ x: 0, z: worldRect.minZ - DAM_CLIP_OVERSHOOT_M }).z;
+    const clipSouthU = fit.apply({ x: 0, z: worldRect.maxZ + DAM_CLIP_OVERSHOOT_M }).z;
+    if (clipWestU > -half || clipNorthU > -half || clipSouthU < half) {
+      throw new Error(
+        `dam closure inside the world square: clip walls at x ${clipWestU.toFixed(0)}, z ${clipNorthU.toFixed(0)}..` +
+          `${clipSouthU.toFixed(0)} u against a ${worldSize} u square. Raise DAM_OVERHANG_M / DAM_CLIP_OVERSHOOT_M.`,
+      );
+    }
+    // Budget, measured on the polygon that actually ships.
+    let wMinX = Infinity; let wMaxX = -Infinity;
+    for (const p of coast.ocean) { const q = fit.apply(p); if (q.x < wMinX) wMinX = q.x; if (q.x > wMaxX) wMaxX = q.x; }
+    let wetRows = 0; let wetCells = 0; let maxReach = 0; const N = 240;
+    for (let r = 0; r < N; r++) {
+      const z = worldRect.minZ + ((worldRect.maxZ - worldRect.minZ) * (r + 0.5)) / N;
+      const xs: number[] = [];
+      for (let i = 0, j = coast.ocean.length - 1; i < coast.ocean.length; j = i++) {
+        const a2 = coast.ocean[i]!; const b2 = coast.ocean[j]!;
+        if ((a2.z > z) !== (b2.z > z)) xs.push(a2.x + (b2.x - a2.x) * ((z - a2.z) / (b2.z - a2.z)));
+      }
+      xs.sort((p, q) => p - q);
+      let row = 0;
+      for (let i = 0; i + 1 < xs.length; i += 2) {
+        const lo = Math.max(xs[i]!, worldRect.minX); const hi = Math.min(xs[i + 1]!, worldRect.maxX);
+        if (hi > lo) { row += hi - lo; maxReach = Math.max(maxReach, fit.apply({ x: hi, z }).x + half); }
+      }
+      if (row > 0) { wetRows++; wetCells += row; }
+    }
+    const spanX = worldRect.maxX - worldRect.minX;
+    log.push(
+      `dam: BUDGET vs the old ocean — water width ${(wMaxX - wMinX).toFixed(0)} u ` +
+        `(${(100 * (wMaxX - wMinX) / worldSize).toFixed(1)}% of the world, old 20.7%), west overhang ` +
+        `${(-half - wMinX).toFixed(0)} u (${(100 * (-half - wMinX) / worldSize).toFixed(1)}%, old 9.4%), ` +
+        `max reach ${maxReach.toFixed(0)} u, wet latitudes ${(100 * wetRows / N).toFixed(0)}%, ` +
+        `in-world water area ${(100 * wetCells / N / spanX).toFixed(1)}% (old 7.9%), ` +
+        `${coast.damIslands.length} island(s)`,
+    );
+  }
+
   // ---- Border veld: scrub cover between the outer roads and the world edge ---
   if (coast) {
     const worldNW = fit.invert({ x: -worldSize / 2, z: -worldSize / 2 });
@@ -518,9 +767,37 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     const veld = buildBorderVeld({
       world: { minX: worldNW.x, minZ: worldNW.z, maxX: worldSE.x, maxZ: worldSE.z },
       coastline: coast.coastline,
+      dam: { northZ: coast.dam.northZ, southZ: coast.dam.southZ },
     });
     for (const band of veld) landuse.push({ name: band.name, kind: 'scrub', points: band.points });
     log.push(`border: ${veld.length} veld bands along the N/E/S world edges (${EDGE_MARGIN_UNITS} u set-back cover)`);
+  }
+
+  // ---- Clip landuse to the world square --------------------------------------
+  // D5. ringInCrop keeps any polygon with ONE vertex inside CROP_BBOX, which is right for
+  // deciding survival (a park half in the crop should still be a park) and wrong for the
+  // emitted geometry: Delta Park shipped 30 of its 73 vertices up to 865 units north of the
+  // world edge, painting green over the void. Roads, tracks, rail, water, stations and
+  // landmarks are all clean; only landuse leaks, because it is the only layer kept by a
+  // one-vertex test and never re-clipped. Sutherland-Hodgman against the world rectangle keeps
+  // the in-world part instead of dropping the whole polygon.
+  {
+    const nw = fit.invert({ x: -worldSize / 2, z: -worldSize / 2 });
+    const se = fit.invert({ x: worldSize / 2, z: worldSize / 2 });
+    const rect = { minX: Math.min(nw.x, se.x), maxX: Math.max(nw.x, se.x), minZ: Math.min(nw.z, se.z), maxZ: Math.max(nw.z, se.z) };
+    const kept: typeof landuse = [];
+    let trimmed = 0; let dropped = 0;
+    for (const area of landuse) {
+      const escaped = area.points.some((p) => p.x < rect.minX || p.x > rect.maxX || p.z < rect.minZ || p.z > rect.maxZ);
+      if (!escaped) { kept.push(area); continue; }
+      const points = clipPolygonToRect(area.points, rect);
+      if (points.length < 3) { dropped++; continue; }
+      trimmed++;
+      kept.push({ ...area, points });
+    }
+    landuse.length = 0;
+    landuse.push(...kept);
+    if (trimmed || dropped) log.push(`landuse: clipped ${trimmed} polygon(s) back inside the world square, dropped ${dropped} entirely outside`);
   }
   const toUnits = (p: Pt): [number, number] => {
     const q = fit.apply(p);
@@ -541,6 +818,10 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
   ));
   // With a coast the grid is rebuilt over the whole composite square: SRTM over the city,
   // synthetic rolling corridor + sea level over the graft (Phase 3 terrain gets it for free).
+  // NB the SRTM corners stay on the FETCH bbox, not the crop. sampleSrtm() maps a projected
+  // point to a grid fraction between these two corners and clamps, so the cached 96x96 grid is
+  // sampled correctly over any sub-box — an explicit subset+regrid would be an identity
+  // operation here, and refetching would cost 93 rate-limited batches for the same numbers.
   const composite = coast ? compositeElevation({
     srtm: elevation,
     joburgNW: project(BBOX.north, BBOX.west),
@@ -583,6 +864,47 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     log.push(`coast: ocean covers ~${oceanKm2} km2 of the ${Math.round(totalKm2)} km2 square`);
   }
 
+  /**
+   * REAL BUILDINGS AS GEOMETRY. The shore extract carries 498 traced OSM footprints; until now they
+   * were counted and thrown away. Each ring becomes its MINIMUM-AREA rectangle (rotating over a
+   * degree grid — footprints are a handful of vertices, so brute force is exact enough and pure),
+   * which is the shape CityGen and the runtime collider already speak. Tiny outbuildings are
+   * dropped: below the engine's minimum footprint they would be shrunk away or rejected anyway.
+   */
+  const shoreBuildings = (coast?.shore?.buildings ?? []).flatMap((building) => {
+    const ring = building.points;
+    if (ring.length < 3) return [];
+    let best: { w: number; d: number; heading: number; cx: number; cz: number; area: number } | null = null;
+    for (let step = 0; step < 90; step++) {
+      const a = (step * Math.PI) / 180;
+      const c = Math.cos(a); const sn = Math.sin(a);
+      let minU = Infinity; let maxU = -Infinity; let minV = Infinity; let maxV = -Infinity;
+      for (const q of ring) {
+        const u = q.x * c + q.z * sn; const v = -q.x * sn + q.z * c;
+        if (u < minU) minU = u; if (u > maxU) maxU = u;
+        if (v < minV) minV = v; if (v > maxV) maxV = v;
+      }
+      const area = (maxU - minU) * (maxV - minV);
+      if (!best || area < best.area) {
+        const cu = (minU + maxU) / 2; const cv = (minV + maxV) / 2;
+        best = { w: maxU - minU, d: maxV - minV, heading: a, area, cx: cu * c - cv * sn, cz: cu * sn + cv * c };
+      }
+    }
+    if (!best) return [];
+    const [x, z] = toUnits({ x: best.cx, z: best.cz });
+    let w = best.w * fit.scale; let d = best.d * fit.scale;
+    // The dam sits at DAM_UNIFORM_SCALE against the city's 1:1, so a real 10 m Deneysville house
+    // measures ~4 units where the engine's minimum buildable footprint is 5. Rather than drop
+    // three quarters of the village, a small footprint is inflated about its own centre until its
+    // short side is buildable, keeping its real position, orientation and aspect exactly — the
+    // fudge is on the size of the dressing, never on the shoreline or the street grid.
+    const grow = Math.min(SHORE_BUILDING_MAX_GROWTH, Math.max(1, SHORE_BUILDING_MIN_UNITS / Math.max(0.01, Math.min(w, d))));
+    w *= grow; d *= grow;
+    if (Math.min(w, d) < SHORE_BUILDING_MIN_UNITS) return [];
+    return [{ x, z, w: round2(w), d: round2(d), heading: round2(-best.heading), kind: building.kind }];
+  });
+  log.push(`shore: ${shoreBuildings.length} REAL building footprints emitted as oriented boxes (of ${coast?.shore?.buildings.length ?? 0} traced)`);
+
   const map: JoburgMap = {
     meta: {
       source: 'OpenStreetMap via Overpass API',
@@ -606,9 +928,16 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       droppedIslandKm: Math.round(islands.droppedKm * 10) / 10,
       minElevation,
       maxElevation,
-      bbox: { ...BBOX },
+      bbox: { ...CROP_BBOX },
       targetSize: worldSize,
       metresPerUnit: Math.round(fit.metresPerUnit * 1000) / 1000,
+      /**
+       * The exact fit, shipped so old->new coordinate transforms are arithmetic instead of a
+       * regression over district positions. game = (projected_m - c) * scale, and the projection
+       * is always CBD_CENTER-origin equirectangular, so any two builds compose as a pure
+       * similarity with no rotation. See src/world/coordTransform.ts.
+       */
+      fit: { scale: fit.scale, cx: fit.cx, cz: fit.cz },
       ...(coast ? {
         oceanKm2,
         landKm2,
@@ -625,16 +954,24 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       const [x, z] = toUnits(net.nodes.get(junction.nodeId)!);
       return { x, z, roads: junction.roads };
     }),
-    districts: districts.map(({ name, p }, index) => {
+    districts: districts.map(({ name, p, density }, index) => {
       const [x, z] = toUnits(p);
-      const count = buildingCounts?.[index];
+      // Two sources, two UNITS, and conflating them was a real bug: `buildingCounts` is a raw
+      // Overpass COUNT inside the district disc and has to be divided by the disc area, while a
+      // shore district's `density` is ALREADY buildings/km2 (see the shore block above). Dividing
+      // that a second time scaled every dam settlement down by the disc area (1.54 km2) — which is
+      // why they all pinned to exactly 110 (the 170 cap, halved) and Misty Bay shipped at 53
+      // against a runtime default of 100, the lowest density on the map.
       const areaKm2 = Math.PI * (DISTRICT_RADIUS_M / 1000) ** 2;
+      const perKm2 = density !== undefined ? density
+        : buildingCounts?.[index] !== undefined ? buildingCounts[index]! / areaKm2
+        : undefined;
       return {
         name,
         x,
         z,
         radius: round2(DISTRICT_RADIUS_M * fit.scale),
-        ...(count !== undefined ? { buildingDensity: Math.round(count / areaKm2) } : {}),
+        ...(perKm2 !== undefined ? { buildingDensity: Math.round(perKm2) } : {}),
       };
     }),
     water: water.map(({ name, points }) => ({ name, points: points.map(toUnits) })),
@@ -677,8 +1014,11 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
     },
     ...(coast ? {
       coast: {
+        name: DAM_NAME,
         coastline: coast.coastline.map(toUnits),
         ocean: coast.ocean.map(toUnits),
+        shore: coast.oceanShore.map((line) => line.map(toUnits)),
+        islands: coast.damIslands.map((ring) => ring.map(toUnits)),
         beaches: coast.beaches.map((beach) => ({ name: beach.name, points: beach.points.map(toUnits) })),
         harbour: (() => { const [x, z] = toUnits(coast.harbour); return { x, z }; })(),
         corridor: {
@@ -687,6 +1027,7 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
           northZ: round2(fit.apply({ x: 0, z: cityBounds.minZ }).z),
           southZ: round2(fit.apply({ x: 0, z: cityBounds.maxZ }).z),
         },
+        ...(shoreBuildings.length > 0 ? { shoreBuildings } : {}),
       },
       rural: {
         farms: coast.farms.map((farm) => { const [x, z] = toUnits(farm.p); return { x, z, kind: farm.kind }; }),
@@ -706,7 +1047,39 @@ export function processOsm(data: OsmResponse, extras: ProcessExtras = {}): Proce
       },
     } : {}),
   };
-  return { map, log };
+  return { map, log, damSourceWindow: coast?.dam.sourceWindow ?? [] };
+}
+
+/**
+ * Sutherland-Hodgman: clip a polygon to an axis-aligned rectangle. Used to keep landuse inside
+ * the world square (see D5 above). The projection+fit is a pure similarity with zero rotation,
+ * so the world square really is axis-aligned in projected metres and no general clipper is
+ * needed. Convex clip region, so the algorithm is exact for convex input and produces a
+ * correct (if degenerate-edge-joined) result for the concave park outlines here.
+ */
+export function clipPolygonToRect(
+  polygon: Pt[],
+  rect: { minX: number; maxX: number; minZ: number; maxZ: number },
+): Pt[] {
+  const edges: Array<{ inside: (p: Pt) => boolean; cut: (a: Pt, b: Pt) => Pt }> = [
+    { inside: (p) => p.x >= rect.minX, cut: (a, b) => ({ x: rect.minX, z: a.z + ((b.z - a.z) * (rect.minX - a.x)) / (b.x - a.x) }) },
+    { inside: (p) => p.x <= rect.maxX, cut: (a, b) => ({ x: rect.maxX, z: a.z + ((b.z - a.z) * (rect.maxX - a.x)) / (b.x - a.x) }) },
+    { inside: (p) => p.z >= rect.minZ, cut: (a, b) => ({ x: a.x + ((b.x - a.x) * (rect.minZ - a.z)) / (b.z - a.z), z: rect.minZ }) },
+    { inside: (p) => p.z <= rect.maxZ, cut: (a, b) => ({ x: a.x + ((b.x - a.x) * (rect.maxZ - a.z)) / (b.z - a.z), z: rect.maxZ }) },
+  ];
+  let out = polygon.slice();
+  for (const edge of edges) {
+    if (out.length === 0) return [];
+    const next: Pt[] = [];
+    for (let i = 0; i < out.length; i++) {
+      const a = out[i]!; const b = out[(i + 1) % out.length]!;
+      const aIn = edge.inside(a); const bIn = edge.inside(b);
+      if (aIn) next.push(a);
+      if (aIn !== bIn) next.push(edge.cut(a, b));
+    }
+    out = next;
+  }
+  return out;
 }
 
 /** Stitch outer member ways of a multipolygon into closed node-id rings. */

@@ -269,9 +269,9 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'pier-pressure', name: 'Pier Pressure', contact: 'Candice from Boksburg', reward: 3000, act: 'side',
     prerequisites: { missions: ['rank-cold-war'] },
-    intro: 'A fare ran on Ricardo — a BIG fare, airport run, coastal toll, the lot. He\'s bragging at Seepunt Pier before his boat leaves. Go collect. With interest.',
+    intro: 'A fare ran on Ricardo — a BIG fare, airport run, coastal toll, the lot. He\'s bragging at the Vaalpunt Slipway before his boat leaves. Go collect. With interest.',
     start: spot(CANDICE_START, 'Candice'), objectives: [
-      { kind: 'reach', radius: 12, timeLimit: 960, text: 'Catch the fare-skipper before his boat leaves Seepunt Pier', target: spot(PIER_SPOT, 'Seepunt Pier') },
+      { kind: 'reach', radius: 12, timeLimit: 960, text: 'Catch the fare-skipper before his boat leaves the Vaalpunt Slipway', target: spot(PIER_SPOT, 'Vaalpunt Slipway') },
       { kind: 'defeat', required: 1, text: 'Convince him', checkpoint: true },
       { kind: 'collect', text: 'Take what he owes — plus interest', target: spot(PIER_SPOT, 'The fare'), checkpoint: true },
     ],

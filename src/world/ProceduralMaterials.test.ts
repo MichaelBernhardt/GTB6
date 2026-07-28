@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex } from './ProceduralMaterials';
+import { SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex } from './ProceduralMaterials';
 import { STREET_SIGN_JUNCTIONS } from './mapData';
 
 describe('sign atlas capacity', () => {
@@ -26,6 +26,15 @@ describe('sign glow ramp (BUG: boards stayed full-bright through load shedding, 
   it('stays off by day, shedding or not (the sun lights the boards through the diffuse face)', () => {
     expect(signEmissiveIntensity(0, 0)).toBe(0);
     expect(signEmissiveIntensity(0, 1)).toBe(0); // daytime load shedding changes nothing, like applyBlackout
+  });
+
+  it('keeps the genny boards lit right through a blackout — the forecourt is the lit thing on a dark street', () => {
+    // A filling station runs a generator, and a red fuel gauge in a load-shedding night is exactly
+    // when the player needs to SEE one. Its pylon board therefore ignores the blackout factor.
+    expect(gennySignEmissiveIntensity(1)).toBe(SIGN_NIGHT_EMISSIVE);
+    expect(gennySignEmissiveIntensity(1)).toBeGreaterThan(signEmissiveIntensity(1, 1));
+    expect(gennySignEmissiveIntensity(1)).toBeGreaterThan(signEmissiveIntensity(1, 0.5));
+    expect(gennySignEmissiveIntensity(0)).toBe(0); // still nothing by day — the sun does that job
   });
 
   it('boosts the diffuse response only in a night blackout — the retro-reflective pop under a beam', () => {

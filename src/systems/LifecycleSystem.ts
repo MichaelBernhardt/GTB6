@@ -114,12 +114,14 @@ export function zoneTarget(zone: Zone, hour: number, busy: number): { peds: numb
 /** Per-pass spawn/despawn allowance: the gentle floor normally, proportional when the console jumps the target. */
 export function censusBudget(totalDeficit: number): number { return Math.max(CHANGE_BUDGET, Math.ceil(Math.abs(totalDeficit) / BUDGET_PASSES)); }
 
-interface PedShape { contact: boolean; police: boolean; hostile: boolean; carGuard: boolean; state: string; fear: number; }
+interface PedShape { contact: boolean; police: boolean; hostile: boolean; carGuard: boolean; state: string; fear: number; scripted?: boolean; }
 interface VehicleShape { playerControlled: boolean; police: boolean; disabled: boolean; onFire: boolean; wrecked: boolean; health: number; maxHealth: number; }
 
-/** Counts toward the ambient ped target: everyday citizens still on their feet (mission cast and corpses excluded). */
+/** Counts toward the ambient ped target: everyday citizens still on their feet (mission cast, feature
+ *  fixtures and corpses excluded). Miss `scripted` here and a placed fixture both counts against
+ *  PED_TARGET_CAP and satisfies pedDespawnable — silently deleted the moment the player looks away. */
 export function isAmbientPedestrian(ped: PedShape): boolean {
-  return !ped.contact && !ped.police && !ped.hostile && !ped.carGuard && ped.state !== 'down';
+  return !ped.scripted && !ped.contact && !ped.police && !ped.hostile && !ped.carGuard && ped.state !== 'down';
 }
 
 /** Safe to silently remove: any anonymous wanderer — mission cast, police, hostiles, guards and corpses
