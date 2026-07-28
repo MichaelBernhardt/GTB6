@@ -102,7 +102,9 @@ unloaded feature's predicate every 0.4 s and opens each one whose ring the playe
 feature that puts people or scenery in the world is already populated by the time the player can see
 it. The prompt is then a fallback that only rejoins the ladder if the fetch itself failed. Two
 consequences: size the ring for "close enough that loading is worth it", not for "close enough to
-press E", and keep `near()` cheap and pure — it now runs whether or not any rung ever draws.
+press E", and keep `near()` cheap and pure — it now runs whether or not any rung ever draws. If your
+prompt belongs to something only the *loaded* body can find, `near` cannot be that ring at all — see
+the `preload` rule below.
 
 And the world has to hold up its end. If a feature's location is a place — a forecourt, a shopfront —
 that place must be built by the **world**, not by the feature body: the fuel feature used to raise
@@ -192,24 +194,19 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
   registered approach prompt produces one.
 - **Features are suspended while the player is online.** No ticks, no prompts, no loading. Do not try
   to work around it: protest crowds and street fixtures must never appear in someone else's PvP.
-- **A lazy feature cannot put anything in the world until its body loads.** If your feature is meant
-  to be *seen* — a lit doorway, a marker, a fixture — waiting for a key press is a catch-22: nothing
-  is visible until somebody presses a key at an invisible ring, and nobody presses a key at an
-  invisible ring. `FeatureHost.preloadNearby()` is the answer for both shapes of feature, polled
-  every 0.4 s while the body is unloaded:
-  - Normally it is just **`approach.near`** — the same predicate that offers your prompt. Street does
-    this: walk within `STREET_LOAD_RADIUS` of a corner and the body arrives already staffed, and the
-    press that used to be mandatory is now only a fallback for a failed fetch.
-  - If your prompt belongs to something **only the loaded body can find**, `near` has nothing to
-    test. Declare **`preload(x, z)`** on the approach instead: a coarse, cheap "there is work for me
-    around here" test taken from the player's position, which loads the body while offering nothing
-    and stealing no press. Interiors does this — its rung belongs to real front doors and an eager
-    chunk cannot reach `CityGen` to know where one is — so its `near` is constant `false` and its
-    `preload` asks "is there a street within ~110 u". `preload` wins over `near` when both exist.
-  Either way the host never auto-retries a failed fetch, and the eager stand-in is kept off the
-  ladder while the chunk is in flight so it cannot sit above `E  Enter vehicle` for a block.
-  `preload` is deliberately **not on `FeatureApproach`**: one feature needs it, the host duck-types
-  it, and `registry.ts` casts. Fold it into the type when a second feature wants it.
+- **A ring your `near` cannot describe needs `preload(x, z)`.** The proximity ring above rides
+  `approach.near`, which works because for most features "the player is close enough to press E" and
+  "the player is close enough that loading is worth it" are the same question asked at two radii. For
+  interiors they are not the same question at all: its rung belongs to a real front door on a real
+  building, and an eager chunk cannot reach `CityGen` to know where one is (that import makes
+  `gameplay-rules` and `simulation` mutually uninitialisable). So its `near` is constant `false` —
+  there is nothing to walk into — and it declares **`preload(x, z)`** on the approach instead: a
+  coarse, cheap test taken from the player's position, which `preloadNearby()` uses **in place of**
+  `near` to fetch the body while offering nothing and stealing no press. Interiors' asks "is there a
+  street within ~110 u". Keep it coarse; it is polled on the same 0.4 s tick and gets the same
+  in-flight guard and the same never-auto-retry rule. It is deliberately **not on
+  `FeatureApproach`**: one feature needs it, the host duck-types it, and `registry.ts` casts. Fold it
+  into the type when a second feature wants it.
 - **The camera boom is 9.5 units and you cannot shorten it.** `Game.updateCamera` special-cases the
   plane, the train and a skydive; a feature cannot add a case, and `CameraController` only shortens
   the boom against `City.colliders`, which a feature cannot register. So anything that encloses the
