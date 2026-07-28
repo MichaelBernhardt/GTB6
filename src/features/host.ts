@@ -144,12 +144,25 @@ export class FeatureHost {
    * Boot pays nothing for this: the import is still dynamic, still unreferenced by index.html, and
    * still only fetched when the player is standing in the ring. What changes is that the world is
    * already populated by the time they get there, so the first interaction is with a PERSON.
+   *
+   * The ring is normally `approach.near` — the very predicate that offers the prompt. That does not
+   * work for a feature whose prompt belongs to something only the loaded body can find: interiors
+   * puts a rung on real front doors, and an eager chunk cannot reach CityGen to know where a door is,
+   * so its `near` is constant false and there is nothing to walk into. Such an approach may instead
+   * declare `preload(x, z)` — a coarse "there is work for this feature around here" test taken from
+   * the player's position — and it is used HERE, in place of `near`, so both kinds of feature share
+   * one timer, one in-flight guard and one never-auto-retry rule. Duck-typed on purpose: it is not on
+   * FeatureApproach, and a feature that does not declare it is untouched.
    */
   private preloadNearby(): void {
     for (const feature of this.registry) {
       const approach = feature.approach;
       if (!approach || this.systems.has(feature.id) || this.inflight.has(feature.id) || this.preloadFailed.has(feature.id)) continue;
-      if (!approach.near(this.frame(approach.context))) continue;
+      const preload = (approach as { preload?(x: number, z: number): boolean }).preload;
+      if (preload) {
+        const at = this.context.api.playerPosition();
+        if (!preload(at.x, at.z)) continue;
+      } else if (!approach.near(this.frame(approach.context))) continue;
       this.preloading.add(feature.id);
       void this.open(feature.id).then((system) => {
         // A failed fetch must NOT leave the ring silent forever: put the stand-in back so the press

@@ -37,7 +37,7 @@ export function buildBeachCafe(seed: number, options: BuildOptions = {}): BuiltM
   }
   const cafeW = deckW * 0.62; const cafeD = deckD * 0.5; const cafeZ = -deckD / 2 + cafeD / 2 + 0.4;
   kit.box(M.whitewash, cafeW, 3, cafeD, -deckW * 0.14, deckH + 0.18, cafeZ, { collide: true });
-  kit.box(M.glass, cafeW * 0.8, 2.1, 0.12, -deckW * 0.14, deckH + 0.42, cafeZ + cafeD / 2 + 0.02, { cast: false });
+  kit.door(M.glass, cafeW * 0.8, 2.1, 0.12, -deckW * 0.14, deckH + 0.42, cafeZ + cafeD / 2 + 0.02, 'shopfront', { cast: false });
   if (variant === 1) kit.hip(M.thatch, cafeW + 1.2, cafeD + 1.2, 2.2, -deckW * 0.14, deckH + 3.18, cafeZ, 0.3);
   else kit.box(M.bleached, cafeW + 0.9, 0.14, cafeD + 0.9, -deckW * 0.14, deckH + 3.3, cafeZ, { rx: 0.05 });
   kit.sign(kit.pick(3, ['SNOEK & CHIPS', 'DIE STRAND KAFEE', 'SEA BREEZE - EST 1994', 'KREEF & CO']), '#f2e2b8', cafeW * 0.8, 0.72, -deckW * 0.14, deckH + 2.55, cafeZ + cafeD / 2 + 0.14, { background: '#2e5560' });
@@ -122,7 +122,7 @@ export function buildBoatShed(seed: number, options: BuildOptions = {}): BuiltMo
 
   kit.box(wall, w, h, d, 0, 0, 0, { collide: true });
   kit.box(M.galv, w + 0.8, 0.09, d + 0.9, 0, h + 0.28, 0.1, { rx: 0.14 });
-  kit.box(M.darkTimber, 0.9, 1.9, 0.08, -w * 0.22, 0, d / 2 + 0.05, { cast: false });
+  kit.door(M.darkTimber, 0.9, 1.9, 0.08, -w * 0.22, 0, d / 2 + 0.05, 'dock', { cast: false });
   kit.box(M.glassDark, 1, 0.8, 0.08, w * 0.22, 1, d / 2 + 0.04, { cast: false });
   kit.sign(kit.pick(4, ['SKI & BAIT', 'BOTE TE HUUR', 'VIS & BAIT', 'KURPER R50/DAG']), '#8fd8d4', w * 0.85, 0.55, 0, h - 0.35, d / 2 + 0.07, { background: '#3a4a54' });
   for (let board = 0; board < 2 + (variant % 2); board++) { // water-skis leaning on the flank

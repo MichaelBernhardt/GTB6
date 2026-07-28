@@ -404,6 +404,51 @@ describe('FeatureHost proximity loading', () => {
     expect(load).toHaveBeenCalledTimes(2);
     expect(host.isLoaded('golf')).toBe(true);
   });
+
+  /**
+   * THE OTHER SHAPE OF RING, and the reason it is not just `near`.
+   *
+   * `near` is the prompt predicate: "are you standing on the thing". Interiors' thing is a front
+   * door on a real building, and an eager chunk cannot reach CityGen to know where one is (that
+   * import makes gameplay-rules and simulation mutually uninitialisable), so its `near` is constant
+   * false and there is nothing to walk into. It declares `preload(x, z)` instead — a coarse "there
+   * is a street around here" test — and the host takes that in place of `near` for the ring only.
+   * These pin that it is the ring and NOT the prompt: the body arrives, and no rung ever appears.
+   */
+  it('takes approach.preload in place of near for the ring, and offers nothing for it', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const at = { x: 0, y: 0, z: 0 } as ReturnType<FeatureGameApi['playerPosition']>;
+    const inStreet = { value: false };
+    const approach = {
+      context: 'foot', order: 64, prompt: 'E  Go inside',
+      near: () => false,
+      preload: (x: number, z: number) => inStreet.value && x === at.x && z === at.z,
+    } as FeatureDescriptor['approach'];
+    const { host } = harness([feature({ load, approach })], stubApi({ playerPosition: () => at }));
+
+    host.update(1);
+    await settle();
+    expect(load, 'a false preload must not fetch anything').not.toHaveBeenCalled();
+    expect(host.descriptors('foot').map((rung) => rung.test({ context: 'foot', position: at, vehicle: undefined, hour: 12 })))
+      .toEqual([undefined]); // the stand-in is on the ladder but a constant-false `near` offers nothing
+
+    inStreet.value = true;
+    host.update(1);
+    await settle();
+    expect(load, 'walking into the street fetches the doorways with no press').toHaveBeenCalledTimes(1);
+    expect(host.isLoaded('golf')).toBe(true);
+  });
+
+  it('never asks preload again once the body is loaded', async () => {
+    const preload = vi.fn(() => true);
+    const approach = { context: 'foot', order: 64, prompt: 'E  Go inside', near: () => false, preload } as FeatureDescriptor['approach'];
+    const { host } = harness([feature({ approach })]);
+    host.update(1);
+    await settle();
+    const asked = preload.mock.calls.length;
+    for (let tick = 0; tick < 20; tick++) host.update(1);
+    expect(preload, 'a loaded feature has its own update(); the ring is done with it').toHaveBeenCalledTimes(asked);
+  });
 });
 
 describe('FeatureHost map blips', () => {

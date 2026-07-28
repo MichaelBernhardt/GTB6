@@ -12,7 +12,7 @@
  */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import type { MassingTier } from '../BuildingArchitecture';
+import type { EntranceKind, EntranceTag, MassingTier } from '../BuildingArchitecture';
 import { createSignMesh } from '../ProceduralMaterials';
 
 export type ModelCategory = 'rural' | 'commercial' | 'industrial' | 'coastal' | 'residential' | 'civic' | 'foliage';
@@ -24,6 +24,16 @@ export interface BuiltModel {
   footprint: { w: number; d: number };
   /** Local-space collider boxes; the placement pass maps them through tierToWorldCollider. */
   tiers: MassingTier[];
+  /**
+   * WHERE THIS MODEL DREW ITS WAY IN — the same EntranceTag BuildingArchitecture emits for a parcel,
+   * in the same local convention (origin at the footprint centre, front toward +z), so a scattered
+   * farmhouse and a procedural house hand the interiors feature the identical fact.
+   *
+   * The builder records it at the moment it draws the leaf (see Kit.door), which is the only moment
+   * anything in this codebase knows where a door is. Undefined on models that draw no door because
+   * they HAVE none — a silo, a pylon, a stack of containers, a stock kraal.
+   */
+  entrance?: EntranceTag;
 }
 
 export interface BuildOptions {
@@ -34,6 +44,21 @@ export interface BuildOptions {
 }
 
 export type ModelBuilder = (seed: number, options?: BuildOptions) => BuiltModel;
+
+/**
+ * WHAT IS INSIDE ONE OF THESE, when a person would live or work in it.
+ *
+ * The catalog carries this for every model that opens and omits it for every model that does not, so
+ * the exclusion list is a property of the THING rather than a rule somewhere else about it: a
+ * farmhouse has an inside, a grain silo does not, and both facts live next to the builder that draws
+ * them. `family` is the structural family the interior grammar generates from — the same vocabulary
+ * CityGen's parcels use (BuildingFacts.style), so a scattered villa reads `estate` and gets an
+ * estate's rooms without the grammar needing to learn a second set of names.
+ */
+export interface ModelInterior {
+  kind: EntranceKind;
+  family: 'suburban' | 'estate' | 'rural' | 'dense-residential' | 'mixed-use' | 'downtown' | 'industrial' | 'civic';
+}
 
 export interface ModelDef {
   name: string;
@@ -49,6 +74,9 @@ export interface ModelDef {
   landmark?: boolean;
   /** Suggested minimum centre-to-centre spacing between instances of this model. */
   spacing: number;
+  /** Set when a person would live or work in this thing, so it gets a doorstep and an inside.
+   *  Models with no `interior` never open — see the exclusion list at the foot of catalog.ts. */
+  interior?: ModelInterior;
   build: ModelBuilder;
 }
 
@@ -233,6 +261,7 @@ interface MeshOptions {
 export class Kit {
   readonly group = new THREE.Group();
   readonly tiers: MassingTier[] = [];
+  private entrance?: EntranceTag;
 
   constructor(private readonly seed: number) {}
 
@@ -255,6 +284,33 @@ export class Kit {
     if (options.rz) mesh.rotation.z = options.rz;
     mesh.castShadow = options.cast ?? true; mesh.receiveShadow = options.receive ?? true;
     return this.add(mesh);
+  }
+
+  /**
+   * THE WAY IN — drawn and recorded in the same call, because the builder is the only thing that
+   * knows where it put one.
+   *
+   * Identical to `box` with the opening's kind wedged in, so turning a door leaf into a TAGGED door
+   * leaf is one word per builder. Everything downstream — the doorstep the player stands on, the
+   * frame the interiors feature hangs, the room grammar behind it — reads this one fact, exactly as
+   * it reads BuildingArchitecture's tag on a procedural parcel. A door cannot disagree with the
+   * model that drew it because there is only one of them.
+   *
+   * A ROW OF COTTAGES DRAWS A LEAF PER UNIT and gets ONE tag: the most central one, ties breaking
+   * left. So `rdp-row` can keep drawing four doors in a loop and the doorstep still lands in the
+   * middle of the row rather than on whichever unit the loop happened to reach first.
+   */
+  door(material: THREE.Material, w: number, h: number, d: number, x: number, baseY: number, z: number, kind: EntranceKind, options: MeshOptions = {}): THREE.Mesh {
+    this.entranceAt(w, baseY + h, x, z, kind);
+    return this.box(material, w, h, d, x, baseY, z, options);
+  }
+
+  /** Record an opening the model does NOT draw a leaf across — an open-fronted shed's bay, a portal,
+   *  a lobby whose facade is one sheet of glass. Same tag, no geometry. */
+  entranceAt(w: number, head: number, x: number, z: number, kind: EntranceKind): void {
+    const held = this.entrance;
+    if (held && (Math.abs(held.x) < Math.abs(x) - 1e-6 || (Math.abs(Math.abs(held.x) - Math.abs(x)) <= 1e-6 && held.x <= x))) return;
+    this.entrance = { x, z, width: w, height: head, kind };
   }
 
   /** Box with its base at baseY. collide expands the footprint by |cos/sin| of ry (quarter turns exact). */
@@ -311,6 +367,9 @@ export class Kit {
       group: this.group,
       footprint: { w: bounds.max.x - bounds.min.x + padding * 2, d: bounds.max.z - bounds.min.z + padding * 2 },
       tiers: this.tiers,
+      // The tag moves with the meshes: it was recorded in the builder's own frame, and the recentring
+      // above is the only thing standing between that frame and the one the placement pass uses.
+      entrance: this.entrance && { ...this.entrance, x: this.entrance.x - cx, z: this.entrance.z - cz },
     };
   }
 }

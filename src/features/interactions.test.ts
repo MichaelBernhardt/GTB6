@@ -84,4 +84,18 @@ describe('every registered feature', () => {
       expect(actions[0]?.key).toBe(promptKey(feature.approach.prompt));
     }
   });
+
+  // Ties are broken alphabetically on id (see sortInteractions), which is stable but is nobody's
+  // design decision: two features that land on the same number get an ordering out of their own
+  // spelling. Fine as a fallback, wrong as a way to decide which prompt a player sees. Each branch
+  // picks its numbers alone, so this only ever fails on a merge — which is exactly when it should.
+  it('claims an approach order no other feature has taken in the same context', () => {
+    const taken = new Map<string, string>();
+    for (const feature of FEATURES) {
+      if (!feature.approach) continue;
+      const key = `${feature.approach.context}:${feature.approach.order}`;
+      expect(taken.get(key), `${feature.id} collides with ${taken.get(key)} at ${key}`).toBeUndefined();
+      taken.set(key, feature.id);
+    }
+  });
 });

@@ -20,7 +20,7 @@ export function buildWarehouse(seed: number, options: BuildOptions = {}): BuiltM
   const doors = 1 + (variant % 2);
   for (let door = 0; door < doors; door++) {
     const x = (door - (doors - 1) / 2) * w * 0.4;
-    kit.box(M.darkMetal, 4, 4, 0.12, x, 0, d / 2 + 0.07, { cast: false });
+    kit.door(M.darkMetal, 4, 4, 0.12, x, 0, d / 2 + 0.07, 'dock', { cast: false });
     kit.box(M.steel, 4.4, 0.3, 0.2, x, 4.05, d / 2 + 0.12, { cast: false });
   }
   if (variant >= 1) { // brick office annexe on the flank
@@ -51,7 +51,7 @@ export function buildFactory(seed: number, options: BuildOptions = {}): BuiltMod
   for (let stack = 0; stack < stacks; stack++) {
     kit.cyl(M.redBrick, 0.6, 0.85, h + 6 + stack, -w / 2 + 2 + stack * 2.4, 0, -d / 2 + 1.6, { seg: 12, collide: true });
   }
-  kit.box(M.darkMetal, 3.6, 3.6, 0.12, w * 0.2, 0, d / 2 + 0.07, { cast: false }); // goods door
+  kit.door(M.darkMetal, 3.6, 3.6, 0.12, w * 0.2, 0, d / 2 + 0.07, 'dock', { cast: false }); // goods door
   kit.box(M.steel, w * 0.3, 1.2, 1, -w * 0.24, h - 1.4, d / 2 + 0.5, { cast: false }); // extraction duct
   kit.sign(kit.pick(4, ['GERMISTON GASKETS', 'VULKANISEER WERKE', 'BOKSBURG BOILERS', 'STAAL & SEUNS']), '#e0c48a', w * 0.4, 0.8, 0, h - 0.8, d / 2 + 0.08);
   return kit.done();
@@ -175,7 +175,7 @@ export function buildWorkshopRow(seed: number, options: BuildOptions = {}): Buil
   kit.box(kit.pick(3, [M.faceBrick, M.concrete, M.tan]), w, h, d, 0, 0, 0, { collide: true });
   for (let bay = 0; bay < bays; bay++) {
     const x = -w / 2 + bayW * (bay + 0.5);
-    kit.box(M.corrCharcoal, bayW * 0.68, 3.1, 0.12, x, 0, d / 2 + 0.07, { cast: false });
+    kit.door(M.corrCharcoal, bayW * 0.68, 3.1, 0.12, x, 0, d / 2 + 0.07, 'dock', { cast: false });
     kit.box(bay % 2 ? M.corrRed : M.corrBlue, bayW * 0.8, 0.14, 1.35, x, 3.45, d / 2 + 0.62, { rx: -0.08 });
     kit.sign(kit.pick(20 + bay, ['TYRE & BRAAI', 'BOETIE MOTORS', 'PANEL BEAT-ISH', 'DIESEL DOCTOR']), '#e5c45d', bayW * 0.75, 0.55, x, 4.05, d / 2 + 0.1);
   }
@@ -196,7 +196,7 @@ export function buildLogisticsDepot(seed: number, options: BuildOptions = {}): B
   const docks = 3 + variant;
   for (let dock = 0; dock < docks; dock++) {
     const x = -w * 0.2 + dock * (w * 0.65 / Math.max(1, docks - 1));
-    kit.box(M.darkMetal, w / docks * 0.52, 3.8, 0.18, x, 0.8, d / 2 + 0.1, { cast: false });
+    kit.door(M.darkMetal, w / docks * 0.52, 3.8, 0.18, x, 0.8, d / 2 + 0.1, 'dock', { cast: false });
     kit.box(M.steel, w / docks * 0.64, 0.25, 2.1, x, 0.55, d / 2 + 1, { collide: true });
   }
   for (let monitor = 0; monitor < 3; monitor++) kit.box(M.glassDark, w * 0.18, 1.1, d * 0.18, -w * 0.24 + monitor * w * 0.24, h + 0.25, -d * 0.12, { collide: true });

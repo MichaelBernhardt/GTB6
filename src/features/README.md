@@ -102,7 +102,9 @@ unloaded feature's predicate every 0.4 s and opens each one whose ring the playe
 feature that puts people or scenery in the world is already populated by the time the player can see
 it. The prompt is then a fallback that only rejoins the ladder if the fetch itself failed. Two
 consequences: size the ring for "close enough that loading is worth it", not for "close enough to
-press E", and keep `near()` cheap and pure — it now runs whether or not any rung ever draws.
+press E", and keep `near()` cheap and pure — it now runs whether or not any rung ever draws. If your
+prompt belongs to something only the *loaded* body can find, `near` cannot be that ring at all — see
+the `preload` rule below.
 
 And the world has to hold up its end. If a feature's location is a place — a forecourt, a shopfront —
 that place must be built by the **world**, not by the feature body: the fuel feature used to raise
@@ -192,6 +194,31 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
   registered approach prompt produces one.
 - **Features are suspended while the player is online.** No ticks, no prompts, no loading. Do not try
   to work around it: protest crowds and street fixtures must never appear in someone else's PvP.
+- **A ring your `near` cannot describe needs `preload(x, z)`.** The proximity ring above rides
+  `approach.near`, which works because for most features "the player is close enough to press E" and
+  "the player is close enough that loading is worth it" are the same question asked at two radii. For
+  interiors they are not the same question at all: its rung belongs to a real front door on a real
+  building, and an eager chunk cannot reach `CityGen` to know where one is (that import makes
+  `gameplay-rules` and `simulation` mutually uninitialisable). So its `near` is constant `false` —
+  there is nothing to walk into — and it declares **`preload(x, z)`** on the approach instead: a
+  coarse, cheap test taken from the player's position, which `preloadNearby()` uses **in place of**
+  `near` to fetch the body while offering nothing and stealing no press. Interiors' asks "is there a
+  street within ~110 u". Keep it coarse; it is polled on the same 0.4 s tick and gets the same
+  in-flight guard and the same never-auto-retry rule. It is deliberately **not on
+  `FeatureApproach`**: one feature needs it, the host duck-types it, and `registry.ts` casts. Fold it
+  into the type when a second feature wants it.
+- **The camera boom is 9.5 units and you cannot shorten it.** `Game.updateCamera` special-cases the
+  plane, the train and a skydive; a feature cannot add a case, and `CameraController` only shortens
+  the boom against `City.colliders`, which a feature cannot register. So anything that encloses the
+  player has to be built for a camera that will end up outside it: interiors use an inside-out
+  (`THREE.BackSide`) shell so the worst case is a cutaway rather than an opaque wall in front of the
+  lens, keep every room wider than a boom, and hide interior partitions that fall between the player
+  and where the camera is. **If you need the boom itself, say so** — that is a `Game.ts` change.
+- **Moving the player far is a trap, not a shortcut.** A teleport re-streams `updateBuildingChunks`,
+  and every player-position-keyed system (police/wanted, the `LifecycleSystem` census and its
+  `REFRESH_RADIUS` recycling, mission distances, `city.updateVisibility`) sees the player leave the
+  city. Interiors avoid it entirely by building over the player's own building — same x, same z,
+  above the roof, where `City.clampMoveAt`'s y-aware collider test finds nothing to freeze them on.
 - **Do not touch anything derived into `public/baked/`** — `src/world/placements.ts`,
   `src/world/data/manicured.ts`, `tools/mapgen/`. Derive your sites from map data at runtime; never
   type absolute world coordinates, which the map rework invalidates.
@@ -206,6 +233,7 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
 | The host: loading, generations, save merge, suspension | `src/features/host.ts` |
 | The eager slice (pre-load tick + HUD) | `FeatureEagerSlice` in `src/features/types.ts`, run by `FeatureHost.update`/`hud` |
 | The eager map + minimap blips | `src/features/mapIcons.ts`, merged by `UIManager.drawMap`/`updateMap` |
+| The proximity ring (`approach.near`, or `approach.preload`) | `FeatureHost.preloadNearby` |
 | The ordered interaction ladder | `src/features/interactions.ts` |
 | The save sanitizer | `src/features/save.ts` |
 | The contract | `src/features/types.ts` |

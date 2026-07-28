@@ -34,7 +34,7 @@ export function buildFarmhouse(seed: number, options: BuildOptions = {}): BuiltM
   for (let post = 0; post <= 3; post++) kit.box(M.timber, 0.14, 2.5, 0.14, -stoepW / 2 + 0.3 + post * ((stoepW - 0.6) / 3), 0.24, d / 2 + stoepD - 0.25);
   kit.box(roof, stoepW + 0.5, 0.09, stoepD + 0.7, 0, 2.86, d / 2 + stoepD / 2 - 0.1, { rx: 0.16 });
   frontWindows(kit, 3, w * 0.8, d / 2 + 0.03);
-  kit.box(M.darkTimber, 1.1, 2.1, 0.1, w * 0.06, 0.24, d / 2 + 0.06, { cast: false });
+  kit.door(M.darkTimber, 1.1, 2.1, 0.1, w * 0.06, 0.24, d / 2 + 0.06, 'porch', { cast: false });
   if (variant === 1) { // L-wing gable jutting toward the street
     const wingW = 4.6; const wingD = 5;
     kit.box(wall, wingW, h, wingD, -w / 2 + wingW / 2, 0, d / 2 + wingD / 2 - 1.2, { collide: true });
@@ -55,7 +55,7 @@ export function buildBarn(seed: number, options: BuildOptions = {}): BuiltModel 
   kit.box(skin, w, h, d, 0, 0, 0, { collide: true });
   kit.gable(kit.pick(4, [M.galv, M.corrCharcoal]), w + 0.7, d + 0.6, w * 0.34, 0, h, 0);
   // Sliding door proud of the gable end, hanging off a rail beam.
-  kit.box(M.darkTimber, w * 0.42, h * 0.78, 0.14, -w * 0.08, 0, d / 2 + 0.14, { cast: false });
+  kit.door(M.darkTimber, w * 0.42, h * 0.78, 0.14, -w * 0.08, 0, d / 2 + 0.14, 'dock', { cast: false });
   kit.box(M.darkMetal, w * 0.9, 0.16, 0.2, 0, h * 0.82, d / 2 + 0.18, { cast: false });
   kit.box(M.glassDark, 1.2, 1.1, 0.1, w * 0.3, h * 0.55, d / 2 + 0.06, { cast: false }); // hay-loft window
   if (variant === 1) { // open lean-to along one flank
@@ -150,6 +150,7 @@ export function buildTractorShed(seed: number, options: BuildOptions = {}): Buil
   kit.box(skin, w, hBack, 0.16, 0, 0, -d / 2 + 0.08, { collide: true });
   for (const side of [-1, 1]) kit.box(skin, 0.16, hBack, d - 0.3, side * (w / 2 - 0.08), 0, -0.15, { collide: true });
   for (let post = 0; post <= 2; post++) kit.box(M.timber, 0.18, hFront, 0.18, -w / 2 + 0.4 + post * ((w - 0.8) / 2), 0, d / 2 - 0.25);
+  kit.entranceAt(w * 0.4, hFront - 0.3, 0, d / 2 - 0.25, 'dock'); // the bay between the posts IS the door
   kit.box(skin, w + 0.7, 0.1, d + 0.9, 0, (hFront + hBack) / 2 - 0.05, 0.15, { rx: (hFront - hBack) / d }); // skillion resting back wall → front posts
   for (let drum = 0; drum < 2 + variant; drum++) kit.cyl(paint(0x35566b, 0.6, 0.3), 0.32, 0.32, 0.95, -w / 2 + 1 + drum * 0.75, 0.14, -d / 2 + 1, { seg: 10 });
   if (variant === 1) kit.box(M.corrRust, 2.6, 1.5, 1.4, w * 0.24, 0.14, -d * 0.12, { collide: true }); // dead bakkie under a tarp shape
@@ -201,6 +202,7 @@ export function buildPadstal(seed: number, options: BuildOptions = {}): BuiltMod
   kit.box(roof, w * 0.95, 0.08, 2.5, 0, 2.72, d / 2 + 1.05, { rx: 0.14 });
   kit.sign(kit.pick(5, ['PADSTAL', 'PLAASWINKEL', 'DROËWORS 100M', 'MOER KOFFIE']), '#e8d9a0', w * 0.8, 0.7, 0, h + 0.9, d / 2 + 0.36, { background: '#4a3a20' });
   kit.box(M.glassDark, w * 0.4, 1, 0.1, -w * 0.18, 0.9, d / 2 + 0.04, { cast: false }); // serving hatch
+  kit.door(M.darkTimber, 0.9, 2.05, 0.08, w * 0.28, 0, d / 2 + 0.05, 'shopfront', { cast: false });
   for (let crate = 0; crate < 2 + variant; crate++) kit.box(M.timber, 0.55, 0.4, 0.55, w / 2 - 0.6 - crate * 0.7, 0.2, d / 2 + 1.4, { cast: false });
   if (variant === 2) kit.cyl(M.jojo, 0.85, 0.85, 1.8, -w / 2 - 1.05, 0, -d * 0.2, { seg: 12, collide: true });
   return kit.done();
@@ -215,7 +217,7 @@ export function buildFarmWorkerCottages(seed: number, options: BuildOptions = {}
     const x = -w / 2 + unitW * (unit + 0.5); const z = -0.7 + (unit % 2) * 0.35;
     kit.box(kit.pick(10 + unit, WALLS), unitW - 0.3, h, d, x, 0, z, { collide: true });
     kit.gable(kit.pick(20 + unit, ROOFS), unitW + 0.2, d + 0.7, 1.05, x, h, z);
-    kit.box(M.darkTimber, 0.82, 1.95, 0.08, x - unitW * 0.14, 0, z + d / 2 + 0.05, { cast: false });
+    kit.door(M.darkTimber, 0.82, 1.95, 0.08, x - unitW * 0.14, 0, z + d / 2 + 0.05, 'porch', { cast: false });
     kit.box(M.glassDark, 0.82, 0.75, 0.08, x + unitW * 0.18, 1.1, z + d / 2 + 0.05, { cast: false });
     kit.box(M.paving, unitW * 0.82, 0.12, 1.5, x, 0, z + d / 2 + 0.75, { cast: false });
   }

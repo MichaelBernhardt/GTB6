@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type GableSpec, type MassingTier } from './BuildingArchitecture';
+import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
   BEACH_POLYGONS,
   COASTLINE,
@@ -2235,7 +2235,7 @@ export class City {
     }
     const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
     this.addLedge(profile.tiers, Math.min(h - 0.5, 3.6));
-    if (detailed) this.addEntrance(0, w, style, profile.tiers);
+    if (profile.entrance) this.addEntrance(style, profile.entrance);
     if (detailed && style === 'dense-residential') this.addBalconies(0, w, h, profile.tiers);
     if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables);
     if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers);
@@ -2313,11 +2313,69 @@ export class City {
     }
   }
 
-  private addEntrance(x: number, w: number, style: BuildingStyle, tiers: readonly MassingTier[]): void {
+  /** The leaf and its canopy, hung on the entrance the architecture TAGGED. The tag is the single
+   *  source: nothing here recomputes where the door is, so the door the player walks up to and the
+   *  door the interior feature opens are the same fact by construction.
+   *
+   *  WHAT gets drawn is the tag's own `kind`, because every family carries a tag now and a glazed
+   *  office leaf on a warehouse is a door the player does not believe. A works gets a corrugated
+   *  roller shutter on a concrete apron; a house gets a painted timber leaf under a stoep roof on
+   *  posts; a lobby and a shopfront keep the glazed leaf and the steel canopy they always had. */
+  private addEntrance(style: BuildingStyle, entrance: EntranceTag): void {
+    const { x, width: w, height: h, z } = entrance;
+    // The sill stays where it always was; a shortened head lowers the lintel, never the threshold.
+    const y = 0.17 + h / 2;
+    if (entrance.kind === 'dock') {
+      const shutter = new THREE.MeshStandardMaterial({ color: 0x8b9095, metalness: 0.55, roughness: 0.62 });
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.12), shutter); leaf.position.set(x, y, z + 0.02); this.target.add(leaf);
+      // Corrugation: the ribs are what makes a grey rectangle read as a roller door from the street.
+      for (let rib = 0; rib < 7; rib++) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.1, 0.07, 0.07), shutter);
+        bar.position.set(x, y - h / 2 + 0.3 + rib * (h - 0.6) / 6, z + 0.1); this.target.add(bar);
+      }
+      const guide = new THREE.MeshStandardMaterial({ color: 0x3d4548, metalness: 0.5, roughness: 0.5 });
+      for (const side of [-1, 1]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.18, h + 0.4, 0.22), guide);
+        rail.position.set(x + side * (w / 2 + 0.09), (h + 0.4) / 2, z + 0.11); rail.castShadow = true; this.target.add(rail);
+      }
+      const hood = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, 0.42, 0.42), guide); hood.position.set(x, h + 0.4, z + 0.2); hood.castShadow = true; this.target.add(hood);
+      // The apron the lorry backs onto — the flat lip that says a vehicle belongs here. Thick and
+      // sunk to the plinth line, so on a parcel that falls away it reads as a kerb rather than a
+      // floating plane (it is decorative: the foundation pass owns the ground under the building).
+      const apron = new THREE.Mesh(new THREE.BoxGeometry(w + 1.6, 0.34, 2.0), new THREE.MeshStandardMaterial({ color: 0x8e8c86, roughness: 0.95 }));
+      apron.position.set(x, 0.18, z + 1.0); apron.receiveShadow = true; this.target.add(apron);
+      return;
+    }
+    if (entrance.kind === 'porch') {
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(Math.min(w, 1.5), h, 0.1), new THREE.MeshStandardMaterial({ color: 0x5d4632, roughness: 0.78 }));
+      leaf.position.set(x, y, z + 0.02); this.target.add(leaf);
+      // Side lights either side of the leaf, where the opening is wide enough to have them.
+      if (w > 2.2) {
+        const light = new THREE.MeshStandardMaterial({ color: 0x3f6672, roughness: 0.2, metalness: 0.1 });
+        const paneW = (w - 1.6) / 2;
+        for (const side of [-1, 1]) {
+          const pane = new THREE.Mesh(new THREE.BoxGeometry(paneW, h * 0.62, 0.08), light);
+          pane.position.set(x + side * (0.75 + paneW / 2 + 0.05), y + 0.2, z + 0.02); this.target.add(pane);
+        }
+      }
+      // A stoep roof on two posts, only where the wall is tall enough to carry it.
+      if (h > 2.7) {
+        const timber = new THREE.MeshStandardMaterial({ color: 0x6b5137, roughness: 0.85 });
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(w + 1.4, 0.14, 1.6), new THREE.MeshStandardMaterial({ color: 0x8a3f2e, roughness: 0.8 }));
+        roof.position.set(x, h + 0.18, z + 0.8); roof.rotation.x = -0.07; roof.castShadow = true; this.target.add(roof);
+        for (const side of [-1, 1]) {
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, h + 0.1, 8), timber);
+          post.position.set(x + side * (w / 2 + 0.5), (h + 0.1) / 2, z + 1.45); post.castShadow = true; this.target.add(post);
+        }
+      }
+      const step = new THREE.Mesh(new THREE.BoxGeometry(w + 0.7, 0.32, 0.9), new THREE.MeshStandardMaterial({ color: 0xb3ad9f, roughness: 0.92 }));
+      step.position.set(x, 0.18, z + 0.45); step.receiveShadow = true; this.target.add(step);
+      return;
+    }
     const glass = new THREE.MeshPhysicalMaterial({ color: style === 'industrial' ? 0x4a5353 : 0x3a6672, roughness: 0.16, metalness: 0.18, clearcoat: 0.6 });
-    const doorW = Math.min(5.5, w * 0.32); const facadeZ = frontFacadeZAt(tiers, x, 1.72, doorW / 2); if (facadeZ === undefined) return;
-    const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, 3.1, 0.12), glass); door.position.set(x, 1.72, facadeZ + 0.02); this.target.add(door);
-    const canopy = new THREE.Mesh(new THREE.BoxGeometry(doorW + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(x, 3.35, facadeZ + 0.7); canopy.castShadow = true; this.target.add(canopy);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.12), glass); door.position.set(x, y, z + 0.02); this.target.add(door);
+    if (h < 2.7) return;
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(w + 1.2, 0.18, 1.5), new THREE.MeshStandardMaterial({ color: 0x30383a, metalness: 0.45, roughness: 0.42 })); canopy.position.set(x, h + 0.25, z + 0.7); canopy.castShadow = true; this.target.add(canopy);
   }
 
   private addBalconies(x: number, w: number, h: number, tiers: readonly MassingTier[]): void {

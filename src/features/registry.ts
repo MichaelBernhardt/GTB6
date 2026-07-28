@@ -1,8 +1,9 @@
 import { approachNear, fuelHud, fuelTick, sanitizeFuelSave } from './fuel.state';
 import { nearGolfCourse, sanitizeGolfState } from './golf.state';
+import { sanitizeInteriorsState, streetsHere } from './interiors.state';
 import { sanitizeProtestState, shutdownPending } from './protest.state';
 import { nearestStreetSite, sanitizeStreetState, STREET_LOAD_RADIUS } from './street.state';
-import type { FeatureDescriptor } from './types';
+import type { FeatureApproach, FeatureDescriptor } from './types';
 
 /**
  * The ONE eager module in the feature system. Everything here is loaded at boot, so keep it to
@@ -19,6 +20,16 @@ import type { FeatureDescriptor } from './types';
  *    inside `src/features/<id>/` imported from BOTH here and the lazy body becomes its own extra
  *    eager chunk — import it with `import type` from the body.
  */
+
+/** See host.preloadNearby(). Nearly every feature rides the proximity ring on `approach.near` — the
+ *  same predicate that offers the prompt. A feature whose prompt belongs to something only the
+ *  loaded body can find (interiors: real doors on real buildings) has no such predicate, so it
+ *  declares `preload(x, z)` instead: a coarse "there is work for this feature around here" test that
+ *  fetches the body without ever offering a rung or stealing a press. Deliberately NOT on
+ *  FeatureApproach — one feature needs it, the host duck-types it, and nothing else in the registry
+ *  has to know it exists. */
+type PreloadingApproach = FeatureApproach & { preload(x: number, z: number): boolean };
+
 export const FEATURES: readonly FeatureDescriptor[] = [
   {
     id: 'golf', saveKey: 'golf', label: 'Golf', sanitize: sanitizeGolfState,
@@ -82,6 +93,25 @@ export const FEATURES: readonly FeatureDescriptor[] = [
         return near !== undefined && near.distanceSq < STREET_LOAD_RADIUS * STREET_LOAD_RADIUS;
       },
     },
+  },
+  {
+    id: 'interiors', saveKey: 'interiors', label: 'Building interiors',
+    sanitize: sanitizeInteriorsState,
+    load: () => import('./interiors/interiors'),
+    // `near` stays false on purpose: this feature's prompt belongs to real doors on real buildings,
+    // and only the body knows where those are — CityGen cannot be reached from an eager chunk
+    // without making gameplay-rules and simulation mutually uninitialisable (see interiors.state.ts).
+    // `preload` is what makes the doorways EXIST to be walked up to: standing in a street is enough.
+    //
+    // `order: 64` is therefore the order of a rung that can never resolve — `near` is constant false.
+    // It is the last number in the on-foot ladder anyway, so if the duck-typed preload hook is ever
+    // promoted onto FeatureApproach and this stand-in starts offering, it queues behind every other
+    // feature instead of jumping the queue with a prompt about a door it cannot point at.
+    approach: {
+      context: 'foot', order: 64, prompt: 'E  Go inside',
+      near: () => false,
+      preload: (x, z) => streetsHere(x, z),
+    } as PreloadingApproach,
   },
 ];
 
