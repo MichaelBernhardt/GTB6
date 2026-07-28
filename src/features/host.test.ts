@@ -256,9 +256,62 @@ describe('FeatureHost HUD and menu', () => {
     ]);
   });
 
-  it('returns undefined when nothing is loaded, so the HUD strip stays hidden', () => {
+  it('returns undefined when nothing is loaded and nothing is eager, so the strip stays hidden', () => {
     expect(harness([feature()]).host.hud()).toBeUndefined();
   });
+});
+
+/**
+ * The seam the owner's playtest bought. A feature whose body loads on approach cannot draw a
+ * permanently visible readout or advance a mechanic the player has not opted into yet — the fuel
+ * gauge simply did not exist until you pressed E at a garage, so a whole session of driving showed
+ * nothing. Both hooks run ONLY while the body is unloaded; the loaded system takes over untouched.
+ */
+describe('FeatureHost eager slice', () => {
+  it('draws an unloaded feature’s chip, and hands the strip back the moment the body lands', async () => {
+    const { host } = harness([feature({
+      eager: { hud: () => [{ id: 'fuel:tank', label: 'FUEL', value: '62%', fill: 62 }] },
+      system: { hud: () => [{ id: 'fuel:tank', label: 'FUEL', value: '62%', fill: 62 }, { id: 'fuel:can', label: 'CAN', value: '5.0 ℓ' }] },
+    })]);
+    expect(host.isLoaded('golf')).toBe(false);
+    expect(host.hud()).toEqual([{ id: 'fuel:tank', label: 'FUEL', value: '62%', fill: 62 }]);
+    await host.open('golf');
+    expect(host.hud()).toHaveLength(2);
+  });
+
+  it('ticks the eager slice on the sim step until the body loads, then never again', async () => {
+    const tick = vi.fn();
+    const update = vi.fn();
+    const { host } = harness([feature({ eager: { tick }, system: { update } })]);
+    host.update(0.05);
+    host.update(0.05);
+    expect(tick).toHaveBeenCalledTimes(2);
+    expect(tick.mock.calls[0]![0]).toBe(0.05);
+    await host.open('golf');
+    host.update(0.05);
+    expect(tick).toHaveBeenCalledTimes(2); // no double burn: exactly one of the two ever runs
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the eager hooks the ladder the player is actually in', () => {
+    const seen: string[] = [];
+    const vehicle = { spec: { kind: 'compact' }, group: { position: { x: 0, y: 0, z: 0 } } } as unknown as ReturnType<FeatureGameApi['drivenVehicle']>;
+    const { host } = harness([feature({ eager: { tick: (_dt, ctx) => { seen.push(ctx.context); } } })], stubApi({ drivenVehicle: () => vehicle }));
+    host.update(0.05);
+    expect(seen).toEqual(['vehicle']);
+  });
+
+  it('runs neither hook while the player is in PvP', () => {
+    const tick = vi.fn();
+    const live = harness([feature({ eager: { tick, hud: () => [{ id: 'fuel:tank', label: 'FUEL' }] } })]);
+    live.online.value = true;
+    live.host.update(0.05);
+    expect(tick).not.toHaveBeenCalled();
+    expect(live.host.hud()).toBeUndefined();
+  });
+});
+
+describe('FeatureHost menu routing', () => {
 
   it('routes a menu row to the feature that opened the menu', async () => {
     const menu = vi.fn();
@@ -267,5 +320,156 @@ describe('FeatureHost HUD and menu', () => {
     host.menuAction('golf', 'buy-clubs');
     host.menuAction('nosuch', 'buy-clubs'); // must not throw
     expect(menu).toHaveBeenCalledWith('buy-clubs');
+  });
+});
+
+/**
+ * WALKING INTO THE RING LOADS THE FEATURE.
+ *
+ * The regression these pin is a design failure, not a crash: before this, pressing E on an eager
+ * stand-in was the only thing in the whole build that could bring a feature's world into existence.
+ * The owner's playtest of the street economy is what that costs — the people were not on the corners
+ * because the corners were never loaded, and he reasonably concluded the content did not work.
+ */
+describe('FeatureHost proximity loading', () => {
+  /** open() awaits the dynamic import AND createFeature, then settles a .finally and a .then, so a
+   *  single microtask turn is not enough to see the result. */
+  const settle = async (): Promise<void> => { for (let turn = 0; turn < 10; turn++) await Promise.resolve(); };
+  const ring = (near: () => boolean): FeatureDescriptor['approach'] => ({
+    context: 'foot', order: 50, prompt: 'E  Ask around', near,
+  });
+
+  it('loads a feature when the player walks into its ring, with no press at all', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const inside = { value: false };
+    const { host } = harness([feature({ load, approach: ring(() => inside.value) })]);
+    host.update(1);
+    expect(host.isLoaded('golf'), 'nothing loads while the player is elsewhere').toBe(false);
+    inside.value = true;
+    host.update(1);
+    await settle();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(host.isLoaded('golf')).toBe(true);
+  });
+
+  it('does not re-fetch on every tick while the player stands in the ring', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const { host } = harness([feature({ load, approach: ring(() => true) })]);
+    for (let tick = 0; tick < 20; tick++) host.update(1);
+    await settle();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the eager stand-in OFF the ladder while the load is in flight', () => {
+    // The on-foot stand-in sits above `E Enter vehicle`. Leaving it up during the fetch would take
+    // the car away from the player for a whole city block, to advertise a door that is opening anyway.
+    const { host } = harness([feature({ approach: ring(() => true) })]);
+    expect(host.descriptors('foot')).toHaveLength(1);
+    host.update(1);
+    expect(host.descriptors('foot'), 'the stand-in must stand down once the load starts').toHaveLength(0);
+  });
+
+  it('puts the stand-in back when the fetch fails, and never auto-retries', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const load = vi.fn(() => Promise.reject(new Error('network')));
+    const { host } = harness([feature({ load, approach: ring(() => true) })]);
+    host.update(1);
+    await settle();
+    expect(host.isLoaded('golf')).toBe(false);
+    expect(host.descriptors('foot'), 'a broken chunk must not leave the ring silent').toHaveLength(1);
+    for (let tick = 0; tick < 20; tick++) host.update(1);
+    await settle();
+    expect(load, 'a failed chunk must not be re-fetched every 0.4 s').toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('never loads anything while the player is online', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const { host, online } = harness([feature({ load, approach: ring(() => true) })]);
+    online.value = true;
+    for (let tick = 0; tick < 5; tick++) host.update(1);
+    await settle();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('re-earns the load from scratch after a new game', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const { host } = harness([feature({ load, approach: ring(() => true) })]);
+    host.update(1);
+    await settle();
+    host.reset({});
+    expect(host.isLoaded('golf')).toBe(false);
+    host.update(1);
+    await settle();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(host.isLoaded('golf')).toBe(true);
+  });
+
+  /**
+   * THE OTHER SHAPE OF RING, and the reason it is not just `near`.
+   *
+   * `near` is the prompt predicate: "are you standing on the thing". Interiors' thing is a front
+   * door on a real building, and an eager chunk cannot reach CityGen to know where one is (that
+   * import makes gameplay-rules and simulation mutually uninitialisable), so its `near` is constant
+   * false and there is nothing to walk into. It declares `preload(x, z)` instead — a coarse "there
+   * is a street around here" test — and the host takes that in place of `near` for the ring only.
+   * These pin that it is the ring and NOT the prompt: the body arrives, and no rung ever appears.
+   */
+  it('takes approach.preload in place of near for the ring, and offers nothing for it', async () => {
+    const load = vi.fn(() => Promise.resolve({ createFeature: () => ({ dispose: vi.fn() }) }));
+    const at = { x: 0, y: 0, z: 0 } as ReturnType<FeatureGameApi['playerPosition']>;
+    const inStreet = { value: false };
+    const approach = {
+      context: 'foot', order: 64, prompt: 'E  Go inside',
+      near: () => false,
+      preload: (x: number, z: number) => inStreet.value && x === at.x && z === at.z,
+    } as FeatureDescriptor['approach'];
+    const { host } = harness([feature({ load, approach })], stubApi({ playerPosition: () => at }));
+
+    host.update(1);
+    await settle();
+    expect(load, 'a false preload must not fetch anything').not.toHaveBeenCalled();
+    expect(host.descriptors('foot').map((rung) => rung.test({ context: 'foot', position: at, vehicle: undefined, hour: 12 })))
+      .toEqual([undefined]); // the stand-in is on the ladder but a constant-false `near` offers nothing
+
+    inStreet.value = true;
+    host.update(1);
+    await settle();
+    expect(load, 'walking into the street fetches the doorways with no press').toHaveBeenCalledTimes(1);
+    expect(host.isLoaded('golf')).toBe(true);
+  });
+
+  it('never asks preload again once the body is loaded', async () => {
+    const preload = vi.fn(() => true);
+    const approach = { context: 'foot', order: 64, prompt: 'E  Go inside', near: () => false, preload } as FeatureDescriptor['approach'];
+    const { host } = harness([feature({ approach })]);
+    host.update(1);
+    await settle();
+    const asked = preload.mock.calls.length;
+    for (let tick = 0; tick < 20; tick++) host.update(1);
+    expect(preload, 'a loaded feature has its own update(); the ring is done with it').toHaveBeenCalledTimes(asked);
+  });
+});
+
+describe('FeatureHost map blips', () => {
+  it('collects every loaded feature’s blips for the radar and the city map', async () => {
+    const { host } = harness([
+      feature({ system: { mapIcons: () => [{ x: 5, z: 6, color: '#f0842a' }] } as Partial<FeatureSystem> }),
+      feature({ id: 'fuel', saveKey: 'fuel', label: 'Fuel', system: { mapIcons: () => [{ x: 1, z: 2, color: '#f5c542', objective: true }] } as Partial<FeatureSystem> }),
+    ]);
+    await host.open('golf'); await host.open('fuel');
+    expect(host.mapIcons()).toEqual([
+      { x: 5, z: 6, color: '#f0842a' },
+      { x: 1, z: 2, color: '#f5c542', objective: true },
+    ]);
+  });
+
+  it('is empty when nothing is loaded and while the player is online', async () => {
+    const { host, online } = harness([feature({ system: { mapIcons: () => [{ x: 5, z: 6, color: '#f0842a' }] } as Partial<FeatureSystem> })]);
+    expect(host.mapIcons()).toEqual([]);
+    await host.open('golf');
+    expect(host.mapIcons()).toHaveLength(1);
+    online.value = true;
+    expect(host.mapIcons(), 'a feature’s world does not exist in someone else’s PvP').toEqual([]);
   });
 });

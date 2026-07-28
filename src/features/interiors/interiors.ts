@@ -496,7 +496,15 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       },
     },
     {
-      id: 'interiors:door', order: 50, context: 'foot',
+      // BELOW THE PEOPLE, ON PURPOSE. There are thousands of front doors and they are everywhere, so
+      // this is the one rung in the game that can turn up next to any other feature's rung — and a
+      // tie in `order` is broken alphabetically by id, which is not a design decision anybody made.
+      // At the 50 this used to sit on it beat `street:deal` (50) and `street:worker` (51) purely
+      // because "interiors" sorts before "street", and a dealer standing in a doorway would have
+      // become unreachable — the exact failure the street branch shipped a proximity ring to fix.
+      // 52 puts the door under both of them and still over the ambient prompts (golf:desk 54,
+      // protest 54-62). A person you can talk to always outranks a door you can always come back to.
+      id: 'interiors:door', order: 52, context: 'foot',
       test: (ctx) => {
         if (visit) return undefined;
         const door = doorNear(ctx.position.x, ctx.position.z);

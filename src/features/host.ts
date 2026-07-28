@@ -19,6 +19,33 @@ export interface FeatureHostContext {
 }
 
 /**
+ * A blip a loaded feature wants on the radar and the city map, in the minimap's own language.
+ *
+ * Declared HERE rather than on FeatureSystem so no feature has to widen the shared contract to be
+ * findable. `objective: true` is the gold pin that never leaves the minimap — out of range it rides
+ * the edge with an arrowhead — and it is reserved for a place the player has actually been SENT.
+ * Structurally identical to ui/MinimapView's MapMarker, without dragging a UI import into features.
+ */
+export interface FeatureMapIcon {
+  readonly x: number;
+  readonly z: number;
+  readonly color: string;
+  readonly shape?: 'circle' | 'diamond' | 'house';
+  readonly objective?: boolean;
+  readonly area?: number;
+}
+
+/** Implement this alongside FeatureSystem to put blips on the radar. Optional and structural: a
+ *  feature that doesn't want blips changes nothing. */
+export interface FeatureMapSource {
+  mapIcons?(): readonly FeatureMapIcon[];
+}
+
+/** How often the host asks unloaded features "is the player in your ring yet?". Cheap — the
+ *  predicates are distance tests over derived data — but there is no reason to run it per frame. */
+const PRELOAD_INTERVAL = 0.4;
+
+/**
  * The lazy feature host: Game's entire footprint for every feature that will ever ship.
  *
  * Game gets ONE field, ONE update() line, ONE ui.update() key, ONE persist() key, ONE console
@@ -38,6 +65,12 @@ export class FeatureHost {
   /** Save slices for features that are NOT loaded. Handed over when a feature loads; merged back on
    *  persist so an unloaded feature's progress is never wiped by a session that didn't touch it. */
   private stored: Record<string, unknown> = {};
+  /** Features whose body is being fetched because the player walked into the ring, not because they
+   *  pressed anything. While an id is in here its eager stand-in is kept OFF the ladder. */
+  private readonly preloading = new Set<string>();
+  /** Ids whose auto-load threw. Never retried automatically; the manual approach press comes back. */
+  private readonly preloadFailed = new Set<string>();
+  private preloadTimer = 0;
 
   constructor(private readonly context: FeatureHostContext, private readonly registry: readonly FeatureDescriptor[] = FEATURES) {}
 
@@ -82,14 +115,93 @@ export class FeatureHost {
 
   update(dt: number): void {
     if (this.context.suspended()) return;
+    this.preloadTimer -= dt;
+    if (this.preloadTimer <= 0) { this.preloadTimer = PRELOAD_INTERVAL; this.preloadNearby(); }
+    // The eager slice ticks ONLY while the body is unloaded, and the loaded system's update() takes
+    // over the instant it is not — so a feature that must be true before the player opts in (petrol
+    // burning from the first metre driven) can never double up. This runs on the fixed sim sub-step,
+    // which is the whole point: the burn used to be a side effect inside the proximity predicate,
+    // called once per RENDERED frame off a wall clock, and was measurably frame-rate coupled.
+    let ctx: InteractionCtx | undefined;
+    for (const feature of this.registry) {
+      if (!feature.eager?.tick || this.systems.has(feature.id)) continue;
+      ctx ??= this.eagerFrame();
+      feature.eager.tick(dt, ctx);
+    }
     for (const system of this.systems.values()) system.update?.(dt);
   }
 
+  /**
+   * WALKING INTO A FEATURE'S RING LOADS IT. Nobody has to press anything first.
+   *
+   * This is the fix for a shipped design failure, so it is worth stating plainly. Before this, the
+   * ONLY thing in the build that ever loaded a feature body was the player pressing E on its eager
+   * stand-in. A feature that puts PEOPLE in the world therefore had nobody in the world until the
+   * player guessed that an unremarkable "E Ask around" prompt was a door — and the owner's playtest
+   * of the street economy is what that costs: he could not find the content, and concluded it was
+   * unusable. Content you have to solve a prompt to make exist is not content.
+   *
+   * Boot pays nothing for this: the import is still dynamic, still unreferenced by index.html, and
+   * still only fetched when the player is standing in the ring. What changes is that the world is
+   * already populated by the time they get there, so the first interaction is with a PERSON.
+   *
+   * The ring is normally `approach.near` — the very predicate that offers the prompt. That does not
+   * work for a feature whose prompt belongs to something only the loaded body can find: interiors
+   * puts a rung on real front doors, and an eager chunk cannot reach CityGen to know where a door is,
+   * so its `near` is constant false and there is nothing to walk into. Such an approach may instead
+   * declare `preload(x, z)` — a coarse "there is work for this feature around here" test taken from
+   * the player's position — and it is used HERE, in place of `near`, so both kinds of feature share
+   * one timer, one in-flight guard and one never-auto-retry rule. Duck-typed on purpose: it is not on
+   * FeatureApproach, and a feature that does not declare it is untouched.
+   */
+  private preloadNearby(): void {
+    for (const feature of this.registry) {
+      const approach = feature.approach;
+      if (!approach || this.systems.has(feature.id) || this.inflight.has(feature.id) || this.preloadFailed.has(feature.id)) continue;
+      const preload = (approach as { preload?(x: number, z: number): boolean }).preload;
+      if (preload) {
+        const at = this.context.api.playerPosition();
+        if (!preload(at.x, at.z)) continue;
+      } else if (!approach.near(this.frame(approach.context))) continue;
+      this.preloading.add(feature.id);
+      void this.open(feature.id).then((system) => {
+        // A failed fetch must NOT leave the ring silent forever: put the stand-in back so the press
+        // still works, and never auto-retry, or a broken chunk becomes a fetch every 0.4 s.
+        if (!system) { this.preloadFailed.add(feature.id); }
+        this.preloading.delete(feature.id);
+      });
+    }
+  }
+
+  /** The HUD strip: each loaded feature's chips, and the eager chips of the ones still unloaded. A
+   *  permanently visible readout cannot be gated on a chunk that only arrives if the player happens
+   *  to walk into the right place — see FeatureEagerSlice. */
   hud(): FeatureHudEntry[] | undefined {
-    if (this.context.suspended() || this.systems.size === 0) return undefined;
+    if (this.context.suspended()) return undefined;
     const entries: FeatureHudEntry[] = [];
-    for (const system of this.systems.values()) entries.push(...(system.hud?.() ?? []));
+    let ctx: InteractionCtx | undefined;
+    for (const feature of this.registry) {
+      const system = this.systems.get(feature.id);
+      if (system) { entries.push(...(system.hud?.() ?? [])); continue; }
+      if (!feature.eager?.hud) continue;
+      ctx ??= this.eagerFrame();
+      entries.push(...(feature.eager.hud(ctx) ?? []));
+    }
     return entries.length > 0 ? entries : undefined;
+  }
+
+  /** One context per frame for the eager hooks, in whichever ladder the player is actually in. */
+  private eagerFrame(): InteractionCtx {
+    return this.frame(this.context.api.drivenVehicle() ? 'vehicle' : 'foot');
+  }
+
+  /** Every loaded feature's blips, for Game.mapMarkers(). Empty while online (features are suspended
+   *  there, so their world does not exist) and empty when nothing is loaded — no allocation either. */
+  mapIcons(): FeatureMapIcon[] {
+    if (this.context.suspended() || this.systems.size === 0) return [];
+    const icons: FeatureMapIcon[] = [];
+    for (const system of this.systems.values()) icons.push(...((system as FeatureSystem & FeatureMapSource).mapIcons?.() ?? []));
+    return icons;
   }
 
   // ---- interactions ----------------------------------------------------------------------------
@@ -120,20 +232,11 @@ export class FeatureHost {
     for (const feature of this.registry) {
       const system = this.systems.get(feature.id);
       if (system) { list.push(...(system.interactions?.() ?? [])); continue; }
+      // A proximity load is already on the way, so the stand-in has nothing left to do — and leaving
+      // it on the ladder would sit above `E Enter vehicle` for a whole block while the chunk lands.
+      if (this.preloading.has(feature.id)) continue;
       const approach = feature.approach;
       if (!approach || approach.context !== context) continue;
-      // PRELOAD RING. A lazy feature cannot put ANYTHING in the world until its body arrives, so a
-      // feature whose whole point is "see it from down the street" — a lit doorway, a marker, a
-      // fixture — is invisible until the first key press, and the player never learns there was
-      // something to press. An approach may therefore declare `preload(x, z)`: return true and the
-      // host fetches the body now, offering nothing and stealing no press. Opt-in and duck-typed
-      // (it is not on FeatureApproach yet); features that do not declare it are untouched, and
-      // open() is idempotent and de-duplicated by `inflight`, so this is one map lookup per frame.
-      const preload = (approach as { preload?(x: number, z: number): boolean }).preload;
-      if (preload) {
-        const at = this.context.api.playerPosition();
-        if (preload(at.x, at.z)) void this.open(feature.id);
-      }
       list.push({
         id: `${feature.id}:approach`, order: approach.order, context: approach.context,
         test: (ctx) => approach.near(ctx) ? { prompt: approach.prompt, act: () => this.openFromApproach(feature.id, context) } : undefined,
@@ -241,6 +344,8 @@ export class FeatureHost {
     // Bump EVERY id, not just the loaded ones: a chunk still in flight when a new game starts would
     // otherwise arrive with a matching generation and install itself into the fresh world.
     for (const id of [...this.systems.keys(), ...this.inflight.keys()]) this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
+    // A new game re-earns the proximity load from scratch, and forgives an earlier failed fetch.
+    this.preloading.clear(); this.preloadFailed.clear(); this.preloadTimer = 0;
     for (const [id, system] of this.systems) {
       try { system.dispose(); }
       catch (error) { console.warn(`[features] "${id}" threw while disposing.`, error); }

@@ -60,11 +60,14 @@ const PROBES: readonly (readonly [number, number])[] = (() => {
 })();
 
 /**
- * The preload ring — see the note in host.descriptors(). A lazily loaded feature cannot put anything
- * in the world until its body arrives, so a feature whose whole point is "you can see it from down
- * the street" is invisible until the first key press. This says: there is a street within about
- * 110 u, so the doorways are worth fetching. Seventeen grid lookups, no allocation beyond the cell
- * keys, and it stops asking the moment the body lands (the host only polls unloaded features).
+ * The preload ring — see the note in host.preloadNearby(). A lazily loaded feature cannot put
+ * anything in the world until its body arrives, so a feature whose whole point is "you can see it
+ * from down the street" is invisible until the first key press. Every other feature rides that ring
+ * on its `approach.near`; this one cannot, because `near` answers "are you on a doorstep" and only
+ * the loaded body knows where a doorstep is. So the approach declares `preload` and this is it:
+ * there is a street within about 110 u, so the doorways are worth fetching. Seventeen grid lookups,
+ * no allocation beyond the cell keys, and it stops being asked the moment the body lands (the host
+ * polls unloaded features only, every 0.4 s).
  */
 export function streetsHere(x: number, z: number): boolean {
   if (pointInAnyPolygon(WATER_POLYGONS, x, z)) return false;

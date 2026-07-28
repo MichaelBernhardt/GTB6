@@ -2,7 +2,23 @@ import { MAP_WORLD_SIZE } from '../world/mapData';
 import type { RoadPoint } from '../world/City';
 
 export interface MapPoint { x: number; z: number; }
-export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house'; objective?: boolean; area?: number; }
+export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house' | 'fuel'; objective?: boolean; area?: number; }
+
+/** The petrol-pump silhouette, traced into the current path at the blip's own scale: a squat body,
+ *  a shoulder, and the hose arm off the right. Recognisable at 13px on the minimap and at 15px on
+ *  the M-map, which is the whole job — a coloured dot among coloured dots is not findable. */
+export function tracePumpGlyph(ctx: CanvasRenderingContext2D | Path2D, s: number): void {
+  ctx.moveTo(-s * 0.62, -s * 0.85);
+  ctx.lineTo(s * 0.20, -s * 0.85);
+  ctx.lineTo(s * 0.20, s * 0.95);
+  ctx.lineTo(-s * 0.62, s * 0.95);
+  ctx.closePath();
+  ctx.moveTo(s * 0.34, -s * 0.30); // hose arm and nozzle, hanging off the shoulder
+  ctx.lineTo(s * 0.80, -s * 0.30);
+  ctx.lineTo(s * 0.80, s * 0.42);
+  ctx.lineTo(s * 0.34, s * 0.42);
+  ctx.closePath();
+}
 
 /** Units-to-pixels factors, ordered widest view to tightest, over the 240px minimap canvas.
  *  'City' is derived from the map footprint so the widest level always frames the whole generated
@@ -139,6 +155,7 @@ export class MinimapView {
       ctx.fillStyle = marker.color; ctx.strokeStyle = '#111817'; ctx.lineWidth = 2; ctx.beginPath();
       if (marker.shape === 'diamond') { ctx.moveTo(0, -6.5); ctx.lineTo(6.5, 0); ctx.lineTo(0, 6.5); ctx.lineTo(-6.5, 0); ctx.closePath(); }
       else if (marker.shape === 'house') { ctx.moveTo(0, -7.5); ctx.lineTo(6, -1.5); ctx.lineTo(6, 6); ctx.lineTo(-6, 6); ctx.lineTo(-6, -1.5); ctx.closePath(); }
+      else if (marker.shape === 'fuel') tracePumpGlyph(ctx, 6.5);
       else ctx.arc(0, 0, 6, 0, Math.PI * 2);
       ctx.fill(); ctx.stroke(); ctx.restore();
     }

@@ -17,13 +17,15 @@ import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separ
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
 import { MELEE_DAMAGE, MELEE_GLOBAL_STAGGER, MELEE_HEIGHT_REACH, MELEE_START_RANGE, meleeHitLands } from './MeleeSystem';
 import { MISSIONS } from './MissionSystem';
-import { ProgressWatchdog, RoutePlanner, type NavPoint } from './NavGraph';
+import { ProgressWatchdog, roadClosures, RoutePlanner, type NavPoint } from './NavGraph';
 import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, vehicleHitDamage } from './TrafficAvoidance';
 import type { City, RoadPoint } from '../world/City';
 import { HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
 import { powerOn } from '../world/powerGrid';
 
-interface DrivePlan { points: NavPoint[]; index: number; watchdog: ProgressWatchdog; backoff: number; }
+/** `closureStamp` is the RoadClosures stamp this route was solved under: when it moves, a driver
+ *  whose remaining waypoints run into a newly closed road re-solves instead of nosing into it. */
+interface DrivePlan { points: NavPoint[]; index: number; watchdog: ProgressWatchdog; backoff: number; closureStamp: number; }
 interface TaxiState { stopTimer: number; dwell: number; hootTimer: number; }
 interface Holdup { held: number; honkAt: number; giveUpAt: number; dodge: number; side: number; holding: boolean; clearFor: number; } // one blocked-by-the-player driver's patience
 export interface PlayerBump { ped: Pedestrian; position: THREE.Vector3; knockdown: boolean; killed: boolean; assault: boolean; }
@@ -477,7 +479,7 @@ export class PopulationSystem {
     if (!points?.length) return false;
     vehicle.occupied = true;
     if (!this.traffic.includes(vehicle)) this.traffic.push(vehicle);
-    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });
+    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0, closureStamp: roadClosures.stamp });
     const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);
     return true;
   }
@@ -623,6 +625,16 @@ export class PopulationSystem {
   private followDrivePlan(vehicle: Vehicle, dt: number): boolean {
     const plan = this.trafficPlans.get(vehicle);
     if (!plan) { if (vehicle.routeCooldown <= 0 && !this.assignVehicleRoute(vehicle, false)) vehicle.routeCooldown = 0.8 + Math.random() * 1.2; return true; } // no plan yet: request one, but back off after an empty result instead of re-solving every frame
+    // A road shut AFTER this route was solved (protest barricade, crash scene). One integer compare in
+    // the common case; only a driver whose remaining waypoints actually enter the circle pays for a
+    // reroute, and requestCollisionReplan's cooldown + the planner's frame budget keep it to a trickle.
+    if (plan.closureStamp !== roadClosures.stamp) {
+      plan.closureStamp = roadClosures.stamp;
+      if (roadClosures.crosses(plan.points, plan.index)) {
+        this.requestCollisionReplan(vehicle);
+        if (this.trafficPlans.get(vehicle) !== plan) return true; // rerouted: drive the fresh plan from next frame, not this stale reference
+      }
+    }
     if (plan.backoff > 0) {
       plan.backoff -= dt; vehicle.reverse(dt, this.city);
       if (plan.backoff <= 0) { this.trafficPlans.delete(vehicle); this.assignVehicleRoute(vehicle, false); } // replan from wherever we backed out to
@@ -653,7 +665,7 @@ export class PopulationSystem {
     const goal = this.vehiclePlanner.goalNear(position.x, position.z, this.playerPos); // nearby lane node, biased player-ward so traffic trends toward the visible streets
     const points = free ? this.vehiclePlanner.plan(position.x, position.z, goal) : this.vehiclePlanner.tryPlan(position.x, position.z, goal);
     if (!points?.length) return false; // budget spent or destination unreachable: caller backs off before retrying
-    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });
+    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0, closureStamp: roadClosures.stamp });
     const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);
     const next = points[1];
     if (next && Math.abs(vehicle.speed) < 1) { vehicle.heading = Math.atan2(next.x - position.x, next.z - position.z); vehicle.group.rotation.y = vehicle.heading; }
@@ -741,7 +753,7 @@ export class PopulationSystem {
     const pos = vehicle.group.position;
     const points = this.vehiclePlanner.tryPlanTo(pos.x, pos.z, dest.x, dest.z);
     if (!points?.length) return; // A* budget spent this frame: the watchdog stays the backstop
-    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0 });
+    this.trafficPlans.set(vehicle, { points, index: 0, watchdog: new ProgressWatchdog(), backoff: 0, closureStamp: roadClosures.stamp });
     const first = points[0]; if (first) vehicle.aiTarget.set(first.x, 0, first.z);
   }
 }

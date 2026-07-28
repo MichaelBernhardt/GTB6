@@ -50,13 +50,40 @@ export interface InteractionDescriptor {
 
 /** The eager stand-in a feature declares in registry.ts so there is something to walk up to BEFORE
  *  its body loads. Keep `near` to a cheap distance test over data derived at runtime — never typed
- *  world coordinates, which the map rework invalidates. Acting on it loads the feature, then
- *  immediately re-resolves against the loaded descriptors. */
+ *  world coordinates, which the map rework invalidates. It must be PURE: it is the prompt resolver,
+ *  it runs from the render loop, and it may be skipped entirely when a lower rung answers first — so
+ *  a simulation side effect hidden in here is both frame-rate coupled and conditional. Put that in
+ *  `FeatureEagerSlice.tick`. Acting on it loads the feature, then immediately re-resolves against the
+ *  loaded descriptors. */
 export interface FeatureApproach {
   readonly context: InteractionContext;
   readonly order: number;
   readonly prompt: string;
   near(ctx: InteractionCtx): boolean;
+}
+
+/**
+ * The part of a feature that has to be TRUE before the player opts in.
+ *
+ * Almost no feature needs this and the default answer is "you don't". A feature body loads on
+ * approach, which is exactly right for a golf course or a protest — nothing about them exists until
+ * you walk up. It is wrong for anything the player is entitled to see or feel WITHOUT having found
+ * the feature first: petrol is the case that forced it, because a fuel tank that only starts draining
+ * once you have pulled into a garage is a mechanic you can decline, and a gauge that only appears
+ * once the chunk lands is a gauge the player never sees. (They didn't: the owner drove a whole
+ * session and reported "I don't see a gauge".)
+ *
+ * Both hooks are called ONLY while the body is not loaded. The moment it is, the loaded system's own
+ * `update`/`hud` take over, so nothing can ever run twice. Keep both in the eager `<id>.state.ts` —
+ * whatever they touch is boot payload for every player, forever.
+ */
+export interface FeatureEagerSlice {
+  /** Per SIMULATION step — the same fixed sub-step the world runs on, never a render frame. Use this
+   *  and not `approach.near` for anything that advances state, or the rate depends on frame rate. */
+  tick?(dt: number, ctx: InteractionCtx): void;
+  /** HUD chips to show before the body exists. Build them with the same function the body uses so
+   *  the strip does not change shape at the moment the chunk lands. */
+  hud?(ctx: InteractionCtx): readonly FeatureHudEntry[] | undefined;
 }
 
 // ---- what the game hands a feature -------------------------------------------------------------
@@ -191,6 +218,9 @@ export interface FeatureDescriptor {
   sanitize?(raw: unknown): unknown;
   /** Optional eager proximity stand-in — see FeatureApproach. */
   readonly approach?: FeatureApproach;
+  /** Optional always-on half: a per-sim tick and/or a HUD chip that exist before the body does.
+   *  See FeatureEagerSlice, and read the "you probably don't need this" paragraph on it first. */
+  readonly eager?: FeatureEagerSlice;
   /** The ONLY runtime reference to the feature body. `() => import('./golf/golf')`. */
   load(): Promise<FeatureModule>;
 }

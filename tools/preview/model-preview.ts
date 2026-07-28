@@ -64,17 +64,30 @@ function makeSubject(name: string): Subject {
   return { object: vehicle.group, label: vehicle.spec.name };
 }
 
+/** Fit the SILHOUETTE, not the bounding sphere: the box corners are projected onto the camera's own
+ *  screen axes, so a side-on shot of an 11 m wingspan fills the frame with the 7 m profile instead of
+ *  shrinking everything to fit a span the view cannot even see. */
 function frame(camera: THREE.PerspectiveCamera, box: THREE.Box3, dir: THREE.Vector3, aspect: number): void {
-  const size = box.getSize(new THREE.Vector3());
   const centre = box.getCenter(new THREE.Vector3());
-  const radius = Math.max(size.x, size.y, size.z) * 0.62 + 0.2;
+  const forward = dir.clone().normalize();
+  const worldUp = Math.abs(forward.x) < 1e-3 && Math.abs(forward.z) < 1e-3 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(worldUp, forward).normalize();
+  const up = new THREE.Vector3().crossVectors(forward, right).normalize();
+  let halfWidth = 0; let halfHeight = 0; let halfDepth = 0;
+  const corner = new THREE.Vector3();
+  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+    corner.set(x, y, z).sub(centre);
+    halfWidth = Math.max(halfWidth, Math.abs(corner.dot(right)));
+    halfHeight = Math.max(halfHeight, Math.abs(corner.dot(up)));
+    halfDepth = Math.max(halfDepth, Math.abs(corner.dot(forward)));
+  }
   const fov = THREE.MathUtils.degToRad(camera.fov);
-  const dist = radius / Math.tan(fov / 2) / Math.min(1, aspect) * 1.18;
-  camera.position.copy(centre).addScaledVector(dir.clone().normalize(), dist);
-  camera.up.set(0, 1, 0);
-  if (Math.abs(dir.x) < 1e-3 && Math.abs(dir.z) < 1e-3) camera.up.set(0, 0, -1); // top view
+  const radius = Math.max(halfHeight, halfWidth / Math.max(0.2, aspect)) + 0.12;
+  const dist = radius / Math.tan(fov / 2) * 1.1 + halfDepth;
+  camera.position.copy(centre).addScaledVector(forward, dist);
+  camera.up.copy(worldUp);
   camera.lookAt(centre);
-  camera.near = Math.max(0.02, dist - radius * 3); camera.far = dist + radius * 6;
+  camera.near = Math.max(0.02, dist - halfDepth * 2 - radius); camera.far = dist + halfDepth * 4 + radius * 4;
   camera.updateProjectionMatrix();
 }
 
@@ -95,16 +108,22 @@ function show(name: string): string {
   return current.label;
 }
 
-/** Single-view directions: one subject filling the whole canvas, for judging detail honestly. */
+/** Single-view directions: one subject filling the whole canvas, for judging detail honestly.
+ *  `ridden` is the side view with the seated dummy switched on — the two-wheeler dummies are built
+ *  from the same grip and footrest points the frozen player ride clips reach for, so seeing hands on
+ *  bars and boots on pegs is the only direct check that the geometry came to the pose. */
 const SOLO: Record<string, THREE.Vector3> = {
   hero: new THREE.Vector3(1.15, 0.55, 1.4),
   side: new THREE.Vector3(1, 0.06, 0),
+  ridden: new THREE.Vector3(1, 0.06, 0),
   rear: new THREE.Vector3(-1.15, 0.5, -1.3),
   front: new THREE.Vector3(0.25, 0.22, 1),
   top: new THREE.Vector3(0, 1, 0.001),
 };
 
 function draw(mode: string): void {
+  const rider = current!.object.getObjectByName('rider');
+  if (rider) rider.visible = mode === 'ridden';
   const box = new THREE.Box3().setFromObject(current!.object);
   const w = renderer.domElement.width; const h = renderer.domElement.height;
   renderer.setScissorTest(true);
@@ -205,7 +224,7 @@ const api: PreviewApi = {
 // ---- Human-facing chrome. The API above is driven by tools/preview/shoot.py; this makes the same
 // page browsable by hand so the models can be reviewed without a screenshot run.
 const SUBJECTS = ['bicycle', 'motorbike', 'courier', 'superbike', 'traincar', 'traincar-seat', 'traincar-aisle', 'plane'];
-const MODES = ['turnaround', 'hero', 'side', 'front', 'rear', 'top', 'interior'];
+const MODES = ['turnaround', 'hero', 'side', 'ridden', 'front', 'rear', 'top', 'interior'];
 let pickedSubject = SUBJECTS[0]!; let pickedMode = MODES[0]!;
 
 const bar = document.createElement('div');

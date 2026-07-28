@@ -344,8 +344,9 @@ export class Kit {
   }
 
   /** Canvas-atlas sign quad (node-safe: falls back to a plain dark plane without a DOM). */
-  sign(text: string, accent: string, w: number, h: number, x: number, y: number, z: number, options: { ry?: number; background?: string; doubleSide?: boolean } = {}): THREE.Mesh {
-    const mesh = createSignMesh(new THREE.PlaneGeometry(w, h), text, accent, { background: options.background, doubleSide: options.doubleSide });
+  /** `genny`: this board is behind a generator and stays lit through load shedding (see setSignGlow). */
+  sign(text: string, accent: string, w: number, h: number, x: number, y: number, z: number, options: { ry?: number; background?: string; doubleSide?: boolean; genny?: boolean } = {}): THREE.Mesh {
+    const mesh = createSignMesh(new THREE.PlaneGeometry(w, h), text, accent, { background: options.background, doubleSide: options.doubleSide, genny: options.genny });
     mesh.position.set(x, y, z); if (options.ry) mesh.rotation.y = options.ry;
     return this.add(mesh);
   }
