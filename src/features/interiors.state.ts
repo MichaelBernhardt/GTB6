@@ -34,6 +34,9 @@ export interface InteriorDoor {
   readonly heading: number;
   /** Clear width of the opening the model drew, so the frame matches the wall it is on. */
   readonly openWidth: number;
+  /** Head height of that same opening. A cottage's door is 2 m and its wall is 2.5: a fixed 3.4 m
+   *  reveal on it is a hole through the roof, which is what the first version drew. */
+  readonly openHeight: number;
   /** Everything the interior generator needs about the host building. */
   readonly facts: import('./interiors/core').BuildingFacts;
 }

@@ -11,6 +11,9 @@ import { describe, expect, it } from 'vitest';
 import { BuildingArchitecture } from '../../world/BuildingArchitecture';
 import * as THREE from 'three';
 import { allBuildings, type GeneratedBuilding } from '../../world/CityGen';
+import { allScatteredModels } from '../../world/ModelScatter';
+import { MODEL_INDEX } from '../../world/models/catalog';
+import { scatterDoorFor } from './doors';
 import { buildCore, coreContinuity, LIFT_FROM_STOREYS, type BuildingFacts } from './core';
 import { solveFloor } from './floor';
 
@@ -120,6 +123,37 @@ describe('the floorplan solver', () => {
       }
     }
   }, 300000);
+
+  /**
+   * AND THE SAME PROOF FOR THE SCATTER PASS, which is most of the buildings outside the CBD and was
+   * absent from the first version of this suite. Every model family the catalog opens — a farmhouse,
+   * a barn, a spaza, a kerk — solves a floor whose every tile is reachable from the mat.
+   */
+  it('leaves no unreachable spot in any scattered model family either', () => {
+    const perModel = new Map<string, BuildingFacts[]>();
+    for (const model of allScatteredModels()) {
+      if (!MODEL_INDEX.get(model.name)?.interior) continue;
+      const bucket = perModel.get(model.name) ?? [];
+      if (bucket.length >= 6) continue;
+      const door = scatterDoorFor(model);
+      if (!door) continue;
+      bucket.push(door.facts);
+      perModel.set(model.name, bucket);
+    }
+    expect(perModel.size, 'the catalog stopped opening whole model families').toBe(32);
+    for (const [name, buildings] of perModel) {
+      for (const facts of buildings) {
+        const core = buildCore(facts);
+        expect(coreContinuity(core), `${name} ${facts.id}`).toBeUndefined();
+        for (const index of [...new Set([0, core.storeys - 1])]) {
+          const plan = solveFloor(facts, index, core);
+          expect(plan.rooms.length, `${name} ${facts.id} floor ${index} has no rooms`).toBeGreaterThan(0);
+          expect(plan.walkable, `${name} ${facts.id} floor ${index} has no floor at all`).toBeGreaterThan(20);
+          expect(plan.unreachable, `${name} ${facts.id} floor ${index}: ${plan.unreachable} unreachable`).toBe(0);
+        }
+      }
+    }
+  }, 600000);
 
   /** A shed must not generate a lounge, and a house must not generate a warehouse bay. */
   it('gives each family its own grammar', () => {

@@ -24,7 +24,7 @@ export function buildChurch(seed: number, options: BuildOptions = {}): BuiltMode
   kit.box(M.whiteMetal, 0.09, 1.3, 0.09, 0, th + 3.4, nd / 2 + tw / 2 - 0.3);
   kit.box(M.whiteMetal, 0.62, 0.09, 0.09, 0, th + 4.25, nd / 2 + tw / 2 - 0.3, { cast: false });
   kit.box(M.glassDark, 1.3, 1.3, 0.1, 0, th * 0.62, nd / 2 + tw / 2 - 0.3 + tw / 2 + 0.03, { cast: false }); // clock face plate
-  kit.box(M.darkTimber, 1.5, 2.5, 0.12, 0, 0, nd / 2 + tw - 0.24, { cast: false });
+  kit.door(M.darkTimber, 1.5, 2.5, 0.12, 0, 0, nd / 2 + tw - 0.24, 'lobby', { cast: false });
   if (variant === 1) for (const side of [-1, 1]) kit.box(M.whitewash, 1, 1.6, 1.4, side * (nw / 2 + 0.5), 0, -nd * 0.25, { collide: true }); // buttress stubs
   return kit.done();
 }
@@ -47,7 +47,7 @@ export function buildMosque(seed: number, options: BuildOptions = {}): BuiltMode
   kit.cyl(M.whitewash, 0.75, 0.9, 11, mx, 0, mz, { seg: 10, collide: true }); // minaret
   kit.cyl(M.whitewash, 1.15, 1.15, 0.35, mx, 8.2, mz, { seg: 10, cast: false }); // balcony ring
   kit.cyl(dome, 0.02, 0.8, 1.4, mx, 11, mz, { seg: 10 });
-  kit.box(M.glassDark, 2.2, 2.6, 0.1, 0, 0.4, hd / 2 + 0.04, { cast: false }); // arch doorway plate
+  kit.door(M.glassDark, 2.2, 2.6, 0.1, 0, 0.4, hd / 2 + 0.04, 'lobby', { cast: false }); // arch doorway plate
   for (const side of [-1, 1]) kit.box(M.glass, 1, 1.7, 0.1, side * hw * 0.28, 1.2, hd / 2 + 0.03, { cast: false });
   if (variant === 1) { // wudu courtyard wall
     kit.box(M.whitewash, hw * 0.7, 1.6, 0.3, -hw * 0.15, 0, hd / 2 + 3.4, { collide: true });
@@ -69,6 +69,7 @@ export function buildSchool(seed: number, options: BuildOptions = {}): BuiltMode
     kit.gable(M.galv, bw + 0.8, bd + 0.8, 1.3, 0, bh, z);
     for (let pane = 0; pane < 5; pane++) kit.box(M.glassDark, 1.7, 1.1, 0.08, -bw / 2 + bw * 0.12 + pane * bw * 0.19, 1.25, z + bd / 2 + 0.03, { cast: false });
   }
+  kit.door(M.darkTimber, 1.5, 2.3, 0.09, bw * 0.36, 0, (bd + gap) / 2 + bd / 2 + 0.05, 'lobby', { cast: false }); // office door on the street block
   kit.box(M.galv, 2.2, 0.08, gap + 1, -bw * 0.2, 2.62, 0, { rx: 0.03 }); // walkway roof
   for (const zed of [-gap / 2 + 0.6, gap / 2 - 0.6]) for (const sx of [-1, 1]) kit.box(M.steel, 0.09, 2.6, 0.09, -bw * 0.2 + sx * 0.9, 0, zed);
   kit.box(M.paving, 2.4, 0.06, gap, -bw * 0.2, 0, 0, { cast: false });
@@ -173,7 +174,7 @@ export function buildCommunityHall(seed: number, options: BuildOptions = {}): Bu
   kit.gable(kit.pick(4, [M.galv, M.corrGreen]), w + 0.8, d + 0.7, 1.9, 0, h, 0);
   kit.box(wall, w * 0.3, 3, 2.2, 0, 0, d / 2 + 1.1, { collide: true }); // porch
   kit.gable(M.galv, w * 0.34, 2.6, 0.9, 0, 3, d / 2 + 1.1);
-  kit.box(M.darkTimber, 1.7, 2.4, 0.1, 0, 0, d / 2 + 2.16, { cast: false });
+  kit.door(M.darkTimber, 1.7, 2.4, 0.1, 0, 0, d / 2 + 2.16, 'lobby', { cast: false });
   for (const side of [-1, 1]) for (let pane = 0; pane < 2; pane++) {
     kit.box(M.glassDark, 1.3, 1.5, 0.08, side * (w / 2 + 0.01), 1.5, -d * 0.28 + pane * d * 0.36, { ry: Math.PI / 2, cast: false });
   }

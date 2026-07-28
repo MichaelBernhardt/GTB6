@@ -101,6 +101,27 @@ describe('structure model catalog', () => {
             if (def.standable) {
               expect(built.tiers.some((tier) => tier.y1 >= 0.4 && (tier.maxX - tier.minX) * (tier.maxZ - tier.minZ) >= 1)).toBe(true);
             }
+
+            // THE WAY IN. The owner's standard is that walking up to a building gets a prompt, and a
+            // player does not know or care which pass placed the thing in front of them — so every
+            // model the catalog says a person lives or works in has to hand over the same door tag a
+            // procedural parcel does, for EVERY seed and EVERY variant. A model that tags no door on
+            // variant 2 is a building that is shut on a third of the map.
+            if (def.interior) {
+              const tag = built.entrance;
+              expect(tag, `${def.name} v${variant} tagged no entrance`).toBeDefined();
+              expect(tag!.kind).toBe(def.interior.kind);
+              expect(tag!.width).toBeGreaterThan(0.5);
+              expect(tag!.height).toBeGreaterThan(1.7);
+              // On the model, not floating beside it: the tag is in the same recentred local frame
+              // as the tiers, so it must land inside the footprint (+ the leaf's own thickness).
+              expect(Math.abs(tag!.x), `${def.name} door x`).toBeLessThanOrEqual(built.footprint.w / 2 + 0.3);
+              expect(Math.abs(tag!.z), `${def.name} door z`).toBeLessThanOrEqual(built.footprint.d / 2 + 0.3);
+            } else {
+              // The exclusion list is a property of the thing: a silo has no door because it has no
+              // room. If a builder starts tagging one, the catalog is what has to change.
+              expect(built.entrance, `${def.name} tagged a door but has no interior in the catalog`).toBeUndefined();
+            }
           }
         });
       }
@@ -111,6 +132,7 @@ describe('structure model catalog', () => {
         expect(meshStats(second.group).signature).toBe(meshStats(first.group).signature);
         expect(second.footprint).toEqual(first.footprint);
         expect(second.tiers).toEqual(first.tiers);
+        expect(second.entrance).toEqual(first.entrance);
       });
     });
   }

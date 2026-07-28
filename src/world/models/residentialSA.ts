@@ -40,7 +40,7 @@ export function buildFaceBrickHouse(seed: number, options: BuildOptions = {}): B
   kit.hip(tile, hw + 1, hd + 1, 2.3, 0, h, houseZ, 0.45);
   windowPane(kit, -hw * 0.28, 1.35, houseZ + hd / 2 + 0.03);
   windowPane(kit, hw * 0.28, 1.35, houseZ + hd / 2 + 0.03);
-  kit.box(M.darkTimber, 1.05, 2.1, 0.09, 0, 0, houseZ + hd / 2 + 0.05, { cast: false });
+  kit.door(M.darkTimber, 1.05, 2.1, 0.09, 0, 0, houseZ + hd / 2 + 0.05, 'porch', { cast: false });
   kit.box(tile, 3, 0.12, 1.6, 0, 2.6, houseZ + hd / 2 + 0.8, { rx: 0.14 }); // door canopy
   if (variant >= 1) { // attached garage facing the gate
     const gw = 4.6;
@@ -70,7 +70,7 @@ export function buildTownhouseRow(seed: number, options: BuildOptions = {}): Bui
     kit.box(skin, unitW, h, unitD, x, 0, stagger, { collide: true });
     kit.gable(tile, unitD + 0.7, unitW + 0.3, 1.9, x, h, stagger, { ry: Math.PI / 2 });
     windowPane(kit, x - unitW * 0.18, 3.9, unitD / 2 + stagger + 0.03, 1.2, 1.1);
-    kit.box(M.darkTimber, 0.95, 2.05, 0.08, x + unitW * 0.2, 0, unitD / 2 + stagger + 0.05, { cast: false });
+    kit.door(M.darkTimber, 0.95, 2.05, 0.08, x + unitW * 0.2, 0, unitD / 2 + stagger + 0.05, 'porch', { cast: false });
     kit.box(M.paving, 2, 0.08, 2.6, x + unitW * 0.2, 0.01, unitD / 2 + stagger + 1.5, { cast: false });
   }
   const plotW = w + 3; const plotD = unitD + 8;
@@ -100,6 +100,7 @@ export function buildApartmentBlock(seed: number, options: BuildOptions = {}): B
   for (const post of [-1, 1]) kit.box(M.steel, 0.08, 1.7, 0.08, post * w * 0.25, h, -d * 0.2); // roof washing lines
   for (let line = 0; line < 3; line++) kit.box(M.whiteMetal, w * 0.5, 0.02, 0.02, 0, h + 1.4 - line * 0.25, -d * 0.2 - line * 0.28, { cast: false });
   kit.box(M.concrete, 3.6, 0.18, 1.7, w * 0.12, 2.85, d / 2 + 0.85, { cast: false }); // entrance canopy
+  kit.door(M.glassDark, 2.3, 2.5, 0.1, w * 0.12, 0, d / 2 + 0.05, 'lobby', { cast: false }); // the way in, under it
   kit.sign(kit.pick(4, ['JACARANDA COURT', 'PROTEA MANSIONS', 'HILLBROW HEIGHTS LITE', 'EKHAYA FLATS']), '#d8d0b8', w * 0.4, 0.65, w * 0.12, 4, d / 2 + 0.07, { background: '#33403c' });
   return kit.done();
 }
@@ -118,7 +119,7 @@ export function buildTinRoofHouse(seed: number, options: BuildOptions = {}): Bui
   kit.box(wall, hw, h, hd, 0, 0, houseZ, { collide: true });
   if (variant === 0) kit.gable(M.galv, hw + 0.9, hd + 0.9, 1.1, 0, h, houseZ);
   else kit.box(kit.pick(5, [M.galv, M.corrRust]), hw + 1, 0.08, hd + 1.1, 0, h + 0.22, houseZ, { rx: 0.1 });
-  kit.box(M.darkTimber, 0.95, 2, 0.08, -hw * 0.18, 0, houseZ + hd / 2 + 0.05, { cast: false });
+  kit.door(M.darkTimber, 0.95, 2, 0.08, -hw * 0.18, 0, houseZ + hd / 2 + 0.05, 'porch', { cast: false });
   windowPane(kit, hw * 0.24, 1.25, houseZ + hd / 2 + 0.03, 1.2, 1);
   kit.box(M.paving, 2.2, 0.12, 1.4, -hw * 0.18, 0, houseZ + hd / 2 + 0.75, { cast: false }); // stoep slab
   // Wire fence: corner posts + two strands, gate gap in front.
@@ -149,7 +150,7 @@ export function buildSandtonVilla(seed: number, options: BuildOptions = {}): Bui
   kit.box(M.grassDry, plotW - 0.6, 0.07, plotD - 0.6, 0, 0, 0, { cast: false });
   const houseZ = -plotD / 2 + gd / 2 + 5.6; // back yard deep enough for the pool terrace
   kit.box(M.whitewash, gw, 3.4, gd, 0, 0, houseZ, { collide: true });
-  kit.box(M.glass, gw * 0.7, 2.2, 0.14, -gw * 0.1, 0.5, houseZ + gd / 2 + 0.04, { cast: false });
+  kit.door(M.glass, gw * 0.7, 2.2, 0.14, -gw * 0.1, 0.5, houseZ + gd / 2 + 0.04, 'porch', { cast: false });
   const uw = gw * 0.72; const ud = gd * 0.85; const upperX = variant === 0 ? gw * 0.14 : -gw * 0.14;
   kit.box(M.whitewash, uw, 3, ud, upperX, 3.4, houseZ + 1.1, { collide: true }); // cantilevered upper — standable tiers both levels
   kit.box(M.glassDark, uw * 0.85, 1.5, 0.12, upperX, 4.2, houseZ + 1.1 + ud / 2 + 0.04, { cast: false });
@@ -178,7 +179,7 @@ export function buildSemiDetachedHouse(seed: number, options: BuildOptions = {})
     kit.box(wall, unitW - 0.12, h, d, x, 0, -1.1 + side * 0.25, { collide: true });
     kit.gable(roof, unitW + 0.35, d + 0.8, 1.8, x, h, -1.1 + side * 0.25);
     kit.box(M.glassDark, 1.4, 1.15, 0.1, x - side * 1.4, 1.2, d / 2 - 1.05 + side * 0.25, { cast: false });
-    kit.box(M.darkTimber, 0.95, 2.05, 0.09, x + side * 1.35, 0, d / 2 - 1.03 + side * 0.25, { cast: false });
+    kit.door(M.darkTimber, 0.95, 2.05, 0.09, x + side * 1.35, 0, d / 2 - 1.03 + side * 0.25, 'porch', { cast: false });
     kit.box(M.paving, 2.2, 0.1, 3.4, x + side * 1.35, 0, d / 2 + 0.65, { cast: false });
   }
   gardenWall(kit, w + 4, d + 7, 1.45 + variant * 0.2, 2.2, variant === 1 ? M.faceBrick : M.plaster);
@@ -198,6 +199,7 @@ export function buildWalkUpFlats(seed: number, options: BuildOptions = {}): Buil
     kit.box(M.darkMetal, w * 0.58, 0.65, 0.06, 0, y + 0.15, d * 0.02 + 0.545, { cast: false }); // rail on the walkway's front lip, not adrift in the court
   }
   kit.box(M.concrete, 2.6, h + 1.8, 2.8, -w * 0.34, 0, -d * 0.02, { collide: true });
+  kit.door(M.glassDark, 2.2, 2.4, 0.1, w * 0.08, 0, -d * 0.06 + 0.06, 'lobby', { cast: false }); // off the court, like every walk-up
   kit.sign(kit.pick(6, ['THUTHUKA COURT', 'MADIBA MANSIONS', 'JACARANDA WALK']), '#e5d5a5', 4.2, 0.7, 0, 3.6, -d * 0.06 + 0.07, { background: '#38433f' }); // flush on the court block's street face
   return kit.done();
 }
@@ -213,7 +215,7 @@ export function buildRdpRow(seed: number, options: BuildOptions = {}): BuiltMode
     const x = -w / 2 + unitW * (unit + 0.5); const stagger = (unit % 2) * 0.45;
     kit.box(kit.pick(10 + unit, walls), unitW - 0.25, h, d, x, 0, -0.8 + stagger, { collide: true });
     kit.gable(unit % 3 === 0 ? M.corrRust : M.galv, unitW + 0.15, d + 0.6, 0.9, x, h, -0.8 + stagger);
-    kit.box(kit.pick(30 + unit, doors), 0.82, 1.95, 0.08, x - unitW * 0.16, 0, d / 2 - 0.76 + stagger, { cast: false });
+    kit.door(kit.pick(30 + unit, doors), 0.82, 1.95, 0.08, x - unitW * 0.16, 0, d / 2 - 0.76 + stagger, 'porch', { cast: false });
     kit.box(M.glassDark, 0.8, 0.75, 0.08, x + unitW * 0.18, 1.05, d / 2 - 0.76 + stagger, { cast: false });
   }
   for (const side of [-1, 1]) kit.box(M.timber, 0.1, 1.2, 0.1, side * (w / 2 + 0.7), 0, d / 2 + 2.1);

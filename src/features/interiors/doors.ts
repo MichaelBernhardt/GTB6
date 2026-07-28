@@ -16,12 +16,23 @@
  * draw one), so asking a whole chunk cell where its doors are costs a few milliseconds, once, and is
  * then memoised.
  *
+ * AND THE CITY HAS TWO BUILDING SYSTEMS, WHICH IS WHY THE FIRST VERSION OF THIS FILE LOOKED BROKEN.
+ * CityGen lays out 3,722 PARCELS; ModelScatter then places 13,900 catalog MODELS — farmhouses,
+ * face-brick houses, spazas, warehouses, churches — along every verge and across every farm and
+ * park. They are a different pass with a different data structure and they are most of what a player
+ * walks past outside the CBD. A report that said "3,721 of 3,722 open" was counting one of the two.
+ * So the scatter is a second door source here, on the same terms: the model's own builder TAGS the
+ * leaf it draws (Kit.door), the catalog says which models a person would live or work in, and
+ * everything downstream cannot tell the two apart. See scatterDoorsInTile for the cost.
+ *
  * This directory is never statically imported — see the chunk note at the top of ../interiors.state.ts.
  */
 import * as THREE from 'three';
-import { BuildingArchitecture } from '../../world/BuildingArchitecture';
+import { BuildingArchitecture, type EntranceTag } from '../../world/BuildingArchitecture';
 import { CELL_SIZE, generateCell, type GeneratedBuilding } from '../../world/CityGen';
 import { distanceToRoadEdge, landmark, nearestDistrict, pointInAnyPolygon, WATER_POLYGONS } from '../../world/mapData';
+import { buildModel, MODEL_INDEX } from '../../world/models/catalog';
+import { scatterCell, type ScatteredModel } from '../../world/ModelScatter';
 import { ARMS_SITE, BOTTLE_STORES, GARAGE_SITE, HOTDOG_SITE, SAFEHOUSE_SITE, SPRAY_SITE } from '../../world/placements';
 import { stablePositionRandom } from '../../world/StableRandom';
 import { DOOR_RADIUS, type InteriorDoor } from '../interiors.state';
@@ -72,6 +83,13 @@ const WORKS_NAMES = [
   'Unit 4 · Bracewell Works', 'Modderfontein Cold Store', 'Meyer & Sons Panelbeaters', 'Bay 2 · Reef Freight',
   'Umgeni Steel Depot', 'Bay 7 · Kruger Haulage', 'Vaal Packaging Unit 9', 'Ndlovu Engineering',
 ];
+/** Scatter-only families. A plot is not a suburban house and a kerk is not an office block, and the
+ *  name over the door is the cheapest way to say which one you are standing at. */
+const PLOT_NAMES = ['Kleinfontein', 'Doringkraal', 'Rietvlei Plaas', 'Waterval Plot 14', 'Skuilkrans', 'Vergenoegd'];
+const SHED_NAMES = ['Die Skuur', 'Implement Shed', 'Hay Store', 'Bait & Ski Shed', 'Plot 9 Store', 'Loods 3'];
+const CIVIC_NAMES = ['NG Kerk Koppiekraal', 'Masjid al-Noor', 'Gemeenskapsaal', 'Laerskool Kopanong', 'St Andrews Hall', 'Ekhaya Community Centre'];
+const CAFE_NAMES = ['Die Strand Kafee', 'Vaalwater Grill', 'Sundowner Bar', 'Kaia Coffee', 'Bunny Chow Now', 'Snoek & Chips'];
+const OFFICE_NAMES = ['Sanlamb House', 'Reef Chambers', 'Protea Place', 'Mediocre Holdings', 'Kopje Chambers', 'Bracewell House'];
 
 // The plan-only architecture instance. It never draws, so this group stays empty forever; it exists
 // only because BuildingArchitecture takes a parent in its constructor.
@@ -90,11 +108,33 @@ function pads(): Pad[] {
   return padCache;
 }
 
-/** Building-local point -> world. The chunk builder places every building this way, so a point that
- *  is on the model's front wall in local space is on the model's front wall in the street. */
-function toWorld(building: GeneratedBuilding, lx: number, lz: number): { x: number; z: number } {
-  const c = Math.cos(building.heading); const s = Math.sin(building.heading);
-  return { x: building.x + lx * c + lz * s, z: building.z - lx * s + lz * c };
+/** Building-local point -> world. City.tierToWorldCollider places every parcel AND every scattered
+ *  model through this exact transform, so a point on the model's front wall in local space is on the
+ *  model's front wall in the street. */
+function toWorld(at: { x: number; z: number; heading: number }, lx: number, lz: number): { x: number; z: number } {
+  const c = Math.cos(at.heading); const s = Math.sin(at.heading);
+  return { x: at.x + lx * c + lz * s, z: at.z - lx * s + lz * c };
+}
+
+/**
+ * The doorstep in front of a tagged wall plane, or undefined when there is nowhere to stand.
+ *
+ * A stride out along the building's own outward normal — local +z, which both CityGen and
+ * ModelScatter aim at the street the thing fronts — tucking closer to the wall rather than giving up
+ * when a building stands hard against the kerb. Shared by both door sources so a scattered house and
+ * a parcel house put their step in the same place relative to their own front wall.
+ */
+function stepOut(face: { x: number; z: number }, heading: number): { x: number; z: number } | undefined {
+  const outX = Math.sin(heading); const outZ = Math.cos(heading);
+  for (const standOff of STAND_OFFS) {
+    const x = face.x + outX * standOff; const z = face.z + outZ * standOff;
+    const clearance = standOff === STAND_OFFS[STAND_OFFS.length - 1] ? KERB_CLEARANCE : ROAD_CLEARANCE;
+    if (distanceToRoadEdge(x, z) < clearance) continue;
+    if (pointInAnyPolygon(WATER_POLYGONS, x, z)) return undefined;
+    for (const pad of pads()) if (Math.hypot(pad.x - x, pad.z - z) < PAD_CLEARANCE) return undefined;
+    return { x, z };
+  }
+  return undefined;
 }
 
 function nameFor(building: GeneratedBuilding, kind: string): string {
@@ -125,19 +165,8 @@ export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoo
   if (!tag) return undefined;
 
   const face = toWorld(building, tag.x, tag.z);
-  // The step is a stride out along the building's own outward normal — local +z, which CityGen aims
-  // at the street the building fronts — tucking closer to the wall rather than giving up when a
-  // building stands hard against the kerb.
-  const outX = Math.sin(building.heading); const outZ = Math.cos(building.heading);
-  let x = 0; let z = 0; let stepped = false;
-  for (const standOff of STAND_OFFS) {
-    x = face.x + outX * standOff; z = face.z + outZ * standOff;
-    const clearance = standOff === STAND_OFFS[STAND_OFFS.length - 1] ? KERB_CLEARANCE : ROAD_CLEARANCE;
-    if (distanceToRoadEdge(x, z) >= clearance) { stepped = true; break; }
-  }
-  if (!stepped) return undefined;
-  if (pointInAnyPolygon(WATER_POLYGONS, x, z)) return undefined;
-  for (const pad of pads()) if (Math.hypot(pad.x - x, pad.z - z) < PAD_CLEARANCE) return undefined;
+  const step = stepOut(face, building.heading);
+  if (!step) return undefined;
 
   const facts: BuildingFacts = {
     id: `${Math.round(building.x)}:${Math.round(building.z)}`,
@@ -148,12 +177,72 @@ export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoo
   return {
     id: facts.id,
     name: name ?? nameFor(building, tag.kind),
-    x, z,
+    x: step.x, z: step.z,
     faceX: face.x, faceZ: face.z,
     heading: building.heading,
     openWidth: tag.width,
+    openHeight: tag.height,
     facts,
   };
+}
+
+// ---- the other half of the city: the scattered catalog models ----------------------------------
+
+/**
+ * The door on ONE scattered model, or undefined when the catalog says it has no inside (a silo, a
+ * pylon, a tree) or its step lands somewhere unusable.
+ *
+ * The tag comes from the builder itself — the same fact, in the same shape, as a parcel's — so the
+ * only work here is the transform and the same doorstep test the parcels get. Building the model is
+ * how we read the tag, which is the one cost this pass has that the parcel pass does not; see
+ * scatterDoorsInTile for what that comes to and why it is spent on a fine grid.
+ */
+export function scatterDoorFor(model: ScatteredModel): InteriorDoor | undefined {
+  const def = MODEL_INDEX.get(model.name);
+  if (!def?.interior) return undefined;
+  const built = buildModel(model.name, model.seed, { variant: model.variant });
+  const tag: EntranceTag | undefined = built.entrance;
+  if (!tag) return undefined;
+
+  const face = toWorld(model, tag.x, tag.z);
+  const step = stepOut(face, model.heading);
+  if (!step) return undefined;
+
+  // Height off the model's own colliders — the same thing City pushes into the world, so the storey
+  // count matches the bands of windows the player counted from the street.
+  let top = 0;
+  for (const tier of built.tiers) if (tier.y1 > top) top = tier.y1;
+  const facts: BuildingFacts = {
+    // `s` prefixes the id so a scattered model can never collide with a parcel's saved visit.
+    id: `s${Math.round(model.x)}:${Math.round(model.z)}`,
+    x: model.x, z: model.z, heading: model.heading,
+    width: built.footprint.w, depth: built.footprint.d,
+    height: Math.max(tag.height + 0.6, top),
+    style: def.interior.family, entrance: tag.kind,
+  };
+  return {
+    id: facts.id,
+    name: scatterName(model, def.interior.family, tag.kind),
+    x: step.x, z: step.z,
+    faceX: face.x, faceZ: face.z,
+    heading: model.heading,
+    openWidth: tag.width,
+    openHeight: tag.height,
+    facts,
+  };
+}
+
+/** The name over a scattered model's door: its own family's list, drawn off its own position. */
+function scatterName(model: ScatteredModel, family: string, kind: string): string {
+  const list = family === 'rural' ? (kind === 'shopfront' ? SPAZA_NAMES : PLOT_NAMES)
+    : family === 'civic' ? CIVIC_NAMES
+      : family === 'industrial' ? (model.name === 'barn' || model.name === 'tractor-shed' || model.name === 'boat-shed' ? SHED_NAMES : WORKS_NAMES)
+        : family === 'estate' ? VILLA_NAMES
+          : family === 'dense-residential' ? BLOCK_NAMES
+            : family === 'downtown' ? OFFICE_NAMES
+              : kind === 'shopfront' ? (model.name.startsWith('seafront') || model.name === 'beach-cafe' ? CAFE_NAMES : SPAZA_NAMES)
+                : HOUSE_NAMES;
+  return list[Math.floor(stablePositionRandom(model.x, model.z, 95) * list.length) % list.length]!;
 }
 
 const cells = new Map<string, InteriorDoor[]>();
@@ -215,8 +304,43 @@ function doorsInCell(cellX: number, cellZ: number): InteriorDoor[] {
   return out;
 }
 
-/** Every door whose step is within `radius` of a point. Used both by the prompt (a tight ring) and
- *  by the doorway streamer (a wide one). */
+/**
+ * Scattered doors are derived on a QUARTER-CELL tile, and the reason is cost.
+ *
+ * A parcel's tag comes out of a plan-only pass at 0.067 ms; a scattered model's comes out of its own
+ * builder, because the builder is the only thing that knows where it drew the leaf, and that is
+ * 0.17 ms of mesh a model. The densest chunk cell holds 169 scattered structures, so asking a whole
+ * 976 u cell would be a 28 ms stall the moment a player crossed a cell line. On a 244 u tile the
+ * same question is 2–7 ms, it is memoised, and — the real win — only the tiles within the streaming
+ * radius are ever asked, rather than the whole cell the player happens to be standing in.
+ */
+const SCATTER_TILE = CELL_SIZE / 4;
+/** How far a model's doorstep can fall outside the tile its centre sits in — a big-box portal is the
+ *  worst case at ~14 u. Scans widen by this so a step near a tile line is never missed. */
+const SCATTER_REACH = 30;
+
+const tiles = new Map<string, InteriorDoor[]>();
+
+function scatterDoorsInTile(tileX: number, tileZ: number): InteriorDoor[] {
+  const key = `${tileX},${tileZ}`;
+  const cached = tiles.get(key);
+  if (cached) return cached;
+  const out: InteriorDoor[] = [];
+  // A tile nests exactly inside one chunk cell (SCATTER_TILE divides CELL_SIZE), so one memoised
+  // scatter bucket holds every candidate.
+  for (const model of scatterCell(Math.floor(tileX / 4), Math.floor(tileZ / 4))) {
+    if (Math.floor(model.x / SCATTER_TILE) !== tileX || Math.floor(model.z / SCATTER_TILE) !== tileZ) continue;
+    const door = scatterDoorFor(model);
+    if (!door) continue;
+    if (out.some((other) => Math.hypot(other.x - door.x, other.z - door.z) < SAME_STEP)) continue;
+    out.push(door);
+  }
+  tiles.set(key, out);
+  return out;
+}
+
+/** Every door whose step is within `radius` of a point — both systems, in one list. Used by the
+ *  prompt (a tight ring) and by the doorway streamer (a wide one). */
 export function doorsNear(x: number, z: number, radius: number): InteriorDoor[] {
   const out: InteriorDoor[] = [];
   const minX = Math.floor((x - radius) / CELL_SIZE); const maxX = Math.floor((x + radius) / CELL_SIZE);
@@ -225,6 +349,22 @@ export function doorsNear(x: number, z: number, radius: number): InteriorDoor[] 
     for (let cellZ = minZ; cellZ <= maxZ; cellZ++) {
       for (const door of doorsInCell(cellX, cellZ)) {
         if (Math.hypot(door.x - x, door.z - z) <= radius) out.push(door);
+      }
+    }
+  }
+  const parcels = out.length;
+  const reach = radius + SCATTER_REACH;
+  const tileMinX = Math.floor((x - reach) / SCATTER_TILE); const tileMaxX = Math.floor((x + reach) / SCATTER_TILE);
+  const tileMinZ = Math.floor((z - reach) / SCATTER_TILE); const tileMaxZ = Math.floor((z + reach) / SCATTER_TILE);
+  for (let tileX = tileMinX; tileX <= tileMaxX; tileX++) {
+    for (let tileZ = tileMinZ; tileZ <= tileMaxZ; tileZ++) {
+      for (const door of scatterDoorsInTile(tileX, tileZ)) {
+        if (Math.hypot(door.x - x, door.z - z) > radius) continue;
+        // Scatter flows around the parcels, so two steps on one spot is rare — but a parcel's
+        // doorstep is the older claim, and two frames of one doorway is better than two of two.
+        let clash = false;
+        for (let i = 0; i < parcels; i++) if (Math.hypot(out[i]!.x - door.x, out[i]!.z - door.z) < SAME_STEP) { clash = true; break; }
+        if (!clash) out.push(door);
       }
     }
   }
@@ -282,5 +422,5 @@ export function doorDistrict(door: InteriorDoor): string {
   return nearestDistrict(door.x, door.z).name;
 }
 
-/** Test seam: drops the memoised per-cell tables. */
-export function resetDoorCache(): void { cells.clear(); padCache = undefined; }
+/** Test seam: drops the memoised per-cell and per-tile tables. */
+export function resetDoorCache(): void { cells.clear(); tiles.clear(); padCache = undefined; }

@@ -48,7 +48,7 @@ import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescrip
 import { PLAYER } from '../../config';
 import { FIND_CAP, type InteriorDoor, type InteriorsSave } from '../interiors.state';
 import {
-  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, toLocal, toWorld,
+  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, markerFade, toLocal, toWorld,
   type BuiltDoorways, type BuiltFloor,
 } from './build';
 import {
@@ -516,8 +516,22 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         streamDoorways(player.x, player.z);
       }
       phase += dt;
-      const pulse = 0.42 + Math.sin(phase * 2.6) * 0.18;
-      if (doorways) for (const disc of doorways.discs) { (disc.material as THREE.MeshBasicMaterial).opacity = pulse; disc.rotation.y += dt * 0.9; }
+      // THE MARKERS FADE UP AS YOU REACH THEM. A shop pad pulses at full strength from across the
+      // street because there are six of them; there are thousands of front doors, so a door only
+      // lights when you are nearly on its step and a street of houses reads as a street of houses.
+      // See markerFade / the note over it in build.ts.
+      const pulse = 0.24 + Math.sin(phase * 2.6) * 0.09;
+      if (doorways) {
+        for (const marker of doorways.markers) {
+          const fade = markerFade(Math.hypot(marker.x - player.x, marker.z - player.z));
+          const lit = fade > 0.001;
+          marker.disc.visible = lit; marker.ring.visible = lit; marker.bay.visible = lit;
+          if (!lit) continue;
+          marker.discMaterial.opacity = pulse * fade;
+          marker.ringMaterial.opacity = 0.7 * fade;
+          marker.disc.rotation.y += dt * 0.9;
+        }
+      }
       if (!current) return;
       if (swapping) return;
       // Death, a checkpoint reload or a console teleport all move the player without telling us.

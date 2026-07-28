@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createFeature } from './interiors';
 import { buildCore } from './core';
 import { doorsNear, nearestDoor, resetDoorCache } from './doors';
+import { buildDoorways, markerFade } from './build';
 import type { FeatureGameApi, FeatureMenuView, FeatureSystem, InteractionCtx } from '../types';
 
 /** Flat ground: the door search still runs against the real generated map, which is the half worth
@@ -222,5 +223,50 @@ describe('a visit', () => {
     system.qa!('leave', {});
     expect(test.player.distanceTo(outside)).toBeLessThan(0.001);
     system.dispose();
+  }, 120000);
+});
+
+/**
+ * "The entrance visuals are a bit strong given it should be for most buildings. Perhaps just a
+ * circle on the ground, no column of light." — the owner, after the first playtest. So: no beam
+ * anywhere, and the circle only says anything when you are nearly standing on it.
+ */
+describe('the marker on the step', () => {
+  it('is off down the street, full on the step, and never a beam', () => {
+    expect(markerFade(0)).toBe(1);
+    expect(markerFade(11)).toBe(1);
+    expect(markerFade(26)).toBe(0);
+    expect(markerFade(400)).toBe(0);
+    expect(markerFade(18)).toBeGreaterThan(0);
+    expect(markerFade(18)).toBeLessThan(1);
+    // Monotone, so a marker never brightens as you walk away from it.
+    for (let d = 0; d < 40; d += 0.5) expect(markerFade(d + 0.5)).toBeLessThanOrEqual(markerFade(d));
+  });
+
+  it('draws a disc and a ring on every door and a column of light on none of them', () => {
+    resetDoorCache();
+    const doors = doorsNear(0, 0, 260).slice(0, 8);
+    expect(doors.length).toBeGreaterThan(3);
+    const built = buildDoorways(doors, flat);
+    expect(built.markers).toHaveLength(doors.length);
+    let cylinders = 0; let tallest = 0;
+    built.group.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const geometry = object.geometry as THREE.BufferGeometry & { parameters?: { height?: number } };
+      if (geometry.type === 'CylinderGeometry') {
+        cylinders++;
+        tallest = Math.max(tallest, (geometry.parameters?.height ?? 0) * object.scale.y);
+      }
+    });
+    // The only cylinder left in a doorway is the 5 cm disc on the paving. The beam was 9 m.
+    expect(cylinders).toBe(doors.length);
+    expect(tallest).toBeLessThan(0.2);
+    // The frame is scaled to the opening the model tagged, never a fixed 3.4 m hole in a cottage.
+    for (const [index, marker] of built.markers.entries()) {
+      const door = doors[index]!;
+      expect(Math.hypot(marker.x - door.x, marker.z - door.z)).toBeLessThan(1e-6);
+      expect(marker.discMaterial.opacity).toBeLessThanOrEqual(0.31);
+    }
+    built.dispose();
   }, 120000);
 });

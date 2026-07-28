@@ -38,7 +38,7 @@ export function buildVenue(seed: number, kind: VenueKind, options: BuildOptions 
   else if (variant === 2) kit.box(M.corrCharcoal, hallW + 0.7, 0.1, hallD + 0.8, 0, hallH + 0.14, hallZ - 0.1, { rx: 0.08 });
   else kit.box(wall, hallW + 0.3, 0.35, hallD + 0.3, 0, hallH, hallZ, { cast: false }); // parapet
   kit.box(M.glass, hallW * 0.6, hallH * 0.52, 0.1, -hallW * 0.12, 0.75, -0.04, { cast: false }); // glazed front
-  kit.box(M.darkTimber, 1, 2.1, 0.1, hallW * 0.33, 0, -0.03, { cast: false }); // door
+  kit.door(M.darkTimber, 1, 2.1, 0.1, hallW * 0.33, 0, -0.03, 'shopfront', { cast: false }); // door
   const drop = 1.7; const stripeW = (hallW + 0.6) / plan.stripes;
   for (let s = 0; s < plan.stripes; s++) { // striped canvas awning sloping over the terrace edge
     kit.box(s % 2 ? stripeB! : stripeA!, stripeW, 0.06, drop, -(hallW + 0.6) / 2 + (s + 0.5) * stripeW, hallH * 0.78, drop / 2 - 0.15, { rx: 0.38, cast: false });

@@ -205,6 +205,15 @@ function floorKinds(core: BuildingCore, index: number): FloorGrammar {
   const split = finish === 'bare' ? 2 : finish === 'homely' ? 3 : 4;
   if (core.entrance === 'dock') return works(core, index);
   if (core.entrance === 'porch') return house(core, index, split);
+  // A kerk, a masjid, a laerskool and a gemeenskapsaal come off the scatter pass, and behind all
+  // four doors is the same thing: one big room somebody books, with an office and a store off it.
+  // Sending them down the lobby branch would put a dead lift button and a tenants' directory in a
+  // church, which is the "a shed that generates a lounge" failure with different furniture.
+  if (core.family === 'civic') {
+    return { kinds: ['lobby', 'store', 'office'], eyebrow: 'HALL', paint: 'house', split: 2, rotate: index % 2 === 1,
+      blurb: 'Stacked plastic chairs, a tea urn, and a roster on the wall in two languages.',
+      findLine: 'The tea money, in a biscuit tin.' };
+  }
   if (index === 0) {
     if (core.entrance === 'shopfront') {
       return { kinds: ['shop', 'store'], eyebrow: 'SPAZA', paint: 'shop', split, rotate: false,

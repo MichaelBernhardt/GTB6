@@ -11,8 +11,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { BuildingArchitecture } from '../../world/BuildingArchitecture';
 import { allBuildings, generateCell, CELL_SIZE, type GeneratedBuilding } from '../../world/CityGen';
 import { distanceToRoadEdge } from '../../world/mapData';
+import { allScatteredModels } from '../../world/ModelScatter';
+import { MODEL_INDEX } from '../../world/models/catalog';
 import { DOOR_RADIUS } from '../interiors.state';
-import { doorFor, doorNear, doorsNear, nearestDoor, resetDoorCache } from './doors';
+import { doorFor, doorNear, doorsNear, nearestDoor, resetDoorCache, scatterDoorFor } from './doors';
+import { solveFloor } from './floor';
 
 const architecture = new BuildingArchitecture(new THREE.Group());
 const facade = new THREE.MeshBasicMaterial();
@@ -123,4 +126,86 @@ describe('doors', () => {
     expect(again).toEqual(first);
     expect(first.length).toBeGreaterThan(0);
   }, 120000);
+});
+
+/**
+ * THE OTHER 3,721 BUILDINGS.
+ *
+ * The previous report said 3,721 of 3,722 open and the owner walked outside and found buildings that
+ * did not. Both were true: that number counted CityGen's parcels, and the city ALSO carries 13,900
+ * scattered catalog models, of which 3,721 are things a person lives or works in. So these tests
+ * count the whole universe — every enterable-looking object placed by either pass — because the
+ * denominator is the part of the last report that was wrong.
+ */
+describe('doors on scattered models', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  /** The exact spot the owner reported: "-3011.8,484.1 has a common building type with no entrance."
+   *  It is a scattered office-block, six metres off, and the parcel pass has nothing within 38 u. */
+  it('offers a prompt at the coordinate the owner reported as shut', () => {
+    const door = doorNear(-3011.8, 484.1);
+    expect(door, 'no prompt at -3011.8,484.1').toBeDefined();
+    expect(door!.id.startsWith('s'), 'the door there should be a scattered model, not a parcel').toBe(true);
+    expect(doorNear(door!.x, door!.z)?.id).toBe(door!.id);
+  }, 300000);
+
+  it('opens essentially every scattered model a person would live or work in', () => {
+    const enterable = allScatteredModels().filter((model) => MODEL_INDEX.get(model.name)?.interior);
+    expect(enterable.length).toBeGreaterThan(3000);
+    const open = enterable.filter((model) => scatterDoorFor(model)).length;
+    expect(open / enterable.length, `only ${open} of ${enterable.length} scattered buildings open`).toBeGreaterThan(0.99);
+  }, 900000);
+
+  it('never opens a silo, a pylon, a tree or a stock kraal', () => {
+    for (const name of ['grain-silo', 'water-tower', 'windpomp', 'kraal', 'cell-tower', 'billboard', 'tank-farm', 'container-stack', 'jacaranda', 'veld-grass']) {
+      expect(MODEL_INDEX.get(name)?.interior, name).toBeUndefined();
+    }
+    const shut = allScatteredModels().filter((model) => !MODEL_INDEX.get(model.name)?.interior);
+    for (const model of shut.filter((_, index) => index % 97 === 0)) {
+      expect(scatterDoorFor(model), model.name).toBeUndefined();
+    }
+  }, 300000);
+
+  /** A shed that generates a lounge is worse than a shed that stays shut, so every scattered family
+   *  has to land on the grammar its own model family asks for. */
+  it('matches the interior grammar to the model family', () => {
+    const wanted: Record<string, string> = {
+      farmhouse: 'PLOT', 'tin-roof-house': 'HOUSE', 'sandton-villa': 'HOUSE', 'rdp-row': 'HOUSE',
+      barn: 'WORKS', 'tractor-shed': 'WORKS', warehouse: 'WORKS', 'boat-shed': 'WORKS',
+      'spaza-shop': 'SPAZA', padstal: 'SPAZA', 'strip-mall': 'SPAZA',
+      church: 'HALL', mosque: 'HALL', school: 'HALL', 'community-hall': 'HALL',
+      'office-block': 'LOBBY', 'walk-up-flats': 'LOBBY',
+    };
+    const seen = new Set<string>();
+    for (const model of allScatteredModels()) {
+      const want = wanted[model.name];
+      if (!want || seen.has(model.name)) continue;
+      const door = scatterDoorFor(model);
+      if (!door) continue;
+      seen.add(model.name);
+      const plan = solveFloor(door.facts, 0);
+      expect(plan.eyebrow, `${model.name} generated a ${plan.eyebrow}`).toBe(want);
+      expect(plan.rooms.length).toBeGreaterThan(0);
+    }
+    expect([...seen].sort()).toEqual(Object.keys(wanted).sort());
+  }, 900000);
+
+  /** Both passes in one list, resolved the same way, with no two doorsteps on one paving slab. */
+  it('mixes both systems into one ring with no duplicate steps', () => {
+    const near = doorsNear(-3011.8, 484.1, 190);
+    expect(near.some((door) => door.id.startsWith('s'))).toBe(true);
+    for (let i = 0; i < near.length; i++) {
+      for (let j = i + 1; j < near.length; j++) {
+        expect(Math.hypot(near[i]!.x - near[j]!.x, near[i]!.z - near[j]!.z), `${near[i]!.name} / ${near[j]!.name}`).toBeGreaterThanOrEqual(2.6);
+      }
+    }
+  }, 300000);
+
+  it('is the same set of scattered doors on the second walk past', () => {
+    const first = doorsNear(-3011.8, 484.1, 400).map((door) => `${door.id}@${door.x}:${door.z}:${door.name}`);
+    resetDoorCache();
+    const again = doorsNear(-3011.8, 484.1, 400).map((door) => `${door.id}@${door.x}:${door.z}:${door.name}`);
+    expect(again).toEqual(first);
+    expect(first.filter((entry) => entry.startsWith('s')).length).toBeGreaterThan(0);
+  }, 300000);
 });

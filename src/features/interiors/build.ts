@@ -22,8 +22,6 @@ import type { InteriorDoor } from '../interiors.state';
 
 /** The camera boom this room has to stand inside. FOOT_VIEW_DISTANCES tops out here. */
 export const BOOM = 9.5;
-/** How many of the streamed doorways carry the standing beam of light. See buildDoorways. */
-const BEAMED = 6;
 const WALL_T = 0.16;
 /** Doorway head height. Partitions carry a lintel over the gap so a doorway reads as a doorway. */
 const DOOR_H = 2.25;
@@ -298,18 +296,61 @@ export function stairCap(shaft: Rect, direction: 1 | -1): Rect {
 
 // ---- the street side -------------------------------------------------------------------------
 
+/** One door's street furniture, kept together so the feature can fade it by distance each frame. */
+export interface DoorMarker {
+  /** The doorstep, for the distance test. */
+  readonly x: number; readonly z: number;
+  readonly disc: THREE.Mesh;
+  readonly ring: THREE.Mesh;
+  /** Frame, sign and glow — everything mounted on the wall itself. */
+  readonly bay: THREE.Group;
+  readonly discMaterial: THREE.MeshBasicMaterial;
+  readonly ringMaterial: THREE.MeshBasicMaterial;
+}
+
 export interface BuiltDoorways {
   readonly group: THREE.Group;
-  readonly discs: readonly THREE.Mesh[];
+  readonly markers: readonly DoorMarker[];
   readonly ids: readonly string[];
   dispose(): void;
 }
 
 /**
+ * HOW LOUD A DOOR IS ALLOWED TO BE, and this is the second thing the owner sent back.
+ *
+ * The first version borrowed ShopSystem's entry pad wholesale — a big gold disc, a ring, and a nine
+ * metre column of light standing on it. That is exactly right for the six crafted shops in this city
+ * and exactly wrong for its four thousand front doors: a street of houses became a field of glowing
+ * rings with beams over it, and a signal every building carries is not a signal. His words: "the
+ * entrance visuals are a bit strong given it should be for most buildings. Perhaps just a circle on
+ * the ground, no column of light."
+ *
+ * So: the beam is gone outright, the disc is half the radius and a third of the opacity, and BOTH
+ * the ring and the frame on the wall FADE IN as you approach — invisible past FADE_FAR, full at
+ * FADE_NEAR, which is about a car's length outside the prompt ring. Walk down a street of houses and
+ * you see houses; walk up to one and its door lights up. The gold pillar stays where it belongs, on
+ * the street economy's genuine objectives.
+ */
+const FADE_FAR = 26;
+const FADE_NEAR = 11;
+
+/** The disc's own opacity at full strength — ShopSystem pulses 0.42..0.60; an ordinary front door
+ *  sits well under that, because there are three thousand of them and six of those. */
+const DISC_OPACITY = 0.3;
+
+/** Distance falloff for a door marker: 1 on the step, 0 well down the street. */
+export function markerFade(distance: number): number {
+  if (distance <= FADE_NEAR) return 1;
+  if (distance >= FADE_FAR) return 0;
+  return (FADE_FAR - distance) / (FADE_FAR - FADE_NEAR);
+}
+
+/**
  * A doorway on the FRONT WALL of a real building, plus the pad you stand on. The frame is mounted on
- * the plane BuildingArchitecture tagged and scaled to the opening it tagged, so it lands on the
- * building's own glazed leaf rather than somewhere near it. Nothing is drawn behind the wall plane:
- * if a building were ever missing you would see a frame on nothing, never a facade in a field.
+ * the plane the model tagged and scaled to the opening it tagged — BuildingArchitecture's tag on a
+ * parcel, the builder's own Kit.door tag on a scattered catalog model — so it lands on the
+ * building's own leaf rather than somewhere near it. Nothing is drawn behind the wall plane: if a
+ * building were ever missing you would see a frame on nothing, never a facade in a field.
  */
 export function buildDoorways(
   doors: readonly InteriorDoor[],
@@ -319,29 +360,19 @@ export function buildDoorways(
   group.name = 'InteriorDoors';
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
-  const discs: THREE.Mesh[] = [];
+  const markers: DoorMarker[] = [];
   const keep = <T extends THREE.BufferGeometry>(geometry: T): T => { geometries.push(geometry); return geometry; };
   const mat = <T extends THREE.Material>(material: T): T => { materials.push(material); return material; };
 
   const unitBox = keep(new THREE.BoxGeometry(1, 1, 1));
-  const discGeometry = keep(new THREE.CylinderGeometry(1.6, 1.6, 0.06, 20));
-  const ringGeometry = keep(new THREE.TorusGeometry(1.9, 0.09, 8, 22));
-  // A soft column of light standing on the pad. This is the thing you see from the far end of the
-  // street: a 3 m doorway is a smudge at 150 u, a 9 m beam is a landmark.
-  const beamGeometry = keep(new THREE.CylinderGeometry(1.15, 1.5, 9, 14, 1, true));
+  // A modest circle on the step. Half the radius of a shop pad, and it does not stand up off it.
+  const discGeometry = keep(new THREE.CylinderGeometry(0.85, 0.85, 0.05, 18));
+  const ringGeometry = keep(new THREE.TorusGeometry(1, 0.045, 6, 20));
 
   const steel = mat(new THREE.MeshStandardMaterial({ color: 0x2f3735, roughness: 0.6, metalness: 0.35 }));
-  const gate = mat(new THREE.MeshStandardMaterial({ color: 0x8d9699, roughness: 0.45, metalness: 0.5 }));
   const mouth = mat(new THREE.MeshBasicMaterial({ color: 0x090c0f }));
-  const glow = mat(new THREE.MeshBasicMaterial({ color: 0xffd98a, transparent: true, opacity: 0.75 }));
-  const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.5 }));
-  const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451 }));
-  const beamMaterial = mat(new THREE.MeshBasicMaterial({
-    color: 0xffc861, transparent: true, opacity: 0.17, side: THREE.DoubleSide,
-    depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
-  }));
 
-  for (const [index, door] of doors.entries()) {
+  for (const door of doors) {
     const bay = new THREE.Group();
     bay.position.set(door.faceX, surfaceHeightAt(door.faceX, door.faceZ), door.faceZ);
     bay.rotation.y = door.heading; // local +z faces the street
@@ -349,45 +380,38 @@ export function buildDoorways(
       const mesh = new THREE.Mesh(unitBox, material);
       mesh.scale.set(w, h, d); mesh.position.set(x, y, z); bay.add(mesh);
     };
-    // The opening the MODEL drew, not one we invented — a narrow cottage keeps its narrow door.
-    const openW = Math.max(1.9, Math.min(4.2, door.openWidth));
-    const openH = 3.4;
+    // THE OPENING THE MODEL DREW, not one we invented — both ways round. A narrow cottage keeps its
+    // narrow door, and a 2.5 m cottage wall keeps a 2 m head: the fixed 3.4 m reveal the first
+    // version drew reached the eaves on every small house in the city and read as a hole, not a door.
+    const openW = Math.max(1.2, Math.min(4.2, door.openWidth));
+    const openH = Math.max(2, Math.min(3.6, door.openHeight));
     // Everything sits PROUD of the tagged plane (+z), never inside it — the wall is the city's.
+    // A dark reveal and two slim jambs, and that is the lot: the canopy, the fanlight and the folded
+    // security gate the first version bolted on turned every cottage on the plot into a shopfront.
     add(openW, openH, 0.08, mouth, 0, openH / 2, 0.05);
-    add(0.28, openH + 0.3, 0.3, steel, -openW / 2 - 0.14, (openH + 0.3) / 2, 0.14);
-    add(0.28, openH + 0.3, 0.3, steel, openW / 2 + 0.14, (openH + 0.3) / 2, 0.14);
-    add(openW + 0.56, 0.3, 0.3, steel, 0, openH + 0.15, 0.14);
-    add(openW + 1.1, 0.16, 1.5, steel, 0, openH + 0.42, 0.7);
-    // The security gate, folded open against the right post: the way in is unmistakably clear.
-    for (let i = 0; i < 5; i++) add(0.06, openH - 0.2, 0.06, gate, openW / 2 - 0.12 - i * 0.075, (openH - 0.2) / 2, 0.22 + i * 0.03);
-    add(openW - 0.3, 0.12, 0.06, glow, 0, openH - 0.35, 0.09);
-    const sign = createSignMesh(keep(new THREE.PlaneGeometry(Math.min(3.6, openW + 1.0), 0.62)), door.name.toUpperCase(), '#f0d9a4', { background: '#20262b' });
-    sign.position.set(0, openH + 0.9, 0.16);
-    bay.add(sign);
-    // Pad marker on the step itself, the same shape as ShopSystem.addPadMarker, so a door reads like
-    // every other doorway worth walking to in this city.
+    add(0.14, openH + 0.16, 0.16, steel, -openW / 2 - 0.07, (openH + 0.16) / 2, 0.08);
+    add(0.14, openH + 0.16, 0.16, steel, openW / 2 + 0.07, (openH + 0.16) / 2, 0.08);
+    add(openW + 0.28, 0.14, 0.16, steel, 0, openH + 0.08, 0.08);
+    // AND NO NAME BOARD. It was the loudest thing on the wall — a lit sign over every front door in
+    // a suburb — and it was also a real bug: ProceduralMaterials' sign atlas holds 512 distinct
+    // boards for a city that already draws about 470, and a name list per door family pushed it over
+    // the top, so doorways came out wearing some other building's text. The name is on the prompt you
+    // are standing in to read it. A house does not have a signboard.
+    // The circle on the ground, and nothing standing on it. Its own material per door so the fade is
+    // per door and not per street — twenty-two MeshBasic materials is nothing next to one beam.
     const stepY = surfaceHeightAt(door.x, door.z);
+    const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: DISC_OPACITY, depthWrite: false }));
+    const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.75, depthWrite: false }));
     const disc = new THREE.Mesh(discGeometry, discMaterial);
-    disc.position.set(door.x, stepY + 0.3, door.z);
+    disc.position.set(door.x, stepY + 0.06, door.z);
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-    ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.02;
-    discs.push(disc);
+    ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.015;
+    markers.push({ x: door.x, z: door.z, disc, ring, bay, discMaterial, ringMaterial });
     group.add(bay, disc, ring);
-    // THE BEAM IS FOR THE NEAREST FEW ONLY, and that is a consequence of opening every building.
-    // `doors` arrives sorted by distance. When a third of the street had a door, a nine-metre column
-    // of light on each of them said "this one, walk here"; with every house on the street open,
-    // twenty-two of them say nothing at all, because a signal every building carries is not a signal.
-    // The frame, the sign and the lit pad are still on every one, so the door is never hidden.
-    if (index < BEAMED) {
-      const beam = new THREE.Mesh(beamGeometry, beamMaterial);
-      beam.position.set(door.x, stepY + 4.5, door.z);
-      beam.renderOrder = 2;
-      group.add(beam);
-    }
   }
 
   return {
-    group, discs, ids: doors.map((door) => door.id),
+    group, markers, ids: doors.map((door) => door.id),
     dispose: () => {
       group.removeFromParent();
       for (const geometry of geometries) geometry.dispose();
