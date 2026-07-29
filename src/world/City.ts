@@ -403,6 +403,12 @@ const RAIL_SURFACE_CLEARANCE = 0.06;
 /** Ballast vertex pitch. Finer than ROAD_STRIP_SUBSTEP so the bed can follow the kerb step at a
  *  crossing instead of interpolating across it and sinking under the pavement. */
 const RAIL_BED_SUBSTEP = 3;
+/** Offsets railBedLift looks across for the surface it must clear — the bed's own half-width, on both
+ *  axes, so the height it picks covers the whole strip rather than just the vertex it was asked about. */
+const RAIL_BED_LIFT_PROBES: ReadonlyArray<readonly [number, number]> = [
+  [RAILWAY_CORRIDOR_HALF_WIDTH, 0], [-RAILWAY_CORRIDOR_HALF_WIDTH, 0],
+  [0, RAILWAY_CORRIDOR_HALF_WIDTH], [0, -RAILWAY_CORRIDOR_HALF_WIDTH],
+];
 /** Sleeper and rail-head heights above the ballast surface, whatever height the ballast is riding at. */
 const SLEEPER_RISE = 0.03;
 const RAIL_HEAD_RISE = 0.115;
@@ -1309,7 +1315,17 @@ export class City {
    * a smaller version of the same "partially covered" complaint.
    */
   private railBedLift(x: number, z: number): number {
-    const surface = this.surfaceHeightAt(x, z) - terrainHeightAt(x, z);
+    // Taken as the HIGHEST surface within the bed's own half-width, not the one directly underfoot.
+    // createRoadStrip carries heights only at the strip's two edges and interpolates between them, so
+    // a vertex that has just cleared the tar would drag the whole cross-section down through the road
+    // it is crossing — measured, the bed sagged to the marking layer for the last few units of every
+    // shallow-angle crossing and z-fought with it. Reaching a corridor half-width outward also gives
+    // the crossing a short raised approach, which is what a crossing has.
+    let surface = this.surfaceHeightAt(x, z) - terrainHeightAt(x, z);
+    for (const [ox, oz] of RAIL_BED_LIFT_PROBES) {
+      const px = x + ox; const pz = z + oz;
+      surface = Math.max(surface, this.surfaceHeightAt(px, pz) - terrainHeightAt(px, pz));
+    }
     return Math.max(RAIL_BED_LIFT, surface + RAIL_SURFACE_CLEARANCE);
   }
 
