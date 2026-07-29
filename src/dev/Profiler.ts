@@ -10,6 +10,7 @@
  *    ?profile=matrix&x=..&z=..&label=..      — full toggle matrix (baseline/gtao/post/shadows/water/agents/medium) at a spot
  *    ?profile=traverse&x=..&z=..&x2=..&z2=.. — glide the player between two points, logging per-frame spikes
  *  Common: &frames=N (measure length), &warmup=N, &speed=U (traverse u/s),
+ *  &peds=N&cars=N (pin ambient census totals for stable A/B phases),
  *  &only=a,b,c (matrix: keep just the named phases — baseline always runs first for the A/B). */
 
 interface FrameSample { dt: number; calls: number; tris: number; heap: number; buckets: Record<string, number>; }
@@ -59,7 +60,9 @@ export function installProfiler(): void {
   if (query().has('fastraf')) window.requestAnimationFrame = ((callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0)) as typeof window.requestAnimationFrame;
   const handle = setInterval(() => {
     const game = (window as any).__game;
-    if (!game) return;
+    // Game publishes __game before its required models and initial building cells finish warming. Starting a
+    // run in that window makes startGame() correctly no-op and silently profiles the loading/menu scene.
+    if (!game?.requiredAssetsReady || game.player?.characterStatus !== 'ready') return;
     clearInterval(handle);
     try { run(game); } catch (error) { emit('PROFILE_ERROR', String(error)); }
   }, 100);
@@ -94,13 +97,16 @@ function run(game: any): void {
   patch(game, 'renderHUD', 'renderHUD');
   patch(game, 'updateCamera', 'updateCamera');
   patchRender(game.renderer, 'render');
-  if (game.composer) patchRender(game.composer, 'render');
+  if (game.postProcessing?.composer) patchRender(game.postProcessing.composer, 'render');
 
   game.loggedDrawCalls = true; // disarm the game's own one-shot renderer.info measurement
   game.renderer.info.autoReset = false;
 
   game.startGame(true); // fresh deterministic save, straight into 'playing'
   game.dayNight.hour = 12; game.dayNight.timeRate = 0; // freeze lighting so phases are comparable
+  const pinnedPeds = num('peds', NaN); const pinnedCars = num('cars', NaN);
+  if (Number.isFinite(pinnedPeds)) game.lifecycle.tuning.peds = Math.max(0, Math.round(pinnedPeds));
+  if (Number.isFinite(pinnedCars)) game.lifecycle.tuning.cars = Math.max(0, Math.round(pinnedCars));
 
   const plan = query().get('profile');
   const x = num('x', NaN); const z = num('z', NaN);
@@ -114,15 +120,15 @@ function run(game: any): void {
   const label = query().get('label') ?? plan ?? 'run';
 
   if (plan === 'matrix') {
-    let stashedComposer: any;
+    let stashedPostProcessing: any;
     phases.push(
       { name: `${label}:baseline-high`, warmup, frames },
-      { name: `${label}:gtao-off`, warmup: 30, frames, apply: () => { if (game.gtao) game.gtao.enabled = false; }, restore: () => { if (game.gtao) game.gtao.enabled = true; } },
-      { name: `${label}:post-off`, warmup: 30, frames, apply: () => { stashedComposer = game.composer; game.composer = undefined; }, restore: () => { game.composer = stashedComposer; } },
+      { name: `${label}:gtao-off`, warmup: 30, frames, apply: () => { if (game.postProcessing?.gtao) game.postProcessing.gtao.enabled = false; }, restore: () => { if (game.postProcessing?.gtao) game.postProcessing.gtao.enabled = true; } },
+      { name: `${label}:post-off`, warmup: 30, frames, apply: () => { stashedPostProcessing = game.postProcessing; game.postProcessing = undefined; }, restore: () => { game.postProcessing = stashedPostProcessing; } },
       { name: `${label}:shadows-off`, warmup: 30, frames, apply: () => { game.renderer.shadowMap.enabled = false; game.environment.sun.castShadow = false; }, restore: () => { game.renderer.shadowMap.enabled = true; game.environment.sun.castShadow = true; } },
       { name: `${label}:water-low`, warmup: 30, frames, apply: () => game.city.setWaterQuality('low'), restore: () => game.city.setWaterQuality('high') },
-      { name: `${label}:agents-off`, warmup: 60, frames, apply: () => { game.lifecycle.tuning.peds = 0; game.lifecycle.tuning.cars = 0; despawnAgents(game); }, restore: () => { game.lifecycle.tuning.peds = undefined; game.lifecycle.tuning.cars = undefined; } },
       { name: `${label}:medium`, warmup: 60, frames, apply: () => { game.settings.quality = 'medium'; game.applyQuality(); }, restore: () => { game.settings.quality = 'high'; game.applyQuality(); } },
+      { name: `${label}:agents-off`, warmup: 60, frames, apply: () => { game.lifecycle.tuning.peds = 0; game.lifecycle.tuning.cars = 0; despawnAgents(game); }, restore: () => { game.lifecycle.tuning.peds = undefined; game.lifecycle.tuning.cars = undefined; } },
     );
     const only = query().get('only');
     if (only) {
@@ -183,7 +189,15 @@ function despawnAgents(game: any): void {
 }
 
 function liveCounts(game: any): Record<string, number> {
-  return { peds: game.population.pedestrians.length, cars: game.population.traffic.length, parked: game.population.vehicles.length - game.population.traffic.length, police: game.police.vehicles.length };
+  const peds = game.population.pedestrians;
+  return {
+    peds: peds.length,
+    renderedPeds: peds.filter((ped: any) => ped.isRenderVisible).length,
+    frozenPeds: peds.filter((ped: any) => ped.frozen).length,
+    cars: game.population.traffic.length,
+    parked: game.population.vehicles.length - game.population.traffic.length,
+    police: game.police.vehicles.length,
+  };
 }
 
 /** One-shot reconnaissance: where can the matrix runs teleport to? */

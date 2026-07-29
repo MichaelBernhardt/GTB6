@@ -185,6 +185,8 @@ export class RiggedPedestrianVisual {
   private impactX?: number;
   private impactZ?: number;
   private impactSpeed?: number;
+  /** Population distance-culling may hide a rig before its async model finishes loading. */
+  private renderVisible = true;
   /** Bare-visual fallback (unit tests / missing city): flat ground at the ped group's own height. */
   private readonly fallbackEnv: RagdollEnvironment = { heightAt: () => this.ragdollGroundY };
   private disposed = false;
@@ -200,6 +202,12 @@ export class RiggedPedestrianVisual {
   get failed(): boolean { return this.status === 'failed'; }
   get activeAnimation(): NpcAnimationName | undefined { return this.currentName; }
   animationTime(name: NpcAnimationName): number | undefined { return this.actions.get(name)?.time; }
+
+  /** Hide only this visual subtree, leaving the pedestrian's gameplay parent visibility untouched. */
+  setRenderVisible(visible: boolean): void {
+    this.renderVisible = visible;
+    this.group.visible = visible && this.ready;
+  }
 
   load(): Promise<void> {
     if (this.disposed || this.ready) return Promise.resolve();
@@ -320,7 +328,10 @@ export class RiggedPedestrianVisual {
     const model = cloneSkeleton(template.gltf.scene); const bones = findHumanoidBones(model);
     if (!bones) throw new NpcCharacterError('Cloned NPC is missing its humanoid skeleton.');
     model.name = `NpcInstance:${this.characterId}`;
-    model.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.receiveShadow = true; object.frustumCulled = false; } });
+    // NPCs substantially outnumber the player, so forcing every body through both the colour and shadow
+    // passes even when it is outside the camera frustum is very expensive. GLTF body geometry carries bounds
+    // for the complete bind pose (ordinary clips stay inside them), so Three's normal per-mesh culling is safe.
+    model.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; object.receiveShadow = true; object.frustumCulled = true; } });
     this.model = model; this.bones = bones; this.mixer = new THREE.AnimationMixer(model); this.deathFloor = template.deathFloor;
     const random = this.options.random ?? Math.random;
     this.ragdollDeath = random() < RAGDOLL_DEATH_CHANCE;
@@ -330,7 +341,7 @@ export class RiggedPedestrianVisual {
       if (name === 'punch_right' || name === 'death') { action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; }
       this.actions.set(name, action);
     }
-    this.group.add(model); this.group.visible = true; this.status = 'ready'; this.transitionTo(selectNpcAnimation(this.state), 0, true); this.mixer.update(0); this.options.onReady?.();
+    this.group.add(model); this.status = 'ready'; this.group.visible = this.renderVisible; this.transitionTo(selectNpcAnimation(this.state), 0, true); this.mixer.update(0); this.options.onReady?.();
   }
 
   private transitionTo(name: NpcAnimationName, fade = 0.12, preservePhase = false): void {

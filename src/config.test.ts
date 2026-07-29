@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_FREEZE_RADIUS, AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
+import { AI_FREEZE_RADIUS, AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS, AI_THAW_RADIUS_VEHICLE, PED_RENDER_HIDE_RADIUS, PED_RENDER_SHOW_RADIUS, PLAYER, resolveFrozen, resolvePedestrianRenderVisible, TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
 import { REFRESH_RADIUS } from './systems/LifecycleSystem';
 import { calculateDamage } from './core/GameRules';
 
@@ -23,6 +23,15 @@ describe('distance freeze hysteresis', () => {
     expect(AI_THAW_RADIUS_VEHICLE).toBeLessThan(AI_FREEZE_RADIUS_VEHICLE);
     expect(AI_FREEZE_RADIUS_VEHICLE).toBeGreaterThan(REFRESH_RADIUS); // a live car is navigating; past the bubble it is recycled, never frozen-and-kept
     expect(resolveFrozen(false, sq(REFRESH_RADIUS), AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE)).toBe(false); // still navigating out to the recycle bubble
+  });
+
+  it('hides sub-pixel pedestrian bodies before freezing their simulation, with visual hysteresis', () => {
+    expect(PED_RENDER_SHOW_RADIUS).toBeLessThan(PED_RENDER_HIDE_RADIUS);
+    expect(PED_RENDER_HIDE_RADIUS).toBeLessThan(AI_THAW_RADIUS);
+    expect(resolvePedestrianRenderVisible(true, sq(PED_RENDER_HIDE_RADIUS + 1))).toBe(false);
+    expect(resolvePedestrianRenderVisible(true, sq(PED_RENDER_HIDE_RADIUS - 1))).toBe(true);
+    expect(resolvePedestrianRenderVisible(false, sq(PED_RENDER_SHOW_RADIUS + 1))).toBe(false);
+    expect(resolvePedestrianRenderVisible(false, sq(PED_RENDER_SHOW_RADIUS - 1))).toBe(true);
   });
 });
 

@@ -96,6 +96,7 @@ describe('ai intentions simulation', () => {
     for (let frame = 0; frame < 15; frame++) population.update(1 / 60, far); // staggered checks: everyone frozen within 10 frames
     expect(population.pedestrians.every((ped) => ped.frozen)).toBe(true);
     expect(population.traffic.every((vehicle) => vehicle.frozen)).toBe(true);
+    expect(population.pedestrians.every((ped) => ped.group.children.every((child) => !child.visible))).toBe(true);
     const pedSnapshot = population.pedestrians.map((ped) => ped.group.position.clone());
     const vehicleSnapshot = population.traffic.map((vehicle) => vehicle.group.position.clone());
     for (let frame = 0; frame < 300; frame++) population.update(1 / 60, far);
@@ -113,6 +114,7 @@ describe('ai intentions simulation', () => {
       travelled += step; largestStep = Math.max(largestStep, step);
     }
     expect(walker.frozen).toBe(false);
+    expect(walker.group.children.some((child) => child.visible)).toBe(true);
     expect(travelled).toBeGreaterThan(0.5); // resumed its route after thawing
     expect(largestStep).toBeLessThan(0.3); // continuous motion from the frozen pose — no teleport pop
   });

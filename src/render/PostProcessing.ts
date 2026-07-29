@@ -13,8 +13,12 @@ export interface PostProcessingStack {
   dispose(): void;
 }
 
+/** GTAO redraws scene depth/normals and roughly doubles submissions in the dense city. High keeps the
+ *  much cheaper bloom/output stack; Ultra is the explicit opt-in tier for maximum-cost AO. */
+export function usesGtao(quality: PostProcessingQuality): boolean { return quality === 'ultra'; }
+
 /** Build the optional post stack. This module is dynamically imported only for medium-or-better
- *  quality; GTAO has a second boundary because medium uses bloom/output but not ambient occlusion. */
+ *  quality; GTAO has a second boundary because only Ultra opts into its full-scene extra passes. */
 export async function createPostProcessing(
   renderer: WebGLRenderer,
   scene: Scene,
@@ -31,7 +35,7 @@ export async function createPostProcessing(
   composer.addPass(new RenderPass(scene, camera));
 
   let gtao: GTAOPass | undefined;
-  if (quality === 'high' || ultra) {
+  if (usesGtao(quality)) {
     const module = await import('three/addons/postprocessing/GTAOPass.js');
     gtao = new module.GTAOPass(scene, camera, innerWidth, innerHeight);
     gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 2, thickness: 1 }); gtao.blendIntensity = 0.9;

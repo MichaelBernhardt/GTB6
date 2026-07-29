@@ -298,6 +298,9 @@ describe('cached rigged pedestrian instances', () => {
     const visual = new RiggedPedestrianVisual(parent, 'braamfontein-creative', { load: () => deferred, onReady: () => { placeholder.visible = false; } });
     const pending = visual.load(); expect(placeholder.visible).toBe(true); expect(visual.group.visible).toBe(false);
     resolve(await loadNpc()); await pending; expect(placeholder.visible).toBe(false); expect(visual.group.visible).toBe(true);
+    visual.group.traverse((object) => { if (object instanceof THREE.Mesh) expect(object.frustumCulled).toBe(true); });
+    visual.setRenderVisible(false); expect(visual.group.visible).toBe(false);
+    visual.setRenderVisible(true); expect(visual.group.visible).toBe(true);
 
     clearNpcTemplateCache(); const fallback = new THREE.Group(); const failed = new RiggedPedestrianVisual(fallback, 'sandton-professional', { load: async () => { throw new Error('offline'); } });
     await expect(failed.load()).rejects.toThrow(/unable to load/i); expect(failed.failed).toBe(true); expect(failed.group.visible).toBe(false); expect(fallback.children).toContain(failed.group);
