@@ -35,7 +35,7 @@ import { COURIER_MIN_TRIP_DISTANCE, COURIER_STOP_RADIUS, COURIER_STOP_SPEED, Cou
 import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { JoziFlowSystem, type JoziFlowEvent } from './systems/JoziFlowSystem';
-import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
+import { LoadSheddingSystem, OUTAGE_MIN_SECONDS } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionDefinition, type MissionUpdate } from './systems/MissionSystem';
 import { StoryDirector } from './systems/StoryDirector';
 import { DialogueSystem } from './systems/DialogueSystem';
@@ -2053,6 +2053,9 @@ export class Game {
     if (!mission || this.missions.state !== 'active') return;
     const script = MISSION_SCRIPTS[mission.id];
     const index = this.missions.objectiveIndex;
+    // If the player reached Kelvin during an outage already in progress, give the full intended
+    // infiltration window from the gate. Grid-up arrivals still have to wait and solve the clue.
+    if (mission.id === 'dark-house' && index === 1) this.loadShedding.guaranteeActiveWindow(OUTAGE_MIN_SECONDS);
     for (const wave of script?.waves ?? []) if (wave.objective === index && wave.checkpoint === undefined) this.population.spawnHostileWave(wave.spots);
     if (script?.forceBlackout === index && !this.loadShedding.active) this.applyEskom(this.loadShedding.force());
     if (script?.wanted?.objective === index) this.forceWanted(script.wanted.level);

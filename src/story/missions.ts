@@ -2,10 +2,10 @@ import { Vector3 } from 'three';
 import type { MissionDefinition } from '../systems/MissionSystem';
 import type { WorldTarget } from '../types';
 import {
-  CANDICE_START, CON_HILL_SPOT, ESCAPE_SPOT, EVIDENCE_VAN_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
+  CANDICE_START, CON_HILL_SPOT, ESCAPE_SPOT, EVIDENCE_VAN_SPOT, KELVIN_BREACH_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
   AIRPORT_APRON, CROWN_STATION, KIOSK_SPOT, LOCKUP_SPOT, PADSTAL_SPOT, PAPER_DROP, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
   CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_PLATFORM, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
-  SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START,
+  SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START, WRONG_TRAIN_START,
 } from '../world/placements';
 import { CANDICE_VAN_COLOR, TANKER_COLOR } from './scripts';
 
@@ -164,7 +164,7 @@ export const MISSIONS: MissionDefinition[] = [
     prerequisites: { missions: ['the-audition'] },
     intro: 'Transnet lost a consist tonight — misplaced it, hey. It moves my diesel now. Take the controls and stop it dead at the Crown Station siding. My people do the rest.',
     start: spot(SOLLY_START, 'Solly'), objectives: [
-      { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true }, text: 'Take the controls of a consist', target: spot(PARK_STATION_SPOT, 'Park Station') },
+      { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true, stationName: 'Booysens Station' }, text: 'Take the controls of the stolen consist at Booysens', target: spot(WRONG_TRAIN_START, 'Booysens Station') },
       { kind: 'reach', conditionsOnly: true, conditions: { drivingTrain: true, stationName: 'Crown Station' }, text: 'Stop the train dead at the Crown Station siding', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
       { kind: 'reach', radius: 45, conditionsOnly: true, conditions: { onFoot: true }, text: 'Step off — the crew takes it from here', target: spot(CROWN_STATION, 'Crown siding'), checkpoint: true },
     ],
@@ -219,9 +219,9 @@ export const MISSIONS: MissionDefinition[] = [
     intro: 'The black ledger sleeps in the records office at Kelvin Yard. Security answers to nobody — not even Solly. Figure it out.',
     start: spot(SAFEHOUSE_SITE.pad, 'The burner phone'), setFlags: ['ledger'], objectives: [
       { kind: 'reach', radius: 14, text: 'Case Kelvin Yard', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard') },
-      { kind: 'reach', radius: 6, conditions: { undetected: true }, failIf: [SPOTTED], checkpoint: true, text: 'Get into the records office. Figure it out.', target: spot(KELVIN_OFFICE_SPOT, 'Records office') },
+      { kind: 'reach', radius: 6, conditions: { undetected: true }, failIf: [SPOTTED], checkpoint: true, text: 'Find the bent rear fence and get into the records office', target: spot(KELVIN_OFFICE_SPOT, 'Records office') },
       { kind: 'collect', conditions: { undetected: true }, failIf: [SPOTTED], checkpoint: true, text: 'Take the black ledger', target: spot(KELVIN_OFFICE_SPOT, 'Black ledger') },
-      { kind: 'escape', radius: 12, failIf: [SPOTTED], text: 'Get out of the yard, unseen', target: spot(KELVIN_GATE_SPOT, 'Out the gate') },
+      { kind: 'escape', radius: 6, failIf: [SPOTTED], text: 'Back out through the rear breach, unseen', target: spot(KELVIN_BREACH_SPOT, 'Rear breach') },
     ],
   },
   {

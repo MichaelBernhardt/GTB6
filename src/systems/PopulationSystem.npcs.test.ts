@@ -93,6 +93,16 @@ describe('all-Blender NPC population policy', () => {
     expect(patrols).toHaveLength(2);
     expect(patrols.every((ped) => localCity.districtAt(ped.group.position.x, ped.group.position.z) === 'Fordsburg')).toBe(true);
   });
+
+  it('keeps Kelvin security posted but damageable for the quiet-takedown route', () => {
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const guard = population.spawnYardGuard(SPAWN_POINT.x + 8, SPAWN_POINT.z + 8);
+    expect(guard.scripted).toBe(true);
+    expect(guard.contact).toBe(false); // mission contacts are invulnerable
+    expect(guard.carGuard).toBe(false); // no tips/hails at the records depot
+    expect(guard.takeDamage(1000)).toBe(true);
+    expect(guard.state).toBe('down');
+  });
 });
 
   it('derives defeat credit from ROSTER TRUTH (spawned - standing) — every kill path counts', () => {

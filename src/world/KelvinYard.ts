@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createSignMesh } from './ProceduralMaterials';
 import { registerPowered } from './powerGrid';
-import { KELVIN_FENCE_RADIUS, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } from './placements';
+import { KELVIN_BREACH_SPOT, KELVIN_FENCE_RADIUS, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } from './placements';
 import { placedCollider } from '../systems/ShopSystem';
 import type { City } from './City';
 
@@ -16,7 +16,7 @@ export function buildKelvinYard(scene: THREE.Scene, city: City): void {
   const group = new THREE.Group();
   group.name = 'Kelvin Yard';
   const gateAngle = Math.atan2(KELVIN_GATE_SPOT.x - KELVIN_YARD_CENTER.x, KELVIN_GATE_SPOT.z - KELVIN_YARD_CENTER.z);
-  const breachAngle = gateAngle + Math.PI; // the cut is at the back, far from the floodlit gate
+  const breachAngle = Math.atan2(KELVIN_BREACH_SPOT.x - KELVIN_YARD_CENTER.x, KELVIN_BREACH_SPOT.z - KELVIN_YARD_CENTER.z);
 
   const steel = new THREE.MeshStandardMaterial({ color: 0x5a6166, roughness: 0.55, metalness: 0.5 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x2c3237, roughness: 0.7, metalness: 0.3 });
@@ -35,11 +35,17 @@ export function buildKelvinYard(scene: THREE.Scene, city: City): void {
     const z = KELVIN_YARD_CENTER.z + Math.cos(angle) * KELVIN_FENCE_RADIUS;
     const heading = angle + Math.PI / 2; // panel runs along the tangent
     if (breach) {
-      // The breach: one leaning post and a curl of dropped mesh — the way in, if you can use it.
+      // The breach: one leaning post, dropped mesh, and a scrap of old warning tape. The tape's
+      // faint retroreflection makes the route readable during an outage without turning it into UI.
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.6, 0.18), steel);
       post.position.set(x + Math.sin(angle + Math.PI / 2) * (panelLength / 2 - 0.4), city.surfaceHeightAt(x, z) + 1.0, z + Math.cos(angle + Math.PI / 2) * (panelLength / 2 - 0.4));
       post.rotation.z = 0.6; post.castShadow = true;
-      group.add(post);
+      const tape = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.12, 0.035), new THREE.MeshStandardMaterial({
+        color: 0xf0c541, emissive: 0x614500, emissiveIntensity: 0.65, roughness: 0.7,
+      }));
+      tape.position.set(x, city.surfaceHeightAt(x, z) + 1.05, z);
+      tape.rotation.y = heading; tape.rotation.z = -0.12;
+      group.add(post, tape);
       continue; // no panel, no collider: this is the gap
     }
     const panel = new THREE.Mesh(new THREE.BoxGeometry(panelLength, 2.6, 0.14), steel);

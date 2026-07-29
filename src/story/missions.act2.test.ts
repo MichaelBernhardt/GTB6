@@ -4,6 +4,8 @@ import { MISSIONS, MissionSystem, missionUnlocked } from '../systems/MissionSyst
 import { StoryDirector } from '../systems/StoryDirector';
 import { MISSION_SCRIPTS, TANKER_COLOR } from './scripts';
 import type { GameSnapshot } from '../types';
+import { STATIONS } from '../world/mapData';
+import { CROWN_STATION, WRONG_TRAIN_START } from '../world/placements';
 
 const base: GameSnapshot = { playerPosition: new Vector3(), inVehicle: false, wantedLevel: 0, shotsFired: 0, hostileDefeated: 0, collectedItem: false };
 const sim = (): MissionSystem => new MissionSystem();
@@ -81,10 +83,19 @@ describe('Paper Round walkthrough (riddle)', () => {
 });
 
 describe('The Wrong Train walkthrough', () => {
+  it('starts on the same physical rail line as Crown (a consist cannot jump tracks)', () => {
+    const at = (point: { x: number; z: number }) => STATIONS.find((station) => Math.hypot(station.x - point.x, station.z - point.z) < 1);
+    const origin = at(WRONG_TRAIN_START); const destination = at(CROWN_STATION);
+    expect(origin?.name).toBe('Booysens Station');
+    expect(destination?.name).toBe('Crown Station');
+    expect(origin?.line).toBe(destination?.line);
+  });
+
   it('completes only when driving and stopped dead at Crown Station', () => {
     const system = sim(); system.start('the-wrong-train');
     expect(system.update(0.016, { ...base, onTrain: true }, false).advanced).toBeUndefined(); // riding, not driving
-    expect(system.update(0.016, { ...base, onTrain: true, drivingTrain: true }, false).advanced).toBe(true);
+    expect(system.update(0.016, { ...base, onTrain: true, drivingTrain: true, stationName: 'Johannesburg Park Station' }, false).advanced).toBeUndefined(); // wrong line
+    expect(system.update(0.016, { ...base, onTrain: true, drivingTrain: true, stationName: 'Booysens Station' }, false).advanced).toBe(true);
     // rolling through Crown does not count: currentStationName only reads out when stopped (speed gate upstream)
     expect(system.update(0.016, { ...base, onTrain: true, drivingTrain: true, stationName: undefined }, false).advanced).toBeUndefined();
     expect(system.update(0.016, { ...base, onTrain: true, drivingTrain: true, stationName: 'Crown Station' }, false).advanced).toBe(true);
@@ -164,7 +175,7 @@ describe('Dark House walkthrough (flagship)', () => {
   it('the full discovery loop: spotted with the grid up, clean in a blackout', () => {
     const system = sim(); expect(system.start('dark-house')).toBe(true);
     system.update(0.016, base, true); // cased the gate
-    expect(system.objective?.text).toContain('Figure it out');
+    expect(system.objective?.text).toContain('bent rear fence');
     // grid up: the depot model marks the player detected the moment they cross the fence
     expect(system.update(0.016, { ...base, detected: true }, false).failed).toBe('Floodlights slam on. The whole yard saw you.');
     expect(system.restart()).toBe(true);

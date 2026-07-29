@@ -478,7 +478,10 @@ export class PopulationSystem {
   /** Story: a hi-vis security guard standing a post (Kelvin Yard); the mission director sweeps his torch. */
   spawnYardGuard(x: number, z: number): Pedestrian {
     const guard = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++ + 90, false, false, this.nextSpecialNpcVariant(CAR_GUARD_NPC_ID));
-    guard.state = 'idle'; guard.idleTime = 999999; guard.makeCarGuard(); guard.group.name = 'Yard Security';
+    // `contact` is deliberately false: contacts are invulnerable mission-giver bodies. The CAR_GUARD
+    // visual already supplies the hi-vis uniform; `scripted` pins this actor without making a quiet
+    // takedown impossible or causing car-guard tip/hail behaviour inside the depot.
+    guard.scripted = true; guard.state = 'idle'; guard.idleTime = 999999; guard.group.name = 'Yard Security';
     this.pedestrians.push(guard);
     return guard;
   }

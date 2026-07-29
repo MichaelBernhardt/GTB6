@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LoadSheddingSystem } from './LoadSheddingSystem';
+import { LoadSheddingSystem, OUTAGE_JITTER_SECONDS, OUTAGE_MIN_SECONDS } from './LoadSheddingSystem';
 
 /** The Couch Run beat forces an outage via the same force() the console cheat uses. The world
  *  must come out of it exactly as from a natural event: the outage self-ends on the natural
@@ -10,11 +10,11 @@ describe('scripted load-shedding (mission beats)', () => {
     expect(grid.force()).toBe('start');
     expect(grid.active).toBe(true);
     let elapsed = 0; let event: 'start' | 'end' | undefined;
-    while (elapsed < 60 && !event) { event = grid.update(1); elapsed += 1; }
+    while (elapsed < 120 && !event) { event = grid.update(1); elapsed += 1; }
     expect(event).toBe('end'); // outage self-terminated
     expect(grid.active).toBe(false);
-    expect(elapsed).toBeGreaterThanOrEqual(32); // natural outage window [32, 44]
-    expect(elapsed).toBeLessThanOrEqual(45);
+    expect(elapsed).toBeGreaterThanOrEqual(OUTAGE_MIN_SECONDS);
+    expect(elapsed).toBeLessThanOrEqual(OUTAGE_MIN_SECONDS + OUTAGE_JITTER_SECONDS + 1);
   });
 
   it('after a forced outage the next natural outage still arrives on the normal schedule', () => {
