@@ -533,6 +533,7 @@ export class Game {
     const chopShop = this.chopShopUnlocked() && !this.hotVehicleForSale() ? LOCKUP_SPOT : undefined;
     return [
       ...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...this.features.mapIcons(), // features blip themselves; the host returns [] while online and when nothing is loaded
+      ...this.mapActivityVehicles(), // the two repeatable opening jobs should be discoverable without reading README controls
       ...(chopShop ? [{ x: chopShop.x, z: chopShop.z, color: '#f28f3b', shape: 'diamond' as const, label: 'Bra Vusi’s Chop Shop' }] : []),
       ...(raceStart ? [{ x: raceStart.x, z: raceStart.z, color: '#d96cff', shape: 'diamond' as const, label: 'Robot Run' }] : []),
       ...(this.customWaypoint ? [{ ...this.customWaypoint, color: '#5ba9ff', shape: 'diamond' as const, label: PERSONAL_WAYPOINT_LABEL, waypoint: true }] : []),
@@ -540,6 +541,17 @@ export class Game {
       ...((area) => area ? [{ x: area.x, z: area.z, color: '#f5c542', area: area.radius, label: 'Riddle search area' }] : [])(this.riddleSearchArea()),
       ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521', label: 'Taxi passenger' }] : []),
     ];
+  }
+  /** Empty specialist vehicles are repeatable jobs, not anonymous parked-car dressing. Follow the actual
+   *  vehicle (including wherever the player left it) and disappear while it is being driven/entered. */
+  private mapActivityVehicles(): MapMarker[] {
+    return this.population.vehicles.flatMap((vehicle): MapMarker[] => {
+      if (vehicle === this.activeVehicle || vehicle === this.transition?.vehicle || vehicle.occupied || vehicle.disabled || vehicle.wrecked) return [];
+      const point = vehicle.group.position;
+      if (isTaxiKind(vehicle.spec.kind)) return [{ x: point.x, z: point.z, color: '#f2c521', shape: 'diamond', label: 'Quantum taxi shift · drive it, then press T' }];
+      if (vehicle.spec.kind === 'courier') return [{ x: point.x, z: point.z, color: '#84f01c', shape: 'diamond', label: 'Sixty-Sekonds courier shift · drive it, then press Y' }];
+      return [];
+    });
   }
   private mapPolice(): MapPoint[] {
     if (this.online) return [];
@@ -777,7 +789,7 @@ export class Game {
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
     this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
-    this.ui.notify('Welcome to Joburg', 'Follow the turquoise GPS route to a gold mission contact. M opens the full city map.');
+    this.ui.notify('Welcome to Joburg', 'Follow turquoise GPS to story contacts. M opens the map; gold Quantum and lime Sixty-Sekonds blips are repeatable side work.');
   }
 
   private startOnline(name: string): void {
