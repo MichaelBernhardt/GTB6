@@ -1327,7 +1327,7 @@ export class City {
       const sampled = this.samplePath(line.points, false, ROAD_SAMPLE_SPACING);
       const bed = this.densifyPath(sampled, RAIL_BED_SUBSTEP, false);
       const ballast = this.createRoadStrip(bed, RAIL_BALLAST_WIDTH, ballastMat, (x, z) => this.railBedLift(x, z), false);
-      ballast.receiveShadow = true; ballast.name = `${line.name} ballast`; this.group.add(ballast);
+      ballast.receiveShadow = true; this.group.add(ballast);
       this.railPaths.push(sampled.map((point) => ({ ...point })));
       const chords = this.densifyPath(sampled, RAIL_PITCH, false);
       for (let index = 0; index < chords.length - 1; index++) {
@@ -1382,7 +1382,10 @@ export class City {
     const barMat = new THREE.MeshStandardMaterial({ color: 0xf2f0e6, roughness: 0.82 });
     const transforms: THREE.Matrix4[] = [];
     const matrix = new THREE.Matrix4();
-    const lift = ROAD_SURFACE_OFFSET + 0.03; // on the tar, under the rail formation that rides over it
+    // Measured from roadHeightAt, which already carries ROAD_SURFACE_OFFSET — so this is the height
+    // over the TAR, not over the terrain. Above the markings (which sit 0.035 over the tar) and below
+    // the rail formation crossing it (RAIL_SURFACE_CLEARANCE, 0.06).
+    const lift = 0.045;
     for (const crossing of RAILWAY_LEVEL_CROSSINGS) {
       for (const approach of [-1, 1]) {
         // Set back from the track along the ROAD, far enough to clear the ballast at any crossing angle.

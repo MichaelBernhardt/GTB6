@@ -204,7 +204,8 @@ export function deconflictRailway(
   }
   const samples = resampleRail(points, options.pitch);
   const required = options.corridorHalf + options.clearance;
-  const crossings: RailCrossing[] = [];
+  /** Which samples cross a road, and what road — resolved to world positions AFTER the line moves. */
+  const crossedRoad = new Array<{ dirX: number; dirZ: number; half: number } | undefined>(samples.length).fill(undefined);
   let offsets = new Array<number>(samples.length).fill(0);
 
   // Three passes: a push can bring a sample alongside a DIFFERENT road, so the demand is re-measured at
@@ -220,13 +221,10 @@ export function deconflictRailway(
       if (at === undefined || at.clearance >= required) continue;
       const alignment = Math.abs(tangent.x * at.dirX + tangent.z * at.dirZ);
       if (alignment < options.parallelCos) {
-        // Genuinely crossing: the line has to get to the other side, so nothing moves here.
-        if (pass === 0) {
-          crossings.push({
-            x: base.x, z: base.z, dirX: tangent.x, dirZ: tangent.z,
-            roadDirX: at.dirX, roadDirZ: at.dirZ, roadHalf: at.half,
-          });
-        }
+        // Genuinely crossing: the line has to get to the other side, so nothing moves HERE. The sample
+        // can still be carried sideways by its neighbours' smoothed offsets, so only the fact of the
+        // crossing is recorded now; where it ends up is read off the finished alignment below.
+        crossedRoad[index] = { dirX: at.dirX, dirZ: at.dirZ, half: at.half };
         continue;
       }
       need[index] = required - at.clearance;
@@ -285,6 +283,22 @@ export function deconflictRailway(
     }
     return { x: point.x + -tangent.z * capped, z: point.z + tangent.x * capped };
   });
+
+  // Crossings resolved on the FINISHED alignment. A crossing sample does not move on its own account,
+  // but the smoothing carries it with its neighbours — up to several units where a crossing sits at the
+  // end of a parallel run that had to be pushed. Reading the position off `shifted` is what keeps a
+  // crossing's markings on the track rather than beside it.
+  const shiftedFrames = tangents(shifted);
+  const crossings: RailCrossing[] = [];
+  for (let index = 0; index < shifted.length; index++) {
+    const road = crossedRoad[index];
+    if (road === undefined) continue;
+    const at = shifted[index]!; const tangent = shiftedFrames[index]!;
+    crossings.push({
+      x: at.x, z: at.z, dirX: tangent.x, dirZ: tangent.z,
+      roadDirX: road.dirX, roadDirZ: road.dirZ, roadHalf: road.half,
+    });
+  }
 
   return {
     points: simplifyRail(shifted, options.simplifyTolerance),
