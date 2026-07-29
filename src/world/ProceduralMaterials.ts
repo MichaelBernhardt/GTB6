@@ -86,6 +86,115 @@ export function createSurfaceTexture(kind: SurfaceKind, repeat = 1): THREE.Canva
   return finish(canvas, repeat, repeat);
 }
 
+/** Which unpaved way a track texture is for: a graded two-rut vehicle track, or a worn footpath. */
+export type TrackVariant = 'track' | 'path';
+
+/**
+ * Unpaved ways — the surfaces of the map's `tracks` layer, which the world never used to draw.
+ *
+ * These tile ACROSS the strip, not over it. City.createRoadStrip writes u = 0..1 edge-to-edge and
+ * v = distance / 18, so with repeat (1, R) the texture's x axis is the full WIDTH of the way and its
+ * y axis runs along the way, one tile per 18/R units. That is what lets a feature stay put in the
+ * cross-section: the two wheel ruts of a farm track are drawn as vertical bands and therefore run
+ * unbroken down the track, exactly as ruts do, instead of tiling into a chequerboard of dirt.
+ *
+ * `track` — a graded strip of bare earth: two compacted, darker wheel ruts either side of a lighter
+ *   middelmannetjie (the grass-and-dust crown a two-track farm road keeps between the ruts), scuffed
+ *   gravel throughout and dust drifting onto the shoulders.
+ * `path` — a desire line worn through the veld. Pale trodden earth, plus a separate ALPHA MAP that
+ *   frays at both edges: paired with alphaTest the strip's silhouette breaks up into the grass
+ *   instead of ending on the ruler-straight edge that would make a footpath read as painted tape.
+ *   Alpha also thins in places along the length, so the line comes and goes as a real one does.
+ *   The fray is a second texture rather than an alpha channel on the colour map on purpose — a
+ *   cut-out baked into `map` blends its transparent texels' (black) RGB into the surviving ones
+ *   under bilinear filtering and mipmapping, ringing the whole path with a dark halo.
+ *
+ * Deterministic (the file's `seeded` hash, never Math.random) and seamless in v: every feature is
+ * either a full-height band or is wrap-drawn across the y seam.
+ */
+export function createTrackSurfaceTexture(variant: TrackVariant, repeatY: number): THREE.CanvasTexture {
+  const SIZE = 256;
+  const { canvas, context } = canvasTexture(SIZE);
+  const wrapRect = (x: number, y: number, w: number, h: number): void => {
+    context.fillRect(x, y, w, h);
+    if (y + h > SIZE) context.fillRect(x, y - SIZE, w, h); // the same fleck again above the seam
+    if (y < 0) context.fillRect(x, y + SIZE, w, h);
+  };
+
+  if (variant === 'track') {
+    context.fillStyle = '#7d6845'; context.fillRect(0, 0, SIZE, SIZE); // graded earth
+    // The crown between the ruts keeps its scrub: a paler, greener band up the middle.
+    context.fillStyle = '#87794c'; context.globalAlpha = 0.55; context.fillRect(SIZE * 0.42, 0, SIZE * 0.16, SIZE);
+    // Two compacted wheel ruts. Each is a dark core with a softer margin, so the tyre line has depth.
+    for (const centre of [0.235, 0.765]) {
+      const x = centre * SIZE;
+      context.globalAlpha = 0.30; context.fillStyle = '#5f4e33'; context.fillRect(x - SIZE * 0.085, 0, SIZE * 0.17, SIZE);
+      context.globalAlpha = 0.46; context.fillStyle = '#54452c'; context.fillRect(x - SIZE * 0.045, 0, SIZE * 0.09, SIZE);
+    }
+    // Dust and worn grass creeping back in at the shoulders.
+    context.globalAlpha = 0.34; context.fillStyle = '#8b7f52';
+    context.fillRect(0, 0, SIZE * 0.06, SIZE); context.fillRect(SIZE * 0.94, 0, SIZE * 0.06, SIZE);
+    // Gravel and clods, denser in the ruts where the tyres turn the surface over.
+    for (let i = 0; i < 2600; i++) {
+      const x = seeded(i, 31) * SIZE; const y = seeded(i, 32) * SIZE;
+      const inRut = Math.abs(x / SIZE - 0.235) < 0.09 || Math.abs(x / SIZE - 0.765) < 0.09;
+      context.globalAlpha = (inRut ? 0.10 : 0.05) + seeded(i, 33) * 0.16;
+      context.fillStyle = seeded(i, 34) > 0.5 ? '#98895c' : '#4e4029';
+      const s = 0.5 + seeded(i, 35) * (inRut ? 2.2 : 1.5);
+      wrapRect(x, y, s, s);
+    }
+    // Faint scuff striations ALONG the track (short vertical ticks), the drag marks of the last bakkie.
+    context.globalAlpha = 0.13; context.fillStyle = '#453923';
+    for (let i = 0; i < 260; i++) wrapRect(seeded(i, 36) * SIZE, seeded(i, 37) * SIZE, 0.9, 10 + seeded(i, 38) * 26);
+    context.globalAlpha = 1;
+    return finish(canvas, 1, repeatY);
+  }
+
+  // --- footpath: trodden earth (the silhouette lives in createFootpathAlphaTexture) ------------
+  context.fillStyle = '#8a7850'; context.fillRect(0, 0, SIZE, SIZE);
+  context.globalAlpha = 0.42; context.fillStyle = '#7a6942'; // polished centre where the feet actually fall
+  context.fillRect(SIZE * 0.3, 0, SIZE * 0.4, SIZE);
+  for (let i = 0; i < 2000; i++) { // grit, root and pebble
+    const x = seeded(i, 41) * SIZE; const y = seeded(i, 42) * SIZE;
+    context.globalAlpha = 0.05 + seeded(i, 43) * 0.18;
+    context.fillStyle = seeded(i, 44) > 0.52 ? '#9d8c5e' : '#5b4c2f';
+    const s = 0.5 + seeded(i, 45) * 1.7; wrapRect(x, y, s, s);
+  }
+  context.globalAlpha = 1;
+  return finish(canvas, 1, repeatY);
+}
+
+/**
+ * The footpath's silhouette, as a standalone greyscale alphaMap on the same (1, repeatY) tiling as
+ * createTrackSurfaceTexture('path'). Cover falls off toward both edges of the strip; a low-frequency
+ * wander walks the line from side to side and a second wave narrows it here and there, then per-pixel
+ * noise roughens the boundary so alphaTest cuts a RAGGED edge — the frayed hem of a desire line — in
+ * place of a ruler-straight one. Linear colour space: this is a mask, not a colour.
+ */
+export function createFootpathAlphaTexture(repeatY: number): THREE.CanvasTexture {
+  const SIZE = 256;
+  const { canvas, context } = canvasTexture(SIZE);
+  const image = context.createImageData(SIZE, SIZE);
+  const data = image.data;
+  for (let y = 0; y < SIZE; y++) {
+    const t = (y / SIZE) * Math.PI * 2; // whole cycles => seamless across the v join
+    const wander = Math.sin(t * 2) * 0.055 + Math.sin(t * 5 + 1.7) * 0.028;
+    const halfWidth = 0.30 + Math.sin(t * 3 + 0.6) * 0.075 + Math.sin(t * 7 + 2.3) * 0.035;
+    for (let x = 0; x < SIZE; x++) {
+      const offset = (x / SIZE) - 0.5 - wander;
+      const edge = 1 - Math.min(1, Math.abs(offset) / halfWidth); // 1 on the centre line, 0 at the fray
+      const cover = edge * 1.35 - seeded(y * SIZE + x, 46) * 0.55;
+      const value = cover > 0.5 ? 255 : 0;
+      const i = (y * SIZE + x) * 4;
+      data[i] = data[i + 1] = data[i + 2] = value; data[i + 3] = 255;
+    }
+  }
+  context.putImageData(image, 0, 0);
+  const texture = finish(canvas, 1, repeatY);
+  texture.colorSpace = THREE.NoColorSpace; // a mask must not be sRGB-decoded on the way in
+  return texture;
+}
+
 export type GrassVariant = 'lush' | 'dry' | 'soil';
 interface GrassPalette { base: string; patches: [string, string]; blades: string[]; dry: string[]; dryChance: number; soil: string; soilChance: number; }
 const GRASS_PALETTES: Record<GrassVariant, GrassPalette> = {

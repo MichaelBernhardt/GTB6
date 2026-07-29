@@ -16,6 +16,7 @@ import {
   HAS_ELEVATION,
   GENERATED_ROADS,
   GENERATED_RAILWAYS,
+  GENERATED_PATHS,
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
@@ -42,7 +43,7 @@ import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter'
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
+import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
@@ -327,6 +328,33 @@ export const districtAt = generatedDistrictAt;
 export const ROAD_NETWORK: RoadDefinition[] = GENERATED_ROADS.map((road) => ({ name: road.name, width: road.width, points: road.points }));
 /** Off-road dirt tracks: rendered as narrow unpaved strips, not part of the nav graph. */
 export const TRACK_NETWORK: RoadDefinition[] = GENERATED_TRACKS.map((track) => ({ name: track.name, width: track.width, points: track.points }));
+/** Footpaths and trails: rendered as worn desire lines. Outside the road index and every nav graph —
+ *  see GENERATED_PATHS for why a metre and a half of trodden earth must not read as carriageway. */
+export const PATH_NETWORK: RoadDefinition[] = GENERATED_PATHS.map((path) => ({ name: path.name, width: path.width, points: path.points }));
+/** How much of a footpath's mapped width is actually bare earth. OSM gives every path the same
+ *  nominal 3 u; a trodden line is nearer half that, and at full width they read as dirt roads. */
+export const FOOTPATH_WIDTH_SCALE = 0.58;
+/** Lift of the HIGHEST draped landuse sheet — the park/veld lawn. (Mine dumps and tilled fields
+ *  drape lower, at 0.04, so a park laid over one still wins.) Every unpaved way has to be laid
+ *  ABOVE this or the sheet paints over it — see TRACK_SURFACE_OFFSET. */
+export const GROUND_COVER_LIFT = 0.05;
+/**
+ * Lift of the unpaved surfaces over the terrain, in world units.
+ *
+ * These must clear GROUND_COVER_LIFT. Dirt tracks used to sit at 0.04, one centimetre UNDER the 0.05
+ * park/veld drape, so every track running through a green polygon was painted over by the lawn laid
+ * on top of it — a quarter of all track length on the map, and most of the mountain two-tracks, which
+ * live in the Melville Koppies parks the range was sited over. The stand at (-752,-2162) is a five-unit
+ * Dirt track on the range with no dirt anywhere in a 28-unit transect; the identical track at
+ * (-3326,2453), which is NOT in a park, renders. Footpaths are worse: 84% of their length is inside a
+ * green polygon, so laying them below the drape would have shipped a footpath system that is invisible
+ * exactly where footpaths are.
+ *
+ * Order, lowest first: ground cover 0.05 < footpath < dirt track < tar 0.15. So a road always wins
+ * where one crosses a track, a track wins over a path, and both win over the lawn they cross.
+ */
+export const TRACK_SURFACE_OFFSET = 0.075;
+export const FOOTPATH_SURFACE_OFFSET = 0.065;
 /** Passenger rail lines: ballast + rails + sleepers, never driveable, outside every nav graph. */
 export const RAILWAY_NETWORK: Array<{ name: string; points: RoadPoint[] }> =
   GENERATED_RAILWAYS.map((line) => ({ name: line.name, points: line.points }));
@@ -696,6 +724,12 @@ export class City {
   private farmSoil = createGrassTexture('soil', 1 / 6); // tilled-field earth for farmland polygons
   private grassWind?: { advance(dt: number): void };
   private sand = createSurfaceTexture('sand', 14);
+  // Unpaved ways tile ACROSS the strip: repeat (1, 2) puts one texture width edge-to-edge — which is
+  // what keeps a farm track's two wheel ruts running down it instead of tiling into a chequerboard —
+  // and one length every 9 u (createRoadStrip writes v = distance / 18).
+  private dirtTrack = createTrackSurfaceTexture('track', 2);
+  private footpath = createTrackSurfaceTexture('path', 2);
+  private footpathAlpha = createFootpathAlphaTexture(2);
   /** The dam bed's own map — near-neutral, so the vertex palette in coast.ts reaches the screen
    *  unmultiplied instead of being re-tinted golden by the beach sand texture (see C5).
    *  Repeat 1, NOT 14: buildBeach writes uv = world/9, so 14 tiled the grain every 64 cm and the
@@ -1129,7 +1163,15 @@ export class City {
     const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xf0eee5, map: this.sidewalk, roughness: 0.96, metalness: 0 });
     const curbMat = new THREE.MeshStandardMaterial({ color: 0xd5d1c4, map: this.concrete, roughness: 0.9 });
     const gutterMat = new THREE.MeshStandardMaterial({ color: 0x4b504d, roughness: 0.96 });
-    const dirtMat = new THREE.MeshStandardMaterial({ color: 0x7a6547, map: this.sand, roughness: 0.98 });
+    // Unpaved ways. The track map already carries its own earth tone, so the tint stays near-white
+    // rather than multiplying the ruts away. The footpath is alpha-TESTED, not blended: the fray has
+    // to survive in the opaque pass, where it needs no depth sorting against the ground it lies on.
+    const dirtMat = new THREE.MeshStandardMaterial({ color: 0xf2ece2, map: this.dirtTrack, roughness: 0.98 });
+    dirtMat.name = 'dirt-track';
+    const pathMat = new THREE.MeshStandardMaterial({
+      color: 0xf2ece2, map: this.footpath, alphaMap: this.footpathAlpha, alphaTest: 0.5, roughness: 0.99,
+    });
+    pathMat.name = 'footpath';
     const dashTransforms: THREE.Matrix4[] = []; const edgeTransforms: THREE.Matrix4[] = [];
 
     // Geometry is deliberately two-pass.  Previously each sidewalk was emitted as its road entered the
@@ -1177,7 +1219,17 @@ export class City {
     }
     // Off-road dirt tracks: narrow unpaved strips — no markings, sidewalks, curbs or nav lanes.
     for (const { definition, sampled } of tracks) {
-      const strip = this.createRoadStrip(sampled, definition.width, dirtMat, 0.04, false); strip.receiveShadow = true; this.group.add(strip);
+      const strip = this.createRoadStrip(sampled, definition.width, dirtMat, TRACK_SURFACE_OFFSET, false);
+      strip.receiveShadow = true; this.group.add(strip);
+    }
+    // Footpaths and trails: a desire line worn through the veld. Same draped strip as everything else
+    // here, at a fraction of the mapped width and with a frayed alpha edge, and — unlike the tracks
+    // above — never entered into the road index (see PATH_NETWORK). One shared material, so the
+    // per-chunk merge collapses all 200-odd of them into one mesh per occupied cell.
+    for (const definition of PATH_NETWORK) {
+      const sampled = this.samplePath(definition.points, false, ROAD_SAMPLE_SPACING);
+      const strip = this.createRoadStrip(sampled, definition.width * FOOTPATH_WIDTH_SCALE, pathMat, FOOTPATH_SURFACE_OFFSET, false);
+      strip.receiveShadow = true; this.group.add(strip);
     }
     const box = new THREE.BoxGeometry(1, 1, 1);
     this.addInstanced(box, centerMat, dashTransforms, {});
@@ -2039,7 +2091,7 @@ export class City {
     applySnowShader(parkMaterial, { snowY: SNOW_Y, rockY: SNOW_Y * 0.55 }); // veld draped up the range whitens with the ground under it
     const dirtMaterial = new THREE.MeshStandardMaterial({ color: 0xb59d5a, map: this.sand, roughness: 0.97 });
     for (const polygon of GREEN_POLYGONS) {
-      this.addGroundCover(polygon, parkMaterial, 0.05); // drapes onto the relief
+      this.addGroundCover(polygon, parkMaterial, GROUND_COVER_LIFT); // drapes onto the relief
       this.plantParkTrees(polygon);
       if (!GENERIC_AREA_NAMES.has(polygon.name.toLowerCase()) && polygon.area > 4000) this.addParkSign(polygon);
     }
