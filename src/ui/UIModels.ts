@@ -88,6 +88,11 @@ export interface PauseModel { settings: GameSettings; }
 export interface CheatsModel { weapons: CheatWeaponEntry[]; cheats: CheatSettings; }
 
 export function clampPercent(value: number): number { return Math.min(100, Math.max(0, Math.round(value))); }
+/** Vehicle specs use different hit-point pools (55–145); the HUD always speaks one 0–100 language. */
+export function vehicleHealthPercent(health: number, maxHealth: number): number {
+  if (!Number.isFinite(health) || !Number.isFinite(maxHealth) || maxHealth <= 0) return 0;
+  return clampPercent(health / maxHealth * 100);
+}
 export function objectiveProgress(objective?: ObjectiveView): number | undefined {
   if (!objective?.required || objective.progress === undefined) return undefined;
   return clampPercent(objective.progress / objective.required * 100);

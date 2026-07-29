@@ -74,7 +74,7 @@ import type { BaseQuality, CheatSettings, GameMode, GameSettings, GameSnapshot, 
 import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
-import type { ObjectiveView } from './ui/UIModels';
+import { vehicleHealthPercent, type ObjectiveView } from './ui/UIModels';
 import { TouchControls } from './ui/TouchControls';
 import { shouldEnableTouch, touchQuality } from './ui/TouchModels';
 import { UIManager } from './ui/UIManager';
@@ -1619,6 +1619,7 @@ export class Game {
       this.police.vehicles,
       eligible,
       this.wanted.level,
+      this.city.potholes,
     );
     if (!events) return;
     for (const event of events) this.applyJoziFlowEvent(event);
@@ -2941,14 +2942,19 @@ export class Game {
       objective.distanceMetres = Math.hypot(this.markerTarget.position.x - focus.x, this.markerTarget.position.z - focus.z) * METRES_PER_UNIT;
     }
     const onlineVehicle = this.online?.vehicleStates.find((entry) => entry.id === this.online?.localState?.vehicleId);
+    const onlineVehicleMaxHealth = onlineVehicle
+      ? onlineVehicle.kind === 'bakkie' ? VEHICLE_SPECS.van.health
+      : onlineVehicle.kind === 'sport' ? VEHICLE_SPECS.sport.health
+      : VEHICLE_SPECS.compact.health
+      : 100;
     const vehicle = onlineVehicle ? {
       name: onlineVehicle.isHot ? 'HOT BAKKIE' : onlineVehicle.kind === 'bakkie' ? 'Hilux Bakkie' : onlineVehicle.kind === 'sport' ? 'Golf GTI' : 'Citi Golf',
-      speedKph: Math.abs(onlineVehicle.speed) * 3.6, health: onlineVehicle.health,
+      speedKph: Math.abs(onlineVehicle.speed) * 3.6, health: vehicleHealthPercent(onlineVehicle.health, onlineVehicleMaxHealth),
     } : this.activePlane ? {
       name: `${this.activePlane.name} · ${Math.max(0, Math.round(this.activePlane.group.position.y - this.city.surfaceHeightAt(this.activePlane.group.position.x, this.activePlane.group.position.z)))}m`,
       speedKph: this.activePlane.state.speed * 3.6, health: this.activePlane.wrecked ? 0 : 100,
     } : this.activeVehicle ? {
-      name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: this.activeVehicle.health,
+      name: this.activeVehicle.spec.name, speedKph: Math.abs(this.activeVehicle.speed) * 3.6, health: vehicleHealthPercent(this.activeVehicle.health, this.activeVehicle.maxHealth),
       radio: this.activeVehicle.spec.twoWheeler ? undefined : radioDial(this.audio.currentRadio),
       taxi: isTaxiKind(this.activeVehicle.spec.kind) ? { text: taxiHudText(this.taxiRide.phase, this.taxiRide.duty === 'available', this.taxiRide.fare, this.taxiRide.tip), available: this.taxiRide.available } : undefined,
       courier: this.activeVehicle.spec.kind === 'courier' ? { text: courierHudText(this.courierJob), available: this.courierJob.active } : undefined,

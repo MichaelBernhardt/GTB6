@@ -27,6 +27,20 @@ export interface NearMissProbe {
   readonly heightGap: number;
 }
 
+export interface FlowHazard {
+  readonly x: number;
+  readonly z: number;
+  readonly r: number;
+}
+
+export interface PotholePassProbe {
+  readonly ahead: number;
+  readonly side: number;
+  /** Distance between the tyre line and the broken-tar rim: negative means the pothole was hit. */
+  readonly clearance: number;
+  readonly playerSpeed: number;
+}
+
 export type JoziFlowEvent =
   | { readonly kind: 'near-miss'; readonly label: string; readonly award: number; readonly combo: number; readonly pot: number }
   | { readonly kind: 'bank'; readonly amount: number; readonly combo: number; readonly personalBest: boolean }
@@ -40,6 +54,9 @@ const FLOW_PASS_COOLDOWN = 12;
 const FLOW_MAX_COMBO = 8;
 const FLOW_MAX_HEIGHT_GAP = 2.4;
 const FLOW_SCAN_DISTANCE_SQ = 7 * 7;
+export const POTHOLE_PASS_MIN_CLEARANCE = 0.28;
+export const POTHOLE_PASS_MAX_CLEARANCE = 2.2;
+const POTHOLE_SCAN_DISTANCE_SQ = 12 * 12;
 
 /** Half of an oriented rectangle projected onto an arbitrary horizontal axis. */
 function projectedHalfExtent(vehicle: FlowVehicle, axisX: number, axisZ: number): number {
@@ -107,6 +124,37 @@ export function nearMissAward(probe: NearMissProbe, wantedLevel: number, combo: 
   return Math.max(25, Math.round(chained / 5) * 5);
 }
 
+/** Driver-relative pothole sample. The city already owns stable pothole objects, so this adds no scene state. */
+export function potholePassProbe(driver: FlowVehicle, pothole: FlowHazard): PotholePassProbe {
+  const dx = pothole.x - driver.group.position.x;
+  const dz = pothole.z - driver.group.position.z;
+  const forwardX = Math.sin(driver.heading); const forwardZ = Math.cos(driver.heading);
+  const rightX = Math.cos(driver.heading); const rightZ = -Math.sin(driver.heading);
+  const side = dx * rightX + dz * rightZ;
+  return {
+    ahead: dx * forwardX + dz * forwardZ,
+    side,
+    clearance: Math.abs(side) - pothole.r,
+    playerSpeed: driver.speed,
+  };
+}
+
+/** A real dodge crosses the axle line at road speed inside a narrow, non-contact band. */
+export function scorablePotholePass(previousAhead: number | undefined, probe: PotholePassProbe, dt: number): boolean {
+  if (previousAhead === undefined || previousAhead <= 0 || probe.ahead > 0 || dt <= 0) return false;
+  const passSpeed = (previousAhead - probe.ahead) / dt;
+  return probe.playerSpeed >= FLOW_MIN_SPEED
+    && passSpeed >= 4
+    && probe.clearance >= POTHOLE_PASS_MIN_CLEARANCE
+    && probe.clearance <= POTHOLE_PASS_MAX_CLEARANCE;
+}
+
+export function potholePassAward(probe: PotholePassProbe, wantedLevel: number, combo: number): number {
+  const closeness = 1 - Math.min(1, Math.max(0, (probe.clearance - POTHOLE_PASS_MIN_CLEARANCE) / (POTHOLE_PASS_MAX_CLEARANCE - POTHOLE_PASS_MIN_CLEARANCE)));
+  const base = 18 + probe.playerSpeed * 0.7 + closeness * 26 + Math.max(0, wantedLevel) * 6;
+  return Math.max(25, Math.round(base * (1 + Math.max(0, combo - 1) * 0.22) / 5) * 5);
+}
+
 /**
  * Free-roam risk/reward with no scene objects and no draw calls. The common frame does scalar
  * broad-phase work only; a NearMissProbe is allocated solely when a car actually crosses beside the
@@ -116,6 +164,8 @@ export class JoziFlowSystem {
   private driver?: FlowVehicle;
   private previousAhead = new WeakMap<FlowVehicle, number>();
   private scoredAt = new WeakMap<FlowVehicle, number>();
+  private potholeAhead = new WeakMap<FlowHazard, number>();
+  private potholeScoredAt = new WeakMap<FlowHazard, number>();
   private elapsed = 0;
   private pot = 0;
   private combo = 0;
@@ -133,6 +183,7 @@ export class JoziFlowSystem {
     police: readonly FlowVehicle[],
     enabled: boolean,
     wantedLevel: number,
+    potholes: readonly FlowHazard[] = [],
   ): JoziFlowEvent[] | undefined {
     this.elapsed += dt;
     let events: JoziFlowEvent[] | undefined;
@@ -150,6 +201,7 @@ export class JoziFlowSystem {
     if (driver !== this.driver) {
       this.driver = driver;
       this.previousAhead = new WeakMap();
+      this.potholeAhead = new WeakMap();
     }
     if (!driver || driver.disabled || driver.wrecked) return events;
 
@@ -181,6 +233,28 @@ export class JoziFlowSystem {
     };
     for (const vehicle of traffic) scan(vehicle);
     for (const vehicle of police) scan(vehicle);
+    if (enabled && driver.speed >= FLOW_MIN_SPEED) {
+      for (const pothole of potholes) {
+        const dx = pothole.x - driver.group.position.x; const dz = pothole.z - driver.group.position.z;
+        if (dx * dx + dz * dz > POTHOLE_SCAN_DISTANCE_SQ) continue;
+        const probe = potholePassProbe(driver, pothole);
+        const previous = this.potholeAhead.get(pothole);
+        this.potholeAhead.set(pothole, probe.ahead);
+        if (!scorablePotholePass(previous, probe, dt)) continue;
+        if (this.elapsed - (this.potholeScoredAt.get(pothole) ?? -Infinity) < FLOW_PASS_COOLDOWN) continue;
+        this.potholeScoredAt.set(pothole, this.elapsed);
+        this.combo = Math.min(FLOW_MAX_COMBO, this.combo + 1);
+        const award = potholePassAward(probe, wantedLevel, this.combo);
+        this.pot += award; this.comboRemaining = FLOW_COMBO_SECONDS;
+        (events ??= []).push({
+          kind: 'near-miss',
+          label: probe.clearance < 0.65 ? 'TYRE-SHOP TEASER' : 'MUNICIPAL SLALOM',
+          award,
+          combo: this.combo,
+          pot: this.pot,
+        });
+      }
+    }
     return events;
   }
 
@@ -205,6 +279,8 @@ export class JoziFlowSystem {
     this.driver = undefined;
     this.previousAhead = new WeakMap();
     this.scoredAt = new WeakMap();
+    this.potholeAhead = new WeakMap();
+    this.potholeScoredAt = new WeakMap();
     this.elapsed = 0;
     this.clearChain();
     this.bestBank = Number.isFinite(bestBank) && bestBank > 0 ? Math.round(bestBank) : 0;

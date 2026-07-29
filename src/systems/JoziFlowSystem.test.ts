@@ -7,7 +7,12 @@ import {
   nearMissAward,
   nearMissLabel,
   nearMissProbe,
+  POTHOLE_PASS_MAX_CLEARANCE,
+  POTHOLE_PASS_MIN_CLEARANCE,
+  potholePassAward,
+  potholePassProbe,
   scorableNearMiss,
+  scorablePotholePass,
   type FlowVehicle,
 } from './JoziFlowSystem';
 
@@ -88,6 +93,23 @@ describe('Jozi Flow loop', () => {
     expect(flow.update(0.1, driver, [other], [], true, 0)).toBeUndefined();
   });
 
+  it('chains a close pothole dodge with traffic, but rejects a hit or a wide miss', () => {
+    const driver = vehicle(0, 0);
+    const pothole = { x: 1.6, z: 0.2, r: 1 };
+    const probe = potholePassProbe(driver, pothole);
+    expect(probe.clearance).toBeCloseTo(0.6);
+    expect(scorablePotholePass(0.2, { ...probe, ahead: -0.2 }, 1 / 60)).toBe(true);
+    expect(scorablePotholePass(0.2, { ...probe, ahead: -0.2, clearance: POTHOLE_PASS_MIN_CLEARANCE - 0.01 }, 1 / 60)).toBe(false);
+    expect(scorablePotholePass(0.2, { ...probe, ahead: -0.2, clearance: POTHOLE_PASS_MAX_CLEARANCE + 0.01 }, 1 / 60)).toBe(false);
+
+    expect(flowUpdateAcrossPothole(driver, pothole)?.[0]).toMatchObject({
+      kind: 'near-miss', label: 'TYRE-SHOP TEASER', combo: 1,
+    });
+    const safer = { ...probe, clearance: 1.4 };
+    expect(potholePassAward(probe, 0, 1)).toBeGreaterThan(potholePassAward(safer, 0, 1));
+    expect(potholePassAward(probe, 3, 4)).toBeGreaterThan(potholePassAward(probe, 0, 1));
+  });
+
   it('loses an unbanked pot on a crash and keeps a saved best across ordinary resets', () => {
     const flow = new JoziFlowSystem(500);
     const driver = vehicle(0, 0); const other = vehicle(3.5, 0.2, { speed: 0 });
@@ -100,3 +122,10 @@ describe('Jozi Flow loop', () => {
     expect(flow.bestBank).toBe(500);
   });
 });
+
+function flowUpdateAcrossPothole(driver: FlowVehicle, pothole: { x: number; z: number; r: number }) {
+  const flow = new JoziFlowSystem();
+  flow.update(1 / 60, driver, [], [], true, 0, [pothole]);
+  pothole.z = -0.2;
+  return flow.update(1 / 60, driver, [], [], true, 0, [pothole]);
+}

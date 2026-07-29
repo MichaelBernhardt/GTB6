@@ -23,6 +23,7 @@ The city combines OpenStreetMap-derived Johannesburg roads with procedural build
 - A five-star wanted system with witnesses, dispatch callouts, foot patrols, road pursuits, arrests, and persistent police pressure.
 - A 24-job campaign spanning the street-level hustle, Stage Six’s genny cartel, and side trips from the padstal to Jozi-by-the-Sea.
 - Repeatable taxi and **Sixty-Sekonds** courier shifts, the Robot Run CBD street circuit, and Bra Vusi’s condition-priced chop shop for witnessed hijackings.
+- **Jozi Flow** free-roam combos that pay for clean traffic squeezes and last-second pothole slaloms, then bank the pot if you keep the mirrors attached.
 - Shops for weapons, armour, food, resprays, and garage storage, plus seamless walk-in interiors at Jozi Arms and Main Main Mansions, where you can save, sleep, heal, and wait for things to become somebody else’s problem.
 - Turquoise street-by-street GPS guidance, click/tap custom waypoints, a searchable city map with named live markers, a rotating minimap, and live Johannesburg street names on the HUD.
 - District reputation, dynamic crowds, a ten-minute day/night cycle, weathered streets, and authentic load shedding at no additional charge.
