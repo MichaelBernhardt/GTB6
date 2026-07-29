@@ -306,13 +306,13 @@ describe('save v3: story flags and diary pages', () => {
 });
 
 describe('replayable activity records', () => {
-  it('round trips a Robot Run personal best', () => {
+  it('round trips Robot Run and Jozi Flow personal bests', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
-    manager.save({ ...DEFAULT_SAVE, activityRecords: { robotRunBest: 187.45 } });
-    expect(manager.load().activityRecords).toEqual({ robotRunBest: 187.45 });
+    manager.save({ ...DEFAULT_SAVE, activityRecords: { robotRunBest: 187.45, joziFlowBest: 935 } });
+    expect(manager.load().activityRecords).toEqual({ robotRunBest: 187.45, joziFlowBest: 935 });
   });
 
-  it('gives old saves empty records and rejects corrupt times', () => {
+  it('gives old saves empty records and independently rejects corrupt records', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     const old = JSON.parse(JSON.stringify(DEFAULT_SAVE)) as Record<string, unknown>;
     delete old.activityRecords;
@@ -321,5 +321,8 @@ describe('replayable activity records', () => {
     expect(sanitizeActivityRecords({ robotRunBest: -1 })).toEqual({});
     expect(sanitizeActivityRecords({ robotRunBest: Number.POSITIVE_INFINITY })).toEqual({});
     expect(sanitizeActivityRecords({ robotRunBest: 86_401 })).toEqual({});
+    expect(sanitizeActivityRecords({ robotRunBest: 180, joziFlowBest: -50 })).toEqual({ robotRunBest: 180 });
+    expect(sanitizeActivityRecords({ robotRunBest: -1, joziFlowBest: 1250.6 })).toEqual({ joziFlowBest: 1251 });
+    expect(sanitizeActivityRecords({ joziFlowBest: 10_000_001 })).toEqual({});
   });
 });

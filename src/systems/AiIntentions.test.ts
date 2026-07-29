@@ -30,6 +30,7 @@ const makeCity = (): City => ({
   isOnRoad: () => true,
   signalStops: () => false, // no robots in this nav-only harness: traffic obedience is covered in JunctionsSignals.test.ts
   signalSlowFactor: () => 1, // no robots: never slow for a signal here
+  districtAt: () => 'Joburg CBD', // neighbourhood casting needs a stable identity; navigation is the subject here
   surfaceHeightAt: () => 0,
   sidewalkHeightAt: () => 0,
   roadHeightAt: () => 0,

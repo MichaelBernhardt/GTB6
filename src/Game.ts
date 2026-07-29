@@ -33,6 +33,7 @@ import { clampT, cornerSide, COVER_ENTER_RANGE, COVER_EXIT_HOLD, coverHeading, c
 import { COURIER_MIN_TRIP_DISTANCE, COURIER_STOP_RADIUS, COURIER_STOP_SPEED, CourierJob, courierHudText } from './systems/CourierJobSystem';
 import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
+import { JoziFlowSystem, type JoziFlowEvent } from './systems/JoziFlowSystem';
 import { LoadSheddingSystem } from './systems/LoadSheddingSystem';
 import { MISSIONS, MissionSystem, type MissionDefinition, type MissionUpdate } from './systems/MissionSystem';
 import { StoryDirector } from './systems/StoryDirector';
@@ -190,6 +191,8 @@ export class Game {
   private streetNameX = Infinity;
   private streetNameZ = Infinity;
   private robotRace?: RobotRace;
+  /** Free-roam traffic threading: observational only, no actors or draw calls. */
+  private joziFlow: JoziFlowSystem;
   private stolenVehicles = new WeakSet<Vehicle>();
   private markerColor = '';
   private markerPhase = 0;
@@ -255,6 +258,7 @@ export class Game {
   constructor(private container: HTMLElement) {
     bootMark('boot: settings');
     this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
+    this.joziFlow = new JoziFlowSystem(this.save.activityRecords.joziFlowBest);
     this.features = new FeatureHost(this.featureHostContext()); this.features.restore(this.save.features); // lazy features: nothing loads until the player walks into one
     if (this.touchMode) this.settings.quality = touchQuality(this.saveExists, this.settings.quality, 'potato'); // phones start on the Skorokoro tier; a saved choice from the settings menu wins
     analytics.setQuality(this.settings.quality);
@@ -771,6 +775,7 @@ export class Game {
     this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
+    this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Follow the turquoise GPS route to a gold mission contact. M opens the full city map.');
   }
@@ -780,6 +785,7 @@ export class Game {
     this.cancelRobotRace('Left the solo city', false);
     this.customWaypoint = undefined;
     this.stolenVehicles = new WeakSet();
+    this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.endTaxiShift(); this.endCourierShift(); this.online?.close(); this.trains.endRide();
     Object.assign(this.cheats, { fastRun: false, bigJump: false, invulnerable: false }); // cheat speeds would trip the server's movement validator and freeze you in place for everyone else
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
@@ -946,7 +952,7 @@ export class Game {
     }
     this.updateVehicleFires(dt, focus);
     for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition && !this.airborne)) this.applyPickup(item);
-    this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateRobotRace(dt); this.updateMission(dt);
+    this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateJoziFlow(dt); this.updateRobotRace(dt); this.updateMission(dt);
     this.updateInebriation(dt);
     this.features.update(dt); // lazily loaded features; the host no-ops while online, so PvP never ticks them
     this.saveTimer += dt; if (this.saveTimer > 8 && !this.activePlane) { this.persist(); this.saveTimer = 0; } // no autosave mid-flight: a resumed save would float the player at altitude
@@ -1448,7 +1454,12 @@ export class Game {
     const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
     this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed, vehicle.spec.kind); // 'bicycle' routes to the freewheel/wind voice, everything else to an engine profile
     this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
-    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) { this.audio.collision(this.prevDrivenSpeed * 1.1); analytics.record('vehicle_collision', { impact: this.prevDrivenSpeed, vehicleKind: vehicle.spec.kind }); this.wallCrashCooldown = 0.8; this.taxiRide.recordCrash(this.prevDrivenSpeed); this.recordCourierCrash(this.prevDrivenSpeed); }
+    if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) {
+      this.audio.collision(this.prevDrivenSpeed * 1.1);
+      analytics.record('vehicle_collision', { impact: this.prevDrivenSpeed, vehicleKind: vehicle.spec.kind });
+      this.wallCrashCooldown = 0.8; this.taxiRide.recordCrash(this.prevDrivenSpeed); this.recordCourierCrash(this.prevDrivenSpeed);
+      this.failJoziFlow('Concrete wins');
+    }
     this.prevDrivenSpeed = speed;
     this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
     if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
@@ -1458,6 +1469,7 @@ export class Game {
         vehicle.speed *= 0.8; vehicle.bounce = Math.min(0.28, Math.abs(vehicle.speed) * 0.012); vehicle.takeDamage(2);
         this.recordCourierCrash(7);
         this.audio.collision(14); this.potholeCooldown = 0.9;
+        this.failJoziFlow('Pothole collected');
         if (Math.random() < 0.3) this.ui.notify('Pothole', 'Wheel alignment: R850. Cash only.', false);
       }
     }
@@ -1546,6 +1558,52 @@ export class Game {
     this.persist();
     this.ui.notify('BRA VUSI · SOLD', `${vehicleName} · R${offer.toLocaleString()}. The VIN has gone to Limpopo.`);
     return true;
+  }
+
+  /** Jozi Flow is deliberately a FREE-ROAM loop: story beats and paid shifts keep their own score,
+   * while ordinary traffic — including a live JMPD chase — becomes the playground. */
+  private updateJoziFlow(dt: number): void {
+    const eligible = Boolean(this.activeVehicle)
+      && !this.missions.active
+      && !this.robotRace?.active
+      && !this.courierJob.active
+      && this.taxiRide.phase === 'idle';
+    const events = this.joziFlow.update(
+      dt,
+      this.activeVehicle,
+      this.population.vehicles,
+      this.police.vehicles,
+      eligible,
+      this.wanted.level,
+    );
+    if (!events) return;
+    for (const event of events) this.applyJoziFlowEvent(event);
+  }
+
+  private applyJoziFlowEvent(event: JoziFlowEvent): void {
+    if (event.kind === 'near-miss') {
+      this.audio.beep();
+      this.ui.notify(`${event.label} · ×${event.combo}`, `+R${event.award} · R${event.pot} riding. Keep threading to build the pot.`);
+      analytics.feature('jozi-flow', 'near_miss', { detail: event.label, value: event.award });
+      return;
+    }
+    if (event.kind === 'lost') {
+      this.audio.ui(false);
+      this.ui.notify('JOZI FLOW LOST', `${event.reason}. R${event.amount} went the same way as your no-claims bonus.`, false);
+      analytics.feature('jozi-flow', 'chain_lost', { detail: event.reason, value: event.amount });
+      return;
+    }
+    this.economy.earn(event.amount);
+    this.audio.ui(true);
+    const best = event.personalBest ? ' · NEW PERSONAL BEST' : this.joziFlow.bestBank > 0 ? ` · PB R${this.joziFlow.bestBank}` : '';
+    this.ui.notify('JOZI FLOW BANKED', `×${event.combo} clean chain · +R${event.amount}${best}`);
+    analytics.feature('jozi-flow', 'banked', { value: event.amount });
+    this.persist();
+  }
+
+  private failJoziFlow(reason: string): void {
+    const event = this.joziFlow.fail(reason);
+    if (event) this.applyJoziFlowEvent(event);
   }
 
   private robotRaceUnlocked(): boolean { return Boolean(this.robotRace && this.missions.completed.size > 0); }
@@ -2709,6 +2767,7 @@ export class Game {
         if (impact > 12) analytics.record('vehicle_collision', { impact, vehicleKind: driven.spec.kind });
         if (driven.spec.twoWheeler) this.damagePlayer(riderImpactDamage(impact)); else driven.takeDamage(impact * 0.35); // riders eat the hit themselves
         other.takeDamage(impact * 0.25); this.audio.collision(impact); this.taxiRide.recordCrash(impact); this.recordCourierCrash(impact); this.vehicleCollisionCooldown.set(driven, 0.8);
+        if (impact > 8) this.failJoziFlow(other.police ? 'JMPD attached the paperwork' : 'Mirrors made contact');
         if (driven.spec.twoWheeler && shouldKnockOff(impact)) { this.knockOff(driven, impact); return; }
       }
       driven.speed *= 0.6; other.speed *= 0.7;
@@ -2844,7 +2903,10 @@ export class Game {
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
     const onlineState = this.online?.localState;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: this.features.hud() });
+    const featureHud = this.features.hud();
+    const flowHud = this.online ? undefined : this.joziFlow.hud();
+    const hudFeatures = flowHud ? [...(featureHud ?? []), flowHud] : featureHud;
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,
@@ -2880,6 +2942,7 @@ export class Game {
   private die(): void {
     if (this.mode === 'dead') return;
     this.cancelRobotRace('Medical timeout', false);
+    this.joziFlow.reset();
     analytics.record('player_death', { mode: this.online ? 'multiplayer' : 'singleplayer' });
     if (this.missions.state === 'active') this.processMissionUpdate(this.missions.fail('You were incapacitated'));
     this.endCourierShift();
@@ -2902,6 +2965,7 @@ export class Game {
     this.closeConsole();
     this.stolenVehicles = new WeakSet();
     this.save = checkpoint;
+    this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.features.reset(this.save.features); // drop live feature state; the checkpoint's slices load again on demand
     this.economy.balance = this.save.money;
     this.inventory = { ...this.save.inventory };
@@ -2932,6 +2996,7 @@ export class Game {
   private getBusted(): void {
     if (this.mode === 'dead' || this.mode === 'busted') return;
     this.cancelRobotRace('JMPD ended the run', false);
+    this.joziFlow.reset();
     if (this.missions.state === 'active') this.processMissionUpdate(this.missions.fail('JMPD nicked you'));
     this.endCourierShift();
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false);
@@ -2945,6 +3010,7 @@ export class Game {
 
   private respawn(busted = false): void {
     this.cancelRobotRace('Respawned', false);
+    this.joziFlow.reset();
     this.trains.endRide();
     this.endTaxiShift(this.activeVehicle);
     this.endCourierShift(this.activeVehicle);
@@ -2994,7 +3060,10 @@ export class Game {
       // Per-KEY merge, never a wholesale replace: serialize() returns only the features loaded this
       // session, so an unloaded feature's stored slice must survive the autosave untouched.
       features: { ...this.save.features, ...this.features.serialize() },
-      activityRecords: { robotRunBest: this.robotRace?.bestTime },
+      activityRecords: {
+        robotRunBest: this.robotRace?.bestTime,
+        joziFlowBest: this.joziFlow.bestBank || undefined,
+      },
     };
     this.saveManager.save(this.save);
   }

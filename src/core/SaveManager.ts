@@ -93,14 +93,15 @@ export function sanitizeInventory(raw: unknown): Inventory {
   return { armour: clampItem(value.armour, ARMOUR_MAX), stims: clampItem(value.stims, STIM_MAX), parachutes: clampItem(value.parachutes, PARACHUTE_MAX) };
 }
 
-/** Activity records are positive finite seconds. Implausible/corrupt values are discarded, not clamped
- * into a fake leaderboard result. */
+/** Activity records are positive finite values with per-activity sanity ceilings. Implausible or
+ * corrupt values are discarded, never clamped into fake leaderboard results. */
 export function sanitizeActivityRecords(raw: unknown): ActivityRecords {
   if (!raw || typeof raw !== 'object') return {};
-  const robotRunBest = (raw as Partial<ActivityRecords>).robotRunBest;
-  return typeof robotRunBest === 'number' && Number.isFinite(robotRunBest) && robotRunBest > 0 && robotRunBest <= 86_400
-    ? { robotRunBest }
-    : {};
+  const value = raw as Partial<ActivityRecords>;
+  const records: ActivityRecords = {};
+  if (typeof value.robotRunBest === 'number' && Number.isFinite(value.robotRunBest) && value.robotRunBest > 0 && value.robotRunBest <= 86_400) records.robotRunBest = value.robotRunBest;
+  if (typeof value.joziFlowBest === 'number' && Number.isFinite(value.joziFlowBest) && value.joziFlowBest > 0 && value.joziFlowBest <= 10_000_000) records.joziFlowBest = Math.round(value.joziFlowBest);
+  return records;
 }
 
 export const STARTER_SAFEHOUSE: SafehouseId = 'brixton';

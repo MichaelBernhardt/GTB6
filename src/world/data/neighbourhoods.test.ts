@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AMBIENT_NPC_CHARACTER_IDS } from '../../entities/NpcCatalog';
+import { AMBIENT_NPC_CHARACTER_IDS, type NpcCharacterId } from '../../entities/NpcCatalog';
 import type { BuildingStyle } from '../BuildingArchitecture';
 import { DISTRICT_CENTERS } from '../mapData';
 import {
@@ -53,7 +53,7 @@ describe('neighbourhood identity', () => {
   });
 
   it('uses only real ambient rigs and real vehicle kinds', () => {
-    const ambient = new Set(AMBIENT_NPC_CHARACTER_IDS);
+    const ambient = new Set<NpcCharacterId>(AMBIENT_NPC_CHARACTER_IDS);
     for (const profile of Object.values(NEIGHBOURHOODS)) {
       expect(profile.pedestrians.length).toBeGreaterThan(0);
       expect(profile.traffic.length).toBeGreaterThan(0);
