@@ -2747,8 +2747,8 @@ export class Game {
         if (other === this.activeVehicle || other.wrecked) continue;
         const push = separationPush(other.group.position.x - unit.group.position.x, other.group.position.z - unit.group.position.z, 3.3);
         if (!push) continue;
-        unit.group.position.x -= push.x; unit.group.position.z -= push.z;
-        other.group.position.x += push.x; other.group.position.z += push.z;
+        unit.nudge(-push.x, -push.z, this.city);
+        other.nudge(push.x, push.z, this.city);
         if ((this.vehicleCollisionCooldown.get(unit) ?? 0) <= 0) {
           const impact = Math.abs(unit.speed - other.speed);
           unit.takeDamage(impact * 0.3); other.takeDamage(impact * 0.25);
@@ -2761,7 +2761,9 @@ export class Game {
     const driven = this.activeVehicle; if (!driven) return;
     for (const other of [...this.population.vehicles, ...this.police.vehicles]) { // JMPD contact is a genuine collision, never scripted damage
       if (other === driven || driven.group.position.distanceToSquared(other.group.position) > 10) continue;
-      const direction = driven.group.position.clone().sub(other.group.position).setY(0).normalize(); driven.group.position.addScaledVector(direction, 0.4); other.group.position.addScaledVector(direction, -0.35);
+      const direction = driven.group.position.clone().sub(other.group.position).setY(0).normalize();
+      driven.nudge(direction.x * 0.4, direction.z * 0.4, this.city);
+      other.nudge(direction.x * -0.35, direction.z * -0.35, this.city);
       if ((this.vehicleCollisionCooldown.get(driven) ?? 0) <= 0) {
         const impact = Math.abs(driven.speed - other.speed);
         if (impact > 12) analytics.record('vehicle_collision', { impact, vehicleKind: driven.spec.kind });

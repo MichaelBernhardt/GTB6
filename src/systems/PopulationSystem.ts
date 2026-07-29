@@ -401,6 +401,18 @@ export class PopulationSystem {
   /** Keeps a small, fully interactive foot-patrol presence near the player while district pressure is high. */
   setPolicePatrolCount(count: number, focus: THREE.Vector3): void {
     const desired = Math.max(0, Math.min(2, Math.floor(count)));
+    const district = this.city.districtAt(focus.x, focus.z);
+    // Patrols belong to the pressure in THIS neighbourhood. Carrying a CBD beat cop forever after a
+    // cross-city trip both leaves the new district empty and pins an irrelevant pedestrian kilometres
+    // away. The roster is at most two, so this relocation check is effectively free.
+    for (let index = this.policePatrols.length - 1; index >= 0; index--) {
+      const officer = this.policePatrols[index]; if (!officer) continue;
+      const local = this.city.districtAt(officer.group.position.x, officer.group.position.z) === district;
+      if (local && officer.group.position.distanceToSquared(focus) < 130 * 130) continue;
+      this.policePatrols.splice(index, 1);
+      this.scene.remove(officer.group); officer.dispose();
+      const pedestrian = this.pedestrians.indexOf(officer); if (pedestrian >= 0) this.pedestrians.splice(pedestrian, 1);
+    }
     while (this.policePatrols.length > desired) {
       const officer = this.policePatrols.pop(); if (!officer) break;
       this.scene.remove(officer.group); officer.dispose(); const index = this.pedestrians.indexOf(officer); if (index >= 0) this.pedestrians.splice(index, 1);
@@ -408,7 +420,7 @@ export class PopulationSystem {
     while (this.policePatrols.length < desired) {
       const candidates = this.city.sidewalkPoints.filter((point) => {
         const distance = Math.hypot(point.x - focus.x, point.z - focus.z);
-        return distance > 25 && distance < 75 && this.city.districtAt(point.x, point.z) === 'Joburg CBD';
+        return distance > 25 && distance < 75 && this.city.districtAt(point.x, point.z) === district;
       });
       const point = candidates[(this.policePatrols.length * 17 + 5) % candidates.length]; if (!point) break;
       const officer = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), 90 + this.policePatrols.length, false, true, this.nextSpecialNpcVariant(JMPD_PATROL_NPC_ID));
@@ -753,8 +765,8 @@ export class PopulationSystem {
       const impact = Math.abs(first.speed - second.speed); // relative closing speed: a same-speed convoy reads ~0
       first.speed *= 0.65; second.speed *= 0.65; // bleed speed (unchanged from the old soft separation)
       const nx = dx / dist; const nz = dz / dist; const push = Math.min(reach - dist, TRAFFIC_MAX_PUSH) / 2; // shove apart so they don't sit pinned in a heap
-      first.group.position.x -= nx * push; first.group.position.z -= nz * push;
-      second.group.position.x += nx * push; second.group.position.z += nz * push;
+      first.nudge(-nx * push, -nz * push, this.city);
+      second.nudge(nx * push, nz * push, this.city);
       if (impact > NPC_CRASH_MIN_SPEED && (this.vehicleCrashCooldown.get(first) ?? 0) <= 0 && (this.vehicleCrashCooldown.get(second) ?? 0) <= 0) {
         const damage = (impact - NPC_CRASH_MIN_SPEED) * NPC_CRASH_DAMAGE; // gentler than player/police hits (0.25-0.35): no road of husks
         first.takeDamage(damage); second.takeDamage(damage);

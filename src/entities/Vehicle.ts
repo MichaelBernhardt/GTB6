@@ -72,6 +72,7 @@ export class Vehicle {
   private headlightFactor = 0;
   private braking = false;
   private disposed = false;
+  private displacementTarget = new THREE.Vector3();
 
   constructor(scene: THREE.Scene, kind: VehicleKind, position: THREE.Vector3, color?: number) {
     this.spec = { ...VEHICLE_SPECS[kind], color: color ?? VEHICLE_SPECS[kind].color };
@@ -240,6 +241,18 @@ export class Vehicle {
     if (position) this.group.position.copy(position);
     this.groundY = (city ? city.roadHeightAt(this.group.position.x, this.group.position.z) : this.group.position.y) + 0.02;
     this.group.position.y = this.groundY; this.group.rotation.set(0, this.heading, 0); this.speed = 0;
+  }
+
+  /** Resolve a contact shove through the same city collision rules as normal driving. Directly editing
+   *  group.position lets pileups push cars through walls, then leaves both the vehicle and chase camera
+   *  embedded. Re-ground here too: a sideways separation can cross sloped Jozi terrain without move(). */
+  nudge(dx: number, dz: number, city: City): void {
+    const from = this.group.position;
+    const desired = this.displacementTarget.set(from.x + dx, from.y, from.z + dz);
+    const radius = Math.max(this.spec.size[0], this.spec.size[2]) * 0.34;
+    const resolved = city.clampMove(from, desired, radius);
+    this.groundY = city.roadHeightAt(resolved.x, resolved.z) + 0.02;
+    this.group.position.copy(resolved).setY(this.groundY);
   }
 
   /** Network/replay presentation hook: animate the authored wheels, steering and lamps from an

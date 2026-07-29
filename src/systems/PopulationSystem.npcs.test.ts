@@ -73,6 +73,26 @@ describe('all-Blender NPC population policy', () => {
     expect(population.ejectDriver(vehicle, new THREE.Vector3(), true).visualVariant).toBe(JMPD_PATROL_NPC_ID);
     expect(population.riggedPedestrianCount()).toBe(population.pedestrians.length);
   });
+
+  it('puts reputation-driven foot patrols in the district the player is actually visiting', () => {
+    const focus = new THREE.Vector3(10_000, 0, 10_000);
+    const remotePoints = [
+      { x: focus.x + 32, z: focus.z },
+      { x: focus.x - 44, z: focus.z + 8 },
+    ];
+    const localCity = {
+      ...(city as unknown as Record<string, unknown>),
+      sidewalkPoints: [...points, ...remotePoints],
+      districtAt: (x: number) => x > 5_000 ? 'Fordsburg' : 'Joburg CBD',
+    } as unknown as City;
+    const population = new PopulationSystem(new THREE.Scene(), localCity, audio);
+    population.setPolicePatrolCount(1, new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z));
+    expect(population.pedestrians.filter((ped) => ped.police)).toHaveLength(1);
+    population.setPolicePatrolCount(2, focus);
+    const patrols = population.pedestrians.filter((ped) => ped.police);
+    expect(patrols).toHaveLength(2);
+    expect(patrols.every((ped) => localCity.districtAt(ped.group.position.x, ped.group.position.z) === 'Fordsburg')).toBe(true);
+  });
 });
 
   it('derives defeat credit from ROSTER TRUTH (spawned - standing) — every kill path counts', () => {

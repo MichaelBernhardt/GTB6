@@ -98,6 +98,23 @@ describe('first-person view clears the taxi driver line of sight', () => {
   });
 });
 
+describe('collision separation', () => {
+  it('cannot shove a vehicle through city geometry and re-grounds an accepted nudge', () => {
+    const scene = new THREE.Scene();
+    const vehicle = new Vehicle(scene, 'compact', new THREE.Vector3(0.8, 0, 0));
+    const city = slopedCity(0.1, 0);
+    city.clampMove = (from: THREE.Vector3, desired: THREE.Vector3) => desired.x > 1 ? from.clone() : desired.clone();
+
+    vehicle.nudge(0.5, 0, city);
+    expect(vehicle.group.position.x).toBeCloseTo(0.8); // wall rejected the contact shove
+
+    vehicle.nudge(-0.4, 1, city);
+    expect(vehicle.group.position.x).toBeCloseTo(0.4);
+    expect(vehicle.group.position.z).toBeCloseTo(1);
+    expect(vehicle.group.position.y).toBeCloseTo(0.06); // 0.1x slope + 0.02 road clearance
+  });
+});
+
 describe('authored road-car fleet', () => {
   it('mounts the Blender hierarchy and preserves mission paint overrides on every road car', () => {
     for (const kind of ROAD_VEHICLE_KINDS) {

@@ -353,8 +353,8 @@ export class PoliceSystem {
         }
         const push = separationPush(dx, dz, 3.3);
         if (!push) continue;
-        unit.group.position.x -= push.x; unit.group.position.z -= push.z;
-        other.group.position.x += push.x; other.group.position.z += push.z;
+        unit.nudge(-push.x, -push.z, this.city);
+        other.nudge(push.x, push.z, this.city);
         const impact = Math.abs(unit.speed - other.speed);
         const brain = this.brainOf(unit);
         if (impact > 6 && brain.bumpIn <= 0) {
