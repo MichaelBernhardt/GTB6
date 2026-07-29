@@ -5,6 +5,7 @@ describe('neighbourhood street-life profiles', () => {
   it('gives trading, leisure, workshop, garden and rural areas recognisable layouts', () => {
     expect(streetLifeForDistrict('Fordsburg').kind).toBe('kiosk');
     expect(streetLifeForDistrict('Melville').kind).toBe('cafe');
+    expect(streetLifeForDistrict('Dunkeld').kind).toBe('cafe');
     expect(streetLifeForDistrict('Booysens').kind).toBe('workshop');
     expect(streetLifeForDistrict('Houghton Estate').kind).toBe('garden');
     expect(streetLifeForDistrict('Refengkgotso').kind).toBe('braai');

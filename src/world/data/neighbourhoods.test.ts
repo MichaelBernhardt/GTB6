@@ -23,7 +23,9 @@ describe('neighbourhood identity', () => {
     expect(neighbourhoodForDistrict('Hillbrow').id).toBe('inner-city');
     expect(neighbourhoodForDistrict('Fordsburg').id).toBe('market-west');
     expect(neighbourhoodForDistrict('Melville').id).toBe('bohemian-west');
-    expect(neighbourhoodForDistrict('Dunkeld').id).toBe('old-money-ridge');
+    expect(neighbourhoodForDistrict('Dunkeld').id).toBe('rosebank-mixed');
+    expect(neighbourhoodForDistrict('Houghton Estate').id).toBe('parktown-ridge');
+    expect(neighbourhoodForDistrict('Parkhurst').id).toBe('old-money-ridge');
     expect(neighbourhoodForDistrict('Booysens').id).toBe('industrial-belt');
     expect(neighbourhoodForDistrict('Refengkgotso').id).toBe('vaal-township');
     expect(neighbourhoodForDistrict('Misty Bay').id).toBe('vaal-marina');

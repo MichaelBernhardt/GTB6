@@ -19,6 +19,8 @@ export type NeighbourhoodId =
   | 'inner-city'
   | 'market-west'
   | 'bohemian-west'
+  | 'rosebank-mixed'
+  | 'parktown-ridge'
   | 'old-money-ridge'
   | 'industrial-belt'
   | 'joburg-suburbs'
@@ -56,6 +58,8 @@ const CREATIVE_COLOURS = [0xb54f37, 0x325f8e, 0xe0a82f, 0x5f6954] as const;
 const INNER_COLOURS = [0xc7c2ad, 0x7f5141, 0x65777a, 0xa97942] as const;
 const MARKET_COLOURS = [0x8b3937, 0xc99b3c, 0xe5dfcc, 0x456b63] as const;
 const WEST_COLOURS = [0x537360, 0xb98045, 0x52799a, 0xd1c4a4] as const;
+const ROSEBANK_COLOURS = [0x2f3940, 0xd8d5ca, 0x8e4e39, 0x356c78] as const;
+const PARKTOWN_COLOURS = [0x354046, 0x8b765d, 0xd5d0c1, 0x4d6144] as const;
 const RIDGE_COLOURS = [0x262c31, 0xd9d8d2, 0x82888d, 0x365363] as const;
 const INDUSTRIAL_COLOURS = [0xe0dfd4, 0xb98738, 0x466378, 0x696b64] as const;
 const SUBURB_COLOURS = [0xc9bf9e, 0x8d5a43, 0x6e8588, 0x4f6a54] as const;
@@ -115,6 +119,26 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['melville-creative', 'braamfontein-creative', 'parkhurst-architect', 'newtown-producer', 'melville-creative'],
     traffic: ['compact', 'motorbike', 'courier', 'compact', 'bicycle', 'van'],
     trafficColours: WEST_COLOURS,
+  },
+  'rosebank-mixed': {
+    id: 'rosebank-mixed',
+    label: 'Rosebank Rise',
+    tagline: 'Glass, brunch and parking validated for seven minutes.',
+    facades: { tower: [1, 3, 5, 1], dense: [5, 7, 8, 5], house: [7, 8, 9], factory: [10, 11] },
+    architectureOffset: 11,
+    pedestrians: ['sandton-professional', 'rosebank-athlete', 'parkhurst-architect', 'maboneng-courier', 'sandton-professional'],
+    traffic: ['sport', 'compact', 'courier', 'compact', 'superbike', 'taxi'],
+    trafficColours: ROSEBANK_COLOURS,
+  },
+  'parktown-ridge': {
+    id: 'parktown-ridge',
+    label: 'Parktown Ridge',
+    tagline: 'Stone walls, jacarandas and security armed with a clipboard.',
+    facades: { tower: [0, 1, 3], dense: [5, 7, 8], house: [8, 7, 8, 9], factory: [10] },
+    architectureOffset: 13,
+    pedestrians: ['parkhurst-architect', 'sandton-professional', 'rosebank-athlete', 'melville-creative', 'parkhurst-architect'],
+    traffic: ['compact', 'van', 'sport', 'compact', 'motorbike', 'van'],
+    trafficColours: PARKTOWN_COLOURS,
   },
   'old-money-ridge': {
     id: 'old-money-ridge',
@@ -184,11 +208,9 @@ const DISTRICTS_BY_PROFILE: Readonly<Record<NeighbourhoodId, readonly string[]>>
   'inner-city': ['Hillbrow', 'Berea', 'Yeoville', 'Doornfontein', 'Bertrams', 'Troyeville'],
   'market-west': ['Fordsburg', 'Mayfair', 'Mayfair West', 'Vrededorp'],
   'bohemian-west': ['Melville', 'Brixton', 'Westdene', 'Greenside', 'Richmond', 'Rossmore'],
-  'old-money-ridge': [
-    'Abbotsford', 'Birdhaven', 'Dunkeld', 'Emmarentia', 'Forest Town', 'Houghton Estate',
-    'Killarney', 'Melrose', 'Melrose North', 'Oaklands', 'Parkhurst', 'Parktown', 'Parktown North',
-    'Parkview', 'Parkwood', 'Riviera', 'Saxonwold', 'Westcliff',
-  ],
+  'rosebank-mixed': ['Birdhaven', 'Dunkeld', 'Melrose', 'Melrose North', 'Parktown North', 'Parkwood'],
+  'parktown-ridge': ['Forest Town', 'Houghton Estate', 'Killarney', 'Parktown', 'Riviera', 'Westcliff'],
+  'old-money-ridge': ['Abbotsford', 'Emmarentia', 'Oaklands', 'Parkhurst', 'Parkview', 'Saxonwold'],
   'industrial-belt': ['Booysens', 'Crown', 'Langlaagte North', 'Ophirton', 'Paarlshoop', 'Crosby', 'Homestead Park'],
   'joburg-suburbs': ['Franklin Roosevelt Park', 'Hursthill', 'Montgomery Park', 'Montroux'],
   'vaal-township': ['Refengkgotso', 'Mamello', 'Metsimaholo', 'Sonsakker'],
