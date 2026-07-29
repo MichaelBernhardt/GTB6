@@ -63,6 +63,7 @@ export class Pedestrian {
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
   private proceduralModel = new THREE.Group();
+  private renderVisible = true;
   readonly riggedVisual?: RiggedPedestrianVisual;
   private direction = new THREE.Vector3();
   private desired = new THREE.Vector3();
@@ -80,7 +81,10 @@ export class Pedestrian {
     this.proceduralModel.name = 'ProceduralPedestrianFallback'; this.group.add(this.proceduralModel);
     scene.add(this.group); this.buildModel(index);
     if (visualVariant) {
-      this.riggedVisual = new RiggedPedestrianVisual(this.group, visualVariant, { onReady: () => { this.proceduralModel.visible = false; } });
+      this.riggedVisual = new RiggedPedestrianVisual(this.group, visualVariant, { onReady: () => {
+        this.proceduralModel.visible = false;
+        this.riggedVisual?.setRenderVisible(this.renderVisible);
+      } });
       void this.riggedVisual.load().catch(() => { /* fail open: the procedural pedestrian remains visible */ });
     }
   }
@@ -88,6 +92,16 @@ export class Pedestrian {
   /** Voice casting: rigged NPCs speak with their catalog sex, procedural fallback peds stay neutral. */
   get voiceSex(): VoiceSex {
     return this.visualVariant ? NPC_CATALOG[this.visualVariant].sex : 'neutral';
+  }
+
+  get isRenderVisible(): boolean { return this.renderVisible; }
+
+  /** Distance-cull the rendered body without touching group.visible, which mission contacts and taxi
+   *  passengers use for their own independent gameplay visibility. Safe while a rig is still loading. */
+  setRenderVisible(visible: boolean): void {
+    this.renderVisible = visible;
+    this.riggedVisual?.setRenderVisible(visible);
+    this.proceduralModel.visible = visible && !this.riggedVisual?.ready;
   }
 
   /** Free this ped's GPU geometry when it despawns — otherwise every culled/replaced ped leaks its meshes

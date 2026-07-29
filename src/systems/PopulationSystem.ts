@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, resolvePedestrianRenderVisible, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
 import {
   AMBIENT_NPC_CHARACTER_IDS,
@@ -93,6 +93,7 @@ export class PopulationSystem {
   private fixtureVariantCursor = 0; // feature fixtures cycle the same cast on their own cursor
   private frame = 0;
   private forward = new THREE.Vector3();
+  private bumpDirection = new THREE.Vector3();
   private playerPos = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z); // last known player position; biases new traffic goals player-ward
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
@@ -108,9 +109,14 @@ export class PopulationSystem {
     this.playerHitCooldown = Math.max(0, this.playerHitCooldown - dt);
     this.pedestrians.forEach((ped, index) => {
       if ((this.frame + index) % FREEZE_CHECK_FRAMES === 0) {
+        const distanceSq = ped.group.position.distanceToSquared(player);
         const wasFrozen = ped.frozen;
-        ped.frozen = resolveFrozen(ped.frozen, ped.group.position.distanceToSquared(player));
-        if (ped.frozen !== wasFrozen) ped.resetProgress(); // stalled time must not straddle a frozen gap
+        ped.frozen = resolveFrozen(ped.frozen, distanceSq);
+        if (ped.frozen !== wasFrozen) {
+          ped.resetProgress(); // stalled time must not straddle a frozen gap
+        }
+        // The outer AI ring keeps routes alive; the tighter visual ring removes bodies too small to read.
+        ped.setRenderVisible(!ped.frozen && resolvePedestrianRenderVisible(ped.isRenderVisible, distanceSq));
       }
       if (ped.frozen) return; // far agents: no motion, routing, or animation until the player closes in again
       ped.update(dt, this.city, this.city.sidewalkPoints, player);
@@ -231,10 +237,13 @@ export class PopulationSystem {
     const events: PlayerBump[] = [];
     for (const ped of this.pedestrians) {
       if (ped.contact || ped.state === 'down') continue;
-      const delta = ped.group.position.clone().sub(position); delta.y = 0;
-      const distance = delta.length();
-      if (distance >= BUMP_RADIUS) continue;
-      const direction = distance > 0.001 ? delta.multiplyScalar(1 / distance) : new THREE.Vector3(1, 0, 0);
+      // Scalar broad phase: the old clone().sub() allocated one Vector3 for every pedestrian on every
+      // on-foot frame, even though almost every body is outside bump range.
+      const dx = ped.group.position.x - position.x; const dz = ped.group.position.z - position.z;
+      const distanceSq = dx * dx + dz * dz;
+      if (distanceSq >= BUMP_RADIUS * BUMP_RADIUS) continue;
+      const distance = Math.sqrt(distanceSq);
+      const direction = distance > 0.001 ? this.bumpDirection.set(dx / distance, 0, dz / distance) : this.bumpDirection.set(1, 0, 0);
       const push = separationPush(distance);
       ped.group.position.copy(this.city.clampMove(ped.group.position, ped.group.position.clone().addScaledVector(direction, push.ped), 0.42));
       position.copy(this.city.clampMove(position, position.clone().addScaledVector(direction, -push.player), PLAYER.radius));

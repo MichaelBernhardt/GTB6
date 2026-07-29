@@ -10,6 +10,15 @@ export const TRAFFIC_SPEED_FACTOR = 0.42;
 export const AI_FREEZE_RADIUS = 500;
 /** Frozen agents wake only once the player is back inside this range (hysteresis avoids boundary flicker). */
 export const AI_THAW_RADIUS = 450;
+/** Pedestrian bodies are sub-pixel well before their AI bubble ends. Keep simulating the outer crowd so
+ *  routes and reactions remain continuous, but submit its meshes only inside this tighter visual ring. */
+export const PED_RENDER_HIDE_RADIUS = 300;
+export const PED_RENDER_SHOW_RADIUS = 270;
+/** Pure visual hysteresis: visible bodies leave at the outer radius; hidden bodies return at the inner one. */
+export function resolvePedestrianRenderVisible(visible: boolean, distanceSq: number): boolean {
+  const radius = visible ? PED_RENDER_HIDE_RADIUS : PED_RENDER_SHOW_RADIUS;
+  return distanceSq <= radius * radius;
+}
 /** Vehicles freeze FARTHER out than pedestrians: traffic drives long routes and quickly leaves the ped
  *  radius, and the lifecycle census keeps cars alive out to REFRESH_RADIUS (1150u) before recycling them.
  *  A freeze radius below that keep-alive boundary strands live-but-frozen cars in a comatose ring around a
