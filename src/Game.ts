@@ -14,6 +14,7 @@ import { MultiplayerOverlay } from './multiplayer/MultiplayerOverlay';
 import { OnlineSession, type OnlineReport } from './multiplayer/OnlineSession';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { FeatureHost, type FeatureHostContext } from './features/host';
+import { featureMapIcons } from './features/mapIcons';
 import type { FeatureGameApi } from './features/types';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { FrameProfiler } from './core/FrameProfiler';
@@ -532,7 +533,7 @@ export class Game {
     const raceStart = this.robotRaceUnlocked() && !this.robotRace?.active ? this.robotRace?.circuit.start : undefined;
     const chopShop = this.chopShopUnlocked() && !this.hotVehicleForSale() ? LOCKUP_SPOT : undefined;
     return [
-      ...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...this.features.mapIcons(), // features blip themselves; the host returns [] while online and when nothing is loaded
+      ...featureMapIcons(), ...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...this.features.mapIcons(), // eager service blips + loaded feature-owned objectives, from one canonical feed
       ...this.mapActivityVehicles(), // the two repeatable opening jobs should be discoverable without reading README controls
       ...(chopShop ? [{ x: chopShop.x, z: chopShop.z, color: '#f28f3b', shape: 'diamond' as const, label: 'Bra Vusi’s Chop Shop' }] : []),
       ...(raceStart ? [{ x: raceStart.x, z: raceStart.z, color: '#d96cff', shape: 'diamond' as const, label: 'Robot Run' }] : []),
