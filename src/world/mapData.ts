@@ -18,7 +18,9 @@ export interface GeneratedRoad {
   points: MapPt[];
 }
 
-export interface GeneratedTrack extends GeneratedRoad { unpaved: true; }
+/** An unpaved way from the map's `tracks` layer. `kind` is the OSM split: `track` is a graded
+ *  vehicle track (farm/mine roads, the mountain two-tracks), `path` is a footpath or trail. */
+export interface GeneratedTrack extends GeneratedRoad { unpaved: true; kind: 'track' | 'path'; }
 
 export interface GeneratedRailway {
   name: string;
@@ -206,10 +208,27 @@ export const GENERATED_ROADS: GeneratedRoad[] = MAP.roads.map((road) => ({
   name: road.name, width: road.width, kind: road.kind, points: toPts(road.points),
 }));
 
-/** Off-road dirt tracks (narrow unpaved strips; footpaths are dropped for the runtime mesh). */
-export const GENERATED_TRACKS: GeneratedTrack[] = MAP.tracks
-  .filter((track) => track.kind === 'track')
-  .map((track) => ({ name: track.name, width: track.width, kind: track.kind, unpaved: true as const, points: toPts(track.points) }));
+const toTrack = (raw: RawMap['tracks'][number]): GeneratedTrack =>
+  ({ name: raw.name, width: raw.width, kind: raw.kind, unpaved: true as const, points: toPts(raw.points) });
+
+/** Off-road dirt tracks: graded unpaved vehicle ways (farm and mine roads, the mountain two-tracks).
+ *  These carry a driveable surface and so join the ROAD INDEX — see City.TRACK_NETWORK. */
+export const GENERATED_TRACKS: GeneratedTrack[] = MAP.tracks.filter((track) => track.kind === 'track').map(toTrack);
+
+/**
+ * Footpaths and trails. Split out rather than dropped: for a long time this module kept only
+ * `kind === 'track'` and the other 200-odd entries existed ONLY as dashed lines on the map screen —
+ * the owner stood at 2855,-821, saw a trail on his map and found bare veld under his feet. The map
+ * view draws every entry of the tracks layer (ui/mapRender groups them by kind and filters nothing),
+ * so the world has to account for every entry too. Paths are deliberately NOT in the road index:
+ * they are a metre and a half of trodden earth, not a carriageway, and putting them in would move
+ * the on-road predicate that gates tree scatter and vehicle nav (and with it the city bake).
+ * mapData.test.ts pins the partition so a third kind cannot appear and be silently invisible again.
+ */
+export const GENERATED_PATHS: GeneratedTrack[] = MAP.tracks.filter((track) => track.kind === 'path').map(toTrack);
+
+/** Every entry of the generated `tracks` layer, whatever its kind — the count the map screen draws. */
+export const GENERATED_UNPAVED_COUNT = MAP.tracks.length;
 
 /** Passenger rail lines (thinned by the pipeline): rendered as ballast + rails, never driveable. */
 export const GENERATED_RAILWAYS: GeneratedRailway[] = (MAP.railways ?? [])
