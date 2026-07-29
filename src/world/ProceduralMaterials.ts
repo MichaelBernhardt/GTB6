@@ -422,21 +422,58 @@ export function createSidewalkTexture(): THREE.CanvasTexture {
 }
 
 export const FACADE_VARIANTS = 12;
-interface FacadeStyle { wall: string; dark: string; frame: string; lit: number; columns: number; rows: number; band: boolean; }
+type FacadeFamily = 'tower' | 'house' | 'industrial';
+interface FacadeStyle { wall: string; dark: string; frame: string; lit: number; columns: number; rows: number; band: boolean; family: FacadeFamily; }
 const FACADE_STYLES: FacadeStyle[] = [
-  { wall: '#88949a', dark: '#5f696e', frame: '#3e4c52', lit: 0.32, columns: 6, rows: 9, band: true },
-  { wall: '#7c8b96', dark: '#525e68', frame: '#2b3a44', lit: 0.48, columns: 8, rows: 11, band: false },
-  { wall: '#9c5a43', dark: '#6b3a2c', frame: '#463631', lit: 0.24, columns: 5, rows: 8, band: true },
-  { wall: '#9aa39a', dark: '#6d766e', frame: '#37454b', lit: 0.4, columns: 7, rows: 10, band: false },
-  { wall: '#b7aa88', dark: '#7e755f', frame: '#4a4436', lit: 0.2, columns: 5, rows: 9, band: true },
-  { wall: '#778080', dark: '#51595c', frame: '#232d31', lit: 0.55, columns: 6, rows: 10, band: false },
-  { wall: '#d3a482', dark: '#9c7458', frame: '#54402f', lit: 0.16, columns: 4, rows: 6, band: true },
-  { wall: '#c9b891', dark: '#94835f', frame: '#4c4231', lit: 0.22, columns: 5, rows: 6, band: false },
-  { wall: '#aebfae', dark: '#7b8d7c', frame: '#3c4a40', lit: 0.13, columns: 4, rows: 5, band: true },
-  { wall: '#8a5a4a', dark: '#57352a', frame: '#4a332c', lit: 0.19, columns: 5, rows: 7, band: false },
-  { wall: '#8d918d', dark: '#636763', frame: '#31383a', lit: 0.1, columns: 4, rows: 5, band: false },
-  { wall: '#98917f', dark: '#6b6558', frame: '#3a382e', lit: 0.14, columns: 5, rows: 6, band: true },
+  { wall: '#88949a', dark: '#5f696e', frame: '#3e4c52', lit: 0.32, columns: 6, rows: 9, band: true, family: 'tower' },
+  { wall: '#7c8b96', dark: '#525e68', frame: '#2b3a44', lit: 0.48, columns: 8, rows: 11, band: false, family: 'tower' },
+  { wall: '#9c5a43', dark: '#6b3a2c', frame: '#463631', lit: 0.24, columns: 5, rows: 8, band: true, family: 'tower' },
+  { wall: '#9aa39a', dark: '#6d766e', frame: '#37454b', lit: 0.4, columns: 7, rows: 10, band: false, family: 'tower' },
+  { wall: '#b7aa88', dark: '#7e755f', frame: '#4a4436', lit: 0.2, columns: 5, rows: 9, band: true, family: 'tower' },
+  { wall: '#778080', dark: '#51595c', frame: '#232d31', lit: 0.55, columns: 6, rows: 10, band: false, family: 'tower' },
+  // House textures are deliberately one/two-storey grammars. The old 5–7-row office grid was
+  // stretched over every Jozi cottage and estate, which made radically different massings read alike.
+  { wall: '#d3a482', dark: '#9c7458', frame: '#54402f', lit: 0.16, columns: 3, rows: 2, band: true, family: 'house' },
+  { wall: '#c9b891', dark: '#94835f', frame: '#4c4231', lit: 0.22, columns: 4, rows: 2, band: false, family: 'house' },
+  { wall: '#aebfae', dark: '#7b8d7c', frame: '#3c4a40', lit: 0.13, columns: 3, rows: 2, band: true, family: 'house' },
+  { wall: '#8a5a4a', dark: '#57352a', frame: '#4a332c', lit: 0.19, columns: 4, rows: 2, band: false, family: 'house' },
+  // Factories get broad clerestory bays and corrugated wall fields, not apartment windows.
+  { wall: '#8d918d', dark: '#636763', frame: '#31383a', lit: 0.1, columns: 4, rows: 2, band: false, family: 'industrial' },
+  { wall: '#98917f', dark: '#6b6558', frame: '#3a382e', lit: 0.14, columns: 5, rows: 2, band: true, family: 'industrial' },
 ];
+
+export type FacadeWindowGrammar = 'punched' | 'strip' | 'barred' | 'curtained' | 'clerestory';
+
+/** The window language is deliberately independent of colour: two similarly coloured buildings can
+ * still read as office curtain wall, masonry tower, secured Jozi home, lived-in cottage or factory. */
+export function facadeWindowGrammar(style: number): FacadeWindowGrammar {
+  const index = ((style % FACADE_STYLES.length) + FACADE_STYLES.length) % FACADE_STYLES.length;
+  const spec = FACADE_STYLES[index]!;
+  if (spec.family === 'industrial') return 'clerestory';
+  if (spec.family === 'house') return index % 2 === 0 ? 'barred' : 'curtained';
+  return index % 3 === 1 ? 'strip' : 'punched';
+}
+
+function facadeWindowRect(spec: FacadeStyle, style: number, row: number, column: number): { x: number; y: number; width: number; height: number } {
+  const cellW = 512 / spec.columns; const cellH = 512 / spec.rows;
+  const grammar = facadeWindowGrammar(style);
+  const inset = grammar === 'clerestory' ? 18 : grammar === 'strip' ? 6 : grammar === 'barred' || grammar === 'curtained' ? 20 : 15;
+  const x = column * cellW + inset;
+  const y = grammar === 'clerestory' ? row * cellH + 44 : row * cellH + (spec.family === 'house' ? 48 : 13);
+  const width = cellW - inset * 2;
+  const height = grammar === 'clerestory' ? 58 : Math.min(cellH - 26, spec.family === 'house' ? 116 : cellH - 26);
+  return { x, y, width, height };
+}
+
+/** Physical size represented by one complete facade texture tile. Geometry scales its UVs against
+ * this, so a 100 m tower gets dozens of human-sized floors while a cottage keeps two — the old
+ * one-tile-per-box mapping stretched the same office grid over every silhouette. */
+export function facadeWorldTile(style: number): { width: number; height: number } {
+  const spec = FACADE_STYLES[style % FACADE_STYLES.length] ?? FACADE_STYLES[0]!;
+  const bay = spec.family === 'industrial' ? 7 : spec.family === 'house' ? 4.8 : 4.4;
+  const floor = spec.family === 'industrial' ? 7 : spec.family === 'house' ? 3.8 : 3.25;
+  return { width: spec.columns * bay, height: spec.rows * floor };
+}
 
 export function createFacadeTexture(style: number): THREE.CanvasTexture {
   const { canvas, context } = canvasTexture(512);
@@ -444,17 +481,47 @@ export function createFacadeTexture(style: number): THREE.CanvasTexture {
   const { wall, dark: wallDark, frame, lit: litDensity, columns, rows } = spec;
   const gradient = context.createLinearGradient(0, 0, 512, 0); gradient.addColorStop(0, wallDark); gradient.addColorStop(0.12, wall); gradient.addColorStop(0.88, wall); gradient.addColorStop(1, wallDark);
   context.fillStyle = gradient; context.fillRect(0, 0, 512, 512);
+  if (spec.family === 'house') {
+    // Face-brick courses / plaster control joints and a darker splash course give houses a readable
+    // South African street scale even before porch, wall and gable geometry is added.
+    context.strokeStyle = wallDark; context.globalAlpha = style % 2 === 0 ? 0.28 : 0.13; context.lineWidth = 1;
+    const course = style % 2 === 0 ? 14 : 32;
+    for (let y = course; y < 512; y += course) { context.beginPath(); context.moveTo(0, y); context.lineTo(512, y); context.stroke(); }
+    context.globalAlpha = 0.45; context.fillStyle = wallDark; context.fillRect(0, 466, 512, 46);
+  } else if (spec.family === 'industrial') {
+    context.strokeStyle = wallDark; context.globalAlpha = 0.26; context.lineWidth = 2;
+    for (let x = 8; x < 512; x += 16) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, 512); context.stroke(); }
+    context.globalAlpha = 0.36; context.fillStyle = frame; context.fillRect(0, 350, 512, 12);
+  }
   for (let i = 0; i < 2200; i++) { context.globalAlpha = seeded(i, style + 20) * 0.09; context.fillStyle = seeded(i, style + 21) > 0.5 ? '#fff' : '#172024'; context.fillRect(seeded(i, 22) * 512, seeded(i, 23) * 512, 1.2, 1.2); }
   context.globalAlpha = 1;
   for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
-    const cellW = 512 / columns; const cellH = 512 / rows; const x = column * cellW + 15; const y = row * cellH + 13;
-    context.fillStyle = frame; context.fillRect(x - 4, y - 4, cellW - 22, cellH - 18);
+    const cellW = 512 / columns; const cellH = 512 / rows;
+    const grammar = facadeWindowGrammar(style);
+    const rect = facadeWindowRect(spec, style, row, column);
+    const { x, y, width: glassW, height: glassH } = rect;
+    context.fillStyle = frame; context.fillRect(x - 4, y - 4, glassW + 8, glassH + 8);
     const lit = seeded(row * columns + column, style + 31) > 1 - litDensity;
-    const glass = context.createLinearGradient(x, y, x + cellW - 30, y + cellH - 25);
+    const glass = context.createLinearGradient(x, y, x + glassW, y + glassH);
     glass.addColorStop(0, lit ? '#f5dd92' : '#70929a'); glass.addColorStop(0.5, lit ? '#d3b465' : '#314a54'); glass.addColorStop(1, lit ? '#9c824b' : '#182a32');
-    context.fillStyle = glass; context.fillRect(x, y, cellW - 30, cellH - 26);
-    context.fillStyle = '#bdc5c1'; context.globalAlpha = 0.45; context.fillRect(x + 4, y + 3, 2, cellH - 32); context.globalAlpha = 1;
-    if (spec.band) { context.fillStyle = wallDark; context.fillRect(column * cellW, y + cellH - 18, cellW, 4); }
+    context.fillStyle = glass; context.fillRect(x, y, glassW, glassH);
+    context.fillStyle = '#bdc5c1'; context.globalAlpha = 0.45; context.fillRect(x + 4, y + 3, 2, Math.max(8, glassH - 6)); context.globalAlpha = 1;
+    if (spec.family === 'house') { // lintel and sill project in the texture even on undetailed streamed LODs
+      context.fillStyle = wallDark; context.fillRect(x - 8, y - 11, glassW + 16, 5); context.fillRect(x - 7, y + glassH + 5, glassW + 14, 7);
+    }
+    if (grammar === 'barred') {
+      // Burglar bars are an instantly recognisable local residential detail, and make these windows
+      // read differently from the office grid even when viewed from the far streaming tier.
+      context.strokeStyle = frame; context.globalAlpha = 0.78; context.lineWidth = 2;
+      for (const fraction of [1 / 3, 2 / 3]) { context.beginPath(); context.moveTo(x + glassW * fraction, y + 2); context.lineTo(x + glassW * fraction, y + glassH - 2); context.stroke(); }
+      context.beginPath(); context.moveTo(x + 2, y + glassH * 0.5); context.lineTo(x + glassW - 2, y + glassH * 0.5); context.stroke(); context.globalAlpha = 1;
+    } else if (grammar === 'curtained') {
+      context.fillStyle = '#e6d5ba'; context.globalAlpha = 0.34;
+      context.fillRect(x + 2, y + 2, glassW * 0.18, glassH - 4);
+      context.fillRect(x + glassW * 0.82 - 2, y + 2, glassW * 0.18, glassH - 4);
+      context.globalAlpha = 1;
+    }
+    if (spec.band) { context.fillStyle = wallDark; context.fillRect(column * cellW, (row + 1) * cellH - 5, cellW, 4); }
   }
   const texture = finish(canvas);
   return texture;
@@ -470,11 +537,11 @@ export function createFacadeGlowTexture(style: number): THREE.CanvasTexture {
   const nightDensity = Math.min(0.85, litDensity * 2 + 0.3);
   for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
     if (seeded(row * columns + column, style + 31) <= 1 - nightDensity) continue;
-    const cellW = 512 / columns; const cellH = 512 / rows; const x = column * cellW + 15; const y = row * cellH + 13;
+    const { x, y, width: glassW, height: glassH } = facadeWindowRect(spec, style, row, column);
     const warmth = 0.72 + seeded(row * columns + column, style + 57) * 0.28;
-    const glass = context.createLinearGradient(x, y, x + cellW - 30, y + cellH - 25);
+    const glass = context.createLinearGradient(x, y, x + glassW, y + glassH);
     glass.addColorStop(0, `rgba(255, 214, 138, ${warmth.toFixed(3)})`); glass.addColorStop(1, `rgba(196, 141, 64, ${warmth.toFixed(3)})`);
-    context.fillStyle = glass; context.fillRect(x, y, cellW - 30, cellH - 26);
+    context.fillStyle = glass; context.fillRect(x, y, glassW, glassH);
   }
   return finish(canvas);
 }

@@ -17,7 +17,7 @@ export interface LoadingState {
 export interface TaxiTelemetry { text: string; available: boolean; }
 export interface CourierTelemetry { text: string; available: boolean; }
 export interface VehicleTelemetry { name: string; speedKph: number; health: number; taxi?: TaxiTelemetry; courier?: CourierTelemetry; radio?: string; }
-export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; failed?: string; }
+export interface ObjectiveView { missionName: string; text: string; progress?: number; required?: number; remainingSeconds?: number; distanceMetres?: number; failed?: string; }
 export interface DialogueView { speaker: string; text: string; more: boolean; offer?: boolean; }
 export interface MissionPassedView { name: string; items: string[] }
 
@@ -48,6 +48,7 @@ export interface HudState {
   wanted: number;
   unseen?: boolean; // blackout stealth: heat is active but JMPD can't see you in the dark — the wanted row dims and shows UNSEEN
   district: string;
+  street?: string;
   clock: string;
   reputation?: string;
   prompt: string;
@@ -93,3 +94,10 @@ export function objectiveProgress(objective?: ObjectiveView): number | undefined
 }
 export function reputationLabel(value: string): string { return value.replace(/(^|[-\s])\w/g, (letter) => letter.toUpperCase()); }
 export function formatMoney(value: number): string { return `R${Math.max(0, Math.round(value)).toLocaleString()}`; }
+/** Compact navigation distance for the objective strip: useful precision nearby, calm numbers across town. */
+export function formatObjectiveDistance(metres: number): string {
+  const safe = Math.max(0, Number.isFinite(metres) ? metres : 0);
+  if (safe < 100) return `${Math.round(safe)} M`;
+  if (safe < 1000) return `${Math.round(safe / 10) * 10} M`;
+  return `${(safe / 1000).toFixed(safe < 10_000 ? 1 : 0)} KM`;
+}

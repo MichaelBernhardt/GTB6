@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeCheats, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeActivityRecords, sanitizeCheats, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
 import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import type { CheatSettings, GameSettings, Inventory, SavedVehicle, SavedWeapons } from '../types';
 import { MAP_WORLD_SIZE } from '../world/mapData';
@@ -302,5 +302,24 @@ describe('save v3: story flags and diary pages', () => {
     expect(sanitizeStoryFlags('not-an-array')).toEqual([]);
     expect(sanitizeDiaryPages([1, 1, 12, 13, 0, 2.5, 'x'])).toEqual([1, 12]);
     expect(sanitizeDiaryPages(undefined)).toEqual([]);
+  });
+});
+
+describe('replayable activity records', () => {
+  it('round trips a Robot Run personal best', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, activityRecords: { robotRunBest: 187.45 } });
+    expect(manager.load().activityRecords).toEqual({ robotRunBest: 187.45 });
+  });
+
+  it('gives old saves empty records and rejects corrupt times', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    const old = JSON.parse(JSON.stringify(DEFAULT_SAVE)) as Record<string, unknown>;
+    delete old.activityRecords;
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify(old));
+    expect(manager.load().activityRecords).toEqual({});
+    expect(sanitizeActivityRecords({ robotRunBest: -1 })).toEqual({});
+    expect(sanitizeActivityRecords({ robotRunBest: Number.POSITIVE_INFINITY })).toEqual({});
+    expect(sanitizeActivityRecords({ robotRunBest: 86_401 })).toEqual({});
   });
 });

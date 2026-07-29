@@ -3,7 +3,7 @@ import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
 import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import { DEFAULT_MINIMAP_ZOOM, sanitizeMinimapZoom } from '../ui/MinimapView';
 import { sanitizeFeatureSaves } from '../features/save';
-import type { CheatSettings, GameSettings, Inventory, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
+import type { ActivityRecords, CheatSettings, GameSettings, Inventory, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
 import { defaultLivingCityState, sanitizeLivingCityState } from '../systems/LivingCitySystem';
 import { DIARY_PAGE_COUNT } from '../systems/StoryDirector';
 import { SAFEHOUSE_IDS, type SafehouseId } from '../systems/SafehouseSystem';
@@ -93,6 +93,16 @@ export function sanitizeInventory(raw: unknown): Inventory {
   return { armour: clampItem(value.armour, ARMOUR_MAX), stims: clampItem(value.stims, STIM_MAX), parachutes: clampItem(value.parachutes, PARACHUTE_MAX) };
 }
 
+/** Activity records are positive finite seconds. Implausible/corrupt values are discarded, not clamped
+ * into a fake leaderboard result. */
+export function sanitizeActivityRecords(raw: unknown): ActivityRecords {
+  if (!raw || typeof raw !== 'object') return {};
+  const robotRunBest = (raw as Partial<ActivityRecords>).robotRunBest;
+  return typeof robotRunBest === 'number' && Number.isFinite(robotRunBest) && robotRunBest > 0 && robotRunBest <= 86_400
+    ? { robotRunBest }
+    : {};
+}
+
 export const STARTER_SAFEHOUSE: SafehouseId = 'brixton';
 
 /** Owned safehouses: keeps only known ids, deduped, and the starter flat is always owned. */
@@ -113,7 +123,7 @@ export function sanitizeDiaryPages(raw: unknown): number[] {
   return [...new Set(raw.filter((page): page is number => Number.isInteger(page) && page >= 1 && page <= DIARY_PAGE_COUNT))].sort((a, b) => a - b);
 }
 
-export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY, features: {} };
+export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY, features: {}, activityRecords: {} };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -145,6 +155,7 @@ function deserialize(value: string | null): SavedGame {
       safehouses: sanitizeSafehouses(parsed.safehouses),
       inventory: sanitizeInventory(parsed.inventory),
       features: sanitizeFeatureSaves(parsed.features), // one delegating sanitizer; saves written before the slot existed arrive as {}
+      activityRecords: sanitizeActivityRecords(parsed.activityRecords),
     };
   } catch { return structuredClone(DEFAULT_SAVE); }
 }

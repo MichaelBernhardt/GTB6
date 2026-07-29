@@ -1,11 +1,72 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeZAt, gableSurfaceAt, massingTopAt, type BuildingProfile, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
+import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeZAt, gableSurfaceAt, massingTopAt, residentialRoofPalette, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingProfile, type BuildingSpec, type BuildingStyle } from './BuildingArchitecture';
 import { GeometryBaker } from './StaticGeometry';
 
 const facade = new THREE.MeshStandardMaterial({ color: 0x99a4a9, roughness: 0.72 });
 const roof = new THREE.MeshStandardMaterial({ color: 0x424a4c, roughness: 0.86 });
 const spec: BuildingSpec = { x: 7, z: -5, width: 30, depth: 22, height: 60, style: 'downtown', variant: 4, facade, roof };
+
+describe('human-scale facade UVs', () => {
+  it('repeats wall faces by their real dimensions while leaving roof UVs untouched', () => {
+    const geometry = scaleBoxFacadeUvs(new THREE.BoxGeometry(60, 30, 20), 60, 30, 20, { width: 20, height: 10 });
+    const uv = geometry.getAttribute('uv'); const index = geometry.index!;
+    const maxima = geometry.groups.map((group) => {
+      let u = 0; let v = 0;
+      for (let cursor = group.start; cursor < group.start + group.count; cursor++) {
+        const vertex = index.getX(cursor); u = Math.max(u, uv.getX(vertex)); v = Math.max(v, uv.getY(vertex));
+      }
+      return [u, v];
+    });
+    expect(maxima[0]).toEqual([1, 3]); // side wall: 20 m / 20 m tile
+    expect(maxima[4]).toEqual([3, 3]); // street wall: 60 m / 20 m tile
+    expect(maxima[2]).toEqual([1, 1]); // roof remains unscaled
+  });
+
+  it('never shrinks a small facade below one complete texture grammar', () => {
+    const geometry = scaleBoxFacadeUvs(new THREE.BoxGeometry(4, 3, 5), 4, 3, 5, { width: 20, height: 10 });
+    const uv = geometry.getAttribute('uv');
+    expect(Math.max(...Array.from({ length: uv.count }, (_, index) => uv.getX(index)))).toBe(1);
+    expect(Math.max(...Array.from({ length: uv.count }, (_, index) => uv.getY(index)))).toBe(1);
+  });
+});
+
+describe('street-facing facade span selection', () => {
+  it('finds the broadest visible wing when a stepped building has no centre wall', () => {
+    const tiers = [
+      { minX: -15, maxX: -2, minZ: -8, maxZ: 10, y0: 0.2, y1: 8 },
+      { minX: 3, maxX: 13, minZ: -10, maxZ: 7, y0: 0.2, y1: 12 },
+    ];
+    expect(frontFacadeZAt(tiers, 0, 3, 1)).toBeUndefined();
+    expect(widestFrontFacadeSpanAt(tiers, 3, -15, 15)).toEqual({ minX: -15, maxX: -2, z: 10 });
+    expect(widestFrontFacadeSpanAt(tiers, 10, -15, 15)).toEqual({ minX: 3, maxX: 13, z: 7 });
+    expect(widestFrontFacadeSpanAt(tiers, 10, -15, 15, 11)).toBeUndefined();
+  });
+});
+
+describe('residential roof variety', () => {
+  it('cycles a deterministic four-material Jozi roof palette, including negative seeds', () => {
+    expect(Array.from({ length: 8 }, (_, variant) => residentialRoofPalette(variant))).toEqual([
+      'terracotta', 'slate', 'corrugated-green', 'weathered-zinc',
+      'terracotta', 'slate', 'corrugated-green', 'weathered-zinc',
+    ]);
+    expect(residentialRoofPalette(-1)).toBe('weathered-zinc');
+  });
+
+  it('gives neighbouring home variants distinct local rooftop utilities', () => {
+    const home = (variant: number, style: BuildingStyle = 'suburban') => build({
+      ...spec, style, variant, width: 18, depth: 12, height: 8,
+    });
+    const chimney = home(0); const solar = home(1); const satellite = home(2); const backup = home(3);
+    expect(chimney.getObjectByName('residential-chimney')).toBeDefined();
+    expect(solar.getObjectByName('residential-chimney')).toBeUndefined();
+    expect(solar.getObjectByName('residential-solar-panel')).toBeDefined();
+    expect(solar.getObjectByName('residential-solar-geyser')).toBeDefined();
+    expect(satellite.getObjectByName('residential-satellite-dish')).toBeDefined();
+    expect(backup.getObjectByName('residential-backup-tank')).toBeDefined();
+    expect(home(3, 'estate').getObjectByName('residential-backup-tank')).toBeUndefined();
+  });
+});
 
 function build(buildingSpec = spec): THREE.Group {
   const group = new THREE.Group();

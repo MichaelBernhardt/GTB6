@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampPercent, dialogueAdvanceLabel, formatMoney, objectiveProgress, reputationLabel, TOAST_MS, toastVisibleAt } from './UIModels';
+import { clampPercent, dialogueAdvanceLabel, formatMoney, formatObjectiveDistance, objectiveProgress, reputationLabel, TOAST_MS, toastVisibleAt } from './UIModels';
 
 describe('toast auto-hide is wall-clock based', () => {
   // Regression: the old implementation decremented 1/60s per HUD update (per rendered frame),
@@ -39,5 +39,13 @@ describe('UI view-model formatting', () => {
   it('formats local currency and reputation labels consistently', () => {
     expect(formatMoney(1234.4)).toBe('R1,234'); expect(formatMoney(-20)).toBe('R0');
     expect(reputationLabel('trusted')).toBe('Trusted'); expect(reputationLabel('well-known')).toBe('Well-Known');
+  });
+
+  it('formats objective distance with useful city-scale precision', () => {
+    expect(formatObjectiveDistance(42.4)).toBe('42 M');
+    expect(formatObjectiveDistance(457)).toBe('460 M');
+    expect(formatObjectiveDistance(1457)).toBe('1.5 KM');
+    expect(formatObjectiveDistance(12_300)).toBe('12 KM');
+    expect(formatObjectiveDistance(Number.NaN)).toBe('0 M');
   });
 });

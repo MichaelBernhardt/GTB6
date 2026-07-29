@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex } from './ProceduralMaterials';
+import { facadeWindowGrammar, facadeWorldTile, SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex } from './ProceduralMaterials';
 import { STREET_SIGN_JUNCTIONS } from './mapData';
+
+describe('facade physical grammars', () => {
+  it('uses compact floor tiles for houses and broad tall bays for factories', () => {
+    expect(facadeWorldTile(6).height).toBeLessThan(10);
+    expect(facadeWorldTile(10).width).toBeGreaterThan(facadeWorldTile(6).width);
+    expect(facadeWorldTile(10).height).toBeGreaterThan(facadeWorldTile(6).height);
+  });
+
+  it('gives each building family a recognisable window language', () => {
+    expect(facadeWindowGrammar(0)).toBe('punched');
+    expect(facadeWindowGrammar(1)).toBe('strip');
+    expect(facadeWindowGrammar(6)).toBe('barred');
+    expect(facadeWindowGrammar(7)).toBe('curtained');
+    expect(facadeWindowGrammar(10)).toBe('clerestory');
+    expect(facadeWindowGrammar(-1)).toBe('clerestory');
+  });
+});
 
 describe('sign atlas capacity', () => {
   it('holds every unique sign the map needs, with headroom (no wrap-and-overwrite)', () => {
