@@ -107,6 +107,26 @@ export class PopulationSystem {
     this.spawnVehicles(); this.spawnPedestrians();
   }
 
+  /** Resolve every opening agent against the actual saved player position before the first world render.
+   *  Runtime LOD checks are deliberately staggered, but leaving constructors at their detailed default
+   *  makes the main-menu backdrop submit every citywide parked car and mission contact for up to ten
+   *  frames. This one O(n) boot pass starts at the same stable LOD/freeze state update() converges on. */
+  primeVisualLods(player: THREE.Vector3): void {
+    this.playerPos.copy(player);
+    for (const ped of this.pedestrians) {
+      const distanceSq = ped.group.position.distanceToSquared(player);
+      ped.frozen = resolveFrozen(ped.frozen, distanceSq);
+      ped.setVisualLod(ped.frozen ? 'hidden' : resolvePedestrianVisualLod(ped.visualLod, distanceSq));
+    }
+    for (const vehicle of this.vehicles) {
+      const distanceSq = vehicle.group.position.distanceToSquared(player);
+      vehicle.setVisualLod(resolveVehicleVisualLod(vehicle.visualLod, distanceSq));
+      if (!this.traffic.includes(vehicle)) continue;
+      vehicle.frozen = resolveFrozen(vehicle.frozen, distanceSq, AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE);
+      if (vehicle.frozen) vehicle.speed = 0;
+    }
+  }
+
   update(dt: number, player: THREE.Vector3, damagePlayer?: (amount: number) => void, playerOnFoot = false): void {
     this.playerPos.copy(player);
     this.vehiclePlanner.beginFrame(); this.pedPlanner.beginFrame(); this.frame += 1;

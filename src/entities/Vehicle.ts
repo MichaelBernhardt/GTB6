@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { VEHICLE_SPECS, type VehicleKind, type VehicleSpec, type VehicleVisualLod } from '../config';
 import { bicycleCap, riderImpactDamage } from '../core/GameRules';
-import type { InputManager } from '../core/InputManager';
+import { inputAxis, type InputManager } from '../core/InputManager';
 import { KNOCKOVER_SPEED_KEEP, knockoverDamage, solidImpactDamage, type PropRegistry } from '../systems/PropSystem';
 import { rollBurnDuration } from '../systems/VehicleFireSystem';
 import type { City } from '../world/City';
@@ -115,8 +115,8 @@ export class Vehicle {
   updatePlayer(dt: number, input: InputManager, city: City, mouseSteer = 0): number {
     this.setVisualLod('detail'); // entering a previously distant/parked car must restore its authored cockpit immediately
     if (this.disabled) return 0;
-    const throttle = Number(input.down('KeyW')) - Number(input.down('KeyS'));
-    const steer = THREE.MathUtils.clamp(Number(input.down('KeyA')) - Number(input.down('KeyD')) + mouseSteer, -1, 1); // A/D keys and the LMB-drag mouse wheel share one clamped steer input
+    const throttle = inputAxis(input, 'KeyS', 'KeyW');
+    const steer = THREE.MathUtils.clamp(inputAxis(input, 'KeyD', 'KeyA') + mouseSteer, -1, 1); // A/D keys, analogue stick and the LMB-drag mouse wheel share one clamped steer input
     const handbrake = input.down('Space');
     if (throttle !== 0) {
       const sameDirection = this.speed === 0 || Math.sign(this.speed) === Math.sign(throttle);

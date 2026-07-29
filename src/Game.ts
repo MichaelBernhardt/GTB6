@@ -7,9 +7,10 @@ import { bootMark, bootTimeline } from './core/BootTimeline';
 import { radioDial } from './core/RadioStations';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, KNOCKOFF_IMPACT_SPEED, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
+import { gamepadPrompt, type GamepadMode } from './core/GamepadInput';
 import { crashKickSpeed, impactKickSpeed, landingDownSpeed } from './entities/PedRagdoll';
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
-import { InputManager } from './core/InputManager';
+import { inputAxis, inputValue, InputManager } from './core/InputManager';
 import { MultiplayerOverlay } from './multiplayer/MultiplayerOverlay';
 import { OnlineSession, type OnlineReport } from './multiplayer/OnlineSession';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
@@ -347,6 +348,7 @@ export class Game {
     this.missions.completed = new Set(this.save.completedMissions);
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
+    this.population.primeVisualLods(this.player.group.position); // the first menu frame starts culled, not with every citywide actor at full detail
     this.applyWorldBudget(); // potato boots with its rings/fog/crowd budget from the first frame
     this.buildMarker(); this.bindUI(); this.animate(); void this.prepareAssets();
     bootMark('boot: interactive');
@@ -815,6 +817,19 @@ export class Game {
     requestAnimationFrame(this.animate);
     this.profiler.enabled = this.settings.showFps || this.settings.showPerfChart; this.profiler.frameStart(); // off = zero overhead
     const raw = this.clock.getDelta(); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
+    const gamepadMode: GamepadMode = this.mode !== 'playing' || this.ui.mapOpen || this.ui.consoleOpen
+      ? 'menu'
+      : this.activePlane ? 'flight'
+      : this.activeVehicle || this.trains.driving ? 'vehicle'
+      : 'foot';
+    const gamepadEvent = this.input.pollGamepad(raw, gamepadMode);
+    document.body.classList.toggle('using-gamepad', this.input.gamepadActive);
+    if (gamepadEvent === 'connected' && this.requiredAssetsReady) this.ui.notify('Controller connected', 'Left stick moves, right stick looks. Y interacts; MENU pauses.');
+    if (gamepadEvent === 'disconnected' && this.requiredAssetsReady) this.ui.notify('Controller disconnected', 'Keyboard, mouse and touch controls are still live.', false);
+    // Map/console keep the world running with InputManager suspended. A controller still needs one
+    // escape hatch, so consume its menu-mode B/MENU edge here before the ordinary world update.
+    if (this.ui.mapOpen && this.input.consume('Escape')) this.closeMap();
+    else if (this.ui.consoleOpen && this.input.consume('Escape')) this.closeConsole();
     analytics.sampleFps(this.fps);
     this.navHudTimer += raw; // once a real second, convert the A* solve/ms totals into per-second rates for the HUD
     if (this.navHudTimer >= 1) {
@@ -840,7 +855,23 @@ export class Game {
     }
     else if (this.mode === 'dead') { this.deathTimer -= frameDt; if (this.deathTimer <= 0) this.respawn(); }
     else if (this.mode === 'busted') { this.bustTimer -= frameDt; if (this.bustTimer <= 0) this.respawn(true); }
-    else if (this.input.consume('Escape')) this.ui.back();
+    else if (this.mode === 'menu' || this.mode === 'paused') {
+      const vertical = (this.input.consume('ArrowDown') ? 1 : 0) - (this.input.consume('ArrowUp') ? 1 : 0);
+      const horizontal = (this.input.consume('ArrowRight') ? 1 : 0) - (this.input.consume('ArrowLeft') ? 1 : 0);
+      if (vertical) this.ui.navigateMenu(vertical as -1 | 1);
+      if (horizontal) this.ui.navigateMenu(horizontal as -1 | 1, true);
+      if (this.input.consume('Enter')) this.ui.activateMenuControl();
+      if (this.input.consume('Escape')) this.ui.back();
+    }
+    // The loading card is an opaque DOM overlay. Rendering the full city behind it wastes the GPU,
+    // repeatedly compiles shaders on software/low-end renderers, and competes with the required
+    // neighbourhood bake for frame time. Keep the animation clock and input edges healthy, but let
+    // the browser spend loading frames on assets and geometry; the first menu frame reveals the city.
+    if (this.mode === 'loading') {
+      this.profiler.frameEnd();
+      this.input.endFrame();
+      return;
+    }
     this.player.updateVisual(frameDt);
     this.profiler.mark('camera');
     this.touch?.tickLook(frameDt); // look-stick deflection → this frame's mouse deltas, ahead of the camera reading them
@@ -994,7 +1025,7 @@ export class Game {
     if (driven) {
       const speed = driven.updatePlayer(dt, this.input, this.city, this.driveSteer);
       this.player.group.position.copy(driven.group.position);
-      this.audio.setEngine(true, speed, this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0, driven.spec.maxSpeed, driven.spec.kind);
+      this.audio.setEngine(true, speed, Math.max(inputValue(this.input, 'KeyW'), inputValue(this.input, 'KeyS') * 0.6), driven.spec.maxSpeed, driven.spec.kind);
     }
     else if (!stateBefore?.dead) {
       this.player.setVisible(true); this.player.update(dt, this.input, this.cameraController.yaw, this.city);
@@ -1204,7 +1235,7 @@ export class Game {
         return;
       }
     }
-    this.trains.setRideStick(Number(this.input.down('KeyD')) - Number(this.input.down('KeyA')), Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')), this.cameraController.yaw, this.input.down('ShiftLeft'));
+    this.trains.setRideStick(inputAxis(this.input, 'KeyA', 'KeyD'), inputAxis(this.input, 'KeyS', 'KeyW'), this.cameraController.yaw, this.input.down('ShiftLeft'));
   }
 
   /** Skydive tick: WASD trims pitch and heading via the pure step, walls still clamp the glide, SPACE (or F)
@@ -1218,8 +1249,8 @@ export class Game {
       this.persist();
     }
     const stick = {
-      pitch: Number(this.input.down('KeyW')) - Number(this.input.down('KeyS')),
-      steer: Number(this.input.down('KeyD')) - Number(this.input.down('KeyA')),
+      pitch: inputAxis(this.input, 'KeyS', 'KeyW'),
+      steer: inputAxis(this.input, 'KeyA', 'KeyD'),
       flare: this.input.down('KeyS') || this.input.down('Space'),
     };
     const support = this.city.supportHeight(position.x, position.z, position.y); // rooftops count: you can land on them
@@ -1366,8 +1397,8 @@ export class Game {
     }
     this.coverAvailable = false;
     const cover = this.cover; const yaw = this.cameraController.yaw;
-    const side = Number(this.input.down('KeyD')) - Number(this.input.down('KeyA'));
-    const forward = Number(this.input.down('KeyW')) - Number(this.input.down('KeyS'));
+    const side = inputAxis(this.input, 'KeyA', 'KeyD');
+    const forward = inputAxis(this.input, 'KeyS', 'KeyW');
     const move = new THREE.Vector3(side, 0, -forward).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
     cover.exitTimer = movingAway(move, cover.spot.normal) ? cover.exitTimer + dt : 0;
     if (this.input.consume('KeyQ') || cover.exitTimer >= COVER_EXIT_HOLD) { this.cover = undefined; return undefined; }
@@ -1464,7 +1495,7 @@ export class Game {
       if (hit.damage > 0) this.damagePlayer(hit.damage);
       if (shouldKnockOff(hit.impact)) { this.knockOff(vehicle, hit.impact); return; }
     }
-    const throttle = this.input.down('KeyW') ? 1 : this.input.down('KeyS') ? 0.6 : 0;
+    const throttle = Math.max(inputValue(this.input, 'KeyW'), inputValue(this.input, 'KeyS') * 0.6);
     this.audio.setEngine(true, speed, throttle, vehicle.spec.maxSpeed, vehicle.spec.kind); // 'bicycle' routes to the freewheel/wind voice, everything else to an engine profile
     this.wallCrashCooldown = Math.max(0, this.wallCrashCooldown - dt);
     if (this.wallCrashCooldown <= 0 && this.prevDrivenSpeed > 12 && this.prevDrivenSpeed - speed > this.prevDrivenSpeed * 0.6) {
@@ -2692,7 +2723,7 @@ export class Game {
    *  the horizontal drag winds a self-centring virtual steering wheel that feeds Vehicle.updatePlayer like the
    *  A/D keys. Ticked once per frame (mouseDX is a whole-frame delta) — the camera tails the heading meanwhile. */
   private tickMouseSteer(dt: number): void {
-    this.driveSteerActive = Boolean(this.activeVehicle) && this.input.firing && !this.input.aiming;
+    this.driveSteerActive = Boolean(this.activeVehicle) && this.input.pointerFireHeld && !this.input.aiming;
     if (this.driveSteerActive) this.driveSteer = THREE.MathUtils.clamp(this.driveSteer - this.input.mouseDX * MOUSE_STEER_GAIN, -1, 1); // drag right -> negative steer -> turn right, matching the D key
     else this.driveSteer *= Math.exp(-dt * 12); // released: the wheel springs back to centre
   }
@@ -2924,7 +2955,9 @@ export class Game {
     const featureHud = this.features.hud();
     const flowHud = this.online ? undefined : this.joziFlow.hud();
     const hudFeatures = flowHud ? [...(featureHud ?? []), flowHud] : featureHud;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
+    const promptMode = this.activePlane ? 'flight' : this.activeVehicle || this.trains.driving ? 'vehicle' : 'foot';
+    const hudPrompt = this.input.gamepadActive ? gamepadPrompt(prompt, promptMode) : prompt;
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,

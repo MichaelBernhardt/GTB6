@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
-  addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, chunkShouldBeVisible,
-  ChunkStore, ChunkVisibility, DETAIL_VISIBLE_RANGE, FAR_CHUNK, POTATO_BUILDING_RANGE, type InstanceItem,
+  addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, chunkShouldBeVisible,
+  ChunkStore, ChunkVisibility, DETAIL_VISIBLE_RANGE, FAR_CHUNK, POTATO_BUILDING_RANGE, POTATO_DETAIL_RANGE, type InstanceItem,
 } from './ChunkVisibility';
 import { splitGeometryByCell } from './StaticGeometry';
 
@@ -14,6 +14,19 @@ describe('cellDistance', () => {
     expect(cellDistance(1200, 500, 0, 0, 1000)).toBe(200); // east of the cell
     expect(cellDistance(-300, -400, 0, 0, 1000)).toBe(500); // diagonal: 3-4-5
     expect(cellDistance(2500, 500, -2, 0, 1000)).toBe(3500); // negative cells
+  });
+});
+
+describe('cellsWithinRange', () => {
+  it('returns the containing and nearby cells nearest-first without square-corner overreach', () => {
+    const cells = cellsWithinRange(1_250, 1_020, 240, 1_000);
+    expect(cells.map((cell) => cell.key)).toEqual(['1,1', '1,0']);
+    expect(cells.map((cell) => cell.distance)).toEqual([0, 20]);
+  });
+
+  it('includes all four cells at a grid corner and handles negative coordinates deterministically', () => {
+    expect(cellsWithinRange(0, 0, 0, 1_000).map((cell) => cell.key)).toEqual(['-1,-1', '-1,0', '0,-1', '0,0']);
+    expect(cellsWithinRange(-1_250, -1_020, 240, 1_000).map((cell) => cell.key)).toEqual(['-2,-2', '-2,-1']);
   });
 });
 
@@ -31,6 +44,7 @@ describe('chunkShouldBeVisible (hysteresis)', () => {
   it('keeps detailed geometry nested inside the cheap world ring', () => {
     expect(DETAIL_VISIBLE_RANGE).toBeLessThan(BUILDING_VISIBLE_RANGE);
     expect(BUILDING_VISIBLE_RANGE).toBeLessThan(CHUNK_VISIBLE_RANGE);
+    expect(POTATO_DETAIL_RANGE).toBeLessThan(DETAIL_VISIBLE_RANGE);
     expect(POTATO_BUILDING_RANGE).toBeLessThan(BUILDING_VISIBLE_RANGE);
   });
 });

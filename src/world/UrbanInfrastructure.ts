@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { PropRegistry } from '../systems/PropSystem';
-import { addInstancedChunks, type ChunkStore, type InstanceItem, type InstanceSlot } from './ChunkVisibility';
+import { addInstancedChunks, ChunkStore, ChunkVisibility, type InstanceItem, type InstanceSlot } from './ChunkVisibility';
 import type { RoadPoint, RoadsidePoint } from './City';
 import { SIGNAL_JUNCTIONS, STREET_SIGN_JUNCTIONS } from './mapData';
 import { ETOLL_SPOTS, ROADSIDE_SIGNS, SPAWN_SIGN_JUNCTIONS, TRANSIT_STOPS } from './placements';
@@ -49,6 +49,15 @@ interface SignalLens { axis: 0 | 1; phase: number; channel: 0 | 1 | 2; }
 const SIGNAL_COLORS = [0xe83f3f, 0xf0ad2f, 0x39d36c] as const;
 
 const BULB_COLOR = 0xffdca0;
+
+/** Textured street boards are several meshes each and unique labels prevent material batching. They are
+ *  only readable nearby, so keep them on a finer stream than the general 976u street-detail grid. */
+export const SIGN_CHUNK_SIZE = 240;
+export const SIGN_VISIBLE_RANGE = 320;
+export const SIGN_HYSTERESIS = 80;
+/** Re-evaluate all occupied sign cells only after meaningful travel; hundreds of cheap cell checks every
+ *  ~72u replace thousands of permanent per-frame draw submissions. */
+export const SIGN_VISIBILITY_STEP = 72;
 
 /** Roadside service hardware is sparse enough to remain legible but citywide enough that streets no
  * longer jump straight from tar to buildings. The source index is stable because roadsidePoints is
@@ -124,6 +133,10 @@ export class UrbanInfrastructure {
   private powered = true;
   private treeSites: RoadPoint[] = [];
   private treeAssetsInstalled = false;
+  private signStore: ChunkStore;
+  private signCulling: ChunkVisibility;
+  private signFocusX = Number.POSITIVE_INFINITY;
+  private signFocusZ = Number.POSITIVE_INFINITY;
 
   constructor(
     parent: THREE.Group,
@@ -140,6 +153,8 @@ export class UrbanInfrastructure {
     private surfaceHeight: (x: number, z: number) => number,
   ) {
     this.group.name = 'Urban infrastructure'; parent.add(this.group);
+    this.signStore = new ChunkStore(parent, SIGN_CHUNK_SIZE);
+    this.signCulling = new ChunkVisibility(this.signStore, SIGN_VISIBLE_RANGE, SIGN_HYSTERESIS);
     onPowerChange((on) => { this.powered = on; this.lensPowerDirty = true; });
     this.buildVegetation();
     this.buildStreetlights();
@@ -206,6 +221,14 @@ export class UrbanInfrastructure {
       this.lensDirty.add(slot.mesh);
     });
     for (const mesh of this.lensDirty) if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  /** Fine-grained distance stream for unique-text sign assemblies. Initial and teleport passes visit every
+   *  occupied sign cell immediately so an invisible board can never retain a nearby solid collision. */
+  updateVisibility(x: number, z: number): void {
+    if (Number.isFinite(this.signFocusX) && Math.hypot(x - this.signFocusX, z - this.signFocusZ) < SIGN_VISIBILITY_STEP) return;
+    this.signFocusX = x; this.signFocusZ = z;
+    this.signCulling.update(x, z, this.signStore.groups.size);
   }
 
   /** Seconds into the shared 30s robot loop — the traffic AI reads this to obey the same lights the player sees. */
@@ -566,7 +589,7 @@ export class UrbanInfrastructure {
       }
     }
     assembly.traverse((object) => { object.userData.dynamic = true; }); // knock-over props stay unmerged so they can tip
-    this.detail.group(postPosition.x, postPosition.z).add(assembly); // unmerged, but still distance-culled with its chunk
+    this.signStore.group(postPosition.x, postPosition.z).add(assembly); // unique text stays interactive, but only readable nearby
     this.props.register('sign', postPosition.x, postPosition.z, 0.14, 3.6, { debris: () => assembly });
   }
 
@@ -583,7 +606,7 @@ export class UrbanInfrastructure {
       const sign = createSignMesh(geometry, label, foreground, { background, doubleSide: true });
       sign.position.y = 2.45; sign.rotation.y = angle; assembly.add(sign);
       assembly.traverse((object) => { object.userData.dynamic = true; }); // knock-over props stay unmerged so they can tip
-      this.detail.group(x, z).add(assembly); // unmerged, but still distance-culled with its chunk
+      this.signStore.group(x, z).add(assembly); // unique text stays interactive, but only readable nearby
       this.props.register('sign', x, z, 0.14, 2.6, { debris: () => assembly });
     }
   }

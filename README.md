@@ -84,6 +84,12 @@ Solo missions, money, wanted level, shops, jobs, saves, cheats, and reputation s
 | `Escape` | Pause |
 | Backquote (`~`) | Open the developer console |
 
+Standard Xbox and PlayStation-style controllers are supported throughout gameplay and menus. The left
+stick moves or steers, the right stick looks, triggers aim/fire on foot and accelerate/brake in a
+vehicle, the north face button interacts, and the south face button jumps or uses the handbrake.
+Controller prompts replace keyboard glyphs automatically as soon as the pad is used; open the field
+guide for the complete context-sensitive layout.
+
 The field guide on the main and pause menus keeps this list in-game. The city map supports drag, wheel zoom, street and district search, hover names for streets and live markers, map-layer filters, and a road-snapped GPS pin by clicking or tapping anywhere.
 
 ## Jobs and consequences
@@ -207,7 +213,7 @@ If Jozi starts moving like the M1 at 17:00, lower the graphics quality first.
 - Pedestrian navigation is graph/collider based rather than full crowd simulation.
 - Police search uses knowledge, sightings, proximity, and timeouts rather than a perfect citywide vision simulation.
 - The campaign is compact, with one browser save and no cloud sync.
-- Gamepad controls are not implemented. Touch mode supports twin-stick movement/look, context actions, combat, vehicles, the city map, and landscape/fullscreen handling, but comfort and performance still depend on the device.
+- Touch mode supports twin-stick movement/look, context actions, combat, vehicles, the city map, and landscape/fullscreen handling, but comfort and performance still depend on the device.
 - The procedural city is an artistic game world, not a navigation tool. Please do not use it to find Sandton during load shedding.
 
 ## Credits

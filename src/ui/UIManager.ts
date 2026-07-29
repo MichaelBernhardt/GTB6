@@ -80,6 +80,8 @@ export class UIManager {
   openMap(frame: MapViewFrame): void { this.mapView.show(frame); }
   closeMap(): void { this.mapView.hide(); }
   updateMap(frame: MapViewFrame): void { this.mapView.update(frame); }
+  navigateMenu(direction: -1 | 1, horizontal = false): void { this.menuView.navigate(direction, horizontal); }
+  activateMenuControl(): void { this.menuView.activateFocused(); }
 
   update(state: HudState): void {
     this.hudView.update(state); if (!toastVisibleAt(performance.now(), this.toastDeadline)) this.toast.classList.remove('is-visible');

@@ -32,6 +32,14 @@ const city = {
 const audio = { scream: () => {}, broadcastFear: () => {}, setTrafficEngine: () => {} } as unknown as AudioManager;
 
 describe('all-Blender NPC population policy', () => {
+  it('primes citywide actors into distance LOD before the first menu render', () => {
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    population.primeVisualLods(new THREE.Vector3(100_000, 0, 100_000));
+    expect(population.pedestrians.every((ped) => ped.frozen && ped.visualLod === 'hidden')).toBe(true);
+    expect(population.vehicles.every((vehicle) => vehicle.visualLod === 'hidden')).toBe(true);
+    expect(population.traffic.every((vehicle) => vehicle.frozen && vehicle.speed === 0)).toBe(true);
+  });
+
   it('assigns a rig to every opening ambient pedestrian and rotates the full ambient cast evenly', () => {
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const ambient = population.pedestrians.filter((ped) => !ped.contact && !ped.carGuard && !ped.hostile && !ped.police);
