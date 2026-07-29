@@ -8,6 +8,13 @@ import { ETOLL_SPOTS, ROADSIDE_SIGNS, SPAWN_SIGN_JUNCTIONS, TRANSIT_STOPS } from
 import { createSignMesh } from './ProceduralMaterials';
 import { onPowerChange } from './powerGrid';
 import { buildTreeInstance, type TreeInstancePart, type TreeSpecies } from './FoliageAssets';
+import { districtAt } from './mapData';
+import {
+  isStreetLifeCandidate,
+  streetLifeForDistrict,
+  type StreetLifeKind,
+  type StreetLifeProfile,
+} from './data/streetLife';
 
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
@@ -142,6 +149,7 @@ export class UrbanInfrastructure {
     this.buildRoadsideSigns();
     this.buildStreetFurniture();
     this.buildLitterBins();
+    this.buildNeighbourhoodStreetLife();
     this.buildTransitStops();
     this.buildEtollGantries();
     this.groundInfrastructure();
@@ -671,6 +679,166 @@ export class UrbanInfrastructure {
         },
       });
     });
+  }
+
+  /**
+   * A cheap, readable street-level identity layer. The whole city shares just four primitive
+   * geometries/materials, while profile-specific layouts turn them into market stalls, pavement
+   * cafés, panelbeater clutter, estate hedges, kasi braais and Vaal farm stands. Everything is
+   * decorative, pushed behind the routed walk line, slope-gated and detail-chunk culled.
+   */
+  private buildNeighbourhoodStreetLife(): void {
+    interface Site extends RoadsidePoint {
+      profile: StreetLifeProfile;
+      sourceIndex: number;
+      rootX: number;
+      rootZ: number;
+    }
+    const sites: Site[] = [];
+    this.roadsidePoints.forEach((point, sourceIndex) => {
+      const profile = streetLifeForDistrict(districtAt(point.x, point.z));
+      if (!isStreetLifeCandidate(profile, sourceIndex, point.width)) return;
+      const rootX = point.x - point.inwardX * 3.15;
+      const rootZ = point.z - point.inwardZ * 3.15;
+      const sideX = point.inwardZ * 1.55;
+      const sideZ = -point.inwardX * 1.55;
+      const ground = this.surfaceHeight(rootX, rootZ);
+      if (this.isBlocked(rootX, rootZ, 2.35) || this.isRoad(rootX, rootZ, 1.15)) return;
+      // Clusters stay coherent instead of stair-stepping across the steep Highveld cuttings.
+      if (Math.abs(this.surfaceHeight(rootX + sideX, rootZ + sideZ) - ground) > 1.15
+        || Math.abs(this.surfaceHeight(rootX - sideX, rootZ - sideZ) - ground) > 1.15) return;
+      sites.push({ ...point, profile, sourceIndex, rootX, rootZ });
+    });
+
+    const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const cylinderGeometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 10);
+    const canopyGeometry = new THREE.ConeGeometry(1, 0.48, 10);
+    const torusGeometry = new THREE.TorusGeometry(0.5, 0.15, 7, 12);
+    const boxItems: InstanceItem[] = [];
+    const cylinderItems: InstanceItem[] = [];
+    const canopyItems: InstanceItem[] = [];
+    const torusItems: InstanceItem[] = [];
+    const up = new THREE.Vector3(0, 1, 0);
+
+    sites.forEach((site) => {
+      const yaw = Math.atan2(site.inwardX, site.inwardZ);
+      const rotation = new THREE.Quaternion().setFromAxisAngle(up, yaw);
+      const root = new THREE.Vector3(site.rootX, 0, site.rootZ);
+      const colours = site.profile.colours;
+      const colour = (slot: number): THREE.Color => new THREE.Color(colours[(site.sourceIndex + slot) % colours.length]!);
+      const position = (x: number, y: number, z: number): THREE.Vector3 =>
+        new THREE.Vector3(x, y, z).applyQuaternion(rotation).add(root);
+      const add = (
+        target: InstanceItem[],
+        x: number, y: number, z: number,
+        sx: number, sy: number, sz: number,
+        tint: number,
+        localRotation?: THREE.Quaternion,
+        fixedColour?: number,
+      ): void => {
+        const quaternion = localRotation ? rotation.clone().multiply(localRotation) : rotation;
+        target.push({
+          x: site.rootX,
+          z: site.rootZ,
+          matrix: new THREE.Matrix4().compose(position(x, y, z), quaternion, new THREE.Vector3(sx, sy, sz)),
+          color: fixedColour === undefined ? colour(tint) : new THREE.Color(fixedColour),
+        });
+      };
+
+      this.addStreetLifeLayout(
+        site.profile.kind,
+        site.sourceIndex,
+        { boxItems, cylinderItems, canopyItems, torusItems },
+        add,
+      );
+    });
+
+    const painted = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.76, metalness: 0.08 });
+    painted.name = 'Neighbourhood street life';
+    const canvas = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88, side: THREE.DoubleSide });
+    canvas.name = 'Neighbourhood street life canvas';
+    addInstancedChunks(this.detail, boxGeometry, painted, this.groundItems(boxItems), { cast: true, receive: true });
+    addInstancedChunks(this.detail, cylinderGeometry, painted, this.groundItems(cylinderItems), { cast: true, receive: true });
+    addInstancedChunks(this.detail, canopyGeometry, canvas, this.groundItems(canopyItems), { cast: true, receive: true });
+    addInstancedChunks(this.detail, torusGeometry, painted, this.groundItems(torusItems), { cast: true, receive: true });
+  }
+
+  private addStreetLifeLayout(
+    kind: StreetLifeKind,
+    serial: number,
+    _items: {
+      boxItems: InstanceItem[];
+      cylinderItems: InstanceItem[];
+      canopyItems: InstanceItem[];
+      torusItems: InstanceItem[];
+    },
+    add: (
+      target: InstanceItem[],
+      x: number, y: number, z: number,
+      sx: number, sy: number, sz: number,
+      tint: number,
+      rotation?: THREE.Quaternion,
+      fixedColour?: number,
+    ) => void,
+  ): void {
+    const { boxItems, cylinderItems, canopyItems, torusItems } = _items;
+    const sideways = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    if (kind === 'kiosk') {
+      add(boxItems, 0, 0.52, 0, 2.5, 1.04, 0.82, 0);
+      add(boxItems, 0, 0.78, 0.43, 1.72, 0.46, 0.08, 1, undefined, 0x252c2c);
+      add(boxItems, 0, 1.16, 0.44, 2.18, 0.14, 0.1, 1);
+      add(boxItems, -1.13, 0.3, 0.68, 0.58, 0.6, 0.58, 2);
+      add(boxItems, 1.05, 0.22, 0.62, 0.48, 0.44, 0.48, 3);
+      add(cylinderItems, 0, 1.35, 0, 0.11, 2.7, 0.11, 1);
+      add(canopyItems, 0, 2.58, 0, 1.55, 1, 1.28, serial % 2);
+      return;
+    }
+    if (kind === 'cafe') {
+      add(cylinderItems, 0, 0.48, 0, 0.13, 0.96, 0.13, 0);
+      add(cylinderItems, 0, 0.93, 0, 2.2, 0.12, 1.75, 3);
+      for (const x of [-1.15, 1.15]) {
+        add(cylinderItems, x, 0.23, 0, 0.12, 0.46, 0.12, x < 0 ? 0 : 2);
+        add(cylinderItems, x, 0.5, 0, 0.9, 0.12, 0.9, x < 0 ? 0 : 2);
+      }
+      if (serial % 2 === 0) {
+        add(cylinderItems, 0, 1.5, -0.48, 0.07, 3, 0.07, 1);
+        add(canopyItems, 0, 2.86, -0.48, 1.45, 1, 1.35, 1);
+      }
+      return;
+    }
+    if (kind === 'workshop') {
+      add(boxItems, 0, 0.48, -0.18, 2.5, 0.96, 0.72, 1);
+      add(boxItems, -0.9, 0.16, 0.72, 1.05, 0.32, 0.78, 0);
+      for (const x of [0.75, 1.38]) add(cylinderItems, x, 0.48, 0.62, 0.42, 0.96, 0.42, x < 1 ? 2 : 3);
+      for (const x of [-1.28, -0.74]) {
+        add(torusItems, x, 0.3, 0.82, 0.74, 0.74, 0.74, 3, sideways, 0x252727);
+      }
+      return;
+    }
+    if (kind === 'garden') {
+      add(boxItems, 0, 0.62, -0.34, 3.15, 1.24, 0.72, 0);
+      add(boxItems, -1.35, 0.32, 0.62, 0.64, 0.64, 0.64, 2);
+      add(boxItems, 1.35, 0.32, 0.62, 0.64, 0.64, 0.64, 2);
+      add(cylinderItems, -1.35, 1.04, 0.62, 0.7, 0.82, 0.7, 1);
+      add(cylinderItems, 1.35, 1.04, 0.62, 0.7, 0.82, 0.7, 1);
+      return;
+    }
+    if (kind === 'braai') {
+      add(cylinderItems, -0.55, 0.52, 0, 0.56, 1.04, 0.56, 3, undefined, 0x303333);
+      add(torusItems, -0.55, 1.02, 0, 1.08, 1.08, 1.08, 3, sideways, 0x555b59);
+      add(boxItems, -0.55, 1.04, 0, 1.02, 0.055, 0.72, 1, undefined, 0x555b59);
+      add(boxItems, 0.75, 0.34, 0.45, 0.84, 0.68, 0.72, 2);
+      add(boxItems, 1.35, 0.22, -0.3, 0.58, 0.44, 0.58, 0);
+      add(cylinderItems, 0.45, 1.45, -0.35, 0.08, 2.9, 0.08, 1);
+      add(canopyItems, 0.45, 2.78, -0.35, 1.5, 1, 1.32, serial % 3);
+      return;
+    }
+    // Farm gates carry produce/hay stands rather than urban furniture.
+    add(boxItems, 0, 0.55, 0, 2.65, 1.1, 0.82, 0);
+    for (const [x, z, scale] of [[-1.15, 0.72, 0.7], [0, 0.74, 0.58], [1.05, 0.68, 0.78]] as const) {
+      add(boxItems, x, scale / 2, z, scale, scale, scale, x < 0 ? 1 : 2);
+    }
+    add(cylinderItems, -1.5, 0.7, -0.35, 0.7, 1.4, 0.7, 1, sideways, 0xc59c45);
   }
 
   private buildEtollGantries(): void {

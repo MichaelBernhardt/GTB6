@@ -58,6 +58,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
 import { neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from './data/neighbourhoods';
+import { foundationIdentityForDistrict, type FoundationIdentity } from './data/foundations';
 
 /** XZ AABB with a real vertical span: `height` above `y0`. `y0` is world-space; when omitted the collider is
  *  grounded on the terrain under its centre (the flat-world registrations keep working untouched). */
@@ -774,6 +775,8 @@ export class City {
   private asphalt = createGeneratedSurfaceTexture('/textures/asphalt-gpt.jpg', 'asphalt', 1);
   private concrete = createGeneratedSurfaceTexture('/textures/concrete-gpt.jpg', 'concrete', 10);
   private foundationMaterial = new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 });
+  private neighbourhoodFoundationMaterials = new Map<string, { wall: THREE.MeshStandardMaterial; accent: THREE.MeshStandardMaterial }>();
+  private foundationJointMaterial = new THREE.MeshStandardMaterial({ color: 0x343a39, map: this.concrete, roughness: 0.94 });
   private sidewalk = createSidewalkTexture();
   // Default veld ground: the same dry turf as wild parks. Ground uses 0..1 plane UVs, so repeat = WORLD_SIZE/6
   // gives the same ~6u tile as the world-space park lawns. Macro-detiled in the shader, no wind on the open ground.
@@ -2422,11 +2425,14 @@ export class City {
     if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: this.facadeGlow, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
     const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial, facadeTile: facadeWorldTile(facadeIndex) });
     const foundations = foundationTiers(profile.tiers, -plinthDrop);
+    const foundationIdentity = foundationIdentityForDistrict(district);
+    const foundationMaterials = this.foundationMaterialsFor(foundationIdentity);
     for (const foundation of foundations) {
       const foundationW = foundation.maxX - foundation.minX; const foundationH = foundation.y1 - foundation.y0; const foundationD = foundation.maxZ - foundation.minZ;
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(foundationW, foundationH, foundationD), this.foundationMaterial);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(foundationW, foundationH, foundationD), foundationMaterials.wall);
       mesh.position.set((foundation.minX + foundation.maxX) / 2, (foundation.y0 + foundation.y1) / 2, (foundation.minZ + foundation.maxZ) / 2);
       mesh.receiveShadow = true; group.add(mesh);
+      this.addFoundationCharacter(group, foundation, foundationIdentity, foundationMaterials.accent, sourceVariant);
     }
     const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
     this.addLedge(profile.tiers, Math.min(h - 0.5, 3.6));
@@ -2445,6 +2451,103 @@ export class City {
     }
     this.target = previousTarget; this.architecture.retarget(this.group);
     return { group, colliders };
+  }
+
+  private foundationMaterialsFor(identity: FoundationIdentity): { wall: THREE.MeshStandardMaterial; accent: THREE.MeshStandardMaterial } {
+    let materials = this.neighbourhoodFoundationMaterials.get(identity.id);
+    if (materials) return materials;
+    const wall = new THREE.MeshStandardMaterial({ color: identity.wall, map: this.concrete, roughness: 0.94 });
+    wall.name = `${identity.id} retaining wall`;
+    const accent = new THREE.MeshStandardMaterial({ color: identity.accent, map: this.concrete, roughness: 0.88 });
+    accent.name = `${identity.id} retaining detail`;
+    materials = { wall, accent };
+    this.neighbourhoodFoundationMaterials.set(identity.id, materials);
+    return materials;
+  }
+
+  /**
+   * Break up the tall blank podiums created when a level building meets Joburg's slopes. Detail is
+   * attached only to the street-facing wall, shares a tiny material cache and is merged into the
+   * streamed building cell, so the treatment adds no object churn or collision work at runtime.
+   */
+  private addFoundationCharacter(
+    group: THREE.Group,
+    foundation: MassingTier,
+    identity: FoundationIdentity,
+    accent: THREE.Material,
+    variant: number,
+  ): void {
+    if (foundation.kind === 'wall') return;
+    const width = foundation.maxX - foundation.minX;
+    const height = foundation.y1 - foundation.y0;
+    if (width < 2.2 || height < 2.25) return;
+    const centreX = (foundation.minX + foundation.maxX) / 2;
+    const frontZ = foundation.maxZ + 0.075;
+    const piece = (
+      geometry: THREE.BufferGeometry,
+      material: THREE.Material,
+      x: number,
+      y: number,
+      z: number,
+      cast = false,
+    ): void => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = cast;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    };
+
+    // A cap and a bounded set of retaining joints give even the tallest cut a human scale.
+    piece(new THREE.BoxGeometry(width + 0.24, 0.2, 0.24), this.foundationJointMaterial, centreX, -0.18, frontZ);
+    const rawJointCount = Math.floor((height - 1.1) / 3.15);
+    const jointCount = Math.min(8, rawJointCount);
+    const jointSpacing = rawJointCount > jointCount ? (height - 0.7) / (jointCount + 1) : 3.15;
+    for (let joint = 1; joint <= jointCount; joint++) {
+      const y = -joint * jointSpacing;
+      if (y <= foundation.y0 + 0.35) break;
+      piece(new THREE.BoxGeometry(width + 0.16, 0.16, 0.2), this.foundationJointMaterial, centreX, y, frontZ);
+    }
+
+    const detailY = Math.max(foundation.y0 + 0.85, -1.35);
+    if (identity.treatment === 'vents') {
+      const count = Math.max(1, Math.min(4, Math.floor(width / 5)));
+      for (let index = 0; index < count; index++) {
+        const x = centreX + (index - (count - 1) / 2) * Math.min(4.2, width / count);
+        piece(new THREE.BoxGeometry(1.35, 0.62, 0.15), this.foundationJointMaterial, x, detailY, frontZ + 0.06);
+      }
+      return;
+    }
+    if (identity.treatment === 'mural') {
+      const count = Math.max(2, Math.min(5, Math.floor(width / 3.4)));
+      const panelWidth = Math.min(2.35, (width - 0.8) / count);
+      for (let index = 0; index < count; index++) {
+        const x = centreX + (index - (count - 1) / 2) * (panelWidth + 0.28);
+        const y = detailY - ((index + variant) % 2) * 0.22;
+        piece(
+          new THREE.BoxGeometry(panelWidth, 1.35 + ((index + variant) % 3) * 0.2, 0.12),
+          (index + variant) % 3 === 1 ? this.foundationJointMaterial : accent,
+          x, y, frontZ + 0.07,
+        );
+      }
+      return;
+    }
+    if (identity.treatment === 'hazard') {
+      const count = Math.max(2, Math.min(8, Math.floor(width / 2.2)));
+      const segment = Math.min(1.5, (width - 0.6) / count);
+      for (let index = 0; index < count; index += 2) {
+        const x = centreX + (index - (count - 1) / 2) * segment;
+        piece(new THREE.BoxGeometry(segment * 0.88, 0.42, 0.14), accent, x, detailY, frontZ + 0.07);
+      }
+      return;
+    }
+    // Estate, suburban and Vaal walls get planted vertical bays instead of urban graphics.
+    const count = Math.max(2, Math.min(5, Math.floor(width / 4.6)));
+    for (let index = 0; index < count; index++) {
+      const x = centreX + (index - (count - 1) / 2) * Math.min(4.4, width / count);
+      const bayHeight = Math.min(2.2, height - 0.55);
+      piece(new THREE.BoxGeometry(0.5, bayHeight, 0.42), accent, x, -bayHeight / 2 - 0.15, frontZ + 0.12, true);
+    }
   }
 
   /** Build one scattered catalog model at the origin, then place + face it exactly like a building.
@@ -2474,7 +2577,7 @@ export class City {
       // Concrete levelling pad under the footprint, buried past the low corner, with a collider so you can't
       // walk into the raised understory on the downhill side.
       const plinthDrop = baseY - hMin + 1.2; const plinthH = plinthDrop + 0.2;
-      const plinth = new THREE.Mesh(new THREE.BoxGeometry(maxX - minX + 1.4, plinthH, maxZ - minZ + 1.4), new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 }));
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(maxX - minX + 1.4, plinthH, maxZ - minZ + 1.4), this.foundationMaterial);
       plinth.position.set((minX + maxX) / 2, 0.2 - plinthH / 2, (minZ + maxZ) / 2); plinth.receiveShadow = true; built.group.add(plinth);
       colliders.push(this.tierToWorldCollider({ minX: minX - 0.7, maxX: maxX + 0.7, minZ: minZ - 0.7, maxZ: maxZ + 0.7, y0: -plinthDrop, y1: 0 }, spec.x, spec.z, spec.heading, baseY));
     }
