@@ -85,6 +85,7 @@ import { CITY_JUNCTIONS, ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 import { loadTreeLibrary } from './world/FoliageAssets';
 import { loadCityBake } from './world/bake/loader';
+import { NeighbourhoodArrivalTracker } from './world/data/neighbourhoods';
 import type { PostProcessingQuality, PostProcessingStack } from './render/PostProcessing';
 
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
@@ -228,7 +229,8 @@ export class Game {
   private helperCooldown = 90;
   private radioCooldown = 0;
   private previousWanted = false;
-  private hostileGuardActivated = false;
+  private hostileGuardDistricts = new Set<string>();
+  private neighbourhoodArrivals = new NeighbourhoodArrivalTracker();
   private taxiRide = new TaxiRide();
   private taxiHailPed?: Pedestrian;
   private taxiPassenger?: Pedestrian;
@@ -762,6 +764,7 @@ export class Game {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
     this.cancelRobotRace('Session changed', false);
     this.customWaypoint = undefined;
+    this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
@@ -1051,26 +1054,40 @@ export class Game {
   }
 
   private updateLivingCityRuntime(dt: number, focus: THREE.Vector3): void {
-    if (this.city.districtAt(focus.x, focus.z) !== CBD) return;
-    const disposition = civilianDisposition(this.livingCity.district(CBD));
+    const district = this.city.districtAt(focus.x, focus.z);
+    const arrival = this.neighbourhoodArrivals.update(district, dt);
+    if (arrival) {
+      this.ui.notify(`${arrival.district.toUpperCase()} · ${arrival.profile.label}`, arrival.profile.tagline);
+    }
+
+    const disposition = civilianDisposition(this.livingCity.district(district));
     this.reputationReactionCooldown = Math.max(0, this.reputationReactionCooldown - dt);
     if ((disposition === 'afraid' || disposition === 'hostile') && this.reputationReactionCooldown === 0) {
       const witness = this.population.pedestrians.find((ped) => !ped.contact && !ped.hostile && !ped.police && ped.state !== 'down'
-        && this.city.districtAt(ped.group.position.x, ped.group.position.z) === CBD && ped.group.position.distanceTo(focus) < 22);
+        && this.city.districtAt(ped.group.position.x, ped.group.position.z) === district && ped.group.position.distanceTo(focus) < 22);
       if (witness) witness.applyFear(disposition === 'hostile' ? 60 : 38, focus);
       this.reputationReactionCooldown = 6;
     }
-    if (disposition === 'hostile' && !this.hostileGuardActivated) {
-      const guard = this.population.pedestrians.find((ped) => ped.carGuard && this.city.districtAt(ped.group.position.x, ped.group.position.z) === CBD);
-      if (guard) { guard.contact = false; guard.hostile = true; guard.state = 'hostile'; guard.destination.copy(focus); guard.group.name = 'Hostile Car Guard'; this.hostileGuardActivated = true; }
+    if (disposition === 'hostile' && !this.hostileGuardDistricts.has(district)) {
+      // The CBD has car guards; elsewhere an ordinary local can decide the player has pushed the
+      // neighbourhood too far. One activation per district keeps this consequence readable, not a mob spawner.
+      const guard = this.population.pedestrians.find((ped) => !ped.contact && !ped.hostile && !ped.police && ped.state !== 'down'
+        && this.city.districtAt(ped.group.position.x, ped.group.position.z) === district && ped.group.position.distanceTo(focus) < 35);
+      if (guard) {
+        guard.contact = false; guard.hostile = true; guard.state = 'hostile'; guard.destination.copy(focus);
+        guard.group.name = guard.carGuard ? 'Hostile Car Guard' : 'Angry Local';
+        this.hostileGuardDistricts.add(district);
+      }
     }
     if (disposition !== 'supportive') { this.helperCooldown = Math.max(this.helperCooldown, 30); return; }
     this.helperCooldown -= dt;
     if (this.helperCooldown > 0) return;
     const helper = this.population.pedestrians.find((ped) => !ped.contact && !ped.hostile && !ped.police && ped.state !== 'down'
-      && this.city.districtAt(ped.group.position.x, ped.group.position.z) === CBD && ped.group.position.distanceTo(focus) < 28);
+      && this.city.districtAt(ped.group.position.x, ped.group.position.z) === district && ped.group.position.distanceTo(focus) < 28);
     if (!helper) return;
-    this.pickups.spawnAmmo(this.scatter(helper.group.position)); this.ui.notify('A local has your back', 'Someone left an ammo box nearby. The CBD remembers.'); this.helperCooldown = 120;
+    this.pickups.spawnAmmo(this.scatter(helper.group.position));
+    this.ui.notify('A local has your back', `Someone left an ammo box nearby. ${district} remembers.`);
+    this.helperCooldown = 120;
   }
 
   private ejectFromWreck(vehicle: Vehicle): void {
@@ -2206,7 +2223,7 @@ export class Game {
 
   private recordCityEvent(kind: CityEvent['kind'], position: THREE.Vector3): void {
     const district = this.city.districtAt(position.x, position.z); const transition = this.livingCity.apply({ kind, district } as CityEvent);
-    if (transition) this.ui.notify(`CBD reputation: ${transition.current}`, 'People are changing how they treat you.', transition.state.communityStanding >= 0, 'reputation');
+    if (transition) this.ui.notify(`${district} reputation: ${transition.current}`, 'People here are changing how they treat you.', transition.state.communityStanding >= 0, 'reputation');
   }
 
   /** Mission-forced heat behaves as a cop-witnessed report at the player's position, so pursuit still works. */
@@ -2275,7 +2292,8 @@ export class Game {
   }
 
   private renderShop(): void {
-    const multiplier = shopPriceMultiplier(this.livingCity.district(CBD));
+    const district = this.city.districtAt(this.player.group.position.x, this.player.group.position.z);
+    const multiplier = shopPriceMultiplier(this.livingCity.district(district));
     const entries = WEAPONS.filter((spec) => !spec.melee).map((spec) => {
       const state = this.combat.loadout[spec.id]; const full = reserveFull(spec.id, state.reserve);
       return {
@@ -2289,20 +2307,22 @@ export class Game {
   }
 
   private purchaseArmour(): void {
-    const multiplier = shopPriceMultiplier(this.livingCity.district(CBD));
+    const district = this.city.districtAt(this.player.group.position.x, this.player.group.position.z);
+    const multiplier = shopPriceMultiplier(this.livingCity.district(district));
     const result = resolveArmourPurchase(this.inventory.armour, this.economy.balance, multiplier);
     if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); this.renderShop(); return; }
-    this.inventory.armour = ARMOUR_MAX; this.livingCity.apply({ kind: 'shop-purchase', district: CBD }); this.audio.ui(true);
+    this.inventory.armour = ARMOUR_MAX; this.livingCity.apply({ kind: 'shop-purchase', district }); this.audio.ui(true);
     this.ui.notify('Body armour fitted', `Full plate · -R${result.price.toLocaleString()}`);
     this.persist(); this.renderShop();
   }
 
   private purchase(kind: 'weapon' | 'ammo', id: WeaponId): void {
     const state = this.combat.loadout[id];
-    const multiplier = shopPriceMultiplier(this.livingCity.district(CBD));
+    const district = this.city.districtAt(this.player.group.position.x, this.player.group.position.z);
+    const multiplier = shopPriceMultiplier(this.livingCity.district(district));
     const result = resolvePurchase(kind, id, state.owned, this.economy.balance, reserveFull(id, state.reserve), multiplier);
     if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); this.renderShop(); return; }
-    this.combat.grantWeapon(id); this.livingCity.apply({ kind: 'shop-purchase', district: CBD }); this.audio.ui(true);
+    this.combat.grantWeapon(id); this.livingCity.apply({ kind: 'shop-purchase', district }); this.audio.ui(true);
     this.ui.notify(kind === 'weapon' ? 'Weapon purchased' : 'Ammo refilled', `${WEAPON_BY_ID[id].name} · -R${result.price.toLocaleString()}`);
     this.persist(); this.renderShop();
   }
@@ -2326,7 +2346,8 @@ export class Game {
     const result = resolveDrinkPurchase(drink, this.economy.balance, this.player.inebriation);
     if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); this.renderBottleStore(); return; }
     this.player.inebriation = applyDrink(this.player.inebriation, drink);
-    this.livingCity.apply({ kind: 'shop-purchase', district: CBD }); this.audio.pickup();
+    const district = this.city.districtAt(this.player.group.position.x, this.player.group.position.z);
+    this.livingCity.apply({ kind: 'shop-purchase', district }); this.audio.pickup();
     if (drink.potency < 0) this.ui.notify(drink.name, `Aaah, that clears the head. -R${result.price}`);
     else this.ui.notify(drink.name, `${this.player.inebriation >= INEBRIATION_MAX ? 'Totaal gedrink. Careful now.' : 'Down the hatch. Lekker.'} -R${result.price}`);
     this.persist(); this.renderBottleStore();
@@ -2819,7 +2840,7 @@ export class Game {
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
     const onlineState = this.online?.localState;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: this.features.hud() });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: this.features.hud() });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,
@@ -2883,6 +2904,7 @@ export class Game {
     Object.assign(this.cheats, this.save.cheats);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current);
     this.livingCity = new LivingCitySystem(this.save.livingCity);
+    this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
     this.missions.completed = new Set(this.save.completedMissions);
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest;

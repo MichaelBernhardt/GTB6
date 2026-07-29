@@ -57,6 +57,7 @@ import { CITY_JUNCTIONS, type JunctionDefinition, signalHoldsDriver, signalSlowF
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
+import { neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from './data/neighbourhoods';
 
 /** XZ AABB with a real vertical span: `height` above `y0`. `y0` is world-space; when omitted the collider is
  *  grounded on the terrain under its centre (the flat-world registrations keep working untouched). */
@@ -700,15 +701,6 @@ const SIDEWALK_BAND = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH;
 const WANDER_CELL = 120;
 const WANDER_REACH_CELLS = 4;
 
-const FACADE_RANGES: Record<BuildingStyle, [number, number]> = {
-  downtown: [0, 6],
-  'mixed-use': [1, 5],
-  'dense-residential': [4, 6],
-  suburban: [6, 4],
-  industrial: [10, 2],
-  estate: [6, 4],
-  rural: [6, 4],
-};
 const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
   downtown: [0x9db1ba, 0xa3563f, 0xd0c4a4, 0x99a4a9, 0x93a9b0],
   'mixed-use': [0xc8b083, 0xa3563f, 0xd7c8a5, 0x7f9799, 0xb98a58, 0x8f6a55],
@@ -2394,7 +2386,11 @@ export class City {
   private buildOneBuilding(spec: GeneratedBuilding): { group: THREE.Group; colliders: Collider[] } {
     const group = new THREE.Group();
     const previousTarget = this.target; this.target = group; this.architecture.retarget(group);
-    const { width: w, depth: d, height: h, style, variant } = spec;
+    const { width: w, depth: d, height: h, style, variant: sourceVariant } = spec;
+    const district = generatedDistrictAt(spec.x, spec.z);
+    // One coherent architecture/facade language per neighbourhood. Both selectors reuse the
+    // existing finite variant sets, so streamed geometry/material budgets do not grow.
+    const variant = neighbourhoodBuildingVariant(district, sourceVariant);
     // Fit the building to sloped terrain: sample the footprint corners, sit the massing on the HIGHEST
     // corner (so nothing sinks into a rising slope), and drop a concrete plinth past the LOWEST corner so
     // the raised base stays buried in the ground on the downhill side instead of floating over a gap.
@@ -2409,8 +2405,7 @@ export class City {
     }
     const baseY = hMax;
     const plinthDrop = baseY - hMin + 1.8; // from the building base down past the lowest corner, buried
-    const [rangeBase, rangeCount] = FACADE_RANGES[style];
-    const facadeIndex = rangeBase + variant % rangeCount;
+    const facadeIndex = neighbourhoodFacadeIndex(district, style, sourceVariant);
     const palette = BUILDING_PALETTES[style];
     const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
     const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);

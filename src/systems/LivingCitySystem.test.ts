@@ -11,10 +11,13 @@ describe('LivingCitySystem', () => {
     expect(city.district(CBD)).toEqual({ communityStanding: -100, policePressure: 100 });
   });
 
-  it('keeps non-CBD districts neutral in the vertical slice', () => {
+  it('tracks consequences in the district where they happened', () => {
     const city = new LivingCitySystem();
-    expect(city.apply({ kind: 'civilian-murder', district: 'Sandton' })).toBeUndefined();
-    expect(city.district('Sandton')).toEqual({ communityStanding: 0, policePressure: 0 });
+    expect(city.apply({ kind: 'civilian-murder', district: 'Melville' })).toBeUndefined();
+    const crossing = city.apply({ kind: 'civilian-murder', district: 'Melville' });
+    expect(crossing).toMatchObject({ previous: 'neutral', current: 'feared' });
+    expect(city.district('Melville')).toEqual({ communityStanding: -36, policePressure: 24 });
+    expect(city.district(CBD)).toEqual({ communityStanding: 0, policePressure: 0 });
   });
 
   it('applies exclusive mission resolutions and their consequence bundles', () => {
@@ -43,16 +46,21 @@ describe('LivingCitySystem', () => {
   });
 
   it('sanitizes partial and malformed state', () => {
-    const state = sanitizeLivingCityState({ districts: { [CBD]: { communityStanding: -999, policePressure: 150 } }, joziArmsResolution: 'maybe' });
+    const state = sanitizeLivingCityState({ districts: {
+      [CBD]: { communityStanding: -999, policePressure: 150 },
+      Melville: { communityStanding: 37, policePressure: 14 },
+    }, joziArmsResolution: 'maybe' });
     expect(state.districts[CBD]).toEqual({ communityStanding: -100, policePressure: 100 });
     expect(state.districts.Sandton).toEqual(defaultLivingCityState().districts.Sandton);
+    expect(state.districts.Melville).toEqual({ communityStanding: 37, policePressure: 14 });
     expect(state.joziArmsResolution).toBeNull();
   });
 
   it('lets police pressure cool without erasing reputation', () => {
-    const city = new LivingCitySystem(); city.apply({ kind: 'mission-robbed', district: CBD }); city.update(120);
+    const city = new LivingCitySystem(); city.apply({ kind: 'mission-robbed', district: CBD }); city.apply({ kind: 'civilian-murder', district: 'Hillbrow' }); city.update(120);
     expect(city.district(CBD).communityStanding).toBe(-55);
     expect(city.district(CBD).policePressure).toBe(44);
+    expect(city.district('Hillbrow')).toEqual({ communityStanding: -18, policePressure: 11 });
   });
 });
 

@@ -22,6 +22,11 @@ import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODG
 import type { City, RoadPoint } from '../world/City';
 import { HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
 import { powerOn } from '../world/powerGrid';
+import {
+  neighbourhoodPedestrian,
+  neighbourhoodTrafficColour,
+  neighbourhoodTrafficKind,
+} from '../world/data/neighbourhoods';
 
 /** `closureStamp` is the RoadClosures stamp this route was solved under: when it moves, a driver
  *  whose remaining waypoints run into a newly closed road re-solves instead of nosing into it. */
@@ -512,7 +517,7 @@ export class PopulationSystem {
 
   /** Lifecycle spawn: one ambient citizen placed on a sidewalk point the lifecycle system already vetted as hidden. */
   spawnAmbientPedestrian(x: number, z: number): Pedestrian {
-    const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++, false, false, this.nextAmbientNpcVariant());
+    const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++, false, false, this.nextAmbientNpcVariant(x, z));
     ped.pickDestination(this.localChoice(ped.group.position.x, ped.group.position.z)); this.pedestrians.push(ped); return ped;
   }
 
@@ -524,8 +529,8 @@ export class PopulationSystem {
     return this.pedestrians.filter((ped) => ped.visualVariant !== undefined && !ped.contact && NPC_CATALOG[ped.visualVariant].role === 'ambient').length;
   }
 
-  private nextAmbientNpcVariant(): NpcCharacterId {
-    const variant = AMBIENT_NPC_CHARACTER_IDS[this.npcVariantCursor % AMBIENT_NPC_CHARACTER_IDS.length];
+  private nextAmbientNpcVariant(x: number, z: number): NpcCharacterId {
+    const variant = neighbourhoodPedestrian(this.city.districtAt(x, z), this.npcVariantCursor);
     this.npcVariantCursor += 1; return variant!;
   }
 
@@ -541,9 +546,9 @@ export class PopulationSystem {
 
   /** Lifecycle spawn: one AI-driven vehicle dropped on a vetted lane node and routed immediately. */
   spawnTrafficVehicle(x: number, z: number): Vehicle {
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'courier', 'taxi']; // the lime courier is actually working, allegedly
-    const kind = kinds[this.ambientSerial % kinds.length] ?? 'compact';
-    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][this.ambientSerial % 4]);
+    const district = this.city.districtAt(x, z);
+    const kind = neighbourhoodTrafficKind(district, this.ambientSerial);
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), kind === 'taxi' ? undefined : neighbourhoodTrafficColour(district, this.ambientSerial));
     this.ambientSerial++;
     vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     return vehicle;
@@ -574,7 +579,6 @@ export class PopulationSystem {
       vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([spot.x, spot.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'taxi', 'sport', 'motorbike', 'courier', 'van']; // the uniform Quantum fleet fills both former taxi slots
     // Seed the opening traffic on lanes around the player spawn (the map is far bigger than the
     // AI wake radius; the lifecycle system keeps density right as the player moves).
     const nearbyRoutes = this.city.trafficRoutes.filter((route) => {
@@ -584,8 +588,9 @@ export class PopulationSystem {
     const routePool = nearbyRoutes.length >= 8 ? nearbyRoutes : this.city.trafficRoutes;
     for (let i = 0; i < 15; i++) {
       const routeIndex = (i * 5 + 3) % routePool.length; const route = routePool[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
-      const kind = kinds[i % kinds.length] ?? 'compact';
-      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, this.city.roadHeightAt(point.x, point.z), point.z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
+      const district = this.city.districtAt(point.x, point.z);
+      const kind = neighbourhoodTrafficKind(district, i);
+      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, this.city.roadHeightAt(point.x, point.z), point.z), kind === 'taxi' ? undefined : neighbourhoodTrafficColour(district, i));
       vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     }
   }
@@ -608,7 +613,7 @@ export class PopulationSystem {
     const pool = nearby.length >= 40 ? nearby : this.city.sidewalkPoints;
     for (let i = 0; i < 28; i++) {
       const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
-      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant()); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
+      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant(point.x, point.z)); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
     }
     const seenContacts = new Set<string>(); // one body per contact, at their first-listed mission's spot
     MISSIONS.forEach((mission, index) => {

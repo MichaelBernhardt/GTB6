@@ -10,9 +10,10 @@ import * as THREE from 'three';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BuildingArchitecture } from '../../world/BuildingArchitecture';
 import { allBuildings, generateCell, CELL_SIZE, type GeneratedBuilding } from '../../world/CityGen';
-import { distanceToRoadEdge } from '../../world/mapData';
+import { distanceToRoadEdge, nearestDistrict } from '../../world/mapData';
 import { allScatteredModels } from '../../world/ModelScatter';
 import { MODEL_INDEX } from '../../world/models/catalog';
+import { neighbourhoodBuildingVariant } from '../../world/data/neighbourhoods';
 import { DOOR_RADIUS } from '../interiors.state';
 import { doorFor, doorNear, doorsNear, nearestDoor, resetDoorCache, scatterDoorFor } from './doors';
 import { solveFloor } from './floor';
@@ -24,7 +25,9 @@ const roof = new THREE.MeshBasicMaterial();
 function planOf(building: GeneratedBuilding) {
   return architecture.plan({
     x: 0, z: 0, width: building.width, depth: building.depth, height: building.height,
-    style: building.style, variant: building.variant, facade, roof,
+    style: building.style,
+    variant: neighbourhoodBuildingVariant(nearestDistrict(building.x, building.z).name, building.variant),
+    facade, roof,
   });
 }
 
