@@ -27,7 +27,13 @@ import {
   OCEAN_POLYGON,
   pointInPolygon,
   RAILWAY_CORRIDOR_HALF_WIDTH,
+  RAILWAY_LEVEL_CROSSINGS,
   RAILWAY_STATION_SITES,
+  ROAD_BUILD_MARGIN,
+  STATION_PLATFORM_OFFSET,
+  STATION_PLATFORM_WIDTH,
+  platformSideFits,
+  stationPlatformLength,
   WATER_POLYGONS,
   type MapPolygon,
 } from './mapData';
@@ -109,7 +115,10 @@ export const WATER_BASIN_DEPTH = 2.6;
 export const STOP_LINE_DEPTH = 0.6; // thickness (along travel) of an intersection stop bar — bold, reads as the feature
 /** Pavement begins just behind the kerb and ends exactly at the walkable-band query boundary. */
 export const SIDEWALK_INNER_EDGE = 0.38;
-export const SIDEWALK_WIDTH = 3.12;
+/** Derived from ROAD_BUILD_MARGIN, not declared beside it, so the pavement the renderer LAYS and the
+ *  road footprint every clearance rule MEASURES can never disagree. Widening the pavement now widens
+ *  the footprint that rail, station platforms and roadside placement are all held clear of. */
+export const SIDEWALK_WIDTH = ROAD_BUILD_MARGIN - SIDEWALK_INNER_EDGE;
 export const SIDEWALK_CENTER = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH / 2;
 const SIDEWALK_UV_LENGTH = 48; // one procedural tile contains sixteen 3u-deep paving bays
 const CLIP_PROBE_SPACING = 3; // narrower than the smallest road: a crossing cannot hide between probes
@@ -334,6 +343,43 @@ export const RAILWAY_NETWORK: Array<{ name: string; points: RoadPoint[] }> =
 export const RAIL_GAUGE = 1.6;
 /** Gravel ballast bed width (u). */
 export const RAIL_BALLAST_WIDTH = RAILWAY_CORRIDOR_HALF_WIDTH * 2;
+
+/**
+ * GROUND-DRAPE ORDER, lowest first. Every sheet laid flat on the terrain competes for the same
+ * millimetres, and the one laid lower simply disappears under the one laid higher:
+ *
+ *   0.04  mine dump / tilled field   0.05  park + veld lawn   0.065 footpath   0.075 dirt track
+ *   0.09  RAIL BALLAST in the open   0.15  tar               0.162 junction paving
+ *   0.185 road markings              0.21  RAIL BALLAST over tar    0.37 sidewalk    0.43 over pavement
+ *
+ * The rail bed is the one sheet with no fixed rung: it rides RAIL_SURFACE_CLEARANCE above whatever is
+ * already laid where it is, so it wins everywhere without having to be higher than everything.
+ *
+ * The ballast used to be laid at 0.045 — five millimetres UNDER the 0.05 park/veld sheet, so every
+ * stretch of line running through a green polygon was painted over by the lawn on top of it. That is
+ * the identical defect PR #110 found in the dirt tracks (laid at 0.04, one centimetre under the same
+ * sheet) and fixed for tracks and footpaths only; rail had it too and kept it. RAIL_BED_LIFT clears
+ * the whole landuse stack, and clears the unpaved ways as well, so a track crossing a line reads as
+ * running over the formation rather than through it.
+ */
+export const RAIL_BED_LIFT = 0.09;
+/**
+ * How far the formation rides above a PAVED surface it crosses — the tar of a carriageway (0.15, so
+ * the bed lands at 0.21, above the 0.185 markings) or the raised pavement beside it (0.37 → 0.43).
+ *
+ * The old comment on buildRailways claimed level crossings "come free" because the bed rode just above
+ * the tar. It did not: the bed sat 0.105 BELOW the tar and only the rails cleared it, by a single
+ * centimetre, so a crossing rendered as two z-fighting metal slivers on bare asphalt.
+ */
+const RAIL_SURFACE_CLEARANCE = 0.06;
+/** Ballast vertex pitch. Finer than ROAD_STRIP_SUBSTEP so the bed can follow the kerb step at a
+ *  crossing instead of interpolating across it and sinking under the pavement. */
+const RAIL_BED_SUBSTEP = 3;
+/** Sleeper and rail-head heights above the ballast surface, whatever height the ballast is riding at. */
+const SLEEPER_RISE = 0.03;
+const RAIL_HEAD_RISE = 0.115;
+/** How far back from the track a level crossing's stop bar is painted, clear of the ballast. */
+const LEVEL_CROSSING_SETBACK = 6;
 
 const seeded = (x: number, z: number, salt = 0): number => {
   const value = Math.sin(x * 12.9898 + z * 78.233 + salt * 41.17) * 43758.5453;
@@ -1197,8 +1243,26 @@ export class City {
     this.buildRailways();
   }
 
-  /** Passenger rail: a draped ballast strip with instanced sleepers and twin rails. Level crossings
-   *  come free — the rail bed rides just above the tar where a line crosses a carriageway. */
+  /**
+   * Lift of the rail formation over the terrain at (x, z).
+   *
+   * The bed rides a few centimetres above whatever surface is already laid there, and the game's own
+   * surface query is what knows which surface that is: the tar on a carriageway, the raised pavement
+   * on a footway, bare ground in the open. Expressed as a lift over the TERRAIN because that is what
+   * the strip builder adds it to.
+   *
+   * Following the surface rather than picking a constant is what makes a level crossing whole. A fixed
+   * lift tuned to clear the tar still leaves the track buried under the 0.37 pavement on both kerbs, so
+   * the crossing renders as a carriageway of visible track with the rails vanishing at each kerb —
+   * a smaller version of the same "partially covered" complaint.
+   */
+  private railBedLift(x: number, z: number): number {
+    const surface = this.surfaceHeightAt(x, z) - terrainHeightAt(x, z);
+    return Math.max(RAIL_BED_LIFT, surface + RAIL_SURFACE_CLEARANCE);
+  }
+
+  /** Passenger rail: a draped ballast strip with instanced sleepers and twin rails, laid above the
+   *  landuse drapes it crosses and above the tar wherever it crosses a carriageway. */
   private buildRailways(): void {
     if (RAILWAY_NETWORK.length === 0) return;
     const ballastMat = new THREE.MeshStandardMaterial({ color: 0x6b625a, map: this.sand, roughness: 0.98 });
@@ -1209,8 +1273,9 @@ export class City {
     const RAIL_PITCH = 12; // chord length for the rail boxes: follows the relief without instance spam
     for (const line of RAILWAY_NETWORK) {
       const sampled = this.samplePath(line.points, false, ROAD_SAMPLE_SPACING);
-      const ballast = this.createRoadStrip(sampled, RAIL_BALLAST_WIDTH, ballastMat, 0.045, false);
-      ballast.receiveShadow = true; this.group.add(ballast);
+      const bed = this.densifyPath(sampled, RAIL_BED_SUBSTEP, false);
+      const ballast = this.createRoadStrip(bed, RAIL_BALLAST_WIDTH, ballastMat, (x, z) => this.railBedLift(x, z), false);
+      ballast.receiveShadow = true; ballast.name = `${line.name} ballast`; this.group.add(ballast);
       this.railPaths.push(sampled.map((point) => ({ ...point })));
       const chords = this.densifyPath(sampled, RAIL_PITCH, false);
       for (let index = 0; index < chords.length - 1; index++) {
@@ -1222,14 +1287,14 @@ export class City {
         const midX = (start.x + end.x) / 2; const midZ = (start.z + end.z) / 2;
         for (const side of [-1, 1]) {
           const x = midX + normalX * side * (RAIL_GAUGE / 2); const z = midZ + normalZ * side * (RAIL_GAUGE / 2);
-          matrix.compose(new THREE.Vector3(x, this.terrainHeightAt(x, z) + 0.16, z), quaternion, new THREE.Vector3(0.16, 0.14, length + 0.3));
+          matrix.compose(new THREE.Vector3(x, this.terrainHeightAt(x, z) + this.railBedLift(x, z) + RAIL_HEAD_RISE, z), quaternion, new THREE.Vector3(0.16, 0.14, length + 0.3));
           railTransforms.push(matrix.clone());
         }
         const sleepers = Math.max(1, Math.round(length / 2.6));
         for (let s = 0; s < sleepers; s++) {
           const t = (s + 0.5) / sleepers;
           const x = start.x + dx * t; const z = start.z + dz * t;
-          matrix.compose(new THREE.Vector3(x, this.terrainHeightAt(x, z) + 0.075, z), quaternion, new THREE.Vector3(2.4, 0.07, 0.55));
+          matrix.compose(new THREE.Vector3(x, this.terrainHeightAt(x, z) + this.railBedLift(x, z) + SLEEPER_RISE, z), quaternion, new THREE.Vector3(2.4, 0.07, 0.55));
           sleeperTransforms.push(matrix.clone());
         }
       }
@@ -1237,6 +1302,7 @@ export class City {
     const box = new THREE.BoxGeometry(1, 1, 1);
     this.addInstanced(box, railMat, railTransforms, { receive: true });
     this.addInstanced(box, sleeperMat, sleeperTransforms, { receive: true });
+    this.buildLevelCrossings();
 
     const platformMaterials = {
       concrete: new THREE.MeshStandardMaterial({ color: 0xb8b7ae, map: this.concrete, roughness: 0.94 }),
@@ -1251,6 +1317,41 @@ export class City {
     for (const station of RAILWAY_STATION_SITES) this.buildRailwayStation(station, platformMaterials);
   }
 
+  /**
+   * A stop bar painted across each approach of every place a line genuinely crosses a carriageway.
+   *
+   * These are the crossings the deconfliction deliberately did NOT design away: where rail and road
+   * run together one of them gives, but where they cross at an angle the line has to get to the other
+   * side, and a level crossing on a Metrorail line is honest Johannesburg. Marking the approaches is
+   * what makes it read as a crossing from a car rather than as track lying loose over the tar.
+   */
+  private buildLevelCrossings(): void {
+    if (RAILWAY_LEVEL_CROSSINGS.length === 0) return;
+    const barMat = new THREE.MeshStandardMaterial({ color: 0xf2f0e6, roughness: 0.82 });
+    const transforms: THREE.Matrix4[] = [];
+    const matrix = new THREE.Matrix4();
+    const lift = ROAD_SURFACE_OFFSET + 0.03; // on the tar, under the rail formation that rides over it
+    for (const crossing of RAILWAY_LEVEL_CROSSINGS) {
+      for (const approach of [-1, 1]) {
+        // Set back from the track along the ROAD, far enough to clear the ballast at any crossing angle.
+        const x = crossing.x + crossing.roadDirX * approach * LEVEL_CROSSING_SETBACK;
+        const z = crossing.z + crossing.roadDirZ * approach * LEVEL_CROSSING_SETBACK;
+        if (distanceToRoadEdge(x, z) > 0) continue; // set back off the end of the road: no bar to paint
+        const span = Math.min(crossing.roadHalf, 14); // one bar per approach lane group, never absurd
+        const quaternion = this.surfaceSegmentQuaternion(
+          x - crossing.roadDirZ * span, z + crossing.roadDirX * span,
+          x + crossing.roadDirZ * span, z - crossing.roadDirX * span, 'road',
+        );
+        matrix.compose(
+          new THREE.Vector3(x, this.roadHeightAt(x, z) + lift, z), quaternion,
+          new THREE.Vector3(STOP_LINE_DEPTH, 0.02, span * 2),
+        );
+        transforms.push(matrix.clone());
+      }
+    }
+    this.addInstanced(new THREE.BoxGeometry(1, 1, 1), barMat, transforms, { receive: true });
+  }
+
   /** Two level, walkable platforms with tactile edges, shelters, benches, lights, and station signs.
    *  Sites are projected onto a real rail segment in mapData, keeping every platform track-aligned. */
   private buildRailwayStation(
@@ -1262,8 +1363,8 @@ export class City {
   ): void {
     const heading = Math.atan2(station.dirX, station.dirZ);
     const c = Math.cos(heading); const s = Math.sin(heading);
-    const length = station.name === 'Park Station' ? 58 : 46;
-    const width = 3.6; const offset = RAILWAY_CORRIDOR_HALF_WIDTH + width / 2 + 0.25;
+    const length = stationPlatformLength(station.name);
+    const width = STATION_PLATFORM_WIDTH; const offset = STATION_PLATFORM_OFFSET;
     const toWorld = (lx: number, lz: number): RoadPoint => ({
       x: station.x + lx * c + lz * s,
       z: station.z - lx * s + lz * c,
@@ -1284,14 +1385,12 @@ export class City {
 
     for (const side of [-1, 1]) {
       const platformX = side * offset;
-      // With full-line station coverage some stops sit near level crossings: a platform side whose
-      // slab would land on a carriageway is skipped (the other side still serves the stop).
-      let overlapsRoad = false;
-      for (let lz = -length / 2; lz <= length / 2 && !overlapsRoad; lz += 6) {
-        const probe = toWorld(platformX, lz);
-        if (distanceToRoadEdge(probe.x, probe.z) < width / 2 - 0.4) overlapsRoad = true;
-      }
-      if (overlapsRoad) continue;
+      // Last resort only. Siting already slid this stop along its line to a spot where both slabs fit
+      // (platformSideFits, measured against the road AS BUILT), so a side is dropped here only where no
+      // such spot exists anywhere within the slide limit — a station wedged in the CBD grid with a
+      // carriageway hard against the track. Anything that reads as a half-built station means siting
+      // failed, not that this test is too strict.
+      if (!platformSideFits(station.x, station.z, station.dirX, station.dirZ, side as 1 | -1, length)) continue;
       const slab = new THREE.Mesh(new THREE.BoxGeometry(width, platformHeight, length), materials.concrete);
       slab.position.set(platformX, (platformTop + platformBottom) / 2, 0); slab.receiveShadow = true; group.add(slab);
       const edgeX = side * (offset - width / 2 + 0.16);
@@ -1728,15 +1827,24 @@ export class City {
     return out;
   }
 
-  private createRoadStrip(input: RoadPoint[], width: number, material: THREE.Material, y: number, closed: boolean): THREE.Mesh {
+  /** `y` may be a per-point lift, for a strip whose height over the terrain varies along its run
+   *  (the rail formation, which rides higher across a carriageway than it does through the veld). */
+  private createRoadStrip(input: RoadPoint[], width: number, material: THREE.Material, y: number | ((x: number, z: number) => number), closed: boolean): THREE.Mesh {
     const points = this.densifyPath(input, ROAD_STRIP_SUBSTEP, closed); // hug the relief between the coarse nav samples
     const vertices: number[] = []; const uvs: number[] = []; const indices: number[] = []; let distance = 0;
     const sides = this.offsetPath(points, width / 2, closed); const opposite = this.offsetPath(points, -width / 2, closed);
+    const liftAt = typeof y === 'function' ? y : (): number => y;
+    // A FIXED raised lift is sunk back to tar level where the strip lies on a carriageway, so a raised
+    // surface cannot stand proud in the middle of a road. A PER-POINT lift is the caller doing that
+    // arithmetic itself — the rail formation deliberately rides over the tar at a level crossing — so
+    // it is taken as given.
+    const sinkOnRoad = typeof y !== 'function';
     for (let index = 0; index < points.length; index++) {
       if (index > 0) { const previous = points[index - 1]; const point = points[index]; if (previous && point) distance += Math.hypot(point.x - previous.x, point.z - previous.z); }
       const left = sides[index]; const right = opposite[index]; if (!left || !right) continue;
-      const leftOffset = y > ROAD_SURFACE_OFFSET && this.isOnRoad(left.x, left.z) ? ROAD_SURFACE_OFFSET : y;
-      const rightOffset = y > ROAD_SURFACE_OFFSET && this.isOnRoad(right.x, right.z) ? ROAD_SURFACE_OFFSET : y;
+      const leftLift = liftAt(left.x, left.z); const rightLift = liftAt(right.x, right.z);
+      const leftOffset = sinkOnRoad && leftLift > ROAD_SURFACE_OFFSET && this.isOnRoad(left.x, left.z) ? ROAD_SURFACE_OFFSET : leftLift;
+      const rightOffset = sinkOnRoad && rightLift > ROAD_SURFACE_OFFSET && this.isOnRoad(right.x, right.z) ? ROAD_SURFACE_OFFSET : rightLift;
       vertices.push(left.x, terrainHeightAt(left.x, left.z) + leftOffset, left.z, right.x, terrainHeightAt(right.x, right.z) + rightOffset, right.z); uvs.push(0, distance / 18, 1, distance / 18);
       if (index < points.length - 1) { const base = index * 2; indices.push(base, base + 2, base + 1, base + 2, base + 3, base + 1); }
     }
