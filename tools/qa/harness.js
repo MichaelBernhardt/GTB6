@@ -552,7 +552,15 @@ window.__qa = (() => {
     }
     if (g.airborne) return 'stuck:never-landed';
     note(`landed after ${Math.round(sim)}s of canopy`);
-    // A canopy landing rarely stops on the exact reach point — walk the rest of the way in on foot.
+    // A canopy landing rarely stops on the exact reach point. Follow the real road graph for the
+    // last block first: a straight-line walker can pin itself against Ponte's tower/forecourt wall
+    // and falsely report an impossible objective even though the GPS route is perfectly usable.
+    const route = roadRoute(tx, tz);
+    if (route?.length) {
+      const walked = driveRoute(route, 180);
+      if (walked >= 0 || g.missions.state !== 'active') { step(4); return 'ok'; }
+    }
+    // Graph unavailable: retain the collider-respecting direct walk as a bounded fallback.
     let wsim = 0;
     while (wsim < 40 && Math.hypot(tx - g.player.group.position.x, tz - g.player.group.position.z) > 4) {
       walkToward(tx, tz, 7, STEP); g.update(STEP); wsim += STEP;
@@ -577,9 +585,12 @@ window.__qa = (() => {
     const office = g.markerTarget ?? g.missionTargetRaw?.();
     if (!office) return 'stuck:no-office-target';
     const gate = g.player.group.position.clone();
-    const cx = (gate.x + office.position.x) / 2, cz = (gate.z + office.position.z) / 2; // ~ yard centre
-    const ring = Math.hypot(gate.x - cx, gate.z - cz) + 3;
-    const gateAngle = Math.atan2(gate.x - cx, gate.z - cz);
+    const yard = window.__qaKelvin;
+    const cx = yard?.x ?? (gate.x + office.position.x) / 2, cz = yard?.z ?? (gate.z + office.position.z) / 2;
+    // Keep a real pavement-width buffer. At +3 the route's chord-following collision response could
+    // graze a fence panel, slide inward, then pin the walker against it; +12 is clear on both sides.
+    const ring = (yard?.radius ?? Math.hypot(gate.x - cx, gate.z - cz)) + 12;
+    const gateAngle = Math.atan2((yard?.gateX ?? gate.x) - cx, (yard?.gateZ ?? gate.z) - cz);
     // arc-walk to the far side
     for (let t = 0; t <= 1.001; t += 0.05) {
       const a = gateAngle + Math.PI * t;
@@ -589,7 +600,8 @@ window.__qa = (() => {
     }
     // now push inward toward the office through the breach; sidestep along the ring if blocked
     for (let offset = 0; offset <= 12; offset = offset <= 0 ? -offset + 2 : -offset) {
-      const a = gateAngle + Math.PI + offset / ring;
+      const breachAngle = yard?.breachX === undefined ? gateAngle + Math.PI : Math.atan2(yard.breachX - cx, yard.breachZ - cz);
+      const a = breachAngle + offset / ring;
       const sx = cx + Math.sin(a) * ring, sz = cz + Math.cos(a) * ring;
       let guard = 0;
       while (walkToward(sx, sz, 7, STEP) === false && guard++ < 200) g.update(STEP);
@@ -608,23 +620,20 @@ window.__qa = (() => {
     return 'stuck:no-breach';
   }
 
-  /** Escape Dark House: back out through the breach and around the ring to the gate — real collision. */
-  const keepDark = () => { g.dayNight.hour = 22; g.torch.on = false; if (!g.loadShedding.active) g.applyEskom(g.loadShedding.force()); };
+  /** Escape Dark House through the authored rear-breach marker — real collision, same outage window. */
+  const stayQuiet = () => { g.dayNight.hour = 22; g.torch.on = false; };
   function escapeYard() {
-    // During the blackout the maglock gate hangs OPEN (the breach was only the grid-up way in), so the
-    // escape is a short straight walk office → gate — well inside one outage window. Keep it dark and
-    // brief so no self-ending-outage frame catches the player still inside the fence.
-    keepDark();
+    // Do not restart an expired outage here: the mission must be honestly completable inside one slot.
+    stayQuiet();
     let dsim = 0; while (g.dayNight.blackoutFactor < 0.78 && dsim < 30) { g.update(STEP); dsim += STEP; }
-    const gate = g.markerTarget ?? g.missionTargetRaw?.();
-    if (!gate) return 'stuck:no-gate-target';
+    const breach = g.markerTarget ?? g.missionTargetRaw?.();
+    if (!breach) return 'stuck:no-breach-target';
     let guard = 0; let last = Infinity; let stall = 0;
     while (g.missions.state === 'active' && guard++ < 400) {
-      keepDark();
+      stayQuiet();
       for (const yg of g.yardGuards ?? []) if (yg.state !== 'down') yg.takeDamage?.(1000); // keep every cone dead the whole walk out
-      const r = walkToward(gate.position.x, gate.position.z, 8, STEP); g.update(STEP);
-      // collision can snag the straight line to the gate; if we stop closing, sidestep along the fence
-      const d = Math.hypot(gate.position.x - g.player.group.position.x, gate.position.z - g.player.group.position.z);
+      const r = walkToward(breach.position.x, breach.position.z, 8, STEP); g.update(STEP);
+      const d = Math.hypot(breach.position.x - g.player.group.position.x, breach.position.z - g.player.group.position.z);
       if (r === 'blocked' || d > last - 0.05) { if (++stall > 8) { const a = guard * 0.7; g.player.group.position.x += Math.cos(a) * 1.5; g.player.group.position.z += Math.sin(a) * 1.5; g.update(STEP); stall = 0; } } else stall = 0;
       last = d;
       if (!g.missions.active || g.missions.state !== 'active') break;

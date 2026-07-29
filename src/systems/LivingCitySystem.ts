@@ -32,7 +32,7 @@ export interface CityTransition {
   state: DistrictState;
 }
 
-/** Districts with pre-seeded reputation slots; any other generated district gets a neutral slot on demand. */
+/** Backward-compatible pre-seeded slots; every other generated district gets a persistent slot on demand. */
 export const DISTRICTS: District[] = ['Joburg CBD', 'Sandton', 'Braamfontein', 'Hillbrow', 'Newtown'];
 export const CBD: District = 'Joburg CBD';
 
@@ -51,8 +51,12 @@ export function sanitizeLivingCityState(raw: unknown): LivingCityState {
   const result = defaultLivingCityState();
   if (!raw || typeof raw !== 'object') return result;
   const value = raw as Partial<LivingCityState>;
-  for (const district of DISTRICTS) {
-    const candidate = value.districts?.[district];
+  // Preserve every lazily-created generated district, not only the five slots that existed in v1.
+  // Otherwise a player's reputation outside the CBD works for one session and vanishes on reload.
+  const candidates = value.districts && typeof value.districts === 'object'
+    ? Object.entries(value.districts)
+    : [];
+  for (const [district, candidate] of candidates) {
     if (!candidate || typeof candidate !== 'object') continue;
     result.districts[district] = {
       communityStanding: Number.isFinite(candidate.communityStanding) ? clamp(Number(candidate.communityStanding), -100, 100) : 0,
@@ -110,8 +114,6 @@ export class LivingCitySystem {
   district(district: District): DistrictState { return this.state.districts[district] ??= neutralDistrict(); }
 
   apply(event: CityEvent): CityTransition | undefined {
-    // The vertical slice only changes the CBD. Other districts already have state slots for later expansion.
-    if (event.district !== CBD) return undefined;
     const state = this.district(event.district); const previous = reputationTier(state.communityStanding);
     const changes: Record<CityEvent['kind'], [number, number]> = {
       'civilian-assault': [-8, 5], 'civilian-murder': [-18, 12], mugging: [-10, 7],
@@ -133,7 +135,9 @@ export class LivingCitySystem {
 
   /** Long-term pressure cools slowly; standing is deliberately persistent and changes through play. */
   update(dt: number): void {
-    const cbd = this.district(CBD);
-    cbd.policePressure = clamp(cbd.policePressure - Math.max(0, dt) / 120, 0, 100);
+    const cooling = Math.max(0, dt) / 120;
+    for (const state of Object.values(this.state.districts)) {
+      state.policePressure = clamp(state.policePressure - cooling, 0, 100);
+    }
   }
 }

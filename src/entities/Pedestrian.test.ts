@@ -49,3 +49,22 @@ describe('death spin', () => {
     expect(grazed.state).not.toBe('down');
   });
 });
+
+describe('pedestrian distance LOD', () => {
+  it('uses one tiny silhouette draw between the detailed body and hidden tier', () => {
+    const ped = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 3);
+    const detail = ped.group.getObjectByName('ProceduralPedestrianFallback')!;
+    const proxy = ped.group.getObjectByName('pedestrian-lod-proxy') as THREE.Mesh;
+    expect(proxy).toBeInstanceOf(THREE.Mesh);
+    expect((proxy.geometry.index?.count ?? proxy.geometry.getAttribute('position').count) / 3).toBeLessThanOrEqual(80);
+    expect(detail.visible).toBe(true); expect(proxy.visible).toBe(false);
+
+    ped.setVisualLod('proxy');
+    expect(ped.isRenderVisible).toBe(true); expect(ped.isDetailVisible).toBe(false);
+    expect(detail.visible).toBe(false); expect(proxy.visible).toBe(true);
+    ped.setVisualLod('hidden');
+    expect(ped.isRenderVisible).toBe(false); expect(detail.visible).toBe(false); expect(proxy.visible).toBe(false);
+    ped.setVisualLod('detail');
+    expect(ped.isDetailVisible).toBe(true); expect(detail.visible).toBe(true); expect(proxy.visible).toBe(false);
+  });
+});

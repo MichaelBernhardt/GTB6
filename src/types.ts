@@ -15,7 +15,12 @@ export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerabl
 export interface Inventory { armour: number; stims: number; parachutes: number; }
 export interface SavedVehicle { kind: VehicleKind; color: number; health: number; }
 /** Best results from replayable open-world activities. Optional fields keep future activities additive. */
-export interface ActivityRecords { robotRunBest?: number; }
+export interface ActivityRecords {
+  /** Fastest Robot Run lap, in seconds. */
+  robotRunBest?: number;
+  /** Largest clean Jozi Flow pot banked, in rand. */
+  joziFlowBest?: number;
+}
 export interface SavedGame {
   version: 3;
   money: number;

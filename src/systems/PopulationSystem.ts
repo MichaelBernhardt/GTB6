@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, resolvePedestrianRenderVisible, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, resolvePedestrianVisualLod, resolveVehicleVisualLod, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
 import {
   AMBIENT_NPC_CHARACTER_IDS,
@@ -22,6 +22,11 @@ import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODG
 import type { City, RoadPoint } from '../world/City';
 import { HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
 import { powerOn } from '../world/powerGrid';
+import {
+  neighbourhoodPedestrian,
+  neighbourhoodTrafficColour,
+  neighbourhoodTrafficKind,
+} from '../world/data/neighbourhoods';
 
 /** `closureStamp` is the RoadClosures stamp this route was solved under: when it moves, a driver
  *  whose remaining waypoints run into a newly closed road re-solves instead of nosing into it. */
@@ -115,8 +120,8 @@ export class PopulationSystem {
         if (ped.frozen !== wasFrozen) {
           ped.resetProgress(); // stalled time must not straddle a frozen gap
         }
-        // The outer AI ring keeps routes alive; the tighter visual ring removes bodies too small to read.
-        ped.setRenderVisible(!ped.frozen && resolvePedestrianRenderVisible(ped.isRenderVisible, distanceSq));
+        // The outer AI ring keeps routes alive; medium bodies become cheap silhouettes before disappearing.
+        ped.setVisualLod(ped.frozen ? 'hidden' : resolvePedestrianVisualLod(ped.visualLod, distanceSq));
       }
       if (ped.frozen) return; // far agents: no motion, routing, or animation until the player closes in again
       ped.update(dt, this.city, this.city.sidewalkPoints, player);
@@ -126,13 +131,22 @@ export class PopulationSystem {
     this.witnessBodies(dt);
     const robotsOut = !powerOn();
     this.hootCooldown = Math.max(0, this.hootCooldown - dt);
+    this.vehicles.forEach((vehicle, index) => {
+      if (vehicle.playerControlled) { vehicle.setVisualLod('detail'); return; }
+      if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES !== 0) return;
+      const distanceSq = vehicle.group.position.distanceToSquared(player);
+      vehicle.setVisualLod(resolveVehicleVisualLod(vehicle.visualLod, distanceSq));
+    });
     this.traffic.forEach((vehicle, index) => {
-      if (vehicle.playerControlled || vehicle.disabled || !vehicle.occupied) return; // no NPC aboard (e.g. a carjacked car the player has since left): sit still, don't plan routes
+      if (vehicle.playerControlled) return;
+      const checkDistance = (this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0;
+      const distanceSq = checkDistance ? vehicle.group.position.distanceToSquared(player) : 0;
+      if (vehicle.disabled || !vehicle.occupied) return; // no NPC aboard (e.g. a carjacked car the player has since left): sit still, don't plan routes
       vehicle.routeCooldown = Math.max(0, vehicle.routeCooldown - dt);
       this.replanCooldown.set(vehicle, Math.max(0, (this.replanCooldown.get(vehicle) ?? 0) - dt));
-      if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0) {
+      if (checkDistance) {
         const wasFrozen = vehicle.frozen;
-        vehicle.frozen = resolveFrozen(vehicle.frozen, vehicle.group.position.distanceToSquared(player), AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE);
+        vehicle.frozen = resolveFrozen(vehicle.frozen, distanceSq, AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE);
         if (vehicle.frozen !== wasFrozen) this.trafficPlans.get(vehicle)?.watchdog.reset();
         if (vehicle.frozen && !wasFrozen) vehicle.speed = 0; // park in place: a stale speed would fire impact checks and jerk on thaw
       }
@@ -387,6 +401,18 @@ export class PopulationSystem {
   /** Keeps a small, fully interactive foot-patrol presence near the player while district pressure is high. */
   setPolicePatrolCount(count: number, focus: THREE.Vector3): void {
     const desired = Math.max(0, Math.min(2, Math.floor(count)));
+    const district = this.city.districtAt(focus.x, focus.z);
+    // Patrols belong to the pressure in THIS neighbourhood. Carrying a CBD beat cop forever after a
+    // cross-city trip both leaves the new district empty and pins an irrelevant pedestrian kilometres
+    // away. The roster is at most two, so this relocation check is effectively free.
+    for (let index = this.policePatrols.length - 1; index >= 0; index--) {
+      const officer = this.policePatrols[index]; if (!officer) continue;
+      const local = this.city.districtAt(officer.group.position.x, officer.group.position.z) === district;
+      if (local && officer.group.position.distanceToSquared(focus) < 130 * 130) continue;
+      this.policePatrols.splice(index, 1);
+      this.scene.remove(officer.group); officer.dispose();
+      const pedestrian = this.pedestrians.indexOf(officer); if (pedestrian >= 0) this.pedestrians.splice(pedestrian, 1);
+    }
     while (this.policePatrols.length > desired) {
       const officer = this.policePatrols.pop(); if (!officer) break;
       this.scene.remove(officer.group); officer.dispose(); const index = this.pedestrians.indexOf(officer); if (index >= 0) this.pedestrians.splice(index, 1);
@@ -394,7 +420,7 @@ export class PopulationSystem {
     while (this.policePatrols.length < desired) {
       const candidates = this.city.sidewalkPoints.filter((point) => {
         const distance = Math.hypot(point.x - focus.x, point.z - focus.z);
-        return distance > 25 && distance < 75 && this.city.districtAt(point.x, point.z) === 'Joburg CBD';
+        return distance > 25 && distance < 75 && this.city.districtAt(point.x, point.z) === district;
       });
       const point = candidates[(this.policePatrols.length * 17 + 5) % candidates.length]; if (!point) break;
       const officer = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), 90 + this.policePatrols.length, false, true, this.nextSpecialNpcVariant(JMPD_PATROL_NPC_ID));
@@ -452,7 +478,10 @@ export class PopulationSystem {
   /** Story: a hi-vis security guard standing a post (Kelvin Yard); the mission director sweeps his torch. */
   spawnYardGuard(x: number, z: number): Pedestrian {
     const guard = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++ + 90, false, false, this.nextSpecialNpcVariant(CAR_GUARD_NPC_ID));
-    guard.state = 'idle'; guard.idleTime = 999999; guard.makeCarGuard(); guard.group.name = 'Yard Security';
+    // `contact` is deliberately false: contacts are invulnerable mission-giver bodies. The CAR_GUARD
+    // visual already supplies the hi-vis uniform; `scripted` pins this actor without making a quiet
+    // takedown impossible or causing car-guard tip/hail behaviour inside the depot.
+    guard.scripted = true; guard.state = 'idle'; guard.idleTime = 999999; guard.group.name = 'Yard Security';
     this.pedestrians.push(guard);
     return guard;
   }
@@ -512,7 +541,7 @@ export class PopulationSystem {
 
   /** Lifecycle spawn: one ambient citizen placed on a sidewalk point the lifecycle system already vetted as hidden. */
   spawnAmbientPedestrian(x: number, z: number): Pedestrian {
-    const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++, false, false, this.nextAmbientNpcVariant());
+    const ped = new Pedestrian(this.scene, this.clearSpawn(x, z), this.ambientSerial++, false, false, this.nextAmbientNpcVariant(x, z));
     ped.pickDestination(this.localChoice(ped.group.position.x, ped.group.position.z)); this.pedestrians.push(ped); return ped;
   }
 
@@ -524,8 +553,8 @@ export class PopulationSystem {
     return this.pedestrians.filter((ped) => ped.visualVariant !== undefined && !ped.contact && NPC_CATALOG[ped.visualVariant].role === 'ambient').length;
   }
 
-  private nextAmbientNpcVariant(): NpcCharacterId {
-    const variant = AMBIENT_NPC_CHARACTER_IDS[this.npcVariantCursor % AMBIENT_NPC_CHARACTER_IDS.length];
+  private nextAmbientNpcVariant(x: number, z: number): NpcCharacterId {
+    const variant = neighbourhoodPedestrian(this.city.districtAt(x, z), this.npcVariantCursor);
     this.npcVariantCursor += 1; return variant!;
   }
 
@@ -541,9 +570,9 @@ export class PopulationSystem {
 
   /** Lifecycle spawn: one AI-driven vehicle dropped on a vetted lane node and routed immediately. */
   spawnTrafficVehicle(x: number, z: number): Vehicle {
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'sport', 'motorbike', 'van', 'courier', 'taxi']; // the lime courier is actually working, allegedly
-    const kind = kinds[this.ambientSerial % kinds.length] ?? 'compact';
-    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][this.ambientSerial % 4]);
+    const district = this.city.districtAt(x, z);
+    const kind = neighbourhoodTrafficKind(district, this.ambientSerial);
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), kind === 'taxi' ? undefined : neighbourhoodTrafficColour(district, this.ambientSerial));
     this.ambientSerial++;
     vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     return vehicle;
@@ -574,7 +603,6 @@ export class PopulationSystem {
       vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([spot.x, spot.z]);
     }
-    const kinds: VehicleKind[] = ['compact', 'taxi', 'taxi', 'sport', 'motorbike', 'courier', 'van']; // the uniform Quantum fleet fills both former taxi slots
     // Seed the opening traffic on lanes around the player spawn (the map is far bigger than the
     // AI wake radius; the lifecycle system keeps density right as the player moves).
     const nearbyRoutes = this.city.trafficRoutes.filter((route) => {
@@ -584,8 +612,9 @@ export class PopulationSystem {
     const routePool = nearbyRoutes.length >= 8 ? nearbyRoutes : this.city.trafficRoutes;
     for (let i = 0; i < 15; i++) {
       const routeIndex = (i * 5 + 3) % routePool.length; const route = routePool[routeIndex]; const point = route?.[(i * 7) % Math.max(1, route.length)]; if (!point) continue;
-      const kind = kinds[i % kinds.length] ?? 'compact';
-      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, this.city.roadHeightAt(point.x, point.z), point.z), kind === 'taxi' ? undefined : [0x5c88a8, 0xd28452, 0x8c9273, 0xc7c8c4][i % 4]);
+      const district = this.city.districtAt(point.x, point.z);
+      const kind = neighbourhoodTrafficKind(district, i);
+      const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(point.x, this.city.roadHeightAt(point.x, point.z), point.z), kind === 'taxi' ? undefined : neighbourhoodTrafficColour(district, i));
       vehicle.occupied = true; this.vehicles.push(vehicle); this.traffic.push(vehicle); this.assignVehicleRoute(vehicle, true);
     }
   }
@@ -608,7 +637,7 @@ export class PopulationSystem {
     const pool = nearby.length >= 40 ? nearby : this.city.sidewalkPoints;
     for (let i = 0; i < 28; i++) {
       const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
-      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant()); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
+      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant(point.x, point.z)); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
     }
     const seenContacts = new Set<string>(); // one body per contact, at their first-listed mission's spot
     MISSIONS.forEach((mission, index) => {
@@ -739,8 +768,8 @@ export class PopulationSystem {
       const impact = Math.abs(first.speed - second.speed); // relative closing speed: a same-speed convoy reads ~0
       first.speed *= 0.65; second.speed *= 0.65; // bleed speed (unchanged from the old soft separation)
       const nx = dx / dist; const nz = dz / dist; const push = Math.min(reach - dist, TRAFFIC_MAX_PUSH) / 2; // shove apart so they don't sit pinned in a heap
-      first.group.position.x -= nx * push; first.group.position.z -= nz * push;
-      second.group.position.x += nx * push; second.group.position.z += nz * push;
+      first.nudge(-nx * push, -nz * push, this.city);
+      second.nudge(nx * push, nz * push, this.city);
       if (impact > NPC_CRASH_MIN_SPEED && (this.vehicleCrashCooldown.get(first) ?? 0) <= 0 && (this.vehicleCrashCooldown.get(second) ?? 0) <= 0) {
         const damage = (impact - NPC_CRASH_MIN_SPEED) * NPC_CRASH_DAMAGE; // gentler than player/police hits (0.25-0.35): no road of husks
         first.takeDamage(damage); second.takeDamage(damage);

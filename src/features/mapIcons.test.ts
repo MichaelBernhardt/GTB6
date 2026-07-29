@@ -26,6 +26,13 @@ describe('the eager feature blips', () => {
     expect(FUEL_ICON_COLOR).not.toBe(SHOP_ICON_COLOR);
   });
 
+  it('reuses the immutable marker set instead of allocating nineteen objects every render frame', () => {
+    const first = featureMapIcons();
+    const second = featureMapIcons();
+    expect(second).toBe(first);
+    expect(second[0]).toBe(first[0]);
+  });
+
   /**
    * The load-bearing invariant, and the whole reason this module exists: an icon that needs the lazy
    * body is an icon for a place the player has already found. Asserted at the SOURCE, because the
@@ -37,14 +44,13 @@ describe('the eager feature blips', () => {
     expect(source).not.toMatch(/import\(/);              // and no dynamic escape hatch either
   });
 
-  it('is merged into BOTH map surfaces by UIManager, not just the minimap', () => {
+  it('joins Game’s canonical marker frame, which feeds both map surfaces without a second merge', () => {
+    const game = readFileSync(join(here, '..', 'Game.ts'), 'utf8');
     const ui = readFileSync(join(here, '..', 'ui', 'UIManager.ts'), 'utf8');
-    expect(ui).toContain("from '../features/mapIcons'");
-    // the corner radar…
-    const draw = ui.slice(ui.indexOf('drawMap(x: number'));
-    expect(draw.slice(0, draw.indexOf('\n  }'))).toContain('featureMapIcons()');
-    // …and the full-screen M map, on open and on every live update while it is open.
-    expect(ui).toContain('openMap(frame: MapViewFrame): void { this.mapView.show(this.withFeatureIcons(frame)); }');
-    expect(ui).toContain('updateMap(frame: MapViewFrame): void { this.mapView.update(this.withFeatureIcons(frame)); }');
+    expect(game).toContain("import { featureMapIcons } from './features/mapIcons'");
+    expect(game.slice(game.indexOf('private mapMarkers()'), game.indexOf('private mapPolice()'))).toContain('...featureMapIcons()');
+    expect(ui).not.toContain("from '../features/mapIcons'");
+    expect(ui).toContain('openMap(frame: MapViewFrame): void { this.mapView.show(frame); }');
+    expect(ui).toContain('this.minimapView.draw(x, z, heading, roads, markers, police');
   });
 });

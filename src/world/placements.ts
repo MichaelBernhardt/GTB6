@@ -440,6 +440,11 @@ export const KELVIN_YARD_CENTER: MapPt = { x: kelvinKerb.x + kelvinIn.x * 30, z:
 export const KELVIN_OFFICE_SPOT: MapPt = { x: kelvinKerb.x + kelvinIn.x * 42, z: kelvinKerb.z + kelvinIn.z * 42 };
 /** Crossing this ring around the yard centre counts as being inside the fence. */
 export const KELVIN_FENCE_RADIUS = 26;
+/** The one honest way through Kelvin's fence: just outside the rear gap, opposite the road gate. */
+export const KELVIN_BREACH_SPOT: MapPt = {
+  x: KELVIN_YARD_CENTER.x + kelvinIn.x * (KELVIN_FENCE_RADIUS + 4),
+  z: KELVIN_YARD_CENTER.z + kelvinIn.z * (KELVIN_FENCE_RADIUS + 4),
+};
 
 /** The Ophirton feeder substation Sindi works (Pull the Plug, Catch Them Cutting, The Switch all key
  *  off it). Sited so it's a real ~1-1.3km night drive from BOTH Solly (SE) and Sindi (NW) — above the
@@ -459,6 +464,9 @@ export const GENNY_ROUND_STOPS: MapPt[] = [
 
 /** Crown Station: where the misplaced diesel consist must stop (The Wrong Train). */
 export const CROWN_STATION = stationPoint('Crown Station');
+/** Board the stolen consist at Booysens: unlike Park Station, this stop shares Crown's east line.
+ *  Sending the player to Park produced an impossible job — that train physically has no route to Crown. */
+export const WRONG_TRAIN_START = stationPoint('Booysens Station');
 
 /** Sindi's dead drop: a platform locker at Park Station — the central rail hub, a landmark a
  *  stranger can find from the station board (the old airport-name pun needed map knowledge). */
@@ -661,6 +669,10 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: PERMIT_SPOT.x, z: PERMIT_SPOT.z, radius: 8 },
   { x: KIOSK_SPOT.x, z: KIOSK_SPOT.z, radius: 7 },
   { x: LOCKUP_SPOT.x, z: LOCKUP_SPOT.z, radius: 9 },
+  // Kelvin Yard is a complete authored stealth arena, not just a marker. The generous claim keeps
+  // the fence, its rear footpath, and the approach clear even though CityGen uses a deliberately
+  // loose circumscribed-radius check for large procedural buildings.
+  { x: KELVIN_YARD_CENTER.x, z: KELVIN_YARD_CENTER.z, radius: 50 },
   ...DELIVERY_STOPS.map((stop) => ({ x: stop.x, z: stop.z, radius: 6 })),
   ...PARKED_VEHICLES.map((spot) => ({ x: spot.x, z: spot.z, radius: 4.5 })),
   ...TRANSIT_STOPS.map((stop) => ({ x: stop.x, z: stop.z, radius: 5 })),

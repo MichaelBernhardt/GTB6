@@ -41,8 +41,11 @@ def boot(browser, port):
     # and units stopped meaning metres when the 2/3 crop rescaled the world. Read from the live map
     # module so a future re-crop needs no edit here (and so the JS and Python edges cannot disagree).
     page.metres_per_unit = page.evaluate(
-        "async () => { const md = await import('/src/world/mapData.ts');"
-        " window.__metresPerUnit = md.METRES_PER_UNIT; return md.METRES_PER_UNIT; }")
+        "async () => { const md = await import('/src/world/mapData.ts'); const pl = await import('/src/world/placements.ts');"
+        " window.__metresPerUnit = md.METRES_PER_UNIT;"
+        " window.__qaKelvin = { x: pl.KELVIN_YARD_CENTER.x, z: pl.KELVIN_YARD_CENTER.z, radius: pl.KELVIN_FENCE_RADIUS,"
+        " gateX: pl.KELVIN_GATE_SPOT.x, gateZ: pl.KELVIN_GATE_SPOT.z,"
+        " breachX: pl.KELVIN_BREACH_SPOT.x, breachZ: pl.KELVIN_BREACH_SPOT.z }; return md.METRES_PER_UNIT; }")
     # NB: never let evaluate() return the __qa object itself — serializing the Game graph hangs Playwright
     page.evaluate("(src) => { new Function(src)(); return typeof window.__qa; }", HARNESS_JS)
     page.evaluate("() => { const q = window.__qa; q.g.update(1/60); return 0; }")
@@ -150,7 +153,7 @@ def play_mission(page, mission, out, all_findings, all_measurements, sheet_rows)
         # first objective), a stealth infiltration (undetected — the challenge is not being seen), or a
         # mission that already carries a sanctioned journey leg (a long drive by construction).
         objs = page.evaluate(f"() => (window.__qa.g.missions.missions.find(m => m.id === '{mission}')?.objectives ?? []).map(o => ({{ kind: o.kind, hidden: !!o.hidden, carrier: !!(o.conditions && (o.conditions.onTrain || o.conditions.drivingTrain || o.conditions.inPlane)), stealth: !!(o.conditions && o.conditions.undetected) }}))") or []
-        non_drive = bool(journeys) or any(o['kind'] == 'follow' or o['carrier'] or o['stealth'] for o in objs) or (bool(objs) and objs[0]['hidden'])
+        non_drive = bool(journeys) or any(o['kind'] in ('follow', 'survive') or o['carrier'] or o['stealth'] for o in objs) or (bool(objs) and objs[0]['hidden'])
         longest_metres = round(max(routed) * page.metres_per_unit) if routed else 0
         if routed and floor and longest_metres < floor and not non_drive:
             all_findings.append({'mission': mission, 'objective': -1, 'severity': 'fail',

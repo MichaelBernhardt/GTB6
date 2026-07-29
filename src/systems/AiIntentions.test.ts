@@ -14,30 +14,36 @@ import { PopulationSystem } from './PopulationSystem';
 import { WantedSystem } from './WantedSystem';
 
 const { lanes, walks } = buildCityNavPaths(ROAD_NETWORK);
-const makeCity = (): City => ({
-  vehicleNav: bridgeIslands(buildNavGraph(lanes, VEHICLE_NAV_JOIN)),
-  pedNav: bridgeIslands(buildNavGraph(walks, PED_NAV_JOIN)),
-  sidewalkPoints: walks.flatMap((walk) => walk.points),
-  wanderTarget: (x: number, z: number) => { // mirror production: hand back a NEARBY sidewalk point so routes stay short and reachable
-    const points = walks.flatMap((walk) => walk.points);
-    const near = points.filter((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < 250 * 250);
-    const pool = near.length ? near : points;
-    return pool[Math.floor(Math.random() * pool.length)];
-  },
-  trafficRoutes: lanes.map((lane) => lane.points),
-  collides: () => false,
-  collidesAt: () => false,
-  isOnRoad: () => true,
-  signalStops: () => false, // no robots in this nav-only harness: traffic obedience is covered in JunctionsSignals.test.ts
-  signalSlowFactor: () => 1, // no robots: never slow for a signal here
-  surfaceHeightAt: () => 0,
-  sidewalkHeightAt: () => 0,
-  roadHeightAt: () => 0,
-  surfaceNormalAt: () => new THREE.Vector3(0, 1, 0),
-  clampMove: (_from: THREE.Vector3, desired: THREE.Vector3) => desired.clone(),
-  nearestRoadPose: (position: THREE.Vector3) => ({ position: position.clone(), heading: 0 }),
-  roadPoseAwayFrom: (position: THREE.Vector3, minimum: number) => ({ position: new THREE.Vector3(position.x + minimum + 5, 0, position.z), heading: 0 }),
-}) as unknown as City;
+const sidewalkPoints = walks.flatMap((walk) => walk.points);
+const makeCity = (): City => {
+  let wanderCursor = 0;
+  return ({
+    vehicleNav: bridgeIslands(buildNavGraph(lanes, VEHICLE_NAV_JOIN)),
+    pedNav: bridgeIslands(buildNavGraph(walks, PED_NAV_JOIN)),
+    sidewalkPoints,
+    wanderTarget: (x: number, z: number) => { // mirror production: hand back a NEARBY sidewalk point so routes stay short and reachable
+      const near = sidewalkPoints.filter((p) => (p.x - x) ** 2 + (p.z - z) ** 2 < 250 * 250);
+      const pool = near.length ? near : sidewalkPoints;
+      // A stable rotating choice proves repeated arrival/replan cycles without a random draw
+      // occasionally handing the walker its current node and making this simulation flaky.
+      return pool[(wanderCursor++ * 17 + 5) % pool.length];
+    },
+    trafficRoutes: lanes.map((lane) => lane.points),
+    collides: () => false,
+    collidesAt: () => false,
+    isOnRoad: () => true,
+    signalStops: () => false, // no robots in this nav-only harness: traffic obedience is covered in JunctionsSignals.test.ts
+    signalSlowFactor: () => 1, // no robots: never slow for a signal here
+    districtAt: () => 'Joburg CBD', // neighbourhood casting needs a stable identity; navigation is the subject here
+    surfaceHeightAt: () => 0,
+    sidewalkHeightAt: () => 0,
+    roadHeightAt: () => 0,
+    surfaceNormalAt: () => new THREE.Vector3(0, 1, 0),
+    clampMove: (_from: THREE.Vector3, desired: THREE.Vector3) => desired.clone(),
+    nearestRoadPose: (position: THREE.Vector3) => ({ position: position.clone(), heading: 0 }),
+    roadPoseAwayFrom: (position: THREE.Vector3, minimum: number) => ({ position: new THREE.Vector3(position.x + minimum + 5, 0, position.z), heading: 0 }),
+  }) as unknown as City;
+};
 
 const audio = { scream: () => {}, setSiren: () => {}, taxiHoot: () => {}, setTrafficEngine: () => {}, copGunshot: () => {}, policeShout: () => {}, collision: () => {} } as unknown as AudioManager;
 

@@ -3,6 +3,7 @@ import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintRai
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_STATS, MAP_WORLD_SIZE, METRES_PER_UNIT, RAILWAY_STATION_SITES, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
+import { KELVIN_FENCE_RADIUS, KELVIN_YARD_CENTER } from './placements';
 
 const HALF = MAP_WORLD_SIZE / 2;
 const QUARTER = Math.PI / 2;
@@ -132,6 +133,16 @@ describe('citywide parcel layout', () => {
       const nearest = Math.min(...all.map((b) => Math.hypot(b.x - site.x, b.z - site.z)));
       expect(nearest, site.id).toBeGreaterThan(site.radius * 0.5);
     }
+  });
+
+  it('keeps complete procedural footprints out of the Kelvin Yard stealth arena', () => {
+    const nearestEdge = Math.min(...all.map((building) => (
+      Math.hypot(building.x - KELVIN_YARD_CENTER.x, building.z - KELVIN_YARD_CENTER.z)
+      - Math.hypot(building.width, building.depth) / 2
+    )));
+    // Three units outside the fence are intentionally walkable: this is the route from the gate to
+    // the rear breach. A generated warehouse here used to bury the entire flagship mission arena.
+    expect(nearestEdge).toBeGreaterThan(KELVIN_FENCE_RADIUS + 3);
   });
 
   it('keeps complete footprints out of parks, farms, water, dirt land, and the aerodrome', () => {

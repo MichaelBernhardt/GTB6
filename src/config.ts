@@ -12,12 +12,50 @@ export const AI_FREEZE_RADIUS = 500;
 export const AI_THAW_RADIUS = 450;
 /** Pedestrian bodies are sub-pixel well before their AI bubble ends. Keep simulating the outer crowd so
  *  routes and reactions remain continuous, but submit its meshes only inside this tighter visual ring. */
-export const PED_RENDER_HIDE_RADIUS = 300;
-export const PED_RENDER_SHOW_RADIUS = 270;
+export const PED_RENDER_HIDE_RADIUS = 260;
+export const PED_RENDER_SHOW_RADIUS = 235;
+export const PED_DETAIL_HIDE_RADIUS = 110;
+export const PED_DETAIL_SHOW_RADIUS = 90;
+export type PedestrianVisualLod = 'detail' | 'proxy' | 'hidden';
 /** Pure visual hysteresis: visible bodies leave at the outer radius; hidden bodies return at the inner one. */
 export function resolvePedestrianRenderVisible(visible: boolean, distanceSq: number): boolean {
   const radius = visible ? PED_RENDER_HIDE_RADIUS : PED_RENDER_SHOW_RADIUS;
   return distanceSq <= radius * radius;
+}
+/** Crowd presentation keeps the authored, animated person inside conversation/combat range, swaps to a
+ *  one-draw silhouette across the background pavement, and hides only once the body is sub-pixel. */
+export function resolvePedestrianVisualLod(current: PedestrianVisualLod, distanceSq: number): PedestrianVisualLod {
+  if (current === 'detail') {
+    if (distanceSq > PED_RENDER_HIDE_RADIUS ** 2) return 'hidden';
+    return distanceSq > PED_DETAIL_HIDE_RADIUS ** 2 ? 'proxy' : 'detail';
+  }
+  if (current === 'proxy') {
+    if (distanceSq > PED_RENDER_HIDE_RADIUS ** 2) return 'hidden';
+    return distanceSq <= PED_DETAIL_SHOW_RADIUS ** 2 ? 'detail' : 'proxy';
+  }
+  if (distanceSq > PED_RENDER_SHOW_RADIUS ** 2) return 'hidden';
+  return distanceSq <= PED_DETAIL_SHOW_RADIUS ** 2 ? 'detail' : 'proxy';
+}
+/** Authored cars are 9–34k triangles spread across many meshes. Keep that detail where players can read
+ *  badges, wheels and damage; farther traffic becomes a one-draw silhouette until it leaves the visual
+ *  horizon. Its AI keeps driving throughout, so a returning car never pops to a different road position. */
+export const VEHICLE_DETAIL_HIDE_RADIUS = 180;
+export const VEHICLE_DETAIL_SHOW_RADIUS = 155;
+export const VEHICLE_RENDER_HIDE_RADIUS = 700;
+export const VEHICLE_RENDER_SHOW_RADIUS = 650;
+export type VehicleVisualLod = 'detail' | 'proxy' | 'hidden';
+/** Three-tier visual hysteresis. Handles a teleport across both boundaries in one call. */
+export function resolveVehicleVisualLod(current: VehicleVisualLod, distanceSq: number): VehicleVisualLod {
+  if (current === 'detail') {
+    if (distanceSq > VEHICLE_RENDER_HIDE_RADIUS ** 2) return 'hidden';
+    return distanceSq > VEHICLE_DETAIL_HIDE_RADIUS ** 2 ? 'proxy' : 'detail';
+  }
+  if (current === 'proxy') {
+    if (distanceSq > VEHICLE_RENDER_HIDE_RADIUS ** 2) return 'hidden';
+    return distanceSq <= VEHICLE_DETAIL_SHOW_RADIUS ** 2 ? 'detail' : 'proxy';
+  }
+  if (distanceSq > VEHICLE_RENDER_SHOW_RADIUS ** 2) return 'hidden';
+  return distanceSq <= VEHICLE_DETAIL_SHOW_RADIUS ** 2 ? 'detail' : 'proxy';
 }
 /** Vehicles freeze FARTHER out than pedestrians: traffic drives long routes and quickly leaves the ped
  *  radius, and the lifecycle census keeps cars alive out to REFRESH_RADIUS (1150u) before recycling them.

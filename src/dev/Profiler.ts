@@ -193,6 +193,8 @@ function liveCounts(game: any): Record<string, number> {
   return {
     peds: peds.length,
     renderedPeds: peds.filter((ped: any) => ped.isRenderVisible).length,
+    detailedPeds: peds.filter((ped: any) => ped.visualLod === 'detail').length,
+    proxyPeds: peds.filter((ped: any) => ped.visualLod === 'proxy').length,
     frozenPeds: peds.filter((ped: any) => ped.frozen).length,
     cars: game.population.traffic.length,
     parked: game.population.vehicles.length - game.population.traffic.length,

@@ -98,6 +98,23 @@ describe('first-person view clears the taxi driver line of sight', () => {
   });
 });
 
+describe('collision separation', () => {
+  it('cannot shove a vehicle through city geometry and re-grounds an accepted nudge', () => {
+    const scene = new THREE.Scene();
+    const vehicle = new Vehicle(scene, 'compact', new THREE.Vector3(0.8, 0, 0));
+    const city = slopedCity(0.1, 0);
+    city.clampMove = (from: THREE.Vector3, desired: THREE.Vector3) => desired.x > 1 ? from.clone() : desired.clone();
+
+    vehicle.nudge(0.5, 0, city);
+    expect(vehicle.group.position.x).toBeCloseTo(0.8); // wall rejected the contact shove
+
+    vehicle.nudge(-0.4, 1, city);
+    expect(vehicle.group.position.x).toBeCloseTo(0.4);
+    expect(vehicle.group.position.z).toBeCloseTo(1);
+    expect(vehicle.group.position.y).toBeCloseTo(0.06); // 0.1x slope + 0.02 road clearance
+  });
+});
+
 describe('authored road-car fleet', () => {
   it('mounts the Blender hierarchy and preserves mission paint overrides on every road car', () => {
     for (const kind of ROAD_VEHICLE_KINDS) {
@@ -115,6 +132,33 @@ describe('authored road-car fleet', () => {
     const cabin = bakkie.group.getObjectByName('cabin')!; const bed = bakkie.group.getObjectByName('bakkie-bed')!;
     bakkie.setFirstPerson(true); expect(cabin.visible).toBe(false); expect(bed.visible).toBe(true);
     bakkie.setFirstPerson(false); expect(cabin.visible).toBe(true);
+  });
+});
+
+describe('vehicle distance LOD', () => {
+  it('swaps the authored car for a one-draw tiny silhouette and can hide the whole vehicle', () => {
+    const car = new Vehicle(new THREE.Scene(), 'sport', new THREE.Vector3(), 0x6a35c8);
+    const detail = car.group.getObjectByName(ROAD_VEHICLE_CONTRACTS.sport.root)!;
+    const proxy = car.group.getObjectByName('vehicle-lod-proxy') as THREE.Mesh;
+    expect(proxy).toBeInstanceOf(THREE.Mesh);
+    expect((proxy.geometry.index?.count ?? proxy.geometry.getAttribute('position').count) / 3).toBeLessThanOrEqual(72);
+    expect(detail.visible).toBe(true); expect(proxy.visible).toBe(false);
+
+    car.setVisualLod('proxy');
+    expect(car.group.visible).toBe(true); expect(detail.visible).toBe(false); expect(proxy.visible).toBe(true);
+    car.setVisualLod('hidden');
+    expect(car.group.visible).toBe(false); expect(detail.visible).toBe(false); expect(proxy.visible).toBe(false);
+    car.setVisualLod('detail');
+    expect(car.group.visible).toBe(true); expect(detail.visible).toBe(true); expect(proxy.visible).toBe(false);
+  });
+
+  it('keeps matching proxy geometry and material shared across the fleet', () => {
+    const first = new Vehicle(new THREE.Scene(), 'compact', new THREE.Vector3(), 0x2277aa);
+    const second = new Vehicle(new THREE.Scene(), 'compact', new THREE.Vector3(), 0x2277aa);
+    const firstProxy = first.group.getObjectByName('vehicle-lod-proxy') as THREE.Mesh;
+    const secondProxy = second.group.getObjectByName('vehicle-lod-proxy') as THREE.Mesh;
+    expect(secondProxy.geometry).toBe(firstProxy.geometry);
+    expect(secondProxy.material).toBe(firstProxy.material);
   });
 });
 

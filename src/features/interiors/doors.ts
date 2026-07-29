@@ -35,6 +35,7 @@ import { buildModel, MODEL_INDEX } from '../../world/models/catalog';
 import { scatterCell, type ScatteredModel } from '../../world/ModelScatter';
 import { ARMS_SITE, BOTTLE_STORES, GARAGE_SITE, HOTDOG_SITE, SAFEHOUSE_SITE, SPRAY_SITE } from '../../world/placements';
 import { stablePositionRandom } from '../../world/StableRandom';
+import { neighbourhoodBuildingVariant } from '../../world/data/neighbourhoods';
 import { DOOR_RADIUS, type InteriorDoor } from '../interiors.state';
 import type { BuildingFacts } from './core';
 
@@ -157,9 +158,12 @@ function nameFor(building: GeneratedBuilding, kind: string): string {
  * racking and a roller door is content the city did not have.
  */
 export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoor | undefined {
+  // City applies the same district shift before drawing its massing. Planning with the transformed
+  // variant keeps this tag byte-for-byte on the visible door even when neighbourhood silhouettes differ.
+  const variant = neighbourhoodBuildingVariant(nearestDistrict(building.x, building.z).name, building.variant);
   const profile = architecture.plan({
     x: 0, z: 0, width: building.width, depth: building.depth, height: building.height,
-    style: building.style, variant: building.variant, facade: planFacade, roof: planRoof,
+    style: building.style, variant, facade: planFacade, roof: planRoof,
   });
   const tag = profile.entrance;
   if (!tag) return undefined;

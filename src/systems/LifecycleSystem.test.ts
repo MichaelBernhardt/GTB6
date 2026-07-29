@@ -100,8 +100,8 @@ describe('dayPhase', () => {
 describe('zoneTarget', () => {
   it('is base density × time-of-day curve × busy percent', () => {
     expect(zoneTarget('commercial-highrise', 12, 100)).toEqual(ZONE_DENSITY['commercial-highrise']); // day, normal busy = base
-    expect(zoneTarget('commercial-highrise', 12, 300)).toEqual({ peds: 66, cars: 27 }); // 3× busy
-    expect(zoneTarget('commercial-highrise', 2, 100)).toEqual({ peds: 22 * PHASE_MULTIPLIER.night, cars: 9 * PHASE_MULTIPLIER.night }); // small hours
+    expect(zoneTarget('commercial-highrise', 12, 300)).toEqual({ peds: 39, cars: 15 }); // 3× busy
+    expect(zoneTarget('commercial-highrise', 2, 100)).toEqual({ peds: 13 * PHASE_MULTIPLIER.night, cars: 5 * PHASE_MULTIPLIER.night }); // small hours
     expect(zoneTarget('none', 12, 500)).toEqual({ peds: 0, cars: 0 }); // parks/water never populate
   });
 
@@ -197,6 +197,7 @@ const makeCity = (): City => ({
   trafficRoutes: lanes.map((lane) => lane.points),
   collides: () => false,
   sightBlocked: () => false, // no buildings in the harness: nothing occludes the sight line
+  districtAt: () => 'Joburg CBD',
   isOnRoad: () => true,
   signalStops: () => false, // no robots in this lifecycle harness
   signalSlowFactor: () => 1, // no robots: never slow for a signal here

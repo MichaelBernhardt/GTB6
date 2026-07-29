@@ -171,7 +171,10 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
 
   // ---- Act 3: "Stage Six" -----------------------------------------------------------
-  'dark-house': { tier: 'substantial', depot: true },
+  'dark-house': { tier: 'substantial', depot: true, radio: [
+    { objective: 1, title: 'Burner phone', detail: 'Gate is a slab. Walk the OUTSIDE fence. Maintenance left one bent post behind the records office. Monday job, they said.' },
+    { objective: 3, title: 'Burner phone', detail: 'Same bent fence. No heroics. Leave the way you came.' },
+  ] },
   'long-live-the-king': { tier: 'standard',
     waves: [
       { objective: 1, spots: around(KELVIN_GATE_SPOT, [[8, 6], [-7, 8], [6, -7]]) },

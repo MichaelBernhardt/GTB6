@@ -36,12 +36,22 @@ export const SPAWN_MAX_DISTANCE = 425;
 // target at once; without this cap the census would burst the lot in one tick and drop a mob at the
 // destination. Instead the street trickles in over several ticks and fills naturally. Despawns are not
 // capped this way — clearing a dead zone is invisible and should be prompt.
-export const AMBIENT_SPAWN_TRICKLE = 6;
+export const AMBIENT_SPAWN_TRICKLE = 10;
 // Spatial stagger: minimum separation between agents spawned within the SAME tick, so a batch scatters
 // across the streets instead of piling onto neighbouring nav nodes. Only same-tick spawns are spaced
 // (no global density cap), so a zone still fills to its full target over successive ticks.
 export const PED_SPAWN_SPACING = 16;
 export const CAR_SPAWN_SPACING = 30;
+/** Forward candidates need a building line-of-sight trace; cap those traces per census so a sparse
+ *  rural view cannot turn one population tick into a citywide collider scan. Behind-camera nodes
+ *  need no trace and remain available as the guaranteed fallback. */
+export const SPAWN_OCCLUSION_PROBE_BUDGET = 24;
+/** Keep some fresh life ahead of the player (behind buildings), without making every spawn pay for LOS. */
+export const SPAWN_FORWARD_SHARE = 0.4;
+/** Construct at most two pedestrians and two vehicles per simulation update. The census can plan a
+ *  full trickle immediately, but spreading model construction over subsequent frames removes the
+ *  periodic "ten new rigs on one frame" hitch without slowing the visible fill-in. */
+export const SPAWN_DRAIN_PER_UPDATE = 2;
 
 /** True when (x,z) is invisible to the viewer: past SIGHT_FAR, or outside the forward cone and past SIGHT_NEAR. */
 export function outOfSight(view: ViewPoint, x: number, z: number): boolean {
@@ -80,8 +90,8 @@ export function dayPhase(hour: number): DayPhase {
  * (The old global 28/15 was spread across the whole 18000u map; this is per active zone instead.)
  */
 export const ZONE_DENSITY: Record<Zone, { peds: number; cars: number }> = {
-  'commercial-highrise': { peds: 22, cars: 9 }, // CBD / Sandton towers — packed pavements and traffic
-  'commercial-strip': { peds: 15, cars: 7 },    // arterial retail — busy but not a tower canyon
+  'commercial-highrise': { peds: 13, cars: 5 }, // CBD towers — packed nearby pavements without 70 animated rigs at the visual horizon
+  'commercial-strip': { peds: 10, cars: 4 },    // arterial retail — busy but not a tower canyon
   'residential': { peds: 6, cars: 3 },          // the suburban bulk — a moderate, lived-in street
   'industrial': { peds: 4, cars: 3 },           // yards & sheds — few walkers, some delivery traffic
   'estate': { peds: 3, cars: 2 },               // walled villas — quiet, the odd car
@@ -96,7 +106,7 @@ export const BUSY_MIN = 10; export const BUSY_MAX = 1000; // percent bounds for 
 // Ceilings on the SUMMED nine-zone target — protect perf when the 3×3 is dense (a CBD core) and/or the
 // busy dial is cranked. Reached only at extreme busy in the densest neighbourhoods; the freeze layer keeps
 // far agents idle so the animating count is far lower. Console `set peds/cars` pins are clamped to these too.
-export const PED_TARGET_CAP = 180; export const CAR_TARGET_CAP = 100;
+export const PED_TARGET_CAP = 100; export const CAR_TARGET_CAP = 50;
 export const BUDGET_PASSES = 3; // each pass closes a third of the gap: a console jump fully lands within ~20 real seconds
 
 export function clampBusy(percent: number): number { return Math.min(BUSY_MAX, Math.max(BUSY_MIN, Math.round(percent))); }
@@ -192,6 +202,8 @@ export class LifecycleSystem {
   private wreckedSince = new Map<Vehicle, number>();
   private currentZone: ZoneCell | undefined; // undefined until the first census; then slid with hysteresis
   private lastArea = { peds: 0, traffic: 0 }; // last active-area totals, for the console crowd readout
+  private pendingPedSpawns: Array<{ x: number; z: number }> = [];
+  private pendingCarSpawns: Array<{ x: number; z: number }> = [];
 
   constructor(private city: City, private population: PopulationSystem) {}
 
@@ -205,9 +217,24 @@ export class LifecycleSystem {
   update(dt: number, hour: number, view: ViewPoint, protectedVehicles: ReadonlySet<Vehicle>): void {
     this.gameHours += dt * 24 / DAY_CYCLE_SECONDS; // advances at exactly the DayNight clock rate
     this.stampDeaths();
+    const drained = this.drainSpawnQueues();
     this.timer -= dt; if (this.timer > 0) return; this.timer = LIFECYCLE_INTERVAL;
     this.sweep(view, protectedVehicles);
     this.converge(hour, view, protectedVehicles);
+    // The census that created an empty queue still places its first citizen/car immediately; all
+    // remaining construction is amortised by the ordinary per-frame drain above.
+    if (drained === 0) this.drainSpawnQueues();
+  }
+
+  private drainSpawnQueues(): number {
+    let drained = 0;
+    for (let index = 0; index < SPAWN_DRAIN_PER_UPDATE; index++) {
+      const point = this.pendingPedSpawns.shift();
+      if (point) { this.population.spawnAmbientPedestrian(point.x, point.z); drained++; }
+      const node = this.pendingCarSpawns.shift();
+      if (node) { this.population.spawnTrafficVehicle(node.x, node.z); drained++; }
+    }
+    return drained;
   }
 
   /** Records the game-hour a ped went down or a vehicle wrecked; a Pay-'n'-Spray restore clears the stamp. */
@@ -262,71 +289,109 @@ export class LifecycleSystem {
 
   /** Ambient pedestrians: clear the dead ring, then trim over / spawn under the active-area target. */
   private reconcilePeds(view: ViewPoint, activeKeys: Set<number>, target: Map<number, number>, total: number): void {
+    this.pendingPedSpawns = this.pendingPedSpawns.filter((point) => activeKeys.has(pointZone(point.x, point.z)) && !beyondBubble(view, point.x, point.z));
     for (const ped of this.population.pedestrians.filter(isAmbientPedestrian)) // dead zones (past the 3×3) AND stragglers left behind inside it: both out of sight, both recycled toward the player
       if ((!activeKeys.has(pointZone(ped.group.position.x, ped.group.position.z)) || beyondBubble(view, ped.group.position.x, ped.group.position.z)) && pedDespawnable(ped)) this.population.removePedestrian(ped);
 
     const live = this.population.pedestrians.filter(isAmbientPedestrian);
+    this.pendingPedSpawns.length = Math.min(this.pendingPedSpawns.length, Math.max(0, total - live.length));
     const zoneLive = countByZone(live.map((ped) => ped.group.position));
-    let deficit = total - live.length; let budget = censusBudget(deficit);
+    let deficit = total - live.length - this.pendingPedSpawns.length; let budget = censusBudget(deficit);
     if (deficit < 0) {
       const surplus = (ped: Pedestrian) => (zoneLive.get(pointZone(ped.group.position.x, ped.group.position.z)) ?? 0) - (target.get(pointZone(ped.group.position.x, ped.group.position.z)) ?? 0);
       const trimmable = live.filter((ped) => pedDespawnable(ped) && outOfSight(view, ped.group.position.x, ped.group.position.z)).sort((a, b) => surplus(b) - surplus(a)); // densest-over-target zones shed first
       for (const ped of trimmable) { if (deficit >= 0 || budget <= 0) break; this.population.removePedestrian(ped); deficit++; budget--; }
     } else {
       const deficitKeys = deficitZones(activeKeys, zoneLive, target);
-      const batch: Array<{ x: number; z: number }> = []; // this tick's spawns, kept apart from one another
-      for (let placed = 0; deficit > 0 && placed < AMBIENT_SPAWN_TRICKLE; deficit--, placed++) {
-        const point = this.hiddenPoint(this.city.sidewalkPoints, view, activeKeys, deficitKeys, batch, PED_SPAWN_SPACING); if (!point) break;
-        this.population.spawnAmbientPedestrian(point.x, point.z); batch.push(point);
-      }
+      const count = Math.min(deficit, AMBIENT_SPAWN_TRICKLE);
+      if (this.pendingPedSpawns.length === 0)
+        this.pendingPedSpawns.push(...this.hiddenPoints(this.city.sidewalkPoints, view, activeKeys, deficitKeys, count, PED_SPAWN_SPACING));
     }
   }
 
   /** Ambient traffic: same discipline as peds, honouring the protected/mission-vehicle guards. */
   private reconcileTraffic(view: ViewPoint, protectedVehicles: ReadonlySet<Vehicle>, activeKeys: Set<number>, target: Map<number, number>, total: number): void {
+    this.pendingCarSpawns = this.pendingCarSpawns.filter((point) => activeKeys.has(pointZone(point.x, point.z)) && !beyondBubble(view, point.x, point.z));
     const drivable = (vehicle: Vehicle) => !vehicle.wrecked && !vehicle.disabled;
     for (const vehicle of this.population.traffic.filter(drivable))
       if ((!activeKeys.has(pointZone(vehicle.group.position.x, vehicle.group.position.z)) || beyondBubble(view, vehicle.group.position.x, vehicle.group.position.z)) && !protectedVehicles.has(vehicle) && !MISSION_VEHICLE_COLORS.has(vehicle.spec.color) && vehicleDespawnable(vehicle)) this.population.removeVehicle(vehicle);
 
     const live = this.population.traffic.filter(drivable);
+    this.pendingCarSpawns.length = Math.min(this.pendingCarSpawns.length, Math.max(0, total - live.length));
     const zoneLive = countByZone(live.map((vehicle) => vehicle.group.position));
-    let deficit = total - live.length; let budget = censusBudget(deficit);
+    let deficit = total - live.length - this.pendingCarSpawns.length; let budget = censusBudget(deficit);
     if (deficit < 0) {
       const surplus = (vehicle: Vehicle) => (zoneLive.get(pointZone(vehicle.group.position.x, vehicle.group.position.z)) ?? 0) - (target.get(pointZone(vehicle.group.position.x, vehicle.group.position.z)) ?? 0);
       const trimmable = live.filter((vehicle) => !protectedVehicles.has(vehicle) && !MISSION_VEHICLE_COLORS.has(vehicle.spec.color) && vehicleDespawnable(vehicle) && outOfSight(view, vehicle.group.position.x, vehicle.group.position.z)).sort((a, b) => surplus(b) - surplus(a));
       for (const vehicle of trimmable) { if (deficit >= 0 || budget <= 0) break; this.population.removeVehicle(vehicle); deficit++; budget--; }
     } else {
       const deficitKeys = deficitZones(activeKeys, zoneLive, target);
-      const batch: Array<{ x: number; z: number }> = [];
-      for (let placed = 0; deficit > 0 && placed < AMBIENT_SPAWN_TRICKLE; deficit--, placed++) {
-        const node = this.hiddenPoint(this.city.vehicleNav.nodes, view, activeKeys, deficitKeys, batch, CAR_SPAWN_SPACING); if (!node) break;
-        this.population.spawnTrafficVehicle(node.x, node.z); batch.push(node);
-      }
+      const count = Math.min(deficit, AMBIENT_SPAWN_TRICKLE);
+      if (this.pendingCarSpawns.length === 0)
+        this.pendingCarSpawns.push(...this.hiddenPoints(this.city.vehicleNav.nodes, view, activeKeys, deficitKeys, count, CAR_SPAWN_SPACING));
     }
   }
 
-  /** Scans nav nodes from a random offset for one hidden and in spawn range within an active zone,
-   *  preferring a zone still short of its own target so density pools in the busy zones near the player.
-   *  Rejects any node within `spacing` of a node already picked this tick (`batch`) so a fresh fill
-   *  scatters over the streets instead of mobbing one spot. */
-  private hiddenPoint(points: ReadonlyArray<{ x: number; z: number }>, view: ViewPoint, activeKeys: Set<number>, deficitKeys: Set<number>, batch: ReadonlyArray<{ x: number; z: number }>, spacing: number): { x: number; z: number } | undefined {
-    if (!points.length) return undefined;
+  /**
+   * Select a whole spawn batch in ONE randomized traversal. The old one-at-a-time helper traversed
+   * the full city array again for every requested agent (up to 20 scans on one census) and repeated
+   * the same building sight-line traces. That made the three-second census hitch scale with map size.
+   *
+   * Cheap behind-camera candidates are collected directly. In-cone candidates are sampled, then only
+   * a bounded number pay for city.sightBlocked; a share of those is selected first so the world still
+   * populates ahead behind corners. Deficit-zone preference and same-tick spacing remain unchanged.
+   */
+  private hiddenPoints(
+    points: ReadonlyArray<{ x: number; z: number }>,
+    view: ViewPoint,
+    activeKeys: Set<number>,
+    deficitKeys: Set<number>,
+    limit: number,
+    spacing: number,
+  ): Array<{ x: number; z: number }> {
+    if (!points.length || limit <= 0) return [];
     const start = Math.floor(Math.random() * points.length);
-    const crowded = (point: { x: number; z: number }) => batch.some((other) => Math.hypot(point.x - other.x, point.z - other.z) < spacing);
-    let fallback: { x: number; z: number } | undefined;
+    const behindPreferred: Array<{ x: number; z: number }> = [];
+    const behindFallback: Array<{ x: number; z: number }> = [];
+    const forwardPreferred: Array<{ x: number; z: number }> = [];
+    const forwardFallback: Array<{ x: number; z: number }> = [];
+    const forwardCandidates: Array<{ point: { x: number; z: number }; preferred: boolean }> = [];
     for (let i = 0; i < points.length; i++) {
       const point = points[(start + i) % points.length]; if (!point) continue;
       const distance = Math.hypot(point.x - view.x, point.z - view.z);
       if (distance < SPAWN_MIN_DISTANCE || distance > SPAWN_MAX_DISTANCE) continue;
-      // Hidden from the player = behind the view cone OR (in front but) with a building blocking the sight line.
-      // The latter lets fresh agents appear within the player's own cell, ahead of them, obscured — instead of
-      // only ever behind, so the world populates the way you're heading rather than the way you came.
-      if (!outOfSight(view, point.x, point.z) && !this.city.sightBlocked(view.x, view.z, point.x, point.z)) continue;
       const key = pointZone(point.x, point.z);
-      if (!activeKeys.has(key) || crowded(point)) continue;
-      if (deficitKeys.has(key)) return point; // ideal: a zone that still wants people, well clear of the batch
-      fallback ??= point; // else keep the first in-range active node so the area total can still be met
+      if (!activeKeys.has(key)) continue;
+      const preferred = deficitKeys.has(key);
+      if (outOfSight(view, point.x, point.z)) {
+        (preferred ? behindPreferred : behindFallback).push(point);
+      } else if (forwardCandidates.length < SPAWN_OCCLUSION_PROBE_BUDGET) {
+        forwardCandidates.push({ point, preferred });
+      }
     }
-    return fallback;
+    // Hidden from the player while still ahead = a building blocks the sight line. These are the
+    // expensive candidates, and the bounded sample above is the hitch-prevention guarantee.
+    for (const candidate of forwardCandidates) {
+      if (!this.city.sightBlocked(view.x, view.z, candidate.point.x, candidate.point.z)) continue;
+      (candidate.preferred ? forwardPreferred : forwardFallback).push(candidate.point);
+    }
+
+    const selected: Array<{ x: number; z: number }> = [];
+    const take = (source: ReadonlyArray<{ x: number; z: number }>, ceiling: number): void => {
+      for (const point of source) {
+        if (selected.length >= ceiling) break;
+        if (selected.some((other) => Math.hypot(point.x - other.x, point.z - other.z) < spacing)) continue;
+        selected.push(point);
+      }
+    };
+    const forwardTarget = Math.max(1, Math.ceil(limit * SPAWN_FORWARD_SHARE));
+    take(forwardPreferred, forwardTarget);
+    take(forwardFallback, forwardTarget);
+    take(behindPreferred, limit);
+    take(behindFallback, limit);
+    // If the view is enclosed and there were few behind-camera nodes, use more occluded-forward ones.
+    take(forwardPreferred, limit);
+    take(forwardFallback, limit);
+    return selected;
   }
 }

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import type { PedestrianVisualLod } from '../config';
 import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems/BumpSystem';
 import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, FEAR_MAX } from '../systems/FearSystem';
 import { advanceSwing, beginSwing, MELEE_COOLDOWN_JITTER, MELEE_COOLDOWN_MIN, MELEE_ENGAGE_RANGE, MELEE_ENGAGE_RELEASE, swingExtension, type MeleeSwing } from '../systems/MeleeSystem';
@@ -9,6 +10,7 @@ import type { VoiceSex } from '../core/VoicePools';
 import { NPC_CATALOG, type NpcCharacterId } from './NpcCatalog';
 import { impactKickSpeed, type RagdollEnvironment } from './PedRagdoll';
 import { RiggedPedestrianVisual } from './RiggedPedestrianVisual';
+import { instantiatePedestrianLodProxy } from './PedestrianLodProxy';
 
 export type PedState = 'walk' | 'idle' | 'flee' | 'hostile' | 'cower' | 'down';
 export const DEATH_SPIN_DURATION = 0.38; // seconds of impact whip as the body drops — matched to the ~0.3s slam
@@ -63,7 +65,8 @@ export class Pedestrian {
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
   private proceduralModel = new THREE.Group();
-  private renderVisible = true;
+  private lodProxy: THREE.Mesh;
+  visualLod: PedestrianVisualLod = 'detail';
   readonly riggedVisual?: RiggedPedestrianVisual;
   private direction = new THREE.Vector3();
   private desired = new THREE.Vector3();
@@ -80,10 +83,11 @@ export class Pedestrian {
     this.aggressive = !hostile && !police && index % 9 === 0; this.wallet = 25 + (index * 47) % 180; this.bravery = ((index * 37 + 11) % 100) / 100;
     this.proceduralModel.name = 'ProceduralPedestrianFallback'; this.group.add(this.proceduralModel);
     scene.add(this.group); this.buildModel(index);
+    this.lodProxy = instantiatePedestrianLodProxy(index, hostile, police, visualVariant); this.group.add(this.lodProxy);
     if (visualVariant) {
       this.riggedVisual = new RiggedPedestrianVisual(this.group, visualVariant, { onReady: () => {
         this.proceduralModel.visible = false;
-        this.riggedVisual?.setRenderVisible(this.renderVisible);
+        this.applyVisualLod();
       } });
       void this.riggedVisual.load().catch(() => { /* fail open: the procedural pedestrian remains visible */ });
     }
@@ -94,21 +98,38 @@ export class Pedestrian {
     return this.visualVariant ? NPC_CATALOG[this.visualVariant].sex : 'neutral';
   }
 
-  get isRenderVisible(): boolean { return this.renderVisible; }
+  get isRenderVisible(): boolean { return this.visualLod !== 'hidden'; }
+  get isDetailVisible(): boolean { return this.visualLod === 'detail'; }
 
   /** Distance-cull the rendered body without touching group.visible, which mission contacts and taxi
    *  passengers use for their own independent gameplay visibility. Safe while a rig is still loading. */
   setRenderVisible(visible: boolean): void {
-    this.renderVisible = visible;
-    this.riggedVisual?.setRenderVisible(visible);
-    this.proceduralModel.visible = visible && !this.riggedVisual?.ready;
+    this.setVisualLod(visible ? 'detail' : 'hidden');
+  }
+
+  setVisualLod(lod: PedestrianVisualLod): void {
+    this.visualLod = lod; this.applyVisualLod();
+  }
+
+  private applyVisualLod(): void {
+    const detail = this.visualLod === 'detail';
+    this.riggedVisual?.setRenderVisible(detail);
+    this.proceduralModel.visible = detail && !this.riggedVisual?.ready;
+    this.lodProxy.visible = this.visualLod === 'proxy';
   }
 
   /** Free this ped's GPU geometry when it despawns — otherwise every culled/replaced ped leaks its meshes
    *  and the session slowly degrades. Geometries are built per-ped (unique), so disposing them is safe. */
   dispose(): void {
     this.riggedVisual?.dispose();
-    this.proceduralModel.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+    const geometries = new Set<THREE.BufferGeometry>(); const materials = new Set<THREE.Material>();
+    this.proceduralModel.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      geometries.add(object.geometry);
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
+    });
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of materials) material.dispose();
   }
 
   update(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
@@ -226,7 +247,14 @@ export class Pedestrian {
       stumbling: this.stumbleTimer > 0,
       stumbleAmount: THREE.MathUtils.clamp(this.stumbleTimer / STUMBLE_DURATION, 0, 1),
     });
-    visual.update(dt, this.ragdollEnv);
+    // The proxy follows gameplay root motion; bones and skinning resume only when the player can read them.
+    if (this.visualLod === 'detail') visual.update(dt, this.ragdollEnv);
+    if (this.visualLod === 'proxy') {
+      const down = this.state === 'down';
+      this.lodProxy.rotation.z = down ? Math.PI / 2 : 0;
+      this.lodProxy.position.y = down ? 0.36 : Math.sin(this.phase) * 0.025;
+      this.lodProxy.scale.y = this.state === 'cower' || this.covering ? 0.7 : 1;
+    }
     this.covering = false;
   }
 

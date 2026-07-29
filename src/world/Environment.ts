@@ -16,13 +16,11 @@ export interface EnvironmentHandle {
 const SHADOW_SPAN = 80;
 const SUN_DISTANCE = 240;
 
-/** Haze density per tier, tuned with chunk culling (~2500u radius) and camera far 8000: the CBD
- *  skyline reads clear well past its ~1100u radius, the chunk boundary sits in a solid haze band,
- *  and the horizon is near-opaque by the far plane so it reads hazy, never clipped. The potato
- *  density instead goes near-opaque by that tier's 1500u streaming ring — a genuinely smoggy day
- *  that hides the pulled-in pop-in edge (applied live by Game's world-budget pass). */
+/** Haze density per tier, tuned around the 1500u facade-streaming ring while cheaper roads and iconic
+ *  skyline silhouettes carry to 2500u. The thicker Joburg horizon masks cell transitions without turning
+ *  the immediate neighbourhood grey. Potato remains a genuinely smoggy day around its tighter ring. */
 export function fogDensity(quality: 'potato' | 'low' | 'medium' | 'high'): number {
-  return quality === 'potato' ? 0.0011 : quality === 'low' ? 0.00032 : 0.00025;
+  return quality === 'potato' ? 0.0011 : quality === 'low' ? 0.0005 : 0.00038;
 }
 
 export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'medium' | 'high'): EnvironmentHandle {

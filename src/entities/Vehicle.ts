@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { VEHICLE_SPECS, type VehicleKind, type VehicleSpec } from '../config';
+import { VEHICLE_SPECS, type VehicleKind, type VehicleSpec, type VehicleVisualLod } from '../config';
 import { bicycleCap, riderImpactDamage } from '../core/GameRules';
 import type { InputManager } from '../core/InputManager';
 import { KNOCKOVER_SPEED_KEEP, knockoverDamage, solidImpactDamage, type PropRegistry } from '../systems/PropSystem';
@@ -9,6 +9,7 @@ import type { City } from '../world/City';
 import { instantiateBikeModel, type TwoWheelerKind } from './BikeAssets';
 import { instantiateRoadVehicleModel, isRoadVehicleKind, onRoadVehicleLibraryReady, type RoadVehicleModelInstance } from './RoadVehicleAssets';
 import { instantiateTaxiModel, onTaxiLibraryReady, type TaxiModelInstance } from './TaxiAsset';
+import { instantiateVehicleLodProxy } from './VehicleLodProxy';
 
 type VehicleMaterial = THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial | THREE.MeshBasicMaterial;
 
@@ -61,6 +62,9 @@ export class Vehicle {
   private taxiReadyUnsubscribe?: () => void;
   private roadPlaceholder?: THREE.Group;
   private roadReadyUnsubscribe?: () => void;
+  private detailRoot?: THREE.Object3D;
+  private lodProxy?: THREE.Mesh;
+  visualLod: VehicleVisualLod = 'detail';
   /** Library geometry this vehicle only borrows, and the materials it genuinely owns — dispose() reads both. */
   private sharedGeometries = new Set<THREE.BufferGeometry>();
   private ownedMaterials = new Set<THREE.Material>();
@@ -68,12 +72,26 @@ export class Vehicle {
   private headlightFactor = 0;
   private braking = false;
   private disposed = false;
+  private displacementTarget = new THREE.Vector3();
 
   constructor(scene: THREE.Scene, kind: VehicleKind, position: THREE.Vector3, color?: number) {
     this.spec = { ...VEHICLE_SPECS[kind], color: color ?? VEHICLE_SPECS[kind].color };
     this.health = this.spec.health; this.maxHealth = this.spec.health; this.police = kind === 'police';
     this.groundY = position.y + 0.02; this.group.position.copy(position).setY(this.groundY); this.group.name = this.spec.name; this.group.userData.vehicle = this;
-    scene.add(this.group); this.buildModel();
+    scene.add(this.group); this.buildModel(); this.buildLodProxy();
+  }
+
+  private buildLodProxy(): void {
+    const proxy = instantiateVehicleLodProxy(this.spec);
+    this.lodProxy = proxy.mesh; this.sharedGeometries.add(proxy.sharedGeometry); this.group.add(proxy.mesh);
+  }
+
+  /** Swap presentation only; physics, collision and route state stay live at every tier. */
+  setVisualLod(lod: VehicleVisualLod): void {
+    if (this.visualLod === lod) return;
+    this.visualLod = lod; this.group.visible = lod !== 'hidden';
+    if (this.detailRoot) this.detailRoot.visible = lod === 'detail';
+    if (this.lodProxy) this.lodProxy.visible = lod === 'proxy';
   }
 
   /** Free only per-vehicle resources. Authored fleet geometry/textures stay in the session cache across traffic churn. */
@@ -95,6 +113,7 @@ export class Vehicle {
   }
 
   updatePlayer(dt: number, input: InputManager, city: City, mouseSteer = 0): number {
+    this.setVisualLod('detail'); // entering a previously distant/parked car must restore its authored cockpit immediately
     if (this.disabled) return 0;
     const throttle = Number(input.down('KeyW')) - Number(input.down('KeyS'));
     const steer = THREE.MathUtils.clamp(Number(input.down('KeyA')) - Number(input.down('KeyD')) + mouseSteer, -1, 1); // A/D keys and the LMB-drag mouse wheel share one clamped steer input
@@ -224,6 +243,18 @@ export class Vehicle {
     this.group.position.y = this.groundY; this.group.rotation.set(0, this.heading, 0); this.speed = 0;
   }
 
+  /** Resolve a contact shove through the same city collision rules as normal driving. Directly editing
+   *  group.position lets pileups push cars through walls, then leaves both the vehicle and chase camera
+   *  embedded. Re-ground here too: a sideways separation can cross sloped Jozi terrain without move(). */
+  nudge(dx: number, dz: number, city: City): void {
+    const from = this.group.position;
+    const desired = this.displacementTarget.set(from.x + dx, from.y, from.z + dz);
+    const radius = Math.max(this.spec.size[0], this.spec.size[2]) * 0.34;
+    const resolved = city.clampMove(from, desired, radius);
+    this.groundY = city.roadHeightAt(resolved.x, resolved.z) + 0.02;
+    this.group.position.copy(resolved).setY(this.groundY);
+  }
+
   /** Network/replay presentation hook: animate the authored wheels, steering and lamps from an
    *  authoritative pose without running local vehicle physics. */
   updatePresentation(dt: number, braking: boolean): void { this.updateVisuals(dt, braking); }
@@ -308,7 +339,7 @@ export class Vehicle {
       placeholder.add(front, rear); this.headLights.push(front); this.brakeLights.push(rear);
     }
     placeholder.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
-    this.group.add(placeholder);
+    this.detailRoot = placeholder; this.group.add(placeholder);
   }
 
   private releaseTaxiPlaceholder(): void {
@@ -326,7 +357,10 @@ export class Vehicle {
     this.releaseTaxiPlaceholder();
     this.wheels = [...instance.wheels]; this.headLights = [...instance.headLights]; this.brakeLights = [...instance.brakeLights]; this.cabinParts = [...instance.cabinParts];
     this.wheels[0]!.rotation.order = 'YXZ'; this.wheels[1]!.rotation.order = 'YXZ';
-    this.sharedGeometries = new Set(instance.sharedGeometries); this.ownedMaterials = new Set(instance.ownedMaterials);
+    this.sharedGeometries = new Set(instance.sharedGeometries);
+    if (this.lodProxy) this.sharedGeometries.add(this.lodProxy.geometry);
+    this.ownedMaterials = new Set(instance.ownedMaterials);
+    this.detailRoot = instance.root; instance.root.visible = this.visualLod === 'detail';
     this.group.add(instance.root); instance.root.userData.vehicleVisual = 'quantum-express';
     this.setFirstPerson(this.firstPerson); this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
     if (this.wrecked) this.applyWreckAppearance();
@@ -359,7 +393,10 @@ export class Vehicle {
     this.releaseRoadPlaceholder();
     this.wheels = [...instance.wheels]; this.headLights = [...instance.headLights]; this.brakeLights = [...instance.brakeLights]; this.cabinParts = [...instance.cabinParts];
     this.wheels[0]!.rotation.order = 'YXZ'; this.wheels[1]!.rotation.order = 'YXZ';
-    this.sharedGeometries = new Set(instance.sharedGeometries); this.ownedMaterials = new Set(instance.ownedMaterials);
+    this.sharedGeometries = new Set(instance.sharedGeometries);
+    if (this.lodProxy) this.sharedGeometries.add(this.lodProxy.geometry);
+    this.ownedMaterials = new Set(instance.ownedMaterials);
+    this.detailRoot = instance.root; instance.root.visible = this.visualLod === 'detail';
     this.group.add(instance.root); instance.root.userData.vehicleVisual = this.spec.kind;
     this.setFirstPerson(this.firstPerson); this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
     if (this.wrecked) this.applyWreckAppearance();
@@ -434,7 +471,7 @@ export class Vehicle {
       placeholder.add(bar); this.cabinParts.push(bar);
     }
     placeholder.traverse((object) => { if (object instanceof THREE.Mesh) { object.castShadow = true; } }); // frustumCulled left default (true): an off-screen bakkie must not render in the main AND shadow pass
-    this.group.add(placeholder);
+    this.detailRoot = placeholder; this.group.add(placeholder);
     this.roadReadyUnsubscribe = onRoadVehicleLibraryReady(kind, () => {
       const loaded = instantiateRoadVehicleModel(kind, this.spec.color); if (loaded) this.mountRoadModel(loaded);
       this.roadReadyUnsubscribe = undefined;
@@ -452,7 +489,7 @@ export class Vehicle {
     this.rider = instance.rider; this.headLights = [...instance.headLights]; this.brakeLights = [...instance.brakeLights];
     this.rollRadius = instance.rollRadius;
     this.sharedGeometries = new Set(instance.sharedGeometries); this.ownedMaterials = new Set(instance.ownedMaterials);
-    this.group.add(instance.root);
+    this.detailRoot = instance.root; instance.root.visible = this.visualLod === 'detail'; this.group.add(instance.root);
     this.group.rotation.z = 0.15; // spawn resting on the kickstand; updateVisuals takes over once ridden
     this.setHeadlightGlow(this.headlightFactor); this.applyBrakeLights();
   }

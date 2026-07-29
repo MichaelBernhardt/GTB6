@@ -12,12 +12,10 @@
  * modules that are already eager; it never touches a feature body, and nothing here may import from
  * src/features/<id>/.
  *
- * THE SEAM. Game.mapMarkers() is the canonical marker source (shops, safehouses, the objective) and
- * Game.ts is off limits on this branch, so UIManager — the one funnel both the minimap and the M-map
- * pass through — merges these in. That is a strictly downward chunk edge (the Game chunk already
- * imports gameplay-rules) and it puts the blips on BOTH surfaces from one call site. If a future
- * branch may touch Game.ts, the tidier home is a `mapIcons` hook on FeatureDescriptor collected by
- * FeatureHost and spread into Game.mapMarkers() beside `this.shops.mapIcons()`.
+ * THE SEAM. Game.mapMarkers() is the canonical marker source (shops, safehouses, objectives and
+ * activities), and spreads this eager list into the same frame handed to both map surfaces. This is
+ * a strictly downward chunk edge: Game already owns FeatureHost, while this leaf still imports no
+ * feature body and therefore cannot defeat lazy loading.
  */
 import { fuelMapIcons } from './fuel.state';
 
@@ -36,15 +34,20 @@ export interface FeatureMapIcon {
   readonly shape: 'circle' | 'diamond' | 'house' | 'fuel';
 }
 
+let cachedSource: ReadonlyArray<{ x: number; z: number }> | undefined;
+let cachedIcons: FeatureMapIcon[] = [];
+
 /**
  * Every eager feature blip for this frame.
  *
- * Called once per rendered frame from UIManager.drawMap and again from updateMap while the M-map is
- * open, so it stays allocation-light: nineteen forecourts is the whole list today. A feature with a
- * bigger catalogue should memoize behind its own state module, not here.
+ * The derived forecourt array is immutable for the session. Cache by its identity so the render
+ * loop receives the same marker objects every frame rather than allocating nineteen objects plus a
+ * second merged array (and doing both again while the full-screen map is open).
  */
 export function featureMapIcons(): FeatureMapIcon[] {
-  const icons: FeatureMapIcon[] = [];
-  for (const spot of fuelMapIcons()) icons.push({ x: spot.x, z: spot.z, color: FUEL_ICON_COLOR, shape: 'fuel' });
-  return icons;
+  const source = fuelMapIcons();
+  if (source === cachedSource) return cachedIcons;
+  cachedSource = source;
+  cachedIcons = source.map((spot) => ({ x: spot.x, z: spot.z, color: FUEL_ICON_COLOR, shape: 'fuel' }));
+  return cachedIcons;
 }
