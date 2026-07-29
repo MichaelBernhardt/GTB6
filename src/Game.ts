@@ -3155,6 +3155,7 @@ export class Game {
       nearestRoadPose: (at) => this.city.nearestRoadPose(at),
       playerPosition: () => this.player.group.position,
       playerHeading: () => this.player.heading,
+      cameraPosition: () => this.camera.position,
       drivenVehicle: () => this.activeVehicle,
       hour: () => this.dayNight.hour,
       blackout: () => this.dayNight.blackoutDarkness,

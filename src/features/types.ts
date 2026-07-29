@@ -107,6 +107,9 @@ export interface FeatureGameApi {
   /** Live player position — call per frame, never retain the returned reference across frames. */
   playerPosition(): Vector3;
   playerHeading(): number;
+  /** Live render-camera position. Optional so older/test feature hosts remain source compatible;
+   *  interiors use it to hide only the walls that really sit between the lens and the player. */
+  cameraPosition?(): Vector3;
   /** The vehicle the player is driving, or undefined on foot. */
   drivenVehicle(): Vehicle | undefined;
   /** Hour of day, 0..24 (fractional). */

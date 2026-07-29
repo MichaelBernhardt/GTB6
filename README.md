@@ -12,7 +12,7 @@ The city combines OpenStreetMap-derived Johannesburg roads with procedural build
 
 ## What is in the game?
 
-- A large Jozi map with 4,010 roads, 117 named districts, roughly 812 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
+- A focused Jozi-and-Vaal map with 2,684 roads, 64 named districts, roughly 552 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
 - On-foot movement, third- and first-person cameras, cover, melee combat, firearms, armour, stim packs, parachutes, pickups, and a weapon wheel.
 - An original 1.8 m skinned Johannesburg protagonist with a teal technical jacket, 24 authored gameplay clips, directional aim, vehicle and airborne poses, and strict retryable startup validation.
 - A 16-character Blender-authored Johannesburg NPC cast. Every pedestrian uses a rigged character with independent animation, including ambient crowds, mission contacts, car guards, enforcers, drivers, and JMPD officers.
@@ -24,7 +24,7 @@ The city combines OpenStreetMap-derived Johannesburg roads with procedural build
 - A 24-job campaign spanning the street-level hustle, Stage Six’s genny cartel, and side trips from the padstal to Jozi-by-the-Sea.
 - Repeatable taxi and **Sixty-Sekonds** courier shifts, the Robot Run CBD street circuit, and Bra Vusi’s condition-priced chop shop for witnessed hijackings.
 - **Jozi Flow** free-roam combos that pay for clean traffic squeezes and last-second pothole slaloms, then bank the pot if you keep the mirrors attached.
-- Shops for weapons, armour, food, resprays, and garage storage, plus seamless walk-in interiors at Jozi Arms and Main Main Mansions, where you can save, sleep, heal, and wait for things to become somebody else’s problem.
+- Shops for weapons, armour, food, resprays, and garage storage, plus seamless walk-in interiors at Jozi Arms and Main Main Mansions and procedural rooms, stairs, lifts, residents, and secrets inside real city buildings.
 - Turquoise street-by-street GPS guidance, click/tap custom waypoints, a searchable city map with named live markers, a rotating minimap, and live Johannesburg street names on the HUD.
 - District reputation, dynamic crowds, a ten-minute day/night cycle, weathered streets, and authentic load shedding at no additional charge.
 - Procedural audio, vehicle engines, weapons, UI sounds, and original in-car stations inspired by amapiano, maskandi, gqom, and kwaito.
