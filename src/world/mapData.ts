@@ -7,6 +7,8 @@
  * Pure data + pure functions only — no three.js, no game systems — so tests can lean on it.
  */
 import rawMap from './generated/joburg-map.json';
+import { deconflictRailway, RAIL_DECONFLICT_DEFAULTS } from './railAlignment';
+import type { RailCrossing, RailRoadProbe } from './railAlignment';
 import type { District } from '../types';
 
 export interface MapPt { x: number; z: number; }
@@ -230,10 +232,139 @@ export const GENERATED_PATHS: GeneratedTrack[] = MAP.tracks.filter((track) => tr
 /** Every entry of the generated `tracks` layer, whatever its kind — the count the map screen draws. */
 export const GENERATED_UNPAVED_COUNT = MAP.tracks.length;
 
-/** Passenger rail lines (thinned by the pipeline): rendered as ballast + rails, never driveable. */
-export const GENERATED_RAILWAYS: GeneratedRailway[] = (MAP.railways ?? [])
+// ---- Road-edge distance grids --------------------------------------------------
+//
+// Declared next to the roads, and BEFORE the railways, because the railway alignment is deconflicted
+// against the built road footprint at module-init time (see GENERATED_RAILWAYS below).
+
+/** How far beyond a road edge the shared edge grid can measure accurately. */
+export const ROAD_EDGE_CAP = 14;
+
+/**
+ * How much finished surface the build lays down BEYOND a road's declared `width`, per side.
+ *
+ * `map.roads[].width` is the CARRIAGEWAY. City.buildRoads then adds, outside it, a kerb bar (out to
+ * +0.41) and a raised sidewalk (SIDEWALK_INNER_EDGE 0.38 then SIDEWALK_WIDTH 3.12, out to +3.50), and
+ * `isOnSidewalk` treats the whole band as walkable pavement. So a road the map calls 14 u is 21 u of
+ * built surface on the ground — 50% wider than declared.
+ *
+ * This was invisible to every clearance rule, all of which measured against the declared width and so
+ * under-read the real road by 3.5 u a side. That is why the Metrorail main line ended up under Albertina
+ * Sisulu Road: nothing that placed the rail, the station platforms or anything else beside a road knew
+ * how wide the road actually is. City derives SIDEWALK_WIDTH from this constant so the two cannot drift.
+ */
+export const ROAD_BUILD_MARGIN = 3.5;
+
+interface EdgeSegment { ax: number; az: number; bx: number; bz: number; half: number; }
+
+const EDGE_CELL = 26;
+
+function insertEdgeSegment(grid: Map<string, EdgeSegment[]>, segment: EdgeSegment, cap: number): void {
+  const pad = segment.half + cap;
+  const minX = Math.floor((Math.min(segment.ax, segment.bx) - pad) / EDGE_CELL);
+  const maxX = Math.floor((Math.max(segment.ax, segment.bx) + pad) / EDGE_CELL);
+  const minZ = Math.floor((Math.min(segment.az, segment.bz) - pad) / EDGE_CELL);
+  const maxZ = Math.floor((Math.max(segment.az, segment.bz) + pad) / EDGE_CELL);
+  for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
+    const key = `${cx},${cz}`;
+    const cell = grid.get(key);
+    if (cell) cell.push(segment); else grid.set(key, [segment]);
+  }
+}
+
+function distanceToEdge(grid: Map<string, EdgeSegment[]>, x: number, z: number, cap: number): number {
+  let best = cap;
+  for (const segment of grid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
+    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
+    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
+    const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
+    if (distance < best) best = distance;
+  }
+  return best;
+}
+
+const edgeGrid = new Map<string, EdgeSegment[]>();
+const builtEdgeGrid = new Map<string, EdgeSegment[]>();
+for (const road of GENERATED_ROADS) {
+  for (let index = 0; index < road.points.length - 1; index++) {
+    const a = road.points[index]!; const b = road.points[index + 1]!;
+    insertEdgeSegment(edgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: road.width / 2 }, ROAD_EDGE_CAP);
+    insertEdgeSegment(builtEdgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: road.width / 2 + ROAD_BUILD_MARGIN }, ROAD_EDGE_CAP);
+  }
+}
+
+/**
+ * Distance from a point to the nearest CARRIAGEWAY edge (negative when on the tar), clamped to
+ * ROAD_EDGE_CAP: any value >= the cap just means "at least this clear". Grid-backed, so placement
+ * code and tests can call it liberally.
+ *
+ * This is the TAR only. Anything asking "am I clear of the road?" — as opposed to "am I on the
+ * driveable surface?" — wants distanceToBuiltRoadEdge, which counts the kerb and pavement too.
+ */
+export function distanceToRoadEdge(x: number, z: number): number {
+  return distanceToEdge(edgeGrid, x, z, ROAD_EDGE_CAP);
+}
+
+/** Distance to the nearest edge of the road AS BUILT — carriageway plus kerb plus sidewalk
+ *  (ROAD_BUILD_MARGIN). Negative inside the finished surface. This is the clearance rule; the
+ *  declared width is only ever the driveable part of it. */
+export function distanceToBuiltRoadEdge(x: number, z: number): number {
+  return distanceToEdge(builtEdgeGrid, x, z, ROAD_EDGE_CAP);
+}
+
+/**
+ * Nearest built road to a point: how much room is left, which way is out, and how the road runs.
+ *
+ * The general form of "am I clear of the road?", and the query the rail deconfliction is built on.
+ * Anything siting something beside a road wants this rather than distanceToRoadEdge, which answers
+ * only about the tar and so under-reads the real road by ROAD_BUILD_MARGIN a side.
+ */
+export function nearestBuiltRoad(x: number, z: number): RailRoadProbe | undefined {
+  let best: RailRoadProbe | undefined; let bestClearance = ROAD_EDGE_CAP;
+  for (const segment of builtEdgeGrid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
+    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
+    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
+    const px = segment.ax + dx * t; const pz = segment.az + dz * t;
+    const span = Math.hypot(x - px, z - pz);
+    const clearance = span - segment.half;
+    if (clearance >= bestClearance) continue;
+    const length = Math.sqrt(lengthSq);
+    // Degenerate only when the point sits exactly on the centreline; the road's own normal is then
+    // as good a "way out" as any, and is stable rather than arbitrary.
+    const awayX = span > 1e-6 ? (x - px) / span : -dz / length;
+    const awayZ = span > 1e-6 ? (z - pz) / span : dx / length;
+    bestClearance = clearance;
+    best = { clearance, awayX, awayZ, dirX: dx / length, dirZ: dz / length, half: segment.half };
+  }
+  return best;
+}
+
+/** Half-width of the rendered ballast bed. Placement code protects this exact shared corridor, and the
+ *  deconfliction below is what keeps roads out of it. */
+export const RAILWAY_CORRIDOR_HALF_WIDTH = 2.6;
+
+/**
+ * Passenger rail lines (thinned by the pipeline), pushed clear of the roads they run alongside.
+ *
+ * The pipeline emits rail and roads independently, so on the shipped map 4.90 km of the 22.5 km network
+ * had its ballast inside a built road — the Metrorail main line ran INSIDE Albertina Sisulu Road for
+ * ~700 u either side of Grosvenor Station, with the two centrelines just 7.0 u apart against a built
+ * road half-width of 10.5 u. deconflictRailway moves the rail off roads it PARALLELS and leaves the
+ * places it genuinely CROSSES alone, so a level crossing still reads as a level crossing.
+ */
+const DECONFLICTED_RAILWAYS = (MAP.railways ?? [])
   .map((line) => ({ name: line.name, points: toPts(line.points) }))
-  .filter((line) => line.points.length >= 2);
+  .filter((line) => line.points.length >= 2)
+  .map((line) => ({
+    name: line.name,
+    ...deconflictRailway(line.points, nearestBuiltRoad, { ...RAIL_DECONFLICT_DEFAULTS, corridorHalf: RAILWAY_CORRIDOR_HALF_WIDTH }),
+  }));
+
+export const GENERATED_RAILWAYS: GeneratedRailway[] =
+  DECONFLICTED_RAILWAYS.map((line) => ({ name: line.name, points: line.points }));
+
+/** Where a rail line genuinely has to get across a carriageway: the renderer lays a level crossing. */
+export const RAILWAY_LEVEL_CROSSINGS: RailCrossing[] = DECONFLICTED_RAILWAYS.flatMap((line) => line.crossings);
 
 export interface RailwaySpot {
   x: number;
@@ -457,10 +588,100 @@ export interface RailwayStationSite extends MapLandmark {
   sourceDistance: number;
 }
 
+// ---- Station platform geometry (shared with the renderer) ---------------------
+//
+// City.buildRailwayStation lays the slabs from these, and the siting below tests against them, so the
+// stop is only ever placed where the architecture it is about to build actually fits.
+
+/** Width of one platform slab. */
+export const STATION_PLATFORM_WIDTH = 3.6;
+/** Slab centre offset from the rail centreline: clear of the ballast, plus a small gap. */
+export const STATION_PLATFORM_OFFSET = RAILWAY_CORRIDOR_HALF_WIDTH + STATION_PLATFORM_WIDTH / 2 + 0.25;
+/** Platform length. Park Station, the terminus, gets the long one. */
+export const STATION_PLATFORM_LENGTH = 46;
+export const STATION_PLATFORM_LENGTH_TERMINUS = 58;
+export function stationPlatformLength(name: string): number {
+  return name === 'Park Station' ? STATION_PLATFORM_LENGTH_TERMINUS : STATION_PLATFORM_LENGTH;
+}
+/** How far along its line a stop may slide to find room for both platforms. */
+const STATION_SLIDE_LIMIT = 200;
+const STATION_SLIDE_STEP = 4;
+
+/** Worst clearance a platform slab on `side` has from the carriageway and from the road AS BUILT. */
+export function platformSideClearance(
+  x: number, z: number, dirX: number, dirZ: number, side: 1 | -1, length: number,
+): { tar: number; built: number } {
+  const heading = Math.atan2(dirX, dirZ);
+  const c = Math.cos(heading); const s = Math.sin(heading);
+  const lx = side * STATION_PLATFORM_OFFSET;
+  let tar = Infinity; let built = Infinity;
+  for (let lz = -length / 2; lz <= length / 2 + 1e-9; lz += 6) {
+    const px = x + lx * c + lz * s; const pz = z - lx * s + lz * c;
+    tar = Math.min(tar, distanceToRoadEdge(px, pz));
+    built = Math.min(built, distanceToBuiltRoadEdge(px, pz));
+  }
+  return { tar, built };
+}
+
+/**
+ * Whether a platform slab on `side` may be built beside the line at (x, z).
+ *
+ * Two standards, because they are different failures. A slab overlapping the PAVEMENT is a station
+ * entrance meeting the footway, which is what stations do — that is only worth sliding a stop to
+ * avoid. A slab overlapping the CARRIAGEWAY is a concrete block in a live traffic lane, and is never
+ * built. Siting below asks for 'built' first and settles for 'tar'; the renderer only ever enforces
+ * 'tar', so a station that got sited is a station that gets both its platforms.
+ */
+export function platformSideFits(
+  x: number, z: number, dirX: number, dirZ: number, side: 1 | -1, length: number, standard: 'built' | 'tar' = 'tar',
+): boolean {
+  const clearance = platformSideClearance(x, z, dirX, dirZ, side, length);
+  return (standard === 'built' ? clearance.built : clearance.tar) >= STATION_PLATFORM_WIDTH / 2;
+}
+
+/** Arc-length walk along a rail line: the spot `distance` further on from `spot`, or undefined at the end. */
+function railSpotAlong(railway: GeneratedRailway, x: number, z: number, distance: number): RailwaySpot | undefined {
+  const points = railway.points;
+  // Locate the parametric position of (x, z) on the line, then walk.
+  let bestIndex = -1; let bestT = 0; let bestDistanceSq = Infinity;
+  for (let index = 0; index < points.length - 1; index++) {
+    const a = points[index]!; const b = points[index + 1]!;
+    const dx = b.x - a.x; const dz = b.z - a.z; const lengthSq = dx * dx + dz * dz;
+    if (lengthSq < 1e-8) continue;
+    const t = Math.min(1, Math.max(0, ((x - a.x) * dx + (z - a.z) * dz) / lengthSq));
+    const distanceSq = (a.x + dx * t - x) ** 2 + (a.z + dz * t - z) ** 2;
+    if (distanceSq < bestDistanceSq) { bestDistanceSq = distanceSq; bestIndex = index; bestT = t; }
+  }
+  if (bestIndex < 0) return undefined;
+  let index = bestIndex; let t = bestT; let remaining = distance;
+  while (index >= 0 && index < points.length - 1) {
+    const a = points[index]!; const b = points[index + 1]!;
+    const segment = Math.hypot(b.x - a.x, b.z - a.z);
+    if (segment < 1e-8) { index += remaining >= 0 ? 1 : -1; t = remaining >= 0 ? 0 : 1; continue; }
+    const ahead = remaining >= 0 ? (1 - t) * segment : -t * segment;
+    if (remaining >= 0 ? remaining <= ahead : remaining >= ahead) {
+      const at = t + remaining / segment;
+      return {
+        x: a.x + (b.x - a.x) * at, z: a.z + (b.z - a.z) * at,
+        dirX: (b.x - a.x) / segment, dirZ: (b.z - a.z) / segment, railway,
+      };
+    }
+    remaining -= ahead;
+    if (remaining >= 0) { index++; t = 0; } else { index--; t = 1; }
+  }
+  return undefined;
+}
+
 /** Station architecture is snapped to real track so platforms can never float beside or cross the line.
  *  Sites come from the pipeline's full `stations` coverage (a stop at every line end + 2.5–5 km spacing),
  *  deduped at shared-interchange points; the station-kind landmarks are the fallback on older maps.
- *  The Lughawe Halt is excluded — Airport.ts builds its own bespoke platform beside the apron. */
+ *  The Lughawe Halt is excluded — Airport.ts builds its own bespoke platform beside the apron.
+ *
+ *  A stop whose projection leaves a platform on a road SLIDES ALONG ITS LINE to the nearest spot where
+ *  both sides fit. It used to be built anyway, minus the offending side: five of the seventeen sites on
+ *  the shipped map rendered as a station with one platform, one row of shelters and nothing opposite —
+ *  which is what "one of the rail station sides is missing" was. Sliding a stop a few tens of units
+ *  along its own line is invisible and authentic; a half-built station is neither. */
 export const RAILWAY_STATION_SITES: RailwayStationSite[] = (() => {
   const sources: Array<{ name: string; x: number; z: number }> = STATIONS.length > 0
     ? STATIONS.filter((station) => !/^lughawe halt$/i.test(station.name))
@@ -468,8 +689,25 @@ export const RAILWAY_STATION_SITES: RailwayStationSite[] = (() => {
   const sites: RailwayStationSite[] = [];
   for (const station of sources) {
     if (sites.some((prior) => (prior.x - station.x) ** 2 + (prior.z - station.z) ** 2 < 40 ** 2)) continue; // one physical interchange, one site
-    const spot = nearestRailwaySpot(station.x, station.z);
-    if (!spot) continue;
+    const projected = nearestRailwaySpot(station.x, station.z);
+    if (!projected) continue;
+    const length = stationPlatformLength(station.name);
+    const fits = (spot: RailwaySpot, standard: 'built' | 'tar'): boolean =>
+      platformSideFits(spot.x, spot.z, spot.dirX, spot.dirZ, -1, length, standard)
+      && platformSideFits(spot.x, spot.z, spot.dirX, spot.dirZ, 1, length, standard)
+      && !sites.some((prior) => (prior.x - spot.x) ** 2 + (prior.z - spot.z) ** 2 < 40 ** 2);
+    /** Nearest first, alternating downline/upline so the choice is symmetric and deterministic. */
+    const search = (standard: 'built' | 'tar'): RailwaySpot | undefined => {
+      if (fits(projected, standard)) return projected;
+      for (let slide = STATION_SLIDE_STEP; slide <= STATION_SLIDE_LIMIT; slide += STATION_SLIDE_STEP) {
+        for (const direction of [1, -1]) {
+          const candidate = railSpotAlong(projected.railway, projected.x, projected.z, slide * direction);
+          if (candidate && fits(candidate, standard)) return candidate;
+        }
+      }
+      return undefined;
+    };
+    const spot = search('built') ?? search('tar') ?? projected;
     sites.push({
       name: station.name,
       kind: 'station',
@@ -528,60 +766,8 @@ export function besideRoad(spot: RoadSpot, side: 1 | -1, clearance: number): Map
   return { x: spot.x - spot.dirZ * offset, z: spot.z + spot.dirX * offset };
 }
 
-// ---- Road-edge distance grid ---------------------------------------------------
-
-/** How far beyond a road edge the shared edge grid can measure accurately. */
-export const ROAD_EDGE_CAP = 14;
-
-interface EdgeSegment { ax: number; az: number; bx: number; bz: number; half: number; }
-
-const EDGE_CELL = 26;
-
-function insertEdgeSegment(grid: Map<string, EdgeSegment[]>, segment: EdgeSegment, cap: number): void {
-  const pad = segment.half + cap;
-  const minX = Math.floor((Math.min(segment.ax, segment.bx) - pad) / EDGE_CELL);
-  const maxX = Math.floor((Math.max(segment.ax, segment.bx) + pad) / EDGE_CELL);
-  const minZ = Math.floor((Math.min(segment.az, segment.bz) - pad) / EDGE_CELL);
-  const maxZ = Math.floor((Math.max(segment.az, segment.bz) + pad) / EDGE_CELL);
-  for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
-    const key = `${cx},${cz}`;
-    const cell = grid.get(key);
-    if (cell) cell.push(segment); else grid.set(key, [segment]);
-  }
-}
-
-function distanceToEdge(grid: Map<string, EdgeSegment[]>, x: number, z: number, cap: number): number {
-  let best = cap;
-  for (const segment of grid.get(`${Math.floor(x / EDGE_CELL)},${Math.floor(z / EDGE_CELL)}`) ?? []) {
-    const dx = segment.bx - segment.ax; const dz = segment.bz - segment.az; const lengthSq = dx * dx + dz * dz || 1;
-    const t = Math.min(1, Math.max(0, ((x - segment.ax) * dx + (z - segment.az) * dz) / lengthSq));
-    const distance = Math.hypot(x - (segment.ax + dx * t), z - (segment.az + dz * t)) - segment.half;
-    if (distance < best) best = distance;
-  }
-  return best;
-}
-
-const edgeGrid = new Map<string, EdgeSegment[]>();
-for (const road of GENERATED_ROADS) {
-  for (let index = 0; index < road.points.length - 1; index++) {
-    const a = road.points[index]!; const b = road.points[index + 1]!;
-    insertEdgeSegment(edgeGrid, { ax: a.x, az: a.z, bx: b.x, bz: b.z, half: road.width / 2 }, ROAD_EDGE_CAP);
-  }
-}
-
-/**
- * Distance from a point to the nearest road EDGE (negative when inside a road surface),
- * clamped to ROAD_EDGE_CAP: any value >= the cap just means "at least this clear".
- * Grid-backed, so placement code and tests can call it liberally.
- */
-export function distanceToRoadEdge(x: number, z: number): number {
-  return distanceToEdge(edgeGrid, x, z, ROAD_EDGE_CAP);
-}
-
 // ---- Railway-corridor distance grid -----------------------------------------
 
-/** Half-width of the rendered ballast bed. Placement code protects this exact shared corridor. */
-export const RAILWAY_CORRIDOR_HALF_WIDTH = 2.6;
 /** How far beyond the ballast edge the railway grid measures accurately. */
 export const RAILWAY_EDGE_CAP = 18;
 
