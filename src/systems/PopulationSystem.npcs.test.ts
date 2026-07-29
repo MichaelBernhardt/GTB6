@@ -48,6 +48,24 @@ describe('all-Blender NPC population policy', () => {
     expect(ambient.map((ped) => ped.visualVariant)).toEqual(Array.from({ length: 28 }, (_, index) => AMBIENT_NPC_CHARACTER_IDS[index % AMBIENT_NPC_CHARACTER_IDS.length]));
   });
 
+  it('seeds the opening crowd around the saved resume point instead of the default CBD spawn', () => {
+    const resume = new THREE.Vector3(SPAWN_POINT.x + 5_000, 0, SPAWN_POINT.z - 4_000);
+    const remote = Array.from({ length: 60 }, (_, index) => ({
+      x: resume.x + 30 + (index % 10) * 12,
+      z: resume.z + 30 + Math.floor(index / 10) * 12,
+    }));
+    const remoteCity = {
+      ...(city as unknown as Record<string, unknown>),
+      sidewalkPoints: [...points, ...remote],
+      wanderTarget: () => remote[0],
+    } as unknown as City;
+    const population = new PopulationSystem(new THREE.Scene(), remoteCity, audio, resume);
+    const ambient = population.pedestrians.filter((ped) => !ped.contact && !ped.carGuard && !ped.hostile && !ped.police);
+    expect(ambient).toHaveLength(28);
+    expect(ambient.every((ped) => ped.group.position.distanceTo(resume) < 320)).toBe(true);
+    expect(ambient.every((ped) => ped.group.position.distanceTo(new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z)) > 1_000)).toBe(true);
+  });
+
   it('keeps assigning rotating Blender identities through lifecycle growth and replacement', () => {
     const population = new PopulationSystem(new THREE.Scene(), city, audio);
     const spawned = Array.from({ length: 132 }, (_, index) => population.spawnAmbientPedestrian(points[index % points.length]!.x, points[index % points.length]!.z));

@@ -316,7 +316,7 @@ export class Game {
     this.player.setHeading(this.save.heading); // resume facing the saved direction
     this.cameraController = new CameraController(this.camera);
     this.cameraController.yaw = this.save.heading + Math.PI; // camera parked behind, looking the way the player faces
-    this.population = new PopulationSystem(this.scene, this.city, this.audio);
+    this.population = new PopulationSystem(this.scene, this.city, this.audio, this.player.group.position);
     // Guards need the population roster: this spawn must stay AFTER the PopulationSystem line above.
     this.yardGuards = [0, Math.PI].map((angle) => this.population.spawnYardGuard(KELVIN_OFFICE_SPOT.x + Math.sin(angle) * 12, KELVIN_OFFICE_SPOT.z + Math.cos(angle) * 12));
     await breathe(46, 'Bringing out the people');

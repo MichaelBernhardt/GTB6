@@ -99,9 +99,15 @@ export class PopulationSystem {
   private frame = 0;
   private forward = new THREE.Vector3();
   private bumpDirection = new THREE.Vector3();
-  private playerPos = new THREE.Vector3(SPAWN_POINT.x, 0, SPAWN_POINT.z); // last known player position; biases new traffic goals player-ward
+  private playerPos = new THREE.Vector3(); // last known player position; biases new traffic goals player-ward
 
-  constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
+  constructor(
+    private scene: THREE.Scene,
+    private city: City,
+    private audio: AudioManager,
+    initialPosition: { x: number; z: number } = SPAWN_POINT,
+  ) {
+    this.playerPos.set(initialPosition.x, 0, initialPosition.z);
     this.vehiclePlanner = new RoutePlanner(city.vehicleNav, 2);
     this.pedPlanner = new RoutePlanner(city.pedNav, 2);
     this.spawnVehicles(); this.spawnPedestrians();
@@ -623,11 +629,11 @@ export class PopulationSystem {
       vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
       this.parkedSpots.push([spot.x, spot.z]);
     }
-    // Seed the opening traffic on lanes around the player spawn (the map is far bigger than the
-    // AI wake radius; the lifecycle system keeps density right as the player moves).
+    // Seed opening traffic around the ACTUAL resume point, not always the default CBD spawn. A
+    // continued Vaal/outer-city save must not spend its first census looking like a ghost town.
     const nearbyRoutes = this.city.trafficRoutes.filter((route) => {
       const point = route[0];
-      return point && (point.x - SPAWN_POINT.x) ** 2 + (point.z - SPAWN_POINT.z) ** 2 < 400 * 400;
+      return point && (point.x - this.playerPos.x) ** 2 + (point.z - this.playerPos.z) ** 2 < 400 * 400;
     });
     const routePool = nearbyRoutes.length >= 8 ? nearbyRoutes : this.city.trafficRoutes;
     for (let i = 0; i < 15; i++) {
@@ -652,8 +658,8 @@ export class PopulationSystem {
   }
 
   private spawnPedestrians(): void {
-    // Opening crowd walks the spawn district; the lifecycle census takes over from there.
-    const nearby = this.city.sidewalkPoints.filter((point) => (point.x - SPAWN_POINT.x) ** 2 + (point.z - SPAWN_POINT.z) ** 2 < 320 * 320);
+    // Opening crowd walks the resumed district; the lifecycle census takes over from there.
+    const nearby = this.city.sidewalkPoints.filter((point) => (point.x - this.playerPos.x) ** 2 + (point.z - this.playerPos.z) ** 2 < 320 * 320);
     const pool = nearby.length >= 40 ? nearby : this.city.sidewalkPoints;
     for (let i = 0; i < 28; i++) {
       const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
