@@ -17,13 +17,18 @@ import * as THREE from 'three';
 export const CHUNK_VISIBLE_RANGE = 2500;
 /** Extra range a visible chunk keeps before detaching, so boundary driving doesn't thrash. */
 export const CHUNK_HYSTERESIS = 200;
+/** Procedural buildings dominate world geometry. Roads, terrain and iconic skyline silhouettes carry
+ *  to the wider world ring; full facade/storefront cells stream only around the playable neighbourhood.
+ *  Since a 600u cell extends beyond its nearest edge, this retains roughly a 2.1km detailed horizon. */
+export const BUILDING_VISIBLE_RANGE = 1500;
 /** Street micro-detail (markings, curbs, potholes, furniture, signal lenses…) is sub-pixel long
  *  before this range, so its chunk tier culls much tighter than the world tier. */
-export const DETAIL_VISIBLE_RANGE = 1200;
+export const DETAIL_VISIBLE_RANGE = 900;
 export const DETAIL_HYSTERESIS = 150;
 /** Potato (Skorokoro) tier pulls both streaming rings in hard; the denser potato fog (Game's world
  *  budget) is tuned to be near-opaque at the world ring so the pop-in edge hides in the haze. */
 export const POTATO_CHUNK_RANGE = 1500;
+export const POTATO_BUILDING_RANGE = 1100;
 export const POTATO_DETAIL_RANGE = 700;
 
 /** Key of the always-visible bucket (world ground plane, skyline landmarks). */

@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
-  addInstancedChunks, cellDistance, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, chunkShouldBeVisible,
-  ChunkStore, ChunkVisibility, FAR_CHUNK, type InstanceItem,
+  addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, chunkShouldBeVisible,
+  ChunkStore, ChunkVisibility, DETAIL_VISIBLE_RANGE, FAR_CHUNK, POTATO_BUILDING_RANGE, type InstanceItem,
 } from './ChunkVisibility';
 import { splitGeometryByCell } from './StaticGeometry';
 
@@ -26,6 +26,12 @@ describe('chunkShouldBeVisible (hysteresis)', () => {
     expect(chunkShouldBeVisible(true, CHUNK_VISIBLE_RANGE + CHUNK_HYSTERESIS + 1)).toBe(false);
     // And an invisible chunk does not re-enter inside the band.
     expect(chunkShouldBeVisible(false, CHUNK_VISIBLE_RANGE + CHUNK_HYSTERESIS - 1)).toBe(false);
+  });
+
+  it('keeps detailed geometry nested inside the cheap world ring', () => {
+    expect(DETAIL_VISIBLE_RANGE).toBeLessThan(BUILDING_VISIBLE_RANGE);
+    expect(BUILDING_VISIBLE_RANGE).toBeLessThan(CHUNK_VISIBLE_RANGE);
+    expect(POTATO_BUILDING_RANGE).toBeLessThan(BUILDING_VISIBLE_RANGE);
   });
 });
 

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, resolvePedestrianRenderVisible, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
+import { AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE, PLAYER, resolveFrozen, resolvePedestrianVisualLod, resolveVehicleVisualLod, TRAFFIC_SPEED_FACTOR, WORLD_SIZE, type VehicleKind } from '../config';
 import type { AudioManager } from '../core/AudioManager';
 import {
   AMBIENT_NPC_CHARACTER_IDS,
@@ -120,8 +120,8 @@ export class PopulationSystem {
         if (ped.frozen !== wasFrozen) {
           ped.resetProgress(); // stalled time must not straddle a frozen gap
         }
-        // The outer AI ring keeps routes alive; the tighter visual ring removes bodies too small to read.
-        ped.setRenderVisible(!ped.frozen && resolvePedestrianRenderVisible(ped.isRenderVisible, distanceSq));
+        // The outer AI ring keeps routes alive; medium bodies become cheap silhouettes before disappearing.
+        ped.setVisualLod(ped.frozen ? 'hidden' : resolvePedestrianVisualLod(ped.visualLod, distanceSq));
       }
       if (ped.frozen) return; // far agents: no motion, routing, or animation until the player closes in again
       ped.update(dt, this.city, this.city.sidewalkPoints, player);
@@ -131,13 +131,22 @@ export class PopulationSystem {
     this.witnessBodies(dt);
     const robotsOut = !powerOn();
     this.hootCooldown = Math.max(0, this.hootCooldown - dt);
+    this.vehicles.forEach((vehicle, index) => {
+      if (vehicle.playerControlled) { vehicle.setVisualLod('detail'); return; }
+      if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES !== 0) return;
+      const distanceSq = vehicle.group.position.distanceToSquared(player);
+      vehicle.setVisualLod(resolveVehicleVisualLod(vehicle.visualLod, distanceSq));
+    });
     this.traffic.forEach((vehicle, index) => {
-      if (vehicle.playerControlled || vehicle.disabled || !vehicle.occupied) return; // no NPC aboard (e.g. a carjacked car the player has since left): sit still, don't plan routes
+      if (vehicle.playerControlled) return;
+      const checkDistance = (this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0;
+      const distanceSq = checkDistance ? vehicle.group.position.distanceToSquared(player) : 0;
+      if (vehicle.disabled || !vehicle.occupied) return; // no NPC aboard (e.g. a carjacked car the player has since left): sit still, don't plan routes
       vehicle.routeCooldown = Math.max(0, vehicle.routeCooldown - dt);
       this.replanCooldown.set(vehicle, Math.max(0, (this.replanCooldown.get(vehicle) ?? 0) - dt));
-      if ((this.frame + index * 3 + 1) % FREEZE_CHECK_FRAMES === 0) {
+      if (checkDistance) {
         const wasFrozen = vehicle.frozen;
-        vehicle.frozen = resolveFrozen(vehicle.frozen, vehicle.group.position.distanceToSquared(player), AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE);
+        vehicle.frozen = resolveFrozen(vehicle.frozen, distanceSq, AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS_VEHICLE);
         if (vehicle.frozen !== wasFrozen) this.trafficPlans.get(vehicle)?.watchdog.reset();
         if (vehicle.frozen && !wasFrozen) vehicle.speed = 0; // park in place: a stale speed would fire impact checks and jerk on thaw
       }

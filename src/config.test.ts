@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_FREEZE_RADIUS, AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS, AI_THAW_RADIUS_VEHICLE, PED_RENDER_HIDE_RADIUS, PED_RENDER_SHOW_RADIUS, PLAYER, resolveFrozen, resolvePedestrianRenderVisible, TRAFFIC_SPEED_FACTOR, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
+import { AI_FREEZE_RADIUS, AI_FREEZE_RADIUS_VEHICLE, AI_THAW_RADIUS, AI_THAW_RADIUS_VEHICLE, PED_DETAIL_HIDE_RADIUS, PED_DETAIL_SHOW_RADIUS, PED_RENDER_HIDE_RADIUS, PED_RENDER_SHOW_RADIUS, PLAYER, resolveFrozen, resolvePedestrianRenderVisible, resolvePedestrianVisualLod, resolveVehicleVisualLod, TRAFFIC_SPEED_FACTOR, VEHICLE_DETAIL_HIDE_RADIUS, VEHICLE_DETAIL_SHOW_RADIUS, VEHICLE_RENDER_HIDE_RADIUS, VEHICLE_RENDER_SHOW_RADIUS, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS } from './config';
 import { REFRESH_RADIUS } from './systems/LifecycleSystem';
 import { calculateDamage } from './core/GameRules';
 
@@ -32,6 +32,31 @@ describe('distance freeze hysteresis', () => {
     expect(resolvePedestrianRenderVisible(true, sq(PED_RENDER_HIDE_RADIUS - 1))).toBe(true);
     expect(resolvePedestrianRenderVisible(false, sq(PED_RENDER_SHOW_RADIUS + 1))).toBe(false);
     expect(resolvePedestrianRenderVisible(false, sq(PED_RENDER_SHOW_RADIUS - 1))).toBe(true);
+  });
+
+  it('keeps pedestrian rigs near interactions and uses silhouettes across the background crowd', () => {
+    expect(PED_DETAIL_SHOW_RADIUS).toBeLessThan(PED_DETAIL_HIDE_RADIUS);
+    expect(PED_DETAIL_HIDE_RADIUS).toBeLessThan(PED_RENDER_SHOW_RADIUS);
+    expect(resolvePedestrianVisualLod('detail', sq(PED_DETAIL_HIDE_RADIUS + 1))).toBe('proxy');
+    expect(resolvePedestrianVisualLod('proxy', sq(PED_DETAIL_SHOW_RADIUS + 1))).toBe('proxy');
+    expect(resolvePedestrianVisualLod('proxy', sq(PED_DETAIL_SHOW_RADIUS - 1))).toBe('detail');
+    expect(resolvePedestrianVisualLod('proxy', sq(PED_RENDER_HIDE_RADIUS + 1))).toBe('hidden');
+    expect(resolvePedestrianVisualLod('hidden', sq(PED_RENDER_SHOW_RADIUS - 1))).toBe('proxy');
+    expect(resolvePedestrianVisualLod('detail', sq(PED_RENDER_HIDE_RADIUS + 1))).toBe('hidden');
+  });
+
+  it('reduces distant vehicles to a proxy, then hides only beyond the readable horizon', () => {
+    expect(VEHICLE_DETAIL_SHOW_RADIUS).toBeLessThan(VEHICLE_DETAIL_HIDE_RADIUS);
+    expect(VEHICLE_DETAIL_HIDE_RADIUS).toBeLessThan(VEHICLE_RENDER_SHOW_RADIUS);
+    expect(VEHICLE_RENDER_SHOW_RADIUS).toBeLessThan(VEHICLE_RENDER_HIDE_RADIUS);
+    expect(VEHICLE_RENDER_HIDE_RADIUS).toBeLessThan(AI_THAW_RADIUS_VEHICLE);
+    expect(resolveVehicleVisualLod('detail', sq(VEHICLE_DETAIL_HIDE_RADIUS + 1))).toBe('proxy');
+    expect(resolveVehicleVisualLod('proxy', sq(VEHICLE_DETAIL_SHOW_RADIUS + 1))).toBe('proxy');
+    expect(resolveVehicleVisualLod('proxy', sq(VEHICLE_DETAIL_SHOW_RADIUS - 1))).toBe('detail');
+    expect(resolveVehicleVisualLod('proxy', sq(VEHICLE_RENDER_HIDE_RADIUS + 1))).toBe('hidden');
+    expect(resolveVehicleVisualLod('hidden', sq(VEHICLE_RENDER_SHOW_RADIUS + 1))).toBe('hidden');
+    expect(resolveVehicleVisualLod('hidden', sq(VEHICLE_RENDER_SHOW_RADIUS - 1))).toBe('proxy');
+    expect(resolveVehicleVisualLod('detail', sq(VEHICLE_RENDER_HIDE_RADIUS + 1))).toBe('hidden'); // teleport skips proxy cleanly
   });
 });
 

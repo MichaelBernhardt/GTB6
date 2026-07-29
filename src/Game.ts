@@ -79,7 +79,7 @@ import { City, ROAD_NETWORK } from './world/City';
 import { CBD_CENTER, GENERATED_ROADS, METRES_PER_UNIT } from './world/mapData';
 import { COURIER_DEPOT, LOCKUP_SPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
-import { CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE, POTATO_CHUNK_RANGE, POTATO_DETAIL_RANGE } from './world/ChunkVisibility';
+import { BUILDING_VISIBLE_RANGE, CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE, POTATO_BUILDING_RANGE, POTATO_CHUNK_RANGE, POTATO_DETAIL_RANGE } from './world/ChunkVisibility';
 import { buildEnvironment, fogDensity, type EnvironmentHandle } from './world/Environment';
 import { CITY_JUNCTIONS, ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
@@ -755,7 +755,11 @@ export class Game {
    *  The sub-native render scale is renderPixelRatio()'s job. */
   private applyWorldBudget(): void {
     const potato = this.settings.quality === 'potato';
-    this.city.setStreamRanges(potato ? POTATO_CHUNK_RANGE : CHUNK_VISIBLE_RANGE, potato ? POTATO_DETAIL_RANGE : DETAIL_VISIBLE_RANGE);
+    this.city.setStreamRanges(
+      potato ? POTATO_CHUNK_RANGE : CHUNK_VISIBLE_RANGE,
+      potato ? POTATO_DETAIL_RANGE : DETAIL_VISIBLE_RANGE,
+      potato ? POTATO_BUILDING_RANGE : BUILDING_VISIBLE_RANGE,
+    );
     this.lifecycle.densityScale = potato ? POTATO_DENSITY_SCALE : 1;
     (this.scene.fog as THREE.FogExp2).density = fogDensity(potato ? 'potato' : this.baseQuality());
   }

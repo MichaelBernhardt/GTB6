@@ -118,6 +118,33 @@ describe('authored road-car fleet', () => {
   });
 });
 
+describe('vehicle distance LOD', () => {
+  it('swaps the authored car for a one-draw tiny silhouette and can hide the whole vehicle', () => {
+    const car = new Vehicle(new THREE.Scene(), 'sport', new THREE.Vector3(), 0x6a35c8);
+    const detail = car.group.getObjectByName(ROAD_VEHICLE_CONTRACTS.sport.root)!;
+    const proxy = car.group.getObjectByName('vehicle-lod-proxy') as THREE.Mesh;
+    expect(proxy).toBeInstanceOf(THREE.Mesh);
+    expect((proxy.geometry.index?.count ?? proxy.geometry.getAttribute('position').count) / 3).toBeLessThanOrEqual(72);
+    expect(detail.visible).toBe(true); expect(proxy.visible).toBe(false);
+
+    car.setVisualLod('proxy');
+    expect(car.group.visible).toBe(true); expect(detail.visible).toBe(false); expect(proxy.visible).toBe(true);
+    car.setVisualLod('hidden');
+    expect(car.group.visible).toBe(false); expect(detail.visible).toBe(false); expect(proxy.visible).toBe(false);
+    car.setVisualLod('detail');
+    expect(car.group.visible).toBe(true); expect(detail.visible).toBe(true); expect(proxy.visible).toBe(false);
+  });
+
+  it('keeps matching proxy geometry and material shared across the fleet', () => {
+    const first = new Vehicle(new THREE.Scene(), 'compact', new THREE.Vector3(), 0x2277aa);
+    const second = new Vehicle(new THREE.Scene(), 'compact', new THREE.Vector3(), 0x2277aa);
+    const firstProxy = first.group.getObjectByName('vehicle-lod-proxy') as THREE.Mesh;
+    const secondProxy = second.group.getObjectByName('vehicle-lod-proxy') as THREE.Mesh;
+    expect(secondProxy.geometry).toBe(firstProxy.geometry);
+    expect(secondProxy.material).toBe(firstProxy.material);
+  });
+});
+
 describe('steered front wheels spin cleanly (no wobble)', () => {
   const flat = slopedCity(0, 0);
   const frontWheel = (car: Vehicle) => (car as unknown as { wheels: THREE.Object3D[] }).wheels[0]!;

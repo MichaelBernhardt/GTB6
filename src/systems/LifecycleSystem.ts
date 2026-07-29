@@ -36,7 +36,7 @@ export const SPAWN_MAX_DISTANCE = 425;
 // target at once; without this cap the census would burst the lot in one tick and drop a mob at the
 // destination. Instead the street trickles in over several ticks and fills naturally. Despawns are not
 // capped this way — clearing a dead zone is invisible and should be prompt.
-export const AMBIENT_SPAWN_TRICKLE = 6;
+export const AMBIENT_SPAWN_TRICKLE = 10;
 // Spatial stagger: minimum separation between agents spawned within the SAME tick, so a batch scatters
 // across the streets instead of piling onto neighbouring nav nodes. Only same-tick spawns are spaced
 // (no global density cap), so a zone still fills to its full target over successive ticks.
@@ -80,8 +80,8 @@ export function dayPhase(hour: number): DayPhase {
  * (The old global 28/15 was spread across the whole 18000u map; this is per active zone instead.)
  */
 export const ZONE_DENSITY: Record<Zone, { peds: number; cars: number }> = {
-  'commercial-highrise': { peds: 22, cars: 9 }, // CBD / Sandton towers — packed pavements and traffic
-  'commercial-strip': { peds: 15, cars: 7 },    // arterial retail — busy but not a tower canyon
+  'commercial-highrise': { peds: 13, cars: 5 }, // CBD towers — packed nearby pavements without 70 animated rigs at the visual horizon
+  'commercial-strip': { peds: 10, cars: 4 },    // arterial retail — busy but not a tower canyon
   'residential': { peds: 6, cars: 3 },          // the suburban bulk — a moderate, lived-in street
   'industrial': { peds: 4, cars: 3 },           // yards & sheds — few walkers, some delivery traffic
   'estate': { peds: 3, cars: 2 },               // walled villas — quiet, the odd car
@@ -96,7 +96,7 @@ export const BUSY_MIN = 10; export const BUSY_MAX = 1000; // percent bounds for 
 // Ceilings on the SUMMED nine-zone target — protect perf when the 3×3 is dense (a CBD core) and/or the
 // busy dial is cranked. Reached only at extreme busy in the densest neighbourhoods; the freeze layer keeps
 // far agents idle so the animating count is far lower. Console `set peds/cars` pins are clamped to these too.
-export const PED_TARGET_CAP = 180; export const CAR_TARGET_CAP = 100;
+export const PED_TARGET_CAP = 100; export const CAR_TARGET_CAP = 50;
 export const BUDGET_PASSES = 3; // each pass closes a third of the gap: a console jump fully lands within ~20 real seconds
 
 export function clampBusy(percent: number): number { return Math.min(BUSY_MAX, Math.max(BUSY_MIN, Math.round(percent))); }

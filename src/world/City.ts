@@ -48,7 +48,7 @@ import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type 
 import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
-import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
+import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
@@ -730,6 +730,9 @@ export class City {
   /** On-demand building tier: buildings are GENERATED per cell as the player approaches (frame-budgeted)
    *  and their geometry disposed beyond the far radius — regenerable identically from CityGen's seeds. */
   private buildingStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
+  private buildingVisibleRange = BUILDING_VISIBLE_RANGE;
+  private visibilityFocusX = 0;
+  private visibilityFocusZ = 0;
   private buildingCells = new Map<string, THREE.Group>();
   private buildingColliderCells = new Set<string>();
   private buildQueue: Array<[number, number]> = [];
@@ -927,9 +930,13 @@ export class City {
   /** Quality-tier streaming rings, changeable live: the staggered culling walk re-evaluates every
    *  chunk against the new ranges within a few frames, no rebuild. Potato passes the pulled-in
    *  pair; every other tier restores the defaults. */
-  setStreamRanges(world: number, detail: number): void {
+  setStreamRanges(world: number, detail: number, buildings = BUILDING_VISIBLE_RANGE): void {
     this.chunkCulling.setRange(world);
     this.detailCulling.setRange(detail);
+    this.buildingVisibleRange = buildings;
+    // A live tier change must not finish the old wider queue after its budget has been pulled inward.
+    this.buildQueue = this.buildQueue.filter(([cx, cz]) => cellDistance(this.visibilityFocusX, this.visibilityFocusZ, cx, cz, MERGE_CHUNK_SIZE) <= buildings);
+    this.queuedCells = new Set(this.buildQueue.map(([cx, cz]) => `${cx},${cz}`));
   }
 
   /** Frame-budgeted distance culling: chunks near the focus join the scene, far ones detach (with
@@ -939,6 +946,7 @@ export class City {
    *  handles, and the premium dams double as the always-visible distant-water representation.
    *  Model streaming can be held behind the required-asset loading gate while static chunks cull. */
   updateVisibility(focus: THREE.Vector3, streamModels = true): void {
+    this.visibilityFocusX = focus.x; this.visibilityFocusZ = focus.z;
     this.chunkCulling.update(focus.x, focus.z);
     this.detailCulling.update(focus.x, focus.z);
     if (streamModels) this.updateBuildingChunks(focus.x, focus.z);
@@ -2312,7 +2320,7 @@ export class City {
    * identically from CityGen's seeds on re-approach.
    */
   private updateBuildingChunks(focusX: number, focusZ: number): void {
-    const size = MERGE_CHUNK_SIZE; const range = CHUNK_VISIBLE_RANGE;
+    const size = MERGE_CHUNK_SIZE; const range = this.buildingVisibleRange;
     const minX = Math.floor((focusX - range) / size); const maxX = Math.floor((focusX + range) / size);
     const minZ = Math.floor((focusZ - range) / size); const maxZ = Math.floor((focusZ + range) / size);
     for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
