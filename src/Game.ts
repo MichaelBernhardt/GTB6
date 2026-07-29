@@ -723,7 +723,7 @@ export class Game {
       || [...this.population.vehicles, ...this.police.vehicles].some((other) => other.group.position.distanceTo(pose.position) < 3.5);
     if (blocked) return 'Eish, no clear kerb for the drop-off. Move along and try again.';
     const vehicle = new Vehicle(this.scene, kind, pose.position.clone());
-    vehicle.heading = Math.atan2(pose.position.x - origin.x, pose.position.z - origin.z); // nose away from the player
+    vehicle.heading = pose.heading; // align to the road tangent: "away from the player" could point straight across the kerb
     vehicle.group.rotation.y = vehicle.heading;
     this.population.vehicles.push(vehicle);
     this.ui.notify('Vehicle delivered', `${spec.name}, parked just ahead.`);
@@ -2756,7 +2756,11 @@ export class Game {
     const trainFp = this.trains.driving && firstPerson;
     // FP at the controls: nudge the eye forward past the (hidden) cab shell so the end wall never clips the view.
     if (trainFp && trainHeading !== undefined) this.trainEye.set(target.x + Math.sin(trainHeading) * 1.15, target.y, target.z + Math.cos(trainHeading) * 1.15);
-    this.cameraController.update(dt, this.input, trainFp && trainHeading !== undefined ? this.trainEye : target, this.city, Boolean(this.activeVehicle) || Boolean(flying) || this.trains.driving, sensitivity, view, flying?.state.heading ?? this.activeVehicle?.heading ?? trainHeading ?? 0, !this.combat.spec.melee && !this.airborne && !flying, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, flying ? 2.6 : this.trains.driving ? 3.4 : this.activeVehicle?.spec.size[1] ?? 0, this.player.heading, footTrail);
+    const speedRatio = flying ? flying.state.speed / PLANE_MAX_SPEED
+      : this.trains.driving ? this.trains.rideSpeedKph / 3.6 / 34
+      : this.activeVehicle ? Math.abs(this.activeVehicle.speed) / this.activeVehicle.spec.maxSpeed
+      : 0;
+    this.cameraController.update(dt, this.input, trainFp && trainHeading !== undefined ? this.trainEye : target, this.city, Boolean(this.activeVehicle) || Boolean(flying) || this.trains.driving, sensitivity, view, flying?.state.heading ?? this.activeVehicle?.heading ?? trainHeading ?? 0, !this.combat.spec.melee && !this.airborne && !flying, this.coverLean, scoped ? scopeFov(this.scopeLevel) : 0, airborneBoost, this.driveSteerActive, flying ? 2.6 : this.trains.driving ? 3.4 : this.activeVehicle?.spec.size[1] ?? 0, this.player.heading, footTrail, speedRatio);
     this.torch.frame(this.camera, target, firstPerson || scoped, !this.online); // after the camera settles so the beam tracks this frame's free-look exactly
     if (this.shake > 0) {
       this.shake = Math.max(0, this.shake - dt);

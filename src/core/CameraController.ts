@@ -15,6 +15,8 @@ const FP_PITCH_LIMIT = 1.2;
 const FP_AIM_ZOOM = 8; // degrees of FOV tightening at full aim (60 -> 52)
 const FP_VEHICLE_RECENTER_DELAY = 1.5; // seconds the mouse must sit still before a first-person driving glance eases back to forward (GTA-ish; tune by feel)
 const FOOT_TRAIL_RATE = 1.2; // lazy on-foot auto-follow: how fast the boom swings behind the direction of travel when the player isn't actively looking (GTA-style; keeps keyboard/gamepad-only players oriented). Higher = snappier.
+export const VEHICLE_SPEED_FOV = 6; // a fast car opens the lens just enough to sell speed without fisheye distortion
+export const VEHICLE_SPEED_BOOM = 1.8; // chase views breathe backwards at speed, keeping more road in frame
 
 export function sanitizeView(raw: unknown): number {
   return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 && raw < CAMERA_VIEW_NAMES.length ? raw : DEFAULT_CAMERA_VIEW;
@@ -35,6 +37,7 @@ export class CameraController {
   private lookOffset = 0;
   private lookIdle = 0; // seconds the mouse has been still, gating the first-person driving recenter (no tug-of-war mid-glance)
   private recoilReturn = 0;
+  private speedBlend = 0;
   private baseFov: number;
   private focus = new THREE.Vector3();
   private desired = new THREE.Vector3();
@@ -50,9 +53,14 @@ export class CameraController {
     this.camera.position.set(target.x + Math.sin(this.yaw) * horizontal, target.y + 1.45 + Math.sin(this.pitch) * distance, target.z + Math.cos(this.yaw) * horizontal);
   }
 
-  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0, extraDistance = 0, steerLock = false, vehicleHeight = 0, footTrailHeading = 0, footTrail = false): void {
+  update(dt: number, input: InputManager, target: THREE.Vector3, city: City, vehicle = false, sensitivity = 0.0025, view = DEFAULT_CAMERA_VIEW, vehicleHeading = 0, aimAllowed = true, coverLean = 0, scopeFov = 0, extraDistance = 0, steerLock = false, vehicleHeight = 0, footTrailHeading = 0, footTrail = false, vehicleSpeedRatio = 0): void {
     const scoped = scopeFov > 0 && !vehicle; // sniper scope: first-person eye regardless of the chosen view
     const firstPerson = sanitizeView(view) === 0 || scoped;
+    const speedTarget = vehicle ? THREE.MathUtils.clamp(Math.abs(vehicleSpeedRatio), 0, 1) : 0;
+    // Acceleration opens the camera with a little weight; braking settles faster so a stopped car never
+    // keeps a leftover speed lens. The exponential blend is frame-rate independent.
+    const speedResponse = speedTarget > this.speedBlend ? 2.8 : 5.5;
+    this.speedBlend += (speedTarget - this.speedBlend) * (1 - Math.exp(-dt * speedResponse));
     if (firstPerson && vehicle) {
       if (steerLock) { this.lookIdle = 0; this.lookOffset *= Math.exp(-dt * 1.4); } // mouse-steering holds the view forward — the drag turns the wheel, not the head
       else {
@@ -71,9 +79,9 @@ export class CameraController {
     this.pitch = THREE.MathUtils.clamp(this.pitch + input.mouseDY * sensitivity, firstPerson ? -FP_PITCH_LIMIT : -0.1, firstPerson ? FP_PITCH_LIMIT : 0.9);
     this.aiming = input.aiming && aimAllowed; // aim mode needs a ranged weapon in hand
     this.aimBlend += ((this.aiming ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-dt * 10));
-    if (firstPerson) { this.updateFirstPerson(target, vehicle, vehicleHeading, scoped ? scopeFov : 0, vehicleHeight); return; }
-    this.setFov(this.baseFov);
-    const distance = aimedViewDistance(view, vehicle, this.aimBlend) + extraDistance; // skydives pull the boom further back
+    if (firstPerson) { this.updateFirstPerson(target, vehicle, vehicleHeading, scoped ? scopeFov : 0, vehicleHeight, this.speedBlend); return; }
+    this.setFov(this.baseFov + (vehicle ? this.speedBlend * VEHICLE_SPEED_FOV : 0));
+    const distance = aimedViewDistance(view, vehicle, this.aimBlend) + extraDistance + (vehicle ? this.speedBlend * VEHICLE_SPEED_BOOM : 0); // skydives and fast chase cams pull the boom further back
     const baseHeight = VEHICLE_VIEW_HEIGHTS[sanitizeView(view)];
     const height = vehicle ? THREE.MathUtils.lerp(baseHeight, Math.min(baseHeight, VEHICLE_VIEW_HEIGHTS[1]), this.aimBlend) : THREE.MathUtils.lerp(1.45, 1.78, this.aimBlend);
     this.focus.set(target.x, target.y + height, target.z);
@@ -101,14 +109,14 @@ export class CameraController {
     this.camera.lookAt(this.focus);
   }
 
-  private updateFirstPerson(target: THREE.Vector3, vehicle: boolean, vehicleHeading: number, scopeFov = 0, vehicleHeight = 0): void {
+  private updateFirstPerson(target: THREE.Vector3, vehicle: boolean, vehicleHeading: number, scopeFov = 0, vehicleHeight = 0, speedBlend = 0): void {
     const vehicleEye = FP_EYE_VEHICLE + Math.max(0, vehicleHeight - VEHICLE_EYE_REF_HEIGHT) * VEHICLE_EYE_RISE; // sit higher in a taller vehicle so the bonnet clears the view
     this.focus.set(target.x, target.y + (vehicle ? vehicleEye : FP_EYE_FOOT), target.z);
     if (vehicle) { this.focus.x += Math.sin(vehicleHeading) * 0.25 + Math.cos(vehicleHeading) * 0.33; this.focus.z += Math.cos(vehicleHeading) * 0.25 - Math.sin(vehicleHeading) * 0.33; } // driver seat: forward + door side
     this.camera.position.copy(this.focus);
     const cosPitch = Math.cos(this.pitch);
     this.camera.lookAt(this.focus.x - Math.sin(this.yaw) * cosPitch, this.focus.y - Math.sin(this.pitch), this.focus.z - Math.cos(this.yaw) * cosPitch);
-    this.setFov(scopeFov > 0 ? scopeFov : this.baseFov - (vehicle ? 0 : FP_AIM_ZOOM * this.aimBlend));
+    this.setFov(scopeFov > 0 ? scopeFov : this.baseFov + (vehicle ? speedBlend * VEHICLE_SPEED_FOV : -FP_AIM_ZOOM * this.aimBlend));
   }
 
   private setFov(fov: number): void {
