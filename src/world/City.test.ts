@@ -2,9 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PLAYER } from '../config';
 import { fallDamage, jumpVelocity, stepVertical, type VerticalMotion } from '../core/GameRules';
-import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, RAILWAY_NETWORK, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
+import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, industrialSignLabel, RAILWAY_NETWORK, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, storefrontSignLabel, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
 import { CBD_CENTER, distanceToRailwayCorridor, districtCenter, MAP_WORLD_SIZE, RAILWAY_CORRIDOR_HALF_WIDTH, RAILWAY_STATIONS, RAILWAY_STATION_SITES, ridgeMetresAt } from './mapData';
 import { CITY_JUNCTIONS, signalCornerOffset } from './UrbanInfrastructure';
+
+describe('procedural local business identity', () => {
+  it('cycles bounded deterministic labels across commercial and industrial buildings', () => {
+    expect(Array.from({ length: 8 }, (_, variant) => storefrontSignLabel(variant))).toEqual([
+      'KOTA & CHIPS', 'HAIR BY BONGI', 'MZANSI FONES', 'BRAAI 2 GO',
+      'EISH EXPRESS', 'LOAD SHED CAFE', 'KOTA & CHIPS', 'HAIR BY BONGI',
+    ]);
+    expect(industrialSignLabel(-1)).toBe('WELDING NOW-NOW');
+  });
+});
 
 describe('generated Joburg road topology', () => {
   it('carries the real OSM network at driveable scale', () => {

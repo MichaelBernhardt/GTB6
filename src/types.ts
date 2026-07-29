@@ -14,6 +14,8 @@ export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerabl
 /** Carried kit beside the weapon loadout: an armour pool plus consumable stims and parachutes. */
 export interface Inventory { armour: number; stims: number; parachutes: number; }
 export interface SavedVehicle { kind: VehicleKind; color: number; health: number; }
+/** Best results from replayable open-world activities. Optional fields keep future activities additive. */
+export interface ActivityRecords { robotRunBest?: number; }
 export interface SavedGame {
   version: 3;
   money: number;
@@ -34,6 +36,7 @@ export interface SavedGame {
   /** One slot for every lazily loaded feature (src/features/): each stores its slice under its own
    *  save key. Adding a feature never touches this file again — see src/features/README.md. */
   features: Record<string, unknown>;
+  activityRecords: ActivityRecords;
 }
 /** Tiers the world subsystems understand. `ultra` is a render-only super-tier (High visuals + extra AA);
  *  it maps down to `high` for everything except the renderer's pixel ratio and post-processing.

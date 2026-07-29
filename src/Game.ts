@@ -27,6 +27,7 @@ import { loadVehicleLibraries } from './entities/VehicleAssets';
 import { BulletSystem } from './systems/BulletSystem';
 import { CombatSystem, type ShotResult } from './systems/CombatSystem';
 import { BUMP_ASSAULT_HEAT } from './systems/BumpSystem';
+import { chopShopAccepts, chopShopOffer } from './systems/ChopShopSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
 import { clampT, cornerSide, COVER_ENTER_RANGE, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestGroundedCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { COURIER_MIN_TRIP_DISTANCE, COURIER_STOP_RADIUS, COURIER_STOP_SPEED, CourierJob, courierHudText } from './systems/CourierJobSystem';
@@ -53,6 +54,10 @@ import { PropSystem } from './systems/PropSystem';
 import { TorchSystem } from './systems/TorchSystem';
 import { formatCountdown, TrainSystem } from './systems/TrainSystem';
 import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
+import { RouteGuidance } from './systems/RouteGuidance';
+import { buildRobotCircuit, racePace, RobotRace, type RaceFinish } from './systems/RobotRaceSystem';
+import { StreetNameIndex } from './systems/StreetNameSystem';
+import { waypointReached } from './systems/WaypointSystem';
 import { canEnterSafehouse, SAFEHOUSES, SafehouseSystem, safehouseSpawn, SLEEP_HOURS, sleepHour, type SafehousePlace } from './systems/SafehouseSystem';
 import { GARAGE_PARK, GARAGE_STEP_OUT, SHOPS, ShopSystem } from './systems/ShopSystem';
 import { airborneHint, canDeploy, chuteLandingDamage, deployParachute, SKYFALL_ALTITUDE, startAirborne, stepAirborne, type AirborneState } from './systems/SkyfallSystem';
@@ -66,15 +71,17 @@ import type { BaseQuality, CheatSettings, GameMode, GameSettings, GameSnapshot, 
 import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
+import type { ObjectiveView } from './ui/UIModels';
 import { TouchControls } from './ui/TouchControls';
 import { shouldEnableTouch, touchQuality } from './ui/TouchModels';
 import { UIManager } from './ui/UIManager';
 import { City, ROAD_NETWORK } from './world/City';
-import { COURIER_DEPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
+import { CBD_CENTER, GENERATED_ROADS, METRES_PER_UNIT } from './world/mapData';
+import { COURIER_DEPOT, LOCKUP_SPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
 import { CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE, POTATO_CHUNK_RANGE, POTATO_DETAIL_RANGE } from './world/ChunkVisibility';
 import { buildEnvironment, fogDensity, type EnvironmentHandle } from './world/Environment';
-import { ETOLL_GANTRIES } from './world/UrbanInfrastructure';
+import { CITY_JUNCTIONS, ETOLL_GANTRIES } from './world/UrbanInfrastructure';
 import { setPower } from './world/powerGrid';
 import { loadTreeLibrary } from './world/FoliageAssets';
 import { loadCityBake } from './world/bake/loader';
@@ -85,6 +92,8 @@ const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and dow
 const ULTRA_MAX_SCALE = 3; // …but cap the buffer so a 4×-dpi panel doesn't blow up VRAM/fill
 const POTATO_RENDER_SCALE = 0.5; // potato renders at HALF the CSS resolution and the canvas upscales 2× — the single biggest lever on a weak GPU (owner-endorsed; on a DPR-3 phone this is 1/6 of native device pixels)
 const POTATO_DENSITY_SCALE = 0.5; // potato halves the ambient ped/car census targets
+const formatRunTime = (seconds: number): string => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
+const PERSONAL_WAYPOINT_LABEL = 'Personal waypoint';
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
@@ -154,6 +163,7 @@ export class Game {
   private economy: Economy;
   private shops!: ShopSystem;
   private safehouses!: SafehouseSystem;
+  private indoorPlace?: 'jozi-arms' | 'main-main';
   private activeSafehouse?: SafehousePlace;
   private activeBottleStore = ''; // name of the bottle store currently being browsed (for the menu header)
   private garageVehicle?: Vehicle;
@@ -170,6 +180,16 @@ export class Game {
   private transition?: Transition;
   private marker = new THREE.Group();
   private markerTarget?: WorldTarget;
+  private customWaypoint?: MapPoint;
+  private routeGuidance!: RouteGuidance;
+  private guidanceRoute: readonly NavPoint[] = [];
+  private streetNames = new StreetNameIndex(GENERATED_ROADS);
+  private streetName = '';
+  private streetNameRefresh = 0;
+  private streetNameX = Infinity;
+  private streetNameZ = Infinity;
+  private robotRace?: RobotRace;
+  private stolenVehicles = new WeakSet<Vehicle>();
   private markerColor = '';
   private markerPhase = 0;
   private collectedItem = false;
@@ -294,6 +314,12 @@ export class Game {
     await breathe(46, 'Bringing out the people');
     bootMark('boot: gameplay systems');
     this.lifecycle = new LifecycleSystem(this.city, this.population);
+    this.routeGuidance = new RouteGuidance(this.city.pedNav, this.city.vehicleNav);
+    const robotCircuit = buildRobotCircuit(CITY_JUNCTIONS, CBD_CENTER);
+    if (robotCircuit) {
+      this.robotRace = new RobotRace(robotCircuit);
+      this.robotRace.bestTime = this.save.activityRecords.robotRunBest;
+    }
     this.combat = new CombatSystem(this.scene, this.audio);
     this.gore = new GoreSystem(this.scene, (x, z) => this.city.surfaceHeightAt(x, z));
     this.pickups = new PickupSystem(this.scene);
@@ -441,6 +467,8 @@ export class Game {
     this.ui.onConsoleCommand = (text) => this.ui.consolePrint(runConsoleCommand(text, this.consoleHost));
     this.ui.onConsoleClose = () => this.closeConsole();
     this.ui.onMapClose = () => this.closeMap();
+    this.ui.onMapWaypoint = (x, z) => this.setCustomWaypoint(x, z);
+    this.ui.onMapWaypointClear = () => this.clearCustomWaypoint();
   }
 
   private openConsole(): void { this.closeWeaponWheel(); this.input.suspend(true); this.ui.openConsole(); }
@@ -458,12 +486,31 @@ export class Game {
     if (this.mode === 'playing') void this.renderer.domElement.requestPointerLock().catch(() => undefined); // may hit the browser's relock cooldown: the standing click-to-relock fallback covers that
   }
 
+  private setCustomWaypoint(x: number, z: number): void {
+    if (this.online) { this.ui.notify('Solo GPS only', 'The global-world event keeps its own route.', false); return; }
+    // A map tap can land on a roof, park or the fictional sea. Snap it to the closest real traffic
+    // route so both the driving and walking graphs finish at a place the player can actually reach.
+    const road = this.city.nearestRoadPose(new THREE.Vector3(clampToWorld(x), 0, clampToWorld(z))).position;
+    this.customWaypoint = { x: road.x, z: road.z };
+    this.routeGuidance.clear();
+    this.markerTarget = this.currentTarget();
+    this.audio.ui(true);
+    this.ui.notify('GPS pin dropped', this.missions.active ? 'Saved for later — the active job keeps route priority.' : 'Blue pin set on the nearest road.');
+  }
+
+  private clearCustomWaypoint(notify = true): void {
+    if (!this.customWaypoint) return;
+    this.customWaypoint = undefined; this.routeGuidance.clear(); this.markerTarget = this.currentTarget();
+    if (notify) { this.audio.ui(true); this.ui.notify('GPS cleared', 'Back to following the city’s opportunities.'); }
+  }
+
   /** Live snapshot fed to the map overlay: player pose plus markers in the minimap's language. */
   private mapFrame(): MapViewFrame {
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     return {
       x: focus.x, z: focus.z, heading: this.activeVehicle?.heading ?? this.player.heading,
       markers: this.mapMarkers(), police: this.mapPolice(), hostiles: this.mapHostiles(),
+      route: this.guidanceRoute,
       cars: this.mapCars(), peds: this.mapPeds(),
     };
   }
@@ -471,16 +518,21 @@ export class Game {
     if (this.online) {
       const target = this.online.objective?.target;
       return [
-        ...this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const })),
+        ...this.online.playerStates.filter((player) => player.id !== this.online?.selfId && !player.dead).map((player) => ({ x: player.x, z: player.z, color: '#55e0bb', shape: 'diamond' as const, label: player.name })),
         ...this.online.vehicleStates.filter((vehicle) => !vehicle.isHot && !vehicle.driverId).map((vehicle) => ({ x: vehicle.x, z: vehicle.z, color: '#8fa7b8' })), // free cars are findable — they spawn at road anchors, not next to players
-        ...(target ? [{ x: target.x, z: target.z, color: target.color, objective: true }] : []),
+        ...(target ? [{ x: target.x, z: target.z, color: target.color, objective: true, label: target.label }] : []),
       ];
     }
+    const raceStart = this.robotRaceUnlocked() && !this.robotRace?.active ? this.robotRace?.circuit.start : undefined;
+    const chopShop = this.chopShopUnlocked() && !this.hotVehicleForSale() ? LOCKUP_SPOT : undefined;
     return [
       ...this.shops.mapIcons(), ...this.safehouses.mapIcons(), ...this.features.mapIcons(), // features blip themselves; the host returns [] while online and when nothing is loaded
-      ...(this.markerTarget ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true }] : []),
-      ...((area) => area ? [{ x: area.x, z: area.z, color: '#f5c542', area: area.radius }] : [])(this.riddleSearchArea()),
-      ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521' }] : []),
+      ...(chopShop ? [{ x: chopShop.x, z: chopShop.z, color: '#f28f3b', shape: 'diamond' as const, label: 'Bra Vusi’s Chop Shop' }] : []),
+      ...(raceStart ? [{ x: raceStart.x, z: raceStart.z, color: '#d96cff', shape: 'diamond' as const, label: 'Robot Run' }] : []),
+      ...(this.customWaypoint ? [{ ...this.customWaypoint, color: '#5ba9ff', shape: 'diamond' as const, label: PERSONAL_WAYPOINT_LABEL, waypoint: true }] : []),
+      ...(this.markerTarget && this.markerTarget.label !== PERSONAL_WAYPOINT_LABEL ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true, label: this.markerTarget.label }] : []),
+      ...((area) => area ? [{ x: area.x, z: area.z, color: '#f5c542', area: area.radius, label: 'Riddle search area' }] : [])(this.riddleSearchArea()),
+      ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521', label: 'Taxi passenger' }] : []),
     ];
   }
   private mapPolice(): MapPoint[] {
@@ -708,14 +760,19 @@ export class Game {
 
   private startGame(fresh: boolean): void {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
+    this.cancelRobotRace('Session changed', false);
+    this.customWaypoint = undefined;
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; this.features.reset(this.save.features); }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
-    this.ui.notify('Welcome to Joburg', 'Mind the potholes. Mission contacts are marked in gold.');
+    this.ui.notify('Welcome to Joburg', 'Follow the turquoise GPS route to a gold mission contact. M opens the full city map.');
   }
 
   private startOnline(name: string): void {
     if (!this.requiredAssetsReady || this.player.characterStatus !== 'ready') return;
+    this.cancelRobotRace('Left the solo city', false);
+    this.customWaypoint = undefined;
+    this.stolenVehicles = new WeakSet();
     this.endTaxiShift(); this.endCourierShift(); this.online?.close(); this.trains.endRide();
     Object.assign(this.cheats, { fastRun: false, bigJump: false, invulnerable: false }); // cheat speeds would trip the server's movement validator and freeze you in place for everyone else
     this.player.inVehicle = false; this.player.setVisible(true); this.player.heal(); this.combat.restore(DEFAULT_SAVE.weapons); this.combat.select('pistol'); this.player.setWeapon('pistol');
@@ -799,6 +856,7 @@ export class Game {
     else if (this.activeVehicle) this.updateDriving(dt);
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    this.updateStreetName(dt, focus);
     this.brandishCooldown = Math.max(0, this.brandishCooldown - dt);
     if (this.input.aiming && !this.combat.spec.melee && !this.transition && !this.airborne && this.brandishCooldown === 0) { this.population.broadcastBrandish(focus); this.brandishCooldown = 1.5; } // a raised gun scares witnesses; no police heat for merely aiming
     this.profiler.mark('world');
@@ -865,7 +923,7 @@ export class Game {
     for (const report of this.knowledge.update(dt, (reporter) => reporter.state !== 'down')) { this.wanted.addCrime(report.heat); this.radioDispatch(report.label, report.x, report.z); }
     this.wanted.update(dt);
     if (this.previousWanted && !this.wanted.isWanted) this.recordCityEvent('police-evaded', focus);
-    this.previousWanted = this.wanted.isWanted; this.shops.update(dt); this.safehouses.update(dt);
+    this.previousWanted = this.wanted.isWanted; this.shops.update(dt); this.safehouses.update(dt); this.updateInteriorPresence();
     // Rounds in flight land here: the resolution carries the exact hitscan-era ShotResult, delayed by time of flight.
     this.profiler.mark('combat');
     for (const landed of this.bullets.update(dt, this.city, this.population, this.police.vehicles)) this.handleGunshot(landed.result, landed.position, landed.weapon);
@@ -881,7 +939,7 @@ export class Game {
     }
     this.updateVehicleFires(dt, focus);
     for (const item of this.pickups.update(dt, this.player.group.position, !this.activeVehicle && !this.transition && !this.airborne)) this.applyPickup(item);
-    this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateMission(dt);
+    this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateRobotRace(dt); this.updateMission(dt);
     this.updateInebriation(dt);
     this.features.update(dt); // lazily loaded features; the host no-ops while online, so PvP never ticks them
     this.saveTimer += dt; if (this.saveTimer > 8 && !this.activePlane) { this.persist(); this.saveTimer = 0; } // no autosave mid-flight: a resumed save would float the player at altitude
@@ -936,7 +994,10 @@ export class Game {
     this.player.health = state.health; this.player.setVisible(!state.dead && !state.vehicleId);
     if (state.dead && !this.onlineWasDead) { this.ui.notify('EISH', 'You were eliminated. Respawning in three seconds.', false); this.audio.setFire(false); }
     this.onlineWasDead = state.dead;
+    const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    this.updateStreetName(dt, focus);
     this.markerTarget = this.currentTarget();
+    this.updateRouteGuidance(dt, focus);
   }
 
   /** Leaving an online seat (E, death, delivery): hand the visual back to snapshots and step out beside it. */
@@ -1394,6 +1455,9 @@ export class Game {
       if (shot.fired && !shot.deferred) this.handleGunshot(shot, vehicle.group.position);
     }
     if (this.input.consume('KeyE')) {
+      if (this.robotRace?.active) { this.cancelRobotRace('Driver bailed. The stopwatch did not.', true); this.beginExit(vehicle); return; }
+      if (this.tryStartRobotRace(vehicle)) return;
+      if (this.trySellHotVehicle(vehicle)) return;
       const shop = this.shops.shopNear(vehicle.group.position);
       if (shop?.kind === 'spray') { this.useSpray(vehicle); return; }
       if (shop?.kind === 'garage') { this.storeVehicle(vehicle); return; }
@@ -1414,7 +1478,119 @@ export class Game {
       const station = this.audio.cycleRadio(this.input.down('ShiftLeft') || this.input.down('ShiftRight') ? -1 : 1);
       this.ui.notify(station ? `${station.name} ${station.frequency}` : 'Radio off', station?.tagline ?? 'Just the engine and the city outside.', true, 'music');
     }
+    if (!vehicle.spec.twoWheeler && this.input.consume('KeyB')) this.audio.hornAt(vehicle.group.position.x, vehicle.group.position.z, isTaxiKind(vehicle.spec.kind));
     if (vehicle.onFire) this.damagePlayer(dt * BURN_DPS);
+  }
+
+  private chopShopUnlocked(): boolean { return this.missions.completed.has('hot-property'); }
+
+  private chopShopNear(position: { x: number; z: number }, radius = 16): boolean {
+    return (LOCKUP_SPOT.x - position.x) ** 2 + (LOCKUP_SPOT.z - position.z) ** 2 <= radius * radius;
+  }
+
+  /** A hot car is a witnessed hijack, not an unattended parked car. The weak set follows the actual
+   * vehicle without pinning despawned traffic in memory. Story/job vehicles never become side-hustle stock. */
+  private hotVehicleForSale(vehicle = this.activeVehicle): Vehicle | undefined {
+    if (!vehicle || !this.chopShopUnlocked() || this.missions.active || this.robotRace?.active
+      || this.courierJob.active || this.taxiRide.phase !== 'idle') return undefined;
+    return this.stolenVehicles.has(vehicle) && chopShopAccepts(vehicle.spec.kind) ? vehicle : undefined;
+  }
+
+  /** E in Vusi's orange lock-up beacon sells the current witnessed hijack once the heat is gone. */
+  private trySellHotVehicle(vehicle: Vehicle): boolean {
+    const hot = this.hotVehicleForSale(vehicle);
+    if (!hot || !this.chopShopNear(vehicle.group.position)) return false;
+    if (this.wanted.isWanted) {
+      this.audio.ui(false);
+      this.ui.notify('Bra Vusi is not home', 'Lose the JMPD first. He says the blue lights clash with the décor.', false);
+      return true;
+    }
+    if (vehicle.onFire) {
+      this.audio.ui(false);
+      this.ui.notify('Too hot, even for Vusi', 'Bring the car back when it is no longer literally burning.', false);
+      return true;
+    }
+    const offer = chopShopOffer(vehicle.spec.kind, vehicle.health, vehicle.maxHealth);
+    if (offer <= 0) return true;
+    const vehicleName = vehicle.spec.name;
+
+    const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(3);
+    const target = vehicle.group.position.clone().add(side);
+    const exit = safePlacement(target.x, target.z, (x, z) => this.city.collides(x, z, PLAYER.radius));
+    vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.occupied = false;
+    this.activeVehicle = undefined; this.transition = undefined; this.player.inVehicle = false; this.player.setVisible(true);
+    this.player.group.position.set(exit.x, this.city.surfaceHeightAt(exit.x, exit.z), exit.z); this.player.resetAirbornePose();
+    this.stolenVehicles.delete(vehicle); this.population.removeVehicle(vehicle);
+    this.economy.earn(offer); this.audio.setEngine(false); this.audio.stopRadio(); this.audio.ui(true); this.ui.screenFade();
+    this.persist();
+    this.ui.notify('BRA VUSI · SOLD', `${vehicleName} · R${offer.toLocaleString()}. The VIN has gone to Limpopo.`);
+    return true;
+  }
+
+  private robotRaceUnlocked(): boolean { return Boolean(this.robotRace && this.missions.completed.size > 0); }
+
+  private robotRaceStartNear(position: { x: number; z: number }, radius = 34): boolean {
+    const start = this.robotRace?.circuit.start;
+    return Boolean(start && (start.x - position.x) ** 2 + (start.z - position.z) ** 2 <= radius * radius);
+  }
+
+  /** Why E cannot clock the car into Robot Run. Returned copy is short enough to fit the HUD prompt. */
+  private robotRaceBlockReason(vehicle: Vehicle): string | undefined {
+    if (!this.robotRaceUnlocked()) return 'Finish one story job first';
+    if (this.missions.active) return 'Finish the current story job';
+    if (this.courierJob.active) return 'Clock out of Sixty-Sekonds';
+    if (this.taxiRide.phase !== 'idle') return 'Drop off the taxi fare first';
+    if (this.wanted.isWanted) return 'Lose the JMPD first';
+    if (vehicle.disabled || vehicle.wrecked || vehicle.onFire) return 'Bring something roadworthy';
+    return undefined;
+  }
+
+  /** E at the purple robot marker: consume the interaction even when entry is declined, so a player
+   * asking to race does not unexpectedly climb out of the car. */
+  private tryStartRobotRace(vehicle: Vehicle): boolean {
+    const race = this.robotRace;
+    if (!race || !this.robotRaceStartNear(vehicle.group.position)) return false;
+    const blocked = this.robotRaceBlockReason(vehicle);
+    if (blocked) { this.audio.ui(false); this.ui.notify('Robot Run unavailable', `${blocked}. Even illegal street racing has admin.`, false); return true; }
+    if (!race.start(vehicle.health / vehicle.maxHealth)) return true;
+    this.audio.ui(true);
+    const record = race.bestTime === undefined ? '' : ` Your PB is ${formatRunTime(race.bestTime)}.`;
+    this.ui.notify('ROBOT RUN · GO!', `Six robots, one lap. Beat 3:20 for gold.${record} The lights are suggestions; JMPD is not.`);
+    this.markerTarget = this.currentTarget();
+    return true;
+  }
+
+  private updateRobotRace(dt: number): void {
+    const race = this.robotRace;
+    if (!race?.active) return;
+    const vehicle = this.activeVehicle;
+    if (!vehicle) { this.cancelRobotRace('Driver bailed. The stopwatch did not.', true); return; }
+    const result = race.update(dt, vehicle.group.position, vehicle.health / vehicle.maxHealth);
+    if (result.failed) { this.audio.ui(false); this.ui.notify('ROBOT RUN FAILED', result.failed, false); return; }
+    if (result.checkpoint !== undefined) {
+      this.audio.beep();
+      this.ui.notify(`ROBOT ${result.checkpoint}/${race.required}`, `Next: ${race.target.label.replace(/^Robot \\d+ · /, '')}`);
+    }
+    if (result.finished) this.finishRobotRace(result.finished);
+  }
+
+  private finishRobotRace(finish: RaceFinish): void {
+    this.economy.earn(finish.total);
+    this.audio.ui(true);
+    const tier = finish.tier === 'finished' ? 'FINISHER' : finish.tier.toUpperCase();
+    const extras = [
+      finish.cleanBonus ? `clean-car bonus R${finish.cleanBonus}` : '',
+      finish.personalBest ? 'new personal best' : `best ${formatRunTime(finish.bestTime)}`,
+    ].filter(Boolean).join(' · ');
+    this.ui.notify(`ROBOT RUN · ${tier}`, `${formatRunTime(finish.elapsed)} · R${finish.total.toLocaleString()}${extras ? ` · ${extras}` : ''}`);
+    this.persist();
+  }
+
+  private cancelRobotRace(reason: string, notify: boolean): void {
+    const result = this.robotRace?.fail(reason);
+    if (!result?.failed || !notify) return;
+    this.audio.ui(false);
+    this.ui.notify('ROBOT RUN FAILED', result.failed, false);
   }
 
   /** A hard hit on a two-wheeler throws the rider: the bike drops on the spot, the player ragdolls
@@ -1619,8 +1795,12 @@ export class Game {
     this.transition = { vehicle, timer: 0.5, entering: true }; vehicle.playerControlled = true; this.prevDrivenSpeed = 0;
     const side = new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(1.6); this.player.group.position.copy(vehicle.group.position).add(side); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z);
     if (vehicle.occupied) {
+      if (!this.missions.active) this.stolenVehicles.add(vehicle);
+      const chopHint = !this.missions.active && this.chopShopUnlocked() && chopShopAccepts(vehicle.spec.kind)
+        ? ' Vusi buys witnessed hijacks at his orange Braamfontein lock-up once the heat is gone.'
+        : '';
       const driver = this.population.ejectDriver(vehicle, this.player.group.position); this.reportCrime(this.player.group.position, 18, { victims: [driver], radius: FEAR_EVENTS.assault.radius, cityEvent: 'civilian-assault', label: 'carjacking' });
-      this.ui.notify('Hijacking witnessed', 'The driver is fleeing. Expect a call to the JMPD.', false); vehicle.occupied = false;
+      this.ui.notify('Hijacking witnessed', `The driver is fleeing. Expect a call to the JMPD.${chopHint}`, false); vehicle.occupied = false;
     }
     if (this.missions.active?.id === 'hot-property' && vehicle.spec.kind === 'sport' && vehicle.spec.color === 0xd83a40) this.forceWanted(2);
     if (!vehicle.occupied) {
@@ -1691,6 +1871,10 @@ export class Game {
     }
     const result = this.missions.update(dt, this.buildMissionSnapshot(focus), reached);
     this.processMissionUpdate(result);
+    if (!this.missions.active && waypointReached(this.customWaypoint, focus)) {
+      this.clearCustomWaypoint(false);
+      this.audio.ui(true); this.ui.notify('Waypoint reached', 'Sharp sharp. Pick another spot from the city map.');
+    }
     const current = `${this.missions.active?.id ?? ''}:${this.missions.objectiveIndex}`;
     if (current !== this.previousObjective) {
       this.previousObjective = current;
@@ -1705,6 +1889,7 @@ export class Game {
     // objective advances, the gold marker and minimap blip already point at the new target
     // (owner playtest: accepting Couch Run left the marker on Portia instead of the Golf).
     this.markerTarget = this.currentTarget();
+    this.updateRouteGuidance(dt, focus);
     this.objectiveElapsed += dt;
     this.updateRiddleHints();
     if (this.missionPassedTimer > 0) { this.missionPassedTimer -= dt; if (this.missionPassedTimer <= 0) this.missionPassedView = undefined; }
@@ -2067,6 +2252,23 @@ export class Game {
     this.ui.showSafehouse(place.name, SLEEP_HOURS);
   }
 
+  /** One threshold chime/card per seamless interior visit. Leaving silently rearms it for the next visit;
+   * the actual interaction prompts remain owned by renderHUD. */
+  private updateInteriorPresence(): void {
+    let current: typeof this.indoorPlace;
+    if (!this.activeVehicle && !this.transition) {
+      if (this.shops.shopNear(this.player.group.position)?.kind === 'weapons') current = 'jozi-arms';
+      else if (this.safehouses.near(this.player.group.position)) current = 'main-main';
+    }
+    if (current === this.indoorPlace) return;
+    this.indoorPlace = current;
+    if (current === 'jozi-arms') {
+      this.audio.ui(true); this.ui.notify('Jozi Arms', 'No EFT? Eish. Press E at the counter.');
+    } else if (current === 'main-main') {
+      this.audio.ui(true); this.ui.notify('Main Main Mansions', 'Home, sharp sharp. Press E to save or sleep.');
+    }
+  }
+
   private openWeaponShop(): void {
     this.mode = 'paused'; analytics.setMode('paused'); this.closeWeaponWheel(); this.audio.setEngine(false); document.exitPointerLock();
     this.renderShop();
@@ -2164,6 +2366,7 @@ export class Game {
     if (vehicle.spec.kind === 'courier') this.endCourierShift(vehicle, false);
     if (this.garageVehicle && this.garageVehicle !== vehicle) this.removeGarageVehicle();
     vehicle.playerControlled = false; vehicle.setFirstPerson(false); vehicle.occupied = false;
+    this.stolenVehicles.delete(vehicle); // garage storage launders the open-world hijack state
     vehicle.heading = GARAGE_PARK.heading; vehicle.reset(new THREE.Vector3(GARAGE_PARK.x, 0, GARAGE_PARK.z), this.city);
     const trafficIndex = this.population.traffic.indexOf(vehicle); if (trafficIndex >= 0) this.population.traffic.splice(trafficIndex, 1);
     this.garageVehicle = vehicle;
@@ -2232,6 +2435,7 @@ export class Game {
     if (rewards?.grantVehicle) { this.grantGarageVehicle(rewards.grantVehicle.kind as VehicleKind, rewards.grantVehicle.color); items.push(`${VEHICLE_SPECS[rewards.grantVehicle.kind as VehicleKind].name} (garaged)`); }
     if (rewards?.armour) { this.inventory.armour = Math.min(ARMOUR_MAX, this.inventory.armour + rewards.armour); items.push(`Body armour +${rewards.armour}`); }
     if (rewards?.standing) { this.livingCity.district(CBD).communityStanding = Math.min(100, this.livingCity.district(CBD).communityStanding + rewards.standing); items.push(`Street respect +${rewards.standing}`); }
+    if (mission.id === 'hot-property') items.push('Bra Vusi’s Chop Shop unlocked');
     if (rewards?.note) items.push(rewards.note);
     this.missionPassedView = { name: mission.name, items };
     this.missionPassedTimer = 6.5;
@@ -2315,6 +2519,11 @@ export class Game {
       const onlineTarget = this.online.objective?.target;
       return onlineTarget ? { position: new THREE.Vector3(onlineTarget.x, this.city.surfaceHeightAt(onlineTarget.x, onlineTarget.z), onlineTarget.z), label: onlineTarget.label, color: onlineTarget.color } : undefined;
     }
+    const race = this.robotRace;
+    if (race?.active) {
+      const target = race.target;
+      return { position: new THREE.Vector3(target.x, this.city.roadHeightAt(target.x, target.z), target.z), label: target.label, color: '#d96cff' };
+    }
     if (this.missions.state === 'failed' && this.missions.active) {
       // The failure card says "find the gold beacon to retry" — the beacon must therefore lead home.
       const start = this.missions.active.start;
@@ -2324,6 +2533,16 @@ export class Game {
     if (this.taxiDestination) return { position: this.taxiDestination, label: 'Drop-off', color: '#7fe08d' }; // active fare outranks mission breadcrumbs
     if (this.courierJob.phase === 'collecting') return { position: new THREE.Vector3(COURIER_DEPOT.x, this.city.roadHeightAt(COURIER_DEPOT.x, COURIER_DEPOT.z), COURIER_DEPOT.z), label: 'Sixty-Sekonds dispatch', color: '#84f01c' };
     if (this.courierDestination) return { position: this.courierDestination, label: `Order ${this.courierJob.completed + 1}`, color: '#84f01c' };
+    if (this.hotVehicleForSale()) return { position: new THREE.Vector3(LOCKUP_SPOT.x, this.city.roadHeightAt(LOCKUP_SPOT.x, LOCKUP_SPOT.z), LOCKUP_SPOT.z), label: 'Bra Vusi’s chop shop', color: '#f28f3b' };
+    if (!this.missions.active && this.customWaypoint) {
+      const { x, z } = this.customWaypoint;
+      return { position: new THREE.Vector3(x, this.city.roadHeightAt(x, z), z), label: PERSONAL_WAYPOINT_LABEL, color: '#5ba9ff' };
+    }
+    if (race && this.activeVehicle && !this.robotRaceBlockReason(this.activeVehicle)
+      && this.robotRaceStartNear(this.activeVehicle.group.position, 240)) {
+      const start = race.circuit.start;
+      return { position: new THREE.Vector3(start.x, this.city.roadHeightAt(start.x, start.z), start.z), label: start.label, color: '#d96cff' };
+    }
     const objective = this.missions.objective;
     if (objective?.hidden && !this.riddleRevealed) return undefined; // riddles: search circle + hints, exact blip only after the final hint
     if (objective?.kind === 'follow' && this.quarry) return { position: this.quarry.group.position, label: 'The bakkie', color: '#e8a13d' };
@@ -2344,6 +2563,30 @@ export class Game {
       if (vehicle) return { position: vehicle.group.position, label: vehicle.spec.name, color: '#65d8ff' };
     }
     return undefined;
+  }
+
+  /** Replan only when RouteGuidance says the target/mode changed or the player left the path.
+   * Moving follow targets, aircraft and trains deliberately keep their direct blips: road GPS would
+   * chase a moving bakkie or draw nonsense through the sky/rails. */
+  private updateRouteGuidance(dt: number, focus: THREE.Vector3): void {
+    const target = !this.online && !this.activePlane && !this.airborne && !this.trains.riding
+      && this.missions.objective?.kind !== 'follow' ? this.markerTarget : undefined;
+    const goal = target ? {
+      key: `${this.missions.active?.id ?? 'free'}:${this.missions.objectiveIndex}:${target.label}`,
+      x: target.position.x,
+      z: target.position.z,
+    } : undefined;
+    this.guidanceRoute = this.routeGuidance.update(dt, focus, goal, this.activeVehicle ? 'drive' : 'walk');
+  }
+
+  /** Refresh the masthead street only after a short interval or a meaningful move. The spatial index
+   * makes each lookup local; the throttle also stops junction-edge names flickering every render frame. */
+  private updateStreetName(dt: number, focus: { x: number; z: number }): void {
+    this.streetNameRefresh -= dt;
+    const movedSq = (focus.x - this.streetNameX) ** 2 + (focus.z - this.streetNameZ) ** 2;
+    if (this.streetNameRefresh > 0 && movedSq < 18 * 18) return;
+    this.streetName = this.streetNames.nearest(focus.x, focus.z, 65)?.name ?? '';
+    this.streetNameX = focus.x; this.streetNameZ = focus.z; this.streetNameRefresh = 0.65;
   }
 
   /** LMB-drag mouse steering: while a non-aiming player holds the fire button in a vehicle (third person),
@@ -2449,13 +2692,18 @@ export class Game {
 
   private renderHUD(): void {
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
+    const hotVehicle = this.hotVehicleForSale();
     let prompt = '';
+    const firstMove = !this.online && !this.missions.active && this.missions.completed.size === 0 && Boolean(this.markerTarget);
     if (this.mode === 'playing' && !this.transition && !this.player.knockedDown) { // a floored player gets no interaction prompts — nothing they could act on
       const nearbyTarget = this.markerTarget;
       const shop = this.shops.shopNear(focus);
       // The SAME resolver the two E branches run, so the prompt on screen always belongs to the
       // branch the key will take. Returns undefined while online — features are suspended in PvP.
       const featureOffer = this.features.offer(this.activeVehicle ? 'vehicle' : 'foot');
+      const safehouse = this.safehouses.near(focus);
+      const walkInShop = this.shops.walkInNear(focus);
+      const walkInSafehouse = this.safehouses.walkInNear(focus);
       const contactPrompt = this.contactPrompt(); // offer / riddle re-state / job re-brief — undefined when E would do nothing
       if (this.online) prompt = this.online.localState?.vehicleId ? 'E  Exit vehicle  ·  ENTER  Global chat'
         : this.online.enterableVehicleNear(this.player.group.position.x, this.player.group.position.z) ? 'E  Enter vehicle  ·  ENTER  Global chat'
@@ -2463,7 +2711,18 @@ export class Game {
       else if (this.airborne) prompt = airborneHint(this.airborne.mode, this.inventory.parachutes);
       else if (this.activePlane) prompt = planeHint(this.activePlane.state);
       else if (this.activeVehicle) {
-        if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
+        const atRaceStart = this.robotRaceStartNear(this.activeVehicle.group.position);
+        if (this.robotRace?.active) prompt = `E  Abandon Robot Run  ·  F  Recover${this.activeVehicle.spec.twoWheeler ? '' : '  ·  N  Radio'}`;
+        else if (atRaceStart && this.robotRaceUnlocked() && !this.missions.active) {
+          const blocked = this.robotRaceBlockReason(this.activeVehicle);
+          const record = this.robotRace?.bestTime === undefined ? '' : `  ·  PB ${formatRunTime(this.robotRace.bestTime)}`;
+          prompt = blocked ? `ROBOT RUN · ${blocked}` : `E  Start Robot Run${record}  ·  F  Recover`;
+        }
+        else if (hotVehicle === this.activeVehicle && this.chopShopNear(focus)) {
+          const offer = chopShopOffer(hotVehicle.spec.kind, hotVehicle.health, hotVehicle.maxHealth);
+          prompt = this.wanted.isWanted ? 'CHOP SHOP · Lose the JMPD first' : `E  Sell to Bra Vusi · R${offer.toLocaleString()}`;
+        }
+        else if (shop?.kind === 'spray') prompt = `E  Pay-'n'-Spray · R${detailerPrice(this.wanted.level)}`;
         else if (shop?.kind === 'garage') prompt = 'E  Store vehicle';
         else {
           const taxiHint = !isTaxiKind(this.activeVehicle.spec.kind) ? ''
@@ -2480,11 +2739,14 @@ export class Game {
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
       else if (this.missions.state === 'failed' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 10) prompt = 'E  Restart mission';
       else if (this.missions.objective?.kind === 'choice') prompt = `E  ${this.missions.objective.text}`;
+      else if (this.robotRaceUnlocked() && !this.missions.active && this.robotRaceStartNear(focus)) prompt = 'Bring a roadworthy vehicle for Robot Run';
       else if (contactPrompt) prompt = contactPrompt;
       else if (shop?.kind === 'weapons') prompt = 'E  Browse Jozi Arms';
       else if (shop?.kind === 'bottle') prompt = `E  Browse ${shop.name}`;
       else if (shop?.kind === 'hotdog') prompt = `E  Boerewors roll · R${HOTDOG_PRICE}`;
-      else if (this.safehouses.near(focus)) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Enter safehouse' : 'Safehouse locked · lose the heat first';
+      else if (safehouse) prompt = canEnterSafehouse(this.wanted.isWanted, this.knowledge.sightingAge) ? 'E  Save / sleep' : 'Too hot to settle in · lose the JMPD first';
+      else if (walkInShop) prompt = `Walk inside · ${walkInShop.name}`;
+      else if (walkInSafehouse) prompt = `Walk inside · ${walkInSafehouse.name}`;
       else if (shop?.driveIn && !this.population.nearestEnterable(focus)) prompt = shop.kind === 'spray' ? 'Drive a vehicle onto the marker to detail' : 'Drive a vehicle onto the marker to store';
       else if (this.trains.boardable(focus)) { const wait = this.trains.boardCountdown(focus); prompt = wait === undefined ? 'E  Board the train' : `E  Board · departs in ${formatCountdown(wait)}`; }
       else if (this.nearbyDiaryPage()) prompt = 'E  Take the torn page';
@@ -2494,19 +2756,53 @@ export class Game {
       else if (this.population.nearestPedestrian(focus)) prompt = 'F  Mug / melee';
       else if (this.population.nearestEnterable(focus) || this.police.stealableNear(focus)) prompt = 'E  Enter vehicle';
     }
+    if (!prompt && firstMove && this.mode === 'playing') prompt = 'WASD  Move  ·  SHIFT  Sprint  ·  M  City map';
     // Being collared: this warning trumps any contextual hint while foot officers are on you.
     if (this.mode === 'playing' && this.bustMeter > 0 && !this.activeVehicle && !this.transition) prompt = 'JMPD ON YOU — break away or get nicked!';
     const spec = this.combat.spec; const ammoState = this.combat.state;
     const district = this.city.districtAt(focus.x, focus.z);
     const riddleHunt = this.missions.objective?.hidden && !this.riddleRevealed; // the search circle is up
-    const objective = this.online ? this.online.objective ? {
+    const runPace = this.robotRace?.active ? racePace(this.robotRace.elapsed) : undefined;
+    const raceObjective: ObjectiveView | undefined = this.robotRace?.active && runPace ? {
+      missionName: 'ROBOT RUN',
+      text: `${this.robotRace.target.label} · ${runPace.label} pace${this.robotRace.bestTime === undefined ? '' : ` · PB ${formatRunTime(this.robotRace.bestTime)}`}`,
+      progress: this.robotRace.progress,
+      required: this.robotRace.required,
+      remainingSeconds: runPace.remaining,
+    } : undefined;
+    const hotVehicleObjective: ObjectiveView | undefined = hotVehicle ? {
+      missionName: 'HOT WHEELS',
+      text: this.wanted.isWanted
+        ? `Lose the JMPD, then take the ${hotVehicle.spec.name} to Bra Vusi’s lock-up`
+        : `Deliver the ${hotVehicle.spec.name} to Bra Vusi · offer R${chopShopOffer(hotVehicle.spec.kind, hotVehicle.health, hotVehicle.maxHealth).toLocaleString()}`,
+    } : undefined;
+    const freeRoamObjective: ObjectiveView | undefined = !this.online && !this.missions.active && this.markerTarget
+      ? this.markerTarget.label === PERSONAL_WAYPOINT_LABEL
+        ? {
+            missionName: 'WAYPOINT',
+            text: 'Follow the turquoise GPS line to your blue map pin',
+          }
+        : this.markerTarget.label.startsWith('Robot Run')
+        ? {
+            missionName: 'ROBOT RUN',
+            text: `Pull into the purple beacon with a roadworthy vehicle${this.robotRace?.bestTime === undefined ? '' : ` · PB ${formatRunTime(this.robotRace.bestTime)}`}`,
+          }
+        : {
+            missionName: this.missions.completed.size === 0 ? 'FIRST MOVE' : 'NEXT JOB',
+            text: `Meet ${this.markerTarget.label} at the gold beacon — follow the turquoise GPS line`,
+          }
+      : undefined;
+    const objective: ObjectiveView | undefined = raceObjective ?? (this.online ? this.online.objective ? {
       missionName: this.online.objective.missionName, text: this.online.objective.text, progress: this.online.objective.progress,
       required: this.online.objective.required, remainingSeconds: this.online.objective.remainingSeconds,
     } : undefined : this.missions.objective ? {
       missionName: this.missions.active?.name ?? '', text: this.missions.objective.text + (riddleHunt ? ' — search inside the circle on your map' : '') + this.trainRideHint(), progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
       failed: !this.online && this.missions.state === 'failed' ? this.missions.failReason ?? 'Mission failed' : undefined,
-    } : undefined;
+    } : hotVehicleObjective ?? freeRoamObjective);
+    if (objective && this.markerTarget) {
+      objective.distanceMetres = Math.hypot(this.markerTarget.position.x - focus.x, this.markerTarget.position.z - focus.z) * METRES_PER_UNIT;
+    }
     const onlineVehicle = this.online?.vehicleStates.find((entry) => entry.id === this.online?.localState?.vehicleId);
     const vehicle = onlineVehicle ? {
       name: onlineVehicle.isHot ? 'HOT BAKKIE' : onlineVehicle.kind === 'bakkie' ? 'Hilux Bakkie' : onlineVehicle.kind === 'sport' ? 'Golf GTI' : 'Citi Golf',
@@ -2523,7 +2819,7 @@ export class Game {
     const scoped = this.scoped; // the scope reticle replaces the HUD crosshair while glassing
     const crosshair = this.mode === 'playing' && !this.transition && !this.airborne && !this.activePlane && !this.weaponWheelOpen && !scoped && crosshairVisible(this.input.aiming, spec.melee) && (!this.activeVehicle || !spec.projectile); // weapons stay holstered mid-air
     const onlineState = this.online?.localState;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: this.features.hud() });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online && district === CBD ? reputationTier(this.livingCity.district(CBD).communityStanding) : undefined, prompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: this.features.hud() });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,
@@ -2540,8 +2836,8 @@ export class Game {
     const heading = this.activeVehicle?.heading ?? this.player.heading;
     // Corner minimap tracks the live view so it spins as you mouse-look on foot (player.heading only catches up when you actually move). In a vehicle the camera tails the car, so keep the true heading. `yaw + PI` is the parked camera-behind relationship (see spawn: yaw = heading + PI).
     const minimapHeading = this.activeVehicle ? heading : this.cameraController.yaw + Math.PI;
-    this.ui.drawMap(focus.x, focus.z, minimapHeading, this.city.roadPaths, markers, police, hostiles, this.settings.minimapZoom);
-    if (this.ui.mapOpen) this.ui.updateMap({ x: focus.x, z: focus.z, heading, markers, police, hostiles, cars: this.mapCars(), peds: this.mapPeds() });
+    this.ui.drawMap(focus.x, focus.z, minimapHeading, this.city.roadPaths, markers, police, hostiles, this.settings.minimapZoom, this.guidanceRoute);
+    if (this.ui.mapOpen) this.ui.updateMap({ x: focus.x, z: focus.z, heading, markers, police, hostiles, route: this.guidanceRoute, cars: this.mapCars(), peds: this.mapPeds() });
   }
 
   /** Single damage funnel: the invulnerable cheat short-circuits, then armour soaks before health bleeds. */
@@ -2558,6 +2854,7 @@ export class Game {
   }
   private die(): void {
     if (this.mode === 'dead') return;
+    this.cancelRobotRace('Medical timeout', false);
     analytics.record('player_death', { mode: this.online ? 'multiplayer' : 'singleplayer' });
     if (this.missions.state === 'active') this.processMissionUpdate(this.missions.fail('You were incapacitated'));
     this.endCourierShift();
@@ -2576,7 +2873,9 @@ export class Game {
   private reloadSavedGame(): string {
     const checkpoint = this.saveManager.loadCheckpoint();
     if (!checkpoint) return 'No checkpoint yet — type `save` to stamp one, then `reload` returns to it.';
+    this.cancelRobotRace('Checkpoint reloaded', false);
     this.closeConsole();
+    this.stolenVehicles = new WeakSet();
     this.save = checkpoint;
     this.features.reset(this.save.features); // drop live feature state; the checkpoint's slices load again on demand
     this.economy.balance = this.save.money;
@@ -2586,6 +2885,7 @@ export class Game {
     this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.missions.completed = new Set(this.save.completedMissions);
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
+    if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest;
     this.dayNight.hour = this.save.timeOfDay;
     this.player.heal();
     this.wanted.clear(); this.previousWanted = false; this.knowledge.reset(); this.clearPolice();
@@ -2605,6 +2905,7 @@ export class Game {
    *  Mirrors die(), but the collar is survivable — you keep your progress, just not your hardware or bail money. */
   private getBusted(): void {
     if (this.mode === 'dead' || this.mode === 'busted') return;
+    this.cancelRobotRace('JMPD ended the run', false);
     if (this.missions.state === 'active') this.processMissionUpdate(this.missions.fail('JMPD nicked you'));
     this.endCourierShift();
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false);
@@ -2617,6 +2918,7 @@ export class Game {
   }
 
   private respawn(busted = false): void {
+    this.cancelRobotRace('Respawned', false);
     this.trains.endRide();
     this.endTaxiShift(this.activeVehicle);
     this.endCourierShift(this.activeVehicle);
@@ -2666,6 +2968,7 @@ export class Game {
       // Per-KEY merge, never a wholesale replace: serialize() returns only the features loaded this
       // session, so an unloaded feature's stored slice must survive the autosave untouched.
       features: { ...this.save.features, ...this.features.serialize() },
+      activityRecords: { robotRunBest: this.robotRace?.bestTime },
     };
     this.saveManager.save(this.save);
   }

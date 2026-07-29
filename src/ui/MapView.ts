@@ -26,6 +26,8 @@ const LAYER_TOGGLES: Array<{ key: keyof RenderLayers; label: string }> = [
 /** Zoom the map opens at — a readable neighbourhood view centred on the player.
  *  0.24 at ~0.98 m/unit covers the same real ground the old 0.12 did at 0.49 m/unit. */
 const OPEN_ZOOM = 0.24;
+type MapSearchKind = 'street' | 'district' | 'landmark' | 'objective' | 'safehouse' | 'place';
+interface MapSearchEntry { name: string; x: number; z: number; kind: MapSearchKind; }
 
 /** Keys that close the map overlay. Pure so the gating is testable. */
 export const closesMapOverlay = (code: string): boolean => code === 'Escape' || code === 'KeyM';
@@ -38,10 +40,47 @@ export function mapOverlayKeyAction(code: string, repeat: boolean): 'close' | 's
   return repeat ? 'swallow' : 'close';
 }
 
+/** Label of the closest named live marker under a city-map cursor, if any. */
+export function markerHoverLabel(
+  markers: readonly MapMarker[], camera: MapCamera, sx: number, sy: number, radius = 13,
+): string | undefined {
+  let closest: string | undefined;
+  let closestSq = radius * radius;
+  for (const marker of markers) {
+    if (!marker.label) continue;
+    const point = markerScreen(marker, camera);
+    if (!point.onScreen) continue;
+    const distanceSq = (point.sx - sx) ** 2 + (point.sy - sy) ** 2;
+    if (distanceSq < closestSq) { closestSq = distanceSq; closest = marker.label; }
+  }
+  return closest;
+}
+
+/** Search entries derived from the current live blips. Names are data only; the result UI uses
+ * textContent because multiplayer display names are untrusted. Duplicate names collapse to the
+ * first marker so a contact/objective sitting on its service blip does not create twin results. */
+export function liveMarkerSearchEntries(markers: readonly MapMarker[]): MapSearchEntry[] {
+  const seen = new Set<string>();
+  const entries: MapSearchEntry[] = [];
+  for (const marker of markers) {
+    const name = marker.label?.trim();
+    if (!name) continue;
+    const key = name.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push({
+      name, x: marker.x, z: marker.z,
+      kind: marker.objective ? 'objective' : marker.shape === 'house' ? 'safehouse' : 'place',
+    });
+  }
+  return entries;
+}
+
 /** Live snapshot the game hands the map each frame it is open. */
 export interface MapViewFrame {
   x: number; z: number; heading: number;
   markers: MapMarker[]; police: MapPoint[]; hostiles: MapPoint[];
+  route?: readonly MapPoint[];
   cars?: MapPoint[]; peds?: MapPoint[]; // `mapnpcs` debug overlay: every ambient car / ped as a tiny dot (empty/undefined when off)
 }
 
@@ -62,37 +101,57 @@ export class MapView {
   private dragging = false;
   private lastX = 0;
   private lastY = 0;
+  private dragDistance = 0;
   private pinchDist = 0;
   private pending = false;
   onClose?: () => void;
+  onWaypoint?: (x: number, z: number) => void;
+  onWaypointClear?: () => void;
 
   private layers: Partial<RenderLayers> = {}; // empty = renderMap defaults (everything on)
   private hovered: MapRoad | undefined;
   private tooltip = document.createElement('div');
   private searchBox = document.createElement('input');
   private results = document.createElement('div');
-  private searchIndex: Array<{ name: string; x: number; z: number; kind: 'street' | 'district' | 'landmark' }> = [];
+  private clearWaypoint = document.createElement('button');
+  private searchIndex: MapSearchEntry[] = [];
 
   constructor() {
     this.root.id = 'map-view'; this.root.setAttribute('aria-hidden', 'true');
     this.canvas.className = 'map-view-canvas';
     const hint = document.createElement('div'); hint.className = 'map-view-hint';
-    hint.textContent = 'drag to pan · scroll to zoom · hover a street for its name · M / ESC to close';
+    hint.textContent = 'click / tap to set GPS · drag to pan · scroll to zoom · hover names · M / ESC to close';
     const title = document.createElement('div'); title.className = 'map-view-title'; title.textContent = 'CITY MAP';
     this.tooltip.className = 'map-view-tooltip';
     const close = document.createElement('button'); close.className = 'map-view-close'; close.textContent = '✕'; close.setAttribute('aria-label', 'Close map');
     close.addEventListener('click', () => this.onClose?.());
-    this.root.append(this.canvas, title, hint, this.tooltip, this.buildSearch(), this.buildFilters(), close);
+    this.clearWaypoint.type = 'button'; this.clearWaypoint.className = 'map-view-clear-waypoint';
+    this.clearWaypoint.textContent = 'CLEAR GPS'; this.clearWaypoint.hidden = true;
+    this.clearWaypoint.addEventListener('click', () => this.onWaypointClear?.());
+    this.root.append(this.canvas, title, hint, this.tooltip, this.buildSearch(), this.buildFilters(), this.clearWaypoint, close);
     const ctx = this.canvas.getContext('2d'); if (!ctx) throw new Error('Canvas unavailable'); this.ctx = ctx;
 
-    this.canvas.addEventListener('mousedown', (e) => { this.dragging = true; this.lastX = e.clientX; this.lastY = e.clientY; this.canvas.classList.add('is-dragging'); });
-    window.addEventListener('mouseup', () => { this.dragging = false; this.canvas.classList.remove('is-dragging'); });
+    this.canvas.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      this.dragging = true; this.dragDistance = 0; this.lastX = e.clientX; this.lastY = e.clientY; this.canvas.classList.add('is-dragging');
+    });
+    window.addEventListener('mouseup', (e) => {
+      const place = this.open && this.dragging && this.dragDistance < 5 && e.target === this.canvas;
+      this.dragging = false; this.canvas.classList.remove('is-dragging');
+      if (place) this.placeWaypoint(e.clientX, e.clientY);
+    });
     window.addEventListener('mousemove', (e) => {
       if (!this.open) return;
       if (this.dragging) {
-        this.viewX -= (e.clientX - this.lastX) / this.zoom; this.viewZ -= (e.clientY - this.lastY) / this.zoom;
+        const dx = e.clientX - this.lastX; const dy = e.clientY - this.lastY;
+        this.dragDistance += Math.hypot(dx, dy);
+        this.viewX -= dx / this.zoom; this.viewZ -= dy / this.zoom;
         this.lastX = e.clientX; this.lastY = e.clientY; this.tooltip.style.display = 'none'; this.requestDraw();
       } else this.hover(e.clientX, e.clientY);
+    });
+    this.canvas.addEventListener('contextmenu', (e) => {
+      if (!this.open) return;
+      e.preventDefault(); this.onWaypointClear?.();
     });
     this.canvas.addEventListener('wheel', (e) => {
       if (!this.open) return;
@@ -111,7 +170,7 @@ export class MapView {
       const t = e.touches[0]; if (!this.open || !t) return;
       e.preventDefault(); this.tooltip.style.display = 'none';
       if (e.touches.length >= 2) { this.dragging = false; this.pinchDist = Math.hypot(e.touches[1]!.clientX - t.clientX, e.touches[1]!.clientY - t.clientY); }
-      else { this.dragging = true; this.lastX = t.clientX; this.lastY = t.clientY; }
+      else { this.dragging = true; this.dragDistance = 0; this.lastX = t.clientX; this.lastY = t.clientY; }
     }, { passive: false });
     this.canvas.addEventListener('touchmove', (e) => {
       const t = e.touches[0]; if (!this.open || !t) return;
@@ -126,11 +185,18 @@ export class MapView {
         this.viewX += before.x - after.x; this.viewZ += before.z - after.z;
         this.requestDraw();
       } else if (this.dragging) {
-        this.viewX -= (t.clientX - this.lastX) / this.zoom; this.viewZ -= (t.clientY - this.lastY) / this.zoom;
+        const dx = t.clientX - this.lastX; const dy = t.clientY - this.lastY;
+        this.dragDistance += Math.hypot(dx, dy);
+        this.viewX -= dx / this.zoom; this.viewZ -= dy / this.zoom;
         this.lastX = t.clientX; this.lastY = t.clientY; this.requestDraw();
       }
     }, { passive: false });
-    this.canvas.addEventListener('touchend', (e) => { if (e.touches.length === 0) { this.dragging = false; this.pinchDist = 0; } });
+    this.canvas.addEventListener('touchend', (e) => {
+      if (e.touches.length !== 0) return;
+      const place = this.dragging && this.dragDistance < 9 && this.pinchDist === 0;
+      this.dragging = false; this.pinchDist = 0;
+      if (place) this.placeWaypoint(this.lastX, this.lastY);
+    });
   }
 
   /** Capture-phase keydown, registered only while the map is open. The game's InputManager also
@@ -158,6 +224,7 @@ export class MapView {
   show(frame: MapViewFrame): void {
     this.frame = frame; this.zoom = OPEN_ZOOM; this.viewX = frame.x; this.viewZ = frame.z;
     this.hovered = undefined; this.tooltip.style.display = 'none';
+    this.syncWaypointControl();
     this.buildStreetIndex();
     this.root.classList.add('is-visible'); this.root.setAttribute('aria-hidden', 'false');
     window.addEventListener('keydown', this.onKeyDown, true); // capture: runs before the game's window listeners
@@ -172,11 +239,24 @@ export class MapView {
   }
 
   /** Feed a fresh live frame while open (markers/player move under the static map). */
-  update(frame: MapViewFrame): void { if (!this.open) return; this.frame = frame; this.requestDraw(); }
+  update(frame: MapViewFrame): void {
+    if (!this.open) return;
+    this.frame = frame; this.syncWaypointControl(); this.requestDraw();
+  }
 
   private requestDraw(): void {
     if (this.pending) return; this.pending = true;
     requestAnimationFrame(() => { this.pending = false; if (this.open) this.draw(); });
+  }
+
+  private placeWaypoint(sx: number, sy: number): void {
+    const point = screenToWorld(sx, sy, this.camera());
+    this.onWaypoint?.(point.x, point.z);
+    this.tooltip.style.display = 'none';
+  }
+
+  private syncWaypointControl(): void {
+    this.clearWaypoint.hidden = !this.frame.markers.some((marker) => marker.waypoint);
   }
 
   private draw(): void {
@@ -185,6 +265,17 @@ export class MapView {
     const ctx = this.ctx;
 
     renderMap(ctx, MAP, cam, { background: '#0c1117', layers: this.layers });
+
+    // Live GPS route in world space, below hover/markers but above the base road network.
+    if ((this.frame.route?.length ?? 0) > 1) {
+      applyWorldTransform(ctx, cam);
+      const route = this.frame.route!;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.beginPath();
+      ctx.moveTo(route[0]!.x, route[0]!.z);
+      for (let index = 1; index < route.length; index++) ctx.lineTo(route[index]!.x, route[index]!.z);
+      ctx.strokeStyle = '#08110f'; ctx.lineWidth = 9 / this.zoom; ctx.stroke();
+      ctx.strokeStyle = '#43d7c2'; ctx.lineWidth = 5 / this.zoom; ctx.stroke();
+    }
 
     // Hovered street: trace it in world space, over the cartography but under the live markers.
     if (this.hovered) {
@@ -232,7 +323,7 @@ export class MapView {
   /** Search box + results dropdown: jump the map to a street by name (GTA-style). */
   private buildSearch(): HTMLElement {
     const wrap = document.createElement('div'); wrap.className = 'map-view-search';
-    this.searchBox.type = 'text'; this.searchBox.placeholder = 'Search a street…'; this.searchBox.spellcheck = false;
+    this.searchBox.type = 'text'; this.searchBox.placeholder = 'Search a street or place…'; this.searchBox.spellcheck = false;
     this.searchBox.className = 'map-view-search-input';
     this.results.className = 'map-view-search-results';
     this.searchBox.addEventListener('input', () => this.runSearch(this.searchBox.value));
@@ -279,10 +370,15 @@ export class MapView {
     // Prefix matches first (what you're typing toward), then substring; districts/landmarks sort ahead of streets.
     const rank = (m: { name: string; kind: string }): number =>
       (m.name.toLowerCase().startsWith(q) ? 0 : 2) + (m.kind === 'street' ? 1 : 0);
-    const matches = this.searchIndex.filter((s) => s.name.toLowerCase().includes(q)).sort((a, b) => rank(a) - rank(b)).slice(0, 8);
+    const matches = [...liveMarkerSearchEntries(this.frame.markers), ...this.searchIndex]
+      .filter((s) => s.name.toLowerCase().includes(q))
+      .sort((a, b) => rank(a) - rank(b))
+      .slice(0, 8);
     for (const m of matches) {
       const row = document.createElement('button'); row.type = 'button'; row.className = 'map-view-result';
-      row.innerHTML = `<span>${m.name.replace(/</g, '&lt;')}</span><span class="map-view-result-kind">${m.kind}</span>`;
+      const name = document.createElement('span'); name.textContent = m.name;
+      const kind = document.createElement('span'); kind.className = 'map-view-result-kind'; kind.textContent = m.kind;
+      row.append(name, kind);
       row.addEventListener('click', () => { this.jumpTo(m.x, m.z, m.kind); this.searchBox.value = m.name; this.clearResults(); this.searchBox.blur(); });
       this.results.append(row);
     }
@@ -292,13 +388,24 @@ export class MapView {
   private clearResults(): void { this.results.replaceChildren(); this.results.classList.remove('is-open'); }
 
   /** Centre the map on a place and zoom in — wider for a district/suburb, tighter for a street or landmark. */
-  private jumpTo(x: number, z: number, kind: 'street' | 'district' | 'landmark' = 'street'): void {
+  private jumpTo(x: number, z: number, kind: MapSearchKind = 'street'): void {
     this.viewX = x; this.viewZ = z; this.zoom = clampZoom(kind === 'district' ? 0.35 : 1.4); this.requestDraw();
   }
 
   /** Nearest street under the cursor → tooltip + highlight. */
   private hover(sx: number, sy: number): void {
-    const w = screenToWorld(sx, sy, this.camera());
+    const camera = this.camera();
+    const markerLabel = markerHoverLabel(this.frame.markers, camera, sx, sy);
+    if (markerLabel) {
+      const hadStreetHighlight = Boolean(this.hovered);
+      this.hovered = undefined;
+      this.tooltip.style.display = 'block';
+      this.tooltip.style.left = `${sx + 14}px`; this.tooltip.style.top = `${sy + 12}px`;
+      this.tooltip.textContent = markerLabel;
+      if (hadStreetHighlight) this.requestDraw();
+      return;
+    }
+    const w = screenToWorld(sx, sy, camera);
     const threshSq = (8 / this.zoom) ** 2;
     let best: MapRoad | undefined; let bestSq = threshSq;
     if (this.layers.roads !== false) for (const road of MAP.roads) {

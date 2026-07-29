@@ -43,6 +43,14 @@ const SIGNAL_COLORS = [0xe83f3f, 0xf0ad2f, 0x39d36c] as const;
 
 const BULB_COLOR = 0xffdca0;
 
+/** Roadside service hardware is sparse enough to remain legible but citywide enough that streets no
+ * longer jump straight from tar to buildings. The source index is stable because roadsidePoints is
+ * generated deterministically from the committed road network. */
+export const UTILITY_SITE_STRIDE = 43;
+export function isUtilityRoadsideCandidate(point: RoadsidePoint, index: number): boolean {
+  return point.width >= 8 && ((index % UTILITY_SITE_STRIDE) + UTILITY_SITE_STRIDE) % UTILITY_SITE_STRIDE === 11;
+}
+
 /** One robot's 30s loop: green 0–11, amber 11–14, red 14–30. The two carriageway axes run 15s apart
  *  so their greens never overlap. Both the lens animation and the traffic AI read this, so the colour
  *  the player sees and the light a driver obeys can never disagree. */
@@ -128,6 +136,7 @@ export class UrbanInfrastructure {
     onPowerChange((on) => { this.powered = on; this.lensPowerDirty = true; });
     this.buildVegetation();
     this.buildStreetlights();
+    this.buildUtilityInfrastructure();
     this.buildTrafficSignals();
     this.buildStreetSigns();
     this.buildRoadsideSigns();
@@ -344,6 +353,104 @@ export class UrbanInfrastructure {
         },
       });
     });
+  }
+
+  /** The unglamorous layer that makes a city feel built and serviced: electricity cabinets at regular
+   * roadside intervals, with a larger pole-mounted distribution transformer at every sixth site.
+   * Every part is instanced and chunk-culled; cabinets sit outward of the walk line and register solid
+   * collisions so they feel like infrastructure rather than painted scenery. */
+  private buildUtilityInfrastructure(): void {
+    const sites = this.roadsidePoints
+      .map((point, sourceIndex) => ({
+        ...point, sourceIndex,
+        x: point.x - point.inwardX * 1.35,
+        z: point.z - point.inwardZ * 1.35,
+      }))
+      .filter((site) => isUtilityRoadsideCandidate(site, site.sourceIndex)
+        && !this.isBlocked(site.x, site.z, 1.15) && !this.isRoad(site.x, site.z, 0.65));
+
+    const concrete = new THREE.MeshStandardMaterial({ color: 0xa6a8a1, roughness: 0.9 });
+    const cabinet = new THREE.MeshStandardMaterial({ color: 0x405c4b, metalness: 0.48, roughness: 0.5 });
+    const cabinetDark = new THREE.MeshStandardMaterial({ color: 0x263c34, metalness: 0.55, roughness: 0.44 });
+    const warning = new THREE.MeshStandardMaterial({ color: 0xf2c230, emissive: 0x4a3505, emissiveIntensity: 0.25, roughness: 0.5 });
+    const safety = new THREE.MeshStandardMaterial({ color: 0xd7aa23, metalness: 0.38, roughness: 0.48 });
+    const utilitySteel = new THREE.MeshStandardMaterial({ color: 0x4d5557, metalness: 0.74, roughness: 0.38 });
+    const ceramic = new THREE.MeshStandardMaterial({ color: 0xd8d4c6, roughness: 0.38, metalness: 0.08 });
+
+    const baseGeometry = new THREE.BoxGeometry(1.9, 0.18, 1.15);
+    const cabinetGeometry = new RoundedBoxGeometry(1.48, 1.65, 0.72, 3, 0.06);
+    const doorGeometry = new THREE.BoxGeometry(1.16, 1.28, 0.055);
+    const warningGeometry = new THREE.BoxGeometry(0.34, 0.4, 0.045);
+    const ventGeometry = new THREE.BoxGeometry(0.72, 0.055, 0.045);
+    const bollardGeometry = new THREE.CylinderGeometry(0.09, 0.12, 0.92, 10);
+    const baseItems: InstanceItem[] = []; const cabinetItems: InstanceItem[] = [];
+    const doorItems: InstanceItem[] = []; const warningItems: InstanceItem[] = [];
+    const ventItems: InstanceItem[] = []; const bollardItems: InstanceItem[] = [];
+
+    const poleGeometry = new THREE.CylinderGeometry(0.13, 0.23, 7.2, 12);
+    const crossarmGeometry = new THREE.BoxGeometry(3.7, 0.18, 0.22);
+    const insulatorGeometry = new THREE.CylinderGeometry(0.1, 0.14, 0.52, 10);
+    const cableGeometry = new THREE.CylinderGeometry(0.025, 0.025, 2.05, 6);
+    const transformerGeometry = new THREE.CylinderGeometry(0.55, 0.55, 1.25, 16);
+    const transformerBandGeometry = new THREE.TorusGeometry(0.56, 0.04, 7, 16);
+    const poleItems: InstanceItem[] = []; const crossarmItems: InstanceItem[] = [];
+    const insulatorItems: InstanceItem[] = []; const cableItems: InstanceItem[] = [];
+    const transformerItems: InstanceItem[] = []; const transformerBandItems: InstanceItem[] = [];
+    const one = new THREE.Vector3(1, 1, 1); const up = new THREE.Vector3(0, 1, 0);
+
+    sites.forEach((site, siteIndex) => {
+      const yaw = Math.atan2(site.inwardX, site.inwardZ);
+      const rotation = new THREE.Quaternion().setFromAxisAngle(up, yaw);
+      const root = new THREE.Vector3(site.x, 0, site.z);
+      const world = (lx: number, ly: number, lz: number): THREE.Vector3 =>
+        new THREE.Vector3(lx, ly, lz).applyQuaternion(rotation).add(root);
+      const item = (position: THREE.Vector3, quaternion = rotation): InstanceItem => ({
+        x: site.x, z: site.z, matrix: new THREE.Matrix4().compose(position, quaternion, one),
+      });
+
+      baseItems.push(item(world(0, 0.09, 0)));
+      cabinetItems.push(item(world(0, 1.005, 0)));
+      doorItems.push(item(world(0, 1.02, 0.39)));
+      warningItems.push(item(world(0, 1.2, 0.433)));
+      for (const y of [0.55, 0.69, 0.83]) ventItems.push(item(world(0, y, 0.433)));
+      for (const x of [-0.76, 0.76]) bollardItems.push(item(world(x, 0.46, 0.76), new THREE.Quaternion()));
+      this.props.register('post', site.x, site.z, 1.05, 1.85);
+
+      if (siteIndex % 6 !== 0) return;
+      // Put the tall hardware another metre outward, behind the cabinet, so its footprint cannot steal
+      // the routed sidewalk. Crossarm follows the street; the transformer can and drops remain vertical.
+      const poleRoot = world(0, 0, -1.2);
+      const poleWorld = (lx: number, ly: number, lz: number): THREE.Vector3 =>
+        new THREE.Vector3(lx, ly, lz).applyQuaternion(rotation).add(poleRoot);
+      const poleItem = (position: THREE.Vector3, quaternion = rotation): InstanceItem => ({
+        x: poleRoot.x, z: poleRoot.z, matrix: new THREE.Matrix4().compose(position, quaternion, one),
+      });
+      poleItems.push(poleItem(poleWorld(0, 3.6, 0), new THREE.Quaternion()));
+      crossarmItems.push(poleItem(poleWorld(0, 7.12, 0)));
+      for (const x of [-1.35, 0, 1.35]) {
+        insulatorItems.push(poleItem(poleWorld(x, 7.46, 0), new THREE.Quaternion()));
+        cableItems.push(poleItem(poleWorld(x * 0.32, 6.1, 0.04), new THREE.Quaternion()));
+      }
+      transformerItems.push(poleItem(poleWorld(0, 4.72, 0), new THREE.Quaternion()));
+      for (const y of [4.25, 5.18]) {
+        const bandRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+        transformerBandItems.push(poleItem(poleWorld(0, y, 0), bandRotation));
+      }
+      this.props.register('post', poleRoot.x, poleRoot.z, 0.28, 7.2);
+    });
+
+    addInstancedChunks(this.detail, baseGeometry, concrete, this.groundItems(baseItems), { cast: true, receive: true });
+    addInstancedChunks(this.detail, cabinetGeometry, cabinet, this.groundItems(cabinetItems), { cast: true, receive: true });
+    addInstancedChunks(this.detail, doorGeometry, cabinetDark, this.groundItems(doorItems), { cast: true });
+    addInstancedChunks(this.detail, warningGeometry, warning, this.groundItems(warningItems));
+    addInstancedChunks(this.detail, ventGeometry, utilitySteel, this.groundItems(ventItems));
+    addInstancedChunks(this.detail, bollardGeometry, safety, this.groundItems(bollardItems), { cast: true });
+    addInstancedChunks(this.chunks, poleGeometry, concrete, this.groundItems(poleItems), { cast: true });
+    addInstancedChunks(this.chunks, crossarmGeometry, utilitySteel, this.groundItems(crossarmItems), { cast: true });
+    addInstancedChunks(this.chunks, insulatorGeometry, ceramic, this.groundItems(insulatorItems), { cast: true });
+    addInstancedChunks(this.chunks, cableGeometry, utilitySteel, this.groundItems(cableItems));
+    addInstancedChunks(this.chunks, transformerGeometry, cabinetDark, this.groundItems(transformerItems), { cast: true });
+    addInstancedChunks(this.chunks, transformerBandGeometry, utilitySteel, this.groundItems(transformerBandItems), { cast: true });
   }
 
   private buildTrafficSignals(): void {

@@ -58,6 +58,8 @@ export class UIManager {
   onConsoleCommand?: (text: string) => void;
   onConsoleClose?: () => void;
   onMapClose?: () => void;
+  onMapWaypoint?: (x: number, z: number) => void;
+  onMapWaypointClear?: () => void;
 
   constructor() {
     this.root.id = 'ui'; this.hud.id = 'hud'; this.toast.id = 'toast'; this.toast.setAttribute('role', 'status'); this.toast.setAttribute('aria-live', 'polite'); this.toast.setAttribute('aria-atomic', 'true');
@@ -65,6 +67,8 @@ export class UIManager {
     this.menuView = new MenuView(document.createElement('div')); this.hudView = new HudView(this.hud);
     this.consoleView.onSubmit = (text) => this.onConsoleCommand?.(text); this.consoleView.onClose = () => this.onConsoleClose?.();
     this.mapView.onClose = () => this.onMapClose?.();
+    this.mapView.onWaypoint = (x, z) => this.onMapWaypoint?.(x, z);
+    this.mapView.onWaypointClear = () => this.onMapWaypointClear?.();
     this.root.append(this.vignette, this.hud, this.minimapView.canvas, this.toast, this.wheel, this.mapView.root, this.consoleView.root, this.menuView.root, this.fade); document.body.append(this.root); this.showLoading();
   }
 
@@ -97,9 +101,9 @@ export class UIManager {
 
   damageFlash(): void { this.vignette.classList.remove('is-flashing'); void this.vignette.offsetWidth; this.vignette.classList.add('is-flashing'); }
   screenFade(): void { this.fade.classList.add('is-active'); clearTimeout(this.fadeTimer); this.fadeTimer = setTimeout(() => this.fade.classList.remove('is-active'), 620); }
-  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom?: number): void {
+  drawMap(x: number, z: number, heading: number, roads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom?: number, route: readonly MapPoint[] = []): void {
     const icons = featureMapIcons();
-    this.minimapView.draw(x, z, heading, roads, icons.length === 0 ? markers : [...icons, ...markers], police, hostiles, zoom);
+    this.minimapView.draw(x, z, heading, roads, icons.length === 0 ? markers : [...icons, ...markers], police, hostiles, zoom, route);
   }
 
   showWeaponWheel(entries: WheelEntry[]): void {

@@ -1,5 +1,5 @@
 import { inebriationLabel, INEBRIATION_MAX } from '../core/DrinkRules';
-import { clampPercent, dialogueAdvanceLabel, formatMoney, objectiveProgress, reputationLabel, type HudState } from './UIModels';
+import { clampPercent, dialogueAdvanceLabel, formatMoney, formatObjectiveDistance, objectiveProgress, reputationLabel, type HudState } from './UIModels';
 import { PHASE_COLORS, ProfileGraph } from './ProfileGraph';
 
 const required = <T extends Element>(root: ParentNode, selector: string): T => {
@@ -15,6 +15,7 @@ const setAttribute = (element: Element, name: string, value: string): void => { 
 
 export class HudView {
   private district: HTMLElement;
+  private street: HTMLElement;
   private clock: HTMLElement;
   private reputation: HTMLElement;
   private health: HTMLElement;
@@ -77,7 +78,7 @@ export class HudView {
       <div class="hud-scope" data-hud="scope" aria-hidden="true" hidden><div class="scope-lens"><i class="scope-mil-h"></i><i class="scope-mil-v"></i><span class="scope-dot"></span></div><b data-hud="scope-zoom"></b></div>
       <header class="hud-masthead" aria-label="Location and reputation">
         <div class="hud-wordmark"><span>GROOT THEFT</span><strong>BAKKIE</strong></div>
-        <div class="hud-location"><span data-hud="district"></span><b data-hud="clock"></b><em data-hud="reputation"></em></div>
+        <div class="hud-location"><span data-hud="district"></span><small data-hud="street"></small><b data-hud="clock"></b><em data-hud="reputation"></em></div>
       </header>
       <section class="hud-status" aria-label="Player status">
         <div class="hud-wanted" data-hud="wanted" aria-label="Wanted level 0 of 5"><em data-hud="unseen" hidden>UNSEEN</em>${Array.from({ length: 5 }, () => '<i aria-hidden="true">★</i>').join('')}</div>
@@ -101,7 +102,7 @@ export class HudView {
       <div class="hud-perf" data-hud="perf" hidden><canvas class="hud-perf__graph" data-hud="perf-graph" width="200" height="60"></canvas><div class="hud-perf__legend" data-hud="perf-legend"></div></div>
       <div class="hud-cheats" data-hud="cheats">CHEATS ACTIVE</div>
       <div class="hud-crosshair" data-hud="crosshair" aria-hidden="true" hidden><i></i></div>`;
-    this.district = required(root, '[data-hud="district"]'); this.clock = required(root, '[data-hud="clock"]'); this.reputation = required(root, '[data-hud="reputation"]');
+    this.district = required(root, '[data-hud="district"]'); this.street = required(root, '[data-hud="street"]'); this.clock = required(root, '[data-hud="clock"]'); this.reputation = required(root, '[data-hud="reputation"]');
     this.health = required(root, '[data-hud="health"]'); this.healthFill = required(root, '[data-hud="health-fill"]'); this.cash = required(root, '[data-hud="cash"]');
     this.healthBox = required(root, '.hud-health');
     this.armourBox = required(root, '[data-hud="armour-box"]'); this.armour = required(root, '[data-hud="armour"]'); this.armourFill = required(root, '[data-hud="armour-fill"]');
@@ -121,7 +122,7 @@ export class HudView {
   }
 
   update(state: HudState): void {
-    const health = clampPercent(state.health); setText(this.district, state.district); setText(this.clock, state.clock); setText(this.reputation, state.reputation ? reputationLabel(state.reputation) : '');
+    const health = clampPercent(state.health); setText(this.district, state.district); setText(this.street, state.street ?? ''); setHidden(this.street, !state.street); setText(this.clock, state.clock); setText(this.reputation, state.reputation ? reputationLabel(state.reputation) : '');
     setHidden(this.reputation, !state.reputation); setText(this.health, `${health}`); setWidth(this.healthFill, `${health}%`);
     setAttribute(this.healthBox, 'aria-valuenow', String(health));
     const armour = clampPercent(state.armour); setHidden(this.armourBox, armour <= 0);
@@ -147,7 +148,8 @@ export class HudView {
       setText(this.objectiveText, state.objective.failed ? `${state.objective.failed} — find the gold beacon to retry (E)` : state.objective.text);
       const bits: string[] = [];
       if (state.objective.required && state.objective.progress !== undefined) bits.push(`${state.objective.progress}/${state.objective.required}`);
-      if (state.objective.remainingSeconds) bits.push(`${Math.ceil(state.objective.remainingSeconds)} SEC`);
+      if (state.objective.remainingSeconds !== undefined) bits.push(`${Math.max(0, Math.ceil(state.objective.remainingSeconds))} SEC`);
+      if (state.objective.distanceMetres !== undefined) bits.push(formatObjectiveDistance(state.objective.distanceMetres));
       setText(this.objectiveMeta, bits.join(' · ')); const progress = objectiveProgress(state.objective); setWidth(this.objectiveFill, `${progress ?? 0}%`); setHidden(this.objectiveTrack, progress === undefined); setAttribute(this.objectiveTrack, 'aria-valuenow', String(progress ?? 0));
     }
     setHidden(this.passed, !state.missionPassed);

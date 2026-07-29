@@ -10,6 +10,15 @@ export type BuildingStyle =
   | 'estate'
   | 'rural';
 
+export type ResidentialRoofPalette = 'terracotta' | 'slate' | 'corrugated-green' | 'weathered-zinc';
+
+/** Stable variation for the pitched-roof suburbs. Keeping this pure makes generated chunks deterministic
+ * while breaking up the old unbroken sea of identical red tile. */
+export function residentialRoofPalette(variant: number): ResidentialRoofPalette {
+  const palettes: readonly ResidentialRoofPalette[] = ['terracotta', 'slate', 'corrugated-green', 'weathered-zinc'];
+  return palettes[((variant % palettes.length) + palettes.length) % palettes.length]!;
+}
+
 export const ARCHITECTURE_VARIANTS: Record<BuildingStyle, number> = {
   downtown: 11,
   'mixed-use': 5,
@@ -30,6 +39,8 @@ export interface BuildingSpec {
   variant: number;
   facade: THREE.Material;
   roof: THREE.Material;
+  /** World-space width/height represented by one repeat of the facade atlas. */
+  facadeTile?: { width: number; height: number };
 }
 
 /** One solid massing volume in world XZ and building-local Y (the city lifts y by the parcel's terrain height).
@@ -261,7 +272,50 @@ export function frontFacadeSpansAt(tiers: readonly MassingTier[], y: number, min
   return spans;
 }
 
+/** Widest real street-facing wall at a height. Offset/stepped sheds often have no wall at local x=0,
+ * so centre-probing would silently drop their loading bay and sign even though a broad wing is visible. */
+export function widestFrontFacadeSpanAt(
+  tiers: readonly MassingTier[], y: number, minX: number, maxX: number, minimumWidth = 0,
+): FrontFacadeSpan | undefined {
+  let widest: FrontFacadeSpan | undefined;
+  for (const span of frontFacadeSpansAt(tiers, y, minX, maxX)) {
+    const width = span.maxX - span.minX;
+    if (width < minimumWidth) continue;
+    const widestWidth = widest ? widest.maxX - widest.minX : -Infinity;
+    // A tie goes to the wall nearest the street, which avoids dressing an exposed rear step.
+    if (width > widestWidth + 1e-4 || (Math.abs(width - widestWidth) <= 1e-4 && span.z > widest!.z)) widest = span;
+  }
+  return widest;
+}
+
 const boxMaterials = (facade: THREE.Material, roof: THREE.Material): THREE.Material[] => [facade, facade, roof, roof, facade, facade];
+
+/** Scale only the four wall UV groups on BoxGeometry/RoundedBoxGeometry. Roof groups retain their
+ * 0..1 UVs. Both geometries dedicate vertices per face, so side/front repeats cannot fight. */
+export function scaleBoxFacadeUvs(
+  geometry: THREE.BufferGeometry, width: number, height: number, depth: number,
+  tile: { width: number; height: number },
+): THREE.BufferGeometry {
+  const uv = geometry.getAttribute('uv');
+  if (!uv || !(tile.width > 0) || !(tile.height > 0)) return geometry;
+  const index = geometry.index;
+  for (const group of geometry.groups) {
+    const face = group.materialIndex ?? 0;
+    if (face === 2 || face === 3) continue; // top / underside use the roof material
+    const horizontal = face === 0 || face === 1 ? depth : width;
+    const repeatX = Math.max(1, horizontal / tile.width);
+    const repeatY = Math.max(1, height / tile.height);
+    const seen = new Set<number>(); // indexed BoxGeometry references each corner in two triangles
+    for (let cursor = group.start; cursor < group.start + group.count; cursor++) {
+      const vertex = index ? index.getX(cursor) : cursor;
+      if (seen.has(vertex)) continue;
+      seen.add(vertex);
+      uv.setXY(vertex, uv.getX(vertex) * repeatX, uv.getY(vertex) * repeatY);
+    }
+  }
+  uv.needsUpdate = true;
+  return geometry;
+}
 
 const createGableGeometry = (width: number, depth: number, rise: number): THREE.BufferGeometry => {
   const halfW = width / 2; const halfD = depth / 2;
@@ -281,10 +335,15 @@ export class BuildingArchitecture {
   private glass = new THREE.MeshPhysicalMaterial({ color: 0x335f69, roughness: 0.12, metalness: 0.2, clearcoat: 0.82 });
   private timber = new THREE.MeshStandardMaterial({ color: 0x704b32, roughness: 0.82 });
   private terracotta = new THREE.MeshStandardMaterial({ color: 0xa14b36, roughness: 0.84 });
+  private slateRoof = new THREE.MeshStandardMaterial({ color: 0x485255, roughness: 0.9, metalness: 0.04 });
+  private greenRoof = new THREE.MeshStandardMaterial({ color: 0x496a5b, roughness: 0.68, metalness: 0.24 });
+  private zincRoof = new THREE.MeshStandardMaterial({ color: 0x8a8c84, roughness: 0.7, metalness: 0.32 });
   private plaster = new THREE.MeshStandardMaterial({ color: 0xd8cdb6, roughness: 0.88 });
   private pool = new THREE.MeshStandardMaterial({ color: 0x2f8fb8, roughness: 0.18, metalness: 0.1 });
   private thatch = new THREE.MeshStandardMaterial({ color: 0x8a7648, roughness: 1 });
   private court = new THREE.MeshStandardMaterial({ color: 0x2f6a4e, roughness: 0.92 });
+  private solarGlass = new THREE.MeshStandardMaterial({ color: 0x183f54, roughness: 0.22, metalness: 0.42 });
+  private tankPlastic = new THREE.MeshStandardMaterial({ color: 0x203b30, roughness: 0.82 });
 
   private tiers: MassingTier[] = [];
   private gables: GableSpec[] = [];
@@ -356,7 +415,10 @@ export class BuildingArchitecture {
     this.tiers.push({ minX: x - width / 2, maxX: x + width / 2, minZ: z - depth / 2, maxZ: z + depth / 2, y0: y - height / 2, y1: y + height / 2 });
     if (!this.drawing) return;
     const radius = Math.min(1.25, width * 0.06, depth * 0.06);
-    const geometry = rounded ? new RoundedBoxGeometry(width, height, depth, 5, radius) : new THREE.BoxGeometry(width, height, depth);
+    const geometry = scaleBoxFacadeUvs(
+      rounded ? new RoundedBoxGeometry(width, height, depth, 5, radius) : new THREE.BoxGeometry(width, height, depth),
+      width, height, depth, spec.facadeTile ?? { width: 28, height: 28 },
+    );
     const mesh = new THREE.Mesh(geometry, boxMaterials(spec.facade, spec.roof)); mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; this.place(mesh);
   }
 
@@ -397,7 +459,12 @@ export class BuildingArchitecture {
     if (massing === 4) {
       const podiumH = Math.min(9, h * 0.2); this.addBox(spec, w, podiumH, d, x, podiumH / 2 + 0.2, z, true);
       const radius = d * 0.39;
-      const tower = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 1.04, h - podiumH, 32), spec.facade); tower.scale.set(w / Math.max(d, 1), 1, 1); tower.position.set(x, podiumH + (h - podiumH) / 2 + 0.2, z); tower.castShadow = true; tower.receiveShadow = true; this.place(tower);
+      const towerGeometry = new THREE.CylinderGeometry(radius, radius * 1.04, h - podiumH, 32);
+      const towerUv = towerGeometry.getAttribute('uv'); const tile = spec.facadeTile ?? { width: 28, height: 28 };
+      const circumference = Math.PI * (w * 0.39 + radius);
+      for (let index = 0; index < towerUv.count; index++) towerUv.setXY(index, towerUv.getX(index) * Math.max(1, circumference / tile.width), towerUv.getY(index) * Math.max(1, (h - podiumH) / tile.height));
+      towerUv.needsUpdate = true;
+      const tower = new THREE.Mesh(towerGeometry, spec.facade); tower.scale.set(w / Math.max(d, 1), 1, 1); tower.position.set(x, podiumH + (h - podiumH) / 2 + 0.2, z); tower.castShadow = true; tower.receiveShadow = true; this.place(tower);
       this.tiers.push({ minX: x - w * 0.39, maxX: x + w * 0.39, minZ: z - radius, maxZ: z + radius, y0: podiumH + 0.2, y1: h + 0.2 }); // scaled cylinder tower, boxed
       const crown = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.78, radius, 3.2, 32), spec.roof); crown.scale.x = w / Math.max(d, 1); crown.position.set(x, h + 1.8, z); crown.castShadow = true; this.place(crown);
       return h + 3.4;
@@ -779,7 +846,13 @@ export class BuildingArchitecture {
     this.gables.push({ x, z, width, depth, y, rise, ry });
     this.decor(() => {
       const tiled = spec.style === 'suburban' || spec.style === 'estate';
-      const roof = new THREE.Mesh(createGableGeometry(width, depth, rise), tiled ? this.terracotta : spec.roof); roof.position.set(x, y, z); roof.rotation.y = ry; roof.castShadow = true; roof.receiveShadow = true; return roof;
+      const palette = residentialRoofPalette(spec.variant);
+      const material = !tiled ? spec.roof
+        : palette === 'terracotta' ? this.terracotta
+          : palette === 'slate' ? this.slateRoof
+            : palette === 'corrugated-green' ? this.greenRoof
+              : this.zincRoof;
+      const roof = new THREE.Mesh(createGableGeometry(width, depth, rise), material); roof.position.set(x, y, z); roof.rotation.y = ry; roof.castShadow = true; roof.receiveShadow = true; return roof;
     });
   }
 
@@ -932,10 +1005,12 @@ export class BuildingArchitecture {
     }
     // Chimney rises out of the actual roof under it (pitched or flat) — never the building-wide roofY,
     // which on winged massings is the tallest ridge, leaving a chimney over a lower wing hanging in air.
-    const chimneyX = x - w * 0.25; const chimneyZ = z - d * 0.18;
-    const chimneySurface = roofSurfaceAt(this.tiers, this.gables, chimneyX, chimneyZ);
-    if (chimneySurface !== undefined) {
-      const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.2, 0.9), this.terracotta); chimney.position.set(chimneyX, chimneySurface + 0.4, chimneyZ); chimney.castShadow = true; this.place(chimney);
+    if (variant % 3 !== 1) {
+      const chimneyX = x - w * 0.25; const chimneyZ = z - d * 0.18;
+      const chimneySurface = roofSurfaceAt(this.tiers, this.gables, chimneyX, chimneyZ);
+      if (chimneySurface !== undefined) {
+        const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.2, 0.9), this.terracotta); chimney.position.set(chimneyX, chimneySurface + 0.4, chimneyZ); chimney.castShadow = true; chimney.name = 'residential-chimney'; this.place(chimney);
+      }
     }
     if (massing !== 2 && h > 8) {
       for (const side of [-1, 1]) {
@@ -946,6 +1021,32 @@ export class BuildingArchitecture {
         const dormer = new THREE.Mesh(new THREE.BoxGeometry(Math.min(2.4, w * 0.2), 1.75, 1.35), boxMaterials(spec.facade, spec.roof)); dormer.position.set(dormerX, surface + 0.5, dormerZ); dormer.castShadow = true; this.place(dormer);
         const window = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.92), this.glass); window.position.set(dormer.position.x, dormer.position.y, dormer.position.z + 0.681); this.place(window);
       }
+    }
+
+    // Mutually recognisable roof/utility stories instead of the old universal red chimney.
+    if (variant % 4 === 1) {
+      const panelX = x + w * 0.14; const panelZ = z - d * 0.1;
+      const surface = roofSurfaceAt(this.tiers, this.gables, panelX, panelZ);
+      if (surface !== undefined) {
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.1, w * 0.24), 0.1, 1.45), this.solarGlass);
+        panel.position.set(panelX, surface + 0.12, panelZ); panel.rotation.z = -0.08; panel.castShadow = true; panel.name = 'residential-solar-panel'; this.place(panel);
+        const geyser = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 1.55, 14), this.zincRoof);
+        geyser.rotation.x = Math.PI / 2; geyser.position.set(panelX - 1.05, surface + 0.58, panelZ - 0.45); geyser.castShadow = true; geyser.name = 'residential-solar-geyser'; this.place(geyser);
+      }
+    } else if (variant % 4 === 2) {
+      const dishX = x + w * 0.23; const dishZ = z - d * 0.08;
+      const surface = roofSurfaceAt(this.tiers, this.gables, dishX, dishZ);
+      if (surface !== undefined) {
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.07, 1.15, 8), this.darkMetal); pole.position.set(dishX, surface + 0.56, dishZ); pole.name = 'residential-satellite-mount'; this.place(pole);
+        const dishMaterial = new THREE.MeshStandardMaterial({ color: 0xb7bbb7, roughness: 0.7, metalness: 0.18, side: THREE.DoubleSide });
+        const dish = new THREE.Mesh(new THREE.CircleGeometry(0.68, 18), dishMaterial); dish.position.set(dishX, surface + 1.12, dishZ); dish.rotation.set(-0.72, variant * 0.37, 0); dish.castShadow = true; dish.name = 'residential-satellite-dish'; this.place(dish);
+      }
+    } else if (variant % 4 === 3 && spec.style === 'suburban' && (massing === 3 || massing === 7)) {
+      // The L/front-wing massings leave this opposite front corner as yard. Keep the tank wholly
+      // inside the authored parcel envelope so its real collider never steals pavement or a neighbour.
+      const radius = 0.92; const tankX = x - w * 0.38; const tankZ = z + d / 2 - radius - 0.25;
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 2.35, 18), this.tankPlastic); tank.position.set(tankX, 1.375, tankZ); tank.castShadow = true; tank.name = 'residential-backup-tank'; this.place(tank);
+      const lid = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.72, radius * 0.78, 0.16, 18), this.darkMetal); lid.position.set(tankX, 2.62, tankZ); lid.name = 'residential-backup-tank-lid'; this.place(lid);
     }
   }
 

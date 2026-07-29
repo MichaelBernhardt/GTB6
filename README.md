@@ -12,17 +12,20 @@ The city combines OpenStreetMap-derived Johannesburg roads with procedural build
 
 ## What is in the game?
 
-- A large Jozi map with 3,939 roads, 117 named districts, roughly 775 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
+- A large Jozi map with 4,010 roads, 117 named districts, roughly 812 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
 - On-foot movement, third- and first-person cameras, cover, melee combat, firearms, armour, stim packs, parachutes, pickups, and a weapon wheel.
 - An original 1.8 m skinned Johannesburg protagonist with a teal technical jacket, 24 authored gameplay clips, directional aim, vehicle and airborne poses, and strict retryable startup validation.
 - A 16-character Blender-authored Johannesburg NPC cast. Every pedestrian uses a rigged character with independent animation, including ambient crowds, mission contacts, car guards, enforcers, drivers, and JMPD officers.
 - A required Blender-authored library of jacarandas, shade trees, gums, pines, acacias, palms, and landmark trees, with two distinct silhouettes per species and deterministic size variation.
+- Fifty-two streamed building silhouettes across CBD towers, mixed-use blocks, walk-up flats, cottages, estates, factories, and rural structures, with human-scale façade grammars and varied tile, slate, zinc, and corrugated roofs.
 - Cars, bakkies, taxis, bicycles, delivery bikes, superbikes, vehicle damage, drive-bys, police sirens, and four synthesised radio stations.
 - Traffic that follows lanes and robots. “Robot” means traffic light here; no metal oke is coming to steal your job.
 - A five-star wanted system with witnesses, dispatch callouts, foot patrols, road pursuits, arrests, and persistent police pressure.
-- Four story jobs, repeatable taxi work, and **Sixty-Sekonds** courier shifts for anyone who believes eggs are suspension components.
-- Shops for weapons, armour, food, resprays, and garage storage, plus a safehouse where you can save, sleep, heal, and wait for things to become somebody else’s problem.
-- A searchable city map, rotating minimap, district reputation, dynamic crowds, a ten-minute day/night cycle, weathered streets, and authentic load shedding at no additional charge.
+- A 24-job campaign spanning the street-level hustle, Stage Six’s genny cartel, and side trips from the padstal to Jozi-by-the-Sea.
+- Repeatable taxi and **Sixty-Sekonds** courier shifts, the Robot Run CBD street circuit, and Bra Vusi’s condition-priced chop shop for witnessed hijackings.
+- Shops for weapons, armour, food, resprays, and garage storage, plus seamless walk-in interiors at Jozi Arms and Main Main Mansions, where you can save, sleep, heal, and wait for things to become somebody else’s problem.
+- Turquoise street-by-street GPS guidance, click/tap custom waypoints, a searchable city map with named live markers, a rotating minimap, and live Johannesburg street names on the HUD.
+- District reputation, dynamic crowds, a ten-minute day/night cycle, weathered streets, and authentic load shedding at no additional charge.
 - Procedural audio, vehicle engines, weapons, UI sounds, and original in-car stations inspired by amapiano, maskandi, gqom, and kwaito.
 
 Everything is original or procedurally generated except the dependencies and credited source material listed in [ATTRIBUTIONS.md](ATTRIBUTIONS.md). No borrowed franchise maps, characters, dialogue, music, or logos are used.
@@ -63,7 +66,7 @@ Solo missions, money, wanted level, shops, jobs, saves, cheats, and reputation s
 | `Ctrl` / right mouse | Aim or fire a drive-by weapon |
 | Left mouse | Fire or punch |
 | `Space` | Jump, handbrake, or deploy/flare a parachute |
-| `E` | Interact, enter/exit a vehicle, claim/abandon the Hot Bakkie, collect, shop, or use a safehouse |
+| `E` | Interact, enter/exit a vehicle, start/abandon Robot Run, claim the Hot Bakkie, collect, shop, or use a safehouse |
 | `Q` | Enter/leave cover in third-person view |
 | `F` | Mug/melee, recover a vehicle, or deploy a parachute |
 | `Tab` | Hold for the weapon wheel |
@@ -75,16 +78,17 @@ Solo missions, money, wanted level, shops, jobs, saves, cheats, and reputation s
 | `Y` | Start or stop a Sixty-Sekonds shift on its delivery bike |
 | `N` / `Shift+N` | Next / previous radio station |
 | `G` | Toggle the siren in a police car you definitely acquired legally |
+| `B` | Hoot; taxis contribute the traditional double hoot |
 | `M` | Open the searchable city map |
 | `Page Up` / `Page Down` | Change minimap zoom |
 | `Escape` | Pause |
 | Backquote (`~`) | Open the developer console |
 
-The field guide on the main and pause menus keeps this list in-game. The city map supports drag, wheel zoom, street and district search, hover names, and marker filters.
+The field guide on the main and pause menus keeps this list in-game. The city map supports drag, wheel zoom, street and district search, hover names for streets and live markers, map-layer filters, and a road-snapped GPS pin by clicking or tapping anywhere.
 
 ## Jobs and consequences
 
-Gold markers identify contacts and current objectives. Walk up and press `E`.
+Gold markers identify contacts and current objectives. Walk up and press `E`. The opening hustle introduces the city through:
 
 1. **Couch Run** — Borrow Auntie Portia’s yellow Citi Golf, make three drops now-now, and bring it back in roughly the same number of pieces.
 2. **Hot Copper** — Take a red GTI from the CBD, lose the JMPD, and deliver it to a Braamfontein lock-up.
@@ -93,9 +97,11 @@ Gold markers identify contacts and current objectives. Walk up and press `E`.
 
 Civilian crime lowers community standing and increases long-term police attention. Helpful behaviour improves prices, witness delays, and local support. Temporary wanted heat can disappear; your reputation has a memory like a tannie who saw you skip the queue in 2009.
 
-For honest-ish money, take a Quantum Express minibus and press `T`, or grab a lime delivery bike and press `Y`. Sixty-Sekonds rewards speed, careful riding, and clean streaks. Potholes convert groceries into a smoothie, and the algorithm does not accept affidavits.
+The story continues through 20 more authored jobs, choices, trains, aircraft, cartel work, and two side adventures. Between missions, take a Quantum Express minibus and press `T`, or grab a lime delivery bike and press `Y`. Sixty-Sekonds rewards speed, careful riding, and clean streaks. Potholes convert groceries into a smoothie, and the algorithm does not accept affidavits.
 
-Progress is saved periodically and after important events. Money, completed jobs, weapons, inventory, garage storage, safehouse spawn, reputation, time of day, settings, and cheats use browser `localStorage`. You can also save at Main Main Mansions or with the `save` console command. The pause menu can reset everything.
+After **Hot Copper**, witnessed hijackings can be sold at Bra Vusi’s orange-marked lock-up once the JMPD loses interest. The purple **Robot Run** marker starts a six-checkpoint CBD circuit with gold, silver, clean-driving bonuses, and a persistent personal best.
+
+Progress is saved periodically and after important events. Money, completed jobs, weapons, inventory, garage storage, safehouse spawn, reputation, activity records, time of day, settings, and cheats use browser `localStorage`. You can also save at Main Main Mansions or with the `save` console command. The pause menu can reset everything.
 
 ## Development
 
@@ -201,7 +207,7 @@ If Jozi starts moving like the M1 at 17:00, lower the graphics quality first.
 - Pedestrian navigation is graph/collider based rather than full crowd simulation.
 - Police search uses knowledge, sightings, proximity, and timeouts rather than a perfect citywide vision simulation.
 - The campaign is compact, with one browser save and no cloud sync.
-- Touch and gamepad controls are not implemented.
+- Gamepad controls are not implemented. Touch mode supports twin-stick movement/look, context actions, combat, vehicles, the city map, and landscape/fullscreen handling, but comfort and performance still depend on the device.
 - The procedural city is an artistic game world, not a navigation tool. Please do not use it to find Sandton during load shedding.
 
 ## Credits

@@ -56,7 +56,7 @@ export class MenuView {
 
   controls(fromMain: boolean, back: () => void): void {
     const groups = [
-      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['CTRL/RMB', 'Aim / drive-by'], ['SPACE', 'Jump / handbrake / chute'], ['E', 'Interact / vehicle'], ['Q', 'Take cover'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—6', 'Select weapon'], ['R', 'Reload'], ['H', 'Use stim pack'], ['L', 'Torch (load shedding)'], ['ALT', 'Walk, don\'t run'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['T', 'Taxi duty'], ['Y', 'Sixty-Sekonds shift'], ['N / SHIFT+N', 'Next / previous radio'], ['G', 'Siren (police car)'], ['PGUP/PGDN', 'Minimap zoom'], ['M', 'City map'], ['ESC', 'Pause'], ['~', 'Console'],
+      ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['CTRL/RMB', 'Aim / drive-by'], ['SPACE', 'Jump / handbrake / chute'], ['E', 'Interact / vehicle'], ['Q', 'Take cover'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—6', 'Select weapon'], ['R', 'Reload'], ['H', 'Use stim pack'], ['L', 'Torch (load shedding)'], ['ALT', 'Walk, don\'t run'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['B', 'Hooter'], ['T', 'Taxi duty'], ['Y', 'Sixty-Sekonds shift'], ['N / SHIFT+N', 'Next / previous radio'], ['G', 'Siren (police car)'], ['PGUP/PGDN', 'Minimap zoom'], ['M', 'City map'], ['ESC', 'Pause'], ['~', 'Console'],
     ];
     this.set('controls', `<section class="menu-card menu-card--guide"><header><p class="eyebrow">FIELD GUIDE</p><h2>Know the streets.</h2><span>${fromMain ? 'The essentials before you enter.' : 'Controls for foot and vehicle.'}</span></header><div class="control-grid">${groups.map(([key, label]) => `<div><kbd>${key}</kbd><span>${label}</span></div>`).join('')}</div><button class="action-primary" data-action="back">Back</button></section>`); this.bind('[data-action="back"]', back);
   }
@@ -101,10 +101,10 @@ export class MenuView {
   }
 
   safehouse(name: string, sleepHours: number, actions: { save: () => void; sleep: () => void; leave: () => void }): void {
-    this.set('safehouse', `<section class="menu-card"><header><p class="eyebrow">SAFEHOUSE · ${name.toUpperCase()}</p><h2>Home, sharp sharp.</h2><span>Saving or sleeping sets your wake-up spot to this door.</span></header><nav class="pause-nav">
+    this.set('safehouse', `<section class="menu-card"><header><p class="eyebrow">SAFEHOUSE · ${name.toUpperCase()}</p><h2>Home, sharp sharp.</h2><span>Saving or sleeping sets your wake-up spot inside this flat.</span></header><nav class="pause-nav">
       <button class="action-primary" data-action="save">Save game</button>
       <button data-action="sleep">Sleep &middot; skip ${sleepHours} hours, heal up</button>
-      <button data-action="leave">Back to the street</button></nav></section>`);
+      <button data-action="leave">Back to the room</button></nav></section>`);
     this.bind('[data-action="save"]', actions.save); this.bind('[data-action="sleep"]', actions.sleep); this.bind('[data-action="leave"]', actions.leave);
   }
 

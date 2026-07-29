@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
+import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
   BEACH_POLYGONS,
   COASTLINE,
@@ -49,7 +49,7 @@ import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter'
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, CHUNK_VISIBLE_RANGE, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, FACADE_VARIANTS } from './ProceduralMaterials';
+import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
@@ -107,6 +107,19 @@ export interface RoadsidePoint extends RoadPoint { inwardX: number; inwardZ: num
 export interface RoadPose { position: THREE.Vector3; heading: number; }
 export interface RoadDefinition { name: string; width: number; closed?: boolean; points: RoadPoint[]; }
 export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
+
+export const STOREFRONT_SIGNS = ['KOTA & CHIPS', 'HAIR BY BONGI', 'MZANSI FONES', 'BRAAI 2 GO', 'EISH EXPRESS', 'LOAD SHED CAFE'] as const;
+export const INDUSTRIAL_SIGNS = ['PANELBEATERS', 'GENERATOR GUYS', 'TYRES & SONS', 'WELDING NOW-NOW'] as const;
+
+/** Deterministic local-business labels: a tiny fixed vocabulary keeps the sign atlas bounded while
+ * giving repeated procedural blocks an unmistakably Johannesburg street-level identity. */
+export function storefrontSignLabel(variant: number): string {
+  return STOREFRONT_SIGNS[((variant % STOREFRONT_SIGNS.length) + STOREFRONT_SIGNS.length) % STOREFRONT_SIGNS.length]!;
+}
+
+export function industrialSignLabel(variant: number): string {
+  return INDUSTRIAL_SIGNS[((variant % INDUSTRIAL_SIGNS.length) + INDUSTRIAL_SIGNS.length) % INDUSTRIAL_SIGNS.length]!;
+}
 
 export const ROAD_SURFACE_OFFSET = 0.15;
 export const SIDEWALK_RISE = 0.22;
@@ -825,7 +838,7 @@ export class City {
     yield { label: 'Planting the parks', fraction: 0.86 }; bootMark('city: parks'); this.buildParks();
     yield { label: 'Raising the landmarks', fraction: 0.87 }; bootMark('city: landmarks'); this.buildLandmarks();
     yield { label: 'Paving the airfield', fraction: 0.87 }; bootMark('city: airfield'); this.buildAirfield();
-    yield { label: 'Wiring the streetlights', fraction: 0.88 }; bootMark('city: infrastructure');
+    yield { label: 'Building street infrastructure', fraction: 0.88 }; bootMark('city: infrastructure');
     this.infrastructure = new UrbanInfrastructure(
       this.group,
       this.chunkStore,
@@ -2404,7 +2417,7 @@ export class City {
     // emissiveIntensity starts at the CURRENT window-glow level, not 0: this material may be born at
     // midnight, halfway across the map from wherever the cycle last walked the list (see setFacadeGlow).
     if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: this.facadeGlow, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
-    const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial });
+    const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial, facadeTile: facadeWorldTile(facadeIndex) });
     const foundations = foundationTiers(profile.tiers, -plinthDrop);
     for (const foundation of foundations) {
       const foundationW = foundation.maxX - foundation.minX; const foundationH = foundation.y1 - foundation.y0; const foundationD = foundation.maxZ - foundation.minZ;
@@ -2568,8 +2581,29 @@ export class City {
   }
 
   private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, variant: number, tiers: readonly MassingTier[], gables: readonly GableSpec[]): void {
-    const shutterW = w * 0.42; const shutterH = Math.min(5, h * 0.48); const shutterZ = frontFacadeZAt(tiers, x, shutterH / 2 + 0.2, shutterW / 2);
-    if (shutterZ !== undefined) { const shutter = new THREE.Mesh(new THREE.BoxGeometry(shutterW, shutterH, 0.14), new THREE.MeshStandardMaterial({ color: 0x5e6868, roughness: 0.52, metalness: 0.45 })); shutter.position.set(x, shutterH / 2 + 0.2, shutterZ + 0.03); this.target.add(shutter); }
+    const shutterH = Math.min(5, h * 0.48); const shutterY = shutterH / 2 + 0.2;
+    const shutterSpan = widestFrontFacadeSpanAt(tiers, shutterY, x - w / 2, x + w / 2, 3.2);
+    if (shutterSpan) {
+      const shutterX = (shutterSpan.minX + shutterSpan.maxX) / 2;
+      const shutterW = Math.min(w * 0.42, shutterSpan.maxX - shutterSpan.minX - 0.55);
+      const shutterColors = [0x5e6868, 0x4c5960, 0x75644e, 0x485b51];
+      const shutter = new THREE.Mesh(new THREE.BoxGeometry(shutterW, shutterH, 0.14), new THREE.MeshStandardMaterial({ color: shutterColors[variant % shutterColors.length], roughness: 0.52, metalness: 0.45 }));
+      shutter.name = 'procedural-industrial-shutter'; shutter.position.set(shutterX, shutterY, shutterSpan.z + 0.03); this.target.add(shutter);
+
+      // The sign gets its own high-wall probe: a low annex may carry the shutter while a taller,
+      // slightly recessed shed behind it is the only valid wall above. If no high span exists, mount
+      // the board across the shutter header so every factory still has an identity at street level.
+      const desiredSignY = Math.min(h - 0.7, shutterH + 1.05);
+      const signSpan = widestFrontFacadeSpanAt(tiers, desiredSignY, x - w / 2, x + w / 2, 3.2) ?? shutterSpan;
+      const signY = signSpan === shutterSpan && frontFacadeZAt(tiers, shutterX, desiredSignY, Math.min(3, shutterW / 2)) === undefined
+        ? shutterH - 0.45
+        : desiredSignY;
+      const signW = Math.min(7.5, signSpan.maxX - signSpan.minX - 0.45);
+      const signX = THREE.MathUtils.clamp(shutterX, signSpan.minX + signW / 2, signSpan.maxX - signW / 2);
+      const accent = variant % 2 ? '#f0ae43' : '#72d8d2';
+      const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.2), industrialSignLabel(variant), accent, { powered: variant % 3 === 0 });
+      sign.name = 'procedural-industrial-sign'; sign.position.set(signX, signY, signSpan.z + 0.08); this.target.add(sign);
+    }
     for (const side of [-1, 1]) {
       // Whirlybird vents pierce the roof surface at their own spot (flat annex or gable slope alike).
       const ventX = x + side * w * 0.24;
@@ -2604,6 +2638,15 @@ export class City {
       if (facadeZ !== undefined) {
         const awning = new THREE.Mesh(new THREE.BoxGeometry(awningW, 0.15, 1.25), new THREE.MeshStandardMaterial({ color: colors[variant % colors.length], roughness: 0.7 }));
         awning.position.set(awningX, 3.1, facadeZ + 0.58); awning.rotation.x = -0.12; awning.castShadow = true; this.target.add(awning);
+      }
+    }
+    if (style === 'downtown' || style === 'mixed-use') {
+      const signX = x - w * 0.2; const signW = Math.min(6.4, w * 0.34); const signY = 3.82;
+      const facadeZ = frontFacadeZAt(tiers, signX, signY, signW / 2);
+      if (facadeZ !== undefined) {
+        const accents = ['#f0ae43', '#72d8d2', '#ef6556', '#74e392'];
+        const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.05), storefrontSignLabel(variant), accents[variant % accents.length] ?? '#f0ae43', { powered: variant % 2 === 0 });
+        sign.name = 'procedural-storefront-sign'; sign.position.set(signX, signY, facadeZ + 0.08); this.target.add(sign);
       }
     }
   }

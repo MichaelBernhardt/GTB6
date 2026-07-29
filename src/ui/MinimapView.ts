@@ -2,7 +2,16 @@ import { MAP_WORLD_SIZE } from '../world/mapData';
 import type { RoadPoint } from '../world/City';
 
 export interface MapPoint { x: number; z: number; }
-export interface MapMarker extends MapPoint { color: string; shape?: 'circle' | 'diamond' | 'house' | 'fuel'; objective?: boolean; area?: number; }
+export interface MapMarker extends MapPoint {
+  color: string;
+  shape?: 'circle' | 'diamond' | 'house' | 'fuel';
+  objective?: boolean;
+  area?: number;
+  /** Full city-map hover text. The compact minimap deliberately ignores labels. */
+  label?: string;
+  /** Player-placed GPS pin; lets the full map expose its clear control without inspecting labels. */
+  waypoint?: boolean;
+}
 
 /** The petrol-pump silhouette, traced into the current path at the blip's own scale: a squat body,
  *  a shoulder, and the hose arm off the right. Recognisable at 13px on the minimap and at 15px on
@@ -111,13 +120,15 @@ export class MinimapView {
   private roadIndex?: MinimapRoadIndex;
   private roadPath = new Path2D();
   private roadPathKey = '';
+  private routeSource?: readonly MapPoint[];
+  private routePath = new Path2D();
 
   constructor() {
     this.canvas.id = 'minimap'; this.canvas.width = 240; this.canvas.height = 240; this.canvas.setAttribute('aria-label', 'Local street map'); this.canvas.setAttribute('role', 'img');
     const context = this.canvas.getContext('2d'); if (!context) throw new Error('Canvas unavailable'); this.context = context;
   }
 
-  draw(x: number, z: number, heading: number, allRoads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom = DEFAULT_MINIMAP_ZOOM): void {
+  draw(x: number, z: number, heading: number, allRoads: RoadPoint[][], markers: MapMarker[], police: MapPoint[], hostiles: MapPoint[] = [], zoom = DEFAULT_MINIMAP_ZOOM, route: readonly MapPoint[] = []): void {
     const ctx = this.context; const size = this.canvas.width; const scale = MINIMAP_ZOOM_SCALES[sanitizeMinimapZoom(zoom)];
     const viewRadius = (size * 0.75) / scale; // canvas half-diagonal in world units, with rotation slack
     if (this.roadIndex?.roads !== allRoads) { this.roadIndex = new MinimapRoadIndex(allRoads); this.roadPathKey = ''; }
@@ -138,7 +149,22 @@ export class MinimapView {
     // two canvas draw calls per visible polyline. A world-space scale keeps the retained path reusable.
     ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading - Math.PI); ctx.scale(scale, scale); ctx.translate(-x, -z);
     ctx.strokeStyle = '#465451'; ctx.lineWidth = Math.max(2.5 / scale, 22); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke(this.roadPath);
-    ctx.strokeStyle = '#c8c4ad'; ctx.lineWidth = Math.max(1.2 / scale, 7); ctx.stroke(this.roadPath); ctx.restore();
+    ctx.strokeStyle = '#c8c4ad'; ctx.lineWidth = Math.max(1.2 / scale, 7); ctx.stroke(this.roadPath);
+    if (this.routeSource !== route) {
+      const path = new Path2D(); const first = route[0];
+      if (first) {
+        path.moveTo(first.x, first.z);
+        for (let index = 1; index < route.length; index++) { const point = route[index]!; path.lineTo(point.x, point.z); }
+      }
+      this.routeSource = route; this.routePath = path;
+    }
+    if (route.length > 1) {
+      // Screen-constant GPS ribbon: a dark keyline preserves it over pale roads and the turquoise
+      // centre is deliberately unlike gold mission blips or blue JMPD units.
+      ctx.strokeStyle = '#101817'; ctx.lineWidth = 9 / scale; ctx.stroke(this.routePath);
+      ctx.strokeStyle = '#43d7c2'; ctx.lineWidth = 5 / scale; ctx.stroke(this.routePath);
+    }
+    ctx.restore();
 
     // Blips stay screen-sized under the original rotation-only transform.
     ctx.save(); ctx.translate(size / 2, size / 2); ctx.rotate(heading - Math.PI); ctx.translate(-x * scale, -z * scale);
