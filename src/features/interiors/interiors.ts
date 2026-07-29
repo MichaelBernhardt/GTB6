@@ -38,7 +38,8 @@
  * boom is a hard 9.5 units. So the geometry is built for it — the shell is inside-out (a cutaway
  * rather than a wall in front of the lens), the floor plate is never narrower than a corridor plus
  * two rooms, and every interior partition standing between the player and where the camera is gets
- * hidden for that frame. It works, and it is still a workaround: see the report.
+ * hidden for that frame using the real render-camera position supplied by FeatureGameApi. Hosts
+ * without that optional seam retain the older heading/boom estimate.
  *
  * This feature pushes ZERO colliders. Containment is its own clamp, so dispose() genuinely removes
  * every trace — the append-only collider list never learns this building had an inside.
@@ -48,7 +49,7 @@ import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescrip
 import { PLAYER } from '../../config';
 import { FIND_CAP, type InteriorDoor, type InteriorsSave } from '../interiors.state';
 import {
-  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, markerFade, toLocal, toWorld,
+  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, INTERIOR_LAMP_INTENSITY, markerFade, toLocal, toWorld,
   type BuiltDoorways, type BuiltFloor,
 } from './build';
 import {
@@ -440,16 +441,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   };
 
   /**
-   * Hide the partitions standing between the player and where the camera is. The boom is 9.5 units
-   * and not ours to shorten, so in a room narrower than that the camera is in the next room along —
-   * and a wall in front of the lens is exactly the black screen this feature shipped with.
-   *
-   * The camera's own pose is not on the feature API, so it is ESTIMATED: CameraController puts the
-   * camera at focus + (sin yaw, cos yaw)·boom, and on foot the player faces AWAY from it (Player
-   * turns toward its camera-relative move direction), so the camera sits a boom behind the player's
-   * heading. That is exact while walking and approximate while turning on the spot, which is the
-   * right way round — the frames that matter are the ones where the player is moving through a
-   * doorway. A real `api.cameraPosition()` would remove the estimate: noted in the report.
+   * Hide the partitions standing between the player and the actual camera. The boom is 9.5 units,
+   * so in a room narrower than that the lens can be in the next room along — and a wall directly in
+   * front of it is exactly the black screen this feature shipped with. The fallback keeps custom
+   * hosts source-compatible, but Game supplies the render camera and therefore also handles orbiting,
+   * cover lean, first-person transitions and collision-shortened booms correctly.
    */
   const cullPartitions = (current: Visit): void => {
     const resident = current.resident.get(current.floor);
@@ -457,7 +453,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const player = api.playerPosition();
     const yaw = api.playerHeading();
     const eye = toLocal(current, current.heading, player.x, player.z);
-    const back = toLocal(current, current.heading, player.x - Math.sin(yaw) * BOOM, player.z - Math.cos(yaw) * BOOM);
+    const camera = api.cameraPosition?.();
+    const back = camera
+      ? toLocal(current, current.heading, camera.x, camera.z)
+      : toLocal(current, current.heading, player.x - Math.sin(yaw) * BOOM, player.z - Math.cos(yaw) * BOOM);
     const onTheStair = withinRect(current.core.stair, eye.x, eye.z, 0.8);
     for (const partition of resident.built.partitions) {
       if (partition.core && onTheStair) { partition.mesh.visible = true; continue; }
@@ -551,7 +550,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // so the way out is always findable.
       const power = 1 - api.blackout();
       for (const resident of current.resident.values()) {
-        for (const lamp of resident.built.lamps) lamp.intensity = 26 * power;
+        for (const lamp of resident.built.lamps) lamp.intensity = INTERIOR_LAMP_INTENSITY * power;
         for (const entry of resident.built.powered) entry.material.emissiveIntensity = entry.base * power;
       }
     },

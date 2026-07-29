@@ -38,6 +38,14 @@ export const STREET_LIFE: Readonly<Record<NeighbourhoodId, StreetLifeProfile>> =
     kind: 'cafe', stride: 25, offset: 17, minRoadWidth: 8,
     colours: [0x477864, 0xb6743e, 0x426b91, 0xe1d2ae],
   },
+  'rosebank-mixed': {
+    kind: 'cafe', stride: 29, offset: 18, minRoadWidth: 9,
+    colours: [0x315f6b, 0xc98b38, 0x8b4939, 0xe5dfd0],
+  },
+  'parktown-ridge': {
+    kind: 'garden', stride: 47, offset: 31, minRoadWidth: 9,
+    colours: [0x294832, 0x667b50, 0x9b876b, 0xd5cdbb],
+  },
   'old-money-ridge': {
     kind: 'garden', stride: 41, offset: 13, minRoadWidth: 8,
     colours: [0x244d34, 0x376b43, 0xd6d0bc, 0x313b3c],

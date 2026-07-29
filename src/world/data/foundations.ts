@@ -20,6 +20,8 @@ export const FOUNDATION_IDENTITIES: Readonly<Record<NeighbourhoodId, FoundationI
   'inner-city': { id: 'inner-city', wall: 0x978b7a, accent: 0xb74a38, treatment: 'mural' },
   'market-west': { id: 'market-west', wall: 0xb09a76, accent: 0xd18b28, treatment: 'mural' },
   'bohemian-west': { id: 'bohemian-west', wall: 0x918774, accent: 0x49735b, treatment: 'mural' },
+  'rosebank-mixed': { id: 'rosebank-mixed', wall: 0x737c7d, accent: 0xb58236, treatment: 'vents' },
+  'parktown-ridge': { id: 'parktown-ridge', wall: 0x817b70, accent: 0x4c633f, treatment: 'garden' },
   'old-money-ridge': { id: 'old-money-ridge', wall: 0x797c72, accent: 0x31563a, treatment: 'garden' },
   'industrial-belt': { id: 'industrial-belt', wall: 0x696c68, accent: 0xd19a29, treatment: 'hazard' },
   'joburg-suburbs': { id: 'joburg-suburbs', wall: 0xa29a86, accent: 0x4c684f, treatment: 'garden' },

@@ -13,23 +13,28 @@ import * as THREE from 'three';
  * fog handle the rest.
  */
 
-/** Chunks whose nearest edge is inside this range of the player are kept in the scene. */
-export const CHUNK_VISIBLE_RANGE = 2500;
+/** Chunks whose nearest edge is inside this range of the player are kept in the scene. A 976u cell
+ *  can still reach almost 3 km from the focus at this setting; beyond that the high-tier fog leaves
+ *  geometry expensive but visually negligible. */
+export const CHUNK_VISIBLE_RANGE = 2000;
 /** Extra range a visible chunk keeps before detaching, so boundary driving doesn't thrash. */
 export const CHUNK_HYSTERESIS = 200;
 /** Procedural buildings dominate world geometry. Roads, terrain and iconic skyline silhouettes carry
  *  to the wider world ring; full facade/storefront cells stream only around the playable neighbourhood.
- *  Since a 600u cell extends beyond its nearest edge, this retains roughly a 2.1km detailed horizon. */
-export const BUILDING_VISIBLE_RANGE = 1500;
+ *  Since a 976u cell extends beyond its nearest edge, this retains roughly a 2.1km detailed horizon. */
+export const BUILDING_VISIBLE_RANGE = 1100;
 /** Street micro-detail (markings, curbs, potholes, furniture, signal lenses…) is sub-pixel long
- *  before this range, so its chunk tier culls much tighter than the world tier. */
-export const DETAIL_VISIBLE_RANGE = 900;
+ *  before this range. Cells are 976u wide, so 500u still prefetches the approaching block and leaves
+ *  up to ~1.5km of detail in the containing cell while avoiding a multi-cell carpet behind the fog. */
+export const DETAIL_VISIBLE_RANGE = 500;
 export const DETAIL_HYSTERESIS = 150;
 /** Potato (Skorokoro) tier pulls both streaming rings in hard; the denser potato fog (Game's world
  *  budget) is tuned to be near-opaque at the world ring so the pop-in edge hides in the haze. */
 export const POTATO_CHUNK_RANGE = 1500;
-export const POTATO_BUILDING_RANGE = 1100;
-export const POTATO_DETAIL_RANGE = 700;
+export const POTATO_BUILDING_RANGE = 800;
+/** A 320u nearest-edge ring retains the current block plus every block the player can reach shortly.
+ *  With 976u cells its effective far edge is still 1.3km — generous for sub-pixel street furniture. */
+export const POTATO_DETAIL_RANGE = 320;
 
 /** Key of the always-visible bucket (world ground plane, skyline landmarks). */
 export const FAR_CHUNK = 'far';
@@ -39,6 +44,29 @@ export function cellDistance(x: number, z: number, cellX: number, cellZ: number,
   const dx = Math.max(cellX * size - x, 0, x - (cellX + 1) * size);
   const dz = Math.max(cellZ * size - z, 0, z - (cellZ + 1) * size);
   return Math.hypot(dx, dz);
+}
+
+export interface RangedCell {
+  cellX: number;
+  cellZ: number;
+  key: string;
+  distance: number;
+}
+
+/** Grid cells whose nearest edge is inside a radius, nearest first. Centralising this query keeps
+ *  the background streamer and the blocking boot warm-up on exactly the same cell boundary rules. */
+export function cellsWithinRange(x: number, z: number, range: number, size: number): RangedCell[] {
+  // `cellDistance` treats both cell edges as inclusive. ceil(low)-1 therefore retains the cell
+  // ending exactly on the west/north edge of the query instead of silently dropping a zero-distance
+  // neighbour when the focus sits on a grid line.
+  const minX = Math.ceil((x - range) / size) - 1; const maxX = Math.floor((x + range) / size);
+  const minZ = Math.ceil((z - range) / size) - 1; const maxZ = Math.floor((z + range) / size);
+  const cells: RangedCell[] = [];
+  for (let cellX = minX; cellX <= maxX; cellX++) for (let cellZ = minZ; cellZ <= maxZ; cellZ++) {
+    const distance = cellDistance(x, z, cellX, cellZ, size);
+    if (distance <= range) cells.push({ cellX, cellZ, key: `${cellX},${cellZ}`, distance });
+  }
+  return cells.sort((a, b) => a.distance - b.distance || a.cellX - b.cellX || a.cellZ - b.cellZ);
 }
 
 /** Hysteretic visibility: enter within `range`, leave only beyond `range + hysteresis`. */

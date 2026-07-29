@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PLAYER, type VehicleKind, type WeaponId } from '../config';
-import type { InputManager } from '../core/InputManager';
+import { inputAxis, type InputManager } from '../core/InputManager';
 import { fallDamage, jumpVelocity, moveSpeed, stepVertical } from '../core/GameRules';
 import { inebriationFraction } from '../core/DrinkRules';
 import { MELEE_SWING_SECONDS } from '../systems/MeleeSystem';
@@ -90,16 +90,16 @@ export class Player {
     const aimHeld = input.aiming && this.weapon !== 'fists';
     const aiming = aimHeld || (input.firing && this.weapon !== 'fists');
     if (cover) { this.updateCover(dt, cover, aiming, input.firing, city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y)); return; }
-    const side = Number(input.down('KeyD')) - Number(input.down('KeyA'));
-    const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
-    const move = new THREE.Vector3(side, 0, -forward); const moving = move.lengthSq() > 0; const sprinting = moving && input.down('ShiftLeft');
+    const side = inputAxis(input, 'KeyA', 'KeyD');
+    const forward = inputAxis(input, 'KeyS', 'KeyW');
+    const move = new THREE.Vector3(side, 0, -forward); const moveAmount = Math.min(1, move.length()); const moving = moveAmount > 0.01; const sprinting = moving && input.down('ShiftLeft');
     const strolling = moving && !sprinting && input.down('AltLeft');
     this.moving = moving; this.sprinting = sprinting;
     const drunk = inebriationFraction(this.inebriation); const stagger = this.updateStagger(dt, drunk); let speed = 0;
     if (moving) {
       move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
       if (stagger) move.applyAxisAngle(new THREE.Vector3(0, 1, 0), stagger);
-      speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld, strolling) * (1 - 0.28 * drunk);
+      speed = moveSpeed(sprinting, this.cheats.fastRun, aimHeld, strolling) * moveAmount * (1 - 0.28 * drunk);
       const desired = this.group.position.clone().addScaledVector(move, speed * dt);
       this.group.position.copy(city.clampMoveAt(this.group.position, desired, PLAYER.radius));
       this.turnToward(aimHeld ? cameraYaw + Math.PI : Math.atan2(move.x, move.z), dt, aimHeld ? 13 : sprinting ? 15 : 11);
@@ -129,11 +129,11 @@ export class Player {
   }
 
   private updateGhost(dt: number, input: InputManager, cameraYaw: number): void {
-    const side = Number(input.down('KeyD')) - Number(input.down('KeyA')); const forward = Number(input.down('KeyW')) - Number(input.down('KeyS'));
-    const move = new THREE.Vector3(side, 0, -forward); const sprinting = input.down('ShiftLeft'); let speed = 0;
+    const side = inputAxis(input, 'KeyA', 'KeyD'); const forward = inputAxis(input, 'KeyS', 'KeyW');
+    const move = new THREE.Vector3(side, 0, -forward); const moveAmount = Math.min(1, move.length()); const sprinting = input.down('ShiftLeft'); let speed = 0;
     if (move.lengthSq() > 0) {
       this.moving = true; this.sprinting = sprinting; move.normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
-      speed = sprinting ? GHOST_RUN_SPEED : moveSpeed(false, this.cheats.fastRun, false); this.group.position.addScaledVector(move, speed * dt); this.turnToward(Math.atan2(move.x, move.z), dt, 12);
+      speed = (sprinting ? GHOST_RUN_SPEED : moveSpeed(false, this.cheats.fastRun, false)) * moveAmount; this.group.position.addScaledVector(move, speed * dt); this.turnToward(Math.atan2(move.x, move.z), dt, 12);
     }
     this.group.position.y += this.ghostRise; this.ghostRise = 0; this.velocityY = 0; this.onGround = false; this.group.rotation.z *= Math.exp(-dt * 12);
     this.setVisualState({ locomotionSpeed: speed, aiming: false, firing: false, onGround: true, velocityY: 0 });

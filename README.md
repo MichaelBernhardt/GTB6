@@ -12,7 +12,7 @@ The city combines OpenStreetMap-derived Johannesburg roads with procedural build
 
 ## What is in the game?
 
-- A large Jozi map with 4,010 roads, 117 named districts, roughly 812 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
+- A focused Jozi-and-Vaal map with 2,684 roads, 64 named districts, roughly 552 km of road, parks, water, landmarks, rural edges, an airport, and the entirely sensible Jozi-by-the-Sea.
 - On-foot movement, third- and first-person cameras, cover, melee combat, firearms, armour, stim packs, parachutes, pickups, and a weapon wheel.
 - An original 1.8 m skinned Johannesburg protagonist with a teal technical jacket, 24 authored gameplay clips, directional aim, vehicle and airborne poses, and strict retryable startup validation.
 - A 16-character Blender-authored Johannesburg NPC cast. Every pedestrian uses a rigged character with independent animation, including ambient crowds, mission contacts, car guards, enforcers, drivers, and JMPD officers.
@@ -23,7 +23,8 @@ The city combines OpenStreetMap-derived Johannesburg roads with procedural build
 - A five-star wanted system with witnesses, dispatch callouts, foot patrols, road pursuits, arrests, and persistent police pressure.
 - A 24-job campaign spanning the street-level hustle, Stage Six’s genny cartel, and side trips from the padstal to Jozi-by-the-Sea.
 - Repeatable taxi and **Sixty-Sekonds** courier shifts, the Robot Run CBD street circuit, and Bra Vusi’s condition-priced chop shop for witnessed hijackings.
-- Shops for weapons, armour, food, resprays, and garage storage, plus seamless walk-in interiors at Jozi Arms and Main Main Mansions, where you can save, sleep, heal, and wait for things to become somebody else’s problem.
+- **Jozi Flow** free-roam combos that pay for clean traffic squeezes and last-second pothole slaloms, then bank the pot if you keep the mirrors attached.
+- Shops for weapons, armour, food, resprays, and garage storage, plus seamless walk-in interiors at Jozi Arms and Main Main Mansions and procedural rooms, stairs, lifts, residents, and secrets inside real city buildings.
 - Turquoise street-by-street GPS guidance, click/tap custom waypoints, a searchable city map with named live markers, a rotating minimap, and live Johannesburg street names on the HUD.
 - District reputation, dynamic crowds, a ten-minute day/night cycle, weathered streets, and authentic load shedding at no additional charge.
 - Procedural audio, vehicle engines, weapons, UI sounds, and original in-car stations inspired by amapiano, maskandi, gqom, and kwaito.
@@ -83,6 +84,12 @@ Solo missions, money, wanted level, shops, jobs, saves, cheats, and reputation s
 | `Page Up` / `Page Down` | Change minimap zoom |
 | `Escape` | Pause |
 | Backquote (`~`) | Open the developer console |
+
+Standard Xbox and PlayStation-style controllers are supported throughout gameplay and menus. The left
+stick moves or steers, the right stick looks, triggers aim/fire on foot and accelerate/brake in a
+vehicle, the north face button interacts, and the south face button jumps or uses the handbrake.
+Controller prompts replace keyboard glyphs automatically as soon as the pad is used; open the field
+guide for the complete context-sensitive layout.
 
 The field guide on the main and pause menus keeps this list in-game. The city map supports drag, wheel zoom, street and district search, hover names for streets and live markers, map-layer filters, and a road-snapped GPS pin by clicking or tapping anywhere.
 
@@ -207,7 +214,7 @@ If Jozi starts moving like the M1 at 17:00, lower the graphics quality first.
 - Pedestrian navigation is graph/collider based rather than full crowd simulation.
 - Police search uses knowledge, sightings, proximity, and timeouts rather than a perfect citywide vision simulation.
 - The campaign is compact, with one browser save and no cloud sync.
-- Gamepad controls are not implemented. Touch mode supports twin-stick movement/look, context actions, combat, vehicles, the city map, and landscape/fullscreen handling, but comfort and performance still depend on the device.
+- Touch mode supports twin-stick movement/look, context actions, combat, vehicles, the city map, and landscape/fullscreen handling, but comfort and performance still depend on the device.
 - The procedural city is an artistic game world, not a navigation tool. Please do not use it to find Sandton during load shedding.
 
 ## Credits

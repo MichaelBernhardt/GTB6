@@ -22,6 +22,10 @@ import type { InteriorDoor } from '../interiors.state';
 
 /** The camera boom this room has to stand inside. FOOT_VIEW_DISTANCES tops out here. */
 export const BOOM = 9.5;
+/** Interior bulbs are deliberately below streetlight intensity. The floors sit below the terrain,
+ *  but Three's global sun has no roof geometry to shadow them; brighter bulbs plus that daylight
+ *  clipped pale rooms to white at noon. */
+export const INTERIOR_LAMP_INTENSITY = 12;
 const WALL_T = 0.16;
 /** Doorway head height. Partitions carry a lintel over the gap so a doorway reads as a doorway. */
 const DOOR_H = 2.25;
@@ -72,6 +76,8 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   const keep = <T extends THREE.BufferGeometry>(geometry: T): T => { geometries.push(geometry); return geometry; };
   const mat = <T extends THREE.Material>(material: T): T => { materials.push(material); return material; };
   const solid = (color: number, roughness = 0.82): THREE.MeshStandardMaterial => mat(new THREE.MeshStandardMaterial({ color, roughness }));
+  const sheltered = (color: number, strength: number): number =>
+    new THREE.Color(color).multiplyScalar(strength).getHex();
   const box = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
     const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
     mesh.position.set(x, y, z); group.add(mesh); return mesh;
@@ -87,9 +93,12 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   group.add(shroud);
 
   // ---- the shell: one inside-out box, six faces, three colours ---------------------------------
-  const wall = mat(new THREE.MeshStandardMaterial({ color: palette.wall, roughness: 0.92, side: THREE.BackSide }));
-  const floorMaterial = mat(new THREE.MeshStandardMaterial({ color: palette.floor, roughness: 0.95, side: THREE.BackSide }));
-  const ceilingMaterial = mat(new THREE.MeshStandardMaterial({ color: palette.ceiling, roughness: 0.95, side: THREE.BackSide }));
+  // There is no physical roof in the buried room for the city's directional/hemisphere lights to
+  // hit. Darker albedo compensates only on the structural surfaces; colourful furniture keeps its
+  // authored palette and therefore still gives each room identity.
+  const wall = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.wall, 0.33), roughness: 0.92, side: THREE.BackSide }));
+  const floorMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.floor, 0.46), roughness: 0.95, side: THREE.BackSide }));
+  const ceilingMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.ceiling, 0.31), roughness: 0.95, side: THREE.BackSide }));
   const shell = new THREE.Mesh(keep(new THREE.BoxGeometry(width, height, depth)), [wall, wall, ceilingMaterial, floorMaterial, wall, wall]);
   shell.position.y = height / 2;
   group.add(shell);
@@ -101,7 +110,7 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   box(WALL_T, 0.14, depth, trim, -width / 2 + WALL_T / 2, 0.07, 0);
 
   // ---- partitions -------------------------------------------------------------------------------
-  const partitionMaterial = mat(new THREE.MeshStandardMaterial({ color: palette.wall, roughness: 0.9 }));
+  const partitionMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.wall, 0.33), roughness: 0.9 }));
   const jamb = solid(palette.trim, 0.6);
   for (const run of plan.walls) buildWall(run, height, { box, partitionMaterial, jamb, partitions });
 
@@ -138,11 +147,11 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   // ---- light --------------------------------------------------------------------------------------
   // A room you cannot see is the bug this feature shipped with. Belt (an ambient the grid cannot take
   // away entirely), braces (the lamps), and the shroud keeps neither from leaking into the city.
-  group.add(new THREE.AmbientLight(0xffe9cc, 0.62));
+  group.add(new THREE.AmbientLight(0xffe9cc, 0.24));
   const shade = mat(new THREE.MeshStandardMaterial({ color: 0xfff0cf, emissive: 0xfff0cf, emissiveIntensity: 1.1, roughness: 0.6 }));
   powered.push({ material: shade, base: shade.emissiveIntensity });
   for (const spot of plan.lamps) {
-    const lamp = new THREE.PointLight(spot.color, 26, 22, 1.5);
+    const lamp = new THREE.PointLight(spot.color, INTERIOR_LAMP_INTENSITY, 22, 1.5);
     lamp.position.set(spot.x, spot.y, spot.z);
     group.add(lamp); lamps.push(lamp);
     const bulb = new THREE.Mesh(keep(new THREE.SphereGeometry(0.13, 10, 8)), shade);
@@ -150,7 +159,7 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   }
   // A dim fill so the corners are never pure black even with the grid down — you must always be able
   // to find the way out.
-  const fill = new THREE.PointLight(0x9fb0c8, 8, 44, 1.1);
+  const fill = new THREE.PointLight(0x9fb0c8, 5, 44, 1.1);
   fill.position.set(0, height * 0.82, -depth * 0.2);
   group.add(fill);
 
@@ -197,10 +206,16 @@ function buildWall(run: Wall, height: number, kit: WallKit): void {
   span(run.from, gapMin, height, 0);
   span(gapMax, run.to, height, 0);
   span(gapMin, gapMax, height - DOOR_H, DOOR_H);
-  // A dark frame around the opening, so a doorway reads as one from across the room.
+  // A dark frame around the opening, so a doorway reads as one from across the room. The posts are
+  // occluders too: hiding the plaster span but leaving a dark jamb directly in front of the lens
+  // produced a lonely floor-to-ceiling bar across the player in third person.
   const post = (along: number): void => {
-    if (run.axis === 'x') box(WALL_T + 0.06, DOOR_H, 0.12, jamb, run.at, DOOR_H / 2, along);
-    else box(0.12, DOOR_H, WALL_T + 0.06, jamb, along, DOOR_H / 2, run.at);
+    const mesh = run.axis === 'x'
+      ? box(WALL_T + 0.06, DOOR_H, 0.12, jamb, run.at, DOOR_H / 2, along)
+      : box(0.12, DOOR_H, WALL_T + 0.06, jamb, along, DOOR_H / 2, run.at);
+    partitions.push(run.axis === 'x'
+      ? { mesh, minX: run.at - WALL_T, maxX: run.at + WALL_T, minZ: along - 0.08, maxZ: along + 0.08 }
+      : { mesh, minX: along - 0.08, maxX: along + 0.08, minZ: run.at - WALL_T, maxZ: run.at + WALL_T });
   };
   post(gapMin); post(gapMax);
 }
@@ -583,4 +598,3 @@ function buildProp(prop: Prop, kit: Kit): void {
       box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
   }
 }
-

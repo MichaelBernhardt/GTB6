@@ -65,7 +65,7 @@ describe('pruneShortStubs', () => {
     net.nodes.set(id, { x: 210, z: 30 });
     net.roads.push({ name: 'Stubby', kind: 'residential' as RoadKind, width: 7, nodeIds: [anchor, id++] });
     net.nodes.set(id, { x: 210, z: 350 });
-    net.roads.push({ name: 'Long Close', kind: 'residential' as RoadKind, width: 7, nodeIds: [anchor, id++] });
+    net.roads.push({ name: 'Long Close', kind: 'residential' as RoadKind, width: 7, nodeIds: [anchor, id] });
     const pruned = pruneShortStubs(net, 80, new Set());
     expect(pruned).toBe(1);
     const names = new Set(net.roads.map((road) => road.name));

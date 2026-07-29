@@ -11,7 +11,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createFeature } from './interiors';
 import { buildCore } from './core';
 import { doorsNear, nearestDoor, resetDoorCache } from './doors';
-import { buildDoorways, markerFade } from './build';
+import { buildDoorways, buildFloor, markerFade } from './build';
+import { solveFloor } from './floor';
 import type { FeatureGameApi, FeatureMenuView, FeatureSystem, InteractionCtx } from '../types';
 
 /** Flat ground: the door search still runs against the real generated map, which is the half worth
@@ -267,6 +268,30 @@ describe('the marker on the step', () => {
       expect(Math.hypot(marker.x - door.x, marker.z - door.z)).toBeLessThan(1e-6);
       expect(marker.discMaterial.opacity).toBeLessThanOrEqual(0.31);
     }
+    built.dispose();
+  }, 120000);
+});
+
+describe('third-person interior visibility', () => {
+  it('registers both doorway jambs as occluders along with every full-height wall span', () => {
+    resetDoorCache();
+    const door = nearestDoor(0, 0)!;
+    const core = buildCore(door.facts);
+    const plan = solveFloor(door.facts, 0, core);
+    const built = buildFloor(plan, { ground: true, top: core.storeys === 1 });
+    let expected = 1; // the stair core
+    for (const wall of plan.walls) {
+      if (wall.gapWidth === undefined) {
+        if (wall.to - wall.from >= 0.02) expected += 1;
+        continue;
+      }
+      const gapMin = wall.gapCentre! - wall.gapWidth / 2;
+      const gapMax = wall.gapCentre! + wall.gapWidth / 2;
+      if (gapMin - wall.from >= 0.02) expected += 1;
+      if (wall.to - gapMax >= 0.02) expected += 1;
+      expected += 2; // the two dark posts must disappear with the partition in front of the lens
+    }
+    expect(built.partitions).toHaveLength(expected);
     built.dispose();
   }, 120000);
 });

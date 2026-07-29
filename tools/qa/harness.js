@@ -298,7 +298,7 @@ window.__qa = (() => {
         if (o.conditions?.inPlane) return 'needs:plane';
         if (o.conditions?.feature) return `needs:feature:${o.conditions.feature}`;
         if (!marker) return 'stuck:no-target';
-        let sim = -1;
+        let sim;
         const near = Math.hypot(marker.position.x - focus().x, marker.position.z - focus().z) < 45 && !g.activeVehicle;
         if (near) {
           sim = 0; let blocked = 0;

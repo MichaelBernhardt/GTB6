@@ -6,7 +6,7 @@ import { activeZones, axisIndex, zoneCharacter, ZONE_SIZE } from '../world/data/
 import {
   AMBIENT_SPAWN_TRICKLE, BUSY_MAX, BUSY_MIN, CAR_TARGET_CAP, censusBudget, CHANGE_BUDGET, clampBusy, CLEANUP_HOURS, cleanupEligible,
   corpseCleanable, dayPhase, FOV_COS, isAmbientPedestrian, LIFECYCLE_INTERVAL, LifecycleSystem, outOfSight, PED_SPAWN_SPACING, PED_TARGET_CAP,
-  pedDespawnable, PHASE_MULTIPLIER, REFRESH_RADIUS, SIGHT_FAR, SIGHT_NEAR, vehicleDespawnable, ZONE_DENSITY, zoneTarget, type ViewPoint,
+  pedDespawnable, PHASE_MULTIPLIER, REFRESH_RADIUS, SIGHT_FAR, SIGHT_NEAR, SPAWN_DRAIN_PER_UPDATE, vehicleDespawnable, ZONE_DENSITY, zoneTarget, type ViewPoint,
 } from './LifecycleSystem';
 import { bridgeIslands, buildNavGraph } from './NavGraph';
 import { PopulationSystem } from './PopulationSystem';
@@ -213,6 +213,19 @@ const audio = { scream: () => {}, setSiren: () => {}, taxiHoot: () => {} } as un
 
 describe('lifecycle simulation', () => {
   const CLEANUP_REAL_SECONDS = 150; // 6 in-game hours on the 10-minute day cycle
+
+  it('runs its cold-start census on the first simulation frame', () => {
+    const city = makeCity();
+    const population = new PopulationSystem(new THREE.Scene(), city, audio);
+    const lifecycle = new LifecycleSystem(city, population);
+    const resumed = { x: -600, z: 1769, dirX: 0, dirZ: 1 };
+    lifecycle.update(1 / 60, 12, resumed, new Set());
+    const local = population.pedestrians.filter((ped) =>
+      isAmbientPedestrian(ped) && Math.hypot(ped.group.position.x - resumed.x, ped.group.position.z - resumed.z) <= REFRESH_RADIUS);
+    expect(local.length).toBeGreaterThan(0);
+    expect(local.length).toBeLessThanOrEqual(SPAWN_DRAIN_PER_UPDATE);
+    expect(lifecycle.targets(12).peds).toBeGreaterThan(0);
+  });
 
   it('removes a far-away corpse and wreck only after six in-game hours', () => {
     const city = makeCity();

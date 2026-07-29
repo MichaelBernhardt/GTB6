@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampPercent, dialogueAdvanceLabel, formatMoney, formatObjectiveDistance, objectiveProgress, reputationLabel, TOAST_MS, toastVisibleAt } from './UIModels';
+import { clampPercent, dialogueAdvanceLabel, formatMoney, formatObjectiveDistance, objectiveProgress, reputationLabel, TOAST_MS, toastVisibleAt, vehicleHealthPercent } from './UIModels';
 
 describe('toast auto-hide is wall-clock based', () => {
   // Regression: the old implementation decremented 1/60s per HUD update (per rendered frame),
@@ -22,6 +22,10 @@ describe('toast auto-hide is wall-clock based', () => {
 describe('UI view-model formatting', () => {
   it('clamps health and progress values for safe rendering', () => {
     expect(clampPercent(-3)).toBe(0); expect(clampPercent(54.6)).toBe(55); expect(clampPercent(150)).toBe(100);
+    expect(vehicleHealthPercent(145, 145)).toBe(100);
+    expect(vehicleHealthPercent(72.5, 145)).toBe(50);
+    expect(vehicleHealthPercent(80, 80)).toBe(100);
+    expect(vehicleHealthPercent(20, 0)).toBe(0);
   });
 
   it('formats objective progress only when both values exist', () => {

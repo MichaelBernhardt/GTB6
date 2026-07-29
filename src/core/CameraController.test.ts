@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { InputManager } from './InputManager';
 import type { City } from '../world/City';
-import { aimedViewDistance, CameraController, cycleView, sanitizeView, viewDistance, DEFAULT_CAMERA_VIEW } from './CameraController';
+import { aimedViewDistance, CameraController, cycleView, sanitizeView, viewDistance, DEFAULT_CAMERA_VIEW, VEHICLE_SPEED_BOOM, VEHICLE_SPEED_FOV } from './CameraController';
 
 const city = { collidesAt: () => false } as unknown as City;
 const input = (mouseDX: number, mouseDY: number, aiming = false): InputManager => ({ mouseDX, mouseDY, firing: false, aiming }) as InputManager;
@@ -163,6 +163,35 @@ describe('camera views in the world', () => {
     expect(camera.fov).toBeCloseTo(52, 0);
     controller.update(1 / 60, input(0, 0, false), new THREE.Vector3(), city, false, 0.0025, 2);
     expect(camera.fov).toBe(60);
+  });
+
+  it('opens and pulls back the vehicle camera smoothly at speed, then settles at a stop', () => {
+    const target = new THREE.Vector3();
+    const camera = new THREE.PerspectiveCamera(60, 1);
+    const controller = new CameraController(camera);
+    const update = (ratio: number): void =>
+      controller.update(1 / 60, input(0, 0), target, city, true, 0.0025, 2, 0, true, 0, 0, 0, false, 1.35, 0, false, ratio);
+    for (let i = 0; i < 240; i++) update(0);
+    const parkedDistance = camera.position.distanceTo(target);
+    expect(camera.fov).toBeCloseTo(60, 2);
+    for (let i = 0; i < 240; i++) update(1);
+    expect(camera.fov).toBeCloseTo(60 + VEHICLE_SPEED_FOV, 1);
+    expect(camera.position.distanceTo(target)).toBeGreaterThan(parkedDistance + VEHICLE_SPEED_BOOM * 0.8);
+    for (let i = 0; i < 240; i++) update(0);
+    expect(camera.fov).toBeCloseTo(60, 1);
+    expect(camera.position.distanceTo(target)).toBeCloseTo(parkedDistance, 1);
+  });
+
+  it('widens first-person driving too, but never changes an on-foot lens', () => {
+    const driving = new THREE.PerspectiveCamera(60, 1);
+    const driver = new CameraController(driving);
+    for (let i = 0; i < 240; i++) driver.update(1 / 60, input(0, 0), new THREE.Vector3(), city, true, 0.0025, 0, 0, true, 0, 0, 0, false, 1.35, 0, false, 1);
+    expect(driving.fov).toBeCloseTo(60 + VEHICLE_SPEED_FOV, 1);
+
+    const walking = new THREE.PerspectiveCamera(60, 1);
+    const walker = new CameraController(walking);
+    for (let i = 0; i < 240; i++) walker.update(1 / 60, input(0, 0), new THREE.Vector3(), city, false, 0.0025, 2, 0, true, 0, 0, 0, false, 0, 0, false, 1);
+    expect(walking.fov).toBe(60);
   });
 
   it('locks the vehicle first-person view to the vehicle heading', () => {

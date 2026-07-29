@@ -9,6 +9,32 @@ export class MenuView {
 
   hide(): void { this.root.classList.remove('is-visible'); this.root.setAttribute('aria-hidden', 'true'); this.screen = 'none'; }
 
+  /** Controller/keyboard focus navigation over whichever menu was most recently rendered. */
+  navigate(direction: -1 | 1, horizontal = false): void {
+    const active = document.activeElement as HTMLElement | null;
+    if (horizontal && active instanceof HTMLInputElement && active.type === 'range') {
+      if (direction > 0) active.stepUp(); else active.stepDown();
+      active.dispatchEvent(new Event('input', { bubbles: true }));
+      active.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+    if (horizontal && active instanceof HTMLSelectElement) {
+      const next = Math.min(active.options.length - 1, Math.max(0, active.selectedIndex + direction));
+      if (next !== active.selectedIndex) { active.selectedIndex = next; active.dispatchEvent(new Event('change', { bubbles: true })); }
+      return;
+    }
+    const controls = this.focusable();
+    if (controls.length === 0) return;
+    const index = active ? controls.indexOf(active) : -1;
+    controls[(index + direction + controls.length) % controls.length]?.focus();
+  }
+
+  /** South/A activates the focused control exactly as a mouse click would. */
+  activateFocused(): void {
+    const active = document.activeElement;
+    if (active instanceof HTMLButtonElement || (active instanceof HTMLInputElement && ['checkbox', 'radio'].includes(active.type))) active.click();
+  }
+
   loading(state: LoadingState): void {
     if (this.screen !== 'loading') {
       this.set('loading', `<section class="menu-card menu-card--loading" aria-busy="true"><p class="eyebrow">CITY SERVICES</p><h2>Getting Joburg ready</h2><div class="loading-progress" role="progressbar" aria-label="Loading game" aria-valuemin="0" aria-valuemax="100"><i data-loading-bar></i></div><div class="loading-progress__status"><strong data-loading-label></strong><output data-loading-percent></output></div><small data-loading-detail></small></section>`);
@@ -55,10 +81,19 @@ export class MenuView {
   }
 
   controls(fromMain: boolean, back: () => void): void {
-    const groups = [
+    const keyboard = [
       ['WASD', 'Move / drive'], ['MOUSE', 'Look / aim'], ['SHIFT', 'Sprint'], ['CTRL/RMB', 'Aim / drive-by'], ['SPACE', 'Jump / handbrake / chute'], ['E', 'Interact / vehicle'], ['Q', 'Take cover'], ['LMB', 'Fire / punch'], ['TAB', 'Weapon wheel'], ['SCROLL', 'Cycle weapons'], ['1—6', 'Select weapon'], ['R', 'Reload'], ['H', 'Use stim pack'], ['L', 'Torch (load shedding)'], ['ALT', 'Walk, don\'t run'], ['V', 'Camera view'], ['F', 'Mug / melee / recover'], ['B', 'Hooter'], ['T', 'Taxi duty'], ['Y', 'Sixty-Sekonds shift'], ['N / SHIFT+N', 'Next / previous radio'], ['G', 'Siren (police car)'], ['PGUP/PGDN', 'Minimap zoom'], ['M', 'City map'], ['ESC', 'Pause'], ['~', 'Console'],
     ];
-    this.set('controls', `<section class="menu-card menu-card--guide"><header><p class="eyebrow">FIELD GUIDE</p><h2>Know the streets.</h2><span>${fromMain ? 'The essentials before you enter.' : 'Controls for foot and vehicle.'}</span></header><div class="control-grid">${groups.map(([key, label]) => `<div><kbd>${key}</kbd><span>${label}</span></div>`).join('')}</div><button class="action-primary" data-action="back">Back</button></section>`); this.bind('[data-action="back"]', back);
+    const controller = [
+      ['LS', 'Move / steer'], ['RS', 'Look / aim'], ['RT', 'Fire / accelerate'], ['LT', 'Aim / brake & reverse'],
+      ['A / ✕', 'Jump / handbrake / chute'], ['Y / △', 'Interact / enter vehicle'], ['B / ○', 'Melee / recover vehicle'], ['X / □', 'Reload / police siren'],
+      ['LB / L1', 'Weapon wheel / drive-by aim'], ['RB / R1', 'Cover / drive-by fire'], ['L3', 'Sprint / hooter'], ['R3', 'Camera view'],
+      ['VIEW', 'City map'], ['MENU', 'Pause / back'], ['DPAD ↑/↓', 'Stim / torch; taxi / courier in vehicle'], ['DPAD ←/→', 'Weapons; radio in vehicle'],
+    ];
+    const usingController = document.body.classList.contains('using-gamepad');
+    const groups = usingController ? controller : keyboard;
+    const device = usingController ? 'Controller detected · prompts use controller glyphs.' : 'Keyboard and mouse · controllers are supported too.';
+    this.set('controls', `<section class="menu-card menu-card--guide"><header><p class="eyebrow">FIELD GUIDE</p><h2>Know the streets.</h2><span>${fromMain ? 'The essentials before you enter.' : 'Controls for foot and vehicle.'} ${device}</span></header><div class="control-grid">${groups.map(([key, label]) => `<div><kbd>${key}</kbd><span>${label}</span></div>`).join('')}</div><button class="action-primary" data-action="back">Back</button></section>`); this.bind('[data-action="back"]', back);
   }
 
   shop(entries: ShopCatalogEntry[], balance: number, actions: { buy: (id: ShopCatalogEntry['id']) => void; ammo: (id: ShopCatalogEntry['id']) => void; armour: () => void; leave: () => void }, armour?: ShopArmourEntry): void {
@@ -121,6 +156,10 @@ export class MenuView {
   private set(screen: MenuScreen, html: string): void {
     this.screen = screen; this.root.innerHTML = html; this.root.className = `menu-overlay is-visible screen-${screen}`; this.root.setAttribute('aria-hidden', 'false');
     requestAnimationFrame(() => this.root.querySelector<HTMLElement>('button:not(:disabled), input, select')?.focus());
+  }
+  private focusable(): HTMLElement[] {
+    return [...this.root.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')]
+      .filter((element) => element.offsetParent !== null);
   }
   private savedOnlineName(): string { return (localStorage.getItem('groot-theft-bakkie-online-name') ?? 'Player').replace(/["<>]/g, '').slice(0, 24); }
   private bind(selector: string, callback: () => void): void { this.root.querySelector(selector)?.addEventListener('click', callback); }

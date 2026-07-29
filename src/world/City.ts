@@ -48,7 +48,7 @@ import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type 
 import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
-import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
+import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS } from './ProceduralMaterials';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
@@ -464,6 +464,15 @@ export const PREMIUM_WATER_AREA = 3200;
 /** Time (ms) per frame spent generating on-demand building chunks. A short stream-in is preferable to
  *  repeatedly consuming a quarter of a 60fps frame and turning initial traversal into visible hitches. */
 export const BUILD_FRAME_BUDGET_MS = 2;
+/** Only the streets immediately visible from the spawn block hold the loading gate. The rest of the
+ *  1.5km building ring streams behind the menu, so players reach a responsive city much sooner. */
+export const WARM_BUILDING_RANGE = 240;
+/** Loading is the one safe moment to spend half a 60fps frame baking geometry. Normal traversal keeps
+ *  the conservative 2ms budget above, while this turns hundreds of one-item frames into a short pass. */
+export const WARM_BUILD_FRAME_BUDGET_MS = 8;
+/** requestAnimationFrame pauses in background tabs and some headless browsers. A bounded fallback
+ *  keeps required-world loading making progress without spinning or monopolising the main thread. */
+export const WARM_BUILD_YIELD_FALLBACK_MS = 50;
 
 export function sampleRoadPath(points: RoadPoint[], closed: boolean, spacing: number): RoadPoint[] {
   const source = closed ? [...points, points[0]].filter((point): point is RoadPoint => Boolean(point)) : points;
@@ -952,25 +961,31 @@ export class City {
     this.visibilityFocusX = focus.x; this.visibilityFocusZ = focus.z;
     this.chunkCulling.update(focus.x, focus.z);
     this.detailCulling.update(focus.x, focus.z);
+    this.infrastructure.updateVisibility(focus.x, focus.z);
     if (streamModels) this.updateBuildingChunks(focus.x, focus.z);
   }
 
   /** Build the player's immediate neighbourhood before play begins. The wider city keeps streaming under
    *  the normal frame budget, but these closest cells are ready before the loading gate opens. */
   async warmInitialBuildings(focus: THREE.Vector3, onProgress: (complete: number, total: number) => void): Promise<void> {
-    const range = MERGE_CHUNK_SIZE * 0.8;
-    const minX = Math.floor((focus.x - range) / MERGE_CHUNK_SIZE); const maxX = Math.floor((focus.x + range) / MERGE_CHUNK_SIZE);
-    const minZ = Math.floor((focus.z - range) / MERGE_CHUNK_SIZE); const maxZ = Math.floor((focus.z + range) / MERGE_CHUNK_SIZE);
-    const targets: string[] = [];
-    for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
-      if (cellDistance(focus.x, focus.z, cx, cz, MERGE_CHUNK_SIZE) <= range) targets.push(`${cx},${cz}`);
-    }
+    const range = Math.min(WARM_BUILDING_RANGE, this.buildingVisibleRange);
+    const targets = cellsWithinRange(focus.x, focus.z, range, MERGE_CHUNK_SIZE).map((cell) => cell.key);
     const readyCount = (): number => targets.reduce((count, key) => count + Number(this.buildingCells.has(key)), 0);
     let complete = readyCount(); onProgress(complete, targets.length);
     while (complete < targets.length) {
-      this.updateBuildingChunks(focus.x, focus.z);
+      this.updateBuildingChunks(focus.x, focus.z, WARM_BUILD_FRAME_BUDGET_MS);
       complete = readyCount(); onProgress(complete, targets.length);
-      if (complete < targets.length) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (complete < targets.length) {
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const done = (): void => {
+            if (settled) return;
+            settled = true; clearTimeout(fallback); resolve();
+          };
+          const fallback = setTimeout(done, WARM_BUILD_YIELD_FALLBACK_MS);
+          requestAnimationFrame(done);
+        });
+      }
     }
   }
 
@@ -2322,13 +2337,9 @@ export class City {
    * low is one cheap finalize step. Geometry beyond the far radius is disposed and regenerates
    * identically from CityGen's seeds on re-approach.
    */
-  private updateBuildingChunks(focusX: number, focusZ: number): void {
+  private updateBuildingChunks(focusX: number, focusZ: number, budgetMs = BUILD_FRAME_BUDGET_MS): void {
     const size = MERGE_CHUNK_SIZE; const range = this.buildingVisibleRange;
-    const minX = Math.floor((focusX - range) / size); const maxX = Math.floor((focusX + range) / size);
-    const minZ = Math.floor((focusZ - range) / size); const maxZ = Math.floor((focusZ + range) / size);
-    for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
-      if (cellDistance(focusX, focusZ, cx, cz, size) > range) continue;
-      const key = `${cx},${cz}`;
+    for (const { cellX: cx, cellZ: cz, key } of cellsWithinRange(focusX, focusZ, range, size)) {
       if (this.buildingCells.has(key) || this.queuedCells.has(key)) continue;
       this.queuedCells.add(key); this.buildQueue.push([cx, cz]);
     }
@@ -2341,7 +2352,7 @@ export class City {
     if (this.pending && cellDistance(focusX, focusZ, this.pending.cellX, this.pending.cellZ, size) > range + CHUNK_HYSTERESIS) this.abortPending();
 
     const start = performance.now();
-    while (performance.now() - start < BUILD_FRAME_BUDGET_MS) {
+    while (performance.now() - start < budgetMs) {
       if (!this.pending) {
         if (this.buildQueue.length === 0) break;
         this.buildQueue.sort((a, b) => cellDistance(focusX, focusZ, a[0], a[1], size) - cellDistance(focusX, focusZ, b[0], b[1], size));

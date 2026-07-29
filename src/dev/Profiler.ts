@@ -11,7 +11,9 @@
  *    ?profile=traverse&x=..&z=..&x2=..&z2=.. — glide the player between two points, logging per-frame spikes
  *  Common: &frames=N (measure length), &warmup=N, &speed=U (traverse u/s),
  *  &peds=N&cars=N (pin ambient census totals for stable A/B phases),
+ *  &world=N&detail=N&buildings=N (override stream radii for an A/B),
  *  &only=a,b,c (matrix: keep just the named phases — baseline always runs first for the A/B). */
+import { CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE } from '../world/ChunkVisibility';
 
 interface FrameSample { dt: number; calls: number; tris: number; heap: number; buckets: Record<string, number>; }
 
@@ -110,7 +112,14 @@ function run(game: any): void {
 
   const plan = query().get('profile');
   const x = num('x', NaN); const z = num('z', NaN);
+  const worldRange = num('world', CHUNK_VISIBLE_RANGE);
+  const detailRange = num('detail', DETAIL_VISIBLE_RANGE);
+  const buildingRange = num('buildings', NaN);
+  if (query().has('world') || query().has('detail') || Number.isFinite(buildingRange)) {
+    game.city.setStreamRanges(worldRange, detailRange, Number.isFinite(buildingRange) ? buildingRange : undefined);
+  }
   if (Number.isFinite(x) && Number.isFinite(z)) game.teleportPlayer(x, z, 'profile');
+  if (Number.isFinite(x) && Number.isFinite(z)) settleBuildings(game, x, z);
 
   if (plan === 'probe') { probe(game); return; }
 
@@ -174,6 +183,27 @@ function run(game: any): void {
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+}
+
+/** Finish the fixed-location building ring before sampling. Normal play intentionally streams it
+ *  under a 2 ms frame budget; a profiler that starts while that queue is still growing compares
+ *  different geometry in every phase and attributes the baker's work to visibility. This is dev-only,
+ *  bounded, and leaves traversal plans representative because they keep streaming after they move. */
+function settleBuildings(game: any, x: number, z: number): void {
+  const started = performance.now();
+  const maxMs = Math.max(1000, num('settleMs', 12000));
+  let passes = 0;
+  do {
+    game.city.updateBuildingChunks(x, z, 24);
+    passes += 1;
+  } while ((game.city.pending || game.city.buildQueue.length > 0) && performance.now() - started < maxMs);
+  emit('PROFILE_SETTLE', {
+    passes,
+    ms: +(performance.now() - started).toFixed(1),
+    cells: game.city.buildingCells.size,
+    complete: !game.city.pending && game.city.buildQueue.length === 0,
+    range: Number.isFinite(num('buildings', NaN)) ? num('buildings', NaN) : 'default',
+  });
 }
 
 /** Instant despawn for the agents-off phase: the census only trims out-of-sight agents on a 3s beat, far too slow

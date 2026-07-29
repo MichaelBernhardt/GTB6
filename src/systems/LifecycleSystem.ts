@@ -197,7 +197,10 @@ export class LifecycleSystem {
    *  `set peds/cars` pins stay absolute so debugging numbers mean what they say. */
   densityScale = 1;
   private gameHours = 0;
-  private timer = LIFECYCLE_INTERVAL;
+  // Reconcile on the first playing frame. PopulationSystem seeds the saved resume point, but New
+  // Game can move the player back to the default spawn after boot; waiting three seconds there left
+  // either choice briefly populated in the wrong district.
+  private timer = 0;
   private downSince = new Map<Pedestrian, number>();
   private wreckedSince = new Map<Vehicle, number>();
   private currentZone: ZoneCell | undefined; // undefined until the first census; then slid with hysteresis
