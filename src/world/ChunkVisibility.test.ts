@@ -47,6 +47,14 @@ describe('chunkShouldBeVisible (hysteresis)', () => {
     expect(POTATO_DETAIL_RANGE).toBeLessThan(DETAIL_VISIBLE_RANGE);
     expect(POTATO_BUILDING_RANGE).toBeLessThan(BUILDING_VISIBLE_RANGE);
   });
+
+  it('keeps full cells beyond the nominal ring without paying for invisible kilometres', () => {
+    // CELL_SIZE is 976u: even the strictest base tier retains the containing cell plus a generous
+    // fogged horizon, while preventing a second carpet of procedural buildings behind it.
+    expect(CHUNK_VISIBLE_RANGE).toBeLessThanOrEqual(2_000);
+    expect(BUILDING_VISIBLE_RANGE).toBeLessThanOrEqual(1_100);
+    expect(DETAIL_VISIBLE_RANGE).toBeLessThanOrEqual(500);
+  });
 });
 
 describe('ChunkStore + ChunkVisibility', () => {
