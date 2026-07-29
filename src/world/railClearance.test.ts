@@ -119,6 +119,25 @@ describe('rail is kept out of the roads it runs alongside', () => {
     }
   });
 
+  it('puts every crossing ON the finished track, not where the track used to be', () => {
+    // A crossing sample is not pushed on its own account, but the smoothing carries it with its
+    // neighbours — so reading the crossing off the PRE-shift samples left markings up to 7.9 u to one
+    // side of the rails they are meant to warn about.
+    for (const crossing of RAILWAY_LEVEL_CROSSINGS) {
+      let onLine = Infinity;
+      for (const line of GENERATED_RAILWAYS) {
+        for (let index = 0; index < line.points.length - 1; index++) {
+          const a = line.points[index]!; const b = line.points[index + 1]!;
+          const dx = b.x - a.x; const dz = b.z - a.z; const lengthSq = dx * dx + dz * dz || 1;
+          const t = Math.max(0, Math.min(1, ((crossing.x - a.x) * dx + (crossing.z - a.z) * dz) / lengthSq));
+          onLine = Math.min(onLine, Math.hypot(crossing.x - (a.x + dx * t), crossing.z - (a.z + dz * t)));
+        }
+      }
+      expect(onLine, `crossing at (${crossing.x.toFixed(0)}, ${crossing.z.toFixed(0)})`)
+        .toBeLessThan(RAILWAY_CORRIDOR_HALF_WIDTH);
+    }
+  });
+
   it('records real crossings only, never a parallel run dressed up as one', () => {
     expect(RAILWAY_LEVEL_CROSSINGS.length).toBeGreaterThan(0);
     for (const crossing of RAILWAY_LEVEL_CROSSINGS) {
