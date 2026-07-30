@@ -261,6 +261,40 @@ describe('FeatureHost HUD and menu', () => {
   });
 });
 
+/** "Is the player under a roof?" — asked by the torch hint, which must not lecture someone standing
+ *  in a lit room. The game asks the host, so it never has to know which features have interiors. */
+describe('FeatureHost indoors', () => {
+  it('is false while nothing is loaded — an unloaded feature cannot be holding the player', () => {
+    expect(harness([feature({ system: { indoors: () => true } })]).host.indoors()).toBe(false);
+  });
+
+  it('is false for a loaded feature that never claims to have a roof', async () => {
+    const { host } = harness([feature()]);
+    await host.open('golf');
+    expect(host.indoors()).toBe(false);
+  });
+
+  it('ORs across loaded features, so any one of them holding the player is enough', async () => {
+    let inside = false;
+    const { host } = harness([
+      feature(),
+      feature({ id: 'interiors', saveKey: 'interiors', system: { indoors: () => inside } }),
+    ]);
+    await host.open('golf'); await host.open('interiors');
+    expect(host.indoors()).toBe(false);
+    inside = true;
+    expect(host.indoors()).toBe(true);
+  });
+
+  it('is false while online — features are suspended, so their rooms do not exist', async () => {
+    const live = harness([feature({ system: { indoors: () => true } })]);
+    await live.host.open('golf');
+    expect(live.host.indoors()).toBe(true);
+    live.online.value = true;
+    expect(live.host.indoors()).toBe(false);
+  });
+});
+
 /**
  * The seam the owner's playtest bought. A feature whose body loads on approach cannot draw a
  * permanently visible readout or advance a mechanic the player has not opted into yet — the fuel

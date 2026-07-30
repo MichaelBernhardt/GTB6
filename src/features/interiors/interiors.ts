@@ -564,6 +564,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       ];
     },
 
+    /** Under a roof, with the lamps above (dimmed by the grid, never out) and the exit mat behind. */
+    indoors: () => Boolean(visit),
+
     interactions: () => rungs,
 
     serialize: () => ({ visited: [...visited].slice(-32), finds }),
