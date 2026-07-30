@@ -106,6 +106,13 @@ export interface FeatureGameApi {
    *  source compatible; interiors use it to land roof exits exactly on the massing top rather than
    *  on an estimate that strands the player inside a wall when the terrain slopes. */
   standHeightAt?(x: number, z: number): number;
+  /** Whether the building-geometry chunk under a world point has actually been BUILT this session.
+   *  Optional so older/test hosts stay source compatible; interiors gate the door prompt on it so E
+   *  can never teleport a player into a building that has not streamed in yet. */
+  chunkBuiltAt?(x: number, z: number): boolean;
+  /** Whether any vehicle currently stands within `radius` of a world point. Optional; interiors use
+   *  it so stepping back outside never restores the player inside a car that parked on the step. */
+  vehicleNear?(x: number, z: number, radius: number): boolean;
   districtAt(x: number, z: number): string;
   isPark(x: number, z: number): boolean;
   nearestRoadPose(at: Vector3): { position: Vector3; heading: number };

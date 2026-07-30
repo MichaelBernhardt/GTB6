@@ -3283,6 +3283,11 @@ export class Game {
       // building, the top of a container stack — which is what a feature teleporting a player onto
       // a surface needs, and what surfaceHeightAt (terrain) cannot say.
       standHeightAt: (x, z) => this.city.supportHeight(x, z, 100000),
+      chunkBuiltAt: (x, z) => this.city.hasBuiltStructuresAt(x, z),
+      vehicleNear: (x, z, radius) => this.population.vehicles.some((vehicle) => {
+        const at = vehicle.group.position;
+        return Math.hypot(at.x - x, at.z - z) < radius + 1.4; // + half a car: the check is "would I be inside it"
+      }),
       districtAt: (x, z) => this.city.districtAt(x, z),
       isPark: (x, z) => this.city.isPark(x, z),
       nearestRoadPose: (at) => this.city.nearestRoadPose(at),

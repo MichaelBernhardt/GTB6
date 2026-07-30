@@ -425,12 +425,36 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         // They came in over the top: restoring `origin` would teleport them back onto the roof, so
         // the street door puts them out on its own doorstep like anyone else.
         const door = current.door;
-        api.playerPosition().set(door.x, api.surfaceHeightAt(door.x, door.z), door.z);
+        const spot = clearOfVehicles(door.x, door.z, current.heading);
+        api.playerPosition().set(spot.x, api.surfaceHeightAt(spot.x, spot.z), spot.z);
       } else {
-        api.playerPosition().copy(current.origin);
+        const spot = clearOfVehicles(current.origin.x, current.origin.z, current.heading);
+        if (spot.x === current.origin.x && spot.z === current.origin.z) api.playerPosition().copy(current.origin);
+        else api.playerPosition().set(spot.x, api.surfaceHeightAt(spot.x, spot.z), spot.z);
       }
     }
     api.analytics('left', { detail: current.core.entrance });
+  };
+
+  /**
+   * The doorstep the player left from may have a CAR parked on it by the time they walk back out —
+   * nothing reserved the slab while they were inside. Restoring `origin` regardless would stand the
+   * player inside the bodywork. So the way out asks the host (optional seam) whether the slab is
+   * occupied, and if it is, steps sideways along the wall, then further out from the door, taking
+   * the first clear spot. If every candidate is somehow occupied the original restore stands — a
+   * shove from a bumper beats being teleported somewhere the player never chose.
+   */
+  const clearOfVehicles = (x: number, z: number, heading: number): { x: number; z: number } => {
+    if (!api.vehicleNear) return { x, z };
+    // `heading` is the door's INWARD yaw; outward is the opposite. Lateral runs along the wall.
+    const outX = -Math.sin(heading); const outZ = -Math.cos(heading);
+    const latX = Math.cos(heading); const latZ = -Math.sin(heading);
+    const candidates: [number, number][] = [
+      [x, z], [x + latX * 1.7, z + latZ * 1.7], [x - latX * 1.7, z - latZ * 1.7],
+      [x + outX * 1.9, z + outZ * 1.9], [x + latX * 3.1, z + latZ * 3.1], [x - latX * 3.1, z - latZ * 3.1],
+    ];
+    for (const [cx, cz] of candidates) if (!api.vehicleNear(cx, cz, 1.6)) return { x: cx, z: cz };
+    return { x, z };
   };
 
   const leave = (instant = false): string => {
@@ -539,6 +563,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
    *  and only the destination is ever built. ONE floor resident, against two on a stair. */
   const rideTo = (current: Visit, index: number): string => {
     if (index < 0 || index >= current.core.storeys) return 'failed:no-such-floor';
+    // The lift menu row can be clicked while a fade is already running (the menu predates it);
+    // starting a second fade mid-fade would fire two arrival callbacks over one visit.
+    if (swapping) return 'failed:mid-fade';
     swapping = true;
     showFade(true);
     after(FADE_MS + 220, () => {
@@ -711,6 +738,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     {
       id: 'interiors:leave', order: 44, context: 'foot',
       test: (ctx) => {
+        // Mid-fade the offer must VANISH, not fizzle: the ladder guarantees a shown prompt's act()
+        // runs, and leave() would answer 'failed:mid-fade' — a stolen keypress, the exact failure
+        // class that once made the protest rung eat "E Enter vehicle". Same guard on every rung.
+        if (swapping) return undefined;
         if (!visit || visit.floor !== 0) return undefined;
         const local = toLocal(visit, visit.heading, ctx.position.x, ctx.position.z);
         const plan = here(visit);
@@ -723,6 +754,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // Exit is NEVER gated — you are already in, and "picking is only needed to enter" is a rule.
       id: 'interiors:roofhatch', order: 43, context: 'foot',
       test: (ctx) => {
+        if (swapping) return undefined;
         if (!visit || !visit.core.stair || !visit.door.roof) return undefined;
         if (visit.floor !== visit.core.storeys - 1 || !hasRoofAccess(visit.core)) return undefined;
         const local = toLocal(visit, visit.heading, ctx.position.x, ctx.position.z);
@@ -737,7 +769,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // (doorLocked is off until the locks pass ships the pick; the shape is already the final one.)
       id: 'interiors:roofdoor', order: 52, context: 'foot',
       test: (ctx) => {
-        if (visit) return undefined;
+        if (visit || swapping) return undefined;
         const door = roofUnderfoot(ctx.position);
         if (!door) return undefined;
         if (hatchLocked(door)) {
@@ -752,6 +784,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     {
       id: 'interiors:lift', order: 45, context: 'foot',
       test: (ctx) => {
+        if (swapping) return undefined;
         if (!visit || !visit.core.lift) return undefined;
         const local = toLocal(visit, visit.heading, ctx.position.x, ctx.position.z);
         const lift = visit.core.lift;
@@ -771,9 +804,14 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // protest 54-62). A person you can talk to always outranks a door you can always come back to.
       id: 'interiors:door', order: 52, context: 'foot',
       test: (ctx) => {
-        if (visit) return undefined;
+        if (visit || swapping) return undefined;
         const door = doorNear(ctx.position.x, ctx.position.z);
         if (!door) return undefined;
+        // Doors derive from MAP DATA, not built geometry — under a teleport the doorway frame can
+        // stand on bare ground with the building not yet streamed in, and E would drop the player
+        // into the interior of an invisible building. No offer until the chunk is really built.
+        // (Hosts without the seam keep the old behaviour.)
+        if (api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) return undefined;
         return { prompt: `E  Go inside · ${door.name}`, act: () => { enter(door); } };
       },
     },

@@ -153,6 +153,19 @@ export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
   box(WALL_T, 0.14, depth, trim, width / 2 - WALL_T / 2, 0.07, 0);
   box(WALL_T, 0.14, depth, trim, -width / 2 + WALL_T / 2, 0.07, 0);
 
+  // ---- ornamentation, per building (see decorFor): a dado band at hip height, a picture rail, a
+  // cornice under the ceiling. Three walls only — the FRONT wall carries the exit doorway on the
+  // ground floor and a bar across its mouth read as a barricade. Ten boxes at most, all from the
+  // shared material cache, so the whole feature costs nothing the skirting did not already cost.
+  const strip = (y: number, thickness: number, material: THREE.Material): void => {
+    box(width, thickness, WALL_T + 0.04, material, 0, y, depth / 2 - WALL_T / 2 - 0.02);
+    box(WALL_T + 0.04, thickness, depth, material, width / 2 - WALL_T / 2 - 0.02, y, 0);
+    box(WALL_T + 0.04, thickness, depth, material, -width / 2 + WALL_T / 2 + 0.02, y, 0);
+  };
+  if (plan.decor.dado) strip(1.05, 0.1, trim);
+  if (plan.decor.rail) strip(2.42, 0.07, trim);
+  if (plan.decor.cornice) strip(height - 0.11, 0.18, solid(0xe9e4d8, 0.85));
+
   // ---- partitions -------------------------------------------------------------------------------
   const partitionMaterial = shared(sheltered(palette.wall, 0.33), 0.9);
   const jamb = solid(palette.trim, 0.6);
@@ -511,10 +524,10 @@ export function buildDoorways(
     add(0.14, openH + 0.16, 0.16, steel, openW / 2 + 0.07, (openH + 0.16) / 2, 0.08);
     add(openW + 0.28, 0.14, 0.16, steel, 0, openH + 0.08, 0.08);
     // AND NO NAME BOARD. It was the loudest thing on the wall — a lit sign over every front door in
-    // a suburb — and it was also a real bug: ProceduralMaterials' sign atlas holds 512 distinct
-    // boards for a city that already draws about 470, and a name list per door family pushed it over
-    // the top, so doorways came out wearing some other building's text. The name is on the prompt you
-    // are standing in to read it. A house does not have a signboard.
+    // a suburb. (It was also, historically, the thing that overflowed the sign atlas; capacity is
+    // 1024 now and buildingIdentity.ts letters the buildings that genuinely carry boards, so the
+    // budget is tested rather than hoped about — see ProceduralMaterials.) The name is on the prompt
+    // you are standing in to read it. A house does not have a signboard.
     // The circle on the ground, and nothing standing on it. Its own material per door so the fade is
     // per door and not per street — twenty-two MeshBasic materials is nothing next to one beam.
     const stepY = surfaceHeightAt(door.x, door.z);
@@ -667,6 +680,43 @@ function buildProp(prop: Prop, kit: Kit): void {
     case 'rug': {
       const rug = box(prop.w, 0.03, prop.d, body, prop.x, base + 0.015, prop.z);
       rug.renderOrder = 1;
+      break;
+    }
+    case 'toilet': {
+      // Pan, seat, cistern against the wall. The one fixture every bathroom actually has.
+      box(prop.w * 0.8, prop.h * 0.5, prop.d * 0.6, body, prop.x, base + prop.h * 0.25, prop.z);
+      box(prop.w, prop.h * 0.1, prop.d * 0.75, solid(0xf0f2f0, 0.5), prop.x, base + prop.h * 0.55, prop.z);
+      // Cistern against whichever outer wall the pan was set against (furnish puts it at wallX).
+      box(0.24, prop.h * 0.55, prop.d * 0.85, body, prop.x + (prop.x > 0 ? 1 : -1) * prop.w * 0.3, base + prop.h * 0.72, prop.z);
+      break;
+    }
+    case 'chair': {
+      // A proper chair, back and all — the stool's grown-up sibling for desks and kitchen tables.
+      box(prop.w, 0.06, prop.d, body, prop.x, base + prop.h * 0.5, prop.z);
+      box(prop.w * 0.85, prop.h * 0.48, 0.06, body, prop.x, base + prop.h * 0.76, prop.z + prop.d * 0.42);
+      for (const sx of [-1, 1]) box(0.05, prop.h * 0.5, 0.05, solid(0x3a342e, 0.7), prop.x + sx * (prop.w / 2 - 0.05), base + prop.h * 0.25, prop.z);
+      break;
+    }
+    case 'picture': {
+      // A framed print. The thin axis faces the room; the canvas sits proud of the frame a touch so
+      // it reads as a picture, not a plaque, from either side.
+      const thinX = prop.w < prop.d;
+      const frame = solid(0x2e2a24, 0.6);
+      box(prop.w, prop.h, prop.d, frame, prop.x, base + prop.h / 2, prop.z);
+      if (thinX) box(prop.w + 0.03, prop.h - 0.14, prop.d - 0.14, body, prop.x, base + prop.h / 2, prop.z);
+      else box(prop.w - 0.14, prop.h - 0.14, prop.d + 0.03, body, prop.x, base + prop.h / 2, prop.z);
+      break;
+    }
+    case 'lamp': {
+      // Standing lamp: base, pole, warm shade. The shade glows on the same powered ramp as the
+      // bulbs, so load shedding takes it down with the rest of the room.
+      const pole = new THREE.Mesh(keep(new THREE.CylinderGeometry(0.03, 0.03, prop.h * 0.75, 8)), solid(0x4a4238, 0.6));
+      pole.position.set(prop.x, base + prop.h * 0.4, prop.z); group.add(pole);
+      box(prop.w * 0.7, 0.05, prop.w * 0.7, body, prop.x, base + 0.03, prop.z);
+      const glow = sharedGlow(0xffe6b8, 0xffd489, 0.85, 0.6);
+      powered?.push({ material: glow, base: 0.85 });
+      const shade = new THREE.Mesh(keep(new THREE.CylinderGeometry(prop.w * 0.34, prop.w * 0.46, 0.34, 10, 1, true)), glow);
+      shade.position.set(prop.x, base + prop.h * 0.85, prop.z); group.add(shade);
       break;
     }
     case 'bath': {

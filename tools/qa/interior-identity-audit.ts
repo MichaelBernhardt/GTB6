@@ -24,7 +24,8 @@ import { industrialSignLabel, storefrontSignLabel } from '../../src/world/City';
 import { BuildingArchitecture, frontFacadeZAt, widestFrontFacadeSpanAt } from '../../src/world/BuildingArchitecture';
 import { neighbourhoodBuildingVariant } from '../../src/world/data/neighbourhoods';
 import { scatterCell } from '../../src/world/ModelScatter';
-import { buildModel } from '../../src/world/models/catalog';
+import { boardText, parcelBuildingName, scatterBuildingName } from '../../src/world/buildingIdentity';
+import { buildModel, MODEL_INDEX } from '../../src/world/models/catalog';
 import { Kit } from '../../src/world/models/kit';
 
 // ---- collect every door, the same way the feature does ------------------------------------------
@@ -84,17 +85,20 @@ function parcelPaintedNames(id: string): string[] | undefined {
   const variant = neighbourhoodBuildingVariant(district, building.variant);
   const { width: w, depth: d, height: h, style } = building;
   const profile = architecture.plan({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: roofMaterial });
+  // City.buildOneBuilding now paints the building's IDENTITY name on any parcel that opens
+  // (buildingIdentity.ts), falling back to the old generic labels only where there is no entrance.
+  const boardName = profile.entrance ? boardText(parcelBuildingName(building.x, building.z, style, profile.entrance.kind)) : undefined;
   const painted: string[] = [];
   if (style === 'industrial') {
     // City.addIndustrialDetail: board drawn whenever the shutter span exists.
     const shutterH = Math.min(5, h * 0.48);
-    if (widestFrontFacadeSpanAt(profile.tiers, shutterH / 2 + 0.2, -w / 2, w / 2, 3.2)) painted.push(industrialSignLabel(variant));
+    if (widestFrontFacadeSpanAt(profile.tiers, shutterH / 2 + 0.2, -w / 2, w / 2, 3.2)) painted.push(boardName ?? industrialSignLabel(variant));
   }
   const detailed = style === 'downtown' || style === 'mixed-use' || style === 'dense-residential' || variant % 2 === 0;
   if (detailed && (style === 'downtown' || style === 'mixed-use')) {
     // City.addStreetLevelDetail: storefront board when the facade holds it.
     const signX = -w * 0.2; const signW = Math.min(6.4, w * 0.34);
-    if (frontFacadeZAt(profile.tiers, signX, 3.82, signW / 2) !== undefined) painted.push(storefrontSignLabel(variant));
+    if (frontFacadeZAt(profile.tiers, signX, 3.82, signW / 2) !== undefined) painted.push(boardName ?? storefrontSignLabel(variant));
   }
   return painted;
 }
@@ -112,8 +116,10 @@ function scatterPaintedNames(door: InteriorDoor): string[] | undefined {
   const model = scatterCell(Math.floor(door.facts.x / CELL_SIZE), Math.floor(door.facts.z / CELL_SIZE))
     .find((candidate) => Math.round(candidate.x) === bx && Math.round(candidate.z) === bz);
   if (!model) return undefined;
+  const interior = MODEL_INDEX.get(model.name)?.interior;
+  const signName = interior ? boardText(scatterBuildingName(model.x, model.z, interior.family, interior.kind, model.name)) : undefined;
   captured.length = 0;
-  buildModel(model.name, model.seed, { variant: model.variant });
+  buildModel(model.name, model.seed, { variant: model.variant, signName });
   return [...captured];
 }
 

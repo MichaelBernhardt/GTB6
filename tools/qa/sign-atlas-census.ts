@@ -1,18 +1,24 @@
 /**
  * Sign-atlas census — how many DISTINCT sign keys (text|accent|background) the whole map wants,
- * against the atlas's 511 usable slots. Every key past 511 shares ONE slot that each newcomer
- * repaints, so any sign built after capacity shows whatever text was drawn last — the mechanism
- * behind boards changing text between entering and leaving a building.
+ * against the atlas's usable slots (capacity − 1; the last slot is the blank overflow board).
+ * Before the identity round this measured 637 keys against 511 usable — the mechanism behind
+ * boards changing text between entering and leaving a building. Reproduces the REAL painter
+ * inputs: parcel boards wear the building's identity name, and every enterable scattered model is
+ * built with the same signName the placement pass now passes.
  *
  *   npx tsx tools/qa/sign-atlas-census.ts
  */
 import { GENERATED_ROADS, MAP_WORLD_SIZE } from '../../src/world/mapData';
 import { CELL_SIZE, generateCell } from '../../src/world/CityGen';
 import { industrialSignLabel, storefrontSignLabel } from '../../src/world/City';
+import * as THREE from 'three';
+import { BuildingArchitecture } from '../../src/world/BuildingArchitecture';
+import { boardText, parcelBuildingName, scatterBuildingName } from '../../src/world/buildingIdentity';
+import { signAtlasLayout } from '../../src/world/ProceduralMaterials';
 import { neighbourhoodBuildingVariant } from '../../src/world/data/neighbourhoods';
 import { nearestDistrict } from '../../src/world/mapData';
 import { scatterCell } from '../../src/world/ModelScatter';
-import { buildModel } from '../../src/world/models/catalog';
+import { buildModel, MODEL_INDEX } from '../../src/world/models/catalog';
 import { Kit } from '../../src/world/models/kit';
 
 const keys = new Set<string>();
@@ -24,17 +30,23 @@ for (const road of GENERATED_ROADS) roadNames.add(road.name);
 for (const name of roadNames) add(name, '#f2f4e9', '#176a5a');
 console.log(`street names: ${roadNames.size}`);
 
-// 2. Parcel boards: storefront (downtown/mixed-use) and industrial, accent varies with variant.
+// 2. Parcel boards: identity names where the building opens (City.buildOneBuilding passes them),
+// the old generic labels where it does not. Accent still varies with variant.
+const architecture = new BuildingArchitecture(new THREE.Group());
+const planMaterial = new THREE.MeshBasicMaterial();
 const half = MAP_WORLD_SIZE / 2 + CELL_SIZE;
 const before = keys.size;
 for (let x = -half; x <= half; x += CELL_SIZE) {
   for (let z = -half; z <= half; z += CELL_SIZE) {
     for (const building of generateCell(Math.floor(x / CELL_SIZE), Math.floor(z / CELL_SIZE))) {
       const variant = neighbourhoodBuildingVariant(nearestDistrict(building.x, building.z).name, building.variant);
-      if (building.style === 'industrial') add(industrialSignLabel(variant), variant % 2 ? '#f0ae43' : '#72d8d2');
-      if (building.style === 'downtown' || building.style === 'mixed-use') {
+      if (building.style !== 'industrial' && building.style !== 'downtown' && building.style !== 'mixed-use') continue;
+      const profile = architecture.plan({ x: 0, z: 0, width: building.width, depth: building.depth, height: building.height, style: building.style, variant, facade: planMaterial, roof: planMaterial });
+      const name = profile.entrance ? boardText(parcelBuildingName(building.x, building.z, building.style, profile.entrance.kind)) : undefined;
+      if (building.style === 'industrial') add(name ?? industrialSignLabel(variant), variant % 2 ? '#f0ae43' : '#72d8d2');
+      else {
         const accents = ['#f0ae43', '#72d8d2', '#ef6556', '#74e392'];
-        add(storefrontSignLabel(variant), accents[variant % accents.length] ?? '#f0ae43');
+        add(name ?? storefrontSignLabel(variant), accents[variant % accents.length] ?? '#f0ae43');
       }
     }
   }
@@ -55,10 +67,12 @@ const seen = new Set<string>();
 for (let x = -half; x <= half; x += CELL_SIZE) {
   for (let z = -half; z <= half; z += CELL_SIZE) {
     for (const model of scatterCell(Math.floor(x / CELL_SIZE), Math.floor(z / CELL_SIZE))) {
-      const identity = `${model.name}:${model.seed}:${model.variant}`;
+      const interior = MODEL_INDEX.get(model.name)?.interior;
+      const signName = interior ? boardText(scatterBuildingName(model.x, model.z, interior.family, interior.kind, model.name)) : undefined;
+      const identity = `${model.name}:${model.seed}:${model.variant}:${signName ?? ''}`;
       if (seen.has(identity)) continue;
       seen.add(identity);
-      try { buildModel(model.name, model.seed, { variant: model.variant }); } catch { /* skip broken */ }
+      try { buildModel(model.name, model.seed, { variant: model.variant, signName }); } catch { /* skip broken */ }
     }
   }
 }
@@ -84,8 +98,9 @@ const INTERIOR: [string, string, string][] = [
 ];
 for (const [text, accent, bg] of INTERIOR) add(text, accent, bg);
 
+const usable = signAtlasLayout().capacity - 1;
 console.log(`\nDISTINCT SIGN KEYS CITYWIDE (before roadside/hangar/etc. extras): ${keys.size}`);
-console.log('atlas usable slots: 511 (512 minus the shared overflow slot)');
-console.log(keys.size > 511
-  ? `OVER CAPACITY by ${keys.size - 511}: every sign allocated after the 511th shares one slot and shows whatever was drawn last.`
-  : `${511 - keys.size} slots of headroom left.`);
+console.log(`atlas usable slots: ${usable} (${usable + 1} minus the blank overflow slot)`);
+console.log(keys.size > usable
+  ? `OVER CAPACITY by ${keys.size - usable}: every sign allocated after the ${usable}th draws as a blank board.`
+  : `${usable - keys.size} slots of headroom left.`);

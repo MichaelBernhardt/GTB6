@@ -333,6 +333,62 @@ describe('a visit', () => {
     system.dispose();
   }, 300000);
 
+  /** The interaction ladder guarantees a shown prompt's act() runs — an offer that then answers
+   *  'failed:mid-fade' is a stolen keypress, the exact failure class that once made the protest rung
+   *  eat "E Enter vehicle". So during a fade every rung must WITHDRAW, not fizzle. */
+  it('withdraws every offer during the entry fade instead of stealing the keypress', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    const prompt = offer(system, test.player);
+    expect(prompt?.prompt).toBe(`E  Go inside · ${door.name}`);
+    prompt!.act(); // starts the 260 ms entry fade — the visit does not exist yet
+    expect(offer(system, test.player), 'an offer shown mid-fade would act and fizzle').toBeUndefined();
+    system.dispose(); // clears the pending fade timer
+  }, 120000);
+
+  /** Doors derive from map data, not built geometry: without this gate, E on a doorway frame whose
+   *  building chunk has not streamed in teleports the player into an invisible building. */
+  it('offers nothing while the building chunk is not built, and offers again once it is', () => {
+    const test = harness();
+    let built = false;
+    test.api.chunkBuiltAt = () => built;
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(offer(system, test.player), 'a doorway on an unbuilt chunk must not offer').toBeUndefined();
+    built = true;
+    expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    system.dispose();
+  }, 120000);
+
+  /** Nothing reserves the doorstep while the player is inside — a car can park on the exact slab
+   *  they left from. Stepping out must sidestep the bodywork, not restore into it. */
+  it('steps the returning player around a car parked on the doorstep', () => {
+    const test = harness();
+    let parked: { x: number; z: number } | undefined;
+    test.api.vehicleNear = (x, z, radius) => (parked ? Math.hypot(parked.x - x, parked.z - z) < radius : false);
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    const outside = test.player.clone();
+    system.qa!('enter', {});
+    parked = { x: outside.x, z: outside.z }; // a taxi pulls onto the slab while they are inside
+    system.qa!('leave', {});
+    const away = Math.hypot(test.player.x - outside.x, test.player.z - outside.z);
+    expect(away, 'the player came out inside the parked car').toBeGreaterThan(1.2);
+    expect(away, 'the sidestep must stay by the door, not teleport down the street').toBeLessThan(4);
+    // And with the slab clear, the restore is still exact.
+    parked = undefined;
+    test.player.set(door.x, 0, door.z);
+    const clean = test.player.clone();
+    system.qa!('enter', {});
+    system.qa!('leave', {});
+    expect(test.player.distanceTo(clean)).toBeLessThan(0.001);
+    system.dispose();
+  }, 120000);
+
   // The torch hint asks the host "is the player under a roof?" and must stay silent in here: the
   // lamps dim with the grid but the room keeps its own ambient, so the way out is always findable.
   it('reports itself as indoors only between stepping in and stepping out', () => {
