@@ -48,12 +48,20 @@ export interface BuildingSpec {
  *  the entrance planner never hangs a front door on one (see planEntrance). */
 export interface MassingTier { minX: number; maxX: number; minZ: number; maxZ: number; y0: number; y1: number; kind?: 'wall'; }
 
+/** One atlas-textured massing volume exactly as addBox placed it — the audit surface for the
+ *  coincident-face guard (src/world/coincidentFaces.ts). Unlike `tiers`, this excludes the manual
+ *  tier pushes that stand in for cylinders (drum towers, silos, stacks): those have no planar faces
+ *  to fight with, and auditing their bounding boxes would report walls that do not exist. */
+export interface MassingBox { x: number; y: number; z: number; width: number; height: number; depth: number; rounded: boolean; }
+
 export interface BuildingProfile {
   roofY: number;
   massing: number;
   /** Every stacked box of the massing, bottom tier first — the collision registry mirrors these exactly.
    *  Gable roofs are left out: the player stands on the eaves plane beneath them. */
   tiers: MassingTier[];
+  /** Every box addBox drew (or would draw — plan() records them identically). See MassingBox. */
+  boxes: MassingBox[];
   /** Pitched roof volumes (decorative, no collider) so dressing can find the real surface under it. */
   gables: GableSpec[];
   /** Where this building's front door is — undefined when the massing offers no street-facing
@@ -290,11 +298,21 @@ export function widestFrontFacadeSpanAt(
 
 const boxMaterials = (facade: THREE.Material, roof: THREE.Material): THREE.Material[] => [facade, facade, roof, roof, facade, facade];
 
+/** Corner radius of a rounded massing box. The massing arithmetic needs this as well as addBox:
+ *  a wing set flush with a rounded box's flank would share that plane over the depth they overlap,
+ *  and two coplanar facade quads at different UV origins draw the same windows twice (see
+ *  buildDenseResidential massing 0). Inset by the radius instead and the wing lands exactly where
+ *  the rounding ends — tangent to the shell, on no plane of its own. */
+export function roundedBoxRadius(width: number, depth: number): number {
+  return Math.min(1.25, width * 0.06, depth * 0.06);
+}
+
 /** Scale only the four wall UV groups on BoxGeometry/RoundedBoxGeometry. Roof groups retain their
  * 0..1 UVs. Both geometries dedicate vertices per face, so side/front repeats cannot fight. */
 export function scaleBoxFacadeUvs(
   geometry: THREE.BufferGeometry, width: number, height: number, depth: number,
   tile: { width: number; height: number },
+  floorRepeats = true,
 ): THREE.BufferGeometry {
   const uv = geometry.getAttribute('uv');
   if (!uv || !(tile.width > 0) || !(tile.height > 0)) return geometry;
@@ -303,8 +321,12 @@ export function scaleBoxFacadeUvs(
     const face = group.materialIndex ?? 0;
     if (face === 2 || face === 3) continue; // top / underside use the roof material
     const horizontal = face === 0 || face === 1 ? depth : width;
-    const repeatX = Math.max(1, horizontal / tile.width);
-    const repeatY = Math.max(1, height / tile.height);
+    // Facades floor at one whole repeat so a narrow wall still shows whole windows. Surfaces with
+    // no bays to keep whole (the concrete foundation walls) pass floorRepeats=false instead, so
+    // every face shares one WORLD texture pitch — two abutting retaining-wall tiers of different
+    // depths used to change concrete scale 1.8x across one continuous wall.
+    const repeatX = floorRepeats ? Math.max(1, horizontal / tile.width) : horizontal / tile.width;
+    const repeatY = floorRepeats ? Math.max(1, height / tile.height) : height / tile.height;
     const seen = new Set<number>(); // indexed BoxGeometry references each corner in two triangles
     for (let cursor = group.start; cursor < group.start + group.count; cursor++) {
       const vertex = index ? index.getX(cursor) : cursor;
@@ -347,6 +369,7 @@ export class BuildingArchitecture {
 
   private tiers: MassingTier[] = [];
   private gables: GableSpec[] = [];
+  private boxes: MassingBox[] = [];
   /** False while planning: the massing arithmetic runs exactly as it does for a real build, but no
    *  geometry is allocated. See plan(). */
   private drawing = true;
@@ -360,11 +383,12 @@ export class BuildingArchitecture {
   build(spec: BuildingSpec): BuildingProfile {
     this.tiers = [];
     this.gables = [];
+    this.boxes = [];
     const massing = spec.variant % ARCHITECTURE_VARIANTS[spec.style];
     const roofY = this.massing(spec, massing);
     if (this.drawing) this.addStructuralDetail(spec, massing, roofY);
     return {
-      roofY, massing, tiers: this.tiers, gables: this.gables,
+      roofY, massing, tiers: this.tiers, gables: this.gables, boxes: this.boxes,
       entrance: planEntrance(spec.width, spec.style, this.tiers),
     };
   }
@@ -413,8 +437,9 @@ export class BuildingArchitecture {
   /** Every massing box doubles as a collision tier; decorative details are plain meshes and stay out of the registry. */
   private addBox(spec: BuildingSpec, width: number, height: number, depth: number, x: number, y: number, z: number, rounded = false): void {
     this.tiers.push({ minX: x - width / 2, maxX: x + width / 2, minZ: z - depth / 2, maxZ: z + depth / 2, y0: y - height / 2, y1: y + height / 2 });
+    this.boxes.push({ x, y, z, width, height, depth, rounded });
     if (!this.drawing) return;
-    const radius = Math.min(1.25, width * 0.06, depth * 0.06);
+    const radius = roundedBoxRadius(width, depth);
     const geometry = scaleBoxFacadeUvs(
       rounded ? new RoundedBoxGeometry(width, height, depth, 5, radius) : new THREE.BoxGeometry(width, height, depth),
       width, height, depth, spec.facadeTile ?? { width: 28, height: 28 },
@@ -450,8 +475,14 @@ export class BuildingArchitecture {
     }
     if (massing === 3) {
       const lowerH = h * 0.58;
-      this.addBox(spec, w * 0.58, lowerH, d, x, lowerH / 2 + 0.2, z);
+      // The cross-plan base used to be a full-depth bar overlapping a full-width bar, which left
+      // 150+ u² of exactly coplanar roof deck fighting at lowerH. Same union, three DISJOINT boxes:
+      // the wide bar stays whole (it is the massing's main lower roof, so the roofline pass dresses
+      // it exactly as before), and the deep bar is cut into the front and back stubs that actually
+      // show beyond it.
       this.addBox(spec, w, lowerH, d * 0.46, x, lowerH / 2 + 0.2, z - d * 0.04);
+      this.addBox(spec, w * 0.58, lowerH, d * 0.31, x, lowerH / 2 + 0.2, z + d * 0.345);
+      this.addBox(spec, w * 0.58, lowerH, d * 0.23, x, lowerH / 2 + 0.2, z - d * 0.385);
       this.addBox(spec, w * 0.46, h - lowerH, d * 0.58, x + w * 0.08, lowerH + (h - lowerH) / 2 + 0.2, z, true);
       this.addSetbackBand(x, z, w * 0.6, d * 1.03, lowerH + 0.2);
       return h + 0.2;
@@ -521,9 +552,15 @@ export class BuildingArchitecture {
     }
     if (massing === 9) {
       // Corner tower: an L-plan block anchoring the street corner with a full-height drum-capped tower.
+      // The L is cut as two DISJOINT boxes with the same union. The street arm used to span the full
+      // width, which put its whole x - w/2 flank on the same plane as the return wing's — 925 u² of
+      // one wall drawn twice from one material, no tie-breaker, and per-box UV origins phase-shifted
+      // a third of a bay, so every window had a flickering ghost twin (the MARTIAL x SMAL report).
+      // The wing owns the left half of the plan; the arm starts where the wing ends.
       const blockH = h * 0.58;
-      this.addBox(spec, w, blockH, d * 0.55, x, blockH / 2 + 0.2, z - d * 0.2);
-      this.addBox(spec, w * 0.5, blockH, d, x - w * 0.25, blockH / 2 + 0.2, z);
+      const wingW = w * 0.5;
+      this.addBox(spec, w - wingW, blockH, d * 0.55, x + wingW / 2, blockH / 2 + 0.2, z - d * 0.2);
+      this.addBox(spec, wingW, blockH, d, x - w * 0.25, blockH / 2 + 0.2, z);
       const towerW = Math.min(w, d) * 0.42;
       const tx = x + w / 2 - towerW / 2; const tz = z + d / 2 - towerW / 2;
       this.addBox(spec, towerW, h, towerW, tx, h / 2 + 0.2, tz, true);
@@ -572,7 +609,11 @@ export class BuildingArchitecture {
     const { x, z, width: w, depth: d, height: h } = spec;
     if (massing === 0) {
       this.addBox(spec, w, h, d * 0.42, x, h / 2 + 0.2, z - d * 0.29, true);
-      for (const side of [-1, 1]) this.addBox(spec, w * 0.28, h * 0.82, d * 0.58, x + side * w * 0.36, h * 0.41 + 0.2, z + d * 0.18);
+      // The front wings tuck inside the slab's rounded corners rather than sitting flush with its
+      // flanks: flush put each wing's outer face on the slab's flank plane over the strip of depth
+      // they overlap, drawing that strip of facade twice at two different repeats (142 buildings).
+      const reveal = roundedBoxRadius(w, d * 0.42);
+      for (const side of [-1, 1]) this.addBox(spec, w * 0.28, h * 0.82, d * 0.58, x + side * (w * 0.36 - reveal), h * 0.41 + 0.2, z + d * 0.18);
     } else if (massing === 1) {
       this.addBox(spec, w, h, d, x, h / 2 + 0.2, z, true);
       this.addBox(spec, w * 0.2, h + 2.2, d * 0.34, x - w * 0.34, (h + 2.2) / 2 + 0.2, z + d * 0.2);
@@ -644,8 +685,11 @@ export class BuildingArchitecture {
       for (const px of [-w * 0.36, -w * 0.12, w * 0.12, w * 0.36]) { const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, h * 0.62, 10), this.timber); post.position.set(x + px, h * 0.31 + 0.6, stoepZ + stoepD / 2 - 0.2); post.castShadow = true; this.place(post); }
       const wx = w * 0.5 + 0.9; const wz = d * 0.5 + 0.9; const wallH = 1.4; const th = 0.32;
       this.addWall(x, wallH, z - wz, wx * 2 + th, wallH, th);
-      for (const side of [-1, 1]) this.addWall(x + side * wx, wallH, z, th, wallH, wz * 2 + th);
-      const gap = Math.min(2.2, w * 0.14); const run = (wx * 2 - gap * 2) / 2;
+      // Side runs stop at the back/front runs instead of overlapping them: the overlapped corner
+      // put a run's end cap on the same plane as the crossing run's outer face, and the concrete
+      // foundation boxes mirrored under both repeated that coincidence where a slope exposes them.
+      for (const side of [-1, 1]) this.addWall(x + side * wx, wallH, z, th, wallH, wz * 2 - th);
+      const gap = Math.min(2.2, w * 0.14); const run = wx + th / 2 - gap; // owns the corner the side run stops short of
       for (const side of [-1, 1]) this.addWall(x + side * (gap + run / 2), wallH, z + wz, run, wallH, th);
     } else if (massing === 7) {
       // L-plan: two perpendicular gabled wings hugging a front yard corner.
@@ -698,7 +742,10 @@ export class BuildingArchitecture {
       // Silo battery: the works shed feeding a row of three cylindrical silos over a catwalk.
       this.addBox(spec, w * 0.55, h, d, x - w * 0.2, h / 2 + 0.2, z);
       this.addGableRoof(spec, x - w * 0.2, z, w * 0.6, d + 0.5, h + 0.2, roofRise);
-      const siloR = Math.min(w * 0.11, d * 0.16); const siloH = h * 1.35; const sx = x + w * 0.33;
+      // Radius caps at 0.15d — half the 0.3d row spacing — so the silos' square foundation pads
+      // (City mirrors each round tier as a concrete box) abut along the row instead of overlapping:
+      // overlapped pads put three x-flanks on one plane, and a slope exposes them as fighting walls.
+      const siloR = Math.min(w * 0.11, d * 0.15); const siloH = h * 1.35; const sx = x + w * 0.33;
       for (const dz of [-0.3, 0, 0.3]) {
         const silo = new THREE.Mesh(new THREE.CylinderGeometry(siloR, siloR, siloH, 18), this.steel); silo.position.set(sx, siloH / 2 + 0.2, z + d * dz); silo.castShadow = true; silo.receiveShadow = true; this.place(silo);
         this.tiers.push({ minX: sx - siloR, maxX: sx + siloR, minZ: z + d * dz - siloR, maxZ: z + d * dz + siloR, y0: 0.2, y1: siloH + 0.2 });
@@ -795,10 +842,14 @@ export class BuildingArchitecture {
     // Perimeter garden wall (kept inside the reserved building radius), gated on the +z street face.
     const wx = w * 0.5 + 1.2; const wz = d * 0.5 + 1.2; const wallH = 2.3; const th = 0.4;
     this.addWall(x, wallH, z - wz, wx * 2 + th, wallH, th);                // back
-    this.addWall(x - wx, wallH, z, th, wallH, wz * 2 + th);               // left
-    this.addWall(x + wx, wallH, z, th, wallH, wz * 2 + th);               // right
+    // The side runs stop at the back/front runs (wz*2 - th, not + th): the overlapped corner put a
+    // run's end cap on the same plane as the crossing run's outer face — invisible on the flat
+    // plaster, but the concrete foundation boxes mirrored under the walls repeated the coincidence
+    // with wildly different UV pitches wherever a slope exposes a corner. Same union either way.
+    this.addWall(x - wx, wallH, z, th, wallH, wz * 2 - th);               // left
+    this.addWall(x + wx, wallH, z, th, wallH, wz * 2 - th);               // right
     const gateHalf = Math.min(3, w * 0.14);                               // gate opening on the street side
-    const frontRun = (wx * 2 - gateHalf * 2) / 2;
+    const frontRun = wx + th / 2 - gateHalf;                              // runs to the corner the side run stops short of
     for (const side of [-1, 1]) this.addWall(x + side * (gateHalf + frontRun / 2), wallH, z + wz, frontRun, wallH, th);
     for (const side of [-1, 1]) { const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3, 0.8), this.stone); pillar.position.set(x + side * gateHalf, 1.5, z + wz); pillar.castShadow = true; this.place(pillar); }
     const gate = new THREE.Mesh(new THREE.BoxGeometry(gateHalf * 2, 2, 0.12), this.darkMetal); gate.position.set(x, 1, z + wz); this.place(gate);
