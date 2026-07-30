@@ -14,13 +14,27 @@
  *     through, and remembers roughly where they stood. It has to tick before the feature body is
  *     loaded (that is the whole point of "the player already felt it"), which is why it is eager.
  *
- *     IT IS DRIVEN BY THE POWER GRID ITSELF, not by an interaction predicate. The first cut ticked it
- *     from the registry's `approach.near()`, which looked fine on a registry with one feature in it
- *     and is silently fatal on a real one: `resolveInteraction` returns on the FIRST descriptor that
- *     offers something, so any feature ordered above this one — a shop door, a tee box, a doorstep —
- *     stops the only unlock gate this feature has. The cross-feature verifier measured it: 3.90
- *     outage-hours accumulated standing in the open street, 0.00 standing on a street corner or a
- *     doorstep. Interaction predicates must be pure. This one now is.
+ *     IT TICKS ON THE SIM SUB-STEP, from the registry's `eager.tick` hook, and it has now been wrong
+ *     twice in the other two possible ways:
+ *
+ *      - the FIRST cut ticked it inside the registry's `approach.near()` predicate.
+ *        `resolveInteraction` returns on the FIRST descriptor that offers something, so any feature
+ *        ordered above this one — a shop door, a tee box, a doorstep — silently stopped the only
+ *        unlock gate this feature has. The cross-feature verifier measured it: 3.90 outage-hours in
+ *        the open street against 0.00 on a street corner.
+ *      - the SECOND cut moved it to `powerGrid.onPowerChange` and credited one lump per outage off
+ *        `performance.now()`. That fires reliably, but a WALL clock is not the game's clock: it ran
+ *        while the game was paused, while the tab was backgrounded and while a menu was open (hence
+ *        the MAX_OUTAGE_CREDIT_HOURS cap that had to exist), and it carried no position at all — so
+ *        `hasAnchor` was false for the entire eager phase and the site fell back to the road under
+ *        the player's own feet. That is the whole of the owner's "it just seems to spawn a protest
+ *        where I am".
+ *
+ *     `eager.tick(dt, ctx)` is the seam that was missing when this was written and is not missing now
+ *     (petrol bought it). The host calls it for EVERY unloaded feature on the fixed sim sub-step —
+ *     never a rendered frame, never conditional on another feature's prompt — and hands it the game
+ *     hour and the live position. So the eager credit and the loaded body's credit are now the same
+ *     call, at the same rate, with the same anchor, and the handover cannot change either.
  *
  *  2. THE NECKLACING BLOCK. Burning tyres carry specific, heavy historical freight in South Africa:
  *     necklacing was a real 1980s township execution — a petrol-soaked tyre forced over a person's
@@ -30,7 +44,8 @@
  *     and so the lazy body cannot ship without it. See protest.state.test.ts — the rule is enforced
  *     by tests, not by a comment.
  */
-import { onPowerChange, powerOn } from '../world/powerGrid';
+import { powerOn } from '../world/powerGrid';
+import type { FeatureHudEntry, InteractionCtx } from './types';
 
 // ---- tuning ------------------------------------------------------------------------------------
 
@@ -48,8 +63,27 @@ export const RIPE_OUTAGE_HOURS = 2.4;
  *  shutdown is earned again, but faster, exactly as a place that keeps being failed gets quicker to
  *  close its own road. */
 export const POST_PICKET_HOURS = 1.2;
-/** A blockade stands this many game hours before the crowd drifts off (≈100 real seconds). */
-export const BLOCKADE_HOURS = 4;
+/**
+ * A blockade stands this many game hours before the crowd drifts off (6 h ≈ 150 real seconds).
+ *
+ * It was 4 (≈100 s) while the player raised the blockade by pressing E on top of it, when the only
+ * thing the clock had to cover was the walk from your own feet to the barricade. It now goes up
+ * SITE_MIN_METRES away and you have to get there, which is 20-45 seconds of walking before any of the
+ * 70-second picket has started. Do not shorten this below `PICKET_SECONDS` plus the walk.
+ */
+export const BLOCKADE_HOURS = 6;
+/**
+ * Fraction of RIPE_OUTAGE_HOURS at which the district says out loud that it has had enough.
+ *
+ * The one warning beat. Everything before it is the HUD chip filling; everything after it is a road
+ * being closed. 0.62 lands it around the end of the first outage, so the sequence a player actually
+ * lives is: lights go out → a bar starts filling → "Brixton has had enough" → lights go out again →
+ * the road shuts. Three beats, about four minutes, no reading.
+ */
+export const WARN_FRACTION = 0.62;
+/** The grievance chip appears once the district is this far gone. Below it there is nothing to say
+ *  yet and a chip that reads 3% is noise on a HUD that already carries STIM and CHUTE. */
+export const HUD_FROM_FRACTION = 0.18;
 /** Dawn shutdowns are the real thing: all entrances at once, before work. A midday one is six people
  *  and two tyres. Being up at 05:00 is rewarded, never required. */
 export const DAWN_START = 3;
@@ -60,19 +94,19 @@ export const SCORCH_CAP = 48;
 export const TYRE_CARRY_CAP = 3;
 
 /**
- * Real seconds per game hour, for the eager credit below.
+ * How far from the player a blockade is allowed to go up, in world units.
  *
- * DayNight already owns this (DAY_CYCLE_SECONDS = 600 over 24 hours = 25 s an hour) but DayNight sits
- * in the `simulation` chunk and this module is eager `gameplay-rules`. Importing it here would make
- * the two chunks mutually dependent, and a chunk cycle is a shipped crash: the page dies on load with
- * "Cannot access 'X' before initialization" while every test stays green. So the number is repeated,
- * and protest.state.test.ts pins it to the real constant so the two can never drift apart in silence.
+ * THE OWNER'S REPORT: "it just seems to spawn a protest where I am or something". It did — the site
+ * was the road nearest his own feet — and content that materialises under you is a cheat button
+ * however good the props are. A protest you STUMBLE ACROSS is a different thing entirely, and this
+ * feature already builds a plume with `fog: false` specifically so it can be read from far away.
+ *
+ * So the site is pushed into a band: far enough that it appears over there rather than here, close
+ * enough that walking to it is a walk. 85 u is about four buildings; 260 u is 40-60 seconds on foot,
+ * inside BLOCKADE_HOURS with the picket still to come.
  */
-export const SECONDS_PER_GAME_HOUR = 25;
-/** The most grievance any ONE outage may be worth. LoadSheddingSystem runs a shed for 32-44 real
- *  seconds — 1.3 to 1.8 game hours — so this only ever bites when the wall clock keeps running and the
- *  game does not: a backgrounded tab, a paused menu, a laptop lid. Generous, but never a free day. */
-export const MAX_OUTAGE_CREDIT_HOURS = 2;
+export const SITE_MIN_METRES = 85;
+export const SITE_MAX_METRES = 260;
 
 export type BlockadeSize = 'dawn' | 'daytime';
 
@@ -113,11 +147,26 @@ export function picketPayout(secondsHeld: number, size: BlockadeSize): number {
 
 // ---- save --------------------------------------------------------------------------------------
 
+/**
+ * What survives a session.
+ *
+ * NOT the grievance. It used to persist `hours` and `anchor`, and that is where the worst bug in the
+ * feature's history lived: the eager half counted from zero every session, the body then received the
+ * stored slice, and a plain `load()` there WIPED the very grievance that had just caused the load —
+ * so `E  Follow the smoke` appeared, the chunk arrived, and the feature woke up with hours=0.00. The
+ * fix at the time was an `adopt()` that merged the two, which worked and left a permanent trap for
+ * the next person.
+ *
+ * The grievance is now deliberately SESSION-SCOPED, which deletes the whole class of problem and is
+ * also the more legible design: everything the chip shows you, you earned in front of your own eyes
+ * this session. A returning player who walked into an instant protest could not possibly have known
+ * why. Ripening is about four minutes of ordinary play — cheap enough to re-earn, and re-earning it is
+ * the part that makes the protest mean something.
+ *
+ * What DOES survive is the durable stuff: tyres in hand, pickets you saw through, and the stains,
+ * because nobody ever comes to repair tar.
+ */
 export interface ProtestSave {
-  /** Outage hours felt on foot. */
-  hours: number;
-  /** Weighted mean of where the player stood in the dark, or null before any outage was felt. */
-  anchor: [number, number] | null;
   /** Tyres in hand. */
   tyres: number;
   /** Pickets seen through to the end. */
@@ -130,24 +179,20 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
 const finite = (value: unknown, fallback = 0): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
 
 export function defaultProtestSave(): ProtestSave {
-  return { hours: 0, anchor: null, tyres: 0, pickets: 0, scorch: [] };
+  return { tyres: 0, pickets: 0, scorch: [] };
 }
 
 /**
  * Runs inside SaveManager's synchronous deserialize (after the generic JSON-safe pass in
- * features/save.ts), so it must not throw and must not import the feature body.
+ * features/save.ts), so it must not throw and must not import the feature body. Saves written by the
+ * build that persisted `hours`/`anchor` still load: the extra keys are simply not read.
  */
 export function sanitizeProtestState(raw: unknown): ProtestSave {
   const out = defaultProtestSave();
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   const value = raw as Partial<ProtestSave>;
-  out.hours = clamp(finite(value.hours), 0, 999);
   out.tyres = Math.round(clamp(finite(value.tyres), 0, TYRE_CARRY_CAP));
   out.pickets = Math.round(clamp(finite(value.pickets), 0, 9999));
-  const anchor = value.anchor;
-  if (Array.isArray(anchor) && anchor.length >= 2 && Number.isFinite(anchor[0]) && Number.isFinite(anchor[1])) {
-    out.anchor = [clamp(Number(anchor[0]), -100_000, 100_000), clamp(Number(anchor[1]), -100_000, 100_000)];
-  }
   if (Array.isArray(value.scorch)) {
     const triples: number[] = [];
     for (let index = 0; index + 2 < value.scorch.length; index += 3) {
@@ -171,25 +216,17 @@ export function hourDelta(previous: number, next: number): number {
 /**
  * How much outage the player has personally stood in, and roughly where.
  *
- * Fed from TWO places, and neither of them is an interaction predicate:
- *
- *  - EAGER, while the body is not loaded: powerGrid's own `onPowerChange` hook (see the module-level
- *    registration at the bottom of this file). One credit per outage endured, measured on the wall
- *    clock and converted at SECONDS_PER_GAME_HOUR. Coarse, but it is a real hook that fires whatever
- *    else the game is doing, which is exactly what the old per-frame predicate was not.
- *  - ACCURATE, once the body is loaded: `update()` calls `tick()` every sim step with the real game
- *    hour, the real player position and the real grid state, and sets `driven` so the eager credit
- *    stands down rather than double-counting.
+ * ONE feeder, on the sim sub-step, and it is `tickGrievance()` at the bottom of this file. While the
+ * body is unloaded the registry's `eager.tick` calls it; the instant the body loads, the body's
+ * `update()` calls it instead — and `FeatureHost.update` runs exactly one of those two, ever, so
+ * there is no double-count to guard against and no handover to get wrong.
  */
 export class OutageLedger {
   hours = 0;
   anchorX = 0;
   anchorZ = 0;
   hasAnchor = false;
-  /** Set by the loaded body: it is ticking this ledger per frame, so the eager credit must not also. */
-  driven = false;
   private lastHour = -1;
-  private outageStartedAt: number | undefined;
 
   /** @param hour game hour 0..24 · @param powered grid state · returns the hours credited this call. */
   tick(hour: number, x: number, z: number, powered: boolean): number {
@@ -209,98 +246,127 @@ export class OutageLedger {
     return elapsed;
   }
 
-  /** The grid went down. Nothing is credited yet — an outage is only worth something once it ends. */
-  beginOutage(now: number): void { this.outageStartedAt = now; }
-
-  /**
-   * The grid came back. Credit the outage the player just lived through, in game hours.
-   *
-   * Returns the hours credited so callers and tests can see it. A no-op while `driven`, because the
-   * loaded body has already counted every one of those hours accurately, frame by frame.
-   */
-  endOutage(now: number): number {
-    const started = this.outageStartedAt;
-    this.outageStartedAt = undefined;
-    if (started === undefined || this.driven) return 0;
-    const credited = clamp((now - started) / 1000 / SECONDS_PER_GAME_HOUR, 0, MAX_OUTAGE_CREDIT_HOURS);
-    this.hours += credited;
-    return credited;
-  }
-
-  /** No `hasAnchor` term: the anchor is a nicety (where the player stood in the dark), and the eager
-   *  path cannot build one without a per-frame position. `chooseSite()` falls back to the road nearest
-   *  the player, which is a better answer anyway — you follow the smoke from where you are. */
+  /** 0..1 — how far this district is toward closing its own road. The number on the HUD chip. */
+  get fraction(): number { return clamp(this.hours / RIPE_OUTAGE_HOURS, 0, 1); }
   get ripe(): boolean { return this.hours >= RIPE_OUTAGE_HOURS; }
+  /** Said out loud once, before anything happens. */
+  get warning(): boolean { return this.hours >= RIPE_OUTAGE_HOURS * WARN_FRACTION; }
 
+  /** A road was closed, so the ledger is knocked back rather than zeroed: the next shutdown is earned
+   *  again, but faster, exactly as a place that keeps being failed gets quicker to close its own road.
+   *  Called on EVERY stand-down and not only on a paid picket — otherwise a blockade that fades
+   *  unattended leaves the ledger ripe and the next one goes up the same second. */
   spend(): void { this.hours = Math.min(this.hours, POST_PICKET_HOURS); }
-
-  /** A checkpoint reload REPLACES the ledger: that save is now the truth. */
-  load(save: ProtestSave): void {
-    this.hours = save.hours;
-    if (save.anchor) { this.anchorX = save.anchor[0]; this.anchorZ = save.anchor[1]; this.hasAnchor = true; }
-    else { this.hasAnchor = false; this.anchorX = 0; this.anchorZ = 0; }
-  }
-
-  /**
-   * The handover, and the one place this is easy to get catastrophically wrong.
-   *
-   * The eager `approach.near()` hook has been counting outage hours since the session started, from
-   * zero, because an unloaded feature is never handed its save slice. When the body finally loads it
-   * receives that slice — and a plain `load()` there would WIPE the very grievance that caused the
-   * load, leaving the player staring at a prompt that does nothing. (It did exactly that in the first
-   * in-engine playthrough: `E  Follow the smoke` appeared, the chunk arrived, and the feature woke up
-   * with hours=0.00 and no blockade.)
-   *
-   * So: the stored hours are the baseline and whatever this session already felt is added on top.
-   * The live anchor wins when there is one — where the player stood in the dark THIS session is a
-   * better answer than where they stood last time.
-   */
-  adopt(save: ProtestSave): void {
-    const sessionHours = this.hours;
-    const sessionAnchor = this.hasAnchor ? [this.anchorX, this.anchorZ] as const : undefined;
-    this.load(save);
-    this.hours += sessionHours;
-    if (sessionAnchor) { this.anchorX = sessionAnchor[0]; this.anchorZ = sessionAnchor[1]; this.hasAnchor = true; }
-  }
-
-  store(): Pick<ProtestSave, 'hours' | 'anchor'> {
-    return { hours: Math.round(this.hours * 1000) / 1000, anchor: this.hasAnchor ? [Math.round(this.anchorX * 100) / 100, Math.round(this.anchorZ * 100) / 100] : null };
-  }
 
   reset(): void {
     this.hours = 0; this.hasAnchor = false; this.anchorX = 0; this.anchorZ = 0;
-    this.lastHour = -1; this.outageStartedAt = undefined; this.driven = false;
+    this.lastHour = -1;
   }
 }
 
-/** The one ledger. Shared by the eager power-grid hook and the lazily loaded body. */
+/** The one ledger. Shared by the registry's eager tick and the lazily loaded body. */
 export const outageLedger = new OutageLedger();
 
-const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-
 /**
- * THE EAGER TICK — and the one line in this feature that must never move back into a predicate.
+ * THE GRIEVANCE TICK — one call, two callers, and it must never move into a predicate again.
  *
- * `onPowerChange` is powerGrid's own listener list, registered once when this module is evaluated at
- * boot. It fires from `Game.applyEskom`, which is the same call that turns every street light off, so
- * it cannot be shadowed, skipped or ordered below anybody: if the player saw the lights go out, this
- * ran. That is the whole property the old `approach.near()` tick did not have.
+ * Called from the registry's `eager.tick` while the body is unloaded and from the body's own
+ * `update()` once it is. Both arrive on the fixed sim sub-step through `FeatureHost.update`, which
+ * means: it does not run while the game is paused, it does not run per rendered frame, it is not
+ * frame-rate coupled, and no other feature's prompt can stop it. All four of those were true of at
+ * least one earlier version of this line.
  */
-onPowerChange((on) => {
-  if (on) outageLedger.endOutage(nowMs());
-  else outageLedger.beginOutage(nowMs());
-});
-
-/** The accurate per-frame tick, called by the LOADED body with the real clock, position and grid. */
-export function tickOutage(hour: number, x: number, z: number): void {
-  outageLedger.tick(hour, x, z, powerOn());
+export function tickGrievance(ctx: Pick<InteractionCtx, 'hour' | 'position'>): void {
+  outageLedger.tick(ctx.hour, ctx.position.x, ctx.position.z, powerOn());
 }
 
-/** Is there a shutdown to walk toward right now? A PURE read: the registry's `approach.near()` calls
- *  it once per rendered frame and must not change anything, or a feature ordered above this one turns
- *  the whole ledger off. Kept as a free function so the eager approach and the body agree. */
-export function shutdownPending(loadedBlockade: boolean): boolean {
-  return !loadedBlockade && outageLedger.ripe;
+/**
+ * The grievance chip — the whole of "he should be able to tell that a district is aggrieved BEFORE
+ * anything happens".
+ *
+ * ONE function, called by the registry's eager `hud` and by the loaded body's `hud()`, so the strip
+ * cannot change shape at the moment the chunk lands (the README's rule, and the reason petrol's gauge
+ * is built this way). It advances only while the lights are out and freezes when they come back, which
+ * is the causal chain stated without a word of text: the bar moves when you are standing in the dark.
+ */
+export function grievanceHud(): FeatureHudEntry[] {
+  const fraction = outageLedger.fraction;
+  if (fraction < HUD_FROM_FRACTION || outageLedger.ripe) return [];
+  const percent = Math.round(fraction * 100);
+  return [{ id: 'protest:anger', label: 'FED UP', value: `${percent}%`, fill: percent, warn: outageLedger.warning }];
+}
+
+/** Should the host fetch the body? Deliberately EARLY — the body is what says "this district has had
+ *  enough" and what raises the blockade, so it has to be up and running before the grievance ripens,
+ *  not at the moment it does. Rides `approach.preload`, so it offers nothing and steals no press. */
+export function grievanceWarming(): boolean {
+  return outageLedger.fraction >= HUD_FROM_FRACTION;
+}
+
+// ---- where the road gets closed ----------------------------------------------------------------
+
+/** A road pose the body has already snapped out of the live road network, with its district. */
+export interface SiteCandidate {
+  readonly x: number;
+  readonly z: number;
+  readonly y: number;
+  readonly heading: number;
+  readonly district: string;
+}
+
+/**
+ * Pick the road to close. PURE, so the rule is testable without a city.
+ *
+ * The rule, in order, and the reason each clause is there:
+ *
+ *  1. Never within SITE_MIN_METRES of the player. This clause IS the owner's bug report — a protest
+ *     that materialises on top of you is a cheat button, and one you cannot see arrive.
+ *  2. Prefer inside the band (≤ SITE_MAX_METRES), so it is a walk and not an expedition, and so the
+ *     plume is actually in shot from where he is standing when the notification lands.
+ *  3. Within the band, prefer the district the player kept standing in — the place that is aggrieved
+ *     is the place that closes its road, and the HUD chip has been filling for that district.
+ *  4. Then: nearest to the anchor. That is "the road nearest where you stood in the dark", which is
+ *     the sentence the design promised all along.
+ *
+ * Ties resolve to the earlier candidate, and callers build the candidate list from fixed bearings, so
+ * the same grievance in the same place always closes the same road. No Math.random anywhere.
+ */
+export function pickBlockadeSite(
+  candidates: readonly SiteCandidate[],
+  player: { x: number; z: number },
+  anchor: { x: number; z: number },
+  anchorDistrict: string,
+): SiteCandidate | undefined {
+  const gap = (a: { x: number; z: number }, b: { x: number; z: number }): number => Math.hypot(a.x - b.x, a.z - b.z);
+  const clear = candidates.filter((entry) => gap(entry, player) >= SITE_MIN_METRES);
+  if (clear.length === 0) {
+    // Nothing far enough away: take the furthest road we found rather than raising one under his feet.
+    let best: SiteCandidate | undefined;
+    for (const entry of candidates) if (!best || gap(entry, player) > gap(best, player)) best = entry;
+    return best;
+  }
+  const inBand = clear.filter((entry) => gap(entry, player) <= SITE_MAX_METRES);
+  const pool = inBand.length > 0 ? inBand : clear;
+  const local = pool.filter((entry) => entry.district === anchorDistrict);
+  const shortlist = local.length > 0 ? local : pool;
+  let best = shortlist[0];
+  for (const entry of shortlist) if (best && gap(entry, anchor) < gap(best, anchor)) best = entry;
+  return best;
+}
+
+const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'] as const;
+
+/**
+ * Which way to look, in words. The notification says "170 m south-east" because a district name is
+ * not a direction and a map is not what somebody reads while walking.
+ *
+ * -z is north here, matching the map and the minimap.
+ */
+export function bearingName(dx: number, dz: number): string {
+  if (dx === 0 && dz === 0) return 'right here';
+  const degrees = (Math.atan2(dx, -dz) * 180) / Math.PI;
+  const index = Math.round((((degrees % 360) + 360) % 360) / 45) % 8;
+  return COMPASS[index]!;
 }
 
 // ---- the necklacing block ----------------------------------------------------------------------

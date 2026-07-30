@@ -25,6 +25,25 @@
  * (protest.state.test.ts, protest/protest.test.ts) rather than by a comment. The player's throw verb
  * calls `Barricade.addTyre()`, which takes NO ARGUMENTS AT ALL: there is nothing to aim it at.
  *
+ * THERE IS NO PROMPT FOR STARTING A PROTEST, AND THAT IS THE POINT.
+ *
+ * It used to offer `E  Follow the smoke` — from anywhere in the city, with no proximity test at all —
+ * and pressing it raised a blockade at your feet. The owner's report is what that costs, and it is
+ * three separate failures in one line: "I don't quite understand the game logic. It just seems to
+ * spawn a protest where I am or something? More recently, it was saying to press E but didn't do
+ * anything, and since it was also blocking E it prevented entering vehicles."
+ *
+ *  - `Follow the smoke` was a navigation instruction for smoke that did not exist yet.
+ *  - The rung sat above `E  Enter vehicle` in Game.updateOnFoot and offered everywhere, so E was eaten
+ *    across the whole map for as long as the grievance stayed ripe.
+ *  - And a road being closed 300 m away, with no blip and no bearing, is indistinguishable from
+ *    nothing happening.
+ *
+ * So the protest raises ITSELF, out of `update()`, at a road SITE_MIN_METRES away that the player can
+ * come across; the plume (built with `fog: false` for exactly this) is the advertisement; a blip and a
+ * live distance chip say where; and every rung this feature owns now belongs to a thing standing in
+ * front of the player. Every prompt here is an interaction with an object, or it does not exist.
+ *
  * HOW TO SEE ONE WITHOUT WAITING FOR THE GRID (documented for review, see also protest/README.md):
  *
  *     ~                      open the developer console
@@ -36,12 +55,14 @@
 import * as THREE from 'three';
 import { Barricade, ScorchField, TyreFire, radialTexture, type BarricadeSite } from './Barricade';
 import {
-  BLOCKADE_HOURS, blockadeSize, closureRadius, crowdSize, hourDelta, outageLedger, PICKET_SECONDS,
-  picketPayout, RIPE_OUTAGE_HOURS, sanitizeProtestState, SMOKE_DECAY, SMOKE_PER_TYRE,
-  SOLO_TYRE_SECONDS, tickOutage, TYRE_CARRY_CAP, TYRE_FEED_COOLDOWN, tyreCount, assertNotLivingHost,
-  ignitableTargets, type BlockadeSize, type ProtestSave,
+  bearingName, BLOCKADE_HOURS, blockadeSize, closureRadius, crowdSize, grievanceHud, hourDelta,
+  outageLedger, PICKET_SECONDS, picketPayout, pickBlockadeSite, RIPE_OUTAGE_HOURS,
+  sanitizeProtestState, SITE_MAX_METRES, SITE_MIN_METRES, SMOKE_DECAY, SMOKE_PER_TYRE,
+  SOLO_TYRE_SECONDS, tickGrievance, TYRE_CARRY_CAP, TYRE_FEED_COOLDOWN, tyreCount,
+  assertNotLivingHost, ignitableTargets, type BlockadeSize, type ProtestSave, type SiteCandidate,
 } from '../protest.state';
 import { roadClosures } from '../../systems/NavGraph';
+import type { FeatureMapIcon, FeatureMapSource } from '../host';
 import type { Pedestrian } from '../../entities/Pedestrian';
 import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescriptor } from '../types';
 
@@ -59,18 +80,25 @@ const BARRICADE_REACH = 17;
  *  light a tyre in the middle of the road with a reach of 7. */
 const TAR_REACH = 10;
 const SOLO_SPACING = 22;
+/** Bearings and radii probed around the player to find a road worth closing. Fixed, so the same
+ *  grievance in the same place always shuts the same road; eight by two is 16 `nearestRoadPose`
+ *  snaps plus 17 `districtAt` calls, ONCE, on the frame a protest starts — measured in-engine at
+ *  6.6 ms, against the barricade's own 33 props and 10 fixture peds on the same frame. Never per
+ *  frame: `raise()` sets `barricade` on its first success, so `update()` stops asking. */
+const SITE_BEARINGS = 8;
+const SITE_RADII = [SITE_MIN_METRES + 35, (SITE_MIN_METRES + SITE_MAX_METRES) / 2 + 30] as const;
+/** The blip colour. Tyre-smoke orange, which is also what the plume reads as from a distance. */
+const BLIP_COLOR = '#ff7a2f';
 
 type Phase = 'idle' | 'live' | 'picketing' | 'smouldering';
 
 interface SoloFire { fire: TyreFire; id: string; x: number; z: number }
 
-export function createFeature(api: FeatureGameApi, state: unknown): FeatureSystem {
+export function createFeature(api: FeatureGameApi, state: unknown): FeatureSystem & FeatureMapSource {
   const save: ProtestSave = sanitizeProtestState(state);
-  outageLedger.adopt(save); // ADOPT, not load — see OutageLedger.adopt. `load` here wipes the session.
-  // From here on THIS is the ledger's clock: update() ticks it every sim step with the real game hour,
-  // the real player position and the real grid. The eager power-grid credit stands down while this is
-  // set, so an outage that spans the chunk arriving is counted once and not twice.
-  outageLedger.driven = true;
+  // NOTHING is adopted from the save into the ledger, and that is deliberate — see ProtestSave. The
+  // grievance is session-scoped, the registry's eager tick has been counting it since boot, and from
+  // this line on `update()` continues the very same count on the very same object.
 
   const scorch = new ScorchField(api.scene, (x, z) => api.surfaceHeightAt(x, z));
   scorch.load(save.scorch);
@@ -93,6 +121,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let solo: SoloFire[] = [];
   let soloSerial = 0;
   let taughtFeed = false;
+  let warned = false;
   let disposed = false;
 
   const scratch = new THREE.Vector3();
@@ -104,20 +133,55 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   // ---- the blockade ------------------------------------------------------------------------------
 
-  /** The site is the road nearest to where the player kept standing in the dark, or — when the QA
-   *  route asks for one right here — the road nearest their feet. Derived at runtime from the live
-   *  road network: no world coordinate is typed anywhere in this feature, because the map moves. */
-  function chooseSite(preferPlayer = false): BarricadeSite {
-    const useAnchor = outageLedger.hasAnchor && !preferPlayer;
-    const anchorX = useAnchor ? outageLedger.anchorX : api.playerPosition().x;
-    const anchorZ = useAnchor ? outageLedger.anchorZ : api.playerPosition().z;
-    const pose = api.nearestRoadPose(scratch.set(anchorX, 0, anchorZ));
-    return { x: pose.position.x, y: pose.position.y, z: pose.position.z, heading: pose.heading };
+  /**
+   * The road that gets closed.
+   *
+   * THIS IS THE OWNER'S SECOND REPORT — "it just seems to spawn a protest where I am or something" —
+   * and it was literally true: the old version snapped to the road nearest a single point and that
+   * point was, on the eager path, always the player's own feet (the wall-clock credit carried no
+   * position, so there was never an anchor to prefer).
+   *
+   * Now: sixteen road poses are snapped out of the live network on fixed bearings around the player,
+   * and `pickBlockadeSite` chooses among them — never within SITE_MIN_METRES of him, preferably inside
+   * SITE_MAX_METRES, preferably in the district that is aggrieved, and of those the one nearest to
+   * where he actually kept standing in the dark. Derived at runtime from the road network every time:
+   * no world coordinate is typed anywhere in this feature, because the map moves under it.
+   *
+   * `atMyFeet` is the console/QA review route only (`feature protest now`), which exists so a protest
+   * can be looked at without waiting out the grid.
+   */
+  function chooseSite(atMyFeet = false): BarricadeSite {
+    const player = api.playerPosition();
+    if (atMyFeet) {
+      const here = api.nearestRoadPose(scratch.set(player.x, 0, player.z));
+      return { x: here.position.x, y: here.position.y, z: here.position.z, heading: here.heading };
+    }
+    const anchor = outageLedger.hasAnchor
+      ? { x: outageLedger.anchorX, z: outageLedger.anchorZ }
+      : { x: player.x, z: player.z };
+    const candidates: SiteCandidate[] = [];
+    for (const radius of SITE_RADII) {
+      for (let index = 0; index < SITE_BEARINGS; index++) {
+        const angle = (index / SITE_BEARINGS) * Math.PI * 2;
+        const pose = api.nearestRoadPose(scratch.set(player.x + Math.cos(angle) * radius, 0, player.z + Math.sin(angle) * radius));
+        candidates.push({
+          x: pose.position.x, y: pose.position.y, z: pose.position.z, heading: pose.heading,
+          district: api.districtAt(pose.position.x, pose.position.z),
+        });
+      }
+    }
+    const chosen = pickBlockadeSite(candidates, player, anchor, api.districtAt(anchor.x, anchor.z));
+    if (chosen) return { x: chosen.x, y: chosen.y, z: chosen.z, heading: chosen.heading };
+    // The whole probe found no road at all (deep veld, or the dam). Fall back to the one under our
+    // feet rather than refusing: a rung nobody can see cannot be "swallowing" anything, and a protest
+    // in an odd place still beats a feature that silently never happens.
+    const here = api.nearestRoadPose(scratch.set(player.x, 0, player.z));
+    return { x: here.position.x, y: here.position.y, z: here.position.z, heading: here.heading };
   }
 
-  function raise(force = false, preferPlayer = false): boolean {
+  function raise(force = false, atMyFeet = false): boolean {
     if (barricade || (!force && !outageLedger.ripe)) return false;
-    const site = chooseSite(preferPlayer);
+    const site = chooseSite(atMyFeet);
     size = blockadeSize(api.hour());
     // Every prop is grounded on the surface under IT, not on the site's single height — see Barricade.
     barricade = new Barricade(api.scene, site, size, tyreCount(size), (x, z) => api.surfaceHeightAt(x, z));
@@ -145,13 +209,18 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
     roadClosures.open({ id: 'protest:blockade', x: site.x, z: site.z, radius: closureRadius(size), toll: BLOCKADE_TOLL });
 
+    // WHERE, IN WORDS. A district name is not a direction and a map is not what somebody reads while
+    // walking, so the notification carries the bearing and the distance, the HUD carries the live
+    // distance, the map and minimap carry a blip, and the plume carries itself.
     const district = api.districtAt(site.x, site.z);
-    api.notify(`${district} is shut`,
+    const player = api.playerPosition();
+    const away = `${Math.round(distanceTo(site.x, site.z))} m ${bearingName(site.x - player.x, site.z - player.z)}`;
+    api.notify(`${district} has shut its road`,
       size === 'dawn'
-        ? 'Every entrance, before work, the way it is always done. Fourth week without water; the tanker came once and it was empty.'
-        : 'A few neighbours and whatever was in the yard. Fourth week without water; the tanker came once and it was empty.',
+        ? `Every entrance, before work, the way it is always done. Black smoke ${away} — you stood in the dark here too. Fourth week without water; the tanker came once and it was empty.`
+        : `A few neighbours and whatever was in the yard. Black smoke ${away} — you stood in the dark here too. Fourth week without water; the tanker came once and it was empty.`,
       true);
-    api.analytics('blockade_raised', { detail: size, value: Math.round(outageLedger.hours * 10) / 10 });
+    api.analytics('blockade_raised', { detail: size, value: Math.round(distanceTo(site.x, site.z)) });
     api.persist();
     return true;
   }
@@ -166,6 +235,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     crowd = [];
     phase = 'smouldering';
     blockadeHoursLeft = 1.5;
+    // The grievance is knocked back on EVERY stand-down, not only on a paid picket. Without this a
+    // blockade the player never reached faded with the ledger still ripe, and `update()` raised the
+    // next one on the same frame — a permanent protest treadmill somewhere behind him.
+    outageLedger.spend();
+    warned = false;
     api.analytics('blockade_cleared', { detail: reason, value: scorch.count });
   }
 
@@ -180,8 +254,19 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   // ---- the picket ---------------------------------------------------------------------------------
 
-  function join(): void {
-    if (phase !== 'live') return;
+  /**
+   * NO REFUSAL PATH, ON PURPOSE — and the same is true of `feedNow` and `burnNow` below.
+   *
+   * The foundation's ladder returns on the first rung that offers something and `act()` has no way to
+   * say "I could not do it, ask the next rung", so a verb that offers and then declines does not merely
+   * fizzle: it EATS THE KEY, and on foot the rung it eats it from is `E  Enter vehicle`. That is the
+   * owner's third report, and the fix has to be structural rather than careful.
+   *
+   * So every rung in this feature computes its precondition in `test()` and hands the already-validated
+   * subject to the verb. These functions take what they need as an argument and cannot fail. If you add
+   * a verb here, add it the same way: the guard belongs in the predicate, never in the action.
+   */
+  function joinNow(): void {
     phase = 'picketing';
     smoke = 58; picketElapsed = 0; feedCooldown = 0;
     api.notify('You took a corner of the road', `Hold it for ${PICKET_SECONDS} seconds. Press E at the fire to throw a tyre on whenever the SMOKE bar drops.`, true);
@@ -202,17 +287,26 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
    * throw a tyre AT anything — it is placed on the barricade by world coordinate, exactly like every
    * other prop, and the necklacing block is untouched.
    */
-  function feed(): boolean {
-    if (phase !== 'picketing' || !barricade || feedCooldown > 0) return false;
-    feedCooldown = TYRE_FEED_COOLDOWN; // a same-frame guard only; the OFFER is never gated on it
+  /** No cooldown check, and none is needed: `InputManager.consume('KeyE')` is edge-triggered and
+   *  cleared on read, so one keypress reaches this once however many sim sub-steps a frame runs. The
+   *  cooldown below exists only for the console/QA door, which has no edge to consume. */
+  function feedNow(fire: Barricade): void {
+    feedCooldown = TYRE_FEED_COOLDOWN;
     smoke = Math.min(100, smoke + SMOKE_PER_TYRE);
-    barricade.addTyre();                  // the visible tyre: no parent, no target, coordinates only
-    barricade.ignite([{ kind: 'tyre' }]); // the props, never a person — `ignite` filters its candidates
+    fire.addTyre();                  // the visible tyre: no parent, no target, coordinates only
+    fire.ignite([{ kind: 'tyre' }]); // the props, never a person — `ignite` filters its candidates
     if (!taughtFeed) {
       taughtFeed = true;
       api.notify('On the fire it goes', 'Black smoke is the whole point: when the smoke goes the cameras go. Keep pressing E while the bar drains.', true);
     }
     api.analytics('tyre_fed', { value: Math.round(smoke) });
+  }
+
+  /** The console/QA door onto the same verb, which DOES have to answer "could you?" — the predicate is
+   *  the rung's job and a command line has no rung. */
+  function feed(): boolean {
+    if (phase !== 'picketing' || !barricade || feedCooldown > 0) return false;
+    feedNow(barricade);
     return true;
   }
 
@@ -257,21 +351,21 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     return { x: position.x, y: api.surfaceHeightAt(position.x, position.z), z: position.z };
   }
 
-  function canBurnHere(): boolean {
-    if (tyres <= 0) return false;
+  /** The validated spot, or nothing — this is the rung's predicate, and what it returns is what the
+   *  verb is handed, so the two can never disagree about whether there was tar. */
+  function burnableSpot(): { x: number; y: number; z: number } | undefined {
+    if (tyres <= 0) return undefined;
     const spot = tarUnderfoot();
-    if (!spot) return false;
-    return !solo.some((entry) => Math.hypot(entry.x - spot.x, entry.z - spot.z) < SOLO_SPACING);
+    if (!spot) return undefined;
+    return solo.some((entry) => Math.hypot(entry.x - spot.x, entry.z - spot.z) < SOLO_SPACING) ? undefined : spot;
   }
 
   /**
-   * Roll one tyre out and light it. Takes NO target: a world position is computed from the player's
-   * own feet and the fire is built from numbers. There is no overload, no parent argument, and no
-   * path from an entity to this call — that is the necklacing block, expressed as a shape.
+   * Roll one tyre out and light it. Takes NO target: it is handed a world position computed from the
+   * player's own feet and the fire is built from numbers. There is no overload, no parent argument,
+   * and no path from an entity to this call — that is the necklacing block, expressed as a shape.
    */
-  function burnTyre(): boolean {
-    const spot = tarUnderfoot();
-    if (!spot || tyres <= 0) return false;
+  function burnNow(spot: { x: number; y: number; z: number }): void {
     tyres -= 1;
     const id = `protest:tyre:${soloSerial++}`;
     const fire = new TyreFire(api.scene, spot.x, spot.y, spot.z, SOLO_TYRE_SECONDS, soloSmoke, soloFlame);
@@ -280,6 +374,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     api.notify('Tyre out, tyre lit', 'That road is closed until it burns down. The mark stays.', true);
     api.analytics('tyre_burned', { value: solo.length });
     api.persist();
+  }
+
+  /** The console/QA door onto the same verb. */
+  function burnTyre(): boolean {
+    const spot = burnableSpot();
+    if (!spot) return false;
+    burnNow(spot);
     return true;
   }
 
@@ -289,10 +390,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (disposed) return;
     const hour = api.hour();
     const position = api.playerPosition();
-    // The accurate half of the grievance clock: real game hours, the real player position, the real
-    // grid. `outageLedger.driven` was set at construction, so the eager power-grid credit stands down
-    // and an outage spanning the chunk's arrival is counted once rather than twice.
-    tickOutage(hour, position.x, position.z);
+    // The grievance clock, continuing the very count the registry's eager tick was running before this
+    // chunk arrived — same object, same call, same rate. `FeatureHost.update` runs the eager hook only
+    // while the body is unloaded, so exactly one of the two is live at any moment.
+    tickGrievance({ hour, position });
     const elapsedHours = Math.max(0, Math.min(0.5, hourDelta(lastHour, hour)));
     lastHour = hour;
 
@@ -307,7 +408,21 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       solo = solo.filter((other) => other !== entry);
     }
 
-    if (!barricade) return;
+    if (!barricade) {
+      // THE WARNING BEAT. One line, before anything happens, naming the place the chip has been
+      // filling for — so the road closing later is the second half of a sentence and not a surprise.
+      if (!warned && outageLedger.warning) {
+        warned = true;
+        const at = outageLedger.hasAnchor ? { x: outageLedger.anchorX, z: outageLedger.anchorZ } : position;
+        api.notify(`${api.districtAt(at.x, at.z)} has had enough`,
+          'Fourth week without water and the lights just went again while you were standing in it. Somebody is talking about closing the road.', false);
+        api.analytics('grievance_warned', { value: Math.round(outageLedger.hours * 10) / 10 });
+      }
+      // AND THE PROTEST RAISES ITSELF. No prompt, no key, nothing to press from across the city: the
+      // grievance ripens and a road closes somewhere the player can walk to and see the smoke from.
+      if (outageLedger.ripe) raise();
+      return;
+    }
     barricade.update(dt);
     blockadeHoursLeft -= elapsedHours;
 
@@ -343,33 +458,49 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       entries.push({ id: 'protest:hold', label: 'HOLD', value: `${Math.max(0, Math.ceil(PICKET_SECONDS - picketElapsed))}s` });
     } else if (barricade && phase !== 'smouldering') {
       entries.push({ id: 'protest:way', label: 'PICKET', value: `${Math.round(distanceTo(barricade.site.x, barricade.site.z))} m` });
+    } else {
+      // The SAME function the registry's eager slice calls, so the strip cannot change shape at the
+      // moment this chunk lands — the README's rule, and the reason petrol's gauge is built this way.
+      entries.push(...grievanceHud());
     }
     if (tyres > 0) entries.push({ id: 'protest:tyres', label: 'TYRES', value: `${tyres}` });
     return entries.length ? entries : undefined;
   }
 
+  /** The blip. A standing blockade is a live thing this feature owns and moves, so it belongs here and
+   *  not in the eager mapIcons.ts — and it is what turns "a road somewhere is shut" into somewhere the
+   *  player can steer. Not an `objective` pin: nobody sent him, he is allowed to ignore it. */
+  function mapIcons(): FeatureMapIcon[] {
+    if (!barricade || phase === 'smouldering') return [];
+    return [{ x: barricade.site.x, z: barricade.site.z, color: BLIP_COLOR, shape: 'diamond' }];
+  }
+
   // ---- interactions -------------------------------------------------------------------------------
 
   /**
-   * Every prompt here names the key AND what pressing it will do, because the owner's playtest report
-   * on the old set was "tyre throwing didn't seem to work but it could be me doing it wrong" — which
-   * is a report about the prompt, not about the code. A verb the player cannot tell they performed is
-   * a verb that does not exist.
+   * EVERY RUNG HERE BELONGS TO SOMETHING STANDING IN FRONT OF THE PLAYER, and every one of them offers
+   * only when its verb is certain to run. Both halves of that are load-bearing:
    *
-   * The feed rung is also NOT gated on its cooldown any more. It used to be, and the effect was that
-   * pressing E made the prompt disappear and come back three seconds later as `E  Burn a tyre` — the
-   * band flickering between two different verbs at the one moment the player is looking for feedback.
+   *  - There is no rung for starting a protest. `E  Follow the smoke` used to sit at order 60 with no
+   *    proximity test whatsoever, so for as long as the grievance stayed ripe it offered across the
+   *    entire map — above `E  Enter vehicle` in Game.updateOnFoot — and the owner could not get into a
+   *    car. The protest now raises itself in `update()`; the smoke is the invitation.
+   *  - Each `test()` resolves the subject (the fire, the barricade, the spot of tar) and hands it to a
+   *    verb with no refusal path. The ladder returns on the first rung that offers and `act()` cannot
+   *    report failure, so "offers but declines" is not a fizzle, it is a stolen keypress.
    */
   const rungs: InteractionDescriptor[] = [
     {
       id: 'protest:feed', order: 54, context: 'foot',
-      test: () => (phase === 'picketing' && nearBarricade()
-        ? { prompt: 'E  Throw a tyre on the fire', act: () => { feed(); } } : undefined),
+      test: () => {
+        const fire = phase === 'picketing' && nearBarricade() ? barricade : undefined;
+        return fire ? { prompt: 'E  Throw a tyre on the fire', act: () => feedNow(fire) } : undefined;
+      },
     },
     {
       id: 'protest:join', order: 56, context: 'foot',
       test: () => (phase === 'live' && nearBarricade()
-        ? { prompt: 'E  Join the picket · keep the smoke up', act: join } : undefined),
+        ? { prompt: 'E  Join the picket · keep the smoke up', act: joinNow } : undefined),
     },
     {
       id: 'protest:take', order: 58, context: 'foot',
@@ -386,35 +517,37 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         } : undefined),
     },
     {
-      id: 'protest:raise', order: 60, context: 'foot',
-      test: () => (!barricade && outageLedger.ripe ? { prompt: 'E  Follow the smoke', act: () => { raise(); } } : undefined),
-    },
-    {
       id: 'protest:burn', order: 62, context: 'foot',
-      test: () => (canBurnHere() ? { prompt: 'E  Roll out a tyre and light it', act: () => { burnTyre(); } } : undefined),
+      test: () => {
+        const spot = burnableSpot();
+        return spot ? { prompt: 'E  Roll out a tyre and light it', act: () => burnNow(spot) } : undefined;
+      },
     },
   ];
 
   // ---- save ---------------------------------------------------------------------------------------
 
   function serialize(): ProtestSave {
-    const ledger = outageLedger.store();
-    return { hours: ledger.hours, anchor: ledger.anchor, tyres, pickets, scorch: scorch.serialize() };
+    return { tyres, pickets, scorch: scorch.serialize() };
   }
 
   function restore(next: unknown): void {
     const loaded = sanitizeProtestState(next);
-    outageLedger.load(loaded);
     tyres = loaded.tyres; pickets = loaded.pickets;
     scorch.load(loaded.scorch);
     clearBlockade();
+    // A checkpoint reload does not un-live the outages the player stood in, so the grievance stays —
+    // but the blockade that WAS standing has just been torn down, so the ledger is knocked back rather
+    // than left ripe, or `update()` raises a replacement on the very next frame.
+    outageLedger.spend();
+    warned = false;
   }
 
   // ---- console + machine playthrough ---------------------------------------------------------------
 
   function status(): string {
-    return `phase=${phase} hours=${outageLedger.hours.toFixed(2)} ripe=${outageLedger.ripe} tyres=${tyres} pickets=${pickets} `
-      + `smoke=${Math.round(smoke)} scorch=${scorch.count} solo=${solo.length} closures=${roadClosures.count}`;
+    return `phase=${phase} hours=${outageLedger.hours.toFixed(2)} fedup=${Math.round(outageLedger.fraction * 100)}% ripe=${outageLedger.ripe} `
+      + `tyres=${tyres} pickets=${pickets} smoke=${Math.round(smoke)} scorch=${scorch.count} solo=${solo.length} closures=${roadClosures.count}`;
   }
 
   /** Where the standing blockade is, and the console line that gets you back to it. */
@@ -435,7 +568,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         outageLedger.hours = Math.max(outageLedger.hours, RIPE_OUTAGE_HOURS + 1);
         const p = api.playerPosition();
         outageLedger.anchorX = p.x; outageLedger.anchorZ = p.z; outageLedger.hasAnchor = true;
-        return ['Grievance ripe, anchored where you are standing. Walk out and follow the smoke.'];
+        return [`Grievance ripe, anchored where you are standing. A road ${SITE_MIN_METRES}-${SITE_MAX_METRES} m away shuts itself on the next frame — look for the smoke and the blip.`];
       }
       // THE REVIEW ROUTE. One line, from a cold start, standing anywhere: no waiting out three
       // load-shedding cycles to look at the thing. The owner could not reach a protest by hand, and a
@@ -484,7 +617,22 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       case 'join':
         if (phase !== 'live') return `stuck:phase-${phase}`;
         if (!nearBarricade()) return `stuck:not-near:${Math.round(distanceTo(barricade!.site.x, barricade!.site.z))}`;
-        join(); return 'ok';
+        joinNow(); return 'ok';
+      // The two questions the E-swallowing bug was about, answerable from the harness: what does the
+      // ladder offer right now, and does pressing it actually do something. See qa('press').
+      case 'offer': {
+        const offer = resolveRung();
+        return offer ? `ok:${offer.prompt}` : 'ok:(nothing — E belongs to the rest of the ladder)';
+      }
+      case 'press': {
+        const offer = resolveRung();
+        if (!offer) return 'ok:no-offer';
+        const before = status();
+        offer.act();
+        return before === status() ? `failed:offer-did-nothing:${offer.prompt}` : `ok:${offer.prompt}`;
+      }
+      case 'fedup': return `ok:${Math.round(outageLedger.fraction * 100)}`;
+      case 'blips': return `ok:${mapIcons().length}`;
       case 'feed':
         if (phase !== 'picketing') return `stuck:phase-${phase}`;
         feedCooldown = 0;
@@ -501,6 +649,18 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       case 'necklace': return necklaceProbe();
       default: return `stuck:unknown-action:${action}`;
     }
+  }
+
+  /** Whatever THIS feature's rungs would offer on foot right now, resolved exactly as the host does:
+   *  lowest order first, first offer wins. */
+  function resolveRung(): { prompt: string; act(): void } | undefined {
+    const at = api.playerPosition();
+    const ctx = { context: 'foot' as const, position: at, vehicle: api.drivenVehicle(), hour: api.hour() };
+    for (const rung of [...rungs].sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : 1))) {
+      const offer = rung.test(ctx);
+      if (offer) return offer;
+    }
+    return undefined;
   }
 
   function necklaceProbe(): string {
@@ -537,8 +697,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // Belt and braces: anything this feature ever closed is reopened, so a stale chunk arrival or a
     // new game can never leave the city routing around a barricade that isn't there.
     for (const id of roadClosures.ids) if (id.startsWith('protest:')) roadClosures.close(id);
-    outageLedger.reset(); // also clears `driven`, handing the clock back to the eager power-grid hook
+    outageLedger.reset(); // a new game re-earns the grievance; the registry's eager tick takes it back
   }
 
-  return { update, hud, interactions: () => rungs, serialize, restore, command, qa, dispose };
+  return { update, hud, mapIcons, interactions: () => rungs, serialize, restore, command, qa, dispose };
 }
