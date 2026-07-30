@@ -47,6 +47,7 @@ import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from
 import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type GeneratedBuilding } from './CityGen';
 import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
+import type { BuiltModel } from './models/kit';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS } from './ProceduralMaterials';
@@ -104,6 +105,42 @@ export function highestColliderTop(colliders: readonly Collider[], x: number, z:
   }
   return best;
 }
+/**
+ * ONE TRUNK, AS A CIRCLE.
+ *
+ * A tree's gameplay volume is the trunk and only the trunk, and a trunk is round — so it is registered
+ * in the PROP grid (a circle in a 12 u hash) rather than pushed onto City.colliders as a rectangle.
+ * Three reasons, all of them the difference between a fix and a regression:
+ *
+ *   COST. `props.blocked` is already called on every player, ped and vehicle move, so a trunk in that
+ *   grid adds no new query — only a couple of entries in one bucket. City.colliders is append-only for
+ *   the life of the session and is scanned per bucket by the player's per-frame clamp AND by
+ *   supportHeight; adding thousands of trunk rectangles to it would tax both forever, for a volume
+ *   nobody can stand on.
+ *
+ *   SHAPE. A circle cannot produce the invisible corner an oversized rectangle does.
+ *
+ *   ONE MODEL. Roadside trees (UrbanInfrastructure) and park trees (addParkTree) have always been
+ *   'tree' props, which is already wired to the vehicle response: solid tier, so a car is stopped and
+ *   takes SOLID_PROP_DAMAGE_FACTOR damage (harder than a wall) instead of felling it like a bin.
+ *   Scattered trees join that, so there is one tree collision rule in the game, not two.
+ */
+export interface TrunkProp { x: number; z: number; radius: number; height: number; }
+
+/** The trunk prop of an authored library tree, or undefined for anything else — procedural
+ *  undergrowth (hedges, aloes, bougainvillea) keeps its tiers to itself and stays passable, and a
+ *  trunk under SOLID_TRUNK_MIN_DIAMETER declares no tier at all. */
+export function trunkProp(built: BuiltModel, x: number, z: number): TrunkProp | undefined {
+  if (built.group.userData.treeSpecies === undefined) return undefined;
+  const trunk = built.tiers[0];
+  if (!trunk) return undefined;
+  return {
+    x, z,
+    radius: Math.max(trunk.maxX - trunk.minX, trunk.maxZ - trunk.minZ) / 2,
+    height: trunk.y1 - trunk.y0,
+  };
+}
+
 export interface RoadPoint { x: number; z: number; }
 export interface RoadsidePoint extends RoadPoint { inwardX: number; inwardZ: number; width: number; }
 export interface RoadPose { position: THREE.Vector3; heading: number; }
@@ -763,7 +800,7 @@ export class City {
   private buildQueue: Array<[number, number]> = [];
   private queuedCells = new Set<string>();
   /** The cell currently being baked, a few buildings at a time, across frames (spreads the cost). */
-  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; index: number; models: ScatteredModel[]; modelIndex: number; baker: GeometryBaker; colliders: Collider[]; group: THREE.Group };
+  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; index: number; models: ScatteredModel[]; modelIndex: number; baker: GeometryBaker; colliders: Collider[]; trunks: TrunkProp[]; group: THREE.Group };
   /** Where the building meshes for the current build go (a per-building local group, rotated to face
    *  its street, then merged into the cell). Defaults to the root group for up-front geometry. */
   private target: THREE.Group = this.group;
@@ -2228,8 +2265,9 @@ export class City {
       for (const tier of pier.tiers) this.colliders.push(this.tierToWorldCollider(tier, x, z, heading, 0));
     }
     for (const spot of [...plan.venues, ...plan.clutter]) {
-      const { group, colliders } = this.buildOneModel(spot);
+      const { group, colliders, trunk } = this.buildOneModel(spot);
       this.group.add(group); this.colliders.push(...colliders);
+      if (trunk) this.props.register('tree', trunk.x, trunk.z, trunk.radius, trunk.height); // built once, never streamed
     }
     for (const boat of plan.boats) {
       const built = buildModel(boat.name, boat.seed, { variant: boat.variant });
@@ -2377,7 +2415,7 @@ export class City {
         const [cx, cz] = this.buildQueue.shift()!; const key = `${cx},${cz}`;
         this.queuedCells.delete(key);
         if (this.buildingCells.has(key)) continue;
-        this.pending = { key, cellX: cx, cellZ: cz, specs: generateCell(cx, cz), index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], group: this.buildingStore.groupForKey(key) };
+        this.pending = { key, cellX: cx, cellZ: cz, specs: generateCell(cx, cz), index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], trunks: [], group: this.buildingStore.groupForKey(key) };
       }
       const pending = this.pending;
       // One item per budget slice — procedural buildings first, then the scattered structures/foliage;
@@ -2388,14 +2426,22 @@ export class City {
         group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); // baker cloned the geometry
         pending.colliders.push(...colliders);
       } else if (pending.modelIndex < pending.models.length) {
-        const { group, colliders } = this.buildOneModel(pending.models[pending.modelIndex++]!);
+        const { group, colliders, trunk } = this.buildOneModel(pending.models[pending.modelIndex++]!);
         pending.baker.addObject(group);
         group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
         pending.colliders.push(...colliders);
+        if (trunk) pending.trunks.push(trunk);
       }
       if (pending.index >= pending.specs.length && pending.modelIndex >= pending.models.length) { // cell complete: one cheap merge, register colliders once
         pending.baker.finalize(pending.group);
-        if (!this.buildingColliderCells.has(pending.key)) { for (const collider of pending.colliders) this.colliders.push(collider); this.buildingColliderCells.add(pending.key); }
+        // Colliders AND trunk props are registered behind the same once-per-cell gate: this cell's
+        // geometry is disposed and rebuilt every time the player leaves and returns, and a trunk
+        // registered per rebuild would grow the prop grid without bound.
+        if (!this.buildingColliderCells.has(pending.key)) {
+          for (const collider of pending.colliders) this.colliders.push(collider);
+          for (const trunk of pending.trunks) this.props.register('tree', trunk.x, trunk.z, trunk.radius, trunk.height);
+          this.buildingColliderCells.add(pending.key);
+        }
         this.buildingCells.set(pending.key, pending.group);
         this.pending = undefined;
       }
@@ -2580,9 +2626,11 @@ export class City {
   }
 
   /** Build one scattered catalog model at the origin, then place + face it exactly like a building.
-   *  Foliage never registers colliders (thin trunks, dense instancing) — you brush through leaves;
-   *  every structure registers its (true-3D, standable-aware) tier colliders. */
-  private buildOneModel(spec: ScatteredModel): { group: THREE.Group; colliders: Collider[] } {
+   *  Foliage registers no rectangle colliders — you brush through leaves, and a canopy rectangle would
+   *  wall off half a park — but an authored trunk thick enough to be wood (SOLID_TRUNK_MIN_DIAMETER)
+   *  comes back as a 'tree' prop for the caller to register, exactly like the roadside and park trees.
+   *  Every structure registers its (true-3D, standable-aware) tier colliders. */
+  private buildOneModel(spec: ScatteredModel): { group: THREE.Group; colliders: Collider[]; trunk?: TrunkProp } {
     const built = buildModel(spec.name, spec.seed, { variant: spec.variant });
     const foliage = MODEL_INDEX.get(spec.name)?.category === 'foliage';
     // Footprint from the model's massing tiers (local AABB union).
@@ -2610,7 +2658,7 @@ export class City {
       plinth.position.set((minX + maxX) / 2, 0.2 - plinthH / 2, (minZ + maxZ) / 2); plinth.receiveShadow = true; built.group.add(plinth);
       colliders.push(this.tierToWorldCollider({ minX: minX - 0.7, maxX: maxX + 0.7, minZ: minZ - 0.7, maxZ: maxZ + 0.7, y0: -plinthDrop, y1: 0 }, spec.x, spec.z, spec.heading, baseY));
     }
-    return { group: built.group, colliders };
+    return { group: built.group, colliders, trunk: foliage ? trunkProp(built, spec.x, spec.z) : undefined };
   }
 
   /** Transform a local massing tier (axis-aligned) by an arbitrary heading into a world collider. The
@@ -2847,12 +2895,8 @@ export class City {
     if (this.isOnRoad(x, z, 2.4)) return; // parks can overlap roads: no trunks on the tar
     const species = PARK_TREE_SPECIES[Math.abs(Math.trunc(seed)) % PARK_TREE_SPECIES.length]!;
     const built = buildModel(species, seed);
-    const trunk = built.tiers[0]!;
-    this.props.register(
-      'tree', x, z,
-      Math.max(trunk.maxX - trunk.minX, trunk.maxZ - trunk.minZ) / 2,
-      trunk.y1 - trunk.y0,
-    );
+    const trunk = trunkProp(built, x, z);
+    if (trunk) this.props.register('tree', trunk.x, trunk.z, trunk.radius, trunk.height);
     built.group.position.set(x, terrainHeightAt(x, z), z); // sit on the terrain, not the flat plane
     built.group.rotation.y = seed * 2.399963229728653;
     target.add(built.group);
