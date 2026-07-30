@@ -156,13 +156,21 @@ describe('SaveManager', () => {
   it('migrates old saves without cheats to everything off', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     storage.setItem('san-cordova-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
-    expect(manager.load().cheats).toEqual({ fastRun: false, bigJump: false, invulnerable: false });
+    expect(manager.load().cheats).toEqual({ fastRun: false, bigJump: false, invulnerable: false, teflon: false });
+  });
+
+  it('starts a fresh game with teflon off, like every other cheat', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, cheats: { ...DEFAULT_CHEATS, teflon: true } });
+    expect(manager.load().cheats.teflon).toBe(true);
+    expect(manager.reset().cheats.teflon).toBe(false); // "new game" restores DEFAULT_SAVE, which Game assigns over the live cheats
+    expect(DEFAULT_SAVE.cheats.teflon).toBe(false);
   });
 
   it('round trips cheat toggles', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
-    manager.save({ ...DEFAULT_SAVE, cheats: { fastRun: true, bigJump: false, invulnerable: true } });
-    expect(manager.load().cheats).toEqual({ fastRun: true, bigJump: false, invulnerable: true });
+    manager.save({ ...DEFAULT_SAVE, cheats: { fastRun: true, bigJump: false, invulnerable: true, teflon: true } });
+    expect(manager.load().cheats).toEqual({ fastRun: true, bigJump: false, invulnerable: true, teflon: true });
   });
 
   it('round trips a stored garage vehicle', () => {
@@ -213,8 +221,9 @@ describe('SaveManager', () => {
   it('sanitizes invalid cheat data to strict booleans', () => {
     expect(sanitizeCheats(undefined)).toEqual(DEFAULT_CHEATS);
     expect(sanitizeCheats('yes' as unknown as CheatSettings)).toEqual(DEFAULT_CHEATS);
-    expect(sanitizeCheats({ fastRun: 1, bigJump: 'true', invulnerable: true } as unknown as CheatSettings)).toEqual({ fastRun: false, bigJump: false, invulnerable: true });
-    expect(sanitizeCheats({ fastRun: true })).toEqual({ fastRun: true, bigJump: false, invulnerable: false });
+    expect(sanitizeCheats({ fastRun: 1, bigJump: 'true', invulnerable: true } as unknown as CheatSettings)).toEqual({ fastRun: false, bigJump: false, invulnerable: true, teflon: false });
+    expect(sanitizeCheats({ fastRun: true })).toEqual({ fastRun: true, bigJump: false, invulnerable: false, teflon: false });
+    expect(sanitizeCheats({ teflon: true })).toEqual({ fastRun: false, bigJump: false, invulnerable: false, teflon: true }); // teflon rides the same cheats slot, so it persists and resets with the rest
     const defaults = sanitizeCheats(undefined); defaults.fastRun = true;
     expect(DEFAULT_CHEATS.fastRun).toBe(false);
   });
