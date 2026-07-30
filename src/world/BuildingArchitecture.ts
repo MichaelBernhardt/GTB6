@@ -964,10 +964,17 @@ export class BuildingArchitecture {
    * through place(), which addStructuralDetail already gates on `drawing` — so plan() cannot see any
    * of it, and plan/build parity (and with it every front door in the city) holds by construction.
    *
-   * It also costs no draw calls. Only `stone` and `darkMetal` are used, both already on every
-   * downtown building (setback bands, spandrel bands, mullions, crown masts), and GeometryBaker
-   * buckets by material PROPERTIES rather than identity — so all of this merges into meshes the cell
-   * already had.
+   * It also costs no draw calls. Only `stone`, `darkMetal` and the building's own `spec.roof` are
+   * used, all three already on every downtown building (setback bands, spandrel bands, mullions,
+   * crown masts, the roof plane itself), and GeometryBaker buckets by material PROPERTIES rather than
+   * identity — so all of this merges into meshes the cell already had.
+   *
+   * WHERE EACH VALUE GOES, because getting this wrong is what makes a crown look cheap: `stone` and
+   * `darkMetal` are the two extremes of the palette and are spent only on THIN pieces — the parapet
+   * lip, the cornice, a coping, corner piers, tanks, masts. Every LARGE new face (the roof deck, the
+   * plant-room and lift-overrun bodies, the first step of the deco cap, the elliptical lantern, the
+   * street plinth) takes `spec.roof`, the tone the building already wears. A bright volume or a black
+   * plate at this size reads as a graphic decal stuck on the massing, not as architecture.
    */
   private addDowntownCrown(spec: BuildingSpec, massing: number, roofY: number): void {
     if (massing === 4) { this.addEllipticalCrown(spec, roofY); return; }
@@ -981,14 +988,20 @@ export class BuildingArchitecture {
       // The main roof carries the tall parapet; a secondary roof (a twin slab, a lower wing, a lift
       // core) gets a shorter one, so a stepped massing reads as steps and not as a repeated stencil.
       this.addParapet(roofs[index]!, index === 0 ? 1.25 + (variant % 3) * 0.45 : 0.85, thickness, cap);
-      // Bitumen, sunk inside the parapet. Downtown roofs were reading as white icing: the slate roof
-      // face is dark, but the setback band several massings wear AT their own roof line is pale stone
-      // and covers most of the deck. A dark membrane both fixes that and gives the pale parapet
-      // something to be pale against — which is what makes the rim read from a rooftop or a hillside.
+      // The deck, sunk inside the parapet, in the building's OWN roof tone. It is here because
+      // downtown roofs were reading as white icing — the setback band several massings wear AT their
+      // roof line is pale stone and covers most of the deck — and re-laying that area in roof grey
+      // both fixes it and gives the pale parapet something to be pale against.
+      //
+      // It is spec.roof and not a dark membrane on purpose. Bitumen is the honest material, but at
+      // this albedo a 200 m² plate ringed in pale coping stops reading as a roof and reads as a hole
+      // with a bathtub rim — and because every downtown roof would get it, the whole roofscape turns
+      // into one repeated black-and-white tile. The frugal rule is to spend the bright accent on the
+      // thin EDGE and leave the big face in the family tone; see the parapet and cornice below.
       const deck = roofs[index]!;
       const inset = thickness * 2 + 0.2;
       if (deck.maxX - deck.minX > inset + 1 && deck.maxZ - deck.minZ > inset + 1) {
-        const membrane = new THREE.Mesh(new THREE.BoxGeometry(deck.maxX - deck.minX - inset, 0.18, deck.maxZ - deck.minZ - inset), this.darkMetal);
+        const membrane = new THREE.Mesh(new THREE.BoxGeometry(deck.maxX - deck.minX - inset, 0.18, deck.maxZ - deck.minZ - inset), spec.roof);
         membrane.position.set((deck.minX + deck.maxX) / 2, deck.y1 + 0.05, (deck.minZ + deck.maxZ) / 2);
         membrane.receiveShadow = true; membrane.name = 'downtown-roof-deck'; this.place(membrane);
       }
@@ -1058,10 +1071,10 @@ export class BuildingArchitecture {
       // Plant room and lift overrun: the two volumes every real office roof carries, and the pair
       // that most cheaply turns a flat top into a stepped one.
       const roomW = Math.min(width * 0.44, 10); const roomD = Math.min(depth * 0.4, 8);
-      box(roomW, 3, roomD, roof.minX + roomW / 2 + 0.7, roof.minZ + roomD / 2 + 0.7, this.stone);
+      box(roomW, 3, roomD, roof.minX + roomW / 2 + 0.7, roof.minZ + roomD / 2 + 0.7, spec.roof);
       const shaftW = Math.min(width * 0.24, 4.6); const shaftD = Math.min(depth * 0.26, 4.4);
       const sx = roof.maxX - shaftW / 2 - 0.9; const sz = roof.minZ + shaftD / 2 + 1.2;
-      box(shaftW, 5.6, shaftD, sx, sz, this.stone);
+      box(shaftW, 5.6, shaftD, sx, sz, spec.roof);
       box(shaftW * 0.72, 0.34, shaftD * 0.72, sx, sz, this.darkMetal, roof.y1 + 5.6);
       return;
     }
@@ -1082,7 +1095,7 @@ export class BuildingArchitecture {
     if (kind === 2) {
       // A stepped cap with corner piers: the deco crown the older CBD blocks wear, and the profile
       // that carries furthest — two shrinking volumes plus four verticals on the parapet line.
-      box(width * 0.66, 2.8, depth * 0.66, cx, cz, this.stone);
+      box(width * 0.66, 2.8, depth * 0.66, cx, cz, spec.roof);
       box(width * 0.38, 2.4, depth * 0.38, cx, cz, cap, roof.y1 + 2.8);
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
         box(1, 1.6, 1, cx + sx * (width - 1) / 2, cz + sz * (depth - 1) / 2, cap);
@@ -1110,7 +1123,7 @@ export class BuildingArchitecture {
   private addEllipticalCrown(spec: BuildingSpec, roofY: number): void {
     const { x, z, width: w, depth: d } = spec;
     const radius = d * 0.39; const stretch = w / Math.max(d, 1);
-    const lantern = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.5, radius * 0.64, 3.4, 20), this.stone);
+    const lantern = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.5, radius * 0.64, 3.4, 20), spec.roof);
     lantern.scale.x = stretch; lantern.position.set(x, roofY + 1.7, z);
     lantern.castShadow = true; lantern.name = 'downtown-roof-crown'; this.place(lantern);
     const drum = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.2, radius * 0.5, 1.7, 20), this.darkMetal);
@@ -1132,6 +1145,11 @@ export class BuildingArchitecture {
    *
    * Every piece rides a REAL front span (frontFacadeSpansAt), so a setback, an arcade or a narrow
    * wing never gets a band floating in front of it.
+   *
+   * The plinth is the DARK one (spec.roof) and the piers and header are pale. With all three in pale
+   * stone the base became a white trellis bolted to the wall — four pale horizontals stacked with the
+   * ledge the glazing pass already hangs. A dark base course is what a Joburg shopfront actually has,
+   * and it gives the pale verticals a bottom to stand on.
    */
   private addDowntownStreetBase(spec: BuildingSpec, massing: number): void {
     if (massing === 4) return; // the elliptical facade is not a plane; see addEllipticalCrown
@@ -1141,7 +1159,7 @@ export class BuildingArchitecture {
     // 0.5, and a base course hung on the front of a walkway slab is a kerb across the arcade mouth.
     for (const span of frontFacadeSpansAt(this.tiers, 0.7, left, right)) {
       if (span.maxX - span.minX < 2.6) continue;
-      const plinth = new THREE.Mesh(new THREE.BoxGeometry(span.maxX - span.minX, 0.7, 0.34), this.stone);
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(span.maxX - span.minX, 0.7, 0.34), spec.roof);
       plinth.position.set((span.minX + span.maxX) / 2, 0.55, span.z + 0.11);
       plinth.receiveShadow = true; plinth.name = 'downtown-plinth'; this.place(plinth);
     }
