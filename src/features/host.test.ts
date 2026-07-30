@@ -243,6 +243,51 @@ describe('FeatureHost console + QA', () => {
   });
 });
 
+describe('FeatureHost grants (give <item>)', () => {
+  const tyres = () => feature({
+    id: 'protest', saveKey: 'protest', label: 'Protests + burning tyres',
+    grants: [{ item: 'tyre', aliases: ['tyres'], label: 'burning tyres' }],
+    system: { grant: (item, count) => `granted:${item}:${count}` },
+  });
+
+  it('answers undefined for an item no feature declares, so the console can say so', () => {
+    const { host } = harness([tyres()]);
+    expect(host.grant('spaceship', 1)).toBeUndefined();
+  });
+
+  it('routes an alias to the loaded owner and returns its line', async () => {
+    const { host } = harness([tyres()]);
+    await host.open('protest');
+    expect(host.grant('tyres', 2)).toEqual(['granted:tyres:2']);
+    expect(host.grant('TYRE', 1)).toEqual(['granted:tyre:1']);
+  });
+
+  it('LOADS an unloaded owner and reports the fetch instead of silently no-opping', async () => {
+    const notes: string[] = [];
+    const api = stubApi({ notify: (title, detail) => { notes.push(`${title}:${detail}`); } });
+    const { host } = harness([tyres()], api);
+    const lines = host.grant('tyres', 2)!;
+    expect(lines[0]).toContain('Loading Protests + burning tyres');
+    await vi.waitFor(() => { expect(host.isLoaded('protest')).toBe(true); });
+    await vi.waitFor(() => { expect(notes.some((note) => note.includes('granted:tyres:2'))).toBe(true); });
+  });
+
+  it('fails loudly when a feature declares an item but ships no grant handler', async () => {
+    const { host } = harness([feature({
+      id: 'protest', saveKey: 'protest', label: 'Protests + burning tyres',
+      grants: [{ item: 'tyre', aliases: ['tyres'], label: 'burning tyres' }],
+    })]);
+    await host.open('protest');
+    expect(host.grant('tyre', 1)![0]).toContain('bug');
+  });
+
+  it('refuses while suspended (online PvP) instead of loading a feature into someone else\'s world', () => {
+    const { host, online } = harness([tyres()]);
+    online.value = true;
+    expect(host.grant('tyres', 1)![0]).toContain('online');
+  });
+});
+
 describe('FeatureHost HUD and menu', () => {
   it('merges every loaded feature’s chips into the one host-owned strip', async () => {
     const { host } = harness([

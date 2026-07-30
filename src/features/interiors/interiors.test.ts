@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createFeature } from './interiors';
 import { buildCore, hasRoofAccess, hatchFoot } from './core';
 import { doorsNear, nearestDoor, resetDoorCache } from './doors';
+import { doorLocked } from './lock';
 import { buildDoorways, buildFloor, markerFade } from './build';
 import { solveFloor } from './floor';
 import type { FeatureGameApi, FeatureMenuView, FeatureSystem, InteractionCtx } from '../types';
@@ -75,6 +76,21 @@ function floorGroups(scene: THREE.Scene): THREE.Object3D[] {
   return scene.children.filter((child) => child.name.startsWith('Floor:'));
 }
 
+/** A door the lock line leaves OPEN in daylight, so tests about visit mechanics (fades, chunks,
+ *  climbing) are not accidentally about locks. The lock behaviour has its own describe block. */
+function openDoorNear(x: number, z: number) {
+  return doorsNear(x, z, 2000)
+    .filter((door) => !doorLocked(door.facts, 'outside', 13))
+    .sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))[0];
+}
+
+/** A door the lock line LOCKS in daylight — somebody's home. */
+function lockedDoorNear(x: number, z: number) {
+  return doorsNear(x, z, 2000)
+    .filter((door) => doorLocked(door.facts, 'outside', 13))
+    .sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))[0];
+}
+
 /** A door on a building with more than one storey, so the stair has somewhere to go. */
 function tallDoor(from: { x: number; z: number }) {
   return doorsNear(from.x, from.z, 2000)
@@ -89,7 +105,11 @@ describe('a visit', () => {
   it('opens on a real doorstep and builds the ground floor of that building, lit', () => {
     const test = harness();
     const system = createFeature(test.api, undefined);
-    const door = nearestDoor(0, 0)!;
+    // An open-class door on a building at least plate-sized, so the position assertion below is
+    // about "under your own building", not about the Tardis clamp on a tiny spaza.
+    const door = doorsNear(0, 0, 2000)
+      .filter((entry) => !doorLocked(entry.facts, 'outside', 13) && entry.facts.width > 15.5 && entry.facts.depth > 21.5)
+      .sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z))[0]!;
     expect(door).toBeDefined();
     test.player.set(door.x, 0, door.z);
 
@@ -339,7 +359,7 @@ describe('a visit', () => {
   it('withdraws every offer during the entry fade instead of stealing the keypress', () => {
     const test = harness();
     const system = createFeature(test.api, undefined);
-    const door = nearestDoor(0, 0)!;
+    const door = openDoorNear(0, 0)!;
     test.player.set(door.x, 0, door.z);
     const prompt = offer(system, test.player);
     expect(prompt?.prompt).toBe(`E  Go inside · ${door.name}`);
@@ -355,7 +375,7 @@ describe('a visit', () => {
     let built = false;
     test.api.chunkBuiltAt = () => built;
     const system = createFeature(test.api, undefined);
-    const door = nearestDoor(0, 0)!;
+    const door = openDoorNear(0, 0)!;
     test.player.set(door.x, 0, door.z);
     expect(offer(system, test.player), 'a doorway on an unbuilt chunk must not offer').toBeUndefined();
     built = true;
@@ -551,3 +571,83 @@ describe('third-person interior visibility', () => {
     built.dispose();
   }, 120000);
 });
+
+/**
+ * THE LOCKS, live. One direction only: entering from the street or the roof asks the lock line;
+ * leaving never asks anything. A pickless player gets an offer that ACTS (rattle + where to buy),
+ * never one that declines — the protest-rung failure class.
+ */
+describe('locked doors', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  it('offers a pickless player an honest Try-the-door that acts, and does not open', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    expect(door).toBeDefined();
+    test.player.set(door.x, 0, door.z);
+    const prompt = offer(system, test.player);
+    expect(prompt?.prompt).toBe(`E  Try the door · ${door.name}`);
+    prompt!.act(); // must DO something: the locked toast with the shop pointer
+    expect(test.notes).toContain('Locked');
+    expect(system.qa!('status', {})).toBe('outside');
+    system.dispose();
+  }, 120000);
+
+  it('with a pick, runs the dial through the real rung and opens on the bite', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(offer(system, test.player)?.prompt).toBe(`E  Pick the lock · ${door.name}`);
+    const picked = system.qa!('pick', {});
+    expect(picked.startsWith('ok'), picked).toBe(true);
+    expect(picked).toContain('picks=1');
+    expect(system.qa!('status', {})).toMatch(/^inside\|/);
+    // EXIT IS NEVER GATED: straight back out, no pick, no check, restored to the slab.
+    expect(system.qa!('leave', {})).toBe('ok');
+    expect(Math.hypot(test.player.x - door.x, test.player.z - door.z)).toBeLessThan(0.01);
+    system.dispose();
+  }, 120000);
+
+  it('holds the door you just left open for the grace window — no second dial to undo a step outside', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('pick', {}).startsWith('ok')).toBe(true);
+    expect(system.qa!('leave', {})).toBe('ok');
+    // Within the grace window the same door opens without the dial.
+    expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    system.dispose();
+  }, 120000);
+
+  it('opensesame opens everything without a pick', () => {
+    const test = harness();
+    test.api.doorsUnlocked = () => true;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    system.dispose();
+  }, 120000);
+
+  it('cancels the dial when the player walks away, costing nothing', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    const start = offer(system, test.player);
+    expect(start?.prompt).toBe(`E  Pick the lock · ${door.name}`);
+    start!.act(); // dial running
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:pick')).toBe(true);
+    test.player.set(door.x + 8, 0, door.z); // walk off the step
+    system.update!(1 / 60);
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:pick') ?? false).toBe(false);
+    system.dispose();
+  }, 120000);
+});
+

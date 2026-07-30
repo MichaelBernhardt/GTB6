@@ -113,6 +113,12 @@ export interface FeatureGameApi {
   /** Whether any vehicle currently stands within `radius` of a world point. Optional; interiors use
    *  it so stepping back outside never restores the player inside a car that parked on the step. */
   vehicleNear?(x: number, z: number, radius: number): boolean;
+  /** How many of a host-owned inventory item the player carries ('lockpick'). Optional so older/test
+   *  hosts stay source compatible; a missing seam reads as owning none. */
+  inventoryCount?(item: string): number;
+  /** True while the `opensesame` console cheat is on: every locked door opens without a pick.
+   *  Optional; a missing seam reads as OFF. */
+  doorsUnlocked?(): boolean;
   districtAt(x: number, z: number): string;
   isPark(x: number, z: number): boolean;
   nearestRoadPose(at: Vector3): { position: Vector3; heading: number };
@@ -212,6 +218,9 @@ export interface FeatureSystem {
   menu?(actionId: string): void;
   /** `feature <id> <args>` from the developer console. Return the lines to print. */
   command?(args: readonly string[]): string[];
+  /** `give <item> [n]` for an item this feature declared in its descriptor's `grants`. Returns the
+   *  feedback line. Only ever called with an item (or alias) from that declaration. */
+  grant?(item: string, count: number): string;
   /** Machine playthrough driver, reached as `window.__qa.feature('<id>', action, args)`. Return a
    *  status string in the harness vocabulary: 'ok', 'stuck:<why>', 'failed:<why>'. */
   qa?(action: string, args: Record<string, unknown>): string;
@@ -223,6 +232,17 @@ export interface FeatureSystem {
 /** The shape of the lazily imported module: `src/features/<id>/<id>.ts` must export this exact name. */
 export interface FeatureModule {
   createFeature(api: FeatureGameApi, state: unknown): FeatureSystem | Promise<FeatureSystem>;
+}
+
+/** One item a feature can hand the player via the console's `give <item> [n]` — eager METADATA only
+ *  (a few strings); the granting itself lives in the lazy body's `FeatureSystem.grant`. */
+export interface FeatureGrant {
+  /** Canonical item word (`tyre`). */
+  readonly item: string;
+  /** Other words that mean the same thing on the console (`tyres`). */
+  readonly aliases?: readonly string[];
+  /** Human name for feedback lines ("burning tyres"). */
+  readonly label: string;
 }
 
 /** The whole eager cost of a feature: one entry in the registry array. Arrays merge; god objects don't. */
@@ -238,6 +258,9 @@ export interface FeatureDescriptor {
   sanitize?(raw: unknown): unknown;
   /** Optional eager proximity stand-in — see FeatureApproach. */
   readonly approach?: FeatureApproach;
+  /** Items the console's `give` can route to this feature — see FeatureGrant. A feature that is not
+   *  loaded when its item is asked for gets LOADED, never silently no-opped (see host.grant). */
+  readonly grants?: readonly FeatureGrant[];
   /** Optional always-on half: a per-sim tick and/or a HUD chip that exist before the body does.
    *  See FeatureEagerSlice, and read the "you probably don't need this" paragraph on it first. */
   readonly eager?: FeatureEagerSlice;

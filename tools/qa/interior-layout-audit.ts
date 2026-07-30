@@ -154,4 +154,4 @@ console.log(`  with a standable top tier recorded on the door (hatch actually us
 
 // ---- lock classification (gate is OFF until the locks pass; the line is settled here) ----------
 const locked = rows.filter((r) => lockedClass(r.door.facts));
-console.log(`\nLOCK LINE D (dormant until LOCKS_ENABLED): ${locked.length} of ${rows.length} doors would be locked (${(100 * locked.length / rows.length).toFixed(1)}%)`);
+console.log(`\nLOCK LINE D (LIVE since the locks pass; day figure — the night fork adds the works): ${locked.length} of ${rows.length} doors locked (${(100 * locked.length / rows.length).toFixed(1)}%)`);

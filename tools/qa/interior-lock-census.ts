@@ -8,6 +8,7 @@ import { allScatteredModels } from '../../src/world/ModelScatter';
 import { CELL_SIZE } from '../../src/world/CityGen';
 import { doorsNear } from '../../src/features/interiors/doors';
 import { buildCore } from '../../src/features/interiors/core';
+import { doorLocked, LOCKS_ENABLED, locksAtNight } from '../../src/features/interiors/lock';
 import type { InteriorDoor } from '../../src/features/interiors.state';
 
 const cells = new Set<string>();
@@ -59,3 +60,16 @@ const roofy = all.filter((d) => {
   return core.storeys > 2 && (commercialStyle.has(d.facts.style) || d.facts.style === 'industrial');
 });
 console.log(`\nROOF candidates (downtown/mixed-use/industrial, storeys > 2): ${roofy.length} of ${all.length}`);
+
+// THE SHIPPED LINE (src/features/interiors/lock.ts): line D + civic lobby open by day, plus the
+// night fork — works (dock + civic lobby) lock 22:00-06:00. Report both clock states.
+console.log(`\nSHIPPED LINE (LOCKS_ENABLED=${LOCKS_ENABLED})`);
+for (const [label, hour] of [['day (12:00)', 12], ['night (23:00)', 23]] as const) {
+  const locked = all.filter((d) => doorLocked(d.facts, 'outside', hour)).length;
+  console.log(`  ${label}: LOCKED ${locked}/${all.length} (${(100 * locked / all.length).toFixed(1)}%)`);
+}
+const nightOnly = all.filter((d) => locksAtNight(d.facts)).length;
+console.log(`  night-only lockups (works: dock + civic lobby): ${nightOnly}`);
+const inside = all.filter((d) => doorLocked(d.facts, 'inside', 23)).length;
+console.log(`  locked from the INSIDE at any hour: ${inside} (must be 0)`);
+

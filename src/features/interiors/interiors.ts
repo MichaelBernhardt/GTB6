@@ -54,9 +54,10 @@ import {
 } from './build';
 import {
   buildCore, CORRIDOR, hasRoofAccess, hatchFoot, rectMaxX, rectMaxZ, rectMinX, rectMinZ, STOREY_HEIGHT,
-  type BuildingCore, type Rect,
+  type BuildingCore, type Finish, type Rect,
 } from './core';
-import { doorLocked } from './lock';
+import { doorLocked, PICK_SWEEP_SECONDS, pickBites, pickBiteWidth } from './lock';
+import { LOCKPICK_PRICE } from '../../core/ShopRules';
 import { stablePositionRandom } from '../../world/StableRandom';
 import { doorDistrict, doorNear, doorsNear, landmarkDoor, nearestDoor, tallestDoorNear } from './doors';
 import { solveFloor, type FloorPlan } from './floor';
@@ -81,8 +82,12 @@ const STREAM_CAP = 22;
 const RELEASE_DWELL = 0.8;
 /** A prop shorter than this is stepped over, not walked around. The solver's grid uses the same sill. */
 const STEP_OVER = 0.55;
-/** Game-seconds a just-used roof hatch stays open to re-entry without a lock check. */
-const HATCH_GRACE = 60;
+/** Game-seconds a door you JUST came out of stays open to re-entry without a lock check — the roof
+ *  hatch (so a pickless player exploring a roof is never marooned out there) and the street door
+ *  (so stepping out to check the street never costs a second dial). */
+const EXIT_GRACE = 60;
+/** Drifting this far from where the dial was started cancels it — golf's walk-off-the-ball rule. */
+const PICK_CANCEL_RANGE = 3.0;
 
 /**
  * THE LAMP POOL — the other half of the stall fix (see the header of build.ts).
@@ -146,10 +151,26 @@ interface Visit {
   peakResident: number;
 }
 
+/** The dial in progress at a locked door: a sweep runs up and falls back until E lands in the bite.
+ *  See the "picking dial" block in lock.ts for the tuning and the reasoning. */
+interface Picking {
+  door: InteriorDoor;
+  via: 'street' | 'roof';
+  /** Where the player stood when the dial started; drifting off it cancels (golf's steppedBack). */
+  x: number; z: number;
+  sweep: number;
+  dir: 1 | -1;
+  misses: number;
+  finish: Finish;
+}
+
 export function createFeature(api: FeatureGameApi, state: unknown): FeatureSystem {
   const saved = state as InteriorsSave | undefined;
   const visited = new Set<string>(saved?.visited ?? []);
   let finds = saved?.finds ?? 0;
+  /** Lifetime successful picks — the practice curve. Persisted. */
+  let picks = saved?.picks ?? 0;
+  let picking: Picking | undefined;
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let visit: Visit | undefined;
   let phase = 0;
@@ -159,9 +180,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /** Monotonic in-game seconds (summed dt — NEVER the wall clock; see the determinism rule). Only
    *  used for the hatch grace window, which is gameplay time, not world generation. */
   let clock = 0;
-  /** After climbing out of a hatch you may drop back in through it for a while without a lock
-   *  check, so a pickless player exploring a roof is never marooned out there. */
-  let hatchGrace: { id: string; until: number } | undefined;
+  /** After leaving a building — by the street door OR the roof hatch — its doors stay open to you
+   *  for EXIT_GRACE game-seconds, so leaving never costs a fresh pick to undo. */
+  let exitGrace: { id: string; until: number } | undefined;
 
   // ---- the fade. The feature API has no screenFade(), so the feature owns one element and takes it
   // away again in dispose(). #fade is z-index 90; this sits just under it and over the HUD.
@@ -421,6 +442,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     for (const light of current.pool.lights) { light.removeFromParent(); light.dispose(); }
     current.pool.ambient.removeFromParent(); current.pool.ambient.dispose();
     if (restore) {
+      // A door you just walked out of does not re-lock in your face: see EXIT_GRACE.
+      exitGrace = { id: current.door.id, until: clock + EXIT_GRACE };
       if (current.entry === 'roof') {
         // They came in over the top: restoring `origin` would teleport them back onto the roof, so
         // the street door puts them out on its own doorstep like anyone else.
@@ -505,7 +528,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       const door = current.door;
       close(false);
       api.playerPosition().set(spot.x, spot.y + 0.05, spot.z);
-      hatchGrace = { id: door.id, until: clock + HATCH_GRACE };
+      exitGrace = { id: door.id, until: clock + EXIT_GRACE };
       api.analytics('roof', { detail: 'exit' });
       api.persist();
     };
@@ -526,12 +549,80 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     return 'ok';
   };
 
-  /** The lock question a roof hatch asks — the same doorLocked() line the street door will use, with
-   *  the grace window on top so a hatch you just climbed out of lets you straight back down. */
-  const hatchLocked = (door: InteriorDoor): boolean => {
-    if (hatchGrace && hatchGrace.id === door.id && clock < hatchGrace.until) return false;
-    return doorLocked(door.facts);
+  /**
+   * THE lock question, asked identically by the street door and the roof hatch — both are entries
+   * from OUTSIDE, so both pass 'outside' to doorLocked (which is where "inside is never locked"
+   * lives; exit paths never ask at all). On top of the classification: `opensesame` opens
+   * everything, and a door you just came out of stays open for the grace window.
+   */
+  const entryLocked = (door: InteriorDoor, hour: number): boolean => {
+    if (api.doorsUnlocked?.()) return false;
+    if (exitGrace && exitGrace.id === door.id && clock < exitGrace.until) return false;
+    return doorLocked(door.facts, 'outside', hour);
   };
+
+  const carriesPick = (): boolean => (api.inventoryCount?.('lockpick') ?? 0) > 0;
+
+  // ---- the picking dial (see lock.ts for the tuning constants and the design note) ---------------
+
+  const startPicking = (door: InteriorDoor, via: 'street' | 'roof', at: THREE.Vector3): void => {
+    picking = {
+      door, via, x: at.x, z: at.z, sweep: 0, dir: 1, misses: 0,
+      finish: buildCore(door.facts).finish,
+    };
+  };
+
+  /** Advance the sweep: up to the top, fall back, forever, until a press or a walk-off ends it. */
+  const tickPicking = (dt: number): void => {
+    const dial = picking;
+    if (!dial) return;
+    const player = api.playerPosition();
+    if (visit || api.drivenVehicle() || Math.hypot(player.x - dial.x, player.z - dial.z) > PICK_CANCEL_RANGE) {
+      picking = undefined; // walking away (or driving off, or being teleported indoors) cancels free
+      return;
+    }
+    dial.sweep += dial.dir * (dt / PICK_SWEEP_SECONDS);
+    if (dial.sweep >= 1) { dial.sweep = 1; dial.dir = -1; }
+    else if (dial.sweep <= 0) { dial.sweep = 0; dial.dir = 1; }
+  };
+
+  const dialBites = (dial: Picking): boolean =>
+    pickBites(dial.sweep, pickBiteWidth(dial.finish, picks, dial.misses));
+
+  /** E during the dial. In the bite: the door opens. Out of it: the sweep starts again — no broken
+   *  picks, no toast, the falling bar is the message. Every miss widens the bite (see lock.ts). */
+  const attemptPick = (instant = false): void => {
+    const dial = picking;
+    if (!dial) return;
+    if (!dialBites(dial)) { dial.misses += 1; dial.sweep = 0; dial.dir = 1; return; }
+    picking = undefined;
+    picks += 1;
+    api.analytics('picked', { detail: dial.via, value: dial.misses });
+    api.persist();
+    if (dial.via === 'roof') enterFromRoof(dial.door, instant);
+    else enter(dial.door, instant);
+  };
+
+  /** The offer while the dial is running: the SAME rung the door offered keeps offering, so the
+   *  press that started the dial and the press that turns the lock are one continuous interaction. */
+  const pickingOffer = (dial: Picking): { prompt: string; act(): void } => ({
+    prompt: dialBites(dial) ? 'E  Turn it — NOW' : 'E  Feel for the bite…',
+    act: () => { attemptPick(); },
+  });
+
+  /** The honest refusal BEFORE any key is offered: a pickless player gets a prompt that says what
+   *  it will do ("try"), and the act really does it — rattle, explanation, where to buy. Never an
+   *  offer that then declines: that steals the press. */
+  const lockedOffer = (door: InteriorDoor, what: 'door' | 'hatch'): { prompt: string; act(): void } => ({
+    prompt: what === 'door' ? `E  Try the door · ${door.name}` : 'E  Try the hatch',
+    act: () => api.notify(
+      'Locked',
+      what === 'door'
+        ? `Rattles, holds. Jozi Arms or any bottle store sells a lock pick (R${LOCKPICK_PRICE}).`
+        : `Bolted from the inside. Jozi Arms or any bottle store sells a lock pick (R${LOCKPICK_PRICE}).`,
+      false,
+    ),
+  });
 
   /**
    * The qualifying building whose roof the player is standing on, or undefined. Cheap first: no
@@ -541,7 +632,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   const roofUnderfoot = (position: THREE.Vector3): InteriorDoor | undefined => {
     const elevation = position.y - api.surfaceHeightAt(position.x, position.z);
     if (elevation < 5) return undefined;
-    for (const door of doorsNear(position.x, position.z, 45)) {
+    // 120, not 45: the search measures to the DOORSTEP, and the far corner of a big works-hall
+    // roof is well over 45u from its own front door — at 45 the rung went dead out there (found
+    // standing on Bracewell Works with the prompt gone). The scan is a cheap cell lookup.
+    for (const door of doorsNear(position.x, position.z, 120)) {
       const roof = door.roof;
       if (!roof) continue;
       if (!hasRoofAccess(buildCore(door.facts))) continue;
@@ -772,11 +866,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         if (visit || swapping) return undefined;
         const door = roofUnderfoot(ctx.position);
         if (!door) return undefined;
-        if (hatchLocked(door)) {
-          return {
-            prompt: 'E  Try the hatch',
-            act: () => api.notify('Locked', 'Bolted from the inside. A lock pick would open it.', false),
-          };
+        if (picking && picking.via === 'roof' && picking.door.id === door.id) return pickingOffer(picking);
+        if (entryLocked(door, ctx.hour)) {
+          if (!carriesPick()) return lockedOffer(door, 'hatch');
+          return { prompt: `E  Pick the hatch lock · ${door.name}`, act: () => startPicking(door, 'roof', ctx.position) };
         }
         return { prompt: `E  In through the roof hatch · ${door.name}`, act: () => { enterFromRoof(door); } };
       },
@@ -812,6 +905,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         // into the interior of an invisible building. No offer until the chunk is really built.
         // (Hosts without the seam keep the old behaviour.)
         if (api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) return undefined;
+        if (picking && picking.via === 'street' && picking.door.id === door.id) return pickingOffer(picking);
+        if (entryLocked(door, ctx.hour)) {
+          if (!carriesPick()) return lockedOffer(door, 'door');
+          return { prompt: `E  Pick the lock · ${door.name}`, act: () => startPicking(door, 'street', ctx.position) };
+        }
         return { prompt: `E  Go inside · ${door.name}`, act: () => { enter(door); } };
       },
     },
@@ -828,6 +926,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       }
       phase += dt;
       clock += dt;
+      tickPicking(dt);
       // THE MARKERS FADE UP AS YOU REACH THEM. A shop pad pulses at full strength from across the
       // street because there are six of them; there are thousands of front doors, so a door only
       // lights when you are nearly on its step and a street of houses reads as a street of houses.
@@ -861,7 +960,16 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     },
 
     hud: (): FeatureHudEntry[] | undefined => {
-      if (!visit) return undefined;
+      if (!visit) {
+        // The dial: the fill bar IS the sweep, and the chip flares (warn) while the lock bites —
+        // the same meter language golf's POWER/TEMPO chips taught.
+        if (!picking) return undefined;
+        const biting = dialBites(picking);
+        return [{
+          id: 'interiors:pick', label: 'PICK', value: biting ? 'NOW' : '···',
+          fill: Math.round(Math.max(0, Math.min(1, picking.sweep)) * 100), warn: biting,
+        }];
+      }
       const plan = here(visit);
       return [
         { id: 'interiors:where', label: plan.eyebrow, value: visit.door.name },
@@ -874,13 +982,15 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
     interactions: () => rungs,
 
-    serialize: () => ({ visited: [...visited].slice(-32), finds }),
+    serialize: () => ({ visited: [...visited].slice(-32), finds, picks }),
 
     restore: (next) => {
       const incoming = next as InteriorsSave | undefined;
       visited.clear();
       for (const id of incoming?.visited ?? []) visited.add(id);
       finds = incoming?.finds ?? 0;
+      picks = incoming?.picks ?? 0;
+      picking = undefined;
       close(false);
     },
 
@@ -1032,6 +1142,40 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         if (entered !== 'ok') return entered;
         return `ok|${door.id}|floor=${visit ? (visit as Visit).floor : -1}`;
       }
+      // What the lock thinks of the nearest door, and what the player carries to answer it with.
+      if (action === 'locked') {
+        const door = pick();
+        if (!door) return 'stuck:no-doors';
+        return `ok|${door.id}|locked=${entryLocked(door, api.hour()) ? 'yes' : 'no'}|class=${doorLocked(door.facts, 'outside', api.hour()) ? 'locked' : 'open'}|pick=${api.inventoryCount?.('lockpick') ?? 0}|picks=${picks}`;
+      }
+      // The full picking arc, THROUGH THE RUNG the player uses: stand on the step, read the offer,
+      // start the dial with a real act(), tick the sweep, press in the bite, be inside.
+      if (action === 'pick') {
+        const door = pick();
+        if (!door) return 'stuck:no-doors';
+        if (visit) leave(true);
+        player.set(door.x, api.surfaceHeightAt(door.x, door.z), door.z);
+        streamDoorways(door.x, door.z);
+        const rung = rungs.find((entry) => entry.id === 'interiors:door')!;
+        const frame = () => rung.test({ context: 'foot', position: player, vehicle: undefined, hour: api.hour() });
+        const first = frame();
+        if (!first) return 'failed:no-offer';
+        if (first.prompt.startsWith('E  Go inside')) return 'failed:not-locked';
+        if (first.prompt.startsWith('E  Try the door')) return 'failed:no-pick';
+        first.act(); // starts the dial
+        if (!picking) return 'failed:dial-did-not-start';
+        for (let step = 0; step < 1200 && picking; step++) {
+          tickPicking(1 / 60);
+          const now = frame();
+          if (!now) return 'failed:offer-vanished-mid-dial';
+          // The rung says the lock is biting; the driver presses. attemptPick(true) is the same
+          // press without the 260 ms fade timer — the deterministic path every qa entry uses.
+          if (now.prompt.includes('NOW')) { attemptPick(true); break; }
+        }
+        if (picking) return 'failed:still-picking-after-20s';
+        if (!visit) return 'failed:picked-but-not-inside';
+        return `ok|picks=${picks}`;
+      }
       if (action === 'enter' || action === 'run') {
         const door = pick();
         if (!door) return 'stuck:no-doors';
@@ -1086,7 +1230,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     },
 
     dispose: () => {
-      disposed = true; swapping = false;
+      disposed = true; swapping = false; picking = undefined;
       for (const handle of timers) clearTimeout(handle);
       timers.clear();
       close(false);

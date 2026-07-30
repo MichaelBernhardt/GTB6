@@ -94,6 +94,9 @@ export interface InteriorsSave {
   /** How many finds have been paid, ever. Caps the payout so a city full of doors is a discovery,
    *  never a farm. */
   finds: number;
+  /** Lifetime successful lock picks. Drives the practice curve: past PICK_MASTERY the bite window
+   *  doubles for good, so the two-hundredth house is effectively instant. */
+  picks: number;
 }
 
 /** How many first visits pay out. Small, generous, and then it stops mattering. */
@@ -101,12 +104,15 @@ export const FIND_CAP = 12;
 
 /** Runs inside SaveManager's synchronous deserialize, on an already generically-sanitised blob. */
 export function sanitizeInteriorsState(raw: unknown): InteriorsSave {
-  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown };
+  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown; picks?: unknown };
   const visited = Array.isArray(source.visited)
     ? source.visited.filter((entry): entry is string => typeof entry === 'string' && entry.length < 32).slice(0, 32)
     : [];
   const finds = typeof source.finds === 'number' && Number.isFinite(source.finds)
     ? Math.max(0, Math.min(FIND_CAP, Math.floor(source.finds)))
     : 0;
-  return { visited, finds };
+  const picks = typeof source.picks === 'number' && Number.isFinite(source.picks)
+    ? Math.max(0, Math.min(1_000_000, Math.floor(source.picks)))
+    : 0;
+  return { visited, finds, picks };
 }
