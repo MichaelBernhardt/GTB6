@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { Barricade, ScorchField, TyreFire } from './Barricade';
 import { createFeature } from './protest';
-import { ProhibitedTyreHostError, SCORCH_CAP, outageLedger } from '../protest.state';
+import {
+  outageLedger, ProhibitedTyreHostError, RIPE_OUTAGE_HOURS, SCORCH_CAP, SITE_MIN_METRES,
+  TYRE_CARRY_CAP,
+} from '../protest.state';
 import { FeatureHost } from '../host';
 import { FEATURES } from '../registry';
 import { roadClosures } from '../../systems/NavGraph';
@@ -47,6 +50,19 @@ function stubApi(overrides: Partial<FeatureGameApi> = {}): FeatureGameApi & { no
     ...overrides,
   } as unknown as FeatureGameApi;
   return Object.assign(api, { notices, earned: 0, events, get earnedTotal() { return earned; } }) as never;
+}
+
+/**
+ * Walk to the barricade.
+ *
+ * The site is no longer the road under the player's feet — that was the owner's "it just seems to spawn
+ * a protest where I am" — so every test about the picket has to make the walk the player makes. The
+ * stub's `playerPosition()` hands back one live vector, exactly as the real api does.
+ */
+function walkToBlockade(api: FeatureGameApi, system: { qa?(action: string, args: Record<string, unknown>): string }): void {
+  const site = system.qa?.('site', {}) ?? '';
+  const [x, z] = site.slice(3).split(',').map(Number);
+  if (Number.isFinite(x) && Number.isFinite(z)) api.playerPosition().set(x!, 0, z!);
 }
 
 /**
@@ -149,10 +165,11 @@ describe('scorch field', () => {
 });
 
 describe('the eager-to-lazy handover', () => {
-  it('a session that ripened BEFORE the chunk loaded still raises on the first press', () => {
-    // Exactly what the first in-engine playthrough did, and exactly where it failed: the eager
-    // approach counted the outage, showed `E  Follow the smoke`, the chunk arrived — and the body
-    // adopted an empty save slice over the top, so the press did nothing.
+  it('a session that ripened BEFORE the chunk loaded raises a protest on its own, with no press', () => {
+    // Exactly what the first in-engine playthrough did, and where it has failed twice: the eager half
+    // counted the outage, `E  Follow the smoke` appeared… and then either the body wiped the ledger
+    // with an empty save slice, or the press raised a barricade on top of the player. There is no
+    // press in this path any more. The body simply arrives, sees a ripe grievance, and closes a road.
     roadClosures.clear();
     outageLedger.reset();
     outageLedger.tick(2, 120, -300, false);
@@ -161,12 +178,159 @@ describe('the eager-to-lazy handover', () => {
 
     const api = stubApi();
     const system = createFeature(api, undefined); // a fresh game: no stored protest slice at all
-    const rung = (system.interactions?.() ?? []).find((entry) => entry.id === 'protest:raise');
-    const offer = rung?.test({ context: 'foot', position: new THREE.Vector3(), vehicle: undefined, hour: 5 });
-    expect(offer?.prompt).toBe('E  Follow the smoke');
-    offer?.act();
+    expect(outageLedger.ripe).toBe(true);         // the grievance survived the chunk landing on it
+    expect(system.qa?.('site', {})).toBe('stuck:no-blockade');
+
+    system.update?.(0.1);
     expect(system.qa?.('site', {})).toMatch(/^ok:/);
     expect(system.qa?.('closures', {})).toContain('protest:blockade');
+    expect(api.notices.join(' ')).toMatch(/has shut its road/);
+    system.dispose();
+  });
+
+  it('does NOT raise one before the grievance ripens, and says so first', () => {
+    roadClosures.clear();
+    outageLedger.reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    for (let step = 0; step < 20; step++) system.update?.(0.1);
+    expect(system.qa?.('site', {})).toBe('stuck:no-blockade');
+    expect(api.notices).toEqual([]);
+
+    // The warning beat, once, before anything happens.
+    outageLedger.hours = RIPE_OUTAGE_HOURS * 0.7;
+    system.update?.(0.1);
+    system.update?.(0.1);
+    expect(api.notices.filter((line) => /has had enough/.test(line))).toHaveLength(1);
+    expect(system.qa?.('site', {})).toBe('stuck:no-blockade');
+    system.dispose();
+  });
+
+  it('spends the grievance on every stand-down, so protests cannot chain forever', () => {
+    roadClosures.clear();
+    outageLedger.reset();
+    setPower(true); // the lights are back on: nothing may be credited while this runs
+    let hour = 5;
+    const api = stubApi({ hour: () => hour });
+    const system = createFeature(api, undefined);
+    outageLedger.hours = RIPE_OUTAGE_HOURS + 2;
+    system.update?.(0.1);
+    expect(system.qa?.('site', {})).toMatch(/^ok:/);
+
+    // Let it fade unattended: the ledger must come back below ripeness or update() raises the next
+    // one on the very next frame, forever, somewhere behind the player.
+    for (let step = 0; step < 400; step++) { hour = (hour + 0.05) % 24; system.update?.(0.5); }
+    expect(outageLedger.ripe).toBe(false);
+    expect(system.qa?.('site', {})).toBe('stuck:no-blockade');
+    system.dispose();
+  });
+});
+
+/**
+ * THE OWNER'S THIRD AND WORST REPORT: "it was saying to press E but didn't do anything, and since it
+ * was also blocking E it prevented entering vehicles."
+ *
+ * `FeatureHost.act()` returns true the moment any rung offers, and Game.updateOnFoot then RETURNS —
+ * above the vehicle-entry branch. So a rung that offers and declines does not fizzle, it eats the key.
+ * This suite walks every state this feature has and asserts the two halves of the rule: a rung offers
+ * only when its verb will run, and no rung offers anything that is not in front of the player.
+ */
+describe('a rung that offers is a rung that acts', () => {
+  const ctxAt = (x: number, z: number) =>
+    ({ context: 'foot' as const, position: new THREE.Vector3(x, 0, z), vehicle: undefined, hour: 5 });
+
+  it('offers nothing at all when there is no protest — E belongs to the rest of the ladder', () => {
+    roadClosures.clear();
+    outageLedger.reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    for (const where of [ctxAt(0, 0), ctxAt(10, 10), ctxAt(4000, -4000)]) {
+      expect((system.interactions?.() ?? []).some((rung) => rung.test(where))).toBe(false);
+    }
+    // …and still nothing when the grievance is ripe. This is the whole of the E-blocking bug: the old
+    // `protest:raise` rung offered here, from anywhere on the map, for as long as `ripe` stayed true.
+    outageLedger.hours = RIPE_OUTAGE_HOURS + 9;
+    expect((system.interactions?.() ?? []).some((rung) => rung.test(ctxAt(0, 0)))).toBe(false);
+    system.dispose();
+  });
+
+  it('offers nothing 100 m from the barricade it just raised', () => {
+    roadClosures.clear();
+    outageLedger.reset();
+    const player = new THREE.Vector3(0, 0, 0);
+    const api = stubApi({ playerPosition: () => player });
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    player.set(400, 0, 400);
+    expect((system.interactions?.() ?? []).some((rung) => rung.test(ctxAt(400, 400)))).toBe(false);
+    system.dispose();
+  });
+
+  it('every offer, in every phase, actually changes something when pressed', () => {
+    // The structural claim, exercised rather than asserted: walk the feature through its whole life
+    // and after each step take whatever the ladder offers and press it. `qa('press')` compares the
+    // status line before and after and reports `failed:offer-did-nothing` if the verb was a no-op.
+    roadClosures.clear();
+    outageLedger.reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    walkToBlockade(api, system);   // the walk the player makes; the site is never under his feet now
+    const pressed: string[] = [];
+    for (let second = 0; second < 130; second++) {
+      const verdict = system.qa?.('press', {}) ?? '';
+      expect(verdict).not.toMatch(/^failed:/);
+      if (verdict.startsWith('ok:') && verdict !== 'ok:no-offer') pressed.push(verdict.slice(3));
+      for (let sub = 0; sub < 10; sub++) system.update?.(0.1);
+    }
+    // …and it really did walk the loop, rather than finding nothing to press for 130 seconds.
+    expect(pressed.some((line) => /Join the picket/.test(line))).toBe(true);
+    expect(pressed.some((line) => /Throw a tyre/.test(line))).toBe(true);
+    expect(pressed.some((line) => /Take a tyre|Roll out a tyre/.test(line))).toBe(true);
+    system.dispose();
+  });
+
+  it('stops offering the tyre pickup at the carry cap instead of offering a full pocket', () => {
+    roadClosures.clear();
+    outageLedger.reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    walkToBlockade(api, system);
+    system.qa?.('tyre', { n: TYRE_CARRY_CAP });
+    for (let step = 0; step < 400; step++) system.update?.(0.5); // fade to smouldering
+    const take = (system.interactions?.() ?? []).find((rung) => rung.id === 'protest:take');
+    const at = api.playerPosition();
+    expect(take?.test(ctxAt(at.x, at.z))).toBeUndefined();
+    system.dispose();
+  });
+});
+
+describe('the protest goes up where he can come across it', () => {
+  it('never closes the road under his feet, and blips it so he can find it', () => {
+    roadClosures.clear();
+    outageLedger.reset();
+    const player = new THREE.Vector3(0, 0, 0);
+    // A dense grid of lanes, so `nearestRoadPose` snaps to a real road wherever the probe lands.
+    const api = stubApi({
+      playerPosition: () => player,
+      nearestRoadPose: (at: THREE.Vector3) => ({
+        position: new THREE.Vector3(Math.round(at.x / 40) * 40, 0, Math.round(at.z / 40) * 40),
+        heading: 0,
+      }),
+    });
+    const system = createFeature(api, undefined);
+    outageLedger.hours = RIPE_OUTAGE_HOURS + 1;
+    outageLedger.anchorX = 150; outageLedger.anchorZ = 0; outageLedger.hasAnchor = true;
+    system.update?.(0.1);
+
+    const site = system.qa?.('site', {}) ?? '';
+    expect(site).toMatch(/^ok:/);
+    const [x, z] = site.slice(3).split(',').map(Number);
+    expect(Math.hypot(x! - player.x, z! - player.z)).toBeGreaterThanOrEqual(SITE_MIN_METRES);
+    expect(system.qa?.('blips', {})).toBe('ok:1');
+    // The notification carries the bearing and the distance, not just a district name.
+    expect(api.notices.join(' ')).toMatch(/has shut its road/);
     system.dispose();
   });
 });
@@ -196,6 +360,7 @@ describe('the loaded feature', () => {
     const api = stubApi();
     const system = createFeature(api, undefined);
     system.qa?.('raise', {});
+    walkToBlockade(api, system);
     expect(system.qa?.('join', {})).toBe('ok');
     for (let second = 0; second < 80; second++) {
       if (second % 8 === 0) system.qa?.('feed', {});
@@ -220,6 +385,7 @@ describe('the loaded feature', () => {
     });
     const system = createFeature(api, undefined);
     system.qa?.('raise', {});
+    walkToBlockade(api, system);
     system.qa?.('join', {});
     system.update?.(1);
     downed[0]!.state = 'down';
@@ -344,9 +510,9 @@ describe('throwing a tyre on the fire', () => {
     roadClosures.clear();
     const api = stubApi();
     const system = createFeature(api, undefined);
-    system.qa?.('raise', {}); system.qa?.('join', {});
+    system.qa?.('raise', {}); walkToBlockade(api, system); system.qa?.('join', {});
     const rungs = system.interactions?.() ?? [];
-    const ctx = { context: 'foot' as const, position: new THREE.Vector3(), vehicle: undefined, hour: 5 };
+    const ctx = { context: 'foot' as const, position: api.playerPosition(), vehicle: undefined, hour: 5 };
     const prompt = () => rungs.map((rung) => rung.test(ctx)).find(Boolean)?.prompt;
     expect(prompt()).toBe('E  Throw a tyre on the fire');
     rungs.find((rung) => rung.id === 'protest:feed')!.test(ctx)!.act();
@@ -359,7 +525,7 @@ describe('throwing a tyre on the fire', () => {
     roadClosures.clear();
     const api = stubApi();
     const system = createFeature(api, undefined);
-    system.qa?.('raise', {}); system.qa?.('join', {});
+    system.qa?.('raise', {}); walkToBlockade(api, system); system.qa?.('join', {});
     for (let second = 0; second < 12; second++) system.update?.(1); // let the smoke bleed down
     const before = Number(/^ok:(\d+)/.exec(system.qa?.('smoke', {}) ?? '')?.[1]);
     expect(system.qa?.('feed', {})).toMatch(/^ok:\d+:tyres-on-the-pile-1$/);
@@ -375,41 +541,73 @@ describe('throwing a tyre on the fire', () => {
  * another feature registered above protest that offers a rung on every single frame.
  */
 describe('the grievance clock with a feature registered above protest', () => {
+  // A feature that answers the ladder on EVERY frame, from a real body — because `host.update()` now
+  // pulls an unloaded feature's stand-in off the ladder while its chunk is in flight, so a stand-in
+  // alone would stop winning halfway through the measurement and prove nothing.
+  const counter = {
+    id: 'tuckshop:counter', order: 1, context: 'foot' as const,
+    test: () => ({ prompt: 'E  Buy a cooldrink', act: () => undefined }),
+  };
   const greedy = {
     id: 'tuckshop', saveKey: 'tuckshop', label: 'Tuck shop',
     approach: { context: 'foot' as const, order: 1, prompt: 'E  Buy a cooldrink', near: () => true },
-    load: () => Promise.resolve({ createFeature: () => ({ dispose: () => undefined }) }),
+    load: () => Promise.resolve({ createFeature: () => ({ interactions: () => [counter], dispose: () => undefined }) }),
   };
+  const settle = async (): Promise<void> => { for (let turn = 0; turn < 8; turn++) await Promise.resolve(); };
 
-  it('still ripens while a shop door wins the ladder every frame', () => {
+  it('still ripens while a shop door wins the ladder every frame, on the REAL five-feature registry', async () => {
     outageLedger.reset();
     setPower(true);
-    const api = stubApi();
+    let hour = 2;
+    const api = stubApi({ hour: () => hour });
     const host = new FeatureHost(
       { api, suspended: () => false, emit: () => undefined, reportError: () => undefined },
       [greedy, ...FEATURES] as never,
     );
 
-    // 600 frames of standing in a doorway. Protest's predicate is never even reached.
+    host.update(0.1);
+    await settle(); // the tuck shop's body installs; it now answers the ladder from a real rung
+
+    // The lights are on: standing in a doorway for 600 frames is worth nothing at all.
     for (let frame = 0; frame < 600; frame++) expect(host.offer('foot')?.prompt).toBe('E  Buy a cooldrink');
     expect(outageLedger.hours).toBe(0);
 
-    // Two load-shedding cycles, through powerGrid's own hook — the path Game.applyEskom takes.
-    // 38 real seconds is the middle of LoadSheddingSystem's 32-44 s shed; the stamp is rewritten so
-    // the credit is deterministic instead of depending on how fast the test runner got here.
-    for (let shed = 0; shed < 2; shed++) {
-      setPower(false);
-      outageLedger.beginOutage(performance.now() - 38_000);
-      setPower(true);
+    // Now the lights go out and the player keeps standing on that doorstep, where a feature ordered
+    // ABOVE protest answers the ladder on every single frame. The grievance rides `eager.tick`, which
+    // FeatureHost.update runs for every unloaded feature unconditionally, so the doorstep is worth
+    // exactly what the open street is worth. This measurement is the whole bug: it used to read 0.00.
+    setPower(false);
+    for (let step = 0; step < 40; step++) {
+      hour += 0.1;
+      host.update(0.1);
+      expect(host.offer('foot')?.prompt).toBe('E  Buy a cooldrink'); // …and protest never offers here
     }
+    expect(outageLedger.hours).toBeGreaterThan(RIPE_OUTAGE_HOURS);
     expect(outageLedger.ripe).toBe(true);
+    expect(outageLedger.hasAnchor).toBe(true); // the eager path knows WHERE he stood, which is new
 
-    // The rung is now live; it is still (correctly) below the shop door, and it is there the moment
-    // the player steps off the doorstep — which is exactly what "0.00 outage-hours" prevented.
+    // And RIPE, the ladder is still the shop door — there is no `protest:approach` rung to steal E.
     const rung = host.descriptors('foot').find((entry) => entry.id === 'protest:approach');
-    expect(rung?.test({ context: 'foot', position: new THREE.Vector3(), vehicle: undefined, hour: 2 })?.prompt)
-      .toBe('E  Follow the smoke');
+    expect(rung?.test({ context: 'foot', position: new THREE.Vector3(), vehicle: undefined, hour: 2 })).toBeUndefined();
     host.dispose();
+    setPower(true);
+    outageLedger.reset();
+  });
+
+  it('publishes the grievance chip through the host while the body is still unloaded', () => {
+    outageLedger.reset();
+    setPower(false);
+    const api = stubApi();
+    const host = new FeatureHost(
+      { api, suspended: () => false, emit: () => undefined, reportError: () => undefined },
+      FEATURES as never,
+    );
+    outageLedger.hours = RIPE_OUTAGE_HOURS * 0.5;
+    const chip = (host.hud() ?? []).find((entry) => entry.id === 'protest:anger');
+    expect(chip?.label).toBe('FED UP');
+    expect(chip?.value).toBe('50%');
+    host.dispose();
+    setPower(true);
     outageLedger.reset();
   });
 });
