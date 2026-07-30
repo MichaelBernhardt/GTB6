@@ -84,6 +84,7 @@ import { City, ROAD_NETWORK } from './world/City';
 import { CBD_CENTER, distanceToRailwayCorridor, GENERATED_ROADS, METRES_PER_UNIT } from './world/mapData';
 import { COURIER_DEPOT, LOCKUP_SPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
+import { POTHOLE_MAX_RADIUS_FACTOR, potholeRadiusToward } from './world/PotholeShape';
 import { BUILDING_VISIBLE_RANGE, CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE, POTATO_BUILDING_RANGE, POTATO_CHUNK_RANGE, POTATO_DETAIL_RANGE } from './world/ChunkVisibility';
 import { buildEnvironment, fogDensity, type EnvironmentHandle } from './world/Environment';
 import { CITY_JUNCTIONS, ETOLL_GANTRIES } from './world/UrbanInfrastructure';
@@ -1571,7 +1572,16 @@ export class Game {
     this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
     if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
       const position = vehicle.group.position;
-      const hit = this.city.potholes.find((hole) => (hole.x - position.x) ** 2 + (hole.z - position.z) ** 2 < hole.r * hole.r);
+      // Against the DRAWN outline, not a circle of r: a hole is stretched along the lane, so tar that
+      // looks clear beside it must not bill you for wheel alignment. The squared-distance reject uses
+      // the shape's analytic bound, so the common case of this whole-city scan hashes nothing.
+      const hit = this.city.potholes.find((hole) => {
+        const dx = position.x - hole.x; const dz = position.z - hole.z;
+        const gap = dx * dx + dz * dz;
+        if (gap >= (hole.r * POTHOLE_MAX_RADIUS_FACTOR) ** 2) return false;
+        const reach = potholeRadiusToward(hole, dx, dz);
+        return gap < reach * reach;
+      });
       if (hit) {
         vehicle.speed *= 0.8; vehicle.bounce = Math.min(0.28, Math.abs(vehicle.speed) * 0.012); vehicle.takeDamage(2);
         this.recordCourierCrash(7);

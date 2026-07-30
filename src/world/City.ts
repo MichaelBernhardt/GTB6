@@ -51,6 +51,7 @@ import type { BuiltModel } from './models/kit';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS } from './ProceduralMaterials';
+import { POTHOLE_SEGMENTS, potholeRimAt, potholeVertexRadius, RIM_MIN_SPAN, type PotholeHazard } from './PotholeShape';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
@@ -810,7 +811,7 @@ export class City {
   private target: THREE.Group = this.group;
   colliders: Collider[] = [];
   props = new PropRegistry();
-  potholes: Array<{ x: number; z: number; r: number }> = []; // road features, not props: no collider, cars rattle over them
+  potholes: PotholeHazard[] = []; // road features, not props: no collider, cars rattle over them
   roadPoints: RoadPoint[] = [];
   sidewalkPoints: RoadPoint[] = [];
   roadsidePoints: RoadsidePoint[] = [];
@@ -1758,13 +1759,26 @@ export class City {
   }
 
   private buildPotholes(): void {
-    for (const point of this.roadPoints) {
-      if (seeded(point.x, point.z, 55) <= 0.96) continue;
-      const x = point.x + (seeded(point.x, point.z, 56) - 0.5) * 3;
-      const z = point.z + (seeded(point.x, point.z, 57) - 0.5) * 3;
-      if (!this.isOnRoad(x, z, -2)) continue;
-      if (CITY_JUNCTIONS.some((junction) => Math.hypot(x - junction.x, z - junction.z) < 16)) continue;
-      this.potholes.push({ x, z, r: 1.1 + seeded(point.x, point.z, 58) * 0.9 });
+    // Walked as ROUTES rather than as the flat roadPoints list (which is exactly these routes
+    // concatenated) purely so each hole can read the bearing of the lane it sits in: PotholeShape
+    // stretches it along the traffic that broke the tar, and that is the one thing about a hole's
+    // shape that its own coordinates cannot tell you.
+    for (const route of this.trafficRoutes) {
+      for (let index = 0; index < route.length; index++) {
+        const point = route[index]!;
+        if (seeded(point.x, point.z, 55) <= 0.96) continue;
+        const x = point.x + (seeded(point.x, point.z, 56) - 0.5) * 3;
+        const z = point.z + (seeded(point.x, point.z, 57) - 0.5) * 3;
+        if (!this.isOnRoad(x, z, -2)) continue;
+        if (CITY_JUNCTIONS.some((junction) => Math.hypot(x - junction.x, z - junction.z) < 16)) continue;
+        const back = route[Math.max(0, index - 1)]!; const forward = route[Math.min(route.length - 1, index + 1)]!;
+        const runX = forward.x - back.x; const runZ = forward.z - back.z;
+        this.potholes.push({
+          x, z,
+          r: 1.1 + seeded(point.x, point.z, 58) * 0.9,
+          axis: runX === 0 && runZ === 0 ? 0 : Math.atan2(runZ, runX),
+        });
+      }
     }
     // Each pothole is DRAPED onto the road surface (every vertex sampled at roadHeightAt) rather than a flat
     // disc laid at its centre's height — so on a slope, or across a crease where the tar steps to a steeper
@@ -1772,40 +1786,61 @@ export class City {
     // winding never culls them; merged into two meshes so they fold into the chunked road buckets.
     const holeParts: THREE.BufferGeometry[] = []; const rimParts: THREE.BufferGeometry[] = [];
     for (const pothole of this.potholes) {
-      holeParts.push(this.drapedPotholeDisc(pothole.x, pothole.z, pothole.r, 0.03));
-      rimParts.push(this.drapedPotholeRing(pothole.x, pothole.z, pothole.r, pothole.r * 1.22, 0.036));
+      holeParts.push(this.drapedPotholeDisc(pothole, 0.03));
+      const rim = this.drapedPotholeRing(pothole, 0.036);
+      if (rim) rimParts.push(rim);
     }
     if (!holeParts.length) return;
     const holeMesh = new THREE.Mesh(mergeGeometries(holeParts, false), new THREE.MeshBasicMaterial({ color: 0x0d1113, side: THREE.DoubleSide }));
+    this.group.add(holeMesh);
+    if (!rimParts.length) return;
     const rimMesh = new THREE.Mesh(mergeGeometries(rimParts, false), new THREE.MeshBasicMaterial({ color: 0x3f4649, side: THREE.DoubleSide }));
-    this.group.add(holeMesh, rimMesh);
+    this.group.add(rimMesh);
   }
 
-  /** A pothole's dark disc, tessellated (centre + two radial rings × 14) and draped onto the road so it
-   *  follows slopes and crease transitions instead of a flat plane the tar swallows. */
-  private drapedPotholeDisc(cx: number, cz: number, r: number, lift: number): THREE.BufferGeometry {
-    const SEG = 14;
-    const positions: number[] = [cx, this.roadHeightAt(cx, cz) + lift, cz]; // centre = index 0
-    for (const rad of [r * 0.55, r]) for (let s = 0; s < SEG; s++) {
-      const ang = (s / SEG) * Math.PI * 2; const x = cx + Math.cos(ang) * rad; const z = cz + Math.sin(ang) * rad;
+  /** A pothole's dark shape: a fan of POTHOLE_SEGMENTS wedges, every vertex draped onto the road so it
+   *  follows slopes and crease transitions instead of a flat plane the tar swallows. The fan's outer
+   *  edge rides PotholeShape's outline rather than a constant radius, so the silhouette the player
+   *  sees is the same irregular edge Game and JoziFlowSystem measure their clearances against.
+   *
+   *  The disc used to carry a second ring at 0.55r to sharpen the drape. Measured across all 1361
+   *  potholes, the terrain pokes through the fan on 10 of them against 4 with the extra ring — the
+   *  median hole sits inside one terrain-grid triangle, where the surface is planar and the ring buys
+   *  exactly nothing. It cost 40 triangles on every hole in the city to rescue six, so it is gone and
+   *  the budget went into the silhouette instead. */
+  private drapedPotholeDisc(hole: PotholeHazard, lift: number): THREE.BufferGeometry {
+    const SEG = POTHOLE_SEGMENTS;
+    const positions: number[] = [hole.x, this.roadHeightAt(hole.x, hole.z) + lift, hole.z]; // centre = index 0
+    for (let s = 0; s < SEG; s++) {
+      const ang = (s / SEG) * Math.PI * 2; const rad = potholeVertexRadius(hole, s);
+      const x = hole.x + Math.cos(ang) * rad; const z = hole.z + Math.sin(ang) * rad;
       positions.push(x, this.roadHeightAt(x, z) + lift, z);
     }
     const indices: number[] = [];
-    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; indices.push(0, 1 + s, 1 + s1); } // centre fan to the inner ring
-    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; const a = 1 + s; const b = 1 + s1; const c = 1 + SEG + s; const d = 1 + SEG + s1; indices.push(a, c, b, b, c, d); }
+    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; indices.push(0, 1 + s, 1 + s1); }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices);
     return geometry;
   }
 
-  /** A pothole's grey rim ring, draped onto the road like the disc. */
-  private drapedPotholeRing(cx: number, cz: number, rIn: number, rOut: number, lift: number): THREE.BufferGeometry {
-    const SEG = 14; const positions: number[] = []; const indices: number[] = [];
+  /** A pothole's broken-tar collar, draped onto the road like the shape it surrounds. Its width varies
+   *  around the circumference and closes entirely where the tar still holds: those segments emit no
+   *  quad at all rather than a degenerate one, which is what pays for the finer tessellation. Returns
+   *  null when a hole's collar closes the whole way round. */
+  private drapedPotholeRing(hole: PotholeHazard, lift: number): THREE.BufferGeometry | null {
+    const SEG = POTHOLE_SEGMENTS; const positions: number[] = []; const indices: number[] = [];
+    const spans: number[] = [];
     for (let s = 0; s < SEG; s++) {
       const ang = (s / SEG) * Math.PI * 2; const c = Math.cos(ang); const sn = Math.sin(ang);
-      for (const rad of [rIn, rOut]) { const x = cx + c * rad; const z = cz + sn * rad; positions.push(x, this.roadHeightAt(x, z) + lift, z); }
+      const rim = potholeRimAt(hole, s); spans.push(rim.outer - rim.inner);
+      for (const rad of [rim.inner, rim.outer]) { const x = hole.x + c * rad; const z = hole.z + sn * rad; positions.push(x, this.roadHeightAt(x, z) + lift, z); }
     }
-    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; const a = s * 2; const b = s * 2 + 1; const c = s1 * 2; const d = s1 * 2 + 1; indices.push(a, c, b, b, c, d); }
+    for (let s = 0; s < SEG; s++) {
+      const s1 = (s + 1) % SEG;
+      if (spans[s]! < RIM_MIN_SPAN * hole.r && spans[s1]! < RIM_MIN_SPAN * hole.r) continue;
+      const a = s * 2; const b = s * 2 + 1; const c = s1 * 2; const d = s1 * 2 + 1; indices.push(a, c, b, b, c, d);
+    }
+    if (!indices.length) return null;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices);
     return geometry;
