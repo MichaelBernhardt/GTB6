@@ -57,6 +57,7 @@ import {
   type BuildingCore, type Finish, type Rect,
 } from './core';
 import { doorLocked, PICK_SWEEP_SECONDS, pickBites, pickBiteWidth } from './lock';
+import { clampInsideRect, interiorToBuildingLocal } from './tardis';
 import { LOCKPICK_PRICE } from '../../core/ShopRules';
 import { stablePositionRandom } from '../../world/StableRandom';
 import { doorDistrict, doorNear, doorsNear, landmarkDoor, nearestDoor, tallestDoorNear } from './doors';
@@ -495,10 +496,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /**
    * Where the hatch puts you out: the stair's own spot mapped back onto the REAL roof. The interior
    * plate is scaled relative to the footprint (58.6% of interiors exceed their massing on an axis),
-   * so the stair position is inverse-proportionally mapped and then clamped a metre inside the top
-   * tier — NEVER mapped one-to-one, or half the city's hatches would open onto thin air beside the
-   * building. Altitude comes from City.supportHeight through the standHeightAt seam, i.e. from the
-   * same collider the player will stand on, not from an estimate.
+   * so the stair position goes through the shared Tardis transform (tardis.ts — the one place
+   * inside is related to outside) and is then clamped a metre inside the top tier — NEVER mapped
+   * one-to-one, or half the city's hatches would open onto thin air beside the building. Altitude
+   * comes from City.supportHeight through the standHeightAt seam, i.e. from the same collider the
+   * player will stand on, not from an estimate.
    */
   const roofExitSpot = (current: Visit): { x: number; y: number; z: number } | undefined => {
     const roof = current.door.roof;
@@ -506,10 +508,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (!roof || !stair) return undefined;
     if (roof.maxX - roof.minX < 2.2 || roof.maxZ - roof.minZ < 2.2) return undefined;
     const facts = current.door.facts;
-    const kx = current.core.width / Math.max(1, facts.width);
-    const kz = current.core.depth / Math.max(1, facts.depth);
-    const bx = Math.max(roof.minX + 1.0, Math.min(roof.maxX - 1.0, -stair.x / kx));
-    const bz = Math.max(roof.minZ + 1.0, Math.min(roof.maxZ - 1.0, -stair.z / kz));
+    const b = interiorToBuildingLocal(current.core, facts, stair.x, stair.z);
+    const { x: bx, z: bz } = clampInsideRect(roof, b.x, b.z, 1.0);
     const world = toWorld({ x: facts.x, z: facts.z }, facts.heading, bx, bz);
     const ground = api.surfaceHeightAt(world.x, world.z);
     const y = api.standHeightAt?.(world.x, world.z) ?? ground + roof.topY;
