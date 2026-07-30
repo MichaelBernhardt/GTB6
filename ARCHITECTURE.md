@@ -55,6 +55,8 @@ Marker sources converge in two places. `Game.mapMarkers()` gathers the live ones
 
 San Cordova uses an intentionally predictable horizontal-plane model. Buildings and containers expose XZ rectangle bounds. Player and vehicle motion first resolves X, then Z, which permits sliding along walls. Vehicles reflect and reduce speed on impact. Vehicle-to-vehicle response separates bodies, damps speed, and applies damage behind a cooldown so contact does not damage every frame.
 
+Street furniture and trees are the second half of the same model: `PropRegistry` holds them as CIRCLES in a coarse spatial hash, queried by every player, pedestrian and vehicle move alongside the rectangles. A prop is `solid` (a wall that stops a car and damages it) or `knockover` (felled above `KNOCKOVER_MIN_SPEED`). Tree colliders are the TRUNK only, never the canopy, and only where the authored trunk reaches `SOLID_TRUNK_MIN_DIAMETER` — you brush through leaves, hedges and undergrowth, and you do not walk through wood.
+
 Terrain, roads, and raised sidewalks share deterministic surface-height queries. Characters ground against the surface beneath them, while vehicles sample the road normal for visual pitch and roll; the compact collision and navigation models remain two-dimensional.
 
 ## State boundaries

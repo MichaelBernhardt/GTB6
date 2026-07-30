@@ -11,7 +11,10 @@ import {
 } from './ModelScatter';
 import { CELL_SIZE, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, allBuildings, footprintRailwayClearance, footprintRoadClearance, type GeneratedBuilding } from './CityGen';
 import { MODEL_INDEX } from './models/catalog';
-import { MAP_STATS, MAP_WORLD_SIZE, METRES_PER_UNIT, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, RAILWAY_STATION_SITES, pointInAnyPolygon } from './mapData';
+import { MAP_STATS, MAP_WORLD_SIZE, METRES_PER_UNIT, WATER_POLYGONS, AERODROME_POLYGONS, FARM_POLYGONS, RAILWAY_STATION_SITES, distanceToBuiltRoadEdge, pointInAnyPolygon } from './mapData';
+import { buildCityNavPaths, ROAD_NETWORK } from './City';
+import { TREE_SPECIES } from './FoliageAssets';
+import { PLAYER } from '../config';
 import { classifyZone } from './data/zoning';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 
@@ -173,6 +176,47 @@ describe('citywide model scatter', () => {
     expect(SCATTER_CELL_CAP).toBeGreaterThanOrEqual(150);
     expect(SCATTER_CELL_CAP).toBeLessThanOrEqual(220);
   });
+
+  it('never plants a solid trunk where a player or a ped has to walk', () => {
+    // Authored tree trunks are SOLID props (see City.trunkProp), so where they land is now a
+    // gameplay fact, not dressing: a trunk overlapping a pavement is an invisible wall on a route
+    // the game tells you to use, and a trunk on a ped walk line is somewhere a pedestrian gets
+    // pinned. Both are worse than the bug this fixed, so both are pinned here.
+    const FATTEST_TRUNK_RADIUS = 0.85; // landmark-tree, 1.7 m authored diameter — see art/foliage/recipe.json
+    const trees = all.filter((model) => (TREE_SPECIES as readonly string[]).includes(model.name));
+    expect(trees.length).toBeGreaterThan(4000);
+
+    for (const tree of trees) {
+      // Clear of the road AS BUILT — tar plus kerb plus sidewalk — by more than the trunk's own radius.
+      expect(distanceToBuiltRoadEdge(tree.x, tree.z), `${tree.name} @ ${tree.x.toFixed(1)},${tree.z.toFixed(1)}`)
+        .toBeGreaterThan(FATTEST_TRUNK_RADIUS);
+    }
+
+    // And clear of the walk lines the ped nav routes on by the trunk radius plus a body: a ped
+    // following its lane never has to resolve a blocked step against a tree.
+    const cell = 24;
+    const walks = new Map<string, Array<[number, number, number, number]>>();
+    for (const path of buildCityNavPaths(ROAD_NETWORK).walks) {
+      for (let index = 0; index < path.points.length - 1; index++) {
+        const a = path.points[index]!; const b = path.points[index + 1]!;
+        const key = `${Math.floor((a.x + b.x) / 2 / cell)},${Math.floor((a.z + b.z) / 2 / cell)}`;
+        const bucket = walks.get(key) ?? [];
+        bucket.push([a.x, a.z, b.x, b.z]); walks.set(key, bucket);
+      }
+    }
+    let nearest = Infinity;
+    for (const tree of trees) {
+      const cx = Math.floor(tree.x / cell); const cz = Math.floor(tree.z / cell);
+      for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
+        for (const [ax, az, bx, bz] of walks.get(`${cx + dx},${cz + dz}`) ?? []) {
+          const sx = bx - ax; const sz = bz - az; const lengthSquared = sx * sx + sz * sz;
+          const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((tree.x - ax) * sx + (tree.z - az) * sz) / lengthSquared));
+          nearest = Math.min(nearest, Math.hypot(tree.x - (ax + sx * t), tree.z - (az + sz * t)));
+        }
+      }
+    }
+    expect(nearest).toBeGreaterThan(FATTEST_TRUNK_RADIUS + PLAYER.radius);
+  }, 30_000);
 
   it('streams every new district-specific structure archetype', () => {
     const counts = scatterStats().perModel;

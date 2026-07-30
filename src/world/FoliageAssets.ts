@@ -29,8 +29,31 @@ export interface TreeInstance {
   scale: number;
   trunkRadius: number;
   trunkHeight: number;
+  /** True when this trunk is thick enough to be a wall (see SOLID_TRUNK_MIN_DIAMETER). */
+  trunkSolid: boolean;
   parts: readonly TreeInstancePart[];
 }
+
+/**
+ * WHERE FOLIAGE STOPS BEING SCENERY.
+ *
+ * Trunk diameter (metres, as authored) at or above which a tree gets a collider. Half a metre is the
+ * line because it is the line a body reads: you brush past a sapling or a shrub, and you do not walk
+ * through something you cannot get your arms around. Every species in the library clears it — the
+ * slimmest authored trunk is a 0.52 m palm — so the whole authored library is solid wood and the
+ * procedural undergrowth (aloe 0.32 m, agave, bougainvillea, veld grass, clipped hedge) stays
+ * passable, which is what a hedge should be.
+ *
+ * Measured on the AUTHORED trunk, deliberately, not on the per-tree ±16% scale jitter: a rule read
+ * off the jitter would make two visually identical gums behave differently, and unpredictable
+ * collision is worse than none. So the answer is per species-variant and every instance agrees.
+ */
+export const SOLID_TRUNK_MIN_DIAMETER = 0.5;
+
+/** Whether an authored trunk footprint earns a collider. One rule, so the roadside, park and
+ *  scattered tree paths cannot disagree about which trees are solid. */
+export const trunkIsSolid = (colliderW: number, colliderD: number): boolean =>
+  Math.max(colliderW, colliderD) >= SOLID_TRUNK_MIN_DIAMETER;
 
 export class TreeLibraryError extends Error {
   constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'TreeLibraryError'; }
@@ -130,6 +153,7 @@ export function buildTreeInstance(species: TreeSpecies, seed: number, options: B
     scale,
     trunkRadius: Math.max(colliderW, colliderD) * scale / 2,
     trunkHeight: colliderH * scale,
+    trunkSolid: trunkIsSolid(colliderW, colliderD),
     parts: record.instanceParts,
   };
 }
@@ -148,10 +172,13 @@ export function buildTreeAsset(species: TreeSpecies, seed: number, options: Buil
     object.castShadow = true; object.receiveShadow = true;
   });
   const [colliderW, colliderD, colliderH] = record.trunkCollider;
+  // A trunk under SOLID_TRUNK_MIN_DIAMETER declares no tier at all, so nothing downstream has to
+  // re-derive the rule: no tier means walk on through.
+  const trunk = { minX: -colliderW * scale / 2, maxX: colliderW * scale / 2, minZ: -colliderD * scale / 2, maxZ: colliderD * scale / 2, y0: 0, y1: colliderH * scale };
   return {
     group,
     footprint: { w: record.size.x * scale, d: record.size.z * scale },
-    tiers: [{ minX: -colliderW * scale / 2, maxX: colliderW * scale / 2, minZ: -colliderD * scale / 2, maxZ: colliderD * scale / 2, y0: 0, y1: colliderH * scale }],
+    tiers: trunkIsSolid(colliderW, colliderD) ? [trunk] : [],
   };
 }
 

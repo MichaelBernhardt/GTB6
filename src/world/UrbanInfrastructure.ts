@@ -367,7 +367,10 @@ export class UrbanInfrastructure {
     sites.forEach((site, index) => {
       const seed = site.x * 0.017 + site.z * 0.031 + index * 13.7;
       const tree = buildTreeInstance(species, seed);
-      this.props.register('tree', site.x, site.z, tree.trunkRadius, tree.trunkHeight);
+      // Same rule as the park and scattered trees: wood you cannot get your arms around is a wall,
+      // anything slimmer is scenery. Every authored species clears it today; the gate is here so a
+      // future sapling variant is passable without a second decision being taken somewhere else.
+      if (tree.trunkSolid) this.props.register('tree', site.x, site.z, tree.trunkRadius, tree.trunkHeight);
       const placement = new THREE.Matrix4().compose(
         new THREE.Vector3(site.x, 0, site.z),
         new THREE.Quaternion().setFromAxisAngle(up, index * 2.399963229728653),
