@@ -345,6 +345,21 @@ export function terrainHeightAt(x: number, z: number): number {
   return terrainGrid ? sampleTerrainGrid(x, z) : analyticTerrainHeightAt(x, z);
 }
 
+/**
+ * IS THIS POINT IN WATER? Tested against the water SHAPES, never their bounding envelopes.
+ *
+ * The dam is a drowned dendritic valley: its bbox contains ridge peninsulas, inlets and the islands
+ * of Grooteiland, all of which are dry land. So the dam is asked through its signed-distance field
+ * (damField), with the same WATERLINE_OFFSET the terrain itself uses to decide bed from strand —
+ * which makes "water" here mean exactly the ground the bed sheet drowns, no second opinion. Authored
+ * inland pans and lakes are point-in-polygon, since the ground mesh is carved down inside those very
+ * polygons.
+ */
+export function inWater(x: number, z: number): boolean {
+  if (damSignedDistance(x, z) + WATERLINE_OFFSET <= 0) return true;
+  return WATER_POLYGONS.some((polygon) => pointInPolygon(polygon, x, z));
+}
+
 /** District ownership comes from the generated map's place nodes (nearest centre). */
 export const districtAt = generatedDistrictAt;
 
@@ -1042,6 +1057,9 @@ export class City {
   isPark(x: number, z: number): boolean {
     return GREEN_POLYGONS.some((polygon) => pointInPolygon(polygon, x, z));
   }
+
+  /** Standing in real water — see the module-level `inWater`. */
+  isWater(x: number, z: number): boolean { return inWater(x, z); }
 
   /** Anchor pads (spawn, shops, mission markers…) that procedural placement must keep clear. */
   isReserved(x: number, z: number, radius: number): boolean {

@@ -54,6 +54,7 @@ import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './syst
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
+import { TorchHint, torchHintToast } from './systems/TorchHint';
 import { TorchSystem } from './systems/TorchSystem';
 import { formatCountdown, TrainSystem } from './systems/TrainSystem';
 import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
@@ -68,6 +69,7 @@ import { PLANE_EXIT_SPEED, PLANE_MAX_SPEED, planeCrashDamage, planeHint } from '
 import { buildTeleportTargets, clampToWorld, districtAnchors, resolveTeleport, safePlacement, type TeleportTarget } from './systems/Teleport';
 import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADIUS, GUNFIRE_FEAR_SCALE, HAIL_RADIUS, isTaxiKind, MIN_TRIP_DISTANCE, PICKUP_RADIUS, REHAIL_COOLDOWN, routeDistance, STOP_SPEED, TaxiRide, taxiHudText } from './systems/TaxiJobSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
+import { placementRadius, placementRefusal, placeVehicleNear, VEHICLE_CLEAR_GAP, type PlacementWorld } from './systems/VehiclePlacement';
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
 import type { BaseQuality, CheatSettings, GameMode, GameSettings, GameSnapshot, Inventory, SavedGame, WorldTarget } from './types';
@@ -79,7 +81,7 @@ import { TouchControls } from './ui/TouchControls';
 import { shouldEnableTouch, touchQuality } from './ui/TouchModels';
 import { UIManager } from './ui/UIManager';
 import { City, ROAD_NETWORK } from './world/City';
-import { CBD_CENTER, GENERATED_ROADS, METRES_PER_UNIT } from './world/mapData';
+import { CBD_CENTER, distanceToRailwayCorridor, GENERATED_ROADS, METRES_PER_UNIT } from './world/mapData';
 import { COURIER_DEPOT, LOCKUP_SPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
 import { BUILDING_VISIBLE_RANGE, CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE, POTATO_BUILDING_RANGE, POTATO_CHUNK_RANGE, POTATO_DETAIL_RANGE } from './world/ChunkVisibility';
@@ -160,7 +162,7 @@ export class Game {
   private yardGuards: Pedestrian[] = [];
   private loadShedding = new LoadSheddingSystem();
   private torch!: TorchSystem;
-  private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
+  private torchHint = new TorchHint(); // one derived condition teaches the L key on EVERY path into a dark shedding street — see TorchHint.ts
   private muzzleFlash = 0; // seconds the player's last shot keeps them lit for blackout stealth — shooting gives you away
   private concealed = false; // blackout stealth verdict this frame: JMPD sight checks shrink to whites-of-eyes while true
   private livingCity: LivingCitySystem;
@@ -344,7 +346,7 @@ export class Game {
     bootMark('boot: input + restore');
     this.input = new InputManager(this.renderer.domElement);
     if (this.touchMode) this.touch = new TouchControls(this.input, this.renderer.domElement, this.ui.root);
-    this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
+    this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats; this.applyTeflon();
     this.missions.completed = new Set(this.save.completedMissions);
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
@@ -448,7 +450,7 @@ export class Game {
     this.ui.onShowCheats = () => this.ui.showCheats(WEAPONS.filter((spec) => !spec.melee).map((spec) => ({ id: spec.id, name: spec.name, owned: this.combat.owned(spec.id) })), this.cheats);
     this.ui.onGiveWeapon = (id) => { const result = this.combat.grantWeapon(id); this.ui.notify(result === 'new' ? 'Weapon granted' : 'Ammo topped up', WEAPON_BY_ID[id].name); this.persist(); };
     this.ui.onMaxAmmo = () => { const filled = this.combat.maxAmmo(); this.ui.notify('Max ammo', `${filled} weapon${filled === 1 ? '' : 's'} fully stocked.`); this.persist(); };
-    this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.persist(); };
+    this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.applyTeflon(); this.persist(); };
     this.ui.onBuyWeapon = (id) => this.purchase('weapon', id);
     this.ui.onBuyAmmo = (id) => this.purchase('ammo', id);
     this.ui.onBuyArmour = () => this.purchaseArmour();
@@ -589,6 +591,12 @@ export class Game {
     dropStar: () => this.consoleDropStar(),
     toggleShedding: () => { const event = this.loadShedding.force(); this.applyEskom(event); return event === 'start' ? 'Load shedding forced. Stage 4 begins.' : 'Load shedding called off. Power restored.'; },
     toggleSirens: () => { this.audio.sirensMuted = !this.audio.sirensMuted; if (this.audio.sirensMuted) this.audio.setSiren(false); return this.audio.sirensMuted ? 'Sirens silenced. Elude in peace.' : 'Sirens back on. The city screams again.'; },
+    toggleTeflon: () => {
+      this.cheats.teflon = !this.cheats.teflon; this.applyTeflon(); this.persist();
+      return this.cheats.teflon
+        ? 'Teflon ON. Nothing sticks: heat cleared, JMPD lost interest, and it can never rise again.'
+        : 'Teflon OFF. JMPD are taking an interest again.';
+    },
     setBusy: (percent) => { this.lifecycle.tuning = { busy: clampBusy(percent) }; return `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`; }, // fresh tuning also clears peds/cars pins
     setPedTarget: (count) => {
       this.lifecycle.tuning.peds = count === undefined ? undefined : Math.min(PED_TARGET_CAP, count);
@@ -713,21 +721,56 @@ export class Game {
     return `Nearby targets: ${target.peds} peds${tuning.peds !== undefined ? ' (pinned)' : ''} / ${target.traffic} cars${tuning.cars !== undefined ? ' (pinned)' : ''} — live ${livePeds} / ${liveCars}.`;
   }
 
+  /** The world queries VehiclePlacement needs, bound to this game. `ignore` keeps a vehicle from
+   *  colliding with itself — recovery re-places a car that is already on the roster. */
+  private placementWorld(ignore?: Vehicle): PlacementWorld {
+    return {
+      surfaceHeightAt: (x, z) => this.city.surfaceHeightAt(x, z),
+      isWater: (x, z) => this.city.isWater(x, z),
+      blocked: (x, z, radius) => this.city.collides(x, z, radius),
+      railDistance: (x, z) => distanceToRailwayCorridor(x, z),
+      nearestRoadPose: (x, z) => {
+        const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z));
+        return { x: pose.position.x, y: pose.position.y, z: pose.position.z, heading: pose.heading };
+      },
+      occupied: (x, z, radius) => [...this.population.vehicles, ...this.police.vehicles]
+        .some((other) => other !== ignore && Math.hypot(other.group.position.x - x, other.group.position.z - z) < radius + VEHICLE_CLEAR_GAP),
+    };
+  }
+
   private spawnConsoleVehicle(kind: VehicleKind): string {
     const spec = VEHICLE_SPECS[kind];
     const origin = this.activeVehicle?.group.position ?? this.player.group.position;
     const yaw = this.activeVehicle?.heading ?? this.player.heading;
-    const ahead = new THREE.Vector3(origin.x + Math.sin(yaw) * 8, 0, origin.z + Math.cos(yaw) * 8);
-    const pose = this.city.nearestRoadPose(ahead);
-    const blocked = pose.position.distanceTo(origin) < 2.5
-      || [...this.population.vehicles, ...this.police.vehicles].some((other) => other.group.position.distanceTo(pose.position) < 3.5);
-    if (blocked) return 'Eish, no clear kerb for the drop-off. Move along and try again.';
-    const vehicle = new Vehicle(this.scene, kind, pose.position.clone());
-    vehicle.heading = pose.heading; // align to the road tangent: "away from the player" could point straight across the kerb
+    // A kerb within ROAD_SNAP_RADIUS wins and the vehicle aligns to the lane; out in the farmland it
+    // lands on suitable ground beside the player instead of teleporting to a road half a map away.
+    const placement = placeVehicleNear(origin, yaw, this.placementWorld(), { radius: placementRadius(spec.size) });
+    if (placement.on === 'nowhere') return placementRefusal(placement.refusal);
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(placement.x, placement.y, placement.z));
+    vehicle.heading = placement.heading;
     vehicle.group.rotation.y = vehicle.heading;
     this.population.vehicles.push(vehicle);
-    this.ui.notify('Vehicle delivered', `${spec.name}, parked just ahead.`);
-    return `${spec.name} delivered just ahead.`;
+    if (placement.on === 'road') {
+      this.ui.notify('Vehicle delivered', `${spec.name}, parked just ahead.`);
+      return `${spec.name} delivered just ahead.`;
+    }
+    const away = Math.round(placement.roadDistance);
+    this.ui.notify('Vehicle delivered', `${spec.name}, set down on the ground beside you.`);
+    return `${spec.name} set down beside you — nearest road is ${Number.isFinite(placement.roadDistance) ? `${away}u` : 'nowhere'} away.`;
+  }
+
+  /** F: unstick the driven vehicle. Back onto the tar while a road is genuinely near, otherwise
+   *  upright on suitable ground where it stands — the old unconditional nearest-road snap yanked a
+   *  farm bakkie to a road hundreds of units away. Never refuses: being stuck is not a valid outcome. */
+  private recoverVehicle(vehicle: Vehicle): void {
+    const label = vehicle.spec.twoWheeler ? 'Bike recovered' : 'Bakkie recovered';
+    const placement = placeVehicleNear(vehicle.group.position, vehicle.heading, this.placementWorld(vehicle), {
+      radius: placementRadius(vehicle.spec.size), ahead: 0, minGap: 0,
+    });
+    if (placement.on === 'nowhere') { vehicle.reset(undefined, this.city); this.ui.notify(label, `${vehicle.spec.name} — nowhere better to put it, so back on its wheels here.`); return; }
+    vehicle.heading = placement.heading;
+    vehicle.reset(new THREE.Vector3(placement.x, placement.y, placement.z), this.city);
+    this.ui.notify(label, placement.on === 'road' ? vehicle.spec.name : `${vehicle.spec.name} — no road nearby, set down where it stood.`);
   }
 
   private consoleDropStar(): string {
@@ -789,7 +832,7 @@ export class Game {
     this.customWaypoint = undefined;
     this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.applyTeflon(); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
     this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Follow turquoise GPS to story contacts. M opens the map; gold Quantum and lime Sixty-Sekonds blips are repeatable side work.');
@@ -905,7 +948,8 @@ export class Game {
       this.ui.notify(`Minimap: ${MINIMAP_ZOOM_NAMES[this.settings.minimapZoom]}`);
     }
     if (this.input.consume('KeyH')) this.useStim();
-    if (this.input.consume('KeyL')) this.audio.ui(this.torch.toggle()); // works on foot, driving, riding, flying — the click doubles as on/off feedback
+    if (this.input.consume('KeyL')) { const lit = this.torch.toggle(); this.audio.ui(lit); if (lit) this.torchHint.learned(); } // works on foot, driving, riding, flying — the click doubles as on/off feedback; a player who found L is never lectured about it
+
     if (this.airborne) this.updateAirborne(dt);
     else if (this.transition) this.updateTransition(dt);
     else if (this.activePlane) this.updateFlying(dt);
@@ -999,6 +1043,7 @@ export class Game {
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateJoziFlow(dt); this.updateRobotRace(dt); this.updateMission(dt);
     this.updateInebriation(dt);
     this.features.update(dt); // lazily loaded features; the host no-ops while online, so PvP never ticks them
+    this.updateTorchHint(dt); // after interior presence and the feature tick, so "indoors" is this step's truth
     this.saveTimer += dt; if (this.saveTimer > 8 && !this.activePlane) { this.persist(); this.saveTimer = 0; } // no autosave mid-flight: a resumed save would float the player at altitude
     if (this.player.health <= 0) this.die();
   }
@@ -1069,18 +1114,36 @@ export class Game {
   }
 
   private applyEskom(event: 'start' | 'end' | undefined): void {
-    if (event === 'start') {
-      setPower(false);
-      const hint = !this.torchHintShown && nightFactor(this.dayNight.hour) > 0.5; if (hint) this.torchHintShown = true; // teach the key the first time the lights die in actual darkness
-      this.ui.notify('Load shedding: Stage 4', hint ? 'Eskom sends regards. Pitch dark out there — L for torch.' : 'Eskom sends regards. The robots are out.', false);
-    }
+    // The torch key is NOT taught here. Teaching from the outage event could only ever cover the
+    // paths the event knows about, and the blackout has not even faded in yet — updateTorchHint owns
+    // it, off one derived condition that covers every way into a dark street.
+    if (event === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
     else if (event === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
-    // The start-of-stage hint only fires if the blackout LANDS in darkness — when shedding begins in
-    // daylight and carries into night, teach the key the moment it actually gets dark instead.
-    if (!this.torchHintShown && !this.torch.on && this.dayNight.blackoutDarkness > 0.5) {
-      this.torchHintShown = true;
-      this.ui.notify('Pitch dark', 'No street lights tonight. L for torch.', false);
-    }
+  }
+
+  /** The ONE place the game teaches the torch key. Every route into a dark shedding street arrives
+   *  here as the same condition — the outage starting after dark, dusk arriving mid-outage, a save
+   *  that loaded into a night that later sheds, stepping out of a car, off a train, out of a plane,
+   *  out of a shop/safehouse/building interior, or closing the map — so none of them can be missed
+   *  and a new one needs no new hint code. See TorchHint.ts for the nag budget. */
+  private updateTorchHint(dt: number): void {
+    if (!this.torchHint.update(dt, {
+      shedding: this.loadShedding.active,
+      darkness: this.dayNight.blackoutDarkness,
+      torchOn: this.torch.on,
+      exposed: this.torchWouldHelp(),
+      watching: !this.ui.mapOpen && !this.ui.consoleOpen,
+    })) return;
+    const hint = torchHintToast(Boolean(this.touch));
+    this.ui.notify(hint.title, hint.detail, false);
+  }
+
+  /** Is the player somewhere a handheld torch is the only light there is? Headlights own the road, a
+   *  train cab and a cockpit are lit, shops/safehouses/interiors keep their own ambient (see
+   *  interiors' lamp ramp), and PvP has no torch at all. */
+  private torchWouldHelp(): boolean {
+    return !this.online && !this.activeVehicle && !this.transition && !this.activePlane && !this.airborne
+      && !this.trains.riding && !this.indoorPlace && !this.features.indoors();
   }
 
   private updateVehicleFires(dt: number, focus: THREE.Vector3): void {
@@ -1541,7 +1604,7 @@ export class Game {
       if (this.features.act('vehicle')) return; // a feature MUST offer nothing when it has nothing to do, or E could never exit the car
       this.beginExit(vehicle);
     }
-    if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify(vehicle.spec.twoWheeler ? 'Bike recovered' : 'Bakkie recovered', vehicle.spec.name); }
+    if (this.input.consume('KeyF')) this.recoverVehicle(vehicle);
     if (isTaxiKind(vehicle.spec.kind)) {
       if (this.input.consume('KeyT')) this.handleTaxiKey(vehicle);
       this.updateTaxiJob(dt, vehicle);
@@ -2306,6 +2369,7 @@ export class Game {
   private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
     if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the taxi spooks the passenger
+    if (this.cheats.teflon) return; // teflon: the heat could not land anyway, so JMPD neither witness nor take the call — no fake dispatch toast, no last-known position
     // A concealed-in-blackout player commits crimes unseen: proximity cops don't witness what they can't make
     // out (a muzzle flash lights the shooter first, so gunfire near JMPD is still caught in the act), but a
     // directly-affected cop (copWitnessed, e.g. one you shot) always knows, and civilian phone-ins run as usual.
@@ -2338,6 +2402,7 @@ export class Game {
 
   /** Mission-forced heat behaves as a cop-witnessed report at the player's position, so pursuit still works. */
   private forceWanted(level: number): void {
+    if (this.cheats.teflon) return; // scripted stars are still stars: teflon means no pursuit, mission or not
     this.wanted.setMinimumLevel(level); this.wanted.reportSeen();
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     this.knowledge.copWitness(focus.x, focus.z);
@@ -2967,7 +3032,7 @@ export class Game {
     const hudFeatures = flowHud ? [...(featureHud ?? []), flowHud] : featureHud;
     const promptMode = this.activePlane ? 'flight' : this.activeVehicle || this.trains.driving ? 'vehicle' : 'foot';
     const hudPrompt = this.input.gamepadActive ? gamepadPrompt(prompt, promptMode) : prompt;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable || this.cheats.teflon), inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,
@@ -3030,7 +3095,7 @@ export class Game {
     this.features.reset(this.save.features); // drop live feature state; the checkpoint's slices load again on demand
     this.economy.balance = this.save.money;
     this.inventory = { ...this.save.inventory };
-    Object.assign(this.cheats, this.save.cheats);
+    Object.assign(this.cheats, this.save.cheats); this.applyTeflon();
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current);
     this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
@@ -3089,6 +3154,17 @@ export class Game {
     }
     this.mode = 'playing'; analytics.setMode(this.online ? 'multiplayer' : 'singleplayer');
   }
+  /** Pushes the `teflon` cheat into the (pure) WantedSystem, which is the only thing that can raise heat.
+   *  Switching it ON also ends the response it invalidates: the setter wipes banked heat, so dispatch
+   *  knowledge and every live interceptor go with it — otherwise units already chasing would follow a
+   *  zero-star suspect until they happened to wander off the block. Safe to call on every restore path;
+   *  re-asserting the same value does nothing. */
+  private applyTeflon(): void {
+    const wasOn = this.wanted.teflon;
+    this.wanted.teflon = this.cheats.teflon;
+    if (this.cheats.teflon && !wasOn) { this.knowledge.reset(); this.previousWanted = false; this.clearPolice(); }
+  }
+
   /** Tears down the JMPD response and drops its foot officers from the population roster. */
   private clearPolice(): void {
     for (const officer of this.police.reset()) this.population.removePedestrian(officer);

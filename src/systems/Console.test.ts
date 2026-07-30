@@ -29,6 +29,8 @@ describe('console parser', () => {
     expect(parseCommand('unwanted')).toEqual({ kind: 'unwanted' });
     expect(parseCommand('shedding')).toEqual({ kind: 'shedding' });
     expect(parseCommand('NoMoreSirens')).toEqual({ kind: 'nomoresirens' });
+    expect(parseCommand('Teflon')).toEqual({ kind: 'teflon' });
+    expect(parseCommand('teflon on').kind).toBe('error'); // a toggle takes no arguments
   });
 
   it('parses spawn with kinds and the bakkie alias', () => {
@@ -160,7 +162,7 @@ describe('runConsoleCommand', () => {
     spawn: (kind) => `spawn:${kind}`,
     giveCash: (amount) => `cash:${amount}`,
     dropStar: () => 'star',
-    toggleSirens: () => 'sirens toggled', toggleShedding: () => 'eskom',
+    toggleSirens: () => 'sirens toggled', toggleShedding: () => 'eskom', toggleTeflon: () => 'teflon toggled',
     setBusy: (percent) => `busy:${percent}`,
     setPedTarget: (count) => `peds:${count ?? 'auto'}`,
     setCarTarget: (count) => `cars:${count ?? 'auto'}`,
@@ -190,6 +192,7 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('unwanted', host)).toEqual(['star']);
     expect(runConsoleCommand('shedding', host)).toEqual(['eskom']);
     expect(runConsoleCommand('nomoresirens', host)).toEqual(['sirens toggled']);
+    expect(runConsoleCommand('teflon', host)).toEqual(['teflon toggled']);
     expect(runConsoleCommand('fps', host)).toEqual(['fps']);
     expect(runConsoleCommand('mapnpcs', host)).toEqual(['mapnpcs toggled']);
     expect(runConsoleCommand('reload', host)).toEqual(['reloaded']);

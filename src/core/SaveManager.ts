@@ -13,11 +13,11 @@ import { distanceToRoadEdge, MAP_WORLD_SIZE, ROAD_EDGE_CAP } from '../world/mapD
 const KEY = 'groot-theft-bakkie-save-v1';
 const CHECKPOINT_KEY = 'groot-theft-bakkie-checkpoint-v1';
 export const DEFAULT_SETTINGS: GameSettings = { masterVolume: 0.65, quality: 'high', showFps: false, showPerfChart: false, mouseSensitivity: 0.0025, touchSwapSides: false, cameraViewFoot: DEFAULT_CAMERA_VIEW, cameraViewVehicle: DEFAULT_CAMERA_VIEW, minimapZoom: DEFAULT_MINIMAP_ZOOM };
-export const DEFAULT_CHEATS: CheatSettings = { fastRun: false, bigJump: false, invulnerable: false };
+export const DEFAULT_CHEATS: CheatSettings = { fastRun: false, bigJump: false, invulnerable: false, teflon: false };
 
 export function sanitizeCheats(raw?: Partial<CheatSettings>): CheatSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_CHEATS };
-  return { fastRun: raw.fastRun === true, bigJump: raw.bigJump === true, invulnerable: raw.invulnerable === true };
+  return { fastRun: raw.fastRun === true, bigJump: raw.bigJump === true, invulnerable: raw.invulnerable === true, teflon: raw.teflon === true };
 }
 
 export function defaultWeapons(): SavedWeapons {

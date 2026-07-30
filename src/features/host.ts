@@ -190,6 +190,14 @@ export class FeatureHost {
     return entries.length > 0 ? entries : undefined;
   }
 
+  /** Is any loaded feature holding the player under a roof? Cheap and allocation-free: unloaded
+   *  features cannot have the player inside them, and PvP suspends features entirely. */
+  indoors(): boolean {
+    if (this.context.suspended()) return false;
+    for (const system of this.systems.values()) if (system.indoors?.()) return true;
+    return false;
+  }
+
   /** One context per frame for the eager hooks, in whichever ladder the player is actually in. */
   private eagerFrame(): InteractionCtx {
     return this.frame(this.context.api.drivenVehicle() ? 'vehicle' : 'foot');

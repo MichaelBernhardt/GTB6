@@ -27,6 +27,7 @@ export type ConsoleCommand =
   | { kind: 'unwanted' }
   | { kind: 'shedding' }
   | { kind: 'nomoresirens' }
+  | { kind: 'teflon' }
   | { kind: 'tp-coords'; x: number; z: number }
   | { kind: 'tp-name'; name: string }
   | { kind: 'tp-list' }
@@ -50,6 +51,7 @@ export interface ConsoleHost {
   dropStar(): string;
   toggleShedding(): string;
   toggleSirens(): string;
+  toggleTeflon(): string;
   setBusy(percent: number): string;
   setPedTarget(count?: number): string;
   setCarTarget(count?: number): string;
@@ -89,6 +91,7 @@ const CHEAT_WORDS: Record<string, ConsoleCommand> = {
   unwanted: { kind: 'unwanted' },
   shedding: { kind: 'shedding' },
   nomoresirens: { kind: 'nomoresirens' },
+  teflon: { kind: 'teflon' },
 };
 
 export const HELP_LINES = [
@@ -116,8 +119,8 @@ export const HELP_LINES = [
   'fps — toggle the performance display (shows X/Y/Z position)',
   'perfchart — toggle the scrolling game-loop timing graph (stacked % of the 60fps budget per phase)',
   'mission [n] — list the missions, or jump-start mission n at its contact (replays even completed ones)',
-  `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
-  'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens',
+  `spawn <kind> — drop a vehicle ahead, on the nearest kerb or on the ground when no road is close: ${KINDS.join(', ')}, bakkie`,
+  'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens · teflon',
 ];
 
 export function tokenize(input: string): string[] { return input.trim().toLowerCase().split(/\s+/).filter(Boolean); }
@@ -252,6 +255,7 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'unwanted': return [host.dropStar()];
     case 'shedding': return [host.toggleShedding()];
     case 'nomoresirens': return [host.toggleSirens()];
+    case 'teflon': return [host.toggleTeflon()];
     case 'tp-coords': return [host.teleport(command.x, command.z)];
     case 'tp-name': return [host.teleportNamed(command.name)];
     case 'tp-list': return host.teleportList();
