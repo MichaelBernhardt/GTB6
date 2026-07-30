@@ -940,6 +940,280 @@ export class BuildingArchitecture {
       for (const px of [-w * 0.2, w * 0.2]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 3.5, 0.16), this.darkMetal); post.position.set(px, 1.75, 0); crown.add(post); }
       const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.52, 0.18, 0.18), this.darkMetal); beam.position.y = 3.45; crown.add(beam); this.place(crown);
     }
+    this.addDowntownCrown(spec, massing, roofY);
+    this.addDowntownStreetBase(spec, massing);
+  }
+
+  /**
+   * WHERE A TOWER IS ACTUALLY LOOKED AT: its outline against the sky, and its first five metres.
+   *
+   * Every flat-topped downtown variant used to stop dead on its own roof plane, so a 110 m shaft met
+   * the sky on a bare cut edge — the strongest "extruded rectangle" cue there is — and met the
+   * pavement on a bare seam. The shaft between them is the part nobody reads: the facade atlas and the
+   * mullion/spandrel rhythm above already carry it, and a window per window on thirty storeys would
+   * cost hundreds of quads for detail two pixels wide.
+   *
+   * So this buys the two ends and nothing else. On the roof: a cornice, a parapet on every roof open
+   * to the sky, and one of four crowns chosen by the building's own hash — a plant room with a lift
+   * overrun, tanks on a stand, a stepped cap with corner piers, or a mast and dish. At the kerb: a
+   * plinth, shopfront piers, a header closing the base off from the shaft, corner pilasters on the
+   * variants that get no mullions, and a roller shutter on a third of them.
+   *
+   * THREE THINGS IT DELIBERATELY DOES NOT DO. It pushes no tier, so the collision registry, the
+   * foundations and the oriented colliders are untouched. It does not move roofY. And it runs only
+   * through place(), which addStructuralDetail already gates on `drawing` — so plan() cannot see any
+   * of it, and plan/build parity (and with it every front door in the city) holds by construction.
+   *
+   * It also costs no draw calls. Only `stone`, `darkMetal` and the building's own `spec.roof` are
+   * used, all three already on every downtown building (setback bands, spandrel bands, mullions,
+   * crown masts, the roof plane itself), and GeometryBaker buckets by material PROPERTIES rather than
+   * identity — so all of this merges into meshes the cell already had.
+   *
+   * WHERE EACH VALUE GOES, because getting this wrong is what makes a crown look cheap: `stone` and
+   * `darkMetal` are the two extremes of the palette and are spent only on THIN pieces — the parapet
+   * lip, the cornice, a coping, corner piers, tanks, masts. Every LARGE new face (the roof deck, the
+   * plant-room and lift-overrun bodies, the first step of the deco cap, the elliptical lantern, the
+   * street plinth) takes `spec.roof`, the tone the building already wears. A bright volume or a black
+   * plate at this size reads as a graphic decal stuck on the massing, not as architecture.
+   */
+  private addDowntownCrown(spec: BuildingSpec, massing: number, roofY: number): void {
+    if (massing === 4) { this.addEllipticalCrown(spec, roofY); return; }
+    const { width: w, depth: d, variant } = spec;
+    const roofs = this.exposedRoofs(Math.max(12, w * d * 0.05)).slice(0, 2);
+    const main = roofs[0];
+    if (!main) return;
+    const cap = variant % 3 === 0 ? this.darkMetal : this.stone;
+    const thickness = 0.38;
+    for (let index = 0; index < roofs.length; index++) {
+      // The main roof carries the tall parapet; a secondary roof (a twin slab, a lower wing, a lift
+      // core) gets a shorter one, so a stepped massing reads as steps and not as a repeated stencil.
+      this.addParapet(roofs[index]!, index === 0 ? 1.25 + (variant % 3) * 0.45 : 0.85, thickness, cap);
+      // The deck, sunk inside the parapet, in the building's OWN roof tone. It is here because
+      // downtown roofs were reading as white icing — the setback band several massings wear AT their
+      // roof line is pale stone and covers most of the deck — and re-laying that area in roof grey
+      // both fixes it and gives the pale parapet something to be pale against.
+      //
+      // It is spec.roof and not a dark membrane on purpose. Bitumen is the honest material, but at
+      // this albedo a 200 m² plate ringed in pale coping stops reading as a roof and reads as a hole
+      // with a bathtub rim — and because every downtown roof would get it, the whole roofscape turns
+      // into one repeated black-and-white tile. The frugal rule is to spend the bright accent on the
+      // thin EDGE and leave the big face in the family tone; see the parapet and cornice below.
+      const deck = roofs[index]!;
+      const inset = thickness * 2 + 0.2;
+      if (deck.maxX - deck.minX > inset + 1 && deck.maxZ - deck.minZ > inset + 1) {
+        // The deck is a SLAB, not a sheet, and its thickness is what keeps it out of two fights at once.
+        // Several massings wear a setback band at their own roof line whose top face sits at y1 + 0.14, so
+        // a 0.18-tall plate centred at y1 + 0.05 put its top on exactly that plane — 478 u² of coincident
+        // face between the palette's two extremes, which fights hard and is overlooked from every
+        // neighbouring tower. Raising it alone would then bring its underside up onto the roof plate at
+        // y1 and simply move the fight. So it is deep enough to clear the band above (top y1 + 0.24) and
+        // stay buried in the plate below (bottom y1 - 0.06), with real margin on both sides rather than a
+        // couple of centimetres that some other massing's band could close again.
+        const membrane = new THREE.Mesh(new THREE.BoxGeometry(deck.maxX - deck.minX - inset, 0.3, deck.maxZ - deck.minZ - inset), spec.roof);
+        membrane.position.set((deck.minX + deck.maxX) / 2, deck.y1 + 0.09, (deck.minZ + deck.maxZ) / 2);
+        membrane.receiveShadow = true; membrane.name = 'downtown-roof-deck'; this.place(membrane);
+      }
+    }
+    // The cornice: one box, and the hard shadow line that stops a facade running straight off the top
+    // of the frame. Kept shallow on purpose — projected far it stops being a cornice and becomes a
+    // brim — and always the opposite value to the parapet, so the crown never flattens into one tone.
+    const cornice = new THREE.Mesh(new THREE.BoxGeometry(
+      main.maxX - main.minX + 0.48, 0.24, main.maxZ - main.minZ + 0.48,
+    ), cap === this.stone ? this.darkMetal : this.stone);
+    cornice.position.set((main.minX + main.maxX) / 2, main.y1 - 0.62, (main.minZ + main.maxZ) / 2);
+    cornice.castShadow = true; cornice.name = 'downtown-cornice'; this.place(cornice);
+    // Two massings already own their roof: 10 has the plant room and braced tanks it was authored
+    // with, and 2's gantry straddles the roof centre, so it takes only the corner-seated crowns.
+    const kind = massing === 10 ? -1 : massing === 2 ? variant % 2 : variant % 4;
+    if (kind >= 0 && main.maxX - main.minX > 6.5 && main.maxZ - main.minZ > 6.5) this.addRoofCrown(spec, main, kind, cap);
+  }
+
+  /** Tier tops open to the sky, tallest first. A centre probe is enough: every downtown massing that
+   *  stacks a volume on a lower one covers that one's centre, so what comes back is the set of roofs
+   *  you can actually see — the exposed ring behind a setback already wears its own band. The sort is
+   *  a total order on the massing, so the crown a building gets never depends on the order its tiers
+   *  happened to be pushed in. */
+  private exposedRoofs(minArea: number): MassingTier[] {
+    const roofs: MassingTier[] = [];
+    for (const tier of this.tiers) {
+      if (tier.kind === 'wall') continue;
+      const width = tier.maxX - tier.minX; const depth = tier.maxZ - tier.minZ;
+      if (width < 2.6 || depth < 2.6 || width * depth < minArea) continue;
+      const top = massingTopAt(this.tiers, (tier.minX + tier.maxX) / 2, (tier.minZ + tier.maxZ) / 2);
+      if (top === undefined || top > tier.y1 + 1e-3) continue;
+      roofs.push(tier);
+    }
+    return roofs.sort((a, b) => (b.y1 - a.y1) || (a.minX - b.minX) || (a.minZ - b.minZ));
+  }
+
+  /** A parapet: four thin upstands round a roof edge. A slab across the top would not read — what
+   *  changes the outline is the LIP, seen from the street as a shadowed band and from above as a rim
+   *  with the roof deck sunk inside it. Decorative: the player still stands on the roof tier. */
+  private addParapet(roof: MassingTier, height: number, thickness: number, material: THREE.Material): void {
+    const width = roof.maxX - roof.minX; const depth = roof.maxZ - roof.minZ;
+    const cx = (roof.minX + roof.maxX) / 2; const cz = (roof.minZ + roof.maxZ) / 2;
+    const y = roof.y1 + height / 2;
+    const inner = Math.max(0.1, depth - thickness * 2);
+    for (const side of [-1, 1]) {
+      const run = new THREE.Mesh(new THREE.BoxGeometry(width, height, thickness), material);
+      run.position.set(cx, y, cz + side * (depth - thickness) / 2);
+      run.castShadow = true; run.name = 'downtown-parapet'; this.place(run);
+      const flank = new THREE.Mesh(new THREE.BoxGeometry(thickness, height, inner), material);
+      flank.position.set(cx + side * (width - thickness) / 2, y, cz);
+      flank.castShadow = true; flank.name = 'downtown-parapet'; this.place(flank);
+    }
+  }
+
+  /** Four rooftop crowns, one per building by hash — the cheapest way to stop a skyline being a row
+   *  of identical flat cuts, because every one of them changes the OUTLINE. Each piece is seated
+   *  inside the roof rectangle it was handed, so nothing probes and nothing can overhang an edge. */
+  private addRoofCrown(spec: BuildingSpec, roof: MassingTier, kind: number, cap: THREE.Material): void {
+    const width = roof.maxX - roof.minX; const depth = roof.maxZ - roof.minZ;
+    const cx = (roof.minX + roof.maxX) / 2; const cz = (roof.minZ + roof.maxZ) / 2;
+    const box = (bw: number, bh: number, bd: number, px: number, pz: number, material: THREE.Material, base = roof.y1): void => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), material);
+      mesh.position.set(px, base + bh / 2, pz);
+      mesh.castShadow = true; mesh.receiveShadow = true; mesh.name = 'downtown-roof-crown'; this.place(mesh);
+    };
+    if (kind === 0) {
+      // Plant room and lift overrun: the two volumes every real office roof carries, and the pair
+      // that most cheaply turns a flat top into a stepped one.
+      const roomW = Math.min(width * 0.44, 10); const roomD = Math.min(depth * 0.4, 8);
+      box(roomW, 3, roomD, roof.minX + roomW / 2 + 0.7, roof.minZ + roomD / 2 + 0.7, spec.roof);
+      const shaftW = Math.min(width * 0.24, 4.6); const shaftD = Math.min(depth * 0.26, 4.4);
+      const sx = roof.maxX - shaftW / 2 - 0.9; const sz = roof.minZ + shaftD / 2 + 1.2;
+      box(shaftW, 5.6, shaftD, sx, sz, spec.roof);
+      box(shaftW * 0.72, 0.34, shaftD * 0.72, sx, sz, this.darkMetal, roof.y1 + 5.6);
+      return;
+    }
+    if (kind === 1) {
+      // The Joburg roof: a pair of tanks up on a stand, above the parapet where you can see them.
+      const standW = Math.min(width * 0.42, 8.4); const standD = Math.min(depth * 0.3, 5.2);
+      const sx = cx + width * 0.12; const sz = roof.minZ + standD / 2 + 0.9;
+      box(standW, 1.2, standD, sx, sz, this.darkMetal);
+      const radius = Math.min(1.5, standW * 0.2, standD * 0.42);
+      for (const side of [-1, 1]) {
+        const tank = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 2.4, 10), this.stone);
+        tank.position.set(sx + side * (standW / 2 - radius - 0.3), roof.y1 + 2.4, sz);
+        tank.castShadow = true; tank.name = 'downtown-roof-crown'; this.place(tank);
+      }
+      box(0.34, 2.6, 0.34, sx, sz + standD / 2 - 0.3, this.darkMetal, roof.y1 + 1.2);
+      return;
+    }
+    if (kind === 2) {
+      // A stepped cap with corner piers: the deco crown the older CBD blocks wear, and the profile
+      // that carries furthest — two shrinking volumes plus four verticals on the parapet line.
+      box(width * 0.66, 2.8, depth * 0.66, cx, cz, spec.roof);
+      box(width * 0.38, 2.4, depth * 0.38, cx, cz, cap, roof.y1 + 2.8);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        box(1, 1.6, 1, cx + sx * (width - 1) / 2, cz + sz * (depth - 1) / 2, cap);
+      }
+      return;
+    }
+    // A mast with its gantry and a dish — the tallest, thinnest silhouette break available, and the
+    // one that reads furthest across a skyline for twelve triangles.
+    const mastH = Math.min(16, Math.max(9, spec.height * 0.16));
+    box(0.4, mastH, 0.4, cx, cz - depth * 0.12, this.darkMetal);
+    for (const level of [0.52, 0.78]) {
+      box(Math.min(width * 0.3, 4.4), 0.2, 0.2, cx, cz - depth * 0.12, this.darkMetal, roof.y1 + mastH * level);
+    }
+    const dishR = Math.min(1.3, width * 0.1);
+    const dishX = cx + dishR + 0.5; const dishZ = cz - depth * 0.12;
+    box(0.28, 1.9, 0.28, dishX, dishZ, this.darkMetal);
+    const dish = new THREE.Mesh(new THREE.CylinderGeometry(dishR * 0.2, dishR, 0.4, 10), this.stone);
+    dish.rotation.z = 0.5; dish.position.set(dishX, roof.y1 + 2.15, dishZ);
+    dish.castShadow = true; dish.name = 'downtown-roof-crown'; this.place(dish);
+  }
+
+  /** The elliptical tower keeps its own vocabulary: a turned lantern on the drum and a mast, both
+   *  inside the parcel envelope. A rectangular parapet on a curved facade is precisely the detached
+   *  trim that addCylindricalDowntownDetail exists to avoid. */
+  private addEllipticalCrown(spec: BuildingSpec, roofY: number): void {
+    const { x, z, width: w, depth: d } = spec;
+    const radius = d * 0.39; const stretch = w / Math.max(d, 1);
+    const lantern = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.5, radius * 0.64, 3.4, 20), spec.roof);
+    lantern.scale.x = stretch; lantern.position.set(x, roofY + 1.7, z);
+    lantern.castShadow = true; lantern.name = 'downtown-roof-crown'; this.place(lantern);
+    const drum = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.2, radius * 0.5, 1.7, 20), this.darkMetal);
+    drum.scale.x = stretch; drum.position.set(x, roofY + 4.25, z);
+    drum.castShadow = true; drum.name = 'downtown-roof-crown'; this.place(drum);
+    const mast = new THREE.Mesh(new THREE.BoxGeometry(0.36, 9, 0.36), this.darkMetal);
+    mast.position.set(x, roofY + 9.6, z);
+    mast.castShadow = true; mast.name = 'downtown-roof-crown'; this.place(mast);
+  }
+
+  /**
+   * THE FIRST FIVE METRES, where the player is standing.
+   *
+   * A plinth so the wall lands on something instead of meeting the pavement on a bare seam; piers
+   * across the shopfront so the glazing stops being a flush sticker; a header band closing the base
+   * off from the shaft; corner pilasters for the odd variants, which get no mullions at all today and
+   * so read as exactly the blank extrusion this pass is about; and on a third of them a roller
+   * shutter pulled down over one bay, which is what a Joburg street corner actually looks like.
+   *
+   * Every piece rides a REAL front span (frontFacadeSpansAt), so a setback, an arcade or a narrow
+   * wing never gets a band floating in front of it.
+   *
+   * The plinth is the DARK one (spec.roof) and the piers and header are pale. With all three in pale
+   * stone the base became a white trellis bolted to the wall — four pale horizontals stacked with the
+   * ledge the glazing pass already hangs. A dark base course is what a Joburg shopfront actually has,
+   * and it gives the pale verticals a bottom to stand on.
+   */
+  private addDowntownStreetBase(spec: BuildingSpec, massing: number): void {
+    if (massing === 4) return; // the elliptical facade is not a plane; see addEllipticalCrown
+    const { x, width: w, height: h, variant } = spec;
+    const left = x - w / 2; const right = x + w / 2;
+    // Probed at 0.7, not at the plinth's own mid-height: the colonnade variant's arcade DECK stops at
+    // 0.5, and a base course hung on the front of a walkway slab is a kerb across the arcade mouth.
+    for (const span of frontFacadeSpansAt(this.tiers, 0.7, left, right)) {
+      if (span.maxX - span.minX < 2.6) continue;
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(span.maxX - span.minX, 0.7, 0.34), spec.roof);
+      plinth.position.set((span.minX + span.maxX) / 2, 0.55, span.z + 0.11);
+      plinth.receiveShadow = true; plinth.name = 'downtown-plinth'; this.place(plinth);
+    }
+    if (h > 14) {
+      for (const span of frontFacadeSpansAt(this.tiers, 5.15, left, right)) {
+        const width = span.maxX - span.minX;
+        if (width < 2.6) continue;
+        const header = new THREE.Mesh(new THREE.BoxGeometry(width, 0.5, 0.5), this.stone);
+        header.position.set((span.minX + span.maxX) / 2, 5.15, span.z + 0.15);
+        header.castShadow = true; header.name = 'downtown-header'; this.place(header);
+        // Piers between plinth and header. The glazing pass hangs flat panes on this wall; a vertical
+        // every few metres in front of them is what turns a painted-on shopfront into a built one.
+        const piers = Math.max(2, Math.min(6, Math.round(width / 6)));
+        for (let pier = 0; pier < piers; pier++) {
+          const px = span.minX + (width * (pier + 0.5)) / piers;
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4, 0.3), this.stone);
+          post.position.set(px, 2.9, span.z + 0.09);
+          post.castShadow = true; post.name = 'downtown-shopfront-pier'; this.place(post);
+        }
+      }
+    }
+    if (variant % 2 !== 0) {
+      let shaft: MassingTier | undefined;
+      for (const tier of this.tiers) if (tier.kind !== 'wall' && (!shaft || tier.y1 > shaft.y1)) shaft = tier;
+      if (shaft && shaft.y1 - shaft.y0 > 9 && shaft.maxX - shaft.minX > 4) {
+        for (const side of [-1, 1]) {
+          const pilaster = new THREE.Mesh(new THREE.BoxGeometry(0.8, shaft.y1 - shaft.y0 - 0.5, 0.3), this.stone);
+          pilaster.position.set(side < 0 ? shaft.minX + 0.4 : shaft.maxX - 0.4, (shaft.y0 + shaft.y1) / 2, shaft.maxZ + 0.09);
+          pilaster.castShadow = true; pilaster.name = 'downtown-pilaster'; this.place(pilaster);
+        }
+      }
+    }
+    if (variant % 3 === 1) {
+      const bay = widestFrontFacadeSpanAt(this.tiers, 1.6, left, right, 4.4);
+      if (bay) {
+        const shutterW = Math.min(4.6, (bay.maxX - bay.minX) * 0.36);
+        const wanted = bay.minX + (bay.maxX - bay.minX) * (variant % 2 ? 0.24 : 0.76);
+        const px = THREE.MathUtils.clamp(wanted, bay.minX + shutterW / 2 + 0.25, bay.maxX - shutterW / 2 - 0.25);
+        const shutter = new THREE.Mesh(new THREE.BoxGeometry(shutterW, 2.5, 0.14), this.darkMetal);
+        shutter.position.set(px, 1.75, bay.z + 0.2); shutter.name = 'downtown-shutter'; this.place(shutter);
+        for (const ry of [1, 1.75, 2.5]) {
+          const rib = new THREE.Mesh(new THREE.BoxGeometry(shutterW - 0.14, 0.1, 0.1), this.darkMetal);
+          rib.position.set(px, ry, bay.z + 0.28); this.place(rib);
+        }
+      }
+    }
   }
 
   /** Trim for the tapered elliptical downtown tower. The old shared downtown pass placed a flat
