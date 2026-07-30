@@ -475,14 +475,14 @@ export class BuildingArchitecture {
     }
     if (massing === 3) {
       const lowerH = h * 0.58;
-      // The cross-plan base used to be a full-depth bar overlapping a full-width bar, which left
-      // 150+ u² of exactly coplanar roof deck fighting at lowerH. Same union, three DISJOINT boxes:
-      // the wide bar stays whole (it is the massing's main lower roof, so the roofline pass dresses
-      // it exactly as before), and the deep bar is cut into the front and back stubs that actually
-      // show beyond it.
-      this.addBox(spec, w, lowerH, d * 0.46, x, lowerH / 2 + 0.2, z - d * 0.04);
-      this.addBox(spec, w * 0.58, lowerH, d * 0.31, x, lowerH / 2 + 0.2, z + d * 0.345);
-      this.addBox(spec, w * 0.58, lowerH, d * 0.23, x, lowerH / 2 + 0.2, z - d * 0.385);
+      this.addBox(spec, w * 0.58, lowerH, d, x, lowerH / 2 + 0.2, z);
+      // The wide bar tops out 0.2 below the deep bar instead of dead level with it: level, their
+      // overlapping roof planes were 150+ u² of exactly coplanar deck deciding its winner per
+      // triangle (hidden today only because the setback band happens to sit on that plane). A real
+      // shoulder line, not a depth hack: the step hides under the band where the bars overlap, and
+      // 0.2 u is depth-resolvable out past 500 u. Footprints, the entrance plane and the roofline
+      // pass's crown selection are all unchanged.
+      this.addBox(spec, w, lowerH - 0.2, d * 0.46, x, (lowerH - 0.2) / 2 + 0.2, z - d * 0.04);
       this.addBox(spec, w * 0.46, h - lowerH, d * 0.58, x + w * 0.08, lowerH + (h - lowerH) / 2 + 0.2, z, true);
       this.addSetbackBand(x, z, w * 0.6, d * 1.03, lowerH + 0.2);
       return h + 0.2;
