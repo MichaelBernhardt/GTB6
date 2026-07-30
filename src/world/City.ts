@@ -173,6 +173,10 @@ export const SIDEWALK_INNER_EDGE = 0.38;
  *  the footprint that rail, station platforms and roadside placement are all held clear of. */
 export const SIDEWALK_WIDTH = ROAD_BUILD_MARGIN - SIDEWALK_INNER_EDGE;
 export const SIDEWALK_CENTER = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH / 2;
+/** The verge line: where addRoadsidePoints and buildStreetlampPoints put every furniture anchor, as a
+ *  distance beyond the kerb. Note it sits only 0.45u inside the pavement's outer edge, so a pass that
+ *  steps OUTWARD from it is stepping onto the grass — see UrbanInfrastructure's kerb-distance table. */
+export const ROADSIDE_OFFSET = 3.05;
 const SIDEWALK_UV_LENGTH = 48; // one procedural tile contains sixteen 3u-deep paving bays
 const CLIP_PROBE_SPACING = 3; // narrower than the smallest road: a crossing cannot hide between probes
 
@@ -603,7 +607,7 @@ export function buildStreetlampPoints(network: RoadDefinition[] = ROAD_NETWORK):
     const closed = definition.closed ?? false;
     const sampled = sampleRoadPath(definition.points, closed, ROAD_SAMPLE_SPACING);
     const source = closed ? [...sampled, sampled[0]].filter((point): point is RoadPoint => Boolean(point)) : sampled;
-    const offset = definition.width / 2 + 3.05; // verge line, same setback as the roadside furniture
+    const offset = definition.width / 2 + ROADSIDE_OFFSET; // verge line, same setback as the roadside furniture
     let travelled = 0; let next = STREETLAMP_SPACING / 2; let side: -1 | 1 = 1; // first lamp half a span in
     for (let segment = 0; segment < source.length - 1; segment++) {
       const start = source[segment]; const end = source[segment + 1]; if (!start || !end) continue;
@@ -907,8 +911,15 @@ export class City {
       (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius)
         || distanceToRailwayCorridor(x, z) < radius + 0.6,
       (x, z, margin) => this.isOnRoad(x, z, margin),
+      (point) => this.isPavementDrawn(point),
       this.props,
-      (x, z) => this.sidewalkHeightAt(x, z),
+      // The surface actually DRAWN at (x, z) — not "pavement everywhere". sidewalkHeightAt is
+      // terrain + ROAD_SURFACE_OFFSET + SIDEWALK_RISE unconditionally, with no test for whether any
+      // paving exists there, while the paving ribbon stops at ROAD_BUILD_MARGIN. Every furniture pass
+      // that steps outward off the verge line therefore stood on a slab that isn't drawn and hung a
+      // full kerb height (0.37u = 50cm) above the grass under it. surfaceHeightAt answers honestly, so
+      // the streetscape is grounded on the same surface the player and the peds walk on.
+      (x, z) => this.surfaceHeightAt(x, z),
     );
     yield { label: 'Merging the city blocks', fraction: 0.91 }; bootMark('city: merge');
     mergeStaticGeometry(this.group, MERGE_CHUNK_SIZE, this.chunkStore); // water is built after the merge: its meshes stay live for per-frame animation
@@ -1210,6 +1221,23 @@ export class City {
   roadHeightAt(x: number, z: number): number { return terrainHeightAt(x, z) + ROAD_SURFACE_OFFSET; }
 
   sidewalkHeightAt(x: number, z: number): number { return terrainHeightAt(x, z) + ROAD_SURFACE_OFFSET + SIDEWALK_RISE; }
+
+  /** True when the pavement ribbon is actually DRAWN alongside this roadside point.
+   *  createClippedSidewalkStrip removes the strip's WHOLE width for the span in which a crossing road
+   *  touches any of its three lateral probes, so "inside the sidewalk band" (isOnSidewalk, a band query
+   *  that knows nothing about the clip) is not the same as "there is paving here": beside a crossing there
+   *  is a notch of bare ground that every height query still reports at pavement level. A prop grounded on
+   *  the pavement plane inside one of those hangs a kerb height above the grass, so the furniture that
+   *  relies on the slab being there asks this first. Same three lateral probes and same 0.035 margin as the
+   *  clip, and the clip bisects its own edges to ~0.006u, so a point test is as exact as the ribbon.
+   *  Cheap enough for a placement pass: three grid lookups, no geometry. */
+  isPavementDrawn(point: RoadsidePoint): boolean {
+    for (const lateral of [SIDEWALK_INNER_EDGE, SIDEWALK_CENTER, SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH]) {
+      const step = ROADSIDE_OFFSET - lateral; // the roadside point sits at ROADSIDE_OFFSET; inward runs at the carriageway
+      if (this.isOnRoad(point.x + point.inwardX * step, point.z + point.inwardZ * step, 0.035)) return false;
+    }
+    return true;
+  }
 
   isOnSidewalk(x: number, z: number): boolean {
     // Grid lookup instead of scanning ~4000 road polylines every ped/frame: edgeDistance already subtracts each
@@ -1835,7 +1863,7 @@ export class City {
 
   private addRoadsidePoints(points: RoadPoint[], width: number, closed: boolean): void {
     for (const side of [-1, 1] as const) {
-      const offset = side * (width / 2 + 3.05); const path = this.offsetPath(points, offset, closed);
+      const offset = side * (width / 2 + ROADSIDE_OFFSET); const path = this.offsetPath(points, offset, closed);
       path.forEach((point, index) => {
         if (index % 2 !== 0) return;
         const previous = points[index === 0 ? (closed ? points.length - 1 : 0) : index - 1] ?? points[index] ?? point;
