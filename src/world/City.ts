@@ -657,7 +657,16 @@ export interface HydrantStation { road: SampledRoad; arc: number; side: -1 | 1; 
  * are exactly the category the standard is loosest about. A district-varying pitch would also have to step
  * discontinuously mid-road, since roads cross district boundaries.
  */
-export const HYDRANT_STATION_SPACING = STREETLAMP_SPACING * 3;
+// Five lamp spans, not three. Three (78 u) was tuned to minimise the walk, and the owner's verdict on
+// walking it was that hydrants looked right but there were too many — so the pitch is set by how often one
+// should catch the eye, not by how short the walk can be made.
+//
+// Count does NOT scale inversely with pitch, which is worth knowing before the next retune: every road is
+// guaranteed at least one station regardless of its length, so short roads pin a floor. Measured placed
+// counts are 78 u -> 4,311, 130 u -> 2,991, 156 u -> 2,708, 208 u -> 2,344 — so widening the pitch by 67%
+// removed 31% of the hydrants, not 40%, and the curve flattens hard after this. Straight-line walk-up at
+// this pitch: median 28 u, p90 70, 77.5% of the pavement network within 50 u.
+export const HYDRANT_STATION_SPACING = STREETLAMP_SPACING * 5;
 /** Station phase: a FIXED offset, not half a pitch. Two things follow. Every station lands exactly half a
  *  lamp span from a lamp station, so no hydrant ever stands in front of a lamp post; and a later pitch
  *  retune stays a refinement — each hydrant slides at most half a pitch along its OWN kerb instead of the
