@@ -312,7 +312,6 @@ export function roundedBoxRadius(width: number, depth: number): number {
 export function scaleBoxFacadeUvs(
   geometry: THREE.BufferGeometry, width: number, height: number, depth: number,
   tile: { width: number; height: number },
-  floorRepeats = true,
 ): THREE.BufferGeometry {
   const uv = geometry.getAttribute('uv');
   if (!uv || !(tile.width > 0) || !(tile.height > 0)) return geometry;
@@ -321,12 +320,14 @@ export function scaleBoxFacadeUvs(
     const face = group.materialIndex ?? 0;
     if (face === 2 || face === 3) continue; // top / underside use the roof material
     const horizontal = face === 0 || face === 1 ? depth : width;
-    // Facades floor at one whole repeat so a narrow wall still shows whole windows. Surfaces with
-    // no bays to keep whole (the concrete foundation walls) pass floorRepeats=false instead, so
-    // every face shares one WORLD texture pitch — two abutting retaining-wall tiers of different
-    // depths used to change concrete scale 1.8x across one continuous wall.
-    const repeatX = floorRepeats ? Math.max(1, horizontal / tile.width) : horizontal / tile.width;
-    const repeatY = floorRepeats ? Math.max(1, height / tile.height) : height / tile.height;
+    // The floor at one whole repeat is load-bearing for every caller: a facade narrower than its
+    // tile still shows whole windows, and a foundation face narrower than its tile still samples
+    // the WHOLE concrete photo. A fractional repeat samples a fraction of the texture — an
+    // arbitrary sub-window of a photograph, which on real concrete is frequently a featureless
+    // patch, i.e. an entire wall rendered flat grey (the floorRepeats=false experiment did exactly
+    // that to 78% of the city's foundation faces).
+    const repeatX = Math.max(1, horizontal / tile.width);
+    const repeatY = Math.max(1, height / tile.height);
     const seen = new Set<number>(); // indexed BoxGeometry references each corner in two triangles
     for (let cursor = group.start; cursor < group.start + group.count; cursor++) {
       const vertex = index ? index.getX(cursor) : cursor;

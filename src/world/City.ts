@@ -2537,12 +2537,15 @@ export class City {
     const foundationMaterials = this.foundationMaterialsFor(foundationIdentity);
     for (const foundation of foundations) {
       const foundationW = foundation.maxX - foundation.minX; const foundationH = foundation.y1 - foundation.y0; const foundationD = foundation.maxZ - foundation.minZ;
-      // World-pitched concrete (floorRepeats=false): a plain box face spans 0..1 UV whatever its
-      // size, so two abutting foundation tiers of different depths used to change concrete scale
-      // 1.8x across one continuous retaining wall (the MARTIAL x SMAL corner). One repeat per
-      // FOUNDATION_UV_TILE world units keeps every exposed face at the same pitch.
+      // World-pitched concrete: a plain box face spans 0..1 UV whatever its size, so two abutting
+      // foundation tiers of different depths used to change concrete scale 1.8x across one
+      // continuous retaining wall (the MARTIAL x SMAL corner). Every face at least one
+      // FOUNDATION_UV_TILE wide/tall now shares one world pitch; smaller faces clamp to a single
+      // whole repeat — the pre-fix look — because a fractional repeat samples an arbitrary
+      // sub-window of the photo and renders whole short walls flat grey (owner-reported when this
+      // briefly shipped unfloored).
       const mesh = new THREE.Mesh(
-        scaleBoxFacadeUvs(new THREE.BoxGeometry(foundationW, foundationH, foundationD), foundationW, foundationH, foundationD, FOUNDATION_UV_TILE, false),
+        scaleBoxFacadeUvs(new THREE.BoxGeometry(foundationW, foundationH, foundationD), foundationW, foundationH, foundationD, FOUNDATION_UV_TILE),
         foundationMaterials.wall);
       mesh.position.set((foundation.minX + foundation.maxX) / 2, (foundation.y0 + foundation.y1) / 2, (foundation.minZ + foundation.maxZ) / 2);
       mesh.receiveShadow = true; group.add(mesh);
