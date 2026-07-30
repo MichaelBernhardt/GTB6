@@ -18,6 +18,79 @@ import {
 
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
+/**
+ * Same-pass spacing. Every furniture pass filters its WHOLE site list before it registers a single
+ * prop, so its isBlocked() guard cannot see the props the pass itself is placing. Two roadside points
+ * that land on the same spot — a road's last point meeting a crossing road's first — therefore both
+ * pass the guard and the two props merge into one lump. This is the pass's own memory of what it has
+ * already put down; sites are ~47u apart, so the linear scan only ever finds coincident points.
+ */
+const spacedFrom = (placed: readonly RoadPoint[], x: number, z: number, clearance: number): boolean =>
+  placed.every((spot) => (spot.x - x) ** 2 + (spot.z - z) ** 2 >= clearance * clearance);
+const BENCH_SPACING = 1.7; // two 0.85u bench shells, edge to edge
+const BIN_SPACING = 0.9;
+const HYDRANT_SPACING = 1.2;
+
+/**
+ * Every streetscape prop is planted this far INTO the surface under it. A base left exactly flush shows
+ * a hairline of daylight the moment the drawn triangle dips below the height query — and a prop a
+ * centimetre proud of the ground reads as broken, while a prop a centimetre into it reads as bolted
+ * down. Two centimetres of real scale: no silhouette here is short enough to notice.
+ */
+const SURFACE_BED = 0.015;
+
+/**
+ * WHERE EACH PAVEMENT PROP STANDS, as a distance beyond the kerb — the same metric City.roadEdgeDistance
+ * reports, so these can be read straight against the pavement the renderer actually draws
+ * (SIDEWALK_INNER_EDGE 0.38 out to ROAD_BUILD_MARGIN 3.50) and against the walk line peds route along
+ * (SIDEWALK_CENTER 1.94). Every roadside point sits on the verge line at 3.05, which is only 0.45 inside
+ * the paving's outer edge, so a pass that steps outward from it puts its prop on the grass.
+ *
+ * Declared as literals rather than derived from City's constants: City constructs UrbanInfrastructure, so
+ * a value import would close a load-time cycle and read the pavement constants inside their TDZ.
+ * UrbanInfrastructure.test.ts asserts every derivation below against City's own numbers instead, so the
+ * two cannot drift.
+ */
+const ROADSIDE_LINE = 3.05; // City.ROADSIDE_OFFSET — where addRoadsidePoints puts every anchor
+/** The hydrant's widest point at ground level: SphereGeometry(0.23) scaled 1.5 across (the ground flange). */
+export const HYDRANT_FLANGE_RADIUS = 0.23 * 1.5;
+/** Kerbside, wholly on the drawn paving: pavement inner edge 0.38, plus the flange, plus 0.2 clear of the
+ *  kerb stone. This is also where a player looks for a hydrant and where a car that clips the kerb finds
+ *  one — and it is 1.01u short of the walk line, so it never stands in a routed pedestrian. */
+export const HYDRANT_KERB_DISTANCE = 0.93;
+/** Benches and bins stay out on the verge behind the paving, where they have always been — far enough
+ *  that no coincidence of strides can put a hydrant inside a bench (asserted in the test). */
+export const BENCH_VERGE_DISTANCE = 3.85;
+export const BIN_VERGE_DISTANCE = 3.75;
+/** Half the 0.55u leg, so a bench's feet land exactly on the surface it is grounded at (SURFACE_BED then
+ *  beds them in). They used to be pinned at 0.3 and stood 0.025u proud of the ground. */
+export const BENCH_LEG_CENTER = 0.275;
+
+/** Move a roadside point across the pavement to where its prop stands, `distance` beyond the kerb.
+ *  inward is the unit normal pointing at the carriageway, so this is one signed step along it. */
+const atKerbDistance = (point: RoadsidePoint, distance: number): { x: number; z: number } => ({
+  x: point.x + point.inwardX * (ROADSIDE_LINE - distance),
+  z: point.z + point.inwardZ * (ROADSIDE_LINE - distance),
+});
+
+/** Rotation that lays an upright cylinder on its side, pointing along local +X. */
+const TIPPED = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+
+/**
+ * One hydrant, as instances of just two geometries — the tapered body cylinder and the cap sphere.
+ * Local +X runs along the street (so the hose outlets face up- and down-street) and y is world height,
+ * already relative to the pavement. Reusing the two batches for the outlets, bonnet collar and ground
+ * flange buys the silhouette that tells a hydrant apart from a bollard at zero extra draw calls.
+ */
+const HYDRANT_PARTS: ReadonlyArray<{ batch: 'body' | 'cap'; x: number; y: number; tipped?: boolean; scale?: THREE.Vector3 }> = [
+  { batch: 'body', x: 0, y: 0.36 },                                                             // barrel
+  { batch: 'body', x: -0.19, y: 0.47, tipped: true, scale: new THREE.Vector3(0.5, 0.34, 0.5) }, // hose outlet, up-street
+  { batch: 'body', x: 0.19, y: 0.47, tipped: true, scale: new THREE.Vector3(0.5, 0.34, 0.5) },  // hose outlet, down-street
+  { batch: 'cap', x: 0, y: 0.76 },                                                              // bonnet
+  { batch: 'cap', x: 0, y: 0.645, scale: new THREE.Vector3(1.3, 0.3, 1.3) },                    // collar under the bonnet
+  { batch: 'cap', x: 0, y: 0.06, scale: new THREE.Vector3(1.5, 0.45, 1.5) },                    // ground flange
+];
+
 /** Hide one instance of a per-cell InstancedMesh (knocked-over prop). */
 const hideSlot = (slot: InstanceSlot): void => { slot.mesh.setMatrixAt(slot.index, HIDDEN_MATRIX); slot.mesh.instanceMatrix.needsUpdate = true; };
 
@@ -63,9 +136,40 @@ export const SIGN_VISIBILITY_STEP = 72;
  * longer jump straight from tar to buildings. The source index is stable because roadsidePoints is
  * generated deterministically from the committed road network. */
 export const UTILITY_SITE_STRIDE = 43;
+
+/** True when `index` is the `offset`th point of every `stride` — negative-index safe. */
+export const onRoadsideStride = (index: number, stride: number, offset: number): boolean =>
+  (((index - offset) % stride) + stride) % stride === 0;
+
 export function isUtilityRoadsideCandidate(point: RoadsidePoint, index: number): boolean {
-  return point.width >= 8 && ((index % UTILITY_SITE_STRIDE) + UTILITY_SITE_STRIDE) % UTILITY_SITE_STRIDE === 11;
+  return point.width >= 8 && onRoadsideStride(index, UTILITY_SITE_STRIDE, 11);
 }
+
+/**
+ * Pavement furniture strides. Benches and litter bins are planted within a tenth of a unit of the same
+ * verge line, so two of them on the SAME roadside point means one prop standing inside the other. That
+ * is exactly how every hydrant came to be embedded in a bench: both were emitted from the bench stride,
+ * 0.05u apart.
+ *
+ * Each prop therefore gets its own stride, and the three are pairwise co-prime so their rhythms
+ * interleave along a street instead of beating together. Co-prime strides still coincide once every
+ * product of strides (13x17 = every 221st index, ~70 sites citywide), so the strides alone are not
+ * a proof of separation — the residual is caught by the placement guards: the passes run in
+ * BENCH -> BIN -> HYDRANT order and each one's isBlocked() consults the prop registry, so a point
+ * whose furniture is already standing rejects the next prop. Both mechanisms are asserted in
+ * UrbanInfrastructure.test.ts.
+ *
+ * The hydrant stride is the tightest of the three because a hydrant is a piece of municipal equipment,
+ * not an amenity: the fire brigade needs one within a hose length everywhere, and a player needs to be
+ * able to find one without a citywide search. It no longer shares the verge line with the bench either
+ * (see HYDRANT_KERB_DISTANCE), so its coincidences with the bench stride cost nothing.
+ */
+export const BENCH_SITE_STRIDE = 13;
+export const BIN_SITE_STRIDE = 17;
+export const HYDRANT_SITE_STRIDE = 11;
+export const isBenchSite = (index: number): boolean => onRoadsideStride(index, BENCH_SITE_STRIDE, 3);
+export const isBinSite = (index: number): boolean => onRoadsideStride(index, BIN_SITE_STRIDE, 8);
+export const isHydrantSite = (index: number): boolean => onRoadsideStride(index, HYDRANT_SITE_STRIDE, 11);
 
 /** One robot's 30s loop: green 0–11, amber 11–14, red 14–30. The two carriageway axes run 15s apart
  *  so their greens never overlap. Both the lens animation and the traffic AI read this, so the colour
@@ -149,6 +253,9 @@ export class UrbanInfrastructure {
     private streetlampPoints: RoadsidePoint[],
     private isBlocked: (x: number, z: number, radius: number) => boolean,
     private isRoad: (x: number, z: number, margin: number) => boolean,
+    /** Whether the pavement ribbon is DRAWN beside this roadside point — see City.isPavementDrawn. Only a
+     *  prop that stands on the slab needs it, and only that prop should trust the pavement height. */
+    private isPaved: (point: RoadsidePoint) => boolean,
     private props: PropRegistry,
     private surfaceHeight: (x: number, z: number) => number,
   ) {
@@ -164,35 +271,44 @@ export class UrbanInfrastructure {
     this.buildRoadsideSigns();
     this.buildStreetFurniture();
     this.buildLitterBins();
+    this.buildFireHydrants(); // last of the pavement furniture: its guard sees the benches and bins already standing
     this.buildNeighbourhoodStreetLife();
     this.buildTransitStops();
     this.buildEtollGantries();
     this.groundInfrastructure();
   }
 
-  /** Raise every streetscape root or instance onto its local sidewalk surface. */
+  /** The height a prop's base sits at: the surface City draws under it, bedded by SURFACE_BED so nothing
+   *  is left exactly flush. One (x, z) per PROP, never per part — see groundItems. */
+  private baseHeight(x: number, z: number): number { return this.surfaceHeight(x, z) - SURFACE_BED; }
+
+  /** Raise every streetscape root or instance onto the surface beneath it. */
   private groundInfrastructure(): void {
     const matrix = new THREE.Matrix4(); const position = new THREE.Vector3(); const rotation = new THREE.Quaternion(); const scale = new THREE.Vector3();
     for (const object of this.group.children) {
       if (object instanceof THREE.InstancedMesh) {
         for (let index = 0; index < object.count; index++) {
           object.getMatrixAt(index, matrix); matrix.decompose(position, rotation, scale);
-          position.y += this.surfaceHeight(position.x, position.z); matrix.compose(position, rotation, scale); object.setMatrixAt(index, matrix);
+          position.y += this.baseHeight(position.x, position.z); matrix.compose(position, rotation, scale); object.setMatrixAt(index, matrix);
         }
         object.instanceMatrix.needsUpdate = true;
-      } else object.position.y += this.surfaceHeight(object.position.x, object.position.z);
+      } else object.position.y += this.baseHeight(object.position.x, object.position.z);
     }
   }
 
-  /** Bake sidewalk height into each instance's Y at build time. Trees, streetlamps, shrubs, signal lenses
+  /** Bake surface height into each instance's Y at build time. Trees, streetlamps, shrubs, signal lenses
    *  and benches go into the chunk/detail stores, which are SHARED with City's already-grounded scatter —
    *  so groundInfrastructure() can't blanket-walk them (it would double-count). Each build pass instead
-   *  grounds only its own items through here, right before handing them to addInstancedChunks. */
+   *  grounds only its own items through here, right before handing them to addInstancedChunks.
+   *
+   *  Every part of one prop must carry the SAME item.x/item.z — its base, not the part's own position.
+   *  The surface query steps by a whole kerb height at the paving edge, so a lamp head keyed to its own
+   *  spot out over the road would sink clean off its pole. (Traffic-signal lenses already say so.) */
   private groundItems(items: InstanceItem[]): InstanceItem[] {
     const position = new THREE.Vector3(); const rotation = new THREE.Quaternion(); const scale = new THREE.Vector3();
     for (const item of items) {
       item.matrix.decompose(position, rotation, scale);
-      position.y += this.surfaceHeight(item.x, item.z);
+      position.y += this.baseHeight(item.x, item.z);
       item.matrix.compose(position, rotation, scale);
     }
     return items;
@@ -283,7 +399,7 @@ export class UrbanInfrastructure {
       this.props.register('shrub', x, z, scale * 1.1, scale * 1.5, {
         hide: () => hideSlot(slot),
         debris: () => {
-          const group = new THREE.Group(); group.position.set(x, this.surfaceHeight(x, z), z);
+          const group = new THREE.Group(); group.position.set(x, this.baseHeight(x, z), z);
           const tuft = new THREE.Mesh(shrubGeometry, shrubDebrisMaterial); tuft.position.y = scale * 0.75; tuft.scale.set(scale * 1.25, scale, scale); tuft.castShadow = true; group.add(tuft);
           return group;
         },
@@ -375,7 +491,7 @@ export class UrbanInfrastructure {
           lampsXZ[index * 2] = 1e9; lampsXZ[index * 2 + 1] = 1e9; // evict from the day/night light pool: felled lamps shine no more
         },
         debris: () => {
-          const group = new THREE.Group(); group.position.set(site.x, this.surfaceHeight(site.x, site.z), site.z);
+          const group = new THREE.Group(); group.position.set(site.x, this.baseHeight(site.x, site.z), site.z);
           const pole = new THREE.Mesh(poleGeometry, metal); pole.position.y = 3.25;
           const collar = new THREE.Mesh(collarGeometry, metal); collar.position.y = 0.23;
           const arm = new THREE.Mesh(armGeometry, metal); arm.position.set(direction.x * 0.58, 6.08, direction.z * 0.58); arm.quaternion.copy(armRotation);
@@ -577,7 +693,7 @@ export class UrbanInfrastructure {
     if (!this.clearOfRoad(postPosition, junction)) return;
     if (this.isBlocked(postPosition.x, postPosition.z, 0.5)) return;
     const assembly = new THREE.Group(); assembly.position.copy(postPosition);
-    assembly.position.y = this.surfaceHeight(postPosition.x, postPosition.z); // sit the post on the terrain, not the flat-world plane
+    assembly.position.y = this.baseHeight(postPosition.x, postPosition.z); // sit the post on the terrain, not the flat-world plane
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 3.6, 10), new THREE.MeshStandardMaterial({ color: 0x344044, metalness: 0.68, roughness: 0.4 })); post.position.y = 1.8; assembly.add(post);
     // Each blade runs ALONG the street it names (its face perpendicular to that street, read head-on by that
     // road's traffic) — hence the +90° from the road bearing. Two back-to-back front-side planes give correct,
@@ -601,7 +717,7 @@ export class UrbanInfrastructure {
     for (const { x, z, angle, label } of ROADSIDE_SIGNS) {
       if (this.isRoad(x, z, 0.45)) continue;
       const hotspot = label.includes('HOTSPOT');
-      const assembly = new THREE.Group(); assembly.position.set(x, this.surfaceHeight(x, z), z); // grounded onto the terrain
+      const assembly = new THREE.Group(); assembly.position.set(x, this.baseHeight(x, z), z); // grounded onto the terrain
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.065, 2.6, 9), poleMaterial); pole.position.y = 1.3; assembly.add(pole);
       const background = label === 'STOP' ? '#b62f2d' : label === 'P' ? '#28619a' : label === 'TAXI' ? '#f2c521' : '#f0eee2';
       const foreground = label === 'STOP' || label === 'P' ? '#ffffff' : '#182326';
@@ -614,40 +730,36 @@ export class UrbanInfrastructure {
     }
   }
 
+  /** Park benches on the bench stride (see BENCH_SITE_STRIDE): three slats, two legs and a tilted back,
+   *  instanced per detail chunk and knockable. Nothing else is placed from this site list. */
   private buildStreetFurniture(): void {
-    const sites = this.roadsidePoints.filter((point, index) => index % 13 === 3 && point.width >= 9 && !this.isBlocked(point.x, point.z, 2) && !this.isRoad(point.x, point.z, 0.7));
+    const sites = this.roadsidePoints.filter((point, index) => isBenchSite(index) && point.width >= 9 && !this.isBlocked(point.x, point.z, 2) && !this.isRoad(point.x, point.z, 0.7));
     const wood = new THREE.MeshStandardMaterial({ color: 0x744d32, roughness: 0.77 });
     const metal = new THREE.MeshStandardMaterial({ color: 0x2c3739, metalness: 0.72, roughness: 0.35 });
-    const red = new THREE.MeshStandardMaterial({ color: 0xa8322d, metalness: 0.3, roughness: 0.5 });
     const slatGeometry = new RoundedBoxGeometry(2.25, 0.11, 0.16, 2, 0.035);
     const legGeometry = new THREE.BoxGeometry(0.08, 0.55, 0.5);
     const backGeometry = new RoundedBoxGeometry(2.25, 0.62, 0.1, 2, 0.03);
-    const bodyGeometry = new THREE.CylinderGeometry(0.17, 0.23, 0.7, 16);
-    const capGeometry = new THREE.SphereGeometry(0.23, 14, 9);
-    const identity = new THREE.Quaternion(); const one = new THREE.Vector3(1, 1, 1);
+    const one = new THREE.Vector3(1, 1, 1);
     const up = new THREE.Vector3(0, 1, 0); const backTilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.12);
     const slatItems: InstanceItem[] = []; const legItems: InstanceItem[] = []; const backItems: InstanceItem[] = [];
-    const bodyItems: InstanceItem[] = []; const capItems: InstanceItem[] = [];
-    const furnitureData: Array<{ yaw: number; bx: number; bz: number; hx: number; hz: number }> = [];
+    const benchData: Array<{ yaw: number; x: number; z: number }> = [];
     sites.forEach((site) => {
       const yaw = Math.atan2(site.inwardX, site.inwardZ);
       const rotation = new THREE.Quaternion().setFromAxisAngle(up, yaw);
-      const bx = site.x - site.inwardX * 0.8; const bz = site.z - site.inwardZ * 0.8; // benches sit back from the walk line so their 0.85u shell doesn't clip routed peds
+      const { x: bx, z: bz } = atKerbDistance(site, BENCH_VERGE_DISTANCE); // back from the walk line so the 0.85u shell doesn't clip routed peds
+      if (!spacedFrom(benchData, bx, bz, BENCH_SPACING)) return; // no bench inside another where two roads' points coincide
+      // Whole bench 0.025 lower than it was: the 0.55u legs are centred at BENCH_LEG_CENTER, so their feet
+      // reach the surface instead of stopping 0.025u (1.4cm, measured) above it and reading as broken.
       const world = (lx: number, ly: number, lz: number) => new THREE.Vector3(lx, ly, lz).applyQuaternion(rotation).add(new THREE.Vector3(bx, 0, bz));
-      for (const lz of [-0.22, 0, 0.22]) slatItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(0, 0.62, lz), rotation, one) });
-      for (const lx of [-0.78, 0.78]) legItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(lx, 0.3, 0), rotation, one) });
-      backItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(0, 0.98, -0.29), rotation.clone().multiply(backTilt), one) });
-      const hx = site.x - site.inwardX * 0.75; const hz = site.z - site.inwardZ * 0.75; // hydrants sit off the walk line so they don't embed spawned peds
-      bodyItems.push({ x: hx, z: hz, matrix: new THREE.Matrix4().compose(new THREE.Vector3(hx, 0.36, hz), identity, one) });
-      capItems.push({ x: hx, z: hz, matrix: new THREE.Matrix4().compose(new THREE.Vector3(hx, 0.76, hz), identity, one) });
-      furnitureData.push({ yaw, bx, bz, hx, hz });
+      for (const lz of [-0.22, 0, 0.22]) slatItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(0, 0.595, lz), rotation, one) });
+      for (const lx of [-0.78, 0.78]) legItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(lx, BENCH_LEG_CENTER, 0), rotation, one) });
+      backItems.push({ x: bx, z: bz, matrix: new THREE.Matrix4().compose(world(0, 0.955, -0.29), rotation.clone().multiply(backTilt), one) });
+      benchData.push({ yaw, x: bx, z: bz });
     });
     const slatSlots = addInstancedChunks(this.detail, slatGeometry, wood, this.groundItems(slatItems), { cast: true, receive: true });
     const legSlots = addInstancedChunks(this.detail, legGeometry, metal, this.groundItems(legItems), { cast: true, receive: true });
     const backSlots = addInstancedChunks(this.detail, backGeometry, wood, this.groundItems(backItems), { cast: true, receive: true });
-    const bodySlots = addInstancedChunks(this.detail, bodyGeometry, red, this.groundItems(bodyItems), { cast: true, receive: true });
-    const capSlots = addInstancedChunks(this.detail, capGeometry, red, this.groundItems(capItems), { cast: true, receive: true });
-    furnitureData.forEach(({ yaw, bx, bz, hx, hz }, index) => {
+    benchData.forEach(({ yaw, x: bx, z: bz }, index) => {
       this.props.register('bench', bx, bz, 0.85, 1.1, {
         hide: () => {
           for (const slot of [0, 1, 2]) hideSlot(slatSlots[index * 3 + slot]!);
@@ -655,30 +767,104 @@ export class UrbanInfrastructure {
           hideSlot(backSlots[index]!);
         },
         debris: () => {
-          const group = new THREE.Group(); group.position.set(bx, this.surfaceHeight(bx, bz), bz); group.rotation.y = yaw;
-          for (const lz of [-0.22, 0, 0.22]) { const slat = new THREE.Mesh(slatGeometry, wood); slat.position.set(0, 0.62, lz); group.add(slat); }
-          for (const lx of [-0.78, 0.78]) { const leg = new THREE.Mesh(legGeometry, metal); leg.position.set(lx, 0.3, 0); group.add(leg); }
-          const back = new THREE.Mesh(backGeometry, wood); back.position.set(0, 0.98, -0.29); back.rotation.x = -0.12; group.add(back);
+          const group = new THREE.Group(); group.position.set(bx, this.baseHeight(bx, bz), bz); group.rotation.y = yaw;
+          for (const lz of [-0.22, 0, 0.22]) { const slat = new THREE.Mesh(slatGeometry, wood); slat.position.set(0, 0.595, lz); group.add(slat); }
+          for (const lx of [-0.78, 0.78]) { const leg = new THREE.Mesh(legGeometry, metal); leg.position.set(lx, BENCH_LEG_CENTER, 0); group.add(leg); }
+          const back = new THREE.Mesh(backGeometry, wood); back.position.set(0, 0.955, -0.29); back.rotation.x = -0.12; group.add(back);
           group.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
-          return group;
-        },
-      });
-      this.props.register('hydrant', hx, hz, 0.24, 0.9, {
-        hide: () => { hideSlot(bodySlots[index]!); hideSlot(capSlots[index]!); },
-        debris: () => {
-          const group = new THREE.Group(); group.position.set(hx, this.surfaceHeight(hx, hz), hz);
-          const body = new THREE.Mesh(bodyGeometry, red); body.position.y = 0.36; body.castShadow = true;
-          const cap = new THREE.Mesh(capGeometry, red); cap.position.y = 0.76; group.add(body, cap);
           return group;
         },
       });
     });
   }
 
-  /** Municipal litter bins on their own roadside stride (offset from the bench stride so streets
-   *  carry both): a ribbed drum + darker lid, instanced per detail chunk, knockable like a hydrant. */
+  /**
+   * Fire hydrants, KERBSIDE — at HYDRANT_KERB_DISTANCE, on the front strip of the drawn paving rather
+   * than out on the verge behind it. Three things follow from that one number, and all three were wrong
+   * before it:
+   *
+   *   - it stands on pavement that is actually DRAWN there, so the pavement height it is grounded at is
+   *     the height of the ground under it. Stepping outward off the verge line put it 0.30u past the
+   *     paving's outer edge, grounded on a slab that stops short of it, hanging a full kerb height above
+   *     the grass (measured: 0.326u of daylight under the flange, 44cm, on 443 of 490 hydrants);
+   *   - it is where a player looks for a hydrant — kerbside, in front of the paving, visible from a car
+   *     — instead of behind the pavement where nothing else stands;
+   *   - it can no longer be inside a bench at any coincidence of strides. The bench and bin verge line is
+   *     2.9u away across the paving, so the separation is geometric now, not merely guarded.
+   *
+   * Still placed LAST of the pavement furniture, and the guard still probes the hydrant's own spot, so a
+   * lamp or a cabinet already standing kerbside rejects the site. The probes are its flange plus air.
+   *
+   * A bare cylinder under a ball reads as a red bollard, which is exactly what it was mistaken for.
+   * The hose outlets, bonnet collar and ground flange are what make it legible as a hydrant, and they
+   * cost NO extra draw calls: both are extra instances of the two batches already here (a scaled,
+   * tipped body cylinder for the outlets; a squashed cap sphere for the collar and flange).
+   */
+  private buildFireHydrants(): void {
+    const red = new THREE.MeshStandardMaterial({ color: 0xa8322d, metalness: 0.3, roughness: 0.5 });
+    const bodyGeometry = new THREE.CylinderGeometry(0.17, 0.23, 0.7, 16);
+    const capGeometry = new THREE.SphereGeometry(0.23, 14, 9);
+    const one = new THREE.Vector3(1, 1, 1);
+    const up = new THREE.Vector3(0, 1, 0);
+    const bodyItems: InstanceItem[] = []; const capItems: InstanceItem[] = [];
+    const spots: Array<{ x: number; z: number; yaw: number }> = [];
+    this.roadsidePoints.forEach((point, index) => {
+      // No width floor: a hydrant belongs in an ordinary residential street, and every paved road in the
+      // network carries a kerb and a pavement to stand it on. The old `width >= 9` was inherited from the
+      // bench and locked hydrants out of the 22% of the network that is 7u wide.
+      if (!isHydrantSite(index)) return;
+      // ...but the paving must actually be there. Beside a crossing street the ribbon is clipped away and
+      // every height query still reports pavement level, which would hang the hydrant over a notch of
+      // bare ground — the very fault this placement exists to fix, at 8% of sites instead of 90%.
+      if (!this.isPaved(point)) return;
+      const { x, z } = atKerbDistance(point, HYDRANT_KERB_DISTANCE);
+      if (this.isBlocked(x, z, HYDRANT_FLANGE_RADIUS + 0.1) || this.isRoad(x, z, HYDRANT_FLANGE_RADIUS + 0.06)) return;
+      if (!spacedFrom(spots, x, z, HYDRANT_SPACING)) return; // this pass registers nothing until it ends, so isBlocked cannot see its own hydrants
+      const yaw = Math.atan2(point.inwardX, point.inwardZ);
+      const rotation = new THREE.Quaternion().setFromAxisAngle(up, yaw);
+      for (const part of HYDRANT_PARTS) {
+        const local = new THREE.Vector3(part.x, part.y, 0).applyQuaternion(rotation);
+        const matrix = new THREE.Matrix4().compose(
+          new THREE.Vector3(x + local.x, part.y, z + local.z),
+          part.tipped ? rotation.clone().multiply(TIPPED) : rotation,
+          part.scale ?? one,
+        );
+        (part.batch === 'body' ? bodyItems : capItems).push({ x, z, matrix });
+      }
+      spots.push({ x, z, yaw });
+    });
+    const bodySlots = addInstancedChunks(this.detail, bodyGeometry, red, this.groundItems(bodyItems), { cast: true, receive: true });
+    const capSlots = addInstancedChunks(this.detail, capGeometry, red, this.groundItems(capItems), { cast: true, receive: true });
+    const bodyParts = HYDRANT_PARTS.filter((part) => part.batch === 'body').length;
+    const capParts = HYDRANT_PARTS.length - bodyParts;
+    spots.forEach(({ x, z, yaw }, index) => {
+      this.props.register('hydrant', x, z, 0.3, 0.9, {
+        // Each hydrant owns a contiguous run of slots in each batch — hide ITS run, or a knock-over
+        // fells some other hydrant three streets away.
+        hide: () => {
+          for (let part = 0; part < bodyParts; part++) hideSlot(bodySlots[index * bodyParts + part]!);
+          for (let part = 0; part < capParts; part++) hideSlot(capSlots[index * capParts + part]!);
+        },
+        debris: () => {
+          const group = new THREE.Group(); group.position.set(x, this.baseHeight(x, z), z); group.rotation.y = yaw;
+          for (const part of HYDRANT_PARTS) {
+            const mesh = new THREE.Mesh(part.batch === 'body' ? bodyGeometry : capGeometry, red);
+            mesh.position.set(part.x, part.y, 0);
+            if (part.tipped) mesh.quaternion.copy(TIPPED);
+            if (part.scale) mesh.scale.copy(part.scale);
+            mesh.castShadow = true;
+            group.add(mesh);
+          }
+          return group;
+        },
+      });
+    });
+  }
+
+  /** Municipal litter bins on their own roadside stride (see BIN_SITE_STRIDE — offset from the bench
+   *  stride so streets carry both): a ribbed drum + darker lid, instanced per detail chunk, knockable. */
   private buildLitterBins(): void {
-    const sites = this.roadsidePoints.filter((point, index) => index % 17 === 8 && point.width >= 9 && !this.isBlocked(point.x, point.z, 1.4) && !this.isRoad(point.x, point.z, 0.7));
+    const sites = this.roadsidePoints.filter((point, index) => isBinSite(index) && point.width >= 9 && !this.isBlocked(point.x, point.z, 1.4) && !this.isRoad(point.x, point.z, 0.7));
     const drum = new THREE.MeshStandardMaterial({ color: 0x3f5c46, metalness: 0.35, roughness: 0.6 });
     const lidMaterial = new THREE.MeshStandardMaterial({ color: 0x22302a, metalness: 0.45, roughness: 0.5 });
     const drumGeometry = new THREE.CylinderGeometry(0.3, 0.26, 0.82, 12);
@@ -687,7 +873,8 @@ export class UrbanInfrastructure {
     const drumItems: InstanceItem[] = []; const lidItems: InstanceItem[] = [];
     const binSpots: Array<{ x: number; z: number }> = [];
     sites.forEach((site) => {
-      const x = site.x - site.inwardX * 0.7; const z = site.z - site.inwardZ * 0.7; // off the ped walk line, like hydrants
+      const { x, z } = atKerbDistance(site, BIN_VERGE_DISTANCE); // out on the verge with the benches, off the ped walk line
+      if (!spacedFrom(binSpots, x, z, BIN_SPACING)) return; // see spacedFrom: this pass cannot see its own bins
       drumItems.push({ x, z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(x, 0.41, z), identity, one) });
       lidItems.push({ x, z, matrix: new THREE.Matrix4().compose(new THREE.Vector3(x, 0.88, z), identity, one) });
       binSpots.push({ x, z });
@@ -698,7 +885,7 @@ export class UrbanInfrastructure {
       this.props.register('bin', x, z, 0.34, 0.95, {
         hide: () => { hideSlot(drumSlots[index]!); hideSlot(lidSlots[index]!); },
         debris: () => {
-          const group = new THREE.Group(); group.position.set(x, this.surfaceHeight(x, z), z);
+          const group = new THREE.Group(); group.position.set(x, this.baseHeight(x, z), z);
           const body = new THREE.Mesh(drumGeometry, drum); body.position.y = 0.41; body.castShadow = true;
           const lid = new THREE.Mesh(lidGeometry, lidMaterial); lid.position.y = 0.88; group.add(body, lid);
           return group;
