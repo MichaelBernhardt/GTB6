@@ -19,7 +19,7 @@
  * about rooms.
  */
 import {
-  buildCore, CEILING, coreRandom, CORE_GAP, CORRIDOR, floorRandom, MIN_ROOM, rectMaxX, rectMaxZ, rectMinX, rectMinZ,
+  buildCore, CEILING, coreFrontZ, coreRandom, CORRIDOR, floorRandom, MIN_ROOM, rectMaxX, rectMaxZ, rectMinX, rectMinZ,
   type BuildingCore, type BuildingFacts, type Finish, type Rect,
 } from './core';
 import { stableWorldFloat } from '../../world/StableRandom';
@@ -119,9 +119,10 @@ function layoutRooms(core: BuildingCore, index: number, kinds: readonly RoomKind
   const spineMin = core.corridorX - CORRIDOR / 2;
   const spineMax = core.corridorX + CORRIDOR / 2;
   const frontZ = -core.depth / 2;
-  // The bands stop well short of the back wall: the core owns that end of the plate, full width, so
-  // no room wall can ever stand across the mouth of the stair. See CORE_GAP.
-  const backZ = rectMinZ(core.stair) - CORE_GAP;
+  // The bands stop well short of the back wall WHEN THERE IS A CORE: that end of the plate is the
+  // stair's, full width, so no room wall can ever stand across the mouth of a flight (see CORE_GAP).
+  // A single-storey building has no core, and its rooms run all the way to the back wall.
+  const backZ = coreFrontZ(core);
   const bandDepth = backZ - frontZ;
   const slots: { id: string; rect: Rect; side: 'left' | 'right' }[] = [];
   for (const side of ['left', 'right'] as const) {
@@ -389,8 +390,9 @@ export function solveFloor(facts: BuildingFacts, index: number, core = buildCore
   const walls = buildWalls(core, rooms);
 
   // The landing: on the spine just in front of the shaft, which is where a stair or a lift puts you
-  // down and, on the ground floor, where the street door leaves you facing the building.
-  const landing = { x: q(core.corridorX), z: q(rectMinZ(core.stair) - 1.4) };
+  // down and, on the ground floor, where the street door leaves you facing the building. A stairless
+  // building has no shaft to land at, so its landing is the back of the spine.
+  const landing = { x: q(core.corridorX), z: q(core.stair ? rectMinZ(core.stair) - 1.4 : core.depth / 2 - 1.4) };
 
   const grid = new Grid(core);
   for (const wall of walls) grid.blockWall(wall);
@@ -449,7 +451,7 @@ function buildWalls(core: BuildingCore, rooms: readonly Room[]): Wall[] {
 
 function lampsFor(core: BuildingCore, rooms: readonly Room[]): Lamp[] {
   const lamps: Lamp[] = [{ x: q(core.corridorX), z: q(-core.depth / 4), y: q(CEILING - 0.35), color: 0xffe6bd }];
-  lamps.push({ x: q(core.corridorX), z: q(rectMinZ(core.stair) - 0.8), y: q(CEILING - 0.35), color: 0xdfe8ff });
+  lamps.push({ x: q(core.corridorX), z: q(core.stair ? rectMinZ(core.stair) - 0.8 : core.depth / 2 - 0.8), y: q(CEILING - 0.35), color: 0xdfe8ff });
   for (const room of rooms) lamps.push({ x: q(room.rect.x), z: q(room.rect.z), y: q(CEILING - 0.35), color: 0xfff0c4 });
   return lamps;
 }

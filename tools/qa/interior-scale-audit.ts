@@ -97,11 +97,14 @@ console.log('');
 // ---- 4. stairs ----------------------------------------------------------------------------------
 // build.ts: 9 treads per half flight, 2 half flights per storey -> 18 risers per STOREY_HEIGHT.
 const riser = STOREY_HEIGHT / 18;
-const treads = rows.map((r) => r.core.stair.d / 9);
+// Stairs are now optional (single-storey buildings carry none) — measure only where one exists.
+const staired = rows.filter((r) => r.core.stair);
+const treads = staired.map((r) => r.core.stair!.d / 9);
 console.log('--- STAIRS: riser and tread (18 risers per storey, 9 treads per half flight) ---');
+console.log(`staired buildings: ${staired.length} of ${rows.length} (stairless single-storey excluded)`);
 console.log(`riser: ${riser.toFixed(3)}u = ${(riser / PLAYER.height * 1.75).toFixed(2)}m player-relative (building code ~0.17-0.19m)`);
 console.log(`tread depth u: ${stats(treads)} (player-relative m: x${(1.75 / PLAYER.height).toFixed(3)})`);
-console.log(`shaft footprint u: w ${stats(rows.map((r) => r.core.stair.w))} d ${stats(rows.map((r) => r.core.stair.d))}`);
+console.log(`shaft footprint u: w ${stats(staired.map((r) => r.core.stair!.w))} d ${stats(staired.map((r) => r.core.stair!.d))}`);
 console.log('');
 
 // ---- 5. the worst offenders, by name, so a human can walk to one -------------------------------

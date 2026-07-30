@@ -28,7 +28,7 @@
  * This directory is never statically imported — see the chunk note at the top of ../interiors.state.ts.
  */
 import * as THREE from 'three';
-import { BuildingArchitecture, type EntranceTag } from '../../world/BuildingArchitecture';
+import { BuildingArchitecture, type EntranceTag, type MassingTier } from '../../world/BuildingArchitecture';
 import { CELL_SIZE, generateCell, type GeneratedBuilding } from '../../world/CityGen';
 import { distanceToRoadEdge, landmark, nearestDistrict, pointInAnyPolygon, WATER_POLYGONS } from '../../world/mapData';
 import { buildModel, MODEL_INDEX } from '../../world/models/catalog';
@@ -176,7 +176,7 @@ export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoo
     id: `${Math.round(building.x)}:${Math.round(building.z)}`,
     x: building.x, z: building.z, heading: building.heading,
     width: building.width, depth: building.depth, height: building.height,
-    style: building.style, entrance: tag.kind,
+    style: building.style, entrance: tag.kind, doorX: tag.x,
   };
   return {
     id: facts.id,
@@ -186,8 +186,23 @@ export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoo
     heading: building.heading,
     openWidth: tag.width,
     openHeight: tag.height,
+    roof: roofOf(profile.tiers),
     facts,
   };
+}
+
+/** The building's flat top, off the SAME massing tiers City pushes as colliders: the tallest
+ *  non-wall tier, when it is big enough to stand a player on. Roof entry and exit both read this
+ *  one rectangle, so where you drop in is exactly where the hatch puts you out. */
+function roofOf(tiers: readonly MassingTier[]): InteriorDoor['roof'] {
+  let top: MassingTier | undefined;
+  for (const tier of tiers) {
+    if (tier.kind === 'wall') continue;
+    if (!top || tier.y1 > top.y1) top = tier;
+  }
+  if (!top) return undefined;
+  if (top.maxX - top.minX < 2.4 || top.maxZ - top.minZ < 2.4) return undefined;
+  return { minX: top.minX, maxX: top.maxX, minZ: top.minZ, maxZ: top.maxZ, topY: top.y1 };
 }
 
 // ---- the other half of the city: the scattered catalog models ----------------------------------
@@ -222,7 +237,7 @@ export function scatterDoorFor(model: ScatteredModel): InteriorDoor | undefined 
     x: model.x, z: model.z, heading: model.heading,
     width: built.footprint.w, depth: built.footprint.d,
     height: Math.max(tag.height + 0.6, top),
-    style: def.interior.family, entrance: tag.kind,
+    style: def.interior.family, entrance: tag.kind, doorX: tag.x,
   };
   return {
     id: facts.id,
@@ -232,6 +247,7 @@ export function scatterDoorFor(model: ScatteredModel): InteriorDoor | undefined 
     heading: model.heading,
     openWidth: tag.width,
     openHeight: tag.height,
+    roof: roofOf(built.tiers),
     facts,
   };
 }

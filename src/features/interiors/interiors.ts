@@ -53,9 +53,10 @@ import {
   type BuiltDoorways, type BuiltFloor,
 } from './build';
 import {
-  buildCore, CORRIDOR, rectMaxX, rectMaxZ, rectMinX, rectMinZ, STOREY_HEIGHT,
+  buildCore, CORRIDOR, hasRoofAccess, hatchFoot, rectMaxX, rectMaxZ, rectMinX, rectMinZ, STOREY_HEIGHT,
   type BuildingCore, type Rect,
 } from './core';
+import { doorLocked } from './lock';
 import { stablePositionRandom } from '../../world/StableRandom';
 import { doorDistrict, doorNear, doorsNear, landmarkDoor, nearestDoor, tallestDoorNear } from './doors';
 import { solveFloor, type FloorPlan } from './floor';
@@ -80,6 +81,8 @@ const STREAM_CAP = 22;
 const RELEASE_DWELL = 0.8;
 /** A prop shorter than this is stepped over, not walked around. The solver's grid uses the same sill. */
 const STEP_OVER = 0.55;
+/** Game-seconds a just-used roof hatch stays open to re-entry without a lock check. */
+const HATCH_GRACE = 60;
 
 /**
  * THE LAMP POOL — the other half of the stall fix (see the header of build.ts).
@@ -119,6 +122,10 @@ interface Visit {
   x: number; z: number; baseY: number;
   /** Room heading: the door's INWARD yaw, so local +z is "further into the building". */
   heading: number;
+  /** Which way the player came in. A roof entry must NOT restore `origin` when they later leave by
+   *  the street door — that would teleport them back up onto the roof — so it restores to the
+   *  doorstep instead. */
+  entry: 'street' | 'roof';
   /** Exactly where the player stood outside, restored on the way out. */
   origin: THREE.Vector3;
   /** The storey the player is standing on. */
@@ -149,6 +156,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let swapping = false;
   let disposed = false;
   let overlay: HTMLDivElement | undefined;
+  /** Monotonic in-game seconds (summed dt — NEVER the wall clock; see the determinism rule). Only
+   *  used for the hatch grace window, which is gameplay time, not world generation. */
+  let clock = 0;
+  /** After climbing out of a hatch you may drop back in through it for a while without a lock
+   *  check, so a pickless player exploring a roof is never marooned out there. */
+  let hatchGrace: { id: string; until: number } | undefined;
 
   // ---- the fade. The feature API has no screenFade(), so the feature owns one element and takes it
   // away again in dispose(). #fade is z-index 90; this sits just under it and over the HUD.
@@ -203,7 +216,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       return existing;
     }
     const plan = solveFloor(current.door.facts, index, current.core);
-    const built = buildFloor(plan, { ground: index === 0, top: index === current.core.storeys - 1 });
+    const top = index === current.core.storeys - 1;
+    // The ladder is only drawn when the hatch can actually deliver: qualifying family AND a
+    // standable top tier recorded on the door (31 of 2,143 candidates have none).
+    const hatch = top && hasRoofAccess(current.core) && current.door.roof !== undefined;
+    const built = buildFloor(plan, { ground: index === 0, top, hatch });
     built.group.position.set(current.x, floorY(current, index), current.z);
     built.group.rotation.y = current.heading;
     api.scene.add(built.group);
@@ -246,17 +263,22 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
    */
   const holdNeighbour = (current: Visit, local: { x: number; z: number }, dt: number): void => {
     const core = current.core;
+    if (!core.stair) return; // a single-storey building has no neighbour to hold
     const onSpine = Math.abs(local.x - core.corridorX) < CORRIDOR / 2 + 1.6;
     const inShaft = withinRect(core.stair, local.x, local.z, 0.6);
+    // On the TOP floor the flight in the well leads DOWN, so the neighbour worth pre-warming is the
+    // storey below — the old code asked for storeys and got nothing, so the well showed bare void.
+    const beside = current.floor + 1 < core.storeys ? current.floor + 1 : current.floor - 1;
     const wanted = current.shaftBase !== undefined ? current.shaftBase + 1
-      : onSpine || inShaft ? current.floor + 1
+      : onSpine || inShaft ? beside
         : undefined;
-    const live = wanted !== undefined && wanted < core.storeys ? wanted : undefined;
+    const live = wanted !== undefined && wanted >= 0 && wanted < core.storeys ? wanted : undefined;
     const keep = new Set([current.floor, current.shaftBase, live].filter((index): index is number => index !== undefined));
     if (live !== undefined) current.idleFor = 0; else current.idleFor += dt;
     // PRUNE BEFORE BUILDING, so the peak really is two and not two-plus-a-frame. Never release
-    // either end of a flight the player is standing on.
-    if (current.shaftBase === undefined && (live !== undefined || current.idleFor >= RELEASE_DWELL)) {
+    // either end of a flight the player is standing on — but DO release the floor the sightline was
+    // holding before they stepped onto the flight (descending used to keep three visible).
+    if (current.shaftBase !== undefined || live !== undefined || current.idleFor >= RELEASE_DWELL) {
       for (const index of [...current.resident.keys()]) if (!keep.has(index)) drop(current, index);
     }
     if (live === undefined) return;
@@ -268,17 +290,18 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /**
    * How high up the flight you are, 0 at the bottom landing and 1 one whole storey above it.
    *
-   * The shaft holds a switchback: up the +x half from the front to the mid landing at the back, then
-   * up the −x half back to the front, arriving one storey higher directly over where you set off.
-   * build.ts draws exactly this; here it is walked. Because the top of one flight is the bottom of
-   * the next IN THE SAME SHAFT, there is no special case at either end of the building, and there is
-   * no moment where the player is teleported up a storey — they walk it.
+   * The shaft holds a switchback: up the `dir` half from the front to the mid landing at the back,
+   * then up the other half back to the front, arriving one storey higher directly over where you set
+   * off. build.ts draws exactly this — mirrored by the building's own seeded stairDir — and here it
+   * is walked. Because the top of one flight is the bottom of the next IN THE SAME SHAFT, there is
+   * no special case at either end of the building, and there is no moment where the player is
+   * teleported up a storey — they walk it.
    */
-  const stairProgress = (shaft: Rect, x: number, z: number): number | undefined => {
+  const stairProgress = (shaft: Rect, dir: 1 | -1, x: number, z: number): number | undefined => {
     if (!withinRect(shaft, x, z, 0)) return undefined;
     const along = (z - rectMinZ(shaft)) / shaft.d;
     const clamped = Math.max(0, Math.min(1, along));
-    return x >= shaft.x ? clamped * 0.5 : 0.5 + (1 - clamped) * 0.5;
+    return (x - shaft.x) * dir >= 0 ? clamped * 0.5 : 0.5 + (1 - clamped) * 0.5;
   };
 
   // ---- the light pool ------------------------------------------------------------------------------
@@ -316,7 +339,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   // ---- entering / leaving --------------------------------------------------------------------------
 
-  const install = (door: InteriorDoor): void => {
+  const install = (door: InteriorDoor, from: 'street' | 'roof' = 'street'): void => {
     const core = buildCore(door.facts);
     const heading = door.heading + Math.PI; // local +z runs away from the street, into the building
     // Floor 0 is the DEEPEST, so climbing a storey raises you and the top floor is the one just
@@ -331,28 +354,35 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     };
     for (const light of pool.lights) api.scene.add(light);
     api.scene.add(pool.ambient);
+    // Through the street door you arrive on the mat of the ground floor; through the roof hatch,
+    // on the top floor's landing, at the head of the stair you would have climbed to get there.
+    const startFloor = from === 'roof' ? core.storeys - 1 : 0;
     visit = {
-      door, core, x: door.facts.x, z: door.facts.z, baseY, heading, origin,
-      floor: 0, resident: new Map(), idleFor: 0, last: { x: core.entryX, z: -core.depth / 2 + EXIT_MAT_IN },
+      door, core, x: door.facts.x, z: door.facts.z, baseY, heading, entry: from, origin,
+      floor: startFloor, resident: new Map(), idleFor: 0,
+      last: { x: core.entryX, z: -core.depth / 2 + EXIT_MAT_IN },
       peakResident: 0, pool,
     };
-    const ground = raise(visit, 0)!;
+    const first = raise(visit, startFloor)!;
+    const stand = from === 'roof'
+      ? { ...first.plan.landing }
+      : { x: core.entryX, z: -core.depth / 2 + EXIT_MAT_IN };
+    visit.last = stand;
     assignLamps(visit);
-    // Land ON THE MAT, facing down the spine at the stair — the shape of the room reads from here.
-    const stand = toWorld(visit, heading, core.entryX, -core.depth / 2 + EXIT_MAT_IN);
-    api.playerPosition().set(stand.x, baseY, stand.z);
-    placeFixture(visit, ground.plan);
-    api.analytics('entered', { detail: core.entrance });
-    const first = !visited.has(door.id);
-    if (first) visited.add(door.id);
-    if (first && finds < FIND_CAP) {
+    const spot = toWorld(visit, heading, stand.x, stand.z);
+    api.playerPosition().set(spot.x, floorY(visit, startFloor), spot.z);
+    placeFixture(visit, first.plan);
+    api.analytics('entered', { detail: from === 'roof' ? 'roof' : core.entrance });
+    const fresh = !visited.has(door.id);
+    if (fresh) visited.add(door.id);
+    if (fresh && finds < FIND_CAP) {
       finds += 1;
       const find = 30 + Math.floor(stableFind(core.seed) * 5) * 10;
       api.earn(find);
-      api.notify(door.name, `${ground.plan.findLine} +R${find}`, true);
+      api.notify(door.name, `${first.plan.findLine} +R${find}`, true);
       api.analytics('first_visit', { detail: core.entrance, value: find });
     } else {
-      api.notify(door.name, ground.plan.blurb, true);
+      api.notify(door.name, first.plan.blurb, true);
     }
     api.persist();
   };
@@ -390,7 +420,16 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // so its program variants are still warm in every material — no recompile on the way out.
     for (const light of current.pool.lights) { light.removeFromParent(); light.dispose(); }
     current.pool.ambient.removeFromParent(); current.pool.ambient.dispose();
-    if (restore) api.playerPosition().copy(current.origin);
+    if (restore) {
+      if (current.entry === 'roof') {
+        // They came in over the top: restoring `origin` would teleport them back onto the roof, so
+        // the street door puts them out on its own doorstep like anyone else.
+        const door = current.door;
+        api.playerPosition().set(door.x, api.surfaceHeightAt(door.x, door.z), door.z);
+      } else {
+        api.playerPosition().copy(current.origin);
+      }
+    }
     api.analytics('left', { detail: current.core.entrance });
   };
 
@@ -402,6 +441,95 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     showFade(true);
     after(FADE_MS, () => { close(true); swapping = false; api.persist(); after(90, () => showFade(false)); });
     return 'ok';
+  };
+
+  // ---- the roof --------------------------------------------------------------------------------------
+
+  /**
+   * Where the hatch puts you out: the stair's own spot mapped back onto the REAL roof. The interior
+   * plate is scaled relative to the footprint (58.6% of interiors exceed their massing on an axis),
+   * so the stair position is inverse-proportionally mapped and then clamped a metre inside the top
+   * tier — NEVER mapped one-to-one, or half the city's hatches would open onto thin air beside the
+   * building. Altitude comes from City.supportHeight through the standHeightAt seam, i.e. from the
+   * same collider the player will stand on, not from an estimate.
+   */
+  const roofExitSpot = (current: Visit): { x: number; y: number; z: number } | undefined => {
+    const roof = current.door.roof;
+    const stair = current.core.stair;
+    if (!roof || !stair) return undefined;
+    if (roof.maxX - roof.minX < 2.2 || roof.maxZ - roof.minZ < 2.2) return undefined;
+    const facts = current.door.facts;
+    const kx = current.core.width / Math.max(1, facts.width);
+    const kz = current.core.depth / Math.max(1, facts.depth);
+    const bx = Math.max(roof.minX + 1.0, Math.min(roof.maxX - 1.0, -stair.x / kx));
+    const bz = Math.max(roof.minZ + 1.0, Math.min(roof.maxZ - 1.0, -stair.z / kz));
+    const world = toWorld({ x: facts.x, z: facts.z }, facts.heading, bx, bz);
+    const ground = api.surfaceHeightAt(world.x, world.z);
+    const y = api.standHeightAt?.(world.x, world.z) ?? ground + roof.topY;
+    // If the collider the hatch expects is not there, refuse rather than strand the player mid-air.
+    if (y < ground + 2.5) return undefined;
+    return { x: world.x, y, z: world.z };
+  };
+
+  const exitToRoof = (instant = false): string => {
+    const current = visit;
+    if (!current) return 'failed:not-inside';
+    if (swapping) return 'failed:mid-fade';
+    const spot = roofExitSpot(current);
+    if (!spot) { api.notify('Painted shut', 'This hatch has not opened in years.', false); return 'failed:no-roof'; }
+    const out = (): void => {
+      const door = current.door;
+      close(false);
+      api.playerPosition().set(spot.x, spot.y + 0.05, spot.z);
+      hatchGrace = { id: door.id, until: clock + HATCH_GRACE };
+      api.analytics('roof', { detail: 'exit' });
+      api.persist();
+    };
+    if (instant) { out(); return 'ok'; }
+    swapping = true;
+    showFade(true);
+    after(FADE_MS, () => { out(); swapping = false; after(90, () => showFade(false)); });
+    return 'ok';
+  };
+
+  const enterFromRoof = (door: InteriorDoor, instant = false): string => {
+    if (visit) return 'failed:already-inside';
+    if (swapping) return 'failed:mid-fade';
+    if (instant) { install(door, 'roof'); return 'ok'; }
+    swapping = true;
+    showFade(true);
+    after(FADE_MS, () => { install(door, 'roof'); swapping = false; after(90, () => showFade(false)); });
+    return 'ok';
+  };
+
+  /** The lock question a roof hatch asks — the same doorLocked() line the street door will use, with
+   *  the grace window on top so a hatch you just climbed out of lets you straight back down. */
+  const hatchLocked = (door: InteriorDoor): boolean => {
+    if (hatchGrace && hatchGrace.id === door.id && clock < hatchGrace.until) return false;
+    return doorLocked(door.facts);
+  };
+
+  /**
+   * The qualifying building whose roof the player is standing on, or undefined. Cheap first: no
+   * height above the street means no roof, and only then are nearby doors tested against their own
+   * top-tier rectangle (building-local, from the same tiers City collides against) and its altitude.
+   */
+  const roofUnderfoot = (position: THREE.Vector3): InteriorDoor | undefined => {
+    const elevation = position.y - api.surfaceHeightAt(position.x, position.z);
+    if (elevation < 5) return undefined;
+    for (const door of doorsNear(position.x, position.z, 45)) {
+      const roof = door.roof;
+      if (!roof) continue;
+      if (!hasRoofAccess(buildCore(door.facts))) continue;
+      const facts = door.facts;
+      const local = toLocal({ x: facts.x, z: facts.z }, facts.heading, position.x, position.z);
+      if (local.x < roof.minX + 0.3 || local.x > roof.maxX - 0.3) continue;
+      if (local.z < roof.minZ + 0.3 || local.z > roof.maxZ - 0.3) continue;
+      const top = api.standHeightAt?.(position.x, position.z) ?? api.surfaceHeightAt(facts.x, facts.z) + roof.topY;
+      if (Math.abs(position.y - top) > 3.5) continue;
+      return door;
+    }
+    return undefined;
   };
 
   // ---- the lift -------------------------------------------------------------------------------------
@@ -466,11 +594,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       else { push(wall.from, wall.gapCentre! - wall.gapWidth / 2); push(wall.gapCentre! + wall.gapWidth / 2, wall.to); }
     }
     if (core.lift) out.push(core.lift);
-    out.push({ x: core.stair.x, z: core.stair.z - core.stair.d * 0.19, w: 0.16, d: core.stair.d * 0.62 });
-    // The shuttered half flight is NOT in this list. The clamp is two-dimensional, and the shutter at
-    // the foot of the ground floor's down flight sits directly under the TOP of its up flight — as a
-    // flat obstacle it walls off the last step of a climb the player is three metres above. The
-    // flight that leads nowhere is refused by altitude instead: see the guard in clamp().
+    // The spine wall between the flights — and on the top floor, the centre rail of the stair head
+    // that stands on the same line. A stairless single-storey building has neither.
+    if (core.stair) out.push({ x: core.stair.x, z: core.stair.z - core.stair.d * 0.19, w: 0.16, d: core.stair.d * 0.62 });
+    // The half flight that leads nowhere is NOT in this list. The clamp is two-dimensional, and a
+    // flat obstacle at the foot of the ground floor's dead down flight would sit directly under the
+    // TOP of its up flight — walling off the last step of a climb the player is three metres above.
+    // The flight that leads nowhere is refused by altitude instead: see the guard in clamp().
     for (const prop of plan.props) {
       if (prop.solid && prop.h >= STEP_OVER) out.push({ x: prop.x, z: prop.z, w: prop.w, d: prop.d });
     }
@@ -503,7 +633,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     current.last = { x, z };
 
     // Height: the floor plane, unless the player is on the flight, in which case the flight.
-    const progress = stairProgress(current.core.stair, x, z);
+    const shaft = current.core.stair;
+    const progress = shaft ? stairProgress(shaft, current.core.stairDir, x, z) : undefined;
     if (progress === undefined) {
       if (current.shaftBase !== undefined) {
         // Stepped off the flight onto a storey. Which one is decided by which end they left from.
@@ -528,7 +659,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
           return;
         }
         current.shaftBase = base;
-        // Both ends of a flight must exist before a foot lands on it.
+        // Both ends of a flight must exist before a foot lands on it — and nothing else stays up:
+        // stepping onto the down flight used to leave the floor ABOVE visible too (peak three).
+        for (const index of [...current.resident.keys()]) {
+          if (index !== current.floor && index !== base && index !== base + 1) drop(current, index);
+        }
         raise(current, current.shaftBase);
         raise(current, current.shaftBase + 1);
       }
@@ -556,7 +691,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const back = camera
       ? toLocal(current, current.heading, camera.x, camera.z)
       : toLocal(current, current.heading, player.x - Math.sin(yaw) * BOOM, player.z - Math.cos(yaw) * BOOM);
-    const onTheStair = withinRect(current.core.stair, eye.x, eye.z, 0.8);
+    const onTheStair = current.core.stair !== undefined && withinRect(current.core.stair, eye.x, eye.z, 0.8);
     for (const partition of resident.built.partitions) {
       if (partition.core && onTheStair) { partition.mesh.visible = true; continue; }
       partition.mesh.visible = !segmentCrossesBox(eye, back, partition);
@@ -581,6 +716,37 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         const plan = here(visit);
         if (Math.hypot(local.x - visit.core.entryX, local.z + plan.depth / 2 - EXIT_MAT_IN) > EXIT_RADIUS) return undefined;
         return { prompt: 'E  Step outside', act: () => { leave(); } };
+      },
+    },
+    {
+      // The roof hatch, from inside: top floor of a qualifying building, at the foot of the ladder.
+      // Exit is NEVER gated — you are already in, and "picking is only needed to enter" is a rule.
+      id: 'interiors:roofhatch', order: 43, context: 'foot',
+      test: (ctx) => {
+        if (!visit || !visit.core.stair || !visit.door.roof) return undefined;
+        if (visit.floor !== visit.core.storeys - 1 || !hasRoofAccess(visit.core)) return undefined;
+        const local = toLocal(visit, visit.heading, ctx.position.x, ctx.position.z);
+        const foot = hatchFoot(visit.core.stair, visit.core.stairDir);
+        if (Math.hypot(local.x - foot.x, local.z - foot.z) > 2.6) return undefined;
+        return { prompt: 'E  Up to the roof', act: () => { exitToRoof(); } };
+      },
+    },
+    {
+      // The roof hatch, from outside: standing on a qualifying building's flat top. The offer must
+      // never fizzle, so a locked hatch still offers — and explains — rather than refusing silently.
+      // (doorLocked is off until the locks pass ships the pick; the shape is already the final one.)
+      id: 'interiors:roofdoor', order: 52, context: 'foot',
+      test: (ctx) => {
+        if (visit) return undefined;
+        const door = roofUnderfoot(ctx.position);
+        if (!door) return undefined;
+        if (hatchLocked(door)) {
+          return {
+            prompt: 'E  Try the hatch',
+            act: () => api.notify('Locked', 'Bolted from the inside. A lock pick would open it.', false),
+          };
+        }
+        return { prompt: `E  In through the roof hatch · ${door.name}`, act: () => { enterFromRoof(door); } };
       },
     },
     {
@@ -623,6 +789,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         streamDoorways(player.x, player.z);
       }
       phase += dt;
+      clock += dt;
       // THE MARKERS FADE UP AS YOU REACH THEM. A shop pad pulses at full strength from across the
       // street because there are six of them; there are thousands of front doors, so a door only
       // lights when you are nearly on its step and a street of houses reads as a street of houses.
@@ -779,6 +946,54 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         const local = toLocal(visit, visit.heading, player.x, player.z);
         return `ok|${local.x.toFixed(2)}|${local.z.toFixed(2)}|y=${player.y.toFixed(2)}|floor=${visit.floor}|to=${distance.toFixed(2)}`;
       }
+      // Jump to a floor without the lift's fade timers — the deterministic path for drivers/tests.
+      if (action === 'floor') {
+        if (!visit) return 'failed:not-inside';
+        const index = typeof args.n === 'number' ? args.n : Number.NaN;
+        if (!Number.isFinite(index) || index < 0 || index >= visit.core.storeys) return 'failed:no-such-floor';
+        for (const key of [...visit.resident.keys()]) drop(visit, key);
+        visit.floor = index; visit.shaftBase = undefined;
+        const arrived = raise(visit, index)!;
+        const spot = toWorld(visit, visit.heading, arrived.plan.landing.x, arrived.plan.landing.z);
+        api.playerPosition().set(spot.x, floorY(visit, index), spot.z);
+        visit.last = { ...arrived.plan.landing };
+        assignLamps(visit);
+        placeFixture(visit, arrived.plan);
+        return `ok|floor=${index}`;
+      }
+      // Out through the roof hatch, instantly.
+      if (action === 'roof') {
+        if (!visit) return 'failed:not-inside';
+        const result = exitToRoof(true);
+        if (result !== 'ok') return result;
+        return `ok|${player.x.toFixed(2)}|${player.y.toFixed(2)}|${player.z.toFixed(2)}`;
+      }
+      // Stand on (and optionally drop into) the nearest qualifying roof.
+      if (action === 'roofstand' || action === 'roofenter') {
+        if (visit) leave(true);
+        let door: InteriorDoor | undefined;
+        for (const radius of [STREAM_RANGE * 3, STREAM_RANGE * 10, STREAM_RANGE * 25]) {
+          door = doorsNear(player.x, player.z, radius)
+            .filter((candidate) => candidate.roof && hasRoofAccess(buildCore(candidate.facts)))
+            .sort((a, b) => Math.hypot(a.x - player.x, a.z - player.z) - Math.hypot(b.x - player.x, b.z - player.z))[0];
+          if (door) break;
+        }
+        if (!door) return 'stuck:no-roof-candidates';
+        const roof = door.roof!;
+        const centre = toWorld(
+          { x: door.facts.x, z: door.facts.z }, door.facts.heading,
+          (roof.minX + roof.maxX) / 2, (roof.minZ + roof.maxZ) / 2,
+        );
+        const y = api.standHeightAt?.(centre.x, centre.z) ?? api.surfaceHeightAt(door.facts.x, door.facts.z) + roof.topY;
+        player.set(centre.x, y + 0.05, centre.z);
+        if (action === 'roofstand') {
+          const found = roofUnderfoot(player);
+          return found ? `ok|${found.id}|${found.name}|${player.y.toFixed(2)}` : 'failed:rung-does-not-see-this-roof';
+        }
+        const entered = enterFromRoof(door, true);
+        if (entered !== 'ok') return entered;
+        return `ok|${door.id}|floor=${visit ? (visit as Visit).floor : -1}`;
+      }
       if (action === 'enter' || action === 'run') {
         const door = pick();
         if (!door) return 'stuck:no-doors';
@@ -850,15 +1065,19 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   function climb(current: Visit, direction: 1 | -1): string {
     const from = current.floor;
     const shaft = current.core.stair;
+    if (!shaft) return 'failed:no-stair';
     const player = api.playerPosition();
     // Waypoints: front of the up half, back of it, back of the down half, front of the down half.
+    // Which half is "up" is the building's own seeded stairDir, exactly as drawn.
     const lane = shaft.w / 4;
+    const up = direction > 0 ? current.core.stairDir : -current.core.stairDir;
     // Onto the spine first — the corridor is the one route every room opens onto, so this is the
     // walk a player makes, not a shortcut through a wall.
     const spine: [number, number][] = [[current.core.corridorX, current.last.z], [current.core.corridorX, rectMinZ(shaft) - 1.6]];
-    const path: [number, number][] = direction > 0
-      ? [[shaft.x + lane, rectMinZ(shaft) + 0.3], [shaft.x + lane, rectMaxZ(shaft) - 0.3], [shaft.x - lane, rectMaxZ(shaft) - 0.3], [shaft.x - lane, rectMinZ(shaft) + 0.3]]
-      : [[shaft.x - lane, rectMinZ(shaft) + 0.3], [shaft.x - lane, rectMaxZ(shaft) - 0.3], [shaft.x + lane, rectMaxZ(shaft) - 0.3], [shaft.x + lane, rectMinZ(shaft) + 0.3]];
+    const path: [number, number][] = [
+      [shaft.x + up * lane, rectMinZ(shaft) + 0.3], [shaft.x + up * lane, rectMaxZ(shaft) - 0.3],
+      [shaft.x - up * lane, rectMaxZ(shaft) - 0.3], [shaft.x - up * lane, rectMinZ(shaft) + 0.3],
+    ];
     let at = { x: current.last.x, z: current.last.z };
     for (const [tx, tz] of [...spine, ...path, [current.core.corridorX, rectMinZ(shaft) - 1.6]] as [number, number][]) {
       for (let step = 0; step < 200; step++) {

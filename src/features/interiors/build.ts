@@ -16,7 +16,7 @@
  */
 import * as THREE from 'three';
 import { createSignMesh } from '../../world/ProceduralMaterials';
-import { rectMaxX, rectMaxZ, rectMinX, rectMinZ, STOREY_HEIGHT, type Rect } from './core';
+import { hatchFoot, rectMaxX, rectMaxZ, rectMinX, rectMinZ, STOREY_HEIGHT, type Rect } from './core';
 import type { FloorPlan, Prop, Wall } from './floor';
 import type { InteriorDoor } from '../interiors.state';
 
@@ -103,7 +103,12 @@ export function toLocal(at: { x: number; z: number }, heading: number, x: number
   return { x: dx * c - dz * s, z: dx * s + dz * c };
 }
 
-export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolean }): BuiltFloor {
+/** What is special about the ends of the building: the ground floor gets the street exit and the
+ *  under-stair storage, the top floor gets a stair head instead of a flight to nowhere, and a top
+ *  floor with `hatch` gets the ladder to the roof. */
+export interface FloorEnds { ground: boolean; top: boolean; hatch: boolean }
+
+export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
   const group = new THREE.Group();
   group.name = `Floor:${plan.core.id}:${plan.index}`;
 
@@ -155,25 +160,37 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
 
   // ---- the core: the same shaft on every storey, which is why they line up ----------------------
   // The stair goes in its own group so the occlusion cull can take the whole flight out in one go.
-  const shaft = new THREE.Group(); shaft.name = 'Stair'; group.add(shaft);
-  const shaftBox = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
-    const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
-    mesh.position.set(x, y, z); shaft.add(mesh); return mesh;
-  };
-  buildStair(core.stair, height, { box: shaftBox, solid, keep, group: shaft, mat });
-  partitions.push({
-    mesh: shaft, core: true,
-    minX: rectMinX(core.stair), maxX: rectMaxX(core.stair),
-    minZ: rectMinZ(core.stair), maxZ: rectMaxZ(core.stair),
-  });
-  // A stair has to stop somewhere: there is no storey over the top one and no basement under the
-  // ground, so the half flight that would lead nowhere is shuttered. Drawn here and clamped against
-  // in interiors.ts from the SAME rectangle, so a locked stair looks locked and behaves locked.
-  const shutter = solid(0x5b625f, 0.7);
-  for (const [enabled, direction] of [[ends.top, 1], [ends.ground, -1]] as [boolean, 1 | -1][]) {
-    if (!enabled) continue;
-    const cap = stairCap(core.stair, direction);
-    box(cap.w, 2.1, cap.d, shutter, cap.x, 1.05, cap.z);
+  // A single-storey building has no shaft at all — the rooms took the whole plate.
+  if (core.stair) {
+    const shaft = new THREE.Group(); shaft.name = 'Stair'; group.add(shaft);
+    const shaftBox = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
+      const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
+      mesh.position.set(x, y, z); shaft.add(mesh); return mesh;
+    };
+    const shaftKit = { box: shaftBox, solid, keep, group: shaft, mat };
+    if (ends.top) {
+      // THE TOP OF THE STAIRWELL. The old code drew a full switchback rising into the ceiling with a
+      // grey shutter across it — the "blocked off stairs" the owner reported on every top floor.
+      // Nobody can ever walk that flight (there is no storey above), so it is not drawn at all: the
+      // top floor gets a stair HEAD — the well the flight from below arrives in, railed off where
+      // the containment clamp refuses to let you walk, open at the mouth you step out of. On a
+      // commercial or industrial building tall enough to qualify, the up side carries a steel
+      // ladder to a roof hatch instead of a rail, and E under it takes you out onto the real roof.
+      buildStairHead(core.stair, core.stairDir, height, ends.hatch, shaftKit);
+    } else {
+      buildStair(core.stair, core.stairDir, height, shaftKit);
+    }
+    if (ends.ground) {
+      // THE FOOT OF THE STAIRWELL. Downstairs from the ground floor there is nothing, and the old
+      // grey shutter said so with a wall. The clamp still refuses the step (see interiors.ts), but
+      // what you SEE is what a real ground floor does with that dead quarter: under-stair storage.
+      buildUnderStair(core.stair, core.stairDir, shaftKit);
+    }
+    partitions.push({
+      mesh: shaft, core: true,
+      minX: rectMinX(core.stair), maxX: rectMaxX(core.stair),
+      minZ: rectMinZ(core.stair), maxZ: rectMaxZ(core.stair),
+    });
   }
   if (core.lift) buildLift(core.lift, height, { box, solid, keep, group, mat, powered });
 
@@ -262,21 +279,23 @@ interface Kit {
 }
 
 /**
- * THE SWITCHBACK. Two half flights side by side: up the +x half from the front to the mid landing at
- * the back, then up the −x half from the back to the front again, arriving one storey higher at the
- * spot you set off from. That shape is why the stair works on every storey with no special case at
- * either end — the top of one flight IS the bottom of the next, in the same shaft, at the same x.
+ * THE SWITCHBACK. Two half flights side by side: up the `dir` half from the front to the mid landing
+ * at the back, then up the other half from the back to the front again, arriving one storey higher
+ * at the spot you set off from. That shape is why the stair works on every storey with no special
+ * case at either end — the top of one flight IS the bottom of the next, in the same shaft, at the
+ * same x. Which side goes up first is the building's own seeded choice (core.stairDir), so two
+ * stairwells on one street no longer all turn the same way.
  *
- * See interiors.ts stairHeight() for the matching altitude function: this draws it, that walks it.
+ * See interiors.ts stairProgress() for the matching altitude function: this draws it, that walks it.
  */
-function buildStair(shaft: Rect, height: number, kit: Kit): void {
+function buildStair(shaft: Rect, dir: 1 | -1, height: number, kit: Kit): void {
   const { box, solid } = kit;
   const tread = solid(0x77726a, 0.9);
   const nose = solid(0x3b4143, 0.7);
   const steps = 9;
   const halfW = shaft.w / 2;
   for (let half = 0; half < 2; half++) {
-    const sign = half === 0 ? 1 : -1;           // +x half rises front→back, −x half back→front
+    const sign = half === 0 ? dir : -dir;       // the `dir` half rises front→back, the other back→front
     const x = shaft.x + sign * halfW / 2;
     for (let i = 0; i < steps; i++) {
       const t = (i + 0.5) / steps;
@@ -290,9 +309,69 @@ function buildStair(shaft: Rect, height: number, kit: Kit): void {
   // landing, and it is the thing that makes the shaft read as a stairwell rather than a ramp.
   box(0.12, height, shaft.d * 0.62, solid(0x8d877c, 0.9), shaft.x, height / 2, shaft.z - shaft.d * 0.19);
   // A handrail down the outside of each flight.
-  for (const sign of [-1, 1]) {
-    box(0.07, 0.07, shaft.d, solid(0x4a5254, 0.5), shaft.x + sign * (halfW - 0.08), STOREY_HEIGHT * (sign > 0 ? 0.25 : 0.75) + 1.0, shaft.z);
+  for (const sign of [-1, 1] as const) {
+    box(0.07, 0.07, shaft.d, solid(0x4a5254, 0.5), shaft.x + sign * (halfW - 0.08), STOREY_HEIGHT * (sign === dir ? 0.25 : 0.75) + 1.0, shaft.z);
   }
+}
+
+/**
+ * THE STAIR HEAD — what the top storey has instead of a switchback. The flight from the floor below
+ * arrives at the front of the shaft on the down side; everything else in the shaft rectangle is the
+ * region the containment clamp refuses (there is nothing above to climb to), so it is railed off
+ * like the top landing of any real stairwell rather than shuttered like a crime scene. The rails are
+ * drawn where the clamp already refuses — they mark the rule, they do not implement it.
+ */
+function buildStairHead(shaft: Rect, dir: 1 | -1, height: number, hatch: boolean, kit: Kit): void {
+  const { box, solid, keep, group } = kit;
+  const steel = solid(0x4a5254, 0.55);
+  const post = (x: number, z: number): void => { box(0.07, 1.02, 0.07, steel, x, 0.51, z); };
+  const railRun = (x0: number, z0: number, x1: number, z1: number): void => {
+    const along = Math.hypot(x1 - x0, z1 - z0);
+    if (along < 0.2) return;
+    const posts = Math.max(2, Math.round(along / 1.3));
+    for (let i = 0; i < posts; i++) post(x0 + (x1 - x0) * i / (posts - 1), z0 + (z1 - z0) * i / (posts - 1));
+    box(Math.abs(x1 - x0) + 0.07, 0.07, Math.abs(z1 - z0) + 0.07, steel, (x0 + x1) / 2, 1.02, (z0 + z1) / 2);
+  };
+  const minX = rectMinX(shaft); const maxX = rectMaxX(shaft);
+  const minZ = rectMinZ(shaft); const maxZ = rectMaxZ(shaft);
+  const upFrontX = dir === 1 ? [shaft.x, maxX] as const : [minX, shaft.x] as const;
+  // The dark well, so the opening reads as a stairwell going down before you step into it.
+  const well = new THREE.Mesh(keep(new THREE.BoxGeometry(shaft.w - 0.1, 0.03, shaft.d - 0.1)), MOUTH_MATERIAL);
+  well.position.set(shaft.x, 0.015, shaft.z);
+  group.add(well);
+  // Rails: both sides, the back, the centre line over the spine wall the clamp still enforces, and
+  // the up-side front — with a gap for the ladder when this head opens onto the roof.
+  railRun(minX, minZ, minX, maxZ);
+  railRun(maxX, minZ, maxX, maxZ);
+  railRun(minX, maxZ, maxX, maxZ);
+  railRun(shaft.x, minZ, shaft.x, maxZ - shaft.d * 0.38);
+  if (!hatch) railRun(upFrontX[0], minZ, upFrontX[1], minZ);
+  if (hatch) {
+    // The way onto the roof: a steel ladder where the up-flight would have started, and a hatch in
+    // the ceiling over it. E at the foot of the ladder does the climb (see interiors:roofhatch).
+    const foot = hatchFoot(shaft, dir);
+    const ladderZ = minZ + 0.35;
+    for (const sx of [-0.3, 0.3]) box(0.07, height, 0.07, steel, foot.x + sx, height / 2, ladderZ);
+    const rungs = Math.floor(height / 0.38);
+    for (let i = 1; i <= rungs; i++) box(0.66, 0.05, 0.05, steel, foot.x, i * height / (rungs + 1), ladderZ);
+    const frame = solid(0x37403f, 0.6);
+    box(1.5, 0.1, 1.5, frame, foot.x, height - 0.05, foot.z);
+    box(1.2, 0.08, 1.2, solid(0x9aa2a4, 0.4), foot.x, height - 0.11, foot.z);
+  }
+}
+
+/** What the dead quarter at the foot of the stairwell really is: the cupboard under the stairs.
+ *  Replaces the grey shutter the owner called out; the clamp still refuses the step (there is no
+ *  basement), and now the reason reads as furniture instead of a barricade. */
+function buildUnderStair(shaft: Rect, dir: 1 | -1, kit: Kit): void {
+  const { box, solid } = kit;
+  const lane = shaft.w / 4;
+  const x = shaft.x - dir * lane;           // the down side's front quarter — the flight to nowhere
+  const z = rectMinZ(shaft) + 0.75;
+  box(0.9, 0.62, 0.9, solid(0xa07a4c, 0.85), x - 0.35, 0.31, z);
+  box(0.8, 0.5, 0.8, solid(0x8a6a3f, 0.85), x - 0.3, 0.87, z + 0.05);
+  box(0.7, 0.9, 0.55, solid(0x5f6a6c, 0.8), x + 0.55, 0.45, z + 0.15);
+  box(0.09, 1.35, 0.09, solid(0x8b5a3c, 0.9), x + 0.85, 0.68, z - 0.3);
 }
 
 function buildLift(shaft: Rect, height: number, kit: Kit): void {
@@ -332,12 +411,6 @@ function buildExit(entryX: number, depth: number, kit: Kit): void {
 
 /** How far in from the front wall the exit mat sits. */
 export const EXIT_MAT_IN = 1.7;
-
-/** The shutter across the half flight that leads nowhere: +1 caps the way up, −1 the way down.
- *  Exported so the containment clamp blocks exactly the rectangle that was drawn. */
-export function stairCap(shaft: Rect, direction: 1 | -1): Rect {
-  return { x: shaft.x + direction * shaft.w / 4, z: rectMinZ(shaft) + 0.25, w: shaft.w / 2, d: 0.3 };
-}
 
 // ---- the street side -------------------------------------------------------------------------
 

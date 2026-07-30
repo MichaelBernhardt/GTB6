@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFeature } from './interiors';
-import { buildCore } from './core';
+import { buildCore, hasRoofAccess, hatchFoot } from './core';
 import { doorsNear, nearestDoor, resetDoorCache } from './doors';
 import { buildDoorways, buildFloor, markerFade } from './build';
 import { solveFloor } from './floor';
@@ -311,6 +311,28 @@ describe('a visit', () => {
     system.dispose();
   }, 120000);
 
+  /** "There seem to always be stairs, even on single floor buildings" — the owner. A single-storey
+   *  building now has no shaft in its core, no stair group in its scene, and rooms on the whole
+   *  plate; the visit still works end to end. */
+  it('gives a single-storey building no stair at all, and still a walkable visit', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const single = doorsNear(0, 0, 4000)
+      .map((door) => ({ door, core: buildCore(door.facts) }))
+      .find((entry) => entry.core.storeys === 1);
+    expect(single, 'no single-storey building near the origin').toBeDefined();
+    expect(single!.core.stair, 'a single-storey core still carries a stair').toBeUndefined();
+    expect(single!.core.lift).toBeUndefined();
+    test.player.set(single!.door.x, 0, single!.door.z);
+    expect(system.qa!('run', {})).toBe('ok');
+    system.qa!('enter', {});
+    let stairGroups = 0;
+    floorGroups(test.scene)[0]!.traverse((object) => { if (object.name === 'Stair') stairGroups++; });
+    expect(stairGroups, 'a stairless building drew a stair').toBe(0);
+    expect(system.qa!('status', {})).toContain('unreachable=0');
+    system.dispose();
+  }, 300000);
+
   // The torch hint asks the host "is the player under a roof?" and must stay silent in here: the
   // lamps dim with the grid but the room keeps its own ambient, so the way out is always findable.
   it('reports itself as indoors only between stepping in and stepping out', () => {
@@ -372,14 +394,92 @@ describe('the marker on the step', () => {
   }, 120000);
 });
 
+/**
+ * ROOF ACCESS. Commercial and industrial buildings taller than two storeys open both ways: the top
+ * stair head carries a ladder out onto the real roof, and standing on such a roof offers the way
+ * down into the top floor. Exit is never gated; entry goes through the same doorLocked() line the
+ * street door will use once the locks pass ships the pick.
+ */
+describe('the roof', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  it('drops into the top floor from the roof, and the street door then puts you out on the doorstep', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const stood = system.qa!('roofstand', {});
+    expect(stood.startsWith('ok'), stood).toBe(true);
+    const doorId = stood.split('|')[1]!;
+    // Standing on the roof: the ladder in, through the same resolver E uses.
+    const prompt = offer(system, test.player);
+    expect(prompt?.prompt, 'no way in from the roof').toContain('roof hatch');
+    const entered = system.qa!('roofenter', {});
+    expect(entered.startsWith('ok'), entered).toBe(true);
+    const status = system.qa!('status', {});
+    const storeys = Number(/storeys=(\d+)/.exec(status)![1]);
+    const floor = Number(/floor=(\d+)/.exec(status)![1]);
+    expect(storeys).toBeGreaterThan(2);
+    expect(floor, 'a roof entry must land on the TOP floor').toBe(storeys - 1);
+    expect(status).toContain('unreachable=0');
+    // Leaving by the street door must NOT restore the roof position — that would teleport the
+    // player back up. It puts them on the doorstep like anyone else. Exit checks nothing, ever.
+    expect(system.qa!('leave', {})).toBe('ok');
+    const door = doorsNear(test.player.x, test.player.z, 60).find((candidate) => candidate.id === doorId);
+    expect(door, 'left somewhere far from the building').toBeDefined();
+    expect(Math.hypot(test.player.x - door!.x, test.player.z - door!.z)).toBeLessThan(0.01);
+    expect(test.player.y).toBeCloseTo(0, 3);
+    system.dispose();
+  }, 300000);
+
+  it('exits the top stair head to the real roof, high above the street', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    expect(system.qa!('roofenter', {}).startsWith('ok')).toBe(true);
+    const inside = test.player.clone();
+    const out = system.qa!('roof', {});
+    expect(out.startsWith('ok'), out).toBe(true);
+    // Interiors live ~30u underground; the roof is the massing top, well above the flat ground.
+    expect(test.player.y, 'the hatch put the player somewhere that is not a roof').toBeGreaterThan(6);
+    expect(test.player.y).toBeGreaterThan(inside.y + 20);
+    expect(system.indoors?.()).toBe(false);
+    // The hatch just used is in grace: the way back down offers immediately.
+    const back = offer(system, test.player);
+    expect(back?.prompt, 'no way back down through a hatch just exited').toContain('roof hatch');
+    system.dispose();
+  }, 300000);
+
+  it('offers the hatch rung at the ladder foot on the top floor of a qualifying building', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const roofy = doorsNear(0, 0, 4000)
+      .map((door) => ({ door, core: buildCore(door.facts) }))
+      .filter((entry) => entry.core.stair && hasRoofAccess(entry.core) && entry.door.roof)
+      .sort((a, b) => a.core.storeys - b.core.storeys)[0];
+    expect(roofy, 'no roof-qualifying building near the origin').toBeDefined();
+    const { door, core } = roofy!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
+    // Walk to the ladder foot (mapped to world through the visit's own frame).
+    const foot = hatchFoot(core.stair!, core.stairDir);
+    for (let i = 0; i < 400; i++) {
+      const step = system.qa!('walk', { x: foot.x, z: foot.z - 1.4 });
+      const parts = step.split('|');
+      if (Math.hypot(Number(parts[1]) - foot.x, Number(parts[2]) - (foot.z - 1.4)) < 0.15) break;
+    }
+    const prompt = offer(system, test.player);
+    expect(prompt?.prompt, 'no roof prompt at the ladder foot').toBe('E  Up to the roof');
+    system.dispose();
+  }, 300000);
+});
+
 describe('third-person interior visibility', () => {
   it('registers both doorway jambs as occluders along with every full-height wall span', () => {
     resetDoorCache();
     const door = nearestDoor(0, 0)!;
     const core = buildCore(door.facts);
     const plan = solveFloor(door.facts, 0, core);
-    const built = buildFloor(plan, { ground: true, top: core.storeys === 1 });
-    let expected = 1; // the stair core
+    const built = buildFloor(plan, { ground: true, top: core.storeys === 1, hatch: false });
+    let expected = core.stair ? 1 : 0; // the stair core, when the building has one
     for (const wall of plan.walls) {
       if (wall.gapWidth === undefined) {
         if (wall.to - wall.from >= 0.02) expected += 1;

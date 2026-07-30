@@ -37,6 +37,16 @@ export interface InteriorDoor {
   /** Head height of that same opening. A cottage's door is 2 m and its wall is 2.5: a fixed 3.4 m
    *  reveal on it is a hole through the roof, which is what the first version drew. */
   readonly openHeight: number;
+  /** The building's TOP massing tier, building-local, read off the same tiers City pushes as
+   *  colliders — so this rectangle is exactly the flat top a player can already stand on. Powers
+   *  roof entry (stand here, drop into the top floor) and roof exit (the hatch teleports onto it).
+   *  Undefined when the model's top is too small to stand a player on. */
+  readonly roof?: {
+    readonly minX: number; readonly maxX: number;
+    readonly minZ: number; readonly maxZ: number;
+    /** Building-local height of that top — world roof height is the building's base plus this. */
+    readonly topY: number;
+  };
   /** Everything the interior generator needs about the host building. */
   readonly facts: import('./interiors/core').BuildingFacts;
 }

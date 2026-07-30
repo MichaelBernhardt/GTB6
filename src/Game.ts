@@ -3279,6 +3279,10 @@ export class Game {
     return {
       scene: this.scene,
       surfaceHeightAt: (x, z) => this.city.surfaceHeightAt(x, z),
+      // A huge feetY makes supportHeight answer "the tallest collider top here" — the roof of a
+      // building, the top of a container stack — which is what a feature teleporting a player onto
+      // a surface needs, and what surfaceHeightAt (terrain) cannot say.
+      standHeightAt: (x, z) => this.city.supportHeight(x, z, 100000),
       districtAt: (x, z) => this.city.districtAt(x, z),
       isPark: (x, z) => this.city.isPark(x, z),
       nearestRoadPose: (at) => this.city.nearestRoadPose(at),

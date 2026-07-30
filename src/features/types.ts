@@ -101,6 +101,11 @@ export interface FeatureGameApi {
   readonly scene: Scene;
   /** Ground height under a world point. */
   surfaceHeightAt(x: number, z: number): number;
+  /** Highest STANDABLE surface at a world point — building roofs and container tops included, from
+   *  the same colliders the player grounds against. Optional so older/test feature hosts remain
+   *  source compatible; interiors use it to land roof exits exactly on the massing top rather than
+   *  on an estimate that strands the player inside a wall when the terrain slopes. */
+  standHeightAt?(x: number, z: number): number;
   districtAt(x: number, z: number): string;
   isPark(x: number, z: number): boolean;
   nearestRoadPose(at: Vector3): { position: Vector3; heading: number };
