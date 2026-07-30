@@ -225,6 +225,21 @@ describe('a visit', () => {
     expect(test.player.distanceTo(outside)).toBeLessThan(0.001);
     system.dispose();
   }, 120000);
+
+  // The torch hint asks the host "is the player under a roof?" and must stay silent in here: the
+  // lamps dim with the grid but the room keeps its own ambient, so the way out is always findable.
+  it('reports itself as indoors only between stepping in and stepping out', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.indoors?.()).toBe(false);
+    system.qa!('enter', {});
+    expect(system.indoors?.()).toBe(true);
+    system.qa!('leave', {});
+    expect(system.indoors?.()).toBe(false);
+    system.dispose();
+  }, 120000);
 });
 
 /**

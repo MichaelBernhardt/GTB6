@@ -185,6 +185,11 @@ export interface FeatureSystem {
   update?(dt: number): void;
   /** HUD chips for this frame. Return undefined or [] for nothing. */
   hud?(): readonly FeatureHudEntry[] | undefined;
+  /** True while this feature has the player somewhere the street is not — under a roof, with the
+   *  feature's own light and its own way out. The host ORs it across loaded features so the game can
+   *  ask "is the player outdoors?" without knowing which features exist (Game.torchWouldHelp: the
+   *  torch hint must not fire at someone standing in a lit room). Almost no feature needs this. */
+  indoors?(): boolean;
   /** Full-fidelity interaction rungs. These replace the eager `approach` entry once loaded. */
   interactions?(): readonly InteractionDescriptor[];
   /** The slice stored under `SavedGame.features[saveKey]`. Must be JSON-safe. */

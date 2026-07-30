@@ -54,6 +54,7 @@ import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './syst
 import { PopulationSystem } from './systems/PopulationSystem';
 import { ProjectileSystem } from './systems/ProjectileSystem';
 import { PropSystem } from './systems/PropSystem';
+import { TorchHint, torchHintToast } from './systems/TorchHint';
 import { TorchSystem } from './systems/TorchSystem';
 import { formatCountdown, TrainSystem } from './systems/TrainSystem';
 import { findPath, nearestNode, type NavPoint } from './systems/NavGraph';
@@ -161,7 +162,7 @@ export class Game {
   private yardGuards: Pedestrian[] = [];
   private loadShedding = new LoadSheddingSystem();
   private torch!: TorchSystem;
-  private torchHintShown = false; // the first blackout that lands in the dark teaches the L key, once
+  private torchHint = new TorchHint(); // one derived condition teaches the L key on EVERY path into a dark shedding street — see TorchHint.ts
   private muzzleFlash = 0; // seconds the player's last shot keeps them lit for blackout stealth — shooting gives you away
   private concealed = false; // blackout stealth verdict this frame: JMPD sight checks shrink to whites-of-eyes while true
   private livingCity: LivingCitySystem;
@@ -947,7 +948,8 @@ export class Game {
       this.ui.notify(`Minimap: ${MINIMAP_ZOOM_NAMES[this.settings.minimapZoom]}`);
     }
     if (this.input.consume('KeyH')) this.useStim();
-    if (this.input.consume('KeyL')) this.audio.ui(this.torch.toggle()); // works on foot, driving, riding, flying — the click doubles as on/off feedback
+    if (this.input.consume('KeyL')) { const lit = this.torch.toggle(); this.audio.ui(lit); if (lit) this.torchHint.learned(); } // works on foot, driving, riding, flying — the click doubles as on/off feedback; a player who found L is never lectured about it
+
     if (this.airborne) this.updateAirborne(dt);
     else if (this.transition) this.updateTransition(dt);
     else if (this.activePlane) this.updateFlying(dt);
@@ -1041,6 +1043,7 @@ export class Game {
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateJoziFlow(dt); this.updateRobotRace(dt); this.updateMission(dt);
     this.updateInebriation(dt);
     this.features.update(dt); // lazily loaded features; the host no-ops while online, so PvP never ticks them
+    this.updateTorchHint(dt); // after interior presence and the feature tick, so "indoors" is this step's truth
     this.saveTimer += dt; if (this.saveTimer > 8 && !this.activePlane) { this.persist(); this.saveTimer = 0; } // no autosave mid-flight: a resumed save would float the player at altitude
     if (this.player.health <= 0) this.die();
   }
@@ -1111,18 +1114,36 @@ export class Game {
   }
 
   private applyEskom(event: 'start' | 'end' | undefined): void {
-    if (event === 'start') {
-      setPower(false);
-      const hint = !this.torchHintShown && nightFactor(this.dayNight.hour) > 0.5; if (hint) this.torchHintShown = true; // teach the key the first time the lights die in actual darkness
-      this.ui.notify('Load shedding: Stage 4', hint ? 'Eskom sends regards. Pitch dark out there — L for torch.' : 'Eskom sends regards. The robots are out.', false);
-    }
+    // The torch key is NOT taught here. Teaching from the outage event could only ever cover the
+    // paths the event knows about, and the blackout has not even faded in yet — updateTorchHint owns
+    // it, off one derived condition that covers every way into a dark street.
+    if (event === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
     else if (event === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
-    // The start-of-stage hint only fires if the blackout LANDS in darkness — when shedding begins in
-    // daylight and carries into night, teach the key the moment it actually gets dark instead.
-    if (!this.torchHintShown && !this.torch.on && this.dayNight.blackoutDarkness > 0.5) {
-      this.torchHintShown = true;
-      this.ui.notify('Pitch dark', 'No street lights tonight. L for torch.', false);
-    }
+  }
+
+  /** The ONE place the game teaches the torch key. Every route into a dark shedding street arrives
+   *  here as the same condition — the outage starting after dark, dusk arriving mid-outage, a save
+   *  that loaded into a night that later sheds, stepping out of a car, off a train, out of a plane,
+   *  out of a shop/safehouse/building interior, or closing the map — so none of them can be missed
+   *  and a new one needs no new hint code. See TorchHint.ts for the nag budget. */
+  private updateTorchHint(dt: number): void {
+    if (!this.torchHint.update(dt, {
+      shedding: this.loadShedding.active,
+      darkness: this.dayNight.blackoutDarkness,
+      torchOn: this.torch.on,
+      exposed: this.torchWouldHelp(),
+      watching: !this.ui.mapOpen && !this.ui.consoleOpen,
+    })) return;
+    const hint = torchHintToast(Boolean(this.touch));
+    this.ui.notify(hint.title, hint.detail, false);
+  }
+
+  /** Is the player somewhere a handheld torch is the only light there is? Headlights own the road, a
+   *  train cab and a cockpit are lit, shops/safehouses/interiors keep their own ambient (see
+   *  interiors' lamp ramp), and PvP has no torch at all. */
+  private torchWouldHelp(): boolean {
+    return !this.online && !this.activeVehicle && !this.transition && !this.activePlane && !this.airborne
+      && !this.trains.riding && !this.indoorPlace && !this.features.indoors();
   }
 
   private updateVehicleFires(dt: number, focus: THREE.Vector3): void {
