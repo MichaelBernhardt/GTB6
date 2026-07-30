@@ -345,7 +345,7 @@ export class Game {
     bootMark('boot: input + restore');
     this.input = new InputManager(this.renderer.domElement);
     if (this.touchMode) this.touch = new TouchControls(this.input, this.renderer.domElement, this.ui.root);
-    this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats;
+    this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats; this.applyTeflon();
     this.missions.completed = new Set(this.save.completedMissions);
     this.story.restore(this.save.storyFlags, this.save.diaryPages);
     this.restoreGarageVehicle();
@@ -449,7 +449,7 @@ export class Game {
     this.ui.onShowCheats = () => this.ui.showCheats(WEAPONS.filter((spec) => !spec.melee).map((spec) => ({ id: spec.id, name: spec.name, owned: this.combat.owned(spec.id) })), this.cheats);
     this.ui.onGiveWeapon = (id) => { const result = this.combat.grantWeapon(id); this.ui.notify(result === 'new' ? 'Weapon granted' : 'Ammo topped up', WEAPON_BY_ID[id].name); this.persist(); };
     this.ui.onMaxAmmo = () => { const filled = this.combat.maxAmmo(); this.ui.notify('Max ammo', `${filled} weapon${filled === 1 ? '' : 's'} fully stocked.`); this.persist(); };
-    this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.persist(); };
+    this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.applyTeflon(); this.persist(); };
     this.ui.onBuyWeapon = (id) => this.purchase('weapon', id);
     this.ui.onBuyAmmo = (id) => this.purchase('ammo', id);
     this.ui.onBuyArmour = () => this.purchaseArmour();
@@ -590,6 +590,12 @@ export class Game {
     dropStar: () => this.consoleDropStar(),
     toggleShedding: () => { const event = this.loadShedding.force(); this.applyEskom(event); return event === 'start' ? 'Load shedding forced. Stage 4 begins.' : 'Load shedding called off. Power restored.'; },
     toggleSirens: () => { this.audio.sirensMuted = !this.audio.sirensMuted; if (this.audio.sirensMuted) this.audio.setSiren(false); return this.audio.sirensMuted ? 'Sirens silenced. Elude in peace.' : 'Sirens back on. The city screams again.'; },
+    toggleTeflon: () => {
+      this.cheats.teflon = !this.cheats.teflon; this.applyTeflon(); this.persist();
+      return this.cheats.teflon
+        ? 'Teflon ON. Nothing sticks: heat cleared, JMPD lost interest, and it can never rise again.'
+        : 'Teflon OFF. JMPD are taking an interest again.';
+    },
     setBusy: (percent) => { this.lifecycle.tuning = { busy: clampBusy(percent) }; return `Busy level ${this.lifecycle.tuning.busy}%. ${this.describeCrowd()}`; }, // fresh tuning also clears peds/cars pins
     setPedTarget: (count) => {
       this.lifecycle.tuning.peds = count === undefined ? undefined : Math.min(PED_TARGET_CAP, count);
@@ -825,7 +831,7 @@ export class Game {
     this.customWaypoint = undefined;
     this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.applyTeflon(); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
     this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Follow turquoise GPS to story contacts. M opens the map; gold Quantum and lime Sixty-Sekonds blips are repeatable side work.');
@@ -2342,6 +2348,7 @@ export class Game {
   private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
     if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the taxi spooks the passenger
+    if (this.cheats.teflon) return; // teflon: the heat could not land anyway, so JMPD neither witness nor take the call — no fake dispatch toast, no last-known position
     // A concealed-in-blackout player commits crimes unseen: proximity cops don't witness what they can't make
     // out (a muzzle flash lights the shooter first, so gunfire near JMPD is still caught in the act), but a
     // directly-affected cop (copWitnessed, e.g. one you shot) always knows, and civilian phone-ins run as usual.
@@ -2374,6 +2381,7 @@ export class Game {
 
   /** Mission-forced heat behaves as a cop-witnessed report at the player's position, so pursuit still works. */
   private forceWanted(level: number): void {
+    if (this.cheats.teflon) return; // scripted stars are still stars: teflon means no pursuit, mission or not
     this.wanted.setMinimumLevel(level); this.wanted.reportSeen();
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     this.knowledge.copWitness(focus.x, focus.z);
@@ -3003,7 +3011,7 @@ export class Game {
     const hudFeatures = flowHud ? [...(featureHud ?? []), flowHud] : featureHud;
     const promptMode = this.activePlane ? 'flight' : this.activeVehicle || this.trains.driving ? 'vehicle' : 'foot';
     const hudPrompt = this.input.gamepadActive ? gamepadPrompt(prompt, promptMode) : prompt;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable), inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable || this.cheats.teflon), inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,
@@ -3066,7 +3074,7 @@ export class Game {
     this.features.reset(this.save.features); // drop live feature state; the checkpoint's slices load again on demand
     this.economy.balance = this.save.money;
     this.inventory = { ...this.save.inventory };
-    Object.assign(this.cheats, this.save.cheats);
+    Object.assign(this.cheats, this.save.cheats); this.applyTeflon();
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current);
     this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
@@ -3125,6 +3133,17 @@ export class Game {
     }
     this.mode = 'playing'; analytics.setMode(this.online ? 'multiplayer' : 'singleplayer');
   }
+  /** Pushes the `teflon` cheat into the (pure) WantedSystem, which is the only thing that can raise heat.
+   *  Switching it ON also ends the response it invalidates: the setter wipes banked heat, so dispatch
+   *  knowledge and every live interceptor go with it — otherwise units already chasing would follow a
+   *  zero-star suspect until they happened to wander off the block. Safe to call on every restore path;
+   *  re-asserting the same value does nothing. */
+  private applyTeflon(): void {
+    const wasOn = this.wanted.teflon;
+    this.wanted.teflon = this.cheats.teflon;
+    if (this.cheats.teflon && !wasOn) { this.knowledge.reset(); this.previousWanted = false; this.clearPolice(); }
+  }
+
   /** Tears down the JMPD response and drops its foot officers from the population roster. */
   private clearPolice(): void {
     for (const officer of this.police.reset()) this.population.removePedestrian(officer);

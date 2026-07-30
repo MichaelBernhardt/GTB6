@@ -10,7 +10,8 @@ export interface Damageable { health: number; maxHealth: number; takeDamage(amou
 export interface WorldTarget { position: Vector3; label: string; color?: string; }
 export interface SavedWeaponState { ammo: number; reserve: number; owned: boolean; }
 export interface SavedWeapons { current: WeaponId; loadout: Record<WeaponId, SavedWeaponState>; }
-export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerable: boolean; }
+/** `teflon`: the police never take an interest — wanted heat can never rise while it is set. */
+export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerable: boolean; teflon: boolean; }
 /** Carried kit beside the weapon loadout: an armour pool plus consumable stims and parachutes. */
 export interface Inventory { armour: number; stims: number; parachutes: number; }
 export interface SavedVehicle { kind: VehicleKind; color: number; health: number; }
