@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { PLAYER } from '../config';
 import { fallDamage, jumpVelocity, stepVertical, type VerticalMotion } from '../core/GameRules';
-import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, industrialSignLabel, RAILWAY_NETWORK, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, storefrontSignLabel, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
-import { CBD_CENTER, distanceToRailwayCorridor, districtCenter, MAP_WORLD_SIZE, RAILWAY_CORRIDOR_HALF_WIDTH, RAILWAY_STATIONS, RAILWAY_STATION_SITES, ridgeMetresAt } from './mapData';
+import { clearPathIntervals, colliderBase, colliderOverlapsXZ, colliderTop, collidersBlock, districtAt, highestColliderTop, industrialSignLabel, inWater, RAILWAY_NETWORK, ROAD_NETWORK, ROAD_SURFACE_OFFSET, SIDEWALK_INNER_EDGE, SIDEWALK_RISE, SIDEWALK_WIDTH, storefrontSignLabel, terrainHeightAt, TRACK_NETWORK, type Collider } from './City';
+import { CBD_CENTER, DAM_ISLAND_RINGS, distanceToRailwayCorridor, districtCenter, MAP_WORLD_SIZE, OCEAN_POLYGON, pointInPolygon, RAILWAY_CORRIDOR_HALF_WIDTH, RAILWAY_STATIONS, RAILWAY_STATION_SITES, ridgeMetresAt, WATER_POLYGONS } from './mapData';
 import { CITY_JUNCTIONS, signalCornerOffset } from './UrbanInfrastructure';
 
 describe('procedural local business identity', () => {
@@ -13,6 +13,35 @@ describe('procedural local business identity', () => {
       'EISH EXPRESS', 'LOAD SHED CAFE', 'KOTA & CHIPS', 'HAIR BY BONGI',
     ]);
     expect(industrialSignLabel(-1)).toBe('WELDING NOW-NOW');
+  });
+});
+
+describe('water test used by vehicle placement', () => {
+  const centroid = (ring: readonly { x: number; z: number }[]): { x: number; z: number } => ({
+    x: ring.reduce((sum, point) => sum + point.x, 0) / ring.length,
+    z: ring.reduce((sum, point) => sum + point.z, 0) / ring.length,
+  });
+
+  it('reads the dam as water and dry city as land', () => {
+    expect(inWater(-3350, -3500)).toBe(true); // deep in the dam
+    expect(inWater(CBD_CENTER.x, CBD_CENTER.z)).toBe(false);
+  });
+
+  it('asks the dam POLYGON, not its bounding envelope: the islands are land', () => {
+    expect(DAM_ISLAND_RINGS.length).toBeGreaterThan(0);
+    for (const ring of DAM_ISLAND_RINGS) {
+      const middle = centroid(ring);
+      // Inside the dam's bbox — a bounding-box water test would drown these and refuse every drop.
+      expect(OCEAN_POLYGON && middle.x > OCEAN_POLYGON.minX && middle.x < OCEAN_POLYGON.maxX
+        && middle.z > OCEAN_POLYGON.minZ && middle.z < OCEAN_POLYGON.maxZ).toBe(true);
+      expect(inWater(middle.x, middle.z)).toBe(false);
+    }
+  });
+
+  it('covers the authored inland pans and lakes too', () => {
+    const named = WATER_POLYGONS.filter((polygon) => pointInPolygon(polygon, polygon.cx, polygon.cz));
+    expect(named.length).toBeGreaterThanOrEqual(6);
+    for (const polygon of named) expect(inWater(polygon.cx, polygon.cz), polygon.name).toBe(true);
   });
 });
 
