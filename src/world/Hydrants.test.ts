@@ -92,9 +92,25 @@ describe('fire-hydrant stations (buildHydrantStations)', () => {
         eligible += Math.hypot(road.points[index + 1]!.x - road.points[index]!.x, road.points[index + 1]!.z - road.points[index]!.z);
       }
     }
-    const predicted = eligible / HYDRANT_STATION_SPACING;
+    // Predict PER ROAD, including the floor. `eligible / pitch` alone is wrong, and wrong in a way that
+    // depends on the pitch: every eligible road is guaranteed its own station however short it is, so the
+    // floor does not shrink when the pitch widens. Measured, going 78 u -> 130 u removed only 31% of the
+    // hydrants rather than 40%. A single global ratio therefore has to be re-tuned on every pitch change,
+    // which is exactly what it failed to do — it passed at 1.35 for 78 u and needed 1.42 for 130 u. Summing
+    // max(1, length/pitch) models the floor directly, so the bound below is TIGHTER than the old one at any
+    // pitch, not looser, and it will not need touching next time the pitch moves.
+    let predicted = 0;
+    for (const road of ROAD_NETWORK) {
+      if (road.width < STREETLAMP_MIN_WIDTH) continue;
+      let length = 0;
+      for (let index = 0; index < road.points.length - 1; index++) {
+        length += Math.hypot(road.points[index + 1]!.x - road.points[index]!.x, road.points[index + 1]!.z - road.points[index]!.z);
+      }
+      predicted += Math.max(1, length / HYDRANT_STATION_SPACING);
+    }
+    expect(predicted).toBeGreaterThan(eligible / HYDRANT_STATION_SPACING); // the floor really is what dominates
     expect(stations.length).toBeGreaterThan(predicted * 0.95);
-    expect(stations.length).toBeLessThan(predicted * 1.35); // + one guaranteed station per short road
+    expect(stations.length).toBeLessThan(predicted * 1.1);
     // SANS 10090 table 9 allows 85 m (category A) to 300 m (category D1) between hydrants; Joburg's own
     // Emergency Services by-laws restate 120/180 m. The station pitch must land inside that bracket.
     expect(HYDRANT_STATION_SPACING * METRES_PER_UNIT).toBeGreaterThan(85);
