@@ -1,7 +1,7 @@
 import { approachNear, fuelHud, fuelTick, sanitizeFuelSave } from './fuel.state';
 import { nearGolfCourse, sanitizeGolfState } from './golf.state';
 import { sanitizeInteriorsState, streetsHere } from './interiors.state';
-import { sanitizeProtestState, shutdownPending } from './protest.state';
+import { grievanceHud, grievanceWarming, sanitizeProtestState, tickGrievance } from './protest.state';
 import { nearestStreetSite, sanitizeStreetState, STREET_LOAD_RADIUS } from './street.state';
 import type { FeatureApproach, FeatureDescriptor } from './types';
 
@@ -59,20 +59,37 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     id: 'protest', saveKey: 'protest', label: 'Protests + burning tyres',
     sanitize: sanitizeProtestState,
     load: () => import('./protest/protest'),
-    // A PURE predicate — one read, no side effect, and that is load-bearing.
+    // The grievance is a SIMULATION — outage hours the player personally stood in — so it belongs on
+    // the sim sub-step like every other one, and the chip that shows it belongs beside the fuel gauge.
+    // Both hooks are one call each into the eager `protest.state.ts`, and the loaded body calls the
+    // very same two functions, so the rate and the strip cannot change when the chunk lands.
     //
-    // This used to tick the grievance clock here, on the grounds that `near()` is the only per-frame
-    // hook an unloaded feature gets. It is, and it is also not reliable: `resolveInteraction` returns
-    // on the FIRST descriptor that offers something, and `order: 60` puts this one below every other
-    // feature. On a registry with only protest in it the clock ran; with anything else registered
-    // above it the clock stopped dead wherever the player was standing — the cross-feature verifier
-    // measured 3.90 outage-hours out in the open street and 0.00 on a street corner or a doorstep.
-    // Since the ledger is this feature's ONLY unlock gate, that would have shipped a feature that can
-    // never trigger. The clock now runs off powerGrid's own transition hook; see protest.state.ts.
-    approach: {
-      context: 'foot', order: 60, prompt: 'E  Follow the smoke',
-      near: () => shutdownPending(false),
+    // It has been in the two wrong places already. It ticked inside `approach.near()` (skipped the
+    // moment any feature ordered above offered first: 3.90 outage-hours in the open street against
+    // 0.00 on a doorstep), and then off `powerGrid.onPowerChange` against `performance.now()` (a wall
+    // clock that ran while the game was paused and carried no position, so there was never an anchor
+    // and every protest went up on the road under the player's own feet). See protest.state.ts.
+    eager: {
+      tick: (_dt, ctx) => tickGrievance(ctx),
+      hud: () => grievanceHud(),
     },
+    // `near` is constant FALSE, and there is no prompt for starting a protest at all.
+    //
+    // It used to be `near: () => ripe`, which is a predicate with no position in it — so the rung it
+    // fed offered `E  Follow the smoke` from anywhere in the city, above `E  Enter vehicle` in
+    // Game.updateOnFoot, for as long as the grievance stayed ripe. The owner could not get into a car.
+    // A protest is not a thing you walk up to and press a key on; it is a thing that happens, and the
+    // body raises it out of its own `update()`.
+    //
+    // What is left is `preload`, the interiors seam: a coarse "there is work for this feature around
+    // here" test that fetches the body while offering nothing and stealing no press. It fires early —
+    // at HUD_FROM_FRACTION, not at ripeness — because the body is what says "this district has had
+    // enough" and what closes the road, so it has to be running BEFORE the grievance ripens.
+    approach: {
+      context: 'foot', order: 60, prompt: 'E  Join the picket',
+      near: () => false,
+      preload: () => grievanceWarming(),
+    } as PreloadingApproach,
   },
   {
     id: 'street', saveKey: 'street', label: 'Street economy',

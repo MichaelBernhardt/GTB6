@@ -73,6 +73,18 @@ The burn had the mirror-image problem — it was smuggled into `approach.near`, 
 per *rendered* frame, which made it measurably frame-rate coupled (0.0059 L/s on a slow box against a
 design rate of 0.0825).
 
+Protest is the second case, and it went through the same two wrong answers in the other order. Its
+grievance clock — outage hours the player personally stood in, which is the *only* thing that unlocks
+the feature — first ticked inside `approach.near` (silently frozen by any feature ordered above it:
+3.90 outage-hours in the open street against 0.00 on a doorstep), and was then moved onto
+`powerGrid.onPowerChange` against `performance.now()`. That hook does fire reliably, and it is still
+wrong for two reasons worth writing down, because a real per-frame hook looks like the obvious escape:
+a wall clock is not the game's clock (it ran while the game was paused and while the tab was
+backgrounded, so a cap had to exist to stop a lunch break becoming a riot), and a transition hook
+carries no **position**, so the feature had no idea where the player had been standing and put every
+protest on the road under his own feet. `eager.tick` gives you `dt` *and* `ctx.position` *and*
+`ctx.hour` on the fixed sub-step. Use it.
+
 Rules: keep both hooks in the eager `<id>.state.ts` (whatever they touch is boot payload for every
 player, forever), build the chips with the same function the body uses so the strip cannot change
 shape at the moment the chunk lands, and add no scene objects — the eager half has no `dispose()`.
@@ -170,6 +182,21 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
   fixture ped you forgot leaks its mesh. Keep your own roster and `api.removeFixture()` each one.
 - **Return `undefined` from `test()` when there is nothing to do.** In the `vehicle` context your rung
   sits *above* `E  Exit vehicle`, so a rung that always offers something traps the player in the car.
+  **On foot it is the same defect and it has now shipped there too**: `Game.updateOnFoot` runs
+  `if (this.features.act('foot')) return;` above the vehicle-entry branch, so an on-foot rung that
+  always offers stops the player getting *into* a car. Protest's `E  Follow the smoke` had no proximity
+  test at all — `!barricade && ripe` — so it offered across the whole map for as long as the grievance
+  stayed ripe, and the owner reported exactly that: "it was saying to press E but didn't do anything,
+  and since it was also blocking E it prevented entering vehicles."
+- **A rung that OFFERS must be a rung that ACTS.** `FeatureHost.act()` returns true the instant any rung
+  offers, so an `act()` that quietly declines does not fizzle — it *eats the keypress* and the rest of
+  the host's ladder never runs. Resolve the subject in `test()` and hand it to a verb that cannot fail:
+  `test: () => { const fire = feedableFire(); return fire ? { prompt, act: () => feedNow(fire) } : undefined; }`.
+  Guards belong in the predicate, never in the action. **Missing seam:** `InteractionOffer.act()`
+  returns `void`, so there is no way for an action to tell the host "I could not, ask the next rung".
+  If a feature ever genuinely needs that, it wants `act(): boolean | void` on `InteractionOffer` plus a
+  `resolve()` in `FeatureHost.act` that continues down the remaining descriptors on a `false` — a
+  `types.ts` and `host.ts` change, which is why protest does it structurally instead.
 - **A feature owns exactly ONE key, and that is a design constraint, not a detail.** `E` is the whole
   input vocabulary: there is no second binding, no `api.onKey`, and the mobile pills are built from
   the prompt string by `parsePromptActions`, so a key the host does not handle is a pill that does
