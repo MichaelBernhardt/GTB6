@@ -68,6 +68,7 @@ import { PLANE_EXIT_SPEED, PLANE_MAX_SPEED, planeCrashDamage, planeHint } from '
 import { buildTeleportTargets, clampToWorld, districtAnchors, resolveTeleport, safePlacement, type TeleportTarget } from './systems/Teleport';
 import { ABANDON_RADIUS, ARRIVE_RADIUS, BOARD_RADIUS, canHail, GUNFIRE_FEAR_RADIUS, GUNFIRE_FEAR_SCALE, HAIL_RADIUS, isTaxiKind, MIN_TRIP_DISTANCE, PICKUP_RADIUS, REHAIL_COOLDOWN, routeDistance, STOP_SPEED, TaxiRide, taxiHudText } from './systems/TaxiJobSystem';
 import { BURN_DPS, OCCUPANT_BURNOUT_DAMAGE, POLICE_WRECK_HEAT, VehicleFireSystem } from './systems/VehicleFireSystem';
+import { placementRadius, placementRefusal, placeVehicleNear, VEHICLE_CLEAR_GAP, type PlacementWorld } from './systems/VehiclePlacement';
 import { WantedSystem } from './systems/WantedSystem';
 import { CBD, civilianDisposition, LivingCitySystem, policeReinforcementModifier, reputationTier, shopPriceMultiplier, witnessDelayMultiplier, type CityEvent } from './systems/LivingCitySystem';
 import type { BaseQuality, CheatSettings, GameMode, GameSettings, GameSnapshot, Inventory, SavedGame, WorldTarget } from './types';
@@ -79,7 +80,7 @@ import { TouchControls } from './ui/TouchControls';
 import { shouldEnableTouch, touchQuality } from './ui/TouchModels';
 import { UIManager } from './ui/UIManager';
 import { City, ROAD_NETWORK } from './world/City';
-import { CBD_CENTER, GENERATED_ROADS, METRES_PER_UNIT } from './world/mapData';
+import { CBD_CENTER, distanceToRailwayCorridor, GENERATED_ROADS, METRES_PER_UNIT } from './world/mapData';
 import { COURIER_DEPOT, LOCKUP_SPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
 import { BUILDING_VISIBLE_RANGE, CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE, POTATO_BUILDING_RANGE, POTATO_CHUNK_RANGE, POTATO_DETAIL_RANGE } from './world/ChunkVisibility';
@@ -713,21 +714,56 @@ export class Game {
     return `Nearby targets: ${target.peds} peds${tuning.peds !== undefined ? ' (pinned)' : ''} / ${target.traffic} cars${tuning.cars !== undefined ? ' (pinned)' : ''} — live ${livePeds} / ${liveCars}.`;
   }
 
+  /** The world queries VehiclePlacement needs, bound to this game. `ignore` keeps a vehicle from
+   *  colliding with itself — recovery re-places a car that is already on the roster. */
+  private placementWorld(ignore?: Vehicle): PlacementWorld {
+    return {
+      surfaceHeightAt: (x, z) => this.city.surfaceHeightAt(x, z),
+      isWater: (x, z) => this.city.isWater(x, z),
+      blocked: (x, z, radius) => this.city.collides(x, z, radius),
+      railDistance: (x, z) => distanceToRailwayCorridor(x, z),
+      nearestRoadPose: (x, z) => {
+        const pose = this.city.nearestRoadPose(new THREE.Vector3(x, 0, z));
+        return { x: pose.position.x, y: pose.position.y, z: pose.position.z, heading: pose.heading };
+      },
+      occupied: (x, z, radius) => [...this.population.vehicles, ...this.police.vehicles]
+        .some((other) => other !== ignore && Math.hypot(other.group.position.x - x, other.group.position.z - z) < radius + VEHICLE_CLEAR_GAP),
+    };
+  }
+
   private spawnConsoleVehicle(kind: VehicleKind): string {
     const spec = VEHICLE_SPECS[kind];
     const origin = this.activeVehicle?.group.position ?? this.player.group.position;
     const yaw = this.activeVehicle?.heading ?? this.player.heading;
-    const ahead = new THREE.Vector3(origin.x + Math.sin(yaw) * 8, 0, origin.z + Math.cos(yaw) * 8);
-    const pose = this.city.nearestRoadPose(ahead);
-    const blocked = pose.position.distanceTo(origin) < 2.5
-      || [...this.population.vehicles, ...this.police.vehicles].some((other) => other.group.position.distanceTo(pose.position) < 3.5);
-    if (blocked) return 'Eish, no clear kerb for the drop-off. Move along and try again.';
-    const vehicle = new Vehicle(this.scene, kind, pose.position.clone());
-    vehicle.heading = pose.heading; // align to the road tangent: "away from the player" could point straight across the kerb
+    // A kerb within ROAD_SNAP_RADIUS wins and the vehicle aligns to the lane; out in the farmland it
+    // lands on suitable ground beside the player instead of teleporting to a road half a map away.
+    const placement = placeVehicleNear(origin, yaw, this.placementWorld(), { radius: placementRadius(spec.size) });
+    if (placement.on === 'nowhere') return placementRefusal(placement.refusal);
+    const vehicle = new Vehicle(this.scene, kind, new THREE.Vector3(placement.x, placement.y, placement.z));
+    vehicle.heading = placement.heading;
     vehicle.group.rotation.y = vehicle.heading;
     this.population.vehicles.push(vehicle);
-    this.ui.notify('Vehicle delivered', `${spec.name}, parked just ahead.`);
-    return `${spec.name} delivered just ahead.`;
+    if (placement.on === 'road') {
+      this.ui.notify('Vehicle delivered', `${spec.name}, parked just ahead.`);
+      return `${spec.name} delivered just ahead.`;
+    }
+    const away = Math.round(placement.roadDistance);
+    this.ui.notify('Vehicle delivered', `${spec.name}, set down on the ground beside you.`);
+    return `${spec.name} set down beside you — nearest road is ${Number.isFinite(placement.roadDistance) ? `${away}u` : 'nowhere'} away.`;
+  }
+
+  /** F: unstick the driven vehicle. Back onto the tar while a road is genuinely near, otherwise
+   *  upright on suitable ground where it stands — the old unconditional nearest-road snap yanked a
+   *  farm bakkie to a road hundreds of units away. Never refuses: being stuck is not a valid outcome. */
+  private recoverVehicle(vehicle: Vehicle): void {
+    const label = vehicle.spec.twoWheeler ? 'Bike recovered' : 'Bakkie recovered';
+    const placement = placeVehicleNear(vehicle.group.position, vehicle.heading, this.placementWorld(vehicle), {
+      radius: placementRadius(vehicle.spec.size), ahead: 0, minGap: 0,
+    });
+    if (placement.on === 'nowhere') { vehicle.reset(undefined, this.city); this.ui.notify(label, `${vehicle.spec.name} — nowhere better to put it, so back on its wheels here.`); return; }
+    vehicle.heading = placement.heading;
+    vehicle.reset(new THREE.Vector3(placement.x, placement.y, placement.z), this.city);
+    this.ui.notify(label, placement.on === 'road' ? vehicle.spec.name : `${vehicle.spec.name} — no road nearby, set down where it stood.`);
   }
 
   private consoleDropStar(): string {
@@ -1541,7 +1577,7 @@ export class Game {
       if (this.features.act('vehicle')) return; // a feature MUST offer nothing when it has nothing to do, or E could never exit the car
       this.beginExit(vehicle);
     }
-    if (this.input.consume('KeyF')) { const pose = this.city.nearestRoadPose(vehicle.group.position); vehicle.heading = pose.heading; vehicle.reset(pose.position); this.ui.notify(vehicle.spec.twoWheeler ? 'Bike recovered' : 'Bakkie recovered', vehicle.spec.name); }
+    if (this.input.consume('KeyF')) this.recoverVehicle(vehicle);
     if (isTaxiKind(vehicle.spec.kind)) {
       if (this.input.consume('KeyT')) this.handleTaxiKey(vehicle);
       this.updateTaxiJob(dt, vehicle);

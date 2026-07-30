@@ -116,7 +116,7 @@ export const HELP_LINES = [
   'fps — toggle the performance display (shows X/Y/Z position)',
   'perfchart — toggle the scrolling game-loop timing graph (stacked % of the 60fps budget per phase)',
   'mission [n] — list the missions, or jump-start mission n at its contact (replays even completed ones)',
-  `spawn <kind> — drop a vehicle ahead: ${KINDS.join(', ')}, bakkie`,
+  `spawn <kind> — drop a vehicle ahead, on the nearest kerb or on the ground when no road is close: ${KINDS.join(', ')}, bakkie`,
   'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens',
 ];
 
