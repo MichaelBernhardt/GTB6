@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
+import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
   BEACH_POLYGONS,
   COASTLINE,
@@ -159,6 +159,11 @@ export function storefrontSignLabel(variant: number): string {
 export function industrialSignLabel(variant: number): string {
   return INDUSTRIAL_SIGNS[((variant % INDUSTRIAL_SIGNS.length) + INDUSTRIAL_SIGNS.length) % INDUSTRIAL_SIGNS.length]!;
 }
+
+/** World units per UV repeat on foundation/retaining-wall concrete. The concrete texture carries
+ *  its own 10x repeat, so this is 3 u per visible concrete tile — the mid-point of the per-face
+ *  pitches the unscaled boxes used to show. See the foundation pass in buildOneBuilding. */
+export const FOUNDATION_UV_TILE = { width: 30, height: 30 };
 
 export const ROAD_SURFACE_OFFSET = 0.15;
 export const SIDEWALK_RISE = 0.22;
@@ -2532,7 +2537,16 @@ export class City {
     const foundationMaterials = this.foundationMaterialsFor(foundationIdentity);
     for (const foundation of foundations) {
       const foundationW = foundation.maxX - foundation.minX; const foundationH = foundation.y1 - foundation.y0; const foundationD = foundation.maxZ - foundation.minZ;
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(foundationW, foundationH, foundationD), foundationMaterials.wall);
+      // World-pitched concrete: a plain box face spans 0..1 UV whatever its size, so two abutting
+      // foundation tiers of different depths used to change concrete scale 1.8x across one
+      // continuous retaining wall (the MARTIAL x SMAL corner). Every face at least one
+      // FOUNDATION_UV_TILE wide/tall now shares one world pitch; smaller faces clamp to a single
+      // whole repeat — the pre-fix look — because a fractional repeat samples an arbitrary
+      // sub-window of the photo and renders whole short walls flat grey (owner-reported when this
+      // briefly shipped unfloored).
+      const mesh = new THREE.Mesh(
+        scaleBoxFacadeUvs(new THREE.BoxGeometry(foundationW, foundationH, foundationD), foundationW, foundationH, foundationD, FOUNDATION_UV_TILE),
+        foundationMaterials.wall);
       mesh.position.set((foundation.minX + foundation.maxX) / 2, (foundation.y0 + foundation.y1) / 2, (foundation.minZ + foundation.maxZ) / 2);
       mesh.receiveShadow = true; group.add(mesh);
       this.addFoundationCharacter(group, foundation, foundationIdentity, foundationMaterials.accent, sourceVariant);
