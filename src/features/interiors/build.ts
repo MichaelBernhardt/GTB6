@@ -44,11 +44,50 @@ export interface Partition {
 
 export interface BuiltFloor {
   readonly group: THREE.Group;
-  readonly lamps: readonly THREE.PointLight[];
   readonly powered: readonly { material: THREE.MeshStandardMaterial; base: number }[];
   readonly partitions: readonly Partition[];
   dispose(): void;
 }
+
+/**
+ * NO LIGHTS IN A FLOOR, AND THIS IS THE STALL FIX. Three.js compiles a program variant per
+ * (material, light-census) pair for EVERY material it renders, so a floor that brings its own
+ * PointLights changes NUM_POINT_LIGHTS for the whole scene on every raise and drop — measured at
+ * 4.4 s for the entry storm and 5.1 s for the first drop under SwiftShader, and a visible freeze on
+ * hardware. Floors therefore emit only lamp POSITIONS (plan.lamps, drawn here as bulb meshes); the
+ * feature owns one constant-size pool of PointLights per visit (see interiors.ts LAMP_POOL) and
+ * repositions them, so the light census never changes between the entry fade and the exit fade.
+ *
+ * MATERIALS ARE SHARED FOR THE SAME REASON, second order: a fresh MeshStandardMaterial per floor
+ * meant every first visit to a floor compiled a handful of new program variants mid-walk (measured
+ * 196-333 ms apiece). Everything here draws from a module-level cache keyed on colour/roughness/side,
+ * so after the first floor of a session there is nothing left to compile. Cached materials are NEVER
+ * disposed by a floor — the cache is bounded by the palette tables in floor.ts.
+ */
+const MATERIALS = new Map<string, THREE.MeshStandardMaterial>();
+function shared(color: number, roughness: number, side: THREE.Side = THREE.FrontSide): THREE.MeshStandardMaterial {
+  const key = `${color}|${roughness}|${side}`;
+  let material = MATERIALS.get(key);
+  if (!material) { material = new THREE.MeshStandardMaterial({ color, roughness, side }); MATERIALS.set(key, material); }
+  return material;
+}
+/** Emissive materials, one per role. `powered` entries reference these shared instances; the blackout
+ *  ramp writes the same product into each, so sharing cannot desynchronise them. */
+const GLOW = new Map<string, THREE.MeshStandardMaterial>();
+function sharedGlow(color: number, emissive: number, intensity: number, roughness: number): THREE.MeshStandardMaterial {
+  const key = `${color}|${emissive}|${intensity}|${roughness}`;
+  let material = GLOW.get(key);
+  if (!material) { material = new THREE.MeshStandardMaterial({ color, emissive, emissiveIntensity: intensity, roughness }); GLOW.set(key, material); }
+  return material;
+}
+/** Fixed-colour basics (the void, door mouths, the exit-mat glow). */
+const VOID_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x05070a, side: THREE.BackSide, fog: false });
+const MOUTH_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x0a0d10, fog: false });
+const MAT_GLOW_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.34, fog: false });
+/** One unit box, scaled per mesh — floors were allocating (and disposing) hundreds of BoxGeometries
+ *  each; every box in an interior is axis-aligned and untextured, so scale carries the whole shape. */
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+const BULB_GEOMETRY = new THREE.SphereGeometry(0.13, 10, 8);
 
 /** Local room point -> world. group.rotation.y = h maps local (lx, lz) to
  *  world (lx·cos h + lz·sin h, −lx·sin h + lz·cos h). */
@@ -69,17 +108,18 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   group.name = `Floor:${plan.core.id}:${plan.index}`;
 
   const geometries: THREE.BufferGeometry[] = [];
-  const materials: THREE.Material[] = [];
-  const lamps: THREE.PointLight[] = [];
   const powered: { material: THREE.MeshStandardMaterial; base: number }[] = [];
   const partitions: Partition[] = [];
   const keep = <T extends THREE.BufferGeometry>(geometry: T): T => { geometries.push(geometry); return geometry; };
-  const mat = <T extends THREE.Material>(material: T): T => { materials.push(material); return material; };
-  const solid = (color: number, roughness = 0.82): THREE.MeshStandardMaterial => mat(new THREE.MeshStandardMaterial({ color, roughness }));
+  // `mat` hands back the SHARED instance untouched: kept as a seam so every call site below reads the
+  // same as before the material cache landed. Nothing per-floor is ever disposed through it.
+  const mat = <T extends THREE.Material>(material: T): T => material;
+  const solid = (color: number, roughness = 0.82): THREE.MeshStandardMaterial => shared(color, roughness);
   const sheltered = (color: number, strength: number): number =>
     new THREE.Color(color).multiplyScalar(strength).getHex();
   const box = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
-    const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
+    const mesh = new THREE.Mesh(UNIT_BOX, material);
+    mesh.scale.set(w, h, d);
     mesh.position.set(x, y, z); group.add(mesh); return mesh;
   };
 
@@ -87,8 +127,7 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
 
   // ---- the void: everything outside this floor is black, whichever way the boom swings ----------
   const shroudRadius = Math.hypot(width, depth) / 2 + BOOM + 2;
-  const voidMaterial = mat(new THREE.MeshBasicMaterial({ color: 0x05070a, side: THREE.BackSide, fog: false }));
-  const shroud = new THREE.Mesh(keep(new THREE.CylinderGeometry(shroudRadius, shroudRadius, height + 34, 24, 1, false)), voidMaterial);
+  const shroud = new THREE.Mesh(keep(new THREE.CylinderGeometry(shroudRadius, shroudRadius, height + 34, 24, 1, false)), VOID_MATERIAL);
   shroud.position.y = (height + 34) / 2 - 17;
   group.add(shroud);
 
@@ -96,9 +135,9 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   // There is no physical roof in the buried room for the city's directional/hemisphere lights to
   // hit. Darker albedo compensates only on the structural surfaces; colourful furniture keeps its
   // authored palette and therefore still gives each room identity.
-  const wall = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.wall, 0.33), roughness: 0.92, side: THREE.BackSide }));
-  const floorMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.floor, 0.46), roughness: 0.95, side: THREE.BackSide }));
-  const ceilingMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.ceiling, 0.31), roughness: 0.95, side: THREE.BackSide }));
+  const wall = shared(sheltered(palette.wall, 0.33), 0.92, THREE.BackSide);
+  const floorMaterial = shared(sheltered(palette.floor, 0.46), 0.95, THREE.BackSide);
+  const ceilingMaterial = shared(sheltered(palette.ceiling, 0.31), 0.95, THREE.BackSide);
   const shell = new THREE.Mesh(keep(new THREE.BoxGeometry(width, height, depth)), [wall, wall, ceilingMaterial, floorMaterial, wall, wall]);
   shell.position.y = height / 2;
   group.add(shell);
@@ -110,7 +149,7 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   box(WALL_T, 0.14, depth, trim, -width / 2 + WALL_T / 2, 0.07, 0);
 
   // ---- partitions -------------------------------------------------------------------------------
-  const partitionMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.wall, 0.33), roughness: 0.9 }));
+  const partitionMaterial = shared(sheltered(palette.wall, 0.33), 0.9);
   const jamb = solid(palette.trim, 0.6);
   for (const run of plan.walls) buildWall(run, height, { box, partitionMaterial, jamb, partitions });
 
@@ -145,33 +184,26 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   for (const prop of plan.props) buildProp(prop, { box, solid, mat, keep, group, powered });
 
   // ---- light --------------------------------------------------------------------------------------
-  // A room you cannot see is the bug this feature shipped with. Belt (an ambient the grid cannot take
-  // away entirely), braces (the lamps), and the shroud keeps neither from leaking into the city.
-  group.add(new THREE.AmbientLight(0xffe9cc, 0.24));
-  const shade = mat(new THREE.MeshStandardMaterial({ color: 0xfff0cf, emissive: 0xfff0cf, emissiveIntensity: 1.1, roughness: 0.6 }));
-  powered.push({ material: shade, base: shade.emissiveIntensity });
+  // ONLY THE BULBS ARE DRAWN HERE. The real PointLights live in the feature's constant-size pool
+  // (interiors.ts) and are repositioned onto plan.lamps — see the header of this file for why a floor
+  // must never add or remove a light. The pool also carries the visit-wide ambient and the dim fill
+  // that keeps the way out findable with the grid down.
+  const shade = sharedGlow(0xfff0cf, 0xfff0cf, 1.1, 0.6);
+  powered.push({ material: shade, base: 1.1 });
   for (const spot of plan.lamps) {
-    const lamp = new THREE.PointLight(spot.color, INTERIOR_LAMP_INTENSITY, 22, 1.5);
-    lamp.position.set(spot.x, spot.y, spot.z);
-    group.add(lamp); lamps.push(lamp);
-    const bulb = new THREE.Mesh(keep(new THREE.SphereGeometry(0.13, 10, 8)), shade);
+    const bulb = new THREE.Mesh(BULB_GEOMETRY, shade);
     bulb.position.set(spot.x, spot.y - 0.06, spot.z); group.add(bulb);
   }
-  // A dim fill so the corners are never pure black even with the grid down — you must always be able
-  // to find the way out.
-  const fill = new THREE.PointLight(0x9fb0c8, 5, 44, 1.1);
-  fill.position.set(0, height * 0.82, -depth * 0.2);
-  group.add(fill);
 
   group.traverse((object) => { object.castShadow = false; object.receiveShadow = false; });
 
   return {
-    group, lamps, powered, partitions,
+    group, powered, partitions,
     dispose: () => {
       group.removeFromParent();
-      group.traverse((object) => { if (object instanceof THREE.Light) object.dispose(); });
+      // Geometries are per-floor (the few that are not the shared unit box); materials are the
+      // module cache's and are deliberately NOT disposed — see the header.
       for (const geometry of geometries) geometry.dispose();
-      for (const material of materials) material.dispose();
       group.clear();
     },
   };
@@ -264,7 +296,7 @@ function buildStair(shaft: Rect, height: number, kit: Kit): void {
 }
 
 function buildLift(shaft: Rect, height: number, kit: Kit): void {
-  const { box, solid, mat, powered } = kit;
+  const { box, solid, powered } = kit;
   const car = solid(0x4d5457, 0.55);
   box(shaft.w + 0.2, height, 0.14, car, shaft.x, height / 2, rectMaxZ(shaft) + 0.07);
   box(0.14, height, shaft.d, car, rectMinX(shaft) - 0.07, height / 2, shaft.z);
@@ -272,7 +304,7 @@ function buildLift(shaft: Rect, height: number, kit: Kit): void {
   // The doors, closed, on the corridor side, with the call panel lit beside them.
   const doors = solid(0x9aa2a4, 0.4);
   for (const sign of [-1, 1]) box(shaft.w / 2 - 0.04, 2.4, 0.1, doors, shaft.x + sign * shaft.w / 4, 1.2, rectMinZ(shaft) - 0.05);
-  const panel = mat(new THREE.MeshStandardMaterial({ color: 0xf0c657, emissive: 0xf0c657, emissiveIntensity: 1.4, roughness: 0.4 }));
+  const panel = sharedGlow(0xf0c657, 0xf0c657, 1.4, 0.4);
   powered?.push({ material: panel, base: panel.emissiveIntensity });
   box(0.18, 0.3, 0.06, panel, rectMinX(shaft) - 0.28, 1.3, rectMinZ(shaft) - 0.05);
 }
@@ -280,10 +312,9 @@ function buildLift(shaft: Rect, height: number, kit: Kit): void {
 /** The way back to the street: a recessed dark opening in the front wall, lit, labelled, with a mat
  *  under it you cannot miss walking back down the spine. */
 function buildExit(entryX: number, depth: number, kit: Kit): void {
-  const { box, solid, mat, keep, group } = kit;
+  const { box, solid, keep, group } = kit;
   const doorW = 2.2; const doorH = 3.0;
-  const mouth = mat(new THREE.MeshBasicMaterial({ color: 0x0a0d10, fog: false }));
-  box(doorW, doorH, 0.06, mouth, entryX, doorH / 2, -depth / 2 + 0.04);
+  box(doorW, doorH, 0.06, MOUTH_MATERIAL, entryX, doorH / 2, -depth / 2 + 0.04);
   const frame = solid(0x37403f, 0.6);
   box(0.22, doorH + 0.22, 0.24, frame, entryX - doorW / 2 - 0.11, (doorH + 0.22) / 2, -depth / 2 + 0.13);
   box(0.22, doorH + 0.22, 0.24, frame, entryX + doorW / 2 + 0.11, (doorH + 0.22) / 2, -depth / 2 + 0.13);
@@ -293,8 +324,7 @@ function buildExit(entryX: number, depth: number, kit: Kit): void {
   const exitSign = createSignMesh(keep(new THREE.PlaneGeometry(1.9, 0.5)), 'EXIT', '#ffe08a', { background: '#16211d' });
   exitSign.position.set(entryX, doorH + 0.58, -depth / 2 + 0.1);
   group.add(exitSign);
-  const matGlow = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.34, fog: false }));
-  const matDisc = new THREE.Mesh(keep(new THREE.CylinderGeometry(1.5, 1.5, 0.05, 20)), matGlow);
+  const matDisc = new THREE.Mesh(keep(new THREE.CylinderGeometry(1.5, 1.5, 0.05, 20)), MAT_GLOW_MATERIAL);
   matDisc.position.set(entryX, 0.03, -depth / 2 + EXIT_MAT_IN);
   group.add(matDisc);
   box(2.2, 0.04, 1.4, solid(0x3b3530, 0.98), entryX, 0.02, -depth / 2 + EXIT_MAT_IN);
@@ -439,7 +469,7 @@ export function buildDoorways(
 // ---- furniture ---------------------------------------------------------------------------------
 
 function buildProp(prop: Prop, kit: Kit): void {
-  const { box, solid, mat, keep, group, powered } = kit;
+  const { box, solid, keep, group, powered } = kit;
   const body = solid(prop.color, 0.8);
   const base = prop.y;
   switch (prop.shape) {
@@ -488,7 +518,7 @@ function buildProp(prop: Prop, kit: Kit): void {
     }
     case 'stove': {
       box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
-      const plate = mat(new THREE.MeshStandardMaterial({ color: 0x6a2a22, emissive: 0x8a2010, emissiveIntensity: 0.7, roughness: 0.5 }));
+      const plate = sharedGlow(0x6a2a22, 0x8a2010, 0.7, 0.5);
       powered?.push({ material: plate, base: plate.emissiveIntensity });
       for (let i = 0; i < 2; i++) {
         const ring = new THREE.Mesh(keep(new THREE.CylinderGeometry(0.15, 0.15, 0.04, 12)), plate);
@@ -498,7 +528,7 @@ function buildProp(prop: Prop, kit: Kit): void {
     }
     case 'tv': {
       box(prop.w, prop.h, prop.d, solid(0x1b1f22, 0.6), prop.x, base + prop.h / 2, prop.z);
-      const screen = mat(new THREE.MeshStandardMaterial({ color: 0x9fc4d8, emissive: 0x6f9fc4, emissiveIntensity: 0.9, roughness: 0.4 }));
+      const screen = sharedGlow(0x9fc4d8, 0x6f9fc4, 0.9, 0.4);
       powered?.push({ material: screen, base: screen.emissiveIntensity });
       box(prop.w * 0.4, prop.h - 0.12, prop.d - 0.12, screen, prop.x, base + prop.h / 2, prop.z);
       break;
@@ -508,7 +538,7 @@ function buildProp(prop: Prop, kit: Kit): void {
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
         box(0.07, prop.h, 0.07, solid(0x4a4640, 0.7), prop.x + sx * (prop.w / 2 - 0.1), base + prop.h / 2, prop.z + sz * (prop.d / 2 - 0.1));
       }
-      const screen = mat(new THREE.MeshStandardMaterial({ color: 0x8fb8cc, emissive: 0x5f8fb4, emissiveIntensity: 0.8, roughness: 0.4 }));
+      const screen = sharedGlow(0x8fb8cc, 0x5f8fb4, 0.8, 0.4);
       powered?.push({ material: screen, base: screen.emissiveIntensity });
       box(0.5, 0.36, 0.05, screen, prop.x, base + prop.h + 0.28, prop.z);
       break;

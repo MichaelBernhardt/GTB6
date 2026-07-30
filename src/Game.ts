@@ -170,6 +170,13 @@ export class Game {
   private shops!: ShopSystem;
   private safehouses!: SafehouseSystem;
   private indoorPlace?: 'jozi-arms' | 'main-main';
+  /** Last frame's features.indoors() — edge-detects stepping into/out of a feature interior. */
+  private featureIndoors = false;
+  /** The on-foot camera view while inside a feature interior, or undefined outside. Entering starts
+   *  it at 0 (first person — the owner's ask: interiors read best with no boom); V cycles it freely;
+   *  leaving simply clears it, so settings.cameraViewFoot — never written by any of this — IS the
+   *  restored former view. A save made indoors therefore also reloads with the outdoor view intact. */
+  private indoorFootView?: number;
   private activeSafehouse?: SafehousePlace;
   private activeBottleStore = ''; // name of the bottle store currently being browsed (for the menu header)
   private garageVehicle?: Vehicle;
@@ -938,8 +945,15 @@ export class Game {
     if (this.input.consume('KeyM')) this.openMap(); // Esc/M closes it (handled by the overlay while open)
     if (this.input.consume('KeyV') && (!this.trains.riding || this.trains.driving)) { // the train aisle is FP-only
       const key = this.activeVehicle || this.trains.driving ? 'cameraViewVehicle' : 'cameraViewFoot';
-      this.settings[key] = cycleView(this.settings[key]);
-      this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.settings[key]]}`); this.persist();
+      if (key === 'cameraViewFoot' && this.indoorFootView !== undefined) {
+        // Inside a feature interior V cycles the temporary indoor view, and the saved preference —
+        // the view that comes back when the player steps outside — stays exactly as it was.
+        this.indoorFootView = cycleView(this.indoorFootView);
+        this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.indoorFootView]}`);
+      } else {
+        this.settings[key] = cycleView(this.settings[key]);
+        this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.settings[key]]}`); this.persist();
+      }
     }
     const zoomDirection = (this.input.consume('PageUp') ? 1 : 0) - (this.input.consume('PageDown') ? 1 : 0);
     if (zoomDirection) {
@@ -1043,6 +1057,7 @@ export class Game {
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateJoziFlow(dt); this.updateRobotRace(dt); this.updateMission(dt);
     this.updateInebriation(dt);
     this.features.update(dt); // lazily loaded features; the host no-ops while online, so PvP never ticks them
+    this.updateFeatureIndoors(); // camera + city-visibility edges, same step as the indoors truth they follow
     this.updateTorchHint(dt); // after interior presence and the feature tick, so "indoors" is this step's truth
     this.saveTimer += dt; if (this.saveTimer > 8 && !this.activePlane) { this.persist(); this.saveTimer = 0; } // no autosave mid-flight: a resumed save would float the player at altitude
     if (this.player.health <= 0) this.die();
@@ -1051,6 +1066,7 @@ export class Game {
   private updateOnline(dt: number): void {
     this.profiler.mark('online');
     const online = this.online; if (!online) return;
+    this.updateFeatureIndoors(); // PvP suspends features, so indoors() is false: un-hide the city and drop the indoor camera override if a session started mid-visit
     if (this.input.consume('Escape')) { this.pause(); return; }
     const stateBefore = online.localState;
     // We are the authority on our own pose. The server never corrects it — its only say is the
@@ -1119,6 +1135,43 @@ export class Game {
     // it, off one derived condition that covers every way into a dark street.
     if (event === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
     else if (event === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
+  }
+
+  /**
+   * The moment the player steps into or out of a feature interior (interiors is the only feature
+   * that answers indoors() today), two host-side things flip:
+   *
+   * 1. THE CAMERA. Inside, the on-foot view starts at first person — the owner's ask, and the read
+   *    that makes an interior legible: no boom, so no wall ever stands between the lens and the
+   *    player and the partition cull barely has to act. V still cycles the whole ladder while
+   *    inside (indoorFootView), and stepping out restores EXACTLY the view from before entry,
+   *    because settings.cameraViewFoot was never touched.
+   *
+   * 2. THE CITY IS NOT DRAWN. The interior stands 30 u under its own building precisely so the city
+   *    never restreams — but the renderer was still drawing all of it every frame: measured ~1,000
+   *    draw calls / 3.2 M triangles submitted from underground behind an opaque shroud, with the
+   *    interior itself under 100 calls. Hiding City's render group while indoors cuts the frame to
+   *    the room the player is in. Chunk STREAMING, colliders and nav are untouched — visibility is a
+   *    render flag, and the culling systems keep their own state warm for the walk out. It also
+   *    shrinks the shader-recompile surface on entry to the interior's own dozen materials.
+   */
+  private updateFeatureIndoors(): void {
+    const indoors = this.features.indoors();
+    if (indoors === this.featureIndoors) return;
+    this.featureIndoors = indoors;
+    this.city.group.visible = !indoors;
+    if (indoors) {
+      this.indoorFootView = 0;
+      if (this.settings.cameraViewFoot !== 0) this.ui.notify('Camera: First person', 'V cycles the view. Your usual view returns outside.');
+    } else {
+      this.indoorFootView = undefined;
+    }
+  }
+
+  /** The on-foot camera view the frame should actually use: the indoor override while inside a
+   *  feature interior, the player's saved preference otherwise. */
+  private footView(): number {
+    return this.indoorFootView ?? this.settings.cameraViewFoot;
   }
 
   /** The ONE place the game teaches the torch key. Every route into a dark shedding street arrives
@@ -1450,7 +1503,7 @@ export class Game {
    *  without stepping out. Game owns the cover position; Player only performs the pose. */
   private updateCoverState(dt: number): CoverPose | undefined {
     const position = this.player.group.position;
-    if (this.settings.cameraViewFoot === 0 || this.player.tumbling || this.player.knockedDown) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble or knockdown knocks you out of cover
+    if (this.footView() === 0 || this.player.tumbling || this.player.knockedDown) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble or knockdown knocks you out of cover
     if (!this.cover) {
       const spot = nearestGroundedCoverSpot(position.x, position.z, this.player.onGround, this.city.colliders, COVER_ENTER_RANGE, position.y); // only faces that shield the player's elevation
       this.coverAvailable = Boolean(spot);
@@ -2802,7 +2855,7 @@ export class Game {
     // the occupied cab's nose shell hides for a clear windscreen (same trick as the cars' cabins).
     const view = this.trains.riding
       ? (this.trains.driving ? this.settings.cameraViewVehicle : 0)
-      : this.activeVehicle || flying ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
+      : this.activeVehicle || flying ? this.settings.cameraViewVehicle : this.footView();
     const firstPerson = view === 0;
     this.trains.setDriveFirstPerson(this.trains.driving && firstPerson);
     const riding = Boolean(this.player.inVehicle && this.activeVehicle?.spec.twoWheeler); // riders stay visible except in first person

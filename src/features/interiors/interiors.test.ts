@@ -99,11 +99,13 @@ describe('a visit', () => {
 
     const groups = floorGroups(test.scene);
     expect(groups, 'no floor in the scene').toHaveLength(1);
-    // Lit: an ambient plus at least one lamp, or you get the void this feature shipped with.
+    // Lit: the visit's ambient plus burning lamps from the POOL (floors own no lights — a floor that
+    // adds or removes a light recompiles every shader in the scene; see build.ts), or you get the
+    // void this feature shipped with.
     const lights: THREE.Light[] = [];
-    groups[0]!.traverse((object) => { if (object instanceof THREE.Light) lights.push(object); });
+    test.scene.traverse((object) => { if (object instanceof THREE.Light) lights.push(object); });
     expect(lights.filter((light) => light instanceof THREE.AmbientLight).length).toBeGreaterThan(0);
-    expect(lights.filter((light) => light instanceof THREE.PointLight).length).toBeGreaterThan(1);
+    expect(lights.filter((light) => light instanceof THREE.PointLight && light.intensity > 0).length).toBeGreaterThan(1);
 
     // The player is under their own building, at the same x and z they walked in on — and BELOW the
     // ground, which is the only band where City.supportHeight leaves them grounded rather than
@@ -136,6 +138,89 @@ describe('a visit', () => {
     test.player.set(tall!.door.x, 0, tall!.door.z);
     expect(system.qa!('run', {})).toBe('ok');
     expect(floorGroups(test.scene), 'floors left behind after leaving').toHaveLength(0);
+    system.dispose();
+  }, 300000);
+
+  /** Walk the player one qa stride at a time toward a floor-local point, through the real clamp,
+   *  until `done(lx, lz)` or the stride budget runs out. Returns the last local position. */
+  function walkUntil(system: FeatureSystem, x: number, z: number, done: (lx: number, lz: number) => boolean, budget = 400): { lx: number; lz: number } {
+    let lx = 0; let lz = 0;
+    for (let i = 0; i < budget; i++) {
+      const r = system.qa!('walk', { x, z });
+      expect(r.startsWith('ok')).toBe(true);
+      const parts = r.split('|');
+      lx = Number(parts[1]); lz = Number(parts[2]);
+      if (done(lx, lz)) break;
+    }
+    return { lx, lz };
+  }
+
+  /**
+   * THE STALL REGRESSION TESTS. The freeze the owner reported was three.js recompiling every shader
+   * in the scene whenever the light census changed — which the old code did on every floor raise
+   * AND drop, i.e. every time the player crossed the spine sightline. The invariant that kills the
+   * whole class: between entering and leaving, the number of lights in the scene NEVER changes.
+   */
+  it('keeps the scene light census constant across floor raises and drops', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const tall = tallDoor({ x: 0, z: 0 })!;
+    test.player.set(tall.door.x, 0, tall.door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    const census = (): string => {
+      let point = 0; let ambient = 0;
+      test.scene.traverse((object) => {
+        if (object instanceof THREE.PointLight) point++;
+        else if (object instanceof THREE.AmbientLight) ambient++;
+      });
+      return `point=${point} ambient=${ambient}`;
+    };
+    const core = tall.core;
+    const offSpine = (lx: number): boolean => Math.abs(lx - core.corridorX) > 3.6; // past holdNeighbour's sightline
+    // On the mat (on the spine): the storey above is raised. Census taken now is the visit's census.
+    walkUntil(system, core.corridorX, core.depth * 0.05, () => true, 1);
+    const reference = census();
+    // Into a room and past the release dwell: the neighbour floor DROPS. No light may go with it.
+    const plan = solveFloor(tall.door.facts, 0, core);
+    const room = plan.rooms[0]!;
+    const spot = walkUntil(system, room.rect.x, room.doorZ, (lx) => offSpine(lx));
+    expect(offSpine(spot.lx), 'never made it off the spine — pick a different fixture').toBe(true);
+    for (let i = 0; i < 70; i++) system.qa!('walk', { x: spot.lx, z: spot.lz }); // 70 strides > 0.8 s dwell
+    expect(census()).toBe(reference);
+    // Back to the spine: the neighbour RAISES again. Still the same lights.
+    walkUntil(system, core.corridorX, room.doorZ, (lx) => Math.abs(lx - core.corridorX) < 0.8);
+    expect(census()).toBe(reference);
+    // And outside, every pooled light is gone with the visit.
+    expect(system.qa!('leave', {})).toBe('ok');
+    expect(census()).toBe('point=0 ambient=0');
+    system.dispose();
+  }, 300000);
+
+  it('re-shows a dropped floor from the cache instead of rebuilding it', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const tall = tallDoor({ x: 0, z: 0 })!;
+    test.player.set(tall.door.x, 0, tall.door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    const core = tall.core;
+    walkUntil(system, core.corridorX, core.depth * 0.05, () => true, 1); // raises floor 1 from the mat
+    const upstairs = test.scene.children.find((child) => child.name === `Floor:${core.id}:1`);
+    expect(upstairs, 'the storey above must exist while the player can see up the shaft').toBeDefined();
+    expect(upstairs!.visible).toBe(true);
+    // Off the sightline and past the dwell: dropped means HIDDEN, not disposed.
+    const plan = solveFloor(tall.door.facts, 0, core);
+    const room = plan.rooms[0]!;
+    const spot = walkUntil(system, room.rect.x, room.doorZ, (lx) => Math.abs(lx - core.corridorX) > 3.6);
+    for (let i = 0; i < 70; i++) system.qa!('walk', { x: spot.lx, z: spot.lz });
+    expect(upstairs!.visible).toBe(false);
+    expect(upstairs!.parent).toBe(test.scene);
+    // Back on the spine: the SAME object returns, no rebuild.
+    walkUntil(system, core.corridorX, room.doorZ, (lx) => Math.abs(lx - core.corridorX) < 0.8);
+    expect(upstairs!.visible).toBe(true);
+    expect(test.scene.children.filter((child) => child.name === `Floor:${core.id}:1`)).toHaveLength(1);
+    // Leaving disposes the cache: nothing of the building survives outside.
+    expect(system.qa!('leave', {})).toBe('ok');
+    expect(floorGroups(test.scene)).toHaveLength(0);
     system.dispose();
   }, 300000);
 

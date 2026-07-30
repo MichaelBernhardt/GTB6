@@ -81,7 +81,36 @@ const RELEASE_DWELL = 0.8;
 /** A prop shorter than this is stepped over, not walked around. The solver's grid uses the same sill. */
 const STEP_OVER = 0.55;
 
+/**
+ * THE LAMP POOL — the other half of the stall fix (see the header of build.ts).
+ *
+ * Three.js compiles a fresh program variant for every rendered material each time the scene's light
+ * CENSUS changes, and destroys nothing it might need again cheaply — so the old per-floor
+ * add-a-light/drop-a-light pattern recompiled the whole scene's shaders on every floor raise and
+ * drop: a measured 4.4 s entry freeze and 5.1 s on the first release, then a hitch for every
+ * first-visited floor. This pool is created ONCE per visit, holds a constant number of PointLights
+ * for the whole stay (unused slots idle at intensity 0, which is a uniform, not a recompile), and is
+ * reassigned to the visible floors' lamp positions every frame — 14 uniform writes, nothing else.
+ *
+ * SIZE: a floor plans at most 2 spine lamps + 8 room lamps + 1 fill (see floor.ts lampsFor), and at
+ * most two floors are ever visible (both ends of the flight you are on). 14 covers the current floor
+ * completely plus the neighbour's spine, stair-mouth and fill — the parts you actually see up a
+ * stairwell. The current floor is assigned first, so any shortfall only ever dims the floor you are
+ * NOT standing on.
+ */
+const LAMP_POOL = 14;
+/** Floors kept BUILT (hidden, not disposed) per visit. Raising a cached floor is a visibility flip,
+ *  so pacing across the spine sightline costs nothing; the cap bounds memory in a tower. */
+const RESIDENT_CACHE = 4;
+/** The per-floor fill light: dim, wide, so the corners are never pure black even with the grid down. */
+const FILL = { color: 0x9fb0c8, intensity: 5, distance: 44, decay: 1.1 } as const;
+
 interface Resident { plan: FloorPlan; built: BuiltFloor }
+
+interface LampPool {
+  readonly lights: readonly THREE.PointLight[];
+  readonly ambient: THREE.AmbientLight;
+}
 
 interface Visit {
   door: InteriorDoor;
@@ -94,8 +123,11 @@ interface Visit {
   origin: THREE.Vector3;
   /** The storey the player is standing on. */
   floor: number;
-  /** Floors currently built. At most two, and only transiently — see holdNeighbour(). */
+  /** Built floors, in LRU order (a raise re-inserts). At most two VISIBLE — see holdNeighbour();
+   *  up to RESIDENT_CACHE kept built-but-hidden so re-raising them is a visibility flip. */
   resident: Map<number, Resident>;
+  /** The constant-size light pool for this visit. See LAMP_POOL. */
+  pool: LampPool;
   /** The floor index at the BOTTOM of the flight the player is on, while they are in the shaft. */
   shaftBase?: number;
   /** Seconds the second floor has been out of sight; it goes when this passes RELEASE_DWELL. */
@@ -103,7 +135,7 @@ interface Visit {
   fixture?: { ped: NonNullable<ReturnType<FeatureGameApi['spawnFixture']>>; y: number };
   /** Previous local position, for the axis-separated clamp. */
   last: { x: number; z: number };
-  /** Peak floors resident this visit — reported by the QA driver, not guessed at. */
+  /** Peak floors VISIBLE at once this visit — reported by the QA driver, not guessed at. */
   peakResident: number;
 }
 
@@ -155,26 +187,46 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   const floorY = (current: Visit, index: number): number => current.baseY + index * STOREY_HEIGHT;
 
-  /** Solve and build ONE storey. This is the only place a floor comes into existence. */
+  const visibleCount = (current: Visit): number =>
+    [...current.resident.values()].filter((resident) => resident.built.group.visible).length;
+
+  /** Solve and build ONE storey — or, for a floor still in the cache, just show it again. Either
+   *  way this is the only place a floor comes to be on screen. */
   const raise = (current: Visit, index: number): Resident | undefined => {
     if (index < 0 || index >= current.core.storeys) return undefined;
     const existing = current.resident.get(index);
-    if (existing) return existing;
+    if (existing) {
+      existing.built.group.visible = true;
+      // LRU touch: re-insert so the longest-unseen floor is the one the cap evicts.
+      current.resident.delete(index); current.resident.set(index, existing);
+      current.peakResident = Math.max(current.peakResident, visibleCount(current));
+      return existing;
+    }
     const plan = solveFloor(current.door.facts, index, current.core);
     const built = buildFloor(plan, { ground: index === 0, top: index === current.core.storeys - 1 });
     built.group.position.set(current.x, floorY(current, index), current.z);
     built.group.rotation.y = current.heading;
     api.scene.add(built.group);
     current.resident.set(index, { plan, built });
-    current.peakResident = Math.max(current.peakResident, current.resident.size);
+    // The cap only ever evicts a HIDDEN floor, so the flight the player stands on is untouchable.
+    if (current.resident.size > RESIDENT_CACHE) {
+      for (const [old, resident] of current.resident) {
+        if (resident.built.group.visible) continue;
+        resident.built.dispose(); current.resident.delete(old);
+        break;
+      }
+    }
+    current.peakResident = Math.max(current.peakResident, visibleCount(current));
     return current.resident.get(index);
   };
 
+  /** A dropped floor HIDES rather than disposes: pacing on and off the spine used to rebuild (and
+   *  worse, relight — see LAMP_POOL) the same storey every few seconds. Disposal happens on
+   *  close(), or under the cache cap in raise(). */
   const drop = (current: Visit, index: number): void => {
     const resident = current.resident.get(index);
     if (!resident) return;
-    resident.built.dispose();
-    current.resident.delete(index);
+    resident.built.group.visible = false;
   };
 
   /** The plan for the storey the player is on. Always resident by construction. */
@@ -229,6 +281,39 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     return x >= shaft.x ? clamped * 0.5 : 0.5 + (1 - clamped) * 0.5;
   };
 
+  // ---- the light pool ------------------------------------------------------------------------------
+
+  /**
+   * Point the constant pool at the visible floors' lamp positions. Current floor first, in full;
+   * whatever is left goes to the neighbour, whose lampsFor() order (spine, stair mouth, rooms) means
+   * the slots it does get are the ones you see up the shaft. Load shedding scales every assignment —
+   * the bulbs sink with the grid; the pool ambient (never scaled) keeps the way out findable.
+   * Fourteen uniform writes per frame; the light CENSUS never moves, which is the whole point.
+   */
+  const assignLamps = (current: Visit): void => {
+    const power = 1 - api.blackout();
+    const floors = [...current.resident.entries()]
+      .filter(([, resident]) => resident.built.group.visible)
+      .sort(([a], [b]) => (a === current.floor ? 0 : 1) - (b === current.floor ? 0 : 1));
+    let slot = 0;
+    const lights = current.pool.lights;
+    const place = (index: number, lx: number, lz: number, y: number, color: number, intensity: number, distance: number, decay: number): void => {
+      if (slot >= lights.length) return;
+      const light = lights[slot]!;
+      const world = toWorld(current, current.heading, lx, lz);
+      light.position.set(world.x, floorY(current, index) + y, world.z);
+      light.color.setHex(color);
+      light.intensity = intensity * power;
+      light.distance = distance; light.decay = decay;
+      slot += 1;
+    };
+    for (const [index, resident] of floors) {
+      for (const lamp of resident.plan.lamps) place(index, lamp.x, lamp.z, lamp.y, lamp.color, INTERIOR_LAMP_INTENSITY, 22, 1.5);
+      place(index, 0, -resident.plan.depth * 0.2, resident.plan.height * 0.82, FILL.color, FILL.intensity, FILL.distance, FILL.decay);
+    }
+    for (; slot < lights.length; slot++) lights[slot]!.intensity = 0;
+  };
+
   // ---- entering / leaving --------------------------------------------------------------------------
 
   const install = (door: InteriorDoor): void => {
@@ -238,12 +323,21 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // under the pavement — the building, the right way up, buried.
     const baseY = api.surfaceHeightAt(door.facts.x, door.facts.z) - BASEMENT_DROP - (core.storeys - 1) * STOREY_HEIGHT;
     const origin = api.playerPosition().clone();
+    // The visit's whole light budget, made once, under the entry fade: the scene's light census then
+    // holds perfectly still until the exit fade, which is the invariant the stall fix rests on.
+    const pool: LampPool = {
+      lights: Array.from({ length: LAMP_POOL }, () => new THREE.PointLight(0xffffff, 0, 22, 1.5)),
+      ambient: new THREE.AmbientLight(0xffe9cc, 0.24),
+    };
+    for (const light of pool.lights) api.scene.add(light);
+    api.scene.add(pool.ambient);
     visit = {
       door, core, x: door.facts.x, z: door.facts.z, baseY, heading, origin,
       floor: 0, resident: new Map(), idleFor: 0, last: { x: core.entryX, z: -core.depth / 2 + EXIT_MAT_IN },
-      peakResident: 0,
+      peakResident: 0, pool,
     };
     const ground = raise(visit, 0)!;
+    assignLamps(visit);
     // Land ON THE MAT, facing down the spine at the stair — the shape of the room reads from here.
     const stand = toWorld(visit, heading, core.entryX, -core.depth / 2 + EXIT_MAT_IN);
     api.playerPosition().set(stand.x, baseY, stand.z);
@@ -292,6 +386,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (current.fixture) api.removeFixture(current.fixture.ped);
     for (const resident of current.resident.values()) resident.built.dispose();
     current.resident.clear();
+    // The pool goes with the visit, under the exit fade. The census outside is the same one we left,
+    // so its program variants are still warm in every material — no recompile on the way out.
+    for (const light of current.pool.lights) { light.removeFromParent(); light.dispose(); }
+    current.pool.ambient.removeFromParent(); current.pool.ambient.dispose();
     if (restore) api.playerPosition().copy(current.origin);
     api.analytics('left', { detail: current.core.entrance });
   };
@@ -323,6 +421,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       const spot = toWorld(current, current.heading, arrived.plan.landing.x, arrived.plan.landing.z);
       api.playerPosition().set(spot.x, floorY(current, index), spot.z);
       current.last = { ...arrived.plan.landing };
+      assignLamps(current);
       placeFixture(current, arrived.plan);
       api.analytics('lift', { value: index });
       swapping = false;
@@ -463,9 +562,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       partition.mesh.visible = !segmentCrossesBox(eye, back, partition);
     }
     // The floors either side of this one are only ever seen up the shaft; nothing of theirs should
-    // ever be between the camera and the player, so they keep every wall.
+    // ever be between the camera and the player, so they keep every wall. (Cached-hidden floors are
+    // skipped — their whole group is invisible, and touching them would fight the cache.)
     for (const [index, other] of current.resident) {
-      if (index === current.floor) continue;
+      if (index === current.floor || !other.built.group.visible) continue;
       for (const partition of other.built.partitions) partition.mesh.visible = true;
     }
   };
@@ -546,11 +646,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       clamp(current, dt);
       cullPartitions(current);
       if (current.fixture) current.fixture.ped.group.position.y = floorY(current, current.floor);
-      // Load shedding reaches inside: the lamps sink with the grid, the room's own ambient does not,
-      // so the way out is always findable.
+      // Load shedding reaches inside: the pool lamps sink with the grid, the pool ambient does not,
+      // so the way out is always findable. assignLamps also tracks raise/drop from this frame.
+      assignLamps(current);
       const power = 1 - api.blackout();
       for (const resident of current.resident.values()) {
-        for (const lamp of resident.built.lamps) lamp.intensity = INTERIOR_LAMP_INTENSITY * power;
         for (const entry of resident.built.powered) entry.material.emissiveIntensity = entry.base * power;
       }
     },
@@ -602,9 +702,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       if (verb === 'where') {
         if (!visit) return ['Outside.'];
         const plan = here(visit);
+        const shown = [...visit.resident.entries()].filter(([, r]) => r.built.group.visible).map(([index]) => index).sort((a, b) => a - b);
         return [
           `${visit.door.name}: floor ${visit.floor} of ${visit.core.storeys}, ${plan.rooms.length} rooms, ${plan.walkable} walkable tiles, ${plan.unreachable} unreachable.`,
-          `Resident floors: ${[...visit.resident.keys()].sort((a, b) => a - b).join(', ')} (peak ${visit.peakResident}).`,
+          `Visible floors: ${shown.join(', ')} (peak ${visit.peakResident}); cached ${visit.resident.size}/${RESIDENT_CACHE}.`,
         ];
       }
       if (verb === 'leave') return [leave() === 'ok' ? 'Stepping out.' : 'Not inside anything.'];
@@ -646,7 +747,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       if (action === 'status') {
         if (!visit) return 'outside';
         const plan = here(visit);
-        return `inside|${visit.door.id}|floor=${visit.floor}|storeys=${visit.core.storeys}|rooms=${plan.rooms.length}|unreachable=${plan.unreachable}|resident=${visit.resident.size}|peak=${visit.peakResident}|lift=${visit.core.lift ? 'yes' : 'no'}`;
+        return `inside|${visit.door.id}|floor=${visit.floor}|storeys=${visit.core.storeys}|rooms=${plan.rooms.length}|unreachable=${plan.unreachable}|resident=${visibleCount(visit)}|cached=${visit.resident.size}|peak=${visit.peakResident}|lift=${visit.core.lift ? 'yes' : 'no'}`;
       }
       if (action === 'leave') return leave(true);
       if (action === 'stand') {
