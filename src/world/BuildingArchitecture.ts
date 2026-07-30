@@ -1001,8 +1001,16 @@ export class BuildingArchitecture {
       const deck = roofs[index]!;
       const inset = thickness * 2 + 0.2;
       if (deck.maxX - deck.minX > inset + 1 && deck.maxZ - deck.minZ > inset + 1) {
-        const membrane = new THREE.Mesh(new THREE.BoxGeometry(deck.maxX - deck.minX - inset, 0.18, deck.maxZ - deck.minZ - inset), spec.roof);
-        membrane.position.set((deck.minX + deck.maxX) / 2, deck.y1 + 0.05, (deck.minZ + deck.maxZ) / 2);
+        // The deck is a SLAB, not a sheet, and its thickness is what keeps it out of two fights at once.
+        // Several massings wear a setback band at their own roof line whose top face sits at y1 + 0.14, so
+        // a 0.18-tall plate centred at y1 + 0.05 put its top on exactly that plane — 478 u² of coincident
+        // face between the palette's two extremes, which fights hard and is overlooked from every
+        // neighbouring tower. Raising it alone would then bring its underside up onto the roof plate at
+        // y1 and simply move the fight. So it is deep enough to clear the band above (top y1 + 0.24) and
+        // stay buried in the plate below (bottom y1 - 0.06), with real margin on both sides rather than a
+        // couple of centimetres that some other massing's band could close again.
+        const membrane = new THREE.Mesh(new THREE.BoxGeometry(deck.maxX - deck.minX - inset, 0.3, deck.maxZ - deck.minZ - inset), spec.roof);
+        membrane.position.set((deck.minX + deck.maxX) / 2, deck.y1 + 0.09, (deck.minZ + deck.maxZ) / 2);
         membrane.receiveShadow = true; membrane.name = 'downtown-roof-deck'; this.place(membrane);
       }
     }
