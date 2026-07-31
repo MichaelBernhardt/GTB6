@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { WEAPONS, WEAPON_BY_ID } from '../config';
-import { adjustedShopPrice, ammoPrice, ARMOUR_PRICE, detailerPrice, HOTDOG_HEAL, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice, WEAPON_PRICES } from './ShopRules';
+import { adjustedShopPrice, ammoPrice, ARMOUR_PRICE, detailerPrice, HOTDOG_HEAL, hotdogHeal, LOCKPICK_PRICE, reserveFull, resolveArmourPurchase, resolveLockpickPurchase, resolvePurchase, weaponPrice, WEAPON_PRICES } from './ShopRules';
+import { LOCKPICK_MAX } from './GameRules';
 
 describe('Cordova Arms purchase resolution', () => {
   it('prices every non-melee weapon and never the fists', () => {
@@ -100,3 +101,22 @@ describe('body armour purchases', () => {
     expect(discounted.price).toBe(Math.round(ARMOUR_PRICE * 0.8 / 5) * 5);
   });
 });
+
+describe('lock pick purchases', () => {
+  it('sells a pick when there is pocket room and cash', () => {
+    expect(resolveLockpickPurchase(0, 1000)).toEqual({ ok: true, price: LOCKPICK_PRICE });
+    expect(resolveLockpickPurchase(LOCKPICK_MAX - 1, LOCKPICK_PRICE)).toEqual({ ok: true, price: LOCKPICK_PRICE });
+  });
+
+  it('refuses at the carry cap or when broke', () => {
+    expect(resolveLockpickPurchase(LOCKPICK_MAX, 99999)).toEqual({ ok: false, price: LOCKPICK_PRICE, reason: 'lockpick-full' });
+    expect(resolveLockpickPurchase(0, LOCKPICK_PRICE - 1)).toEqual({ ok: false, price: LOCKPICK_PRICE, reason: 'funds' });
+  });
+
+  it('applies the district price multiplier with R5 rounding', () => {
+    const discounted = resolveLockpickPurchase(0, 99999, 0.8);
+    expect(discounted.ok).toBe(true);
+    expect(discounted.price).toBe(Math.round(LOCKPICK_PRICE * 0.8 / 5) * 5);
+  });
+});
+

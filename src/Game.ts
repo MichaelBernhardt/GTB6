@@ -6,7 +6,7 @@ import { AudioManager } from './core/AudioManager';
 import { bootMark, bootTimeline } from './core/BootTimeline';
 import { radioDial } from './core/RadioStations';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
-import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, KNOCKOFF_IMPACT_SPEED, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
+import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, KNOCKOFF_IMPACT_SPEED, LOCKPICK_MAX, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
 import { gamepadPrompt, type GamepadMode } from './core/GamepadInput';
 import { crashKickSpeed, impactKickSpeed, landingDownSpeed } from './entities/PedRagdoll';
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
@@ -19,7 +19,7 @@ import { featureMapIcons } from './features/mapIcons';
 import type { FeatureGameApi } from './features/types';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { FrameProfiler } from './core/FrameProfiler';
-import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
+import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolveLockpickPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
 import { applyDrink, decayInebriation, DRINK_BY_ID, DRINKS, drunkHealthDelta, inebriationFraction, INEBRIATION_MAX, resolveDrinkPurchase, type DrinkId } from './core/DrinkRules';
 import type { Pedestrian } from './entities/Pedestrian';
 import { Player, type CoverPose } from './entities/Player';
@@ -118,6 +118,12 @@ export class Game {
   private save: SavedGame;
   private settings: GameSettings;
   private cheats: CheatSettings;
+  /** STICKY: true the moment any cheat is ever used in this save; never unset (a checkpoint reload
+   *  ORs, never lowers). Only a fresh save starts clean. See markCheatUsed / Console.commandIsCheat. */
+  private everCheated = false;
+  /** `opensesame`: every locked interior door opens without a pick. Session-only, console-only —
+   *  the owner ruled testing tools get no UI and no checkbox; the STICKY flag above is what persists. */
+  private openSesame = false;
   private city!: City;
   private dayNight!: DayNightSystem;
   private player!: Player;
@@ -170,6 +176,13 @@ export class Game {
   private shops!: ShopSystem;
   private safehouses!: SafehouseSystem;
   private indoorPlace?: 'jozi-arms' | 'main-main';
+  /** Last frame's features.indoors() — edge-detects stepping into/out of a feature interior. */
+  private featureIndoors = false;
+  /** The on-foot camera view while inside a feature interior, or undefined outside. Entering starts
+   *  it at 0 (first person — the owner's ask: interiors read best with no boom); V cycles it freely;
+   *  leaving simply clears it, so settings.cameraViewFoot — never written by any of this — IS the
+   *  restored former view. A save made indoors therefore also reloads with the outdoor view intact. */
+  private indoorFootView?: number;
   private activeSafehouse?: SafehousePlace;
   private activeBottleStore = ''; // name of the bottle store currently being browsed (for the menu header)
   private garageVehicle?: Vehicle;
@@ -261,7 +274,7 @@ export class Game {
 
   constructor(private container: HTMLElement) {
     bootMark('boot: settings');
-    this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
+    this.saveExists = this.saveManager.hasSave(); this.save = this.saveManager.load(); this.settings = { ...this.save.settings }; this.cheats = { ...this.save.cheats }; this.everCheated = this.save.everCheated; this.inventory = { ...this.save.inventory }; this.economy = new Economy(this.save.money); this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.joziFlow = new JoziFlowSystem(this.save.activityRecords.joziFlowBest);
     this.features = new FeatureHost(this.featureHostContext()); this.features.restore(this.save.features); // lazy features: nothing loads until the player walks into one
     if (this.touchMode) this.settings.quality = touchQuality(this.saveExists, this.settings.quality, 'potato'); // phones start on the Skorokoro tier; a saved choice from the settings menu wins
@@ -448,12 +461,16 @@ export class Game {
       if (qualityChanged) this.applyQuality(); this.persist();
     };
     this.ui.onShowCheats = () => this.ui.showCheats(WEAPONS.filter((spec) => !spec.melee).map((spec) => ({ id: spec.id, name: spec.name, owned: this.combat.owned(spec.id) })), this.cheats);
-    this.ui.onGiveWeapon = (id) => { const result = this.combat.grantWeapon(id); this.ui.notify(result === 'new' ? 'Weapon granted' : 'Ammo topped up', WEAPON_BY_ID[id].name); this.persist(); };
-    this.ui.onMaxAmmo = () => { const filled = this.combat.maxAmmo(); this.ui.notify('Max ammo', `${filled} weapon${filled === 1 ? '' : 's'} fully stocked.`); this.persist(); };
-    this.ui.onCheats = (cheats) => { Object.assign(this.cheats, cheats); this.applyTeflon(); this.persist(); };
+    this.ui.onGiveWeapon = (id) => { this.markCheatUsed(); const result = this.combat.grantWeapon(id); this.ui.notify(result === 'new' ? 'Weapon granted' : 'Ammo topped up', WEAPON_BY_ID[id].name); this.persist(); };
+    this.ui.onMaxAmmo = () => { this.markCheatUsed(); const filled = this.combat.maxAmmo(); this.ui.notify('Max ammo', `${filled} weapon${filled === 1 ? '' : 's'} fully stocked.`); this.persist(); };
+    // ENABLING any cheat marks the save; merely unticking one does not (turning a cheat off is the
+    // one direction that never helps — unlike the console toggles, whose helpful direction is why
+    // the whole command is a cheat there).
+    this.ui.onCheats = (cheats) => { if (Object.values(cheats).some(Boolean)) this.markCheatUsed(); Object.assign(this.cheats, cheats); this.applyTeflon(); this.persist(); };
     this.ui.onBuyWeapon = (id) => this.purchase('weapon', id);
     this.ui.onBuyAmmo = (id) => this.purchase('ammo', id);
     this.ui.onBuyArmour = () => this.purchaseArmour();
+    this.ui.onBuyLockpick = () => this.purchaseLockpick();
     this.ui.onBuyDrink = (id) => this.buyDrink(id);
     this.ui.onSafehouseSave = () => {
       const place = this.activeSafehouse; if (!place) return;
@@ -636,9 +653,19 @@ export class Game {
     giveArmour: () => { this.inventory.armour = ARMOUR_MAX; this.persist(); return `Body armour strapped on: ${ARMOUR_MAX}/${ARMOUR_MAX}.`; },
     giveItem: (item, count) => {
       if (item === 'stim') { this.inventory.stims = Math.min(STIM_MAX, this.inventory.stims + count); this.persist(); return `Stim packs: ${this.inventory.stims}/${STIM_MAX}. Press H to use one.`; }
+      if (item === 'lockpick') { this.inventory.lockpicks = Math.min(LOCKPICK_MAX, this.inventory.lockpicks + count); this.persist(); return `Lock picks: ${this.inventory.lockpicks}/${LOCKPICK_MAX}. Press E at a locked door and stop the sweep as it bites.`; }
       this.inventory.parachutes = Math.min(PARACHUTE_MAX, this.inventory.parachutes + count); this.persist();
       return `Parachutes: ${this.inventory.parachutes}/${PARACHUTE_MAX}. SPACE deploys one mid-air.`;
     },
+    giveFeatureItem: (item, count) => this.features.grant(item, count)
+      ?? [`Eish, nothing in the game is called "${item}". Feature kit: tyres, zol, buttons, nyaope, petrol. Host kit: type "help".`],
+    toggleOpenSesame: () => {
+      this.openSesame = !this.openSesame;
+      return this.openSesame
+        ? 'Open sesame. Every locked door in the city opens without a pick.'
+        : 'Doors locked again. The picks matter once more.';
+    },
+    cheatUsed: () => this.markCheatUsed(),
     setInebriation: (level) => {
       this.player.inebriation = Math.max(0, Math.min(INEBRIATION_MAX, level ?? INEBRIATION_MAX));
       return this.player.inebriation <= 0 ? 'Sobered up. Straight as an arrow.' : `Inebriation set to ${Math.round(this.player.inebriation)}/100. Mind the lampposts.`;
@@ -660,6 +687,18 @@ export class Game {
       return `Mission ${index} "${mission.name}" armed — you're with ${mission.contact}. Objective: ${this.missions.objective?.text ?? ''}`;
     },
   };
+
+  /**
+   * THE one chokepoint for "this save has been cheated in". Called by the console (every
+   * cheat-classified command — see Console.commandIsCheat) and by every Testing-tools action
+   * (cheat toggles, weapon grants, max ammo). Persists immediately so the mark survives even a
+   * session that crashes a frame later, and NOTHING ever sets it back to false except a new game.
+   */
+  private markCheatUsed(): void {
+    if (this.everCheated) return;
+    this.everCheated = true;
+    this.persist();
+  }
 
   /** The gazetteer is rebuilt per query so the `spawn` entry tracks the current wake-up spot; districts are sampled once. */
   private teleportTargets(): TeleportTarget[] {
@@ -832,7 +871,7 @@ export class Game {
     this.customWaypoint = undefined;
     this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.applyTeflon(); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.everCheated = false; this.openSesame = false; this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.applyTeflon(); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
     this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Follow turquoise GPS to story contacts. M opens the map; gold Quantum and lime Sixty-Sekonds blips are repeatable side work.');
@@ -938,8 +977,15 @@ export class Game {
     if (this.input.consume('KeyM')) this.openMap(); // Esc/M closes it (handled by the overlay while open)
     if (this.input.consume('KeyV') && (!this.trains.riding || this.trains.driving)) { // the train aisle is FP-only
       const key = this.activeVehicle || this.trains.driving ? 'cameraViewVehicle' : 'cameraViewFoot';
-      this.settings[key] = cycleView(this.settings[key]);
-      this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.settings[key]]}`); this.persist();
+      if (key === 'cameraViewFoot' && this.indoorFootView !== undefined) {
+        // Inside a feature interior V cycles the temporary indoor view, and the saved preference —
+        // the view that comes back when the player steps outside — stays exactly as it was.
+        this.indoorFootView = cycleView(this.indoorFootView);
+        this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.indoorFootView]}`);
+      } else {
+        this.settings[key] = cycleView(this.settings[key]);
+        this.ui.notify(`Camera: ${CAMERA_VIEW_NAMES[this.settings[key]]}`); this.persist();
+      }
     }
     const zoomDirection = (this.input.consume('PageUp') ? 1 : 0) - (this.input.consume('PageDown') ? 1 : 0);
     if (zoomDirection) {
@@ -1043,6 +1089,7 @@ export class Game {
     this.combat.update(dt); this.gore.update(dt); this.propFx.update(dt); this.handleVehicleCollisions(dt); this.updateJoziFlow(dt); this.updateRobotRace(dt); this.updateMission(dt);
     this.updateInebriation(dt);
     this.features.update(dt); // lazily loaded features; the host no-ops while online, so PvP never ticks them
+    this.updateFeatureIndoors(); // camera + city-visibility edges, same step as the indoors truth they follow
     this.updateTorchHint(dt); // after interior presence and the feature tick, so "indoors" is this step's truth
     this.saveTimer += dt; if (this.saveTimer > 8 && !this.activePlane) { this.persist(); this.saveTimer = 0; } // no autosave mid-flight: a resumed save would float the player at altitude
     if (this.player.health <= 0) this.die();
@@ -1051,6 +1098,7 @@ export class Game {
   private updateOnline(dt: number): void {
     this.profiler.mark('online');
     const online = this.online; if (!online) return;
+    this.updateFeatureIndoors(); // PvP suspends features, so indoors() is false: un-hide the city and drop the indoor camera override if a session started mid-visit
     if (this.input.consume('Escape')) { this.pause(); return; }
     const stateBefore = online.localState;
     // We are the authority on our own pose. The server never corrects it — its only say is the
@@ -1119,6 +1167,43 @@ export class Game {
     // it, off one derived condition that covers every way into a dark street.
     if (event === 'start') { setPower(false); this.ui.notify('Load shedding: Stage 4', 'Eskom sends regards. The robots are out.', false); }
     else if (event === 'end') { setPower(true); this.ui.notify('Power restored', 'For now. Sharp sharp.'); }
+  }
+
+  /**
+   * The moment the player steps into or out of a feature interior (interiors is the only feature
+   * that answers indoors() today), two host-side things flip:
+   *
+   * 1. THE CAMERA. Inside, the on-foot view starts at first person — the owner's ask, and the read
+   *    that makes an interior legible: no boom, so no wall ever stands between the lens and the
+   *    player and the partition cull barely has to act. V still cycles the whole ladder while
+   *    inside (indoorFootView), and stepping out restores EXACTLY the view from before entry,
+   *    because settings.cameraViewFoot was never touched.
+   *
+   * 2. THE CITY IS NOT DRAWN. The interior stands 30 u under its own building precisely so the city
+   *    never restreams — but the renderer was still drawing all of it every frame: measured ~1,000
+   *    draw calls / 3.2 M triangles submitted from underground behind an opaque shroud, with the
+   *    interior itself under 100 calls. Hiding City's render group while indoors cuts the frame to
+   *    the room the player is in. Chunk STREAMING, colliders and nav are untouched — visibility is a
+   *    render flag, and the culling systems keep their own state warm for the walk out. It also
+   *    shrinks the shader-recompile surface on entry to the interior's own dozen materials.
+   */
+  private updateFeatureIndoors(): void {
+    const indoors = this.features.indoors();
+    if (indoors === this.featureIndoors) return;
+    this.featureIndoors = indoors;
+    this.city.group.visible = !indoors;
+    if (indoors) {
+      this.indoorFootView = 0;
+      if (this.settings.cameraViewFoot !== 0) this.ui.notify('Camera: First person', 'V cycles the view. Your usual view returns outside.');
+    } else {
+      this.indoorFootView = undefined;
+    }
+  }
+
+  /** The on-foot camera view the frame should actually use: the indoor override while inside a
+   *  feature interior, the player's saved preference otherwise. */
+  private footView(): number {
+    return this.indoorFootView ?? this.settings.cameraViewFoot;
   }
 
   /** The ONE place the game teaches the torch key. Every route into a dark shedding street arrives
@@ -1450,7 +1535,7 @@ export class Game {
    *  without stepping out. Game owns the cover position; Player only performs the pose. */
   private updateCoverState(dt: number): CoverPose | undefined {
     const position = this.player.group.position;
-    if (this.settings.cameraViewFoot === 0 || this.player.tumbling || this.player.knockedDown) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble or knockdown knocks you out of cover
+    if (this.footView() === 0 || this.player.tumbling || this.player.knockedDown) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble or knockdown knocks you out of cover
     if (!this.cover) {
       const spot = nearestGroundedCoverSpot(position.x, position.z, this.player.onGround, this.city.colliders, COVER_ENTER_RANGE, position.y); // only faces that shield the player's elevation
       this.coverAvailable = Boolean(spot);
@@ -2485,7 +2570,10 @@ export class Game {
       };
     });
     const armour = resolveArmourPurchase(this.inventory.armour, this.economy.balance, multiplier);
-    this.ui.showShop(entries, this.economy.balance, { price: armour.price, full: this.inventory.armour >= ARMOUR_MAX, canBuy: armour.ok });
+    const lockpick = resolveLockpickPurchase(this.inventory.lockpicks, this.economy.balance, multiplier);
+    this.ui.showShop(entries, this.economy.balance,
+      { price: armour.price, full: this.inventory.armour >= ARMOUR_MAX, canBuy: armour.ok },
+      { price: lockpick.price, count: this.inventory.lockpicks, full: this.inventory.lockpicks >= LOCKPICK_MAX, canBuy: lockpick.ok });
   }
 
   private purchaseArmour(): void {
@@ -2496,6 +2584,19 @@ export class Game {
     this.inventory.armour = ARMOUR_MAX; this.livingCity.apply({ kind: 'shop-purchase', district }); this.audio.ui(true);
     this.ui.notify('Body armour fitted', `Full plate · -R${result.price.toLocaleString()}`);
     this.persist(); this.renderShop();
+  }
+
+  /** One purchase path for both counters (Jozi Arms and the bottle stores sell the same pick). */
+  private purchaseLockpick(): void {
+    const district = this.city.districtAt(this.player.group.position.x, this.player.group.position.z);
+    const multiplier = shopPriceMultiplier(this.livingCity.district(district));
+    const result = resolveLockpickPurchase(this.inventory.lockpicks, this.economy.balance, multiplier);
+    const rerender = (): void => { if (this.ui.menuScreen() === 'bottle') this.renderBottleStore(); else this.renderShop(); };
+    if (!result.ok || !this.economy.spend(result.price)) { this.audio.ui(false); rerender(); return; }
+    this.inventory.lockpicks = Math.min(LOCKPICK_MAX, this.inventory.lockpicks + 1);
+    this.livingCity.apply({ kind: 'shop-purchase', district }); this.audio.ui(true);
+    this.ui.notify('Lock pick bought', `Press E at a locked door and stop the sweep as it bites. -R${result.price.toLocaleString()}`);
+    this.persist(); rerender();
   }
 
   private purchase(kind: 'weapon' | 'ammo', id: WeaponId): void {
@@ -2520,7 +2621,11 @@ export class Game {
       id: drink.id, name: drink.name, note: drink.note, price: drink.price, potency: drink.potency,
       canBuy: resolveDrinkPurchase(drink, this.economy.balance, this.player.inebriation).ok,
     }));
-    this.ui.showBottleStore(this.activeBottleStore, entries, this.economy.balance, this.player.inebriation);
+    const district = this.city.districtAt(this.player.group.position.x, this.player.group.position.z);
+    const multiplier = shopPriceMultiplier(this.livingCity.district(district));
+    const lockpick = resolveLockpickPurchase(this.inventory.lockpicks, this.economy.balance, multiplier);
+    this.ui.showBottleStore(this.activeBottleStore, entries, this.economy.balance, this.player.inebriation,
+      { price: lockpick.price, count: this.inventory.lockpicks, full: this.inventory.lockpicks >= LOCKPICK_MAX, canBuy: lockpick.ok });
   }
 
   private buyDrink(id: DrinkId): void {
@@ -2809,7 +2914,7 @@ export class Game {
     // the occupied cab's nose shell hides for a clear windscreen (same trick as the cars' cabins).
     const view = this.trains.riding
       ? (this.trains.driving ? this.settings.cameraViewVehicle : 0)
-      : this.activeVehicle || flying ? this.settings.cameraViewVehicle : this.settings.cameraViewFoot;
+      : this.activeVehicle || flying ? this.settings.cameraViewVehicle : this.footView();
     const firstPerson = view === 0;
     this.trains.setDriveFirstPerson(this.trains.driving && firstPerson);
     const riding = Boolean(this.player.inVehicle && this.activeVehicle?.spec.twoWheeler); // riders stay visible except in first person
@@ -3039,7 +3144,7 @@ export class Game {
     const hudFeatures = flowHud ? [...(featureHud ?? []), flowHud] : featureHud;
     const promptMode = this.activePlane ? 'flight' : this.activeVehicle || this.trains.driving ? 'vehicle' : 'foot';
     const hudPrompt = this.input.gamepadActive ? gamepadPrompt(prompt, promptMode) : prompt;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable || this.cheats.teflon), inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable || this.cheats.teflon || this.openSesame), cheatedEver: !this.online && this.everCheated, inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,
@@ -3098,6 +3203,9 @@ export class Game {
     this.closeConsole();
     this.stolenVehicles = new WeakSet();
     this.save = checkpoint;
+    // The sticky flag only ever ORs: cheating and then reloading a clean checkpoint does not launder
+    // the save (and `reload` itself is exempt from being a cheat — the owner's rule).
+    this.everCheated = this.everCheated || checkpoint.everCheated;
     this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.features.reset(this.save.features); // drop live feature state; the checkpoint's slices load again on demand
     this.economy.balance = this.save.money;
@@ -3208,6 +3316,8 @@ export class Game {
         robotRunBest: this.robotRace?.bestTime,
         joziFlowBest: this.joziFlow.bestBank || undefined,
       },
+      // Monotonic: the live flag never reads the save back, so nothing here can lower a true.
+      everCheated: this.everCheated,
     };
     this.saveManager.save(this.save);
   }
@@ -3233,6 +3343,17 @@ export class Game {
     return {
       scene: this.scene,
       surfaceHeightAt: (x, z) => this.city.surfaceHeightAt(x, z),
+      // A huge feetY makes supportHeight answer "the tallest collider top here" — the roof of a
+      // building, the top of a container stack — which is what a feature teleporting a player onto
+      // a surface needs, and what surfaceHeightAt (terrain) cannot say.
+      standHeightAt: (x, z) => this.city.supportHeight(x, z, 100000),
+      chunkBuiltAt: (x, z) => this.city.hasBuiltStructuresAt(x, z),
+      vehicleNear: (x, z, radius) => this.population.vehicles.some((vehicle) => {
+        const at = vehicle.group.position;
+        return Math.hypot(at.x - x, at.z - z) < radius + 1.4; // + half a car: the check is "would I be inside it"
+      }),
+      inventoryCount: (item) => (item === 'lockpick' ? this.inventory.lockpicks : 0),
+      doorsUnlocked: () => this.openSesame,
       districtAt: (x, z) => this.city.districtAt(x, z),
       isPark: (x, z) => this.city.isPark(x, z),
       nearestRoadPose: (at) => this.city.nearestRoadPose(at),

@@ -46,6 +46,7 @@ describe('BuildingArchitecture.plan', () => {
         const planned = planner.plan(specFor(style, variant));
         expect(planned.tiers, `${style}#${variant} tiers`).toEqual(built.tiers);
         expect(planned.gables, `${style}#${variant} gables`).toEqual(built.gables);
+        expect(planned.boxes, `${style}#${variant} boxes`).toEqual(built.boxes);
         expect(planned.roofY, `${style}#${variant} roofY`).toBe(built.roofY);
         expect(planned.entrance, `${style}#${variant} entrance`).toEqual(built.entrance);
       }

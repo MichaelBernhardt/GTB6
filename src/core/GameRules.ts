@@ -118,6 +118,8 @@ export const ARMOUR_MAX = 100;
 export const STIM_MAX = 5;
 export const STIM_HEAL = 50;
 export const PARACHUTE_MAX = 3;
+/** Lock picks are reusable tools; the cap exists so `give lockpick 99` cannot inflate the pocket. */
+export const LOCKPICK_MAX = 5;
 
 /** Classic GTA body armour: the vest soaks damage point-for-point before health takes the remainder. */
 export function absorbDamage(armour: number, amount: number): { armour: number; through: number } {

@@ -75,7 +75,7 @@ export function buildSchool(seed: number, options: BuildOptions = {}): BuiltMode
   kit.box(M.paving, 2.4, 0.06, gap, -bw * 0.2, 0, 0, { cast: false });
   kit.cyl(M.whiteMetal, 0.05, 0.05, 6, bw / 2 - 1, 0, bd + gap / 2 + 2, { seg: 6 }); // flagpole
   kit.box(paint(0x2e6b46, 0.8), 1.3, 0.8, 0.02, bw / 2 - 1.65, 5.1, bd + gap / 2 + 2, { cast: false });
-  kit.sign(kit.pick(3, ['LAERSKOOL KOPPIEKRAAL', 'HOËRSKOOL VYFSTER', 'SUNNYSIDE PRIMARY']), '#e8dfc0', 5, 0.9, 0, 1.4, bd + gap / 2 + 3.4, { doubleSide: true, background: '#3a4a3c' });
+  kit.sign(options.signName ?? kit.pick(3, ['LAERSKOOL KOPPIEKRAAL', 'HOËRSKOOL VYFSTER', 'SUNNYSIDE PRIMARY']), '#e8dfc0', 5, 0.9, 0, 1.4, bd + gap / 2 + 3.4, { doubleSide: true, background: '#3a4a3c' });
   if (variant === 1) { // netball hoop on a dust court
     kit.box(M.dirt, 8, 0.05, 4.2, bw * 0.24, 0, bd + gap / 2 + 1.4, { cast: false });
     kit.cyl(M.steel, 0.05, 0.05, 2.6, bw * 0.24, 0, bd + gap / 2 + 1.4, { seg: 6 });
@@ -178,7 +178,7 @@ export function buildCommunityHall(seed: number, options: BuildOptions = {}): Bu
   for (const side of [-1, 1]) for (let pane = 0; pane < 2; pane++) {
     kit.box(M.glassDark, 1.3, 1.5, 0.08, side * (w / 2 + 0.01), 1.5, -d * 0.28 + pane * d * 0.36, { ry: Math.PI / 2, cast: false });
   }
-  kit.sign(kit.pick(5, ['GEMEENSKAPSAAL', 'COMMUNITY HALL', 'DIENSSENTRUM', 'BINGO VRYDAE 7NM']), '#e8dfc0', w * 0.42, 0.75, w * 0.24, 2.3, d / 2 + 0.06, { background: '#454238' });
+  kit.sign(options.signName ?? kit.pick(5, ['GEMEENSKAPSAAL', 'COMMUNITY HALL', 'DIENSSENTRUM', 'BINGO VRYDAE 7NM']), '#e8dfc0', w * 0.42, 0.75, w * 0.24, 2.3, d / 2 + 0.06, { background: '#454238' });
   kit.box(M.darkTimber, 1.8, 1.2, 0.12, -w * 0.3, 0.8, d / 2 + 0.7, { cast: false }); // notice board
   if (variant === 1) kit.cyl(M.jojo, 1.05, 1.05, 2.1, -w / 2 - 1.3, 0, -d * 0.2, { seg: 12, collide: true });
   return kit.done();

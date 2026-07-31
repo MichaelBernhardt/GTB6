@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHEAT_CASH, GIVE_WEAPON_IDS, HELP_LINES, heatAfterStarDrop, parseCommand, parseCoordinate, parseTimeToken, runConsoleCommand, tokenize, type ConsoleHost } from './Console';
+import { CHEAT_CASH, commandIsCheat, GIVE_WEAPON_IDS, HELP_LINES, heatAfterStarDrop, parseCommand, parseCoordinate, parseTimeToken, runConsoleCommand, tokenize, type ConsoleCommand, type ConsoleHost } from './Console';
 
 describe('console tokenizer', () => {
   it('lowercases and collapses whitespace', () => {
@@ -98,7 +98,10 @@ describe('console parser', () => {
     expect(parseCommand('give armor')).toEqual({ kind: 'give-armour' }); // both spellings land
     expect(parseCommand('give parachute')).toEqual({ kind: 'give-item', item: 'parachute', count: 1 });
     expect(parseCommand('give stim 3')).toEqual({ kind: 'give-item', item: 'stim', count: 3 });
-    for (const bad of ['give', 'give fists', 'give stim 0', 'give stim lots', 'give pistol 2', 'give ammo 5', 'give spaceship']) expect(parseCommand(bad).kind, bad).toBe('error');
+    for (const bad of ['give', 'give stim 0', 'give stim lots', 'give pistol 2', 'give ammo 5']) expect(parseCommand(bad).kind, bad).toBe('error');
+    // Unknown items are no longer parse errors — they route to the feature grant seam, whose HOST
+    // answers "nothing in the game is called that" (see the grant tests below).
+    expect(parseCommand('give spaceship')).toEqual({ kind: 'give-feature', item: 'spaceship', count: 1 });
   });
 
   it('parses the drunk command with an optional 0-100 level', () => {
@@ -183,6 +186,9 @@ describe('runConsoleCommand', () => {
     giveItem: (item, count) => `item:${item}:${count}`,
     setInebriation: (level) => `drunk:${level ?? 'max'}`,
     feature: (args) => [`feature:${args.join(' ') || 'list'}`],
+    giveFeatureItem: (item, count) => [`grant:${item}:${count}`],
+    toggleOpenSesame: () => 'sesame toggled',
+    cheatUsed: () => undefined, // the chokepoint has its own describe below
   };
 
   it('routes parsed commands to host handlers and echoes their feedback', () => {
@@ -240,3 +246,101 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('drunk', host)).toEqual(['drunk:max']);
   });
 });
+
+describe('the new grant commands and opensesame', () => {
+  it('parses give lockpick (with the plural alias) as a counted host item', () => {
+    expect(parseCommand('give lockpick')).toEqual({ kind: 'give-item', item: 'lockpick', count: 1 });
+    expect(parseCommand('give lockpicks 3')).toEqual({ kind: 'give-item', item: 'lockpick', count: 3 });
+    expect(parseCommand('give lockpick 0').kind).toBe('error');
+  });
+
+  it('routes unknown give items to the feature grant seam instead of erroring', () => {
+    expect(parseCommand('give tyres')).toEqual({ kind: 'give-feature', item: 'tyres', count: 1 });
+    expect(parseCommand('give tyres 2')).toEqual({ kind: 'give-feature', item: 'tyres', count: 2 });
+    expect(parseCommand('give zol 5')).toEqual({ kind: 'give-feature', item: 'zol', count: 5 });
+    expect(parseCommand('give tyres nope').kind).toBe('error');
+    expect(parseCommand('give tyres 0').kind).toBe('error');
+  });
+
+  it('parses opensesame as a no-argument cheat word', () => {
+    expect(parseCommand('opensesame')).toEqual({ kind: 'opensesame' });
+    expect(parseCommand('OpenSesame')).toEqual({ kind: 'opensesame' });
+    expect(parseCommand('opensesame now').kind).toBe('error');
+  });
+});
+
+describe('the cheat classification (default is CHEAT; exemptions are deliberate)', () => {
+  // Every command kind the console can produce, with its ruled classification. A kind someone adds
+  // without updating this table fails the exhaustiveness check below — and defaults to cheat in the
+  // code, which is the safe direction.
+  const RULINGS: Record<ConsoleCommand['kind'], boolean> = {
+    // exempt: read-only, cosmetic, or a named save mechanic
+    'noop': false, 'error': false, 'help': false, 'fps': false, 'perfchart': false, 'map': false,
+    'save': false, 'reload': false, 'busy': false, 'tp-list': false, 'mission-list': false,
+    // cheats — including mapnpcs (unearned information advantage) and shedding (the owner's own
+    // ruling: a toggle is a cheat by virtue of the direction that helps)
+    'mapnpcs': true, 'shedding': true, 'nomoresirens': true, 'teflon': true, 'unwanted': true,
+    'cash': true, 'spawn': true, 'ghost': true, 'set-time': true, 'set-timerate': true,
+    'set-busy': true, 'set-peds': true, 'set-cars': true, 'set-pos': true, 'tp-coords': true,
+    'tp-name': true, 'skyfall': true, 'give-weapon': true, 'give-ammo': true, 'give-armour': true,
+    'give-item': true, 'give-feature': true, 'opensesame': true, 'drunk': true,
+    'mission-start': true, 'feature': true, // 'feature' WITH args; the bare list is special-cased below
+  };
+
+  it('classifies every command kind, most of them as cheats', () => {
+    const inputs: Record<ConsoleCommand['kind'], string> = {
+      'noop': ' ', 'error': 'wololo', 'help': 'help', 'fps': 'fps', 'perfchart': 'perfchart',
+      'map': 'map', 'save': 'save', 'reload': 'reload', 'busy': 'busy', 'tp-list': 'tp list',
+      'mission-list': 'mission', 'mapnpcs': 'mapnpcs', 'shedding': 'shedding',
+      'nomoresirens': 'nomoresirens', 'teflon': 'teflon', 'unwanted': 'unwanted',
+      'cash': 'ritchierich', 'spawn': 'spawn taxi', 'ghost': 'ghost', 'set-time': 'set time 1200',
+      'set-timerate': 'set timerate 2', 'set-busy': 'set busy 300', 'set-peds': 'set peds 10',
+      'set-cars': 'set cars 10', 'set-pos': 'set x 100', 'tp-coords': 'tp 10 10',
+      'tp-name': 'tp sandton', 'skyfall': 'skyfall', 'give-weapon': 'give rpg',
+      'give-ammo': 'give ammo', 'give-armour': 'give armour', 'give-item': 'give lockpick',
+      'give-feature': 'give tyres', 'opensesame': 'opensesame', 'drunk': 'drunk',
+      'mission-start': 'mission 1', 'feature': 'feature interiors leave',
+    };
+    for (const [kind, ruled] of Object.entries(RULINGS)) {
+      const command = parseCommand(inputs[kind as ConsoleCommand['kind']]);
+      expect(command.kind, `input for ${kind} parsed as ${command.kind}`).toBe(kind);
+      expect(commandIsCheat(command), kind).toBe(ruled);
+    }
+  });
+
+  it('exempts the bare feature listing but not feature commands', () => {
+    expect(commandIsCheat(parseCommand('feature'))).toBe(false);
+    expect(commandIsCheat(parseCommand('feature interiors doors'))).toBe(true);
+  });
+
+  it('treats any UNKNOWN future kind as a cheat by default', () => {
+    expect(commandIsCheat({ kind: 'some-command-added-next-month' } as unknown as ConsoleCommand)).toBe(true);
+  });
+});
+
+describe('the cheat chokepoint in runConsoleCommand', () => {
+  const marks: string[] = [];
+  const host = new Proxy({}, {
+    get: (_target, prop) => prop === 'cheatUsed'
+      ? () => { marks.push('mark'); }
+      : () => (prop === 'feature' || prop === 'teleportList' || prop === 'missionList' || prop === 'giveFeatureItem' ? [] : 'ok'),
+  }) as ConsoleHost;
+
+  it('marks cheats before dispatch and leaves exempt commands unmarked', () => {
+    marks.length = 0;
+    runConsoleCommand('help', host); runConsoleCommand('save', host); runConsoleCommand('reload', host);
+    runConsoleCommand('map', host); runConsoleCommand('fps', host); runConsoleCommand('busy', host);
+    expect(marks).toHaveLength(0);
+    runConsoleCommand('shedding', host);
+    expect(marks).toHaveLength(1);
+    runConsoleCommand('opensesame', host);
+    runConsoleCommand('give tyres 2', host);
+    runConsoleCommand('mapnpcs', host);
+    runConsoleCommand('tp 10 10', host);
+    expect(marks).toHaveLength(5);
+    // a malformed command runs nothing and marks nothing
+    runConsoleCommand('give tyres zero', host);
+    expect(marks).toHaveLength(5);
+  });
+});
+

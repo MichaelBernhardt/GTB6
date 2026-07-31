@@ -28,13 +28,13 @@
  * This directory is never statically imported — see the chunk note at the top of ../interiors.state.ts.
  */
 import * as THREE from 'three';
-import { BuildingArchitecture, type EntranceTag } from '../../world/BuildingArchitecture';
+import { BuildingArchitecture, type EntranceTag, type MassingTier } from '../../world/BuildingArchitecture';
 import { CELL_SIZE, generateCell, type GeneratedBuilding } from '../../world/CityGen';
-import { distanceToRoadEdge, landmark, nearestDistrict, pointInAnyPolygon, WATER_POLYGONS } from '../../world/mapData';
+import { distanceToRoadEdge, nearestDistrict, pointInAnyPolygon, WATER_POLYGONS } from '../../world/mapData';
 import { buildModel, MODEL_INDEX } from '../../world/models/catalog';
 import { scatterCell, type ScatteredModel } from '../../world/ModelScatter';
 import { ARMS_SITE, BOTTLE_STORES, GARAGE_SITE, HOTDOG_SITE, SAFEHOUSE_SITE, SPRAY_SITE } from '../../world/placements';
-import { stablePositionRandom } from '../../world/StableRandom';
+import { landmarkAnchors, landmarkParcelName, parcelBuildingName, scatterBuildingName } from '../../world/buildingIdentity';
 import { neighbourhoodBuildingVariant } from '../../world/data/neighbourhoods';
 import { DOOR_RADIUS, type InteriorDoor } from '../interiors.state';
 import type { BuildingFacts } from './core';
@@ -69,28 +69,9 @@ const PAD_CLEARANCE = 20;
 /** Two doorsteps closer than this are the same step, and only the first of them is a door. */
 const SAME_STEP = 2.6;
 
-/** Metres of building per storey — the interior's own STOREY_HEIGHT, repeated here only so the
- *  landmark filter can talk in storeys without importing the whole core. */
-const MIN_LANDMARK_STOREY = 3.5;
-
-const SPAZA_NAMES = [
-  'Sizwe se Spaza', 'Mama Dlamini Tuck Shop', 'Ekhaya Superette', 'Zwelethu Cash Store',
-  'Kwa-Mnandi Spaza', 'Blue Sky Tuck Shop', 'Bhut Solly se Winkel', 'Corner Café',
-];
-const HOUSE_NAMES = ['No. 12', 'No. 7', 'No. 41', 'No. 3', 'No. 88', 'No. 26', 'No. 15', 'No. 60'];
-const VILLA_NAMES = ['Kopje House', 'The Willows', 'Acacia Lodge', 'Mimosa House', 'Riverbend', 'Klipdrift House'];
-const BLOCK_NAMES = ['Ridge Court', 'Sunnyside Mansions', 'Kopje Heights', 'Vista Flats', 'Boundary House', 'Hilltop Court'];
-const WORKS_NAMES = [
-  'Unit 4 · Bracewell Works', 'Modderfontein Cold Store', 'Meyer & Sons Panelbeaters', 'Bay 2 · Reef Freight',
-  'Umgeni Steel Depot', 'Bay 7 · Kruger Haulage', 'Vaal Packaging Unit 9', 'Ndlovu Engineering',
-];
-/** Scatter-only families. A plot is not a suburban house and a kerk is not an office block, and the
- *  name over the door is the cheapest way to say which one you are standing at. */
-const PLOT_NAMES = ['Kleinfontein', 'Doringkraal', 'Rietvlei Plaas', 'Waterval Plot 14', 'Skuilkrans', 'Vergenoegd'];
-const SHED_NAMES = ['Die Skuur', 'Implement Shed', 'Hay Store', 'Bait & Ski Shed', 'Plot 9 Store', 'Loods 3'];
-const CIVIC_NAMES = ['NG Kerk Koppiekraal', 'Masjid al-Noor', 'Gemeenskapsaal', 'Laerskool Kopanong', 'St Andrews Hall', 'Ekhaya Community Centre'];
-const CAFE_NAMES = ['Die Strand Kafee', 'Vaalwater Grill', 'Sundowner Bar', 'Kaia Coffee', 'Bunny Chow Now', 'Snoek & Chips'];
-const OFFICE_NAMES = ['Sanlamb House', 'Reef Chambers', 'Protea Place', 'Mediocre Holdings', 'Kopje Chambers', 'Bracewell House'];
+// THE NAMES LIVE IN src/world/buildingIdentity.ts NOW — one module both this file and the facade
+// painters read, so the board on the wall and the name on the prompt are the same fact. The pools
+// and salts moved verbatim, so every name a prompt showed before the move is the name it shows after.
 
 // The plan-only architecture instance. It never draws, so this group stays empty forever; it exists
 // only because BuildingArchitecture takes a parent in its constructor.
@@ -139,11 +120,7 @@ function stepOut(face: { x: number; z: number }, heading: number): { x: number; 
 }
 
 function nameFor(building: GeneratedBuilding, kind: string): string {
-  const list = kind === 'shopfront' ? SPAZA_NAMES
-    : kind === 'dock' ? WORKS_NAMES
-      : kind === 'porch' ? (building.style === 'estate' ? VILLA_NAMES : HOUSE_NAMES)
-        : BLOCK_NAMES;
-  return list[Math.floor(stablePositionRandom(building.x, building.z, 94) * list.length) % list.length]!;
+  return parcelBuildingName(building.x, building.z, building.style, kind);
 }
 
 /**
@@ -176,7 +153,7 @@ export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoo
     id: `${Math.round(building.x)}:${Math.round(building.z)}`,
     x: building.x, z: building.z, heading: building.heading,
     width: building.width, depth: building.depth, height: building.height,
-    style: building.style, entrance: tag.kind,
+    style: building.style, entrance: tag.kind, doorX: tag.x,
   };
   return {
     id: facts.id,
@@ -186,8 +163,23 @@ export function doorFor(building: GeneratedBuilding, name?: string): InteriorDoo
     heading: building.heading,
     openWidth: tag.width,
     openHeight: tag.height,
+    roof: roofOf(profile.tiers),
     facts,
   };
+}
+
+/** The building's flat top, off the SAME massing tiers City pushes as colliders: the tallest
+ *  non-wall tier, when it is big enough to stand a player on. Roof entry and exit both read this
+ *  one rectangle, so where you drop in is exactly where the hatch puts you out. */
+function roofOf(tiers: readonly MassingTier[]): InteriorDoor['roof'] {
+  let top: MassingTier | undefined;
+  for (const tier of tiers) {
+    if (tier.kind === 'wall') continue;
+    if (!top || tier.y1 > top.y1) top = tier;
+  }
+  if (!top) return undefined;
+  if (top.maxX - top.minX < 2.4 || top.maxZ - top.minZ < 2.4) return undefined;
+  return { minX: top.minX, maxX: top.maxX, minZ: top.minZ, maxZ: top.maxZ, topY: top.y1 };
 }
 
 // ---- the other half of the city: the scattered catalog models ----------------------------------
@@ -222,7 +214,7 @@ export function scatterDoorFor(model: ScatteredModel): InteriorDoor | undefined 
     x: model.x, z: model.z, heading: model.heading,
     width: built.footprint.w, depth: built.footprint.d,
     height: Math.max(tag.height + 0.6, top),
-    style: def.interior.family, entrance: tag.kind,
+    style: def.interior.family, entrance: tag.kind, doorX: tag.x,
   };
   return {
     id: facts.id,
@@ -232,41 +224,17 @@ export function scatterDoorFor(model: ScatteredModel): InteriorDoor | undefined 
     heading: model.heading,
     openWidth: tag.width,
     openHeight: tag.height,
+    roof: roofOf(built.tiers),
     facts,
   };
 }
 
-/** The name over a scattered model's door: its own family's list, drawn off its own position. */
+/** The name over a scattered model's door: the shared identity, off its own position. */
 function scatterName(model: ScatteredModel, family: string, kind: string): string {
-  const list = family === 'rural' ? (kind === 'shopfront' ? SPAZA_NAMES : PLOT_NAMES)
-    : family === 'civic' ? CIVIC_NAMES
-      : family === 'industrial' ? (model.name === 'barn' || model.name === 'tractor-shed' || model.name === 'boat-shed' ? SHED_NAMES : WORKS_NAMES)
-        : family === 'estate' ? VILLA_NAMES
-          : family === 'dense-residential' ? BLOCK_NAMES
-            : family === 'downtown' ? OFFICE_NAMES
-              : kind === 'shopfront' ? (model.name.startsWith('seafront') || model.name === 'beach-cafe' ? CAFE_NAMES : SPAZA_NAMES)
-                : HOUSE_NAMES;
-  return list[Math.floor(stablePositionRandom(model.x, model.z, 95) * list.length) % list.length]!;
+  return scatterBuildingName(model.x, model.z, family, kind, model.name);
 }
 
 const cells = new Map<string, InteriorDoor[]>();
-
-/**
- * Landmarks that get their name put over a door — but only over a building that can carry it.
- *
- * The map pins Ponte Tower, and the parcel pass puts whatever the zoning asked for on that spot. On
- * the current map that is a three-storey block, and calling a three-storey block Ponte Tower is a
- * lie the player catches in four seconds. So an anchor states the least it will accept: the tallest
- * opening building in the pin's own chunk cell, within `radius` of it, that is at least `storeys`
- * tall. If nothing there qualifies the landmark simply has no door, and the ordinary doors around it
- * still do.
- */
-function anchors(): { at: { x: number; z: number }; name: string; radius: number; storeys: number }[] {
-  const out: { at: { x: number; z: number }; name: string; radius: number; storeys: number }[] = [];
-  const ponte = landmark('Ponte Tower') ?? landmark('Hillbrow tower');
-  if (ponte) out.push({ at: ponte, name: 'Ponte Tower', radius: 420, storeys: 12 });
-  return out;
-}
 
 function doorsInCell(cellX: number, cellZ: number): InteriorDoor[] {
   const key = `${cellX},${cellZ}`;
@@ -276,19 +244,16 @@ function doorsInCell(cellX: number, cellZ: number): InteriorDoor[] {
   const out: InteriorDoor[] = [];
   const claimed = new Set<string>();
 
-  // 1. Landmark doors first, so a rolled-out parcel can never take the Ponte slot.
-  for (const anchor of anchors()) {
-    if (Math.floor(anchor.at.x / CELL_SIZE) !== cellX || Math.floor(anchor.at.z / CELL_SIZE) !== cellZ) continue;
-    // The TALLEST qualifying building near the pin, not merely the nearest: a landmark name belongs
-    // on a landmark, and the parcel that happens to sit on the pin is usually a shop.
-    let best: InteriorDoor | undefined; let bestHeight = anchor.storeys * MIN_LANDMARK_STOREY;
-    for (const building of buildings) {
-      if (Math.hypot(building.x - anchor.at.x, building.z - anchor.at.z) > anchor.radius) continue;
-      if (building.height <= bestHeight) continue;
-      const door = doorFor(building, anchor.name);
-      if (door) { bestHeight = building.height; best = door; }
-    }
-    if (best && !claimed.has(best.id)) { claimed.add(best.id); out.push(best); }
+  // 1. Landmark doors first, so a rolled-out parcel can never take the Ponte slot. WHICH building
+  // carries a landmark's name is buildingIdentity's call now (landmarkParcelName), made from the
+  // same plan-level facts on BOTH sides — the selection used to live here, prompt-side only, which
+  // is exactly how the tower's prompt said 'Ponte Tower' while its painted board said 'RIDGE
+  // COURT'. nameFor() -> parcelBuildingName() answers the landmark name by itself; this pass only
+  // preserves the claim ORDER, so a neighbouring parcel's step can never shadow the landmark door.
+  for (const building of buildings) {
+    if (!landmarkParcelName(building.x, building.z)) continue;
+    const door = doorFor(building);
+    if (door && !claimed.has(door.id)) { claimed.add(door.id); out.push(door); }
   }
 
   // 2. EVERY OTHER PARCEL IN THE CELL, in cell order so the answer is a pure function of the map.
@@ -343,12 +308,20 @@ function scatterDoorsInTile(tileX: number, tileZ: number): InteriorDoor[] {
   return out;
 }
 
+/** How far a PARCEL's doorstep can stand from the building-centre cell it is stored under. A door
+ *  lives in the cell of its building's CENTRE (doorsInCell), but the step is out past the facade —
+ *  up to half the deepest parcel plus the stand-off. The cell scan widens by this, or a step across
+ *  a chunk-cell line is a lit marker that never answers: 65 of 7,415 doorsteps citywide were exactly
+ *  that — a prompt radius of 4.2 u opened only the step's own cell, never the building's. */
+const PARCEL_REACH = 45;
+
 /** Every door whose step is within `radius` of a point — both systems, in one list. Used by the
  *  prompt (a tight ring) and by the doorway streamer (a wide one). */
 export function doorsNear(x: number, z: number, radius: number): InteriorDoor[] {
   const out: InteriorDoor[] = [];
-  const minX = Math.floor((x - radius) / CELL_SIZE); const maxX = Math.floor((x + radius) / CELL_SIZE);
-  const minZ = Math.floor((z - radius) / CELL_SIZE); const maxZ = Math.floor((z + radius) / CELL_SIZE);
+  const parcelReach = radius + PARCEL_REACH;
+  const minX = Math.floor((x - parcelReach) / CELL_SIZE); const maxX = Math.floor((x + parcelReach) / CELL_SIZE);
+  const minZ = Math.floor((z - parcelReach) / CELL_SIZE); const maxZ = Math.floor((z + parcelReach) / CELL_SIZE);
   for (let cellX = minX; cellX <= maxX; cellX++) {
     for (let cellZ = minZ; cellZ <= maxZ; cellZ++) {
       for (const door of doorsInCell(cellX, cellZ)) {
@@ -412,7 +385,7 @@ export function tallestDoorNear(x: number, z: number, radius: number): InteriorD
 
 /** The named door for a landmark anchor, for the console (`feature interiors go ponte`). */
 export function landmarkDoor(name = 'Ponte Tower'): InteriorDoor | undefined {
-  for (const anchor of anchors()) {
+  for (const anchor of landmarkAnchors()) {
     if (anchor.name !== name) continue;
     const cellX = Math.floor(anchor.at.x / CELL_SIZE); const cellZ = Math.floor(anchor.at.z / CELL_SIZE);
     const found = doorsInCell(cellX, cellZ).find((door) => door.name === anchor.name);

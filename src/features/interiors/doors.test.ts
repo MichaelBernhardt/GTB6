@@ -113,6 +113,31 @@ describe('doors', () => {
     expect(total).toBeGreaterThan(200);
   }, 300000);
 
+  it('answers on a doorstep that lies across a chunk-cell line from its building', () => {
+    // A parcel's door is stored under its BUILDING CENTRE's cell, but the step is out past the
+    // facade — 65 of 7,415 doorsteps citywide sat in the neighbouring cell, and doorNear's 4.2 u
+    // ring never opened it: a lit marker that never offered a prompt. The audit's worked example
+    // lives near (-4378, -1960); scan that block, find every cross-cell step, and prove each one
+    // now answers to the exact door standing on it.
+    const nearCellX = Math.floor(-4378 / CELL_SIZE); const nearCellZ = Math.floor(-1960 / CELL_SIZE);
+    const crossers = [];
+    for (let cx = nearCellX - 1; cx <= nearCellX + 1; cx++) {
+      for (let cz = nearCellZ - 1; cz <= nearCellZ + 1; cz++) {
+        const centreX = (cx + 0.5) * CELL_SIZE; const centreZ = (cz + 0.5) * CELL_SIZE;
+        for (const door of doorsNear(centreX, centreZ, CELL_SIZE * 0.75)) {
+          if (door.id.startsWith('s')) continue; // scatter doors tile with their own reach already
+          const stepCellX = Math.floor(door.x / CELL_SIZE); const stepCellZ = Math.floor(door.z / CELL_SIZE);
+          const homeCellX = Math.floor(door.facts.x / CELL_SIZE); const homeCellZ = Math.floor(door.facts.z / CELL_SIZE);
+          if (stepCellX !== homeCellX || stepCellZ !== homeCellZ) crossers.push(door);
+        }
+      }
+    }
+    expect(crossers.length, 'the audit found cross-cell steps in this block; the fixture has moved if none remain').toBeGreaterThan(0);
+    for (const door of crossers) {
+      expect(doorNear(door.x, door.z)?.id, `standing on ${door.id}'s step must prompt ${door.id}`).toBe(door.id);
+    }
+  });
+
   it('resolves the prompt and the press through the same ring', () => {
     const door = nearestDoor(0, 0);
     expect(door).toBeDefined();
