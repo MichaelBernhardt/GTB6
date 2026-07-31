@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { City } from '../world/City';
 import { DEATH_SPIN_DURATION, Pedestrian } from './Pedestrian';
+import { FEAR_EVENTS, FLEE_THRESHOLD } from '../systems/FearSystem';
 
 const flatCity = { surfaceHeightAt: () => 0 } as unknown as City;
 const step = (ped: Pedestrian, seconds: number): void => {
@@ -66,5 +67,61 @@ describe('pedestrian distance LOD', () => {
     expect(ped.isRenderVisible).toBe(false); expect(detail.visible).toBe(false); expect(proxy.visible).toBe(false);
     ped.setVisualLod('detail');
     expect(ped.isDetailVisible).toBe(true); expect(detail.visible).toBe(true); expect(proxy.visible).toBe(false);
+  });
+});
+
+/**
+ * The entity half of solidarity: a protester who does not run from the man who joined them, and does
+ * stop standing with him the moment he hurts somebody.
+ */
+describe('solidarity', () => {
+  const protester = (index = 3): Pedestrian => {
+    const ped = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), index);
+    ped.scripted = true; ped.state = 'idle'; ped.idleTime = 999999; ped.solidarity = true;
+    return ped;
+  };
+  const player = new THREE.Vector3(1, 0, 0);
+
+  it('holds the line through the fear that scatters an ordinary crowd', () => {
+    const ped = protester();
+    ped.applyFear(FEAR_EVENTS.assault.base, player); // barged into twice inside the bump window
+    ped.applyFear(FEAR_EVENTS.brandish.base, player); // and a gun raised in their face
+    ped.applyFear(FEAR_EVENTS.kill.base, player);
+    expect(ped.state).toBe('idle');
+    expect(ped.fear).toBeLessThan(FLEE_THRESHOLD);
+  });
+
+  it('scatters the identical pedestrian who is NOT on the picket', () => {
+    const bystander = protester(); bystander.solidarity = false;
+    bystander.applyFear(FEAR_EVENTS.assault.base, player);
+    expect(bystander.state).toBe('flee'); // the behaviour the owner reported, still intact off the line
+  });
+
+  it('does not square up to the player it is standing next to', () => {
+    // One ambient body in nine is `aggressive` and turns hostile on anyone within 4.5 units, which at
+    // a protest means the crowd you just joined starts a fight with you.
+    const bruiser = protester(9); // index % 9 === 0
+    expect(bruiser.aggressive).toBe(true);
+    for (let t = 0; t < 0.5; t += 1 / 30) bruiser.update(1 / 30, flatCity, [], new THREE.Vector3(1, 0, 1));
+    expect(bruiser.state).toBe('idle');
+    bruiser.solidarity = false;
+    for (let t = 0; t < 0.5; t += 1 / 30) bruiser.update(1 / 30, flatCity, [], new THREE.Vector3(1, 0, 1));
+    expect(bruiser.state).toBe('hostile');
+  });
+
+  it('ends the instant somebody actually hits them, and the fear that lands then does its normal job', () => {
+    const ped = protester();
+    ped.takeDamage(10, player);
+    expect(ped.solidarity).toBe(false);
+    expect(ped.state).toBe('flee');
+  });
+
+  it('ends on a knockdown and on a mugging too', () => {
+    const floored = protester();
+    floored.knockdown(player);
+    expect(floored.solidarity).toBe(false);
+    const mugged = protester();
+    mugged.mug(player);
+    expect(mugged.solidarity).toBe(false);
   });
 });

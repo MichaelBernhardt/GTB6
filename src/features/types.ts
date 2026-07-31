@@ -203,6 +203,19 @@ export interface FeatureSystem {
   /** Machine playthrough driver, reached as `window.__qa.feature('<id>', action, args)`. Return a
    *  status string in the harness vocabulary: 'ok', 'stuck:<why>', 'failed:<why>'. */
   qa?(action: string, args: Record<string, unknown>): string;
+  /**
+   * The player entered online PvP, so this feature is SUSPENDED: no ticks, no prompts, no blips.
+   *
+   * Suspension is not disposal — the feature keeps its state and its scene objects and comes back
+   * when he leaves. But anything it has published into the SHARED simulation is still steering a
+   * world whose clock has stopped, and that is a live bug shape on this project (a suspended feature
+   * rendering garage blips). A protest that has shut a road is the sharp version: its tyres never burn
+   * down while suspended, so its road stays shut forever.
+   *
+   * Retract here; republish from `update()`, which resumes the moment suspension lifts. Called ONCE
+   * on the suspend edge, never repeatedly while already suspended.
+   */
+  suspend?(): void;
   /** Remove every scene object, collider, fixture ped and timer this feature added. Called on new
    *  game, checkpoint reload and a stale lazy arrival — it must be safe to call more than once. */
   dispose(): void;

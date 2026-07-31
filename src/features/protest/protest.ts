@@ -61,7 +61,7 @@ import {
   SOLO_TYRE_SECONDS, tickGrievance, TYRE_CARRY_CAP, TYRE_FEED_COOLDOWN, tyreCount,
   assertNotLivingHost, ignitableTargets, type BlockadeSize, type ProtestSave, type SiteCandidate,
 } from '../protest.state';
-import { roadClosures } from '../../systems/NavGraph';
+import { roadClosures, roadHazards, type RoadHazard } from '../../systems/NavGraph';
 import type { FeatureMapIcon, FeatureMapSource } from '../host';
 import type { Pedestrian } from '../../entities/Pedestrian';
 import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescriptor } from '../types';
@@ -70,6 +70,37 @@ import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescrip
 const BLOCKADE_TOLL = 700;
 const TYRE_TOLL = 420;
 const TYRE_CLOSURE_RADIUS = 12;
+/**
+ * WHAT THE SIMULATION IS TOLD, and why there are two of them.
+ *
+ * A `RoadClosure` is a routing preference: A* pays a toll to plan through the circle, so the city
+ * routes AROUND a shutdown instead of queueing into it. That is what this feature already published,
+ * and it is why the owner's second report was true — "cars etc just drive through it". A closure
+ * reroutes the driver who has not committed to the block yet and says nothing whatsoever to the one
+ * already on it, because no driver had ever been told there was a fire in his lane.
+ *
+ * A `RoadHazard` is the object itself, at the scale a driver sees. Both live in ../../systems/NavGraph
+ * (the `navigation` chunk, which imports nothing), so this lazily-loaded body may reach UP into the
+ * simulation without the simulation ever reaching down into it. A static edge the other way — a system
+ * importing src/features/protest — makes the eager chunk depend on a lazy one, which is the chunk
+ * cycle that has taken production down on this project once already.
+ */
+const HAZARD_OWNER = 'protest';
+/** One burning tyre, physically: the rubber plus the bit of fire and heat nobody drives a bakkie
+ *  through. Sized so a car CAN thread past a single one — `HAZARD_SWERVE_MAX` is 3.4 and this asks for
+ *  1.6 + half a car + clearance ≈ 3.05 — because one tyre by the kerb should be a metre of steering. */
+const TYRE_HAZARD_RADIUS = 1.6;
+/** The barricade is published as a ROW of circles laid across its own lane, not one big one. Three
+ *  reasons: a car on the cross street then meets only the part of it actually in front of him; the
+ *  arithmetic that decides "can I get round this" is the same arithmetic used for the player's own
+ *  tyres, so there is one rule and not two; and the row is genuinely unthreadable, which is what makes
+ *  a blockade a blockade. */
+const BARRICADE_HAZARD_RADIUS = 2.4;
+const BARRICADE_HAZARD_STEP = 3.4;
+/** Once the crowd has gone home the road is declared open again (the closure lifts), but the junk is
+ *  still lying there. One smaller circle at the centre, threadable on purpose: traffic weaves round
+ *  the remains rather than stopping at a road nothing says is shut. */
+const SMOULDER_HAZARD_RADIUS = 1.8;
 /** Interaction reach around the barricade centre. Generous on purpose: a dawn barricade is 18 units
  *  of junk with placards another 5 units down the lane, so a reach measured from the centre has to
  *  clear the whole thing plus the pavement you would naturally walk up on. */
@@ -79,7 +110,17 @@ const BARRICADE_REACH = 17;
  *  on the road can still be 7-8 units from the nearest sample. The first in-engine run refused to
  *  light a tyre in the middle of the road with a reach of 7. */
 const TAR_REACH = 10;
-const SOLO_SPACING = 22;
+/**
+ * Elbow room between one player-lit tyre and the next.
+ *
+ * It was 22 — wider than any road in the city — which meant the player could never put two tyres on
+ * the same carriageway and so could never build anything. That is half of the owner's second report:
+ * he threw a tyre expecting to block a road, and one tyre by itself is a thing a driver steers round,
+ * correctly. At 4.5 a carried set of three lays a real line across a lane and shuts it, while a single
+ * one still just gets swerved past — which is the whole design: what the traffic does is decided by how
+ * much of the carriageway you actually covered, not by a flag on the tyre.
+ */
+const SOLO_SPACING = 4.5;
 /** Bearings and radii probed around the player to find a road worth closing. Fixed, so the same
  *  grievance in the same place always shuts the same road; eight by two is 16 `nearestRoadPose`
  *  snaps plus 17 `districtAt` calls, ONCE, on the frame a protest starts — measured in-engine at
@@ -123,6 +164,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let taughtFeed = false;
   let warned = false;
   let disposed = false;
+  /** False while the shared simulation does not know about this feature's road works — see syncRoad. */
+  let published = false;
 
   const scratch = new THREE.Vector3();
   const distanceTo = (x: number, z: number): number => {
@@ -130,6 +173,55 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     return Math.hypot(position.x - x, position.z - z);
   };
   const nearBarricade = (reach = BARRICADE_REACH): boolean => Boolean(barricade) && distanceTo(barricade!.site.x, barricade!.site.z) <= reach;
+
+  // ---- what the simulation is told ----------------------------------------------------------------
+
+  /** Every circle this feature currently has lying on a road, derived from live state and never
+   *  stored — so it cannot drift out of step with what is actually in the scene. */
+  function hazardList(): RoadHazard[] {
+    const list: RoadHazard[] = [];
+    if (barricade) {
+      const site = barricade.site;
+      if (phase === 'smouldering') list.push({ x: site.x, z: site.z, r: SMOULDER_HAZARD_RADIUS });
+      else {
+        // The same `across` and `span` the junk itself was laid out on — see Barricade's constructor.
+        const acrossX = Math.cos(site.heading); const acrossZ = -Math.sin(site.heading);
+        const span = size === 'dawn' ? 9 : 6.5;
+        const steps = Math.max(1, Math.round((span * 2) / BARRICADE_HAZARD_STEP));
+        for (let index = 0; index <= steps; index++) {
+          const offset = -span + (index / steps) * span * 2;
+          list.push({ x: site.x + acrossX * offset, z: site.z + acrossZ * offset, r: BARRICADE_HAZARD_RADIUS });
+        }
+      }
+    }
+    for (const entry of solo) list.push({ x: entry.x, z: entry.z, r: TYRE_HAZARD_RADIUS });
+    return list;
+  }
+
+  /**
+   * Restate everything this feature publishes into the shared simulation, out of its own live state.
+   *
+   * Idempotent — closures replace by id, hazards replace by owner — so it is both the "something
+   * changed" call and the "we were suspended and the registry has forgotten about us" call. That is
+   * why `published` exists: `suspend()` retracts and clears it, and `update()` puts it all back on the
+   * first frame after the player leaves PvP, with no resume hook needed anywhere.
+   */
+  function syncRoad(): void {
+    if (barricade && phase !== 'smouldering') {
+      roadClosures.open({ id: 'protest:blockade', x: barricade.site.x, z: barricade.site.z, radius: closureRadius(size), toll: BLOCKADE_TOLL });
+    }
+    for (const entry of solo) roadClosures.open({ id: entry.id, x: entry.x, z: entry.z, radius: TYRE_CLOSURE_RADIUS, toll: TYRE_TOLL });
+    roadHazards.publish(HAZARD_OWNER, hazardList());
+    published = true;
+  }
+
+  /** Everything back off the road, and the flag that makes `update()` put it back. Called on the PvP
+   *  suspend edge and from dispose(). */
+  function retractRoad(): void {
+    roadHazards.retract(HAZARD_OWNER);
+    for (const id of roadClosures.ids) if (id.startsWith('protest:')) roadClosures.close(id);
+    published = false;
+  }
 
   // ---- the blockade ------------------------------------------------------------------------------
 
@@ -204,10 +296,16 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       const ped = api.spawnFixture(x, z, 'Resident');
       if (!ped) continue;
       ped.setHail(true); // the existing raised-arm additive pose, reused as a raised fist — scripted peds never hail a taxi
+      // SOLIDARITY, and the owner's first report: "everyone gets scared of me and runs away, which
+      // means it's not much of a protest." It is granted here rather than on `E  Join the picket`,
+      // because a crowd that scatters as you walk up is a picket there is nothing left to join. It
+      // lasts exactly as long as the barricade stands, and hurting anybody in sight ends it — see
+      // SOLIDARITY_FEAR_CAP in FearSystem and PopulationSystem.breakSolidarity.
+      ped.solidarity = true;
       crowd.push(ped);
     }
 
-    roadClosures.open({ id: 'protest:blockade', x: site.x, z: site.z, radius: closureRadius(size), toll: BLOCKADE_TOLL });
+    syncRoad();
 
     // WHERE, IN WORDS. A district name is not a direction and a map is not what somebody reads while
     // walking, so the notification carries the bearing and the distance, the HUD carries the live
@@ -231,10 +329,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     for (const mark of barricade.scorchPlan) scorch.add(mark.x, mark.z, mark.r);
     barricade.smoulder();
     roadClosures.close('protest:blockade');
-    for (const ped of crowd) api.removeFixture(ped);
+    for (const ped of crowd) { ped.solidarity = false; api.removeFixture(ped); }
     crowd = [];
     phase = 'smouldering';
     blockadeHoursLeft = 1.5;
+    syncRoad(); // the row across the lane becomes one smouldering heap traffic weaves round
     // The grievance is knocked back on EVERY stand-down, not only on a paid picket. Without this a
     // blockade the player never reached faded with the ledger still ripe, and `update()` raised the
     // next one on the same frame — a permanent protest treadmill somewhere behind him.
@@ -245,11 +344,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   function clearBlockade(): void {
     if (barricade) { barricade.dispose(); barricade = undefined; }
-    for (const ped of crowd) api.removeFixture(ped);
+    for (const ped of crowd) { ped.solidarity = false; api.removeFixture(ped); }
     crowd = [];
     roadClosures.close('protest:blockade');
     phase = 'idle';
     smoke = 0; picketElapsed = 0;
+    syncRoad(); // the junk is gone from the scene, so it goes from the drivers' world too
   }
 
   // ---- the picket ---------------------------------------------------------------------------------
@@ -370,8 +470,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const id = `protest:tyre:${soloSerial++}`;
     const fire = new TyreFire(api.scene, spot.x, spot.y, spot.z, SOLO_TYRE_SECONDS, soloSmoke, soloFlame);
     solo.push({ fire, id, x: spot.x, z: spot.z });
-    roadClosures.open({ id, x: spot.x, z: spot.z, radius: TYRE_CLOSURE_RADIUS, toll: TYRE_TOLL });
-    api.notify('Tyre out, tyre lit', 'That road is closed until it burns down. The mark stays.', true);
+    syncRoad();
+    api.notify('Tyre out, tyre lit',
+      solo.length > 1
+        ? 'Drivers go round one tyre. Lay them across the lane and there is nowhere left to go.'
+        : 'That road is closed until it burns down, and drivers will steer round it. The mark stays.',
+      true);
     api.analytics('tyre_burned', { value: solo.length });
     api.persist();
   }
@@ -399,6 +503,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
     feedCooldown = Math.max(0, feedCooldown - dt);
 
+    // The simulation forgets a suspended feature's road works (see suspend()); this puts them back on
+    // the first frame after PvP, and is a no-op on every other frame of the game.
+    if (!published) syncRoad();
+
     for (const entry of [...solo]) {
       entry.fire.update(dt);
       if (!entry.fire.spent) continue;
@@ -406,6 +514,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       roadClosures.close(entry.id);
       entry.fire.dispose(api.scene);
       solo = solo.filter((other) => other !== entry);
+      syncRoad(); // burnt out: off the drivers' map as well as out of the planner's
     }
 
     if (!barricade) {
@@ -547,7 +656,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   function status(): string {
     return `phase=${phase} hours=${outageLedger.hours.toFixed(2)} fedup=${Math.round(outageLedger.fraction * 100)}% ripe=${outageLedger.ripe} `
-      + `tyres=${tyres} pickets=${pickets} smoke=${Math.round(smoke)} scorch=${scorch.count} solo=${solo.length} closures=${roadClosures.count}`;
+      + `tyres=${tyres} pickets=${pickets} smoke=${Math.round(smoke)} scorch=${scorch.count} solo=${solo.length} closures=${roadClosures.count} hazards=${roadHazards.count} solidarity=${crowd.filter((ped) => ped.solidarity).length}/${crowd.length}`;
   }
 
   /** Where the standing blockade is, and the console line that gets you back to it. */
@@ -642,6 +751,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       case 'tyre': tyres = Math.min(TYRE_CARRY_CAP, tyres + (Number(args.n) || 1)); return `ok:${tyres}`;
       case 'burn': return burnTyre() ? `ok:${solo.length}` : 'failed:no-tar-or-no-tyre';
       case 'closures': return `ok:${roadClosures.count}:${roadClosures.ids.join('|')}`;
+      // The two questions the traffic half of this feature is judged on: is there anything in the
+      // road as far as a DRIVER is concerned, and is the crowd still standing there.
+      case 'hazards': return `ok:${roadHazards.count}`;
+      case 'solidarity': return `ok:${crowd.filter((ped) => ped.solidarity).length}/${crowd.length}`;
+      case 'fled': return `ok:${crowd.filter((ped) => ped.state === 'flee' || ped.state === 'cower').length}/${crowd.length}`;
+      case 'suspend': suspend(); return `ok:${roadHazards.count}:${roadClosures.count}`;
       case 'scorch': return `ok:${scorch.count}`;
       case 'money': return `ok:${api.balance()}`;
       // The safety probe, run in-engine rather than only in vitest: hand the tyre and ignition paths
@@ -686,6 +801,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   // ---- teardown -----------------------------------------------------------------------------------
 
+  /** PvP: this feature's clock has stopped, so nothing it published may keep steering the city. Its
+   *  tyres would never burn down and its road would stay shut for as long as the player stayed online.
+   *  `update()` restates the lot on the first frame back — nothing needs a resume hook. */
+  function suspend(): void { retractRoad(); }
+
   function dispose(): void {
     if (disposed) return;
     disposed = true;
@@ -694,11 +814,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     solo = [];
     scorch.dispose();
     soloSmoke.dispose(); soloFlame.dispose();
-    // Belt and braces: anything this feature ever closed is reopened, so a stale chunk arrival or a
-    // new game can never leave the city routing around a barricade that isn't there.
-    for (const id of roadClosures.ids) if (id.startsWith('protest:')) roadClosures.close(id);
+    // Belt and braces: anything this feature ever put on a road is taken off it, so a stale chunk
+    // arrival or a new game can never leave the city routing around — or braking for — a barricade
+    // that isn't there.
+    retractRoad();
     outageLedger.reset(); // a new game re-earns the grievance; the registry's eager tick takes it back
   }
 
-  return { update, hud, mapIcons, interactions: () => rungs, serialize, restore, command, qa, dispose };
+  return { update, hud, mapIcons, interactions: () => rungs, serialize, restore, command, qa, suspend, dispose };
 }

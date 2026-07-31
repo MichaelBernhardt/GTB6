@@ -4,11 +4,11 @@ import { Barricade, ScorchField, TyreFire } from './Barricade';
 import { createFeature } from './protest';
 import {
   outageLedger, ProhibitedTyreHostError, RIPE_OUTAGE_HOURS, SCORCH_CAP, SITE_MIN_METRES,
-  TYRE_CARRY_CAP,
+  SOLO_TYRE_SECONDS, TYRE_CARRY_CAP,
 } from '../protest.state';
 import { FeatureHost } from '../host';
 import { FEATURES } from '../registry';
-import { roadClosures } from '../../systems/NavGraph';
+import { roadClosures, roadHazards } from '../../systems/NavGraph';
 import { setPower } from '../../world/powerGrid';
 import type { FeatureGameApi } from '../types';
 
@@ -708,5 +708,108 @@ describe('no tyre hangs in the air', () => {
     for (let press = 0; press < 60; press++) barricade.addTyre();
     expect(unsupported(tyresOf(barricade, () => 0))).toEqual([]);
     barricade.dispose();
+  });
+});
+
+/**
+ * THE OWNER'S REPORTS, both of them, at the feature's own boundary.
+ *
+ *  (1) "when I join a protest, everyone gets scared of me and runs away, which means it's not much of
+ *      a protest."
+ *  (2) "when I throw a burning tyre on the road, cars etc just drive through it. Isn't it supposed to
+ *      do something like block them?"
+ *
+ * The simulation half of both lives in src/systems (see PopulationSystem.protest.test.ts). What is
+ * proved here is the contract between them: who this feature grants solidarity to and when it takes
+ * it back, and that everything it lays on a road is taken off again — on stand-down, on dispose, and
+ * on the PvP suspend, which does NOT dispose the feature and has left phantom state behind before.
+ */
+describe('what the protest publishes into the simulation', () => {
+  const reset = () => { roadClosures.clear(); roadHazards.clear(); };
+
+  it('gives the whole crowd solidarity while the barricade stands, and takes it back when it comes down', () => {
+    reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const crowd = Number(system.qa?.('crowd', {})?.slice(3));
+    expect(crowd).toBeGreaterThan(0);
+    // Granted on RAISE, not on join: a crowd that scatters as you walk up is a picket there is
+    // nothing left to join.
+    expect(system.qa?.('solidarity', {})).toBe(`ok:${crowd}/${crowd}`);
+    system.command?.(['clear']);
+    expect(system.qa?.('solidarity', {})).toBe('ok:0/0');
+    system.dispose();
+  });
+
+  it('puts a row of circles across the lane a driver can actually see, and clears them on dispose', () => {
+    reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    expect(roadHazards.count).toBe(0);
+    system.qa?.('raise', {});
+    // A barricade is published as several circles laid across its own lane, never one big one — so a
+    // car on the cross street meets only the part in front of him, and the "can I get round this"
+    // arithmetic is the same one the player's own tyres go through.
+    expect(roadHazards.count).toBeGreaterThan(2);
+    system.dispose();
+    expect(roadHazards.count).toBe(0);
+    expect(roadClosures.count).toBe(0);
+  });
+
+  it('drops one circle per tyre the player lights, and takes it off again when the tyre burns out', () => {
+    reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('tyre', { n: 2 });
+    expect(system.qa?.('burn', {})).toBe('ok:1');
+    expect(roadHazards.count).toBe(1);
+    // SOLO_SPACING is 4.5 now, not 22: three carried tyres lay a real line across a lane. A wider
+    // spacing than the road meant the player could never build anything, which is half of report (2).
+    api.playerPosition().x += 5;
+    expect(system.qa?.('burn', {})).toBe('ok:2');
+    expect(roadHazards.count).toBe(2);
+    for (let second = 0; second < SOLO_TYRE_SECONDS + 2; second++) system.update?.(1);
+    expect(roadHazards.count).toBe(0);
+    expect(roadClosures.count).toBe(0);
+    system.dispose();
+  });
+
+  it('takes everything off the road when the feature is SUSPENDED, and puts it back when it resumes', () => {
+    reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const standing = roadHazards.count;
+    expect(standing).toBeGreaterThan(0);
+    expect(roadClosures.count).toBeGreaterThan(0);
+
+    // PvP: no ticks, so its tyres never burn down. Leaving them registered shuts a road for as long
+    // as the player stays online, in a city with no protest in it.
+    system.suspend?.();
+    expect(roadHazards.count).toBe(0);
+    expect(roadClosures.count).toBe(0);
+
+    // ...and the very first frame back restates the lot. No resume hook anywhere.
+    system.update?.(1 / 60);
+    expect(roadHazards.count).toBe(standing);
+    expect(roadClosures.ids).toContain('protest:blockade');
+    system.dispose();
+  });
+
+  it('leaves one threadable heap behind while it smoulders, so traffic weaves rather than stops', () => {
+    reset();
+    let clock = 5;
+    const api = stubApi({ hour: () => clock });
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const standing = roadHazards.count;
+    // The blockade stands BLOCKADE_HOURS of GAME time, and hourDelta clamps each step to half an hour.
+    for (let step = 0; step < 16; step++) { clock += 0.4; system.update?.(1); }
+    expect(system.qa?.('status', {})).toContain('phase=smouldering');
+    expect(roadHazards.count).toBeLessThan(standing);
+    expect(roadHazards.count).toBe(1);
+    expect(roadClosures.ids).not.toContain('protest:blockade'); // the road is open again, junk and all
+    system.dispose();
   });
 });

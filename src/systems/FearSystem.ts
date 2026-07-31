@@ -39,6 +39,30 @@ export function decayFear(current: number, dt: number): number {
   return Math.max(0, current - FEAR_DECAY_RATE * dt);
 }
 
+/**
+ * SOLIDARITY — the picket line, and the answer to "everyone gets scared of me and runs away".
+ *
+ * WHY THEY RAN. Nothing registered the player as a threat; the ordinary fear machine did its job and
+ * the job was wrong for this one place. A protest crowd is ten people standing shoulder to shoulder in
+ * the road, so walking into it BUMPS someone; a second bump inside BUMP_WINDOW reads as `assault`
+ * (42 ≥ FLEE_THRESHOLD) and that one person bolts; `spreadPanic` then hands every neighbour up to
+ * `panic` (16) each and three fleeing neighbours is 48. The crowd scatters in about two seconds and
+ * the fault is not any single number — it is that nobody had ever said these particular people came
+ * here on purpose.
+ *
+ * So they do not get an immunity, they get a NERVE. Fear still accumulates on a picket (the value
+ * moves, the threat is remembered, the moment solidarity breaks it is already there to act on) but it
+ * is held below the flee threshold, because standing in the road while frightened is the entire
+ * activity. That covers the bumping, the raised gun, the panicking bystander and the bang two streets
+ * away with one rule instead of four exemptions — and it leaves `takeDamage`/`knockdown`/`mug`, which
+ * set fear directly rather than through this path, free to break it. Attacking someone is what ends it.
+ */
+export const SOLIDARITY_FEAR_CAP = FLEE_THRESHOLD - 1;
+
+export function solidarityFear(current: number, amount: number): number {
+  return Math.min(SOLIDARITY_FEAR_CAP, accumulateFear(current, amount));
+}
+
 export function fearResponse(fear: number, aggressive: boolean, bravery: number, fleeing = false): FearResponse {
   if (fear < FLEE_THRESHOLD) return 'calm';
   if (aggressive || bravery >= BRAVE_FIGHT) return 'fight';
