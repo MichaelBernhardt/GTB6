@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeActivityRecords, sanitizeCheats, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
-import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
+import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeActivityRecords, sanitizeCheats, sanitizeEverCheated, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { ARMOUR_MAX, LOCKPICK_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import type { CheatSettings, GameSettings, Inventory, SavedVehicle, SavedWeapons } from '../types';
 import { MAP_WORLD_SIZE } from '../world/mapData';
 
@@ -245,21 +245,21 @@ describe('SaveManager', () => {
 
   it('round trips the item inventory', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
-    manager.save({ ...DEFAULT_SAVE, inventory: { armour: 60, stims: 2, parachutes: 1 } });
-    expect(manager.load().inventory).toEqual({ armour: 60, stims: 2, parachutes: 1 });
+    manager.save({ ...DEFAULT_SAVE, inventory: { armour: 60, stims: 2, parachutes: 1, lockpicks: 1 } });
+    expect(manager.load().inventory).toEqual({ armour: 60, stims: 2, parachutes: 1, lockpicks: 1 });
   });
 
   it('defaults old saves without an inventory to empty pockets', () => {
     const storage = new MemoryStorage(); const manager = new SaveManager(storage);
     storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 1, money: 500, completedMissions: [], spawn: [-20, 1, 260], settings: DEFAULT_SAVE.settings, weapons: defaultWeapons() }));
-    expect(manager.load().inventory).toEqual({ armour: 0, stims: 0, parachutes: 0 });
+    expect(manager.load().inventory).toEqual({ armour: 0, stims: 0, parachutes: 0, lockpicks: 0 });
   });
 
   it('sanitizes garbage inventory data and clamps to the carry caps', () => {
     expect(sanitizeInventory(undefined)).toEqual(DEFAULT_INVENTORY);
     expect(sanitizeInventory('full')).toEqual(DEFAULT_INVENTORY);
-    expect(sanitizeInventory({ armour: 999, stims: 999, parachutes: 999 })).toEqual({ armour: ARMOUR_MAX, stims: STIM_MAX, parachutes: PARACHUTE_MAX });
-    expect(sanitizeInventory({ armour: -20, stims: 1.6, parachutes: Number.NaN } as Inventory)).toEqual({ armour: 0, stims: 2, parachutes: 0 });
+    expect(sanitizeInventory({ armour: 999, stims: 999, parachutes: 999, lockpicks: 999 })).toEqual({ armour: ARMOUR_MAX, stims: STIM_MAX, parachutes: PARACHUTE_MAX, lockpicks: LOCKPICK_MAX });
+    expect(sanitizeInventory({ armour: -20, stims: 1.6, parachutes: Number.NaN, lockpicks: -3 } as Inventory)).toEqual({ armour: 0, stims: 2, parachutes: 0, lockpicks: 0 });
     expect(sanitizeInventory({ armour: 'lots', stims: 'many' } as unknown as Inventory)).toEqual(DEFAULT_INVENTORY);
     const defaults = sanitizeInventory(undefined); defaults.armour = 40;
     expect(DEFAULT_INVENTORY.armour).toBe(0);
@@ -333,5 +333,36 @@ describe('replayable activity records', () => {
     expect(sanitizeActivityRecords({ robotRunBest: 180, joziFlowBest: -50 })).toEqual({ robotRunBest: 180 });
     expect(sanitizeActivityRecords({ robotRunBest: -1, joziFlowBest: 1250.6 })).toEqual({ joziFlowBest: 1251 });
     expect(sanitizeActivityRecords({ joziFlowBest: 10_000_001 })).toEqual({});
+  });
+});
+
+describe('the sticky ever-cheated flag', () => {
+  it('only a literal stored true counts — junk never becomes an accusation', () => {
+    expect(sanitizeEverCheated(true)).toBe(true);
+    expect(sanitizeEverCheated(false)).toBe(false);
+    expect(sanitizeEverCheated(undefined)).toBe(false);
+    expect(sanitizeEverCheated('true')).toBe(false);
+    expect(sanitizeEverCheated(1)).toBe(false);
+    expect(sanitizeEverCheated({})).toBe(false);
+  });
+
+  it('round trips through save and load', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    manager.save({ ...DEFAULT_SAVE, everCheated: true });
+    expect(manager.load().everCheated).toBe(true);
+    manager.save({ ...DEFAULT_SAVE, everCheated: false });
+    expect(manager.load().everCheated).toBe(false);
+  });
+
+  it('defaults to an honest false on saves from builds that predate the flag', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    const old = JSON.parse(JSON.stringify(DEFAULT_SAVE)) as Record<string, unknown>;
+    delete old.everCheated;
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify(old));
+    expect(manager.load().everCheated).toBe(false);
+  });
+
+  it('starts every new game clean', () => {
+    expect(DEFAULT_SAVE.everCheated).toBe(false);
   });
 });

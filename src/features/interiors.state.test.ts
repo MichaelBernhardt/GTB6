@@ -27,18 +27,21 @@ describe('the preload ring', () => {
 
 describe('interiors save slice', () => {
   it('keeps a clean visited list and a bounded find count', () => {
-    expect(sanitizeInteriorsState({ visited: ['a:b', 'c:d'], finds: 2 })).toEqual({ visited: ['a:b', 'c:d'], finds: 2 });
+    expect(sanitizeInteriorsState({ visited: ['a:b', 'c:d'], finds: 2, picks: 7 })).toEqual({ visited: ['a:b', 'c:d'], finds: 2, picks: 7 });
   });
 
   it('survives junk, missing keys and hostile shapes', () => {
-    expect(sanitizeInteriorsState(undefined)).toEqual({ visited: [], finds: 0 });
-    expect(sanitizeInteriorsState({})).toEqual({ visited: [], finds: 0 });
-    expect(sanitizeInteriorsState({ visited: 'spaza' })).toEqual({ visited: [], finds: 0 });
-    expect(sanitizeInteriorsState({ visited: [1, null, { a: 1 }, 'flat'] })).toEqual({ visited: ['flat'], finds: 0 });
-    expect(sanitizeInteriorsState({ visited: [`${'x'.repeat(64)}`] })).toEqual({ visited: [], finds: 0 });
+    expect(sanitizeInteriorsState(undefined)).toEqual({ visited: [], finds: 0, picks: 0 });
+    expect(sanitizeInteriorsState({})).toEqual({ visited: [], finds: 0, picks: 0 });
+    expect(sanitizeInteriorsState({ visited: 'spaza' })).toEqual({ visited: [], finds: 0, picks: 0 });
+    expect(sanitizeInteriorsState({ visited: [1, null, { a: 1 }, 'flat'] })).toEqual({ visited: ['flat'], finds: 0, picks: 0 });
+    expect(sanitizeInteriorsState({ visited: [`${'x'.repeat(64)}`] })).toEqual({ visited: [], finds: 0, picks: 0 });
     expect(sanitizeInteriorsState({ visited: new Array(80).fill('spaza') }).visited).toHaveLength(32);
     expect(sanitizeInteriorsState({ finds: 9999 }).finds).toBe(12);
     expect(sanitizeInteriorsState({ finds: -4 }).finds).toBe(0);
     expect(sanitizeInteriorsState({ finds: 'lots' }).finds).toBe(0);
+    expect(sanitizeInteriorsState({ picks: 3.9 }).picks).toBe(3);
+    expect(sanitizeInteriorsState({ picks: -2 }).picks).toBe(0);
+    expect(sanitizeInteriorsState({ picks: 'many' }).picks).toBe(0);
   });
 });
