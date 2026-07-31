@@ -37,6 +37,16 @@ export interface InteriorDoor {
   /** Head height of that same opening. A cottage's door is 2 m and its wall is 2.5: a fixed 3.4 m
    *  reveal on it is a hole through the roof, which is what the first version drew. */
   readonly openHeight: number;
+  /** The building's TOP massing tier, building-local, read off the same tiers City pushes as
+   *  colliders — so this rectangle is exactly the flat top a player can already stand on. Powers
+   *  roof entry (stand here, drop into the top floor) and roof exit (the hatch teleports onto it).
+   *  Undefined when the model's top is too small to stand a player on. */
+  readonly roof?: {
+    readonly minX: number; readonly maxX: number;
+    readonly minZ: number; readonly maxZ: number;
+    /** Building-local height of that top — world roof height is the building's base plus this. */
+    readonly topY: number;
+  };
   /** Everything the interior generator needs about the host building. */
   readonly facts: import('./interiors/core').BuildingFacts;
 }
@@ -84,6 +94,14 @@ export interface InteriorsSave {
   /** How many finds have been paid, ever. Caps the payout so a city full of doors is a discovery,
    *  never a farm. */
   finds: number;
+  /** Lifetime successful lock picks. Drives the practice curve: past PICK_MASTERY the bite window
+   *  doubles for good, so the two-hundredth house is effectively instant. */
+  picks: number;
+  /** The one door id whose latch is currently off for this player: the door they just left through
+   *  (the body's EXIT_GRACE). Persisted for exactly one reason — a save written while standing on a
+   *  roof they walked out onto must not reload with the way back down re-latched; the body re-arms
+   *  the window for as long as they remain on that roof. Absent from almost every save. */
+  graceId?: string;
 }
 
 /** How many first visits pay out. Small, generous, and then it stops mattering. */
@@ -91,12 +109,18 @@ export const FIND_CAP = 12;
 
 /** Runs inside SaveManager's synchronous deserialize, on an already generically-sanitised blob. */
 export function sanitizeInteriorsState(raw: unknown): InteriorsSave {
-  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown };
+  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown; picks?: unknown; graceId?: unknown };
   const visited = Array.isArray(source.visited)
     ? source.visited.filter((entry): entry is string => typeof entry === 'string' && entry.length < 32).slice(0, 32)
     : [];
   const finds = typeof source.finds === 'number' && Number.isFinite(source.finds)
     ? Math.max(0, Math.min(FIND_CAP, Math.floor(source.finds)))
     : 0;
-  return { visited, finds };
+  const picks = typeof source.picks === 'number' && Number.isFinite(source.picks)
+    ? Math.max(0, Math.min(1_000_000, Math.floor(source.picks)))
+    : 0;
+  const graceId = typeof source.graceId === 'string' && source.graceId.length > 0 && source.graceId.length < 32
+    ? source.graceId
+    : undefined;
+  return graceId ? { visited, finds, picks, graceId } : { visited, finds, picks };
 }

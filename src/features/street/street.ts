@@ -1118,6 +1118,19 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     },
     menu,
     command,
+    /** The console's generic `give zol 5` route (registry.ts `grants`). Adds carried stock; the
+     *  street-name aliases land on their product. Deliberately ignores the carry cap — it is a
+     *  testing grant, and the sell path already handles any held amount. */
+    grant: (item, count) => {
+      const product: StreetProduct = item === 'bankie' || item === 'bankies' ? 'zol'
+        : item === 'button' ? 'buttons'
+          : item === 'straw' || item === 'straws' || item === 'whoonga' ? 'nyaope'
+            : (STREET_PRODUCTS.find((entry) => entry === item) ?? 'zol');
+      save.stock[product] += Math.max(1, count);
+      dirty = true;
+      const spec = productSpec(product);
+      return `Holding ${save.stock[product]} ${save.stock[product] === 1 ? spec.unit : spec.plural} of ${spec.name} (${carrying(save.stock)} total).`;
+    },
     qa,
     dispose: () => {
       disposed = true;

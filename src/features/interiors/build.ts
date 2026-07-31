@@ -16,7 +16,7 @@
  */
 import * as THREE from 'three';
 import { createSignMesh } from '../../world/ProceduralMaterials';
-import { rectMaxX, rectMaxZ, rectMinX, rectMinZ, STOREY_HEIGHT, type Rect } from './core';
+import { hatchFoot, rectMaxX, rectMaxZ, rectMinX, rectMinZ, STOREY_HEIGHT, type Rect } from './core';
 import type { FloorPlan, Prop, Wall } from './floor';
 import type { InteriorDoor } from '../interiors.state';
 
@@ -44,11 +44,50 @@ export interface Partition {
 
 export interface BuiltFloor {
   readonly group: THREE.Group;
-  readonly lamps: readonly THREE.PointLight[];
   readonly powered: readonly { material: THREE.MeshStandardMaterial; base: number }[];
   readonly partitions: readonly Partition[];
   dispose(): void;
 }
+
+/**
+ * NO LIGHTS IN A FLOOR, AND THIS IS THE STALL FIX. Three.js compiles a program variant per
+ * (material, light-census) pair for EVERY material it renders, so a floor that brings its own
+ * PointLights changes NUM_POINT_LIGHTS for the whole scene on every raise and drop — measured at
+ * 4.4 s for the entry storm and 5.1 s for the first drop under SwiftShader, and a visible freeze on
+ * hardware. Floors therefore emit only lamp POSITIONS (plan.lamps, drawn here as bulb meshes); the
+ * feature owns one constant-size pool of PointLights per visit (see interiors.ts LAMP_POOL) and
+ * repositions them, so the light census never changes between the entry fade and the exit fade.
+ *
+ * MATERIALS ARE SHARED FOR THE SAME REASON, second order: a fresh MeshStandardMaterial per floor
+ * meant every first visit to a floor compiled a handful of new program variants mid-walk (measured
+ * 196-333 ms apiece). Everything here draws from a module-level cache keyed on colour/roughness/side,
+ * so after the first floor of a session there is nothing left to compile. Cached materials are NEVER
+ * disposed by a floor — the cache is bounded by the palette tables in floor.ts.
+ */
+const MATERIALS = new Map<string, THREE.MeshStandardMaterial>();
+function shared(color: number, roughness: number, side: THREE.Side = THREE.FrontSide): THREE.MeshStandardMaterial {
+  const key = `${color}|${roughness}|${side}`;
+  let material = MATERIALS.get(key);
+  if (!material) { material = new THREE.MeshStandardMaterial({ color, roughness, side }); MATERIALS.set(key, material); }
+  return material;
+}
+/** Emissive materials, one per role. `powered` entries reference these shared instances; the blackout
+ *  ramp writes the same product into each, so sharing cannot desynchronise them. */
+const GLOW = new Map<string, THREE.MeshStandardMaterial>();
+function sharedGlow(color: number, emissive: number, intensity: number, roughness: number): THREE.MeshStandardMaterial {
+  const key = `${color}|${emissive}|${intensity}|${roughness}`;
+  let material = GLOW.get(key);
+  if (!material) { material = new THREE.MeshStandardMaterial({ color, emissive, emissiveIntensity: intensity, roughness }); GLOW.set(key, material); }
+  return material;
+}
+/** Fixed-colour basics (the void, door mouths, the exit-mat glow). */
+const VOID_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x05070a, side: THREE.BackSide, fog: false });
+const MOUTH_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x0a0d10, fog: false });
+const MAT_GLOW_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.34, fog: false });
+/** One unit box, scaled per mesh — floors were allocating (and disposing) hundreds of BoxGeometries
+ *  each; every box in an interior is axis-aligned and untextured, so scale carries the whole shape. */
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+const BULB_GEOMETRY = new THREE.SphereGeometry(0.13, 10, 8);
 
 /** Local room point -> world. group.rotation.y = h maps local (lx, lz) to
  *  world (lx·cos h + lz·sin h, −lx·sin h + lz·cos h). */
@@ -64,22 +103,28 @@ export function toLocal(at: { x: number; z: number }, heading: number, x: number
   return { x: dx * c - dz * s, z: dx * s + dz * c };
 }
 
-export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolean }): BuiltFloor {
+/** What is special about the ends of the building: the ground floor gets the street exit and the
+ *  under-stair storage, the top floor gets a stair head instead of a flight to nowhere, and a top
+ *  floor with `hatch` gets the ladder to the roof. */
+export interface FloorEnds { ground: boolean; top: boolean; hatch: boolean }
+
+export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
   const group = new THREE.Group();
   group.name = `Floor:${plan.core.id}:${plan.index}`;
 
   const geometries: THREE.BufferGeometry[] = [];
-  const materials: THREE.Material[] = [];
-  const lamps: THREE.PointLight[] = [];
   const powered: { material: THREE.MeshStandardMaterial; base: number }[] = [];
   const partitions: Partition[] = [];
   const keep = <T extends THREE.BufferGeometry>(geometry: T): T => { geometries.push(geometry); return geometry; };
-  const mat = <T extends THREE.Material>(material: T): T => { materials.push(material); return material; };
-  const solid = (color: number, roughness = 0.82): THREE.MeshStandardMaterial => mat(new THREE.MeshStandardMaterial({ color, roughness }));
+  // `mat` hands back the SHARED instance untouched: kept as a seam so every call site below reads the
+  // same as before the material cache landed. Nothing per-floor is ever disposed through it.
+  const mat = <T extends THREE.Material>(material: T): T => material;
+  const solid = (color: number, roughness = 0.82): THREE.MeshStandardMaterial => shared(color, roughness);
   const sheltered = (color: number, strength: number): number =>
     new THREE.Color(color).multiplyScalar(strength).getHex();
   const box = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
-    const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
+    const mesh = new THREE.Mesh(UNIT_BOX, material);
+    mesh.scale.set(w, h, d);
     mesh.position.set(x, y, z); group.add(mesh); return mesh;
   };
 
@@ -87,8 +132,7 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
 
   // ---- the void: everything outside this floor is black, whichever way the boom swings ----------
   const shroudRadius = Math.hypot(width, depth) / 2 + BOOM + 2;
-  const voidMaterial = mat(new THREE.MeshBasicMaterial({ color: 0x05070a, side: THREE.BackSide, fog: false }));
-  const shroud = new THREE.Mesh(keep(new THREE.CylinderGeometry(shroudRadius, shroudRadius, height + 34, 24, 1, false)), voidMaterial);
+  const shroud = new THREE.Mesh(keep(new THREE.CylinderGeometry(shroudRadius, shroudRadius, height + 34, 24, 1, false)), VOID_MATERIAL);
   shroud.position.y = (height + 34) / 2 - 17;
   group.add(shroud);
 
@@ -96,9 +140,9 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   // There is no physical roof in the buried room for the city's directional/hemisphere lights to
   // hit. Darker albedo compensates only on the structural surfaces; colourful furniture keeps its
   // authored palette and therefore still gives each room identity.
-  const wall = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.wall, 0.33), roughness: 0.92, side: THREE.BackSide }));
-  const floorMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.floor, 0.46), roughness: 0.95, side: THREE.BackSide }));
-  const ceilingMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.ceiling, 0.31), roughness: 0.95, side: THREE.BackSide }));
+  const wall = shared(sheltered(palette.wall, 0.33), 0.92, THREE.BackSide);
+  const floorMaterial = shared(sheltered(palette.floor, 0.46), 0.95, THREE.BackSide);
+  const ceilingMaterial = shared(sheltered(palette.ceiling, 0.31), 0.95, THREE.BackSide);
   const shell = new THREE.Mesh(keep(new THREE.BoxGeometry(width, height, depth)), [wall, wall, ceilingMaterial, floorMaterial, wall, wall]);
   shell.position.y = height / 2;
   group.add(shell);
@@ -109,32 +153,57 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   box(WALL_T, 0.14, depth, trim, width / 2 - WALL_T / 2, 0.07, 0);
   box(WALL_T, 0.14, depth, trim, -width / 2 + WALL_T / 2, 0.07, 0);
 
+  // ---- ornamentation, per building (see decorFor): a dado band at hip height, a picture rail, a
+  // cornice under the ceiling. Three walls only — the FRONT wall carries the exit doorway on the
+  // ground floor and a bar across its mouth read as a barricade. Ten boxes at most, all from the
+  // shared material cache, so the whole feature costs nothing the skirting did not already cost.
+  const strip = (y: number, thickness: number, material: THREE.Material): void => {
+    box(width, thickness, WALL_T + 0.04, material, 0, y, depth / 2 - WALL_T / 2 - 0.02);
+    box(WALL_T + 0.04, thickness, depth, material, width / 2 - WALL_T / 2 - 0.02, y, 0);
+    box(WALL_T + 0.04, thickness, depth, material, -width / 2 + WALL_T / 2 + 0.02, y, 0);
+  };
+  if (plan.decor.dado) strip(1.05, 0.1, trim);
+  if (plan.decor.rail) strip(2.42, 0.07, trim);
+  if (plan.decor.cornice) strip(height - 0.11, 0.18, solid(0xe9e4d8, 0.85));
+
   // ---- partitions -------------------------------------------------------------------------------
-  const partitionMaterial = mat(new THREE.MeshStandardMaterial({ color: sheltered(palette.wall, 0.33), roughness: 0.9 }));
+  const partitionMaterial = shared(sheltered(palette.wall, 0.33), 0.9);
   const jamb = solid(palette.trim, 0.6);
   for (const run of plan.walls) buildWall(run, height, { box, partitionMaterial, jamb, partitions });
 
   // ---- the core: the same shaft on every storey, which is why they line up ----------------------
   // The stair goes in its own group so the occlusion cull can take the whole flight out in one go.
-  const shaft = new THREE.Group(); shaft.name = 'Stair'; group.add(shaft);
-  const shaftBox = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
-    const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
-    mesh.position.set(x, y, z); shaft.add(mesh); return mesh;
-  };
-  buildStair(core.stair, height, { box: shaftBox, solid, keep, group: shaft, mat });
-  partitions.push({
-    mesh: shaft, core: true,
-    minX: rectMinX(core.stair), maxX: rectMaxX(core.stair),
-    minZ: rectMinZ(core.stair), maxZ: rectMaxZ(core.stair),
-  });
-  // A stair has to stop somewhere: there is no storey over the top one and no basement under the
-  // ground, so the half flight that would lead nowhere is shuttered. Drawn here and clamped against
-  // in interiors.ts from the SAME rectangle, so a locked stair looks locked and behaves locked.
-  const shutter = solid(0x5b625f, 0.7);
-  for (const [enabled, direction] of [[ends.top, 1], [ends.ground, -1]] as [boolean, 1 | -1][]) {
-    if (!enabled) continue;
-    const cap = stairCap(core.stair, direction);
-    box(cap.w, 2.1, cap.d, shutter, cap.x, 1.05, cap.z);
+  // A single-storey building has no shaft at all — the rooms took the whole plate.
+  if (core.stair) {
+    const shaft = new THREE.Group(); shaft.name = 'Stair'; group.add(shaft);
+    const shaftBox = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
+      const mesh = new THREE.Mesh(keep(new THREE.BoxGeometry(w, h, d)), material);
+      mesh.position.set(x, y, z); shaft.add(mesh); return mesh;
+    };
+    const shaftKit = { box: shaftBox, solid, keep, group: shaft, mat };
+    if (ends.top) {
+      // THE TOP OF THE STAIRWELL. The old code drew a full switchback rising into the ceiling with a
+      // grey shutter across it — the "blocked off stairs" the owner reported on every top floor.
+      // Nobody can ever walk that flight (there is no storey above), so it is not drawn at all: the
+      // top floor gets a stair HEAD — the well the flight from below arrives in, railed off where
+      // the containment clamp refuses to let you walk, open at the mouth you step out of. On a
+      // commercial or industrial building tall enough to qualify, the up side carries a steel
+      // ladder to a roof hatch instead of a rail, and E under it takes you out onto the real roof.
+      buildStairHead(core.stair, core.stairDir, height, ends.hatch, shaftKit);
+    } else {
+      buildStair(core.stair, core.stairDir, height, shaftKit);
+    }
+    if (ends.ground) {
+      // THE FOOT OF THE STAIRWELL. Downstairs from the ground floor there is nothing, and the old
+      // grey shutter said so with a wall. The clamp still refuses the step (see interiors.ts), but
+      // what you SEE is what a real ground floor does with that dead quarter: under-stair storage.
+      buildUnderStair(core.stair, core.stairDir, shaftKit);
+    }
+    partitions.push({
+      mesh: shaft, core: true,
+      minX: rectMinX(core.stair), maxX: rectMaxX(core.stair),
+      minZ: rectMinZ(core.stair), maxZ: rectMaxZ(core.stair),
+    });
   }
   if (core.lift) buildLift(core.lift, height, { box, solid, keep, group, mat, powered });
 
@@ -145,33 +214,26 @@ export function buildFloor(plan: FloorPlan, ends: { ground: boolean; top: boolea
   for (const prop of plan.props) buildProp(prop, { box, solid, mat, keep, group, powered });
 
   // ---- light --------------------------------------------------------------------------------------
-  // A room you cannot see is the bug this feature shipped with. Belt (an ambient the grid cannot take
-  // away entirely), braces (the lamps), and the shroud keeps neither from leaking into the city.
-  group.add(new THREE.AmbientLight(0xffe9cc, 0.24));
-  const shade = mat(new THREE.MeshStandardMaterial({ color: 0xfff0cf, emissive: 0xfff0cf, emissiveIntensity: 1.1, roughness: 0.6 }));
-  powered.push({ material: shade, base: shade.emissiveIntensity });
+  // ONLY THE BULBS ARE DRAWN HERE. The real PointLights live in the feature's constant-size pool
+  // (interiors.ts) and are repositioned onto plan.lamps — see the header of this file for why a floor
+  // must never add or remove a light. The pool also carries the visit-wide ambient and the dim fill
+  // that keeps the way out findable with the grid down.
+  const shade = sharedGlow(0xfff0cf, 0xfff0cf, 1.1, 0.6);
+  powered.push({ material: shade, base: 1.1 });
   for (const spot of plan.lamps) {
-    const lamp = new THREE.PointLight(spot.color, INTERIOR_LAMP_INTENSITY, 22, 1.5);
-    lamp.position.set(spot.x, spot.y, spot.z);
-    group.add(lamp); lamps.push(lamp);
-    const bulb = new THREE.Mesh(keep(new THREE.SphereGeometry(0.13, 10, 8)), shade);
+    const bulb = new THREE.Mesh(BULB_GEOMETRY, shade);
     bulb.position.set(spot.x, spot.y - 0.06, spot.z); group.add(bulb);
   }
-  // A dim fill so the corners are never pure black even with the grid down — you must always be able
-  // to find the way out.
-  const fill = new THREE.PointLight(0x9fb0c8, 5, 44, 1.1);
-  fill.position.set(0, height * 0.82, -depth * 0.2);
-  group.add(fill);
 
   group.traverse((object) => { object.castShadow = false; object.receiveShadow = false; });
 
   return {
-    group, lamps, powered, partitions,
+    group, powered, partitions,
     dispose: () => {
       group.removeFromParent();
-      group.traverse((object) => { if (object instanceof THREE.Light) object.dispose(); });
+      // Geometries are per-floor (the few that are not the shared unit box); materials are the
+      // module cache's and are deliberately NOT disposed — see the header.
       for (const geometry of geometries) geometry.dispose();
-      for (const material of materials) material.dispose();
       group.clear();
     },
   };
@@ -230,21 +292,23 @@ interface Kit {
 }
 
 /**
- * THE SWITCHBACK. Two half flights side by side: up the +x half from the front to the mid landing at
- * the back, then up the −x half from the back to the front again, arriving one storey higher at the
- * spot you set off from. That shape is why the stair works on every storey with no special case at
- * either end — the top of one flight IS the bottom of the next, in the same shaft, at the same x.
+ * THE SWITCHBACK. Two half flights side by side: up the `dir` half from the front to the mid landing
+ * at the back, then up the other half from the back to the front again, arriving one storey higher
+ * at the spot you set off from. That shape is why the stair works on every storey with no special
+ * case at either end — the top of one flight IS the bottom of the next, in the same shaft, at the
+ * same x. Which side goes up first is the building's own seeded choice (core.stairDir), so two
+ * stairwells on one street no longer all turn the same way.
  *
- * See interiors.ts stairHeight() for the matching altitude function: this draws it, that walks it.
+ * See interiors.ts stairProgress() for the matching altitude function: this draws it, that walks it.
  */
-function buildStair(shaft: Rect, height: number, kit: Kit): void {
+function buildStair(shaft: Rect, dir: 1 | -1, height: number, kit: Kit): void {
   const { box, solid } = kit;
   const tread = solid(0x77726a, 0.9);
   const nose = solid(0x3b4143, 0.7);
   const steps = 9;
   const halfW = shaft.w / 2;
   for (let half = 0; half < 2; half++) {
-    const sign = half === 0 ? 1 : -1;           // +x half rises front→back, −x half back→front
+    const sign = half === 0 ? dir : -dir;       // the `dir` half rises front→back, the other back→front
     const x = shaft.x + sign * halfW / 2;
     for (let i = 0; i < steps; i++) {
       const t = (i + 0.5) / steps;
@@ -258,13 +322,73 @@ function buildStair(shaft: Rect, height: number, kit: Kit): void {
   // landing, and it is the thing that makes the shaft read as a stairwell rather than a ramp.
   box(0.12, height, shaft.d * 0.62, solid(0x8d877c, 0.9), shaft.x, height / 2, shaft.z - shaft.d * 0.19);
   // A handrail down the outside of each flight.
-  for (const sign of [-1, 1]) {
-    box(0.07, 0.07, shaft.d, solid(0x4a5254, 0.5), shaft.x + sign * (halfW - 0.08), STOREY_HEIGHT * (sign > 0 ? 0.25 : 0.75) + 1.0, shaft.z);
+  for (const sign of [-1, 1] as const) {
+    box(0.07, 0.07, shaft.d, solid(0x4a5254, 0.5), shaft.x + sign * (halfW - 0.08), STOREY_HEIGHT * (sign === dir ? 0.25 : 0.75) + 1.0, shaft.z);
   }
 }
 
+/**
+ * THE STAIR HEAD — what the top storey has instead of a switchback. The flight from the floor below
+ * arrives at the front of the shaft on the down side; everything else in the shaft rectangle is the
+ * region the containment clamp refuses (there is nothing above to climb to), so it is railed off
+ * like the top landing of any real stairwell rather than shuttered like a crime scene. The rails are
+ * drawn where the clamp already refuses — they mark the rule, they do not implement it.
+ */
+function buildStairHead(shaft: Rect, dir: 1 | -1, height: number, hatch: boolean, kit: Kit): void {
+  const { box, solid, keep, group } = kit;
+  const steel = solid(0x4a5254, 0.55);
+  const post = (x: number, z: number): void => { box(0.07, 1.02, 0.07, steel, x, 0.51, z); };
+  const railRun = (x0: number, z0: number, x1: number, z1: number): void => {
+    const along = Math.hypot(x1 - x0, z1 - z0);
+    if (along < 0.2) return;
+    const posts = Math.max(2, Math.round(along / 1.3));
+    for (let i = 0; i < posts; i++) post(x0 + (x1 - x0) * i / (posts - 1), z0 + (z1 - z0) * i / (posts - 1));
+    box(Math.abs(x1 - x0) + 0.07, 0.07, Math.abs(z1 - z0) + 0.07, steel, (x0 + x1) / 2, 1.02, (z0 + z1) / 2);
+  };
+  const minX = rectMinX(shaft); const maxX = rectMaxX(shaft);
+  const minZ = rectMinZ(shaft); const maxZ = rectMaxZ(shaft);
+  const upFrontX = dir === 1 ? [shaft.x, maxX] as const : [minX, shaft.x] as const;
+  // The dark well, so the opening reads as a stairwell going down before you step into it.
+  const well = new THREE.Mesh(keep(new THREE.BoxGeometry(shaft.w - 0.1, 0.03, shaft.d - 0.1)), MOUTH_MATERIAL);
+  well.position.set(shaft.x, 0.015, shaft.z);
+  group.add(well);
+  // Rails: both sides, the back, the centre line over the spine wall the clamp still enforces, and
+  // the up-side front — with a gap for the ladder when this head opens onto the roof.
+  railRun(minX, minZ, minX, maxZ);
+  railRun(maxX, minZ, maxX, maxZ);
+  railRun(minX, maxZ, maxX, maxZ);
+  railRun(shaft.x, minZ, shaft.x, maxZ - shaft.d * 0.38);
+  if (!hatch) railRun(upFrontX[0], minZ, upFrontX[1], minZ);
+  if (hatch) {
+    // The way onto the roof: a steel ladder where the up-flight would have started, and a hatch in
+    // the ceiling over it. E at the foot of the ladder does the climb (see interiors:roofhatch).
+    const foot = hatchFoot(shaft, dir);
+    const ladderZ = minZ + 0.35;
+    for (const sx of [-0.3, 0.3]) box(0.07, height, 0.07, steel, foot.x + sx, height / 2, ladderZ);
+    const rungs = Math.floor(height / 0.38);
+    for (let i = 1; i <= rungs; i++) box(0.66, 0.05, 0.05, steel, foot.x, i * height / (rungs + 1), ladderZ);
+    const frame = solid(0x37403f, 0.6);
+    box(1.5, 0.1, 1.5, frame, foot.x, height - 0.05, foot.z);
+    box(1.2, 0.08, 1.2, solid(0x9aa2a4, 0.4), foot.x, height - 0.11, foot.z);
+  }
+}
+
+/** What the dead quarter at the foot of the stairwell really is: the cupboard under the stairs.
+ *  Replaces the grey shutter the owner called out; the clamp still refuses the step (there is no
+ *  basement), and now the reason reads as furniture instead of a barricade. */
+function buildUnderStair(shaft: Rect, dir: 1 | -1, kit: Kit): void {
+  const { box, solid } = kit;
+  const lane = shaft.w / 4;
+  const x = shaft.x - dir * lane;           // the down side's front quarter — the flight to nowhere
+  const z = rectMinZ(shaft) + 0.75;
+  box(0.9, 0.62, 0.9, solid(0xa07a4c, 0.85), x - 0.35, 0.31, z);
+  box(0.8, 0.5, 0.8, solid(0x8a6a3f, 0.85), x - 0.3, 0.87, z + 0.05);
+  box(0.7, 0.9, 0.55, solid(0x5f6a6c, 0.8), x + 0.55, 0.45, z + 0.15);
+  box(0.09, 1.35, 0.09, solid(0x8b5a3c, 0.9), x + 0.85, 0.68, z - 0.3);
+}
+
 function buildLift(shaft: Rect, height: number, kit: Kit): void {
-  const { box, solid, mat, powered } = kit;
+  const { box, solid, powered } = kit;
   const car = solid(0x4d5457, 0.55);
   box(shaft.w + 0.2, height, 0.14, car, shaft.x, height / 2, rectMaxZ(shaft) + 0.07);
   box(0.14, height, shaft.d, car, rectMinX(shaft) - 0.07, height / 2, shaft.z);
@@ -272,7 +396,7 @@ function buildLift(shaft: Rect, height: number, kit: Kit): void {
   // The doors, closed, on the corridor side, with the call panel lit beside them.
   const doors = solid(0x9aa2a4, 0.4);
   for (const sign of [-1, 1]) box(shaft.w / 2 - 0.04, 2.4, 0.1, doors, shaft.x + sign * shaft.w / 4, 1.2, rectMinZ(shaft) - 0.05);
-  const panel = mat(new THREE.MeshStandardMaterial({ color: 0xf0c657, emissive: 0xf0c657, emissiveIntensity: 1.4, roughness: 0.4 }));
+  const panel = sharedGlow(0xf0c657, 0xf0c657, 1.4, 0.4);
   powered?.push({ material: panel, base: panel.emissiveIntensity });
   box(0.18, 0.3, 0.06, panel, rectMinX(shaft) - 0.28, 1.3, rectMinZ(shaft) - 0.05);
 }
@@ -280,10 +404,9 @@ function buildLift(shaft: Rect, height: number, kit: Kit): void {
 /** The way back to the street: a recessed dark opening in the front wall, lit, labelled, with a mat
  *  under it you cannot miss walking back down the spine. */
 function buildExit(entryX: number, depth: number, kit: Kit): void {
-  const { box, solid, mat, keep, group } = kit;
+  const { box, solid, keep, group } = kit;
   const doorW = 2.2; const doorH = 3.0;
-  const mouth = mat(new THREE.MeshBasicMaterial({ color: 0x0a0d10, fog: false }));
-  box(doorW, doorH, 0.06, mouth, entryX, doorH / 2, -depth / 2 + 0.04);
+  box(doorW, doorH, 0.06, MOUTH_MATERIAL, entryX, doorH / 2, -depth / 2 + 0.04);
   const frame = solid(0x37403f, 0.6);
   box(0.22, doorH + 0.22, 0.24, frame, entryX - doorW / 2 - 0.11, (doorH + 0.22) / 2, -depth / 2 + 0.13);
   box(0.22, doorH + 0.22, 0.24, frame, entryX + doorW / 2 + 0.11, (doorH + 0.22) / 2, -depth / 2 + 0.13);
@@ -293,8 +416,7 @@ function buildExit(entryX: number, depth: number, kit: Kit): void {
   const exitSign = createSignMesh(keep(new THREE.PlaneGeometry(1.9, 0.5)), 'EXIT', '#ffe08a', { background: '#16211d' });
   exitSign.position.set(entryX, doorH + 0.58, -depth / 2 + 0.1);
   group.add(exitSign);
-  const matGlow = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: 0.34, fog: false }));
-  const matDisc = new THREE.Mesh(keep(new THREE.CylinderGeometry(1.5, 1.5, 0.05, 20)), matGlow);
+  const matDisc = new THREE.Mesh(keep(new THREE.CylinderGeometry(1.5, 1.5, 0.05, 20)), MAT_GLOW_MATERIAL);
   matDisc.position.set(entryX, 0.03, -depth / 2 + EXIT_MAT_IN);
   group.add(matDisc);
   box(2.2, 0.04, 1.4, solid(0x3b3530, 0.98), entryX, 0.02, -depth / 2 + EXIT_MAT_IN);
@@ -302,12 +424,6 @@ function buildExit(entryX: number, depth: number, kit: Kit): void {
 
 /** How far in from the front wall the exit mat sits. */
 export const EXIT_MAT_IN = 1.7;
-
-/** The shutter across the half flight that leads nowhere: +1 caps the way up, −1 the way down.
- *  Exported so the containment clamp blocks exactly the rectangle that was drawn. */
-export function stairCap(shaft: Rect, direction: 1 | -1): Rect {
-  return { x: shaft.x + direction * shaft.w / 4, z: rectMinZ(shaft) + 0.25, w: shaft.w / 2, d: 0.3 };
-}
 
 // ---- the street side -------------------------------------------------------------------------
 
@@ -408,10 +524,10 @@ export function buildDoorways(
     add(0.14, openH + 0.16, 0.16, steel, openW / 2 + 0.07, (openH + 0.16) / 2, 0.08);
     add(openW + 0.28, 0.14, 0.16, steel, 0, openH + 0.08, 0.08);
     // AND NO NAME BOARD. It was the loudest thing on the wall — a lit sign over every front door in
-    // a suburb — and it was also a real bug: ProceduralMaterials' sign atlas holds 512 distinct
-    // boards for a city that already draws about 470, and a name list per door family pushed it over
-    // the top, so doorways came out wearing some other building's text. The name is on the prompt you
-    // are standing in to read it. A house does not have a signboard.
+    // a suburb. (It was also, historically, the thing that overflowed the sign atlas; capacity is
+    // 1024 now and buildingIdentity.ts letters the buildings that genuinely carry boards, so the
+    // budget is tested rather than hoped about — see ProceduralMaterials.) The name is on the prompt
+    // you are standing in to read it. A house does not have a signboard.
     // The circle on the ground, and nothing standing on it. Its own material per door so the fade is
     // per door and not per street — twenty-two MeshBasic materials is nothing next to one beam.
     const stepY = surfaceHeightAt(door.x, door.z);
@@ -439,7 +555,7 @@ export function buildDoorways(
 // ---- furniture ---------------------------------------------------------------------------------
 
 function buildProp(prop: Prop, kit: Kit): void {
-  const { box, solid, mat, keep, group, powered } = kit;
+  const { box, solid, keep, group, powered } = kit;
   const body = solid(prop.color, 0.8);
   const base = prop.y;
   switch (prop.shape) {
@@ -488,7 +604,7 @@ function buildProp(prop: Prop, kit: Kit): void {
     }
     case 'stove': {
       box(prop.w, prop.h, prop.d, body, prop.x, base + prop.h / 2, prop.z);
-      const plate = mat(new THREE.MeshStandardMaterial({ color: 0x6a2a22, emissive: 0x8a2010, emissiveIntensity: 0.7, roughness: 0.5 }));
+      const plate = sharedGlow(0x6a2a22, 0x8a2010, 0.7, 0.5);
       powered?.push({ material: plate, base: plate.emissiveIntensity });
       for (let i = 0; i < 2; i++) {
         const ring = new THREE.Mesh(keep(new THREE.CylinderGeometry(0.15, 0.15, 0.04, 12)), plate);
@@ -498,7 +614,7 @@ function buildProp(prop: Prop, kit: Kit): void {
     }
     case 'tv': {
       box(prop.w, prop.h, prop.d, solid(0x1b1f22, 0.6), prop.x, base + prop.h / 2, prop.z);
-      const screen = mat(new THREE.MeshStandardMaterial({ color: 0x9fc4d8, emissive: 0x6f9fc4, emissiveIntensity: 0.9, roughness: 0.4 }));
+      const screen = sharedGlow(0x9fc4d8, 0x6f9fc4, 0.9, 0.4);
       powered?.push({ material: screen, base: screen.emissiveIntensity });
       box(prop.w * 0.4, prop.h - 0.12, prop.d - 0.12, screen, prop.x, base + prop.h / 2, prop.z);
       break;
@@ -508,7 +624,7 @@ function buildProp(prop: Prop, kit: Kit): void {
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
         box(0.07, prop.h, 0.07, solid(0x4a4640, 0.7), prop.x + sx * (prop.w / 2 - 0.1), base + prop.h / 2, prop.z + sz * (prop.d / 2 - 0.1));
       }
-      const screen = mat(new THREE.MeshStandardMaterial({ color: 0x8fb8cc, emissive: 0x5f8fb4, emissiveIntensity: 0.8, roughness: 0.4 }));
+      const screen = sharedGlow(0x8fb8cc, 0x5f8fb4, 0.8, 0.4);
       powered?.push({ material: screen, base: screen.emissiveIntensity });
       box(0.5, 0.36, 0.05, screen, prop.x, base + prop.h + 0.28, prop.z);
       break;
@@ -564,6 +680,43 @@ function buildProp(prop: Prop, kit: Kit): void {
     case 'rug': {
       const rug = box(prop.w, 0.03, prop.d, body, prop.x, base + 0.015, prop.z);
       rug.renderOrder = 1;
+      break;
+    }
+    case 'toilet': {
+      // Pan, seat, cistern against the wall. The one fixture every bathroom actually has.
+      box(prop.w * 0.8, prop.h * 0.5, prop.d * 0.6, body, prop.x, base + prop.h * 0.25, prop.z);
+      box(prop.w, prop.h * 0.1, prop.d * 0.75, solid(0xf0f2f0, 0.5), prop.x, base + prop.h * 0.55, prop.z);
+      // Cistern against whichever outer wall the pan was set against (furnish puts it at wallX).
+      box(0.24, prop.h * 0.55, prop.d * 0.85, body, prop.x + (prop.x > 0 ? 1 : -1) * prop.w * 0.3, base + prop.h * 0.72, prop.z);
+      break;
+    }
+    case 'chair': {
+      // A proper chair, back and all — the stool's grown-up sibling for desks and kitchen tables.
+      box(prop.w, 0.06, prop.d, body, prop.x, base + prop.h * 0.5, prop.z);
+      box(prop.w * 0.85, prop.h * 0.48, 0.06, body, prop.x, base + prop.h * 0.76, prop.z + prop.d * 0.42);
+      for (const sx of [-1, 1]) box(0.05, prop.h * 0.5, 0.05, solid(0x3a342e, 0.7), prop.x + sx * (prop.w / 2 - 0.05), base + prop.h * 0.25, prop.z);
+      break;
+    }
+    case 'picture': {
+      // A framed print. The thin axis faces the room; the canvas sits proud of the frame a touch so
+      // it reads as a picture, not a plaque, from either side.
+      const thinX = prop.w < prop.d;
+      const frame = solid(0x2e2a24, 0.6);
+      box(prop.w, prop.h, prop.d, frame, prop.x, base + prop.h / 2, prop.z);
+      if (thinX) box(prop.w + 0.03, prop.h - 0.14, prop.d - 0.14, body, prop.x, base + prop.h / 2, prop.z);
+      else box(prop.w - 0.14, prop.h - 0.14, prop.d + 0.03, body, prop.x, base + prop.h / 2, prop.z);
+      break;
+    }
+    case 'lamp': {
+      // Standing lamp: base, pole, warm shade. The shade glows on the same powered ramp as the
+      // bulbs, so load shedding takes it down with the rest of the room.
+      const pole = new THREE.Mesh(keep(new THREE.CylinderGeometry(0.03, 0.03, prop.h * 0.75, 8)), solid(0x4a4238, 0.6));
+      pole.position.set(prop.x, base + prop.h * 0.4, prop.z); group.add(pole);
+      box(prop.w * 0.7, 0.05, prop.w * 0.7, body, prop.x, base + 0.03, prop.z);
+      const glow = sharedGlow(0xffe6b8, 0xffd489, 0.85, 0.6);
+      powered?.push({ material: glow, base: 0.85 });
+      const shade = new THREE.Mesh(keep(new THREE.CylinderGeometry(prop.w * 0.34, prop.w * 0.46, 0.34, 10, 1, true)), glow);
+      shade.position.set(prop.x, base + prop.h * 0.85, prop.z); group.add(shade);
       break;
     }
     case 'bath': {

@@ -64,8 +64,16 @@ export const MIN_ROOM = 5.6;
  * a wall's blocking footprint reaches a player-radius beyond its end, and a flight lane that grazes
  * one is a stair you cannot walk down. It cost a debugging session to find, so it is a named
  * constant with a reason attached rather than a 0.2 somebody will helpfully tidy away.
+ *
+ * WHY 2.2 AND NOT THE 1.4 IT USED TO BE. The stair's divider wall starts at the shaft mouth, and its
+ * blocking footprint (±0.73 in x) used to sit wholly inside the corridor, clear of the room walls'
+ * own footprints (inner edge ±0.9 around the spine). Now that the shaft stands seeded OFF the spine,
+ * those two bands can overlap in x — and at 1.4 the z gap between a room wall's end and the divider's
+ * start was 1.4 − 2·(body 0.65) = 0.1: a sealed corner the axis-separated clamp deadlocks in, found
+ * by the QA climber the first time a stair drew an offset. 2.2 leaves a 0.9 walk channel across the
+ * whole plate in front of the shaft mouth, at every offset the placement window allows.
  */
-export const CORE_GAP = 1.4;
+export const CORE_GAP = 2.2;
 
 /**
  * Floor plates are clamped: a 5 u cottage still has to hold a room a camera can stand in, and a 60 u
@@ -109,6 +117,10 @@ export interface BuildingFacts {
   readonly height: number;
   readonly style: string;
   readonly entrance: EntranceKind;
+  /** Building-local x of the tagged entrance — where the model actually drew its door along the
+   *  front wall. The spine corridor anchors here, so walking in through an off-centre door puts you
+   *  in a corridor that is off-centre by the same relative amount. See buildCore. */
+  readonly doorX: number;
 }
 
 /**
@@ -130,10 +142,15 @@ export interface BuildingCore {
   /** Interior clear plate. */
   readonly width: number;
   readonly depth: number;
-  /** The spine corridor: full depth, offset from centre by the hash so buildings differ. */
+  /** The spine corridor: full depth, anchored on the model's own tagged door (see buildCore). */
   readonly corridorX: number;
-  /** The stair shaft. Identical on every storey by construction. */
-  readonly stair: Rect;
+  /** The stair shaft — identical on every storey by construction, and ABSENT on a single-storey
+   *  building, which has nowhere for a stair to go. 2,766 of this city's 7,415 enterable buildings
+   *  are single-storey; every one of them used to carry a full dead shaft. */
+  readonly stair?: Rect;
+  /** Which side the up-flight of the switchback is on: +1 the +x half rises from this storey, −1
+   *  mirrored. Seeded per building, so two stairwells do not all turn the same way. */
+  readonly stairDir: 1 | -1;
   /** The lift shaft, on tall buildings only. Also identical on every storey. */
   readonly lift?: Rect;
   /** Where the street door lands on the front wall (floor 0 only), in plate-local x. */
@@ -143,6 +160,29 @@ export interface BuildingCore {
   readonly family: string;
   /** How well-kept it is. See Finish. */
   readonly finish: Finish;
+}
+
+/** Where the room bands stop and the core band begins. Stairless buildings have no core band, so the
+ *  rooms run all the way to the back wall — ~7 units of plate a dead shaft used to waste. Every
+ *  reader of "how deep may a room be" goes through this one helper. */
+export function coreFrontZ(core: Pick<BuildingCore, 'stair' | 'depth'>): number {
+  return core.stair ? rectMinZ(core.stair) - CORE_GAP : core.depth / 2;
+}
+
+/** Families whose flat roofs are part of the game: stand on them, drop in through them, climb out
+ *  onto them. Houses keep their pitched roofs to themselves. */
+const ROOF_FAMILIES = new Set(['downtown', 'mixed-use', 'industrial']);
+
+/** Whether this building's top stair opens onto its roof: commercial/industrial only, and taller
+ *  than two storeys — the owner's line, measured at 2,143 of 7,415 doors citywide. */
+export function hasRoofAccess(core: Pick<BuildingCore, 'storeys' | 'family'>): boolean {
+  return core.storeys > 2 && ROOF_FAMILIES.has(core.family);
+}
+
+/** Where the roof ladder stands: the foot of the shaft on the up side, which is exactly where the
+ *  up-flight would have started if there were another storey to climb to. */
+export function hatchFoot(stair: Rect, dir: 1 | -1): { x: number; z: number } {
+  return { x: stair.x + dir * stair.w / 4, z: rectMinZ(stair) + 0.7 };
 }
 
 /**
@@ -190,14 +230,19 @@ export function floorRandom(seed: number, floor: number, salt: number): number {
 const clamp = (value: number, low: number, high: number): number => Math.max(low, Math.min(high, value));
 
 /**
- * The core, from the building and nothing else.
+ * The core, from the building and nothing else — and this is where the owner's ordered brief is
+ * actually consumed: perimeter (the plate), then the DOOR from the model's own tag, then the stair,
+ * then the lift, each spending the building's hash so the skeleton varies as well as the paint.
  *
- * The plate is the building's real footprint, clamped; the corridor runs front-to-back and the core
- * sits at the far end of it, against the back wall, which is where a real building puts its stair
- * and is also the arrangement that makes every floor trivially walkable (see floor.ts).
+ * The old version put the corridor on a seeded offset and then derived EVERYTHING else from the
+ * plate rectangle in closed form: the stair's rear edge was 0.30 off the back wall on all 7,415
+ * enterable buildings, the shaft was 4.30 × 5.40 on all of them, and the lift stood exactly +1.5
+ * from the stair's right edge on all 1,151 lifted ones. Same skeleton, seven thousand times.
  */
 export function buildCore(facts: BuildingFacts): BuildingCore {
   const seed = buildingSeed(facts);
+  // 1. PERIMETER: the building's real footprint, clamped so a cottage still holds the camera and a
+  // warehouse floor is not a stadium.
   const ceiling = facts.entrance === 'dock' ? MAX_HALL : MAX_PLATE;
   const width = stableWorldFloat(clamp(facts.width - 0.9, MIN_PLATE[0], ceiling[0]));
   const depth = stableWorldFloat(clamp(facts.depth - 0.9, MIN_PLATE[1], ceiling[1]));
@@ -207,31 +252,72 @@ export function buildCore(facts: BuildingFacts): BuildingCore {
   // many floors as it is tall.
   const storeys = Math.max(1, Math.floor((facts.height - 0.4) / FACADE_STOREY));
 
-  // The spine is offset off centre so two neighbouring buildings do not read as the same plan. It
-  // stays far enough from both side walls to leave a room-sized band either side.
+  // 2. THE DOOR. The spine is anchored where the model actually drew its entrance: the interior
+  // frame is the building frame rotated a half turn (hence the sign flip), the plate may be clamped
+  // wider or narrower than the footprint (hence the proportional scale), and the corridor still
+  // leaves a room-sized band on both sides (hence the clamp). 2,835 of this city's tagged doors sit
+  // genuinely off the facade centre, so this one line buys 2,835 off-centre corridors for free —
+  // and, more importantly, walking in a corner door no longer materialises you centre-front.
   const slack = Math.max(0, width / 2 - CORRIDOR / 2 - MIN_ROOM);
-  const corridorX = stableWorldFloat((coreRandom(seed, 3) * 2 - 1) * slack * 0.6);
+  const doorScale = width / Math.max(1, facts.width);
+  const corridorX = stableWorldFloat(clamp(-facts.doorX * doorScale, -slack, slack));
 
-  const needsLift = storeys >= LIFT_FROM_STOREYS;
-  // Stair and lift stand at the back of the plate, in the full-width band the rooms leave them. The
-  // stair is CENTRED ON THE SPINE so both halves of its switchback are straight ahead as you walk
-  // down the corridor; the lift stands beside it.
-  const shaftDepth = stableWorldFloat(Math.min(depth * 0.32, 5.4));
-  const backZ = stableWorldFloat(depth / 2 - shaftDepth / 2 - 0.3);
-  const stairWidth = stableWorldFloat(CORRIDOR + 1.0);
-  const stair: Rect = { x: corridorX, z: backZ, w: stairWidth, d: shaftDepth };
-  const lift: Rect | undefined = needsLift
-    ? { x: stableWorldFloat(corridorX + stairWidth / 2 + 1.5), z: backZ, w: 2.4, d: stableWorldFloat(Math.min(shaftDepth, 2.8)) }
+  // 3. THE STAIR — only where there is a storey for it to reach. Its x is a seeded draw across the
+  // window that keeps at least a metre of shared mouth with the spine; its rear gap off the back
+  // wall is a seeded 0.3..1.5; which way the switchback turns is a seeded coin. 4. THE LIFT, on
+  // tall buildings, stands on a seeded side of the shaft.
+  const placed = storeys >= 2
+    ? placeShafts(seed, width, depth, corridorX, storeys >= LIFT_FROM_STOREYS)
     : undefined;
 
   return {
-    id: facts.id, seed, storeys, width, depth, corridorX, stair, lift,
+    id: facts.id, seed, storeys, width, depth, corridorX,
+    stair: placed?.stair,
+    stairDir: coreRandom(seed, 6) < 0.5 ? 1 : -1,
+    lift: placed?.lift,
     // The street door lands on the spine, so walking in puts you in the corridor facing the core.
     entryX: corridorX,
     entrance: facts.entrance,
     family: facts.style,
     finish: finishFor(facts, seed),
   };
+}
+
+/** Stair (and lift) placement, all seeded. Kept out of buildCore so the fitting rules read in one
+ *  place: the shaft keeps ≥1u of shared mouth with the spine, stays on the plate, and on a lifted
+ *  building leaves room for the car on its chosen side — pulling toward the roomier side, and in
+ *  the last resort landing back on the spine, which fits everywhere the old layout fitted. */
+function placeShafts(
+  seed: number, width: number, depth: number, corridorX: number, needsLift: boolean,
+): { stair: Rect; lift?: Rect } {
+  const stairWidth = stableWorldFloat(CORRIDOR + 1.0);
+  const shaftDepth = stableWorldFloat(Math.min(depth * 0.32, 5.4));
+  const backGap = stableWorldFloat(0.3 + coreRandom(seed, 5) * 1.2);
+  const backZ = stableWorldFloat(depth / 2 - shaftDepth / 2 - backGap);
+  const window = (CORRIDOR + stairWidth) / 2 - 1.0;
+  const plateLimit = width / 2 - stairWidth / 2 - 0.2;
+  let stairX = clamp(corridorX + (coreRandom(seed, 4) * 2 - 1) * window, -plateLimit, plateLimit);
+  let lift: Rect | undefined;
+  if (needsLift) {
+    const liftW = 2.4;
+    const span = stairWidth / 2 + 0.3 + liftW; // stair centre -> lift outer edge
+    const limit = width / 2 - 0.2;
+    let side: 1 | -1 = coreRandom(seed, 7) < 0.5 ? 1 : -1;
+    if (Math.abs(stairX + side * span) > limit) side = side === 1 ? -1 : 1;
+    if (Math.abs(stairX + side * span) > limit) {
+      // Neither side fits from here: pull the shaft toward the roomier side until the lift lands on
+      // the plate, still inside the spine-overlap window; failing even that, back onto the spine.
+      side = stairX > 0 ? -1 : 1;
+      stairX = clamp(side === 1 ? limit - span : -limit + span, corridorX - window, corridorX + window);
+      if (Math.abs(stairX + side * span) > limit + 1e-6) { stairX = corridorX; side = corridorX > 0 ? -1 : 1; }
+    }
+    stairX = stableWorldFloat(stairX);
+    lift = {
+      x: stableWorldFloat(stairX + side * (stairWidth / 2 + 0.3 + liftW / 2)),
+      z: backZ, w: liftW, d: stableWorldFloat(Math.min(shaftDepth, 2.8)),
+    };
+  }
+  return { stair: { x: stableWorldFloat(stairX), z: backZ, w: stairWidth, d: shaftDepth }, lift };
 }
 
 /**
@@ -245,24 +331,32 @@ export function buildCore(facts: BuildingFacts): BuildingCore {
  */
 export function coreContinuity(core: BuildingCore): string | undefined {
   const plate: Rect = { x: 0, z: 0, w: core.width, d: core.depth };
-  if (!inside(core.stair, plate)) return 'stair shaft leaves the floor plate';
+  // A stair exists exactly when there is a storey for it to reach.
+  if (core.storeys >= 2 && !core.stair) return 'a multi-storey building with no stair';
+  if (core.storeys < 2 && core.stair) return 'a single-storey building carrying a dead stair shaft';
+  if (core.storeys < 2 && core.lift) return 'a single-storey building carrying a lift';
+  if (core.lift && !core.stair) return 'a lift with no stair beside it';
+  if (core.stair) {
+    if (!inside(core.stair, plate)) return 'stair shaft leaves the floor plate';
+    // The spine must genuinely share a mouth with the shaft, or the stair is walled off from the
+    // front door. The shaft may now stand seeded off the spine, so this is an overlap width, not an
+    // exact-centre check — but the overlap must be wide enough to walk through.
+    const mouth = Math.min(rectMaxX(core.stair), core.corridorX + CORRIDOR / 2)
+      - Math.max(rectMinX(core.stair), core.corridorX - CORRIDOR / 2);
+    if (mouth < 0.9) return 'the stair shaft has drifted off the spine';
+  }
   if (core.lift && !inside(core.lift, plate)) return 'lift shaft leaves the floor plate';
-  if (core.lift && overlaps(core.stair, core.lift)) return 'lift shaft cuts into the stair';
+  if (core.lift && core.stair && overlaps(core.stair, core.lift)) return 'lift shaft cuts into the stair';
   if (Math.abs(core.entryX - core.corridorX) > 0.01) return 'the street door does not land on the spine';
   if (Math.abs(core.corridorX) + CORRIDOR / 2 > core.width / 2) return 'the spine leaves the floor plate';
-  // The spine must actually reach the shaft, or the stair is walled off from the front door.
-  if (rectMinX(core.stair) > core.corridorX + CORRIDOR / 2 || rectMaxX(core.stair) < core.corridorX - CORRIDOR / 2) {
-    return 'the stair does not meet the spine';
-  }
   if (core.storeys >= LIFT_FROM_STOREYS && !core.lift) return 'a tall building with no lift';
   // Both bands either side of the spine have to be able to hold a room, or the floor above has
   // nothing on it but a corridor.
   for (const band of [core.width / 2 - (core.corridorX + CORRIDOR / 2), core.corridorX - CORRIDOR / 2 + core.width / 2]) {
     if (band < MIN_ROOM - 1e-6) return 'a band beside the spine is too narrow to hold a room';
   }
-  if (core.depth - core.stair.d - 0.3 - CORE_GAP < MIN_ROOM) return 'the plate is too shallow to hold a room in front of the core';
-  // The flight lanes must clear the room walls, or the switchback is a stair you cannot walk down.
-  if (rectMinZ(core.stair) - CORE_GAP + 1e-6 < -core.depth / 2) return 'the core band overruns the plate';
+  // The room band in front of the core (the whole plate, on a stairless building) must hold a room.
+  if (coreFrontZ(core) + core.depth / 2 < MIN_ROOM) return 'the plate is too shallow to hold a room in front of the core';
   return undefined;
 }
 

@@ -170,7 +170,11 @@ export class HudView {
     }
     setText(this.fps, `${Math.round(state.fps)} FPS · loop ${Math.round(state.loopTotalPct)}% · A* ${state.navCalls}/s ${state.navMs.toFixed(1)}ms · X ${state.position.x.toFixed(1)} Y ${state.position.y.toFixed(1)} Z ${state.position.z.toFixed(1)}`); setHidden(this.fps, !state.settings.showFps);
     this.renderPerfChart(state);
-    setHidden(this.cheats, !state.cheatsOn); setHidden(this.crosshair, !state.crosshair);
+    // Honest about the distinction: "CHEATS ACTIVE" while one is switched on right now, and the
+    // permanent "CHEATS USED" once the save has ever been helped — the badge never comes off again.
+    setHidden(this.cheats, !state.cheatsOn && !state.cheatedEver);
+    setText(this.cheats, state.cheatsOn ? 'CHEATS ACTIVE' : 'CHEATS USED');
+    setHidden(this.crosshair, !state.crosshair);
     setHidden(this.scope, !state.scope); if (state.scope) setText(this.scopeZoom, state.scope.zoom);
   }
 

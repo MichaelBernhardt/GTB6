@@ -546,11 +546,18 @@ export function createFacadeGlowTexture(style: number): THREE.CanvasTexture {
   return finish(canvas);
 }
 
-// 512 slots (8 cols × 64 rows) in a single 2048×4096 texture (~32MB). The whole 1:1 map has a FIXED ~470
-// unique signs (372 street names + shop/model boards), so this holds them all with headroom — no wrapping.
-const SIGN_ATLAS = { width: 2048, height: 4096, slotW: 256, slotH: 64 };
+// 1024 slots (16 cols × 64 rows) in a single 4096×4096 texture (~64MB RGBA). The claim this comment
+// used to make — "~470 unique signs, no wrapping" — was stale by 126: a census (tools/qa/
+// sign-atlas-census.ts) measured 637 distinct keys citywide against 511 usable slots, and every key
+// past capacity shared ONE slot that each newcomer repainted. That is the mechanism behind boards
+// changing text between entering and leaving a building. Capacity is now 1024 and the last slot is a
+// blank overflow board drawn ONCE — an over-budget sign goes blank and logs, it never wears another
+// building's text and never repaints anything already on a wall. ProceduralMaterials.test.ts gates
+// the budget so pool growth fails a test instead of silently overflowing. 4096 stays within the
+// texture-size floor of the low-end devices the potato tier exists for.
+const SIGN_ATLAS = { width: 4096, height: 4096, slotW: 256, slotH: 64 };
 interface SignSlot { u0: number; v0: number; u1: number; v1: number; }
-let signAtlas: { context: CanvasRenderingContext2D; texture: THREE.CanvasTexture; next: number } | undefined;
+let signAtlas: { context: CanvasRenderingContext2D; texture: THREE.CanvasTexture; next: number; overflowed: number } | undefined;
 const signSlots = new Map<string, SignSlot>();
 const signMaterials = new Map<string, THREE.MeshLambertMaterial>();
 
@@ -568,6 +575,12 @@ export function signSlotIndex(order: number, capacity: number): number {
   return order < capacity - 1 ? order : capacity - 1;
 }
 
+/** How full the atlas really is, for probes and the QA census. `overflowed` counts distinct keys
+ *  that arrived after capacity and were given the blank board instead of somebody else's slot. */
+export function signAtlasStats(): { used: number; overflowed: number } {
+  return { used: signAtlas?.next ?? 0, overflowed: signAtlas?.overflowed ?? 0 };
+}
+
 function signSlot(text: string, accent: string, background: string): SignSlot {
   const key = `${text}|${accent}|${background}`;
   const existing = signSlots.get(key); if (existing) return existing;
@@ -575,17 +588,33 @@ function signSlot(text: string, accent: string, background: string): SignSlot {
     const canvas = document.createElement('canvas'); canvas.width = SIGN_ATLAS.width; canvas.height = SIGN_ATLAS.height;
     const context = canvas.getContext('2d'); if (!context) throw new Error('Canvas 2D is unavailable');
     const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
-    signAtlas = { context, texture, next: 0 };
+    signAtlas = { context, texture, next: 0, overflowed: 0 };
   }
   const { columns, capacity } = signAtlasLayout();
   const index = signSlotIndex(signAtlas.next, capacity);
-  if (signAtlas.next < capacity - 1) signAtlas.next++;
+  const overflow = signAtlas.next >= capacity - 1;
   const x = (index % columns) * SIGN_ATLAS.slotW; const y = Math.floor(index / columns) * SIGN_ATLAS.slotH;
   const context = signAtlas.context;
-  context.fillStyle = background; context.fillRect(x, y, SIGN_ATLAS.slotW, SIGN_ATLAS.slotH);
-  context.strokeStyle = accent; context.lineWidth = 5; context.strokeRect(x + 4, y + 4, SIGN_ATLAS.slotW - 8, SIGN_ATLAS.slotH - 8);
-  context.fillStyle = accent; context.font = '700 30px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(text, x + SIGN_ATLAS.slotW / 2, y + SIGN_ATLAS.slotH / 2 + 1, SIGN_ATLAS.slotW - 20);
-  signAtlas.texture.needsUpdate = true;
+  // AN OVERFLOW KEY NEVER LETTERS THE SHARED SLOT. The old code redrew the last slot for every key
+  // past capacity, so each late sign retroactively re-captioned every other late sign in the city —
+  // walk into a building (whose interior allocates 'EXIT' and its notices) and the spaza board down
+  // the street changed text while you were inside. The shared slot is now painted ONCE, as a blank
+  // board, and every over-budget key points at it: a blank board is an honest failure, someone
+  // else's name is a lie.
+  if (!overflow || signAtlas.overflowed === 0) {
+    context.fillStyle = overflow ? '#10191c' : background; context.fillRect(x, y, SIGN_ATLAS.slotW, SIGN_ATLAS.slotH);
+    context.strokeStyle = overflow ? '#3a4448' : accent; context.lineWidth = 5; context.strokeRect(x + 4, y + 4, SIGN_ATLAS.slotW - 8, SIGN_ATLAS.slotH - 8);
+    if (!overflow) {
+      context.fillStyle = accent; context.font = '700 30px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(text, x + SIGN_ATLAS.slotW / 2, y + SIGN_ATLAS.slotH / 2 + 1, SIGN_ATLAS.slotW - 20);
+    }
+    signAtlas.texture.needsUpdate = true;
+  }
+  if (overflow) {
+    signAtlas.overflowed++;
+    if (signAtlas.overflowed === 1) console.warn(`Sign atlas over capacity (${capacity}): '${text}' and every later distinct sign will draw as a blank board. Run tools/qa/sign-atlas-census.ts.`);
+  } else {
+    signAtlas.next++;
+  }
   const slot: SignSlot = { u0: x / SIGN_ATLAS.width, v0: 1 - (y + SIGN_ATLAS.slotH) / SIGN_ATLAS.height, u1: (x + SIGN_ATLAS.slotW) / SIGN_ATLAS.width, v1: 1 - y / SIGN_ATLAS.height };
   signSlots.set(key, slot); return slot;
 }

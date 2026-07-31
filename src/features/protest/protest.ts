@@ -700,5 +700,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     outageLedger.reset(); // a new game re-earns the grievance; the registry's eager tick takes it back
   }
 
-  return { update, hud, mapIcons, interactions: () => rungs, serialize, restore, command, qa, dispose };
+  /** `give tyre(s) [n]` from the console's generic grant route (declared in registry.ts). ADDS to
+   *  the carried count (a grant, not a set — `feature protest tyres <n>` remains the setter). */
+  function grant(_item: string, count: number): string {
+    tyres = Math.max(0, Math.min(TYRE_CARRY_CAP, tyres + count));
+    return `Carrying ${tyres}/${TYRE_CARRY_CAP} tyres. Stand on any road and press E to roll one out and light it.`;
+  }
+
+  return { update, hud, mapIcons, interactions: () => rungs, serialize, restore, command, grant, qa, dispose };
 }

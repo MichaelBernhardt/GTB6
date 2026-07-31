@@ -75,7 +75,7 @@ export function buildTownhouseRow(seed: number, options: BuildOptions = {}): Bui
   }
   const plotW = w + 3; const plotD = unitD + 8;
   gardenWall(kit, plotW, plotD, 2.1, 2.1, M.plaster);
-  kit.sign(kit.pick(5, ['VILLA MIA ESTATE', 'DIE EIKE KOMPLEKS', 'SUNSET RIDGE 2', 'KIEPERSOL CLOSE']), '#d8c8a0', 3.4, 0.6, 2.8, 1.5, plotD / 2 + 0.06, { background: '#3a4436' });
+  kit.sign(options.signName ?? kit.pick(5, ['VILLA MIA ESTATE', 'DIE EIKE KOMPLEKS', 'SUNSET RIDGE 2', 'KIEPERSOL CLOSE']), '#d8c8a0', 3.4, 0.6, 2.8, 1.5, plotD / 2 + 0.06, { background: '#3a4436' });
   return kit.done();
 }
 
@@ -101,7 +101,7 @@ export function buildApartmentBlock(seed: number, options: BuildOptions = {}): B
   for (let line = 0; line < 3; line++) kit.box(M.whiteMetal, w * 0.5, 0.02, 0.02, 0, h + 1.4 - line * 0.25, -d * 0.2 - line * 0.28, { cast: false });
   kit.box(M.concrete, 3.6, 0.18, 1.7, w * 0.12, 2.85, d / 2 + 0.85, { cast: false }); // entrance canopy
   kit.door(M.glassDark, 2.3, 2.5, 0.1, w * 0.12, 0, d / 2 + 0.05, 'lobby', { cast: false }); // the way in, under it
-  kit.sign(kit.pick(4, ['JACARANDA COURT', 'PROTEA MANSIONS', 'HILLBROW HEIGHTS LITE', 'EKHAYA FLATS']), '#d8d0b8', w * 0.4, 0.65, w * 0.12, 4, d / 2 + 0.07, { background: '#33403c' });
+  kit.sign(options.signName ?? kit.pick(4, ['JACARANDA COURT', 'PROTEA MANSIONS', 'HILLBROW HEIGHTS LITE', 'EKHAYA FLATS']), '#d8d0b8', w * 0.4, 0.65, w * 0.12, 4, d / 2 + 0.07, { background: '#33403c' });
   return kit.done();
 }
 
@@ -165,6 +165,9 @@ export function buildSandtonVilla(seed: number, options: BuildOptions = {}): Bui
   gardenWall(kit, plotW, plotD, 2.5, 2.2, M.whitewash);
   for (let strand = 0; strand < 3; strand++) kit.box(M.darkMetal, plotW, 0.025, 0.025, 0, 2.6 + strand * 0.14, -plotD / 2, { cast: false }); // electric fence
   kit.sign('CAVEO ARMED RESPONSE', '#c8d6dd', 1.4, 0.55, plotW / 2 - 1.6, 1.6, plotD / 2 + 0.05, { background: '#2c3440' });
+  // The house's own name on the gate wall — the estate habit. Only when the placement pass supplies
+  // the identity (the alarm plate above is a security company's, not a name).
+  if (options.signName) kit.sign(options.signName, '#d8c8a0', 2.4, 0.55, -plotW / 2 + 1.9, 1.55, plotD / 2 + 0.05, { background: '#3a4436' });
   return kit.done();
 }
 
@@ -200,7 +203,7 @@ export function buildWalkUpFlats(seed: number, options: BuildOptions = {}): Buil
   }
   kit.box(M.concrete, 2.6, h + 1.8, 2.8, -w * 0.34, 0, -d * 0.02, { collide: true });
   kit.door(M.glassDark, 2.2, 2.4, 0.1, w * 0.08, 0, -d * 0.06 + 0.06, 'lobby', { cast: false }); // off the court, like every walk-up
-  kit.sign(kit.pick(6, ['THUTHUKA COURT', 'MADIBA MANSIONS', 'JACARANDA WALK']), '#e5d5a5', 4.2, 0.7, 0, 3.6, -d * 0.06 + 0.07, { background: '#38433f' }); // flush on the court block's street face
+  kit.sign(options.signName ?? kit.pick(6, ['THUTHUKA COURT', 'MADIBA MANSIONS', 'JACARANDA WALK']), '#e5d5a5', 4.2, 0.7, 0, 3.6, -d * 0.06 + 0.07, { background: '#38433f' }); // flush on the court block's street face
   return kit.done();
 }
 
