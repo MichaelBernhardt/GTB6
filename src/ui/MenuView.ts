@@ -1,6 +1,6 @@
 import type { MissionChoice } from '../systems/MissionSystem';
 import type { CheatSettings, GameSettings } from '../types';
-import { clampPercent, formatMoney, reputationLabel, type CheatWeaponEntry, type DrinkCatalogEntry, type FeatureMenuView, type LoadingState, type MainMenuSummary, type MenuScreen, type ShopArmourEntry, type ShopCatalogEntry } from './UIModels';
+import { clampPercent, formatMoney, reputationLabel, type CheatWeaponEntry, type DrinkCatalogEntry, type FeatureMenuView, type LoadingState, type MainMenuSummary, type MenuScreen, type ShopArmourEntry, type ShopCatalogEntry, type ShopLockpickEntry } from './UIModels';
 import { inebriationLabel, INEBRIATION_MAX } from '../core/DrinkRules';
 
 export class MenuView {
@@ -96,16 +96,17 @@ export class MenuView {
     this.set('controls', `<section class="menu-card menu-card--guide"><header><p class="eyebrow">FIELD GUIDE</p><h2>Know the streets.</h2><span>${fromMain ? 'The essentials before you enter.' : 'Controls for foot and vehicle.'} ${device}</span></header><div class="control-grid">${groups.map(([key, label]) => `<div><kbd>${key}</kbd><span>${label}</span></div>`).join('')}</div><button class="action-primary" data-action="back">Back</button></section>`); this.bind('[data-action="back"]', back);
   }
 
-  shop(entries: ShopCatalogEntry[], balance: number, actions: { buy: (id: ShopCatalogEntry['id']) => void; ammo: (id: ShopCatalogEntry['id']) => void; armour: () => void; leave: () => void }, armour?: ShopArmourEntry): void {
+  shop(entries: ShopCatalogEntry[], balance: number, actions: { buy: (id: ShopCatalogEntry['id']) => void; ammo: (id: ShopCatalogEntry['id']) => void; armour: () => void; lockpick: () => void; leave: () => void }, armour?: ShopArmourEntry, lockpick?: ShopLockpickEntry): void {
     const rows = entries.map((entry) => entry.owned
       ? `<button class="shop-row" data-ammo="${entry.id}" ${entry.canRefill ? '' : 'disabled'}><span><b>${entry.name}</b><small>Reserve ${entry.reserve}</small></span><em>${entry.ammoFull ? 'FULL' : formatMoney(entry.ammoPrice)}</em></button>`
       : `<button class="shop-row" data-buy="${entry.id}" ${entry.canBuy ? '' : 'disabled'}><span><b>${entry.name}</b><small>${entry.canBuy ? 'Available now' : 'Not enough cash'}</small></span><em>${formatMoney(entry.price)}</em></button>`).join('');
     const armourRow = armour ? `<button class="shop-row" data-action="armour" ${armour.canBuy ? '' : 'disabled'}><span><b>BODY ARMOUR</b><small>${armour.full ? 'Fully plated already' : 'Soaks damage before health'}</small></span><em>${armour.full ? 'FULL' : formatMoney(armour.price)}</em></button>` : '';
-    this.set('shop', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">JOZI ARMS · CBD</p><h2>Choose your insurance.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header><div class="shop-list">${rows}${armourRow}</div><button data-action="leave">Leave the counter</button></section>`);
-    for (const entry of entries) { this.bind(`[data-buy="${entry.id}"]`, () => actions.buy(entry.id)); this.bind(`[data-ammo="${entry.id}"]`, () => actions.ammo(entry.id)); } this.bind('[data-action="armour"]', actions.armour); this.bind('[data-action="leave"]', actions.leave);
+    const lockpickRow = lockpick ? `<button class="shop-row" data-action="lockpick" ${lockpick.canBuy ? '' : 'disabled'}><span><b>LOCK PICK</b><small>${lockpick.full ? 'Your pocket is full of them already' : lockpick.count > 0 ? `Carrying ${lockpick.count} — a spare never hurt` : 'Opens locked doors. Reusable.'}</small></span><em>${lockpick.full ? 'FULL' : formatMoney(lockpick.price)}</em></button>` : '';
+    this.set('shop', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">JOZI ARMS · CBD</p><h2>Choose your insurance.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header><div class="shop-list">${rows}${armourRow}${lockpickRow}</div><button data-action="leave">Leave the counter</button></section>`);
+    for (const entry of entries) { this.bind(`[data-buy="${entry.id}"]`, () => actions.buy(entry.id)); this.bind(`[data-ammo="${entry.id}"]`, () => actions.ammo(entry.id)); } this.bind('[data-action="armour"]', actions.armour); this.bind('[data-action="lockpick"]', actions.lockpick); this.bind('[data-action="leave"]', actions.leave);
   }
 
-  bottle(storeName: string, entries: DrinkCatalogEntry[], balance: number, inebriation: number, actions: { buy: (id: DrinkCatalogEntry['id']) => void; leave: () => void }): void {
+  bottle(storeName: string, entries: DrinkCatalogEntry[], balance: number, inebriation: number, actions: { buy: (id: DrinkCatalogEntry['id']) => void; lockpick: () => void; leave: () => void }, lockpick?: ShopLockpickEntry): void {
     const rows = entries.map((entry) => {
       const potency = entry.potency < 0 ? `SOBER-UP ${entry.potency}` : `+${entry.potency} DOP`;
       const reason = entry.canBuy ? entry.note : entry.potency < 0 ? 'Stone-cold sober already' : 'Not enough cash';
@@ -114,8 +115,10 @@ export class MenuView {
     const meter = Math.round((Math.max(0, Math.min(INEBRIATION_MAX, inebriation)) / INEBRIATION_MAX) * 100);
     const tag = inebriationLabel(inebriation);
     const gauge = `<div class="drunk-gauge${tag?.warn ? ' is-babalas' : ''}"><span>DOP LEVEL</span><div class="drunk-gauge__track"><i style="width:${meter}%"></i></div><b>${tag ? tag.text : 'STONE SOBER'}</b></div>`;
-    this.set('bottle', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">${storeName.toUpperCase()} · LIQUOR</p><h2>Wet your whistle.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header>${gauge}<div class="shop-list">${rows}</div><button data-action="leave">Cap it off &amp; leave</button></section>`);
+    const lockpickRow = lockpick ? `<button class="shop-row" data-action="lockpick" ${lockpick.canBuy ? '' : 'disabled'}><span><b>LOCK PICK</b><small>${lockpick.full ? 'You have plenty, china' : 'Under the counter. Ask nicely. Reusable.'}</small></span><em>${lockpick.full ? 'FULL' : formatMoney(lockpick.price)}</em></button>` : '';
+    this.set('bottle', `<section class="menu-card menu-card--shop"><header><p class="eyebrow">${storeName.toUpperCase()} · LIQUOR</p><h2>Wet your whistle.</h2><div class="balance-stamp">ON HAND <b>${formatMoney(balance)}</b></div></header>${gauge}<div class="shop-list">${rows}${lockpickRow}</div><button data-action="leave">Cap it off &amp; leave</button></section>`);
     for (const entry of entries) this.bind(`[data-drink="${entry.id}"]`, () => actions.buy(entry.id));
+    this.bind('[data-action="lockpick"]', actions.lockpick);
     this.bind('[data-action="leave"]', actions.leave);
   }
 

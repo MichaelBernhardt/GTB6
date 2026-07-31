@@ -1,6 +1,6 @@
 import { VEHICLE_SPECS, WEAPONS, WEAPON_BY_ID, type VehicleKind, type WeaponId } from '../config';
 import { DEFAULT_CAMERA_VIEW, sanitizeView } from './CameraController';
-import { ARMOUR_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
+import { ARMOUR_MAX, LOCKPICK_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import { DEFAULT_MINIMAP_ZOOM, sanitizeMinimapZoom } from '../ui/MinimapView';
 import { sanitizeFeatureSaves } from '../features/save';
 import type { ActivityRecords, CheatSettings, GameSettings, Inventory, SavedGame, SavedVehicle, SavedWeaponState, SavedWeapons } from '../types';
@@ -83,14 +83,20 @@ export function sanitizeHeading(raw: unknown): number {
   return typeof raw === 'number' && Number.isFinite(raw) ? ((raw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) : DEFAULT_HEADING;
 }
 
-export const DEFAULT_INVENTORY: Inventory = { armour: 0, stims: 0, parachutes: 0 };
+export const DEFAULT_INVENTORY: Inventory = { armour: 0, stims: 0, parachutes: 0, lockpicks: 0 };
 
 /** Item inventory: old saves carry none (everything zeroes); live values clamp to the carry caps. */
 export function sanitizeInventory(raw: unknown): Inventory {
   const clampItem = (value: unknown, max: number): number => typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(0, Math.round(value))) : 0;
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_INVENTORY };
   const value = raw as Partial<Inventory>;
-  return { armour: clampItem(value.armour, ARMOUR_MAX), stims: clampItem(value.stims, STIM_MAX), parachutes: clampItem(value.parachutes, PARACHUTE_MAX) };
+  return { armour: clampItem(value.armour, ARMOUR_MAX), stims: clampItem(value.stims, STIM_MAX), parachutes: clampItem(value.parachutes, PARACHUTE_MAX), lockpicks: clampItem(value.lockpicks, LOCKPICK_MAX) };
+}
+
+/** The sticky ever-cheated flag: only a literal stored `true` counts, junk never becomes an
+ *  accusation — and a stored `true` can never be laundered back to false by malformed noise. */
+export function sanitizeEverCheated(raw: unknown): boolean {
+  return raw === true;
 }
 
 /** Activity records are positive finite values with per-activity sanity ceilings. Implausible or
@@ -124,7 +130,7 @@ export function sanitizeDiaryPages(raw: unknown): number[] {
   return [...new Set(raw.filter((page): page is number => Number.isInteger(page) && page >= 1 && page <= DIARY_PAGE_COUNT))].sort((a, b) => a - b);
 }
 
-export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY, features: {}, activityRecords: {} };
+export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY, features: {}, activityRecords: {}, everCheated: false };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -157,6 +163,7 @@ function deserialize(value: string | null): SavedGame {
       inventory: sanitizeInventory(parsed.inventory),
       features: sanitizeFeatureSaves(parsed.features), // one delegating sanitizer; saves written before the slot existed arrive as {}
       activityRecords: sanitizeActivityRecords(parsed.activityRecords),
+      everCheated: sanitizeEverCheated(parsed.everCheated), // saves from builds that predate the flag arrive honest: false
     };
   } catch { return structuredClone(DEFAULT_SAVE); }
 }

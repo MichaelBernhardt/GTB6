@@ -44,6 +44,7 @@ import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
+import { boardText, parcelBuildingName, scatterBuildingName } from './buildingIdentity';
 import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type GeneratedBuilding } from './CityGen';
 import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
@@ -1201,6 +1202,14 @@ export class City {
     if (this.collidesAt(output.x, from.z, radius, y0, y1)) output.x = from.x;
     if (this.collidesAt(output.x, output.z, radius, y0, y1)) output.z = from.z;
     return output;
+  }
+
+  /** Whether the building/scatter chunk cell under a point has actually been BUILT this session.
+   *  Doors derive from map data, not geometry, so a doorway can otherwise offer a prompt on a
+   *  building that is not there yet — E on a steel frame standing on bare sand teleported the player
+   *  into the interior of an invisible building. The interiors rung gates its offer on this. */
+  hasBuiltStructuresAt(x: number, z: number): boolean {
+    return this.buildingCells.has(`${Math.floor(x / MERGE_CHUNK_SIZE)},${Math.floor(z / MERGE_CHUNK_SIZE)}`);
   }
 
   /** Highest standable surface whose top sits at or below feetY + stepUp: stacked building tiers, containers
@@ -2555,8 +2564,12 @@ export class City {
     this.addLedge(profile.tiers, Math.min(h - 0.5, 3.6));
     if (profile.entrance) this.addEntrance(style, profile.entrance);
     if (detailed && style === 'dense-residential') this.addBalconies(0, w, h, profile.tiers);
-    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables);
-    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers);
+    // The name on the board is the building's ONE identity — the same derivation the interiors
+    // feature puts on the E prompt (see buildingIdentity.ts). A building with no tagged entrance
+    // never opens, so it keeps the old generic-business vocabulary.
+    const boardName = profile.entrance ? boardText(parcelBuildingName(spec.x, spec.z, style, profile.entrance.kind)) : undefined;
+    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables, boardName);
+    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName);
     this.addRoofEquipment(0, 0, w, d, h, profile.tiers, profile.gables, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.tiers, profile.gables, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
@@ -2673,8 +2686,12 @@ export class City {
    *  comes back as a 'tree' prop for the caller to register, exactly like the roadside and park trees.
    *  Every structure registers its (true-3D, standable-aware) tier colliders. */
   private buildOneModel(spec: ScatteredModel): { group: THREE.Group; colliders: Collider[]; trunk?: TrunkProp } {
-    const built = buildModel(spec.name, spec.seed, { variant: spec.variant });
-    const foliage = MODEL_INDEX.get(spec.name)?.category === 'foliage';
+    const def = MODEL_INDEX.get(spec.name);
+    // Every model a person can walk into gets its ONE name handed to the builder, so the board it
+    // paints is the name the interiors feature will put on the prompt (see buildingIdentity.ts).
+    const signName = def?.interior ? boardText(scatterBuildingName(spec.x, spec.z, def.interior.family, def.interior.kind, spec.name)) : undefined;
+    const built = buildModel(spec.name, spec.seed, { variant: spec.variant, signName });
+    const foliage = def?.category === 'foliage';
     // Footprint from the model's massing tiers (local AABB union).
     let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
     for (const tier of built.tiers) { minX = Math.min(minX, tier.minX); maxX = Math.max(maxX, tier.maxX); minZ = Math.min(minZ, tier.minZ); maxZ = Math.max(maxZ, tier.maxZ); }
@@ -2805,7 +2822,7 @@ export class City {
     }
   }
 
-  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, variant: number, tiers: readonly MassingTier[], gables: readonly GableSpec[]): void {
+  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, variant: number, tiers: readonly MassingTier[], gables: readonly GableSpec[], boardName?: string): void {
     const shutterH = Math.min(5, h * 0.48); const shutterY = shutterH / 2 + 0.2;
     const shutterSpan = widestFrontFacadeSpanAt(tiers, shutterY, x - w / 2, x + w / 2, 3.2);
     if (shutterSpan) {
@@ -2826,7 +2843,7 @@ export class City {
       const signW = Math.min(7.5, signSpan.maxX - signSpan.minX - 0.45);
       const signX = THREE.MathUtils.clamp(shutterX, signSpan.minX + signW / 2, signSpan.maxX - signW / 2);
       const accent = variant % 2 ? '#f0ae43' : '#72d8d2';
-      const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.2), industrialSignLabel(variant), accent, { powered: variant % 3 === 0 });
+      const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.2), boardName ?? industrialSignLabel(variant), accent, { powered: variant % 3 === 0 });
       sign.name = 'procedural-industrial-sign'; sign.position.set(signX, signY, signSpan.z + 0.08); this.target.add(sign);
     }
     for (const side of [-1, 1]) {
@@ -2844,7 +2861,7 @@ export class City {
     if (variant % 4 === 0) this.addRoofSign(x, z, w, d, tiers, gables, variant);
   }
 
-  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[]): void {
+  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[], boardName?: string): void {
     const frame = new THREE.MeshStandardMaterial({ color: 0x273235, metalness: 0.55, roughness: 0.38 });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x315f68, roughness: 0.12, metalness: 0.18, clearcoat: 0.7 });
     const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
@@ -2870,7 +2887,7 @@ export class City {
       const facadeZ = frontFacadeZAt(tiers, signX, signY, signW / 2);
       if (facadeZ !== undefined) {
         const accents = ['#f0ae43', '#72d8d2', '#ef6556', '#74e392'];
-        const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.05), storefrontSignLabel(variant), accents[variant % accents.length] ?? '#f0ae43', { powered: variant % 2 === 0 });
+        const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.05), boardName ?? storefrontSignLabel(variant), accents[variant % accents.length] ?? '#f0ae43', { powered: variant % 2 === 0 });
         sign.name = 'procedural-storefront-sign'; sign.position.set(signX, signY, facadeZ + 0.08); this.target.add(sign);
       }
     }

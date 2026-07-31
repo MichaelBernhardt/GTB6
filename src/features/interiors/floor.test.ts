@@ -31,7 +31,7 @@ function factsFor(building: GeneratedBuilding): BuildingFacts | undefined {
     id: `${Math.round(building.x)}:${Math.round(building.z)}`,
     x: building.x, z: building.z, heading: building.heading,
     width: building.width, depth: building.depth, height: building.height,
-    style: building.style, entrance: profile.entrance.kind,
+    style: building.style, entrance: profile.entrance.kind, doorX: profile.entrance.x,
   };
 }
 
@@ -208,15 +208,71 @@ describe('the floorplan solver', () => {
     expect(finishes.size, 'every house has the same finish').toBeGreaterThan(1);
   }, 300000);
 
-  it('gives a lift to every building tall enough to need one, and a stair to all of them', () => {
-    let tall = 0;
+  /** "There seem to always be stairs, even on single floor buildings" — the owner. Not any more:
+   *  a stair exists exactly when there is a storey for it to reach, and a lift only on tall stacks. */
+  it('gives a stair only to buildings with an upstairs, and a lift only to tall ones', () => {
+    let tall = 0; let single = 0; let multi = 0;
     for (const facts of sample(300)) {
       const core = buildCore(facts);
-      expect(core.stair.w).toBeGreaterThan(1.5);
+      if (core.storeys === 1) {
+        single++;
+        expect(core.stair, `${facts.id} is single-storey and still carries a stair shaft`).toBeUndefined();
+        expect(core.lift, facts.id).toBeUndefined();
+        continue;
+      }
+      multi++;
+      expect(core.stair, `${facts.id} has ${core.storeys} storeys and no stair`).toBeDefined();
+      expect(core.stair!.w).toBeGreaterThan(1.5);
       if (core.storeys >= LIFT_FROM_STOREYS) { tall++; expect(core.lift, facts.id).toBeDefined(); }
       else expect(core.lift, facts.id).toBeUndefined();
     }
     expect(tall).toBeGreaterThan(3);
+    expect(single, 'the sample found no single-storey buildings at all').toBeGreaterThan(10);
+    expect(multi).toBeGreaterThan(10);
+  }, 120000);
+
+  /**
+   * "The stairs and elevators always seem to be in the same place" — measured as literally true:
+   * zero variance in stair z, one constant lift offset, the whole stair-x distribution inside the
+   * middle 40% of the plate. This asserts the seed is now genuinely SPENT on the skeleton.
+   */
+  it('spends the seed on the skeleton: stair x, stair depth-gap, turn direction and lift side all vary', () => {
+    const cores = sample(300).map(buildCore).filter((core) => core.stair);
+    expect(cores.length).toBeGreaterThan(80);
+    const offsets = new Set(cores.map((core) => (core.stair!.x - core.corridorX).toFixed(2)));
+    const backGaps = new Set(cores.map((core) => (core.depth / 2 - (core.stair!.z + core.stair!.d / 2)).toFixed(2)));
+    const turns = new Set(cores.map((core) => core.stairDir));
+    expect(offsets.size, 'every stair sits at one offset from the spine').toBeGreaterThan(20);
+    expect(backGaps.size, 'every stair sits the same distance off the back wall').toBeGreaterThan(20);
+    expect(turns.size, 'every switchback turns the same way').toBe(2);
+    const lifted = cores.filter((core) => core.lift);
+    if (lifted.length > 3) {
+      const sides = new Set(lifted.map((core) => Math.sign(core.lift!.x - core.stair!.x)));
+      expect(sides.size, 'every lift stands on the same side of its stair').toBe(2);
+    }
+  }, 120000);
+
+  /**
+   * The owner's placement step 2: the interior entry matches the model's tagged door. The interior
+   * frame is the building frame rotated a half turn, so the tag at building-local +x lands at
+   * interior-local −x, proportionally scaled where the plate is clamped, held inside the band that
+   * keeps a room either side of the corridor.
+   */
+  it('anchors the corridor on the model-tagged door, proportionally mapped and clamped', () => {
+    let offCentre = 0;
+    for (const facts of sample(300)) {
+      const core = buildCore(facts);
+      const slack = Math.max(0, core.width / 2 - 3.3 / 2 - 5.6);
+      const wanted = -facts.doorX * (core.width / Math.max(1, facts.width));
+      const expected = Math.max(-slack, Math.min(slack, wanted));
+      expect(core.entryX, facts.id).toBe(core.corridorX);
+      expect(Math.abs(core.corridorX - expected), `${facts.id}: entry ${core.corridorX} vs door-mapped ${expected}`).toBeLessThan(1e-6);
+      if (Math.abs(facts.doorX) > 0.5 && Math.abs(wanted) <= slack) {
+        offCentre++;
+        expect(Math.sign(core.corridorX), `${facts.id}: off-centre door did not pull the corridor`).toBe(Math.sign(-facts.doorX));
+      }
+    }
+    expect(offCentre, 'the sample found no off-centre tagged doors with room to follow them').toBeGreaterThan(5);
   }, 120000);
 });
 

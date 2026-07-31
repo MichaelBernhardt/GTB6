@@ -35,10 +35,47 @@ export type ConsoleCommand =
   | { kind: 'give-weapon'; weapon: WeaponId }
   | { kind: 'give-ammo' }
   | { kind: 'give-armour' }
-  | { kind: 'give-item'; item: 'parachute' | 'stim'; count: number }
+  | { kind: 'give-item'; item: 'parachute' | 'stim' | 'lockpick'; count: number }
+  /** `give <anything else> [n]` — routed to whichever lazily loaded feature declares the item
+   *  (`give tyres 2`). The host answers with an honest error when nothing claims it. */
+  | { kind: 'give-feature'; item: string; count: number }
+  | { kind: 'opensesame' }
   | { kind: 'drunk'; level?: number }
   | { kind: 'feature'; args: string[] }
   | { kind: 'error'; message: string };
+
+/**
+ * THE STICKY CHEAT FLAG — which commands mark a save as "has ever been cheated in".
+ *
+ * The owner's rule, verbatim: "Pretty much any console command is a cheat, except things like map,
+ * fps, perfchart, that are cosmetic or normal. Let's say save and reload are not cheats as well."
+ *
+ * So the DEFAULT IS CHEAT and this set is the exemption list: a command someone adds next month is a
+ * cheat unless they deliberately put it here, because the failure mode of the flag is a false claim
+ * of innocence. What earns an exemption is being read-only or a normal part of playing:
+ *   - help, fps, perfchart, map — cosmetic/diagnostic displays;
+ *   - save, reload — the owner's named save mechanics;
+ *   - busy, tp-list, mission-list — read-only listings that change nothing;
+ *   - noop/error — nothing ran.
+ *
+ * Deliberate rulings on the contested ones (also justified in the commit message):
+ *   - mapnpcs is a CHEAT: it sounds map-adjacent, but live NPC positions are an information
+ *     advantage the player has not earned — knowing where every cop is IS the advantage.
+ *   - shedding is a CHEAT, per the owner: "it can also turn OFF shedding". The generalised test: a
+ *     toggle is a cheat by virtue of the direction that HELPS, whatever the other direction does.
+ *     drunk passes the same test (drunk 0 sobers you up instantly), so it is a cheat too.
+ *   - `feature` with arguments is a CHEAT (feature commands teleport, grant and mutate state); the
+ *     bare `feature` listing is read-only and exempt — see commandIsCheat.
+ */
+const CHEAT_EXEMPT: ReadonlySet<ConsoleCommand['kind']> = new Set<ConsoleCommand['kind']>([
+  'noop', 'error', 'help', 'fps', 'perfchart', 'map', 'save', 'reload', 'busy', 'tp-list', 'mission-list',
+]);
+
+/** Whether running this parsed command marks the save as cheated. Default: yes. */
+export function commandIsCheat(command: ConsoleCommand): boolean {
+  if (command.kind === 'feature') return command.args.length > 0; // the bare list is read-only
+  return !CHEAT_EXEMPT.has(command.kind);
+}
 
 /** Game wires these in; the console never imports Game. Each handler returns its console feedback line. */
 export interface ConsoleHost {
@@ -69,7 +106,16 @@ export interface ConsoleHost {
   giveWeapon(id: WeaponId): string;
   giveAmmo(): string;
   giveArmour(): string;
-  giveItem(item: 'parachute' | 'stim', count: number): string;
+  giveItem(item: 'parachute' | 'stim' | 'lockpick', count: number): string;
+  /** `give <item> [n]` for items the host does not own: routed to whichever feature declares the
+   *  item (burning tyres live in the protest feature). Loading, granting and honest failure are the
+   *  host's problem — the console only forwards the words. */
+  giveFeatureItem(item: string, count: number): string[];
+  /** `opensesame` — every locked door in the city opens without a pick while it is on. */
+  toggleOpenSesame(): string;
+  /** Called BEFORE a cheat-classified command runs — see commandIsCheat. Sets the save's permanent
+   *  ever-cheated flag; the host never clears it. */
+  cheatUsed(): void;
   setInebriation(level?: number): string;
   /** The ONE generic feature seam: `feature` lists them, `feature <id> …` talks to a loaded one.
    *  Per-feature console commands would mean every branch edits this interface AND the stub host
@@ -92,6 +138,7 @@ const CHEAT_WORDS: Record<string, ConsoleCommand> = {
   shedding: { kind: 'shedding' },
   nomoresirens: { kind: 'nomoresirens' },
   teflon: { kind: 'teflon' },
+  opensesame: { kind: 'opensesame' },
 };
 
 export const HELP_LINES = [
@@ -101,7 +148,8 @@ export const HELP_LINES = [
   `give <${GIVE_WEAPON_IDS.join('|')}> — grant a weapon (or top up its ammo)`,
   'give ammo — fully stock every owned weapon',
   'give armour — strap on full body armour',
-  'give parachute [n] · give stim [n] — stock inventory items',
+  'give parachute [n] · give stim [n] · give lockpick [n] — stock inventory items',
+  'give <item> [n] — grant a feature\'s kit without earning it (tyres, zol, buttons, nyaope, petrol)',
   'drunk [0-100] — set inebriation (no number = fully legless) to test the stagger',
   'feature [id] [args] — list the lazily loaded features, or send a command to one',
   'set time <HHMM> — jump the clock (e.g. set time 1200)',
@@ -120,7 +168,7 @@ export const HELP_LINES = [
   'perfchart — toggle the scrolling game-loop timing graph (stacked % of the 60fps budget per phase)',
   'mission [n] — list the missions, or jump-start mission n at its contact (replays even completed ones)',
   `spawn <kind> — drop a vehicle ahead, on the nearest kerb or on the ground when no road is close: ${KINDS.join(', ')}, bakkie`,
-  'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens · teflon',
+  'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens · teflon · opensesame',
 ];
 
 export function tokenize(input: string): string[] { return input.trim().toLowerCase().split(/\s+/).filter(Boolean); }
@@ -209,17 +257,22 @@ export function parseCommand(input: string): ConsoleCommand {
   if (head === 'skyfall') return { kind: 'skyfall', name: rest.length > 0 ? rest.join(' ') : undefined };
   if (head === 'feature') return { kind: 'feature', args: rest };
   if (head === 'give') {
-    const usage = `Usage: give <${GIVE_WEAPON_IDS.join('|')}> · give ammo · give armour · give parachute [n] · give stim [n]`;
+    const usage = `Usage: give <${GIVE_WEAPON_IDS.join('|')}> · give ammo · give armour · give parachute [n] · give stim [n] · give lockpick [n] · give <feature item> [n]`;
     const [what, countToken, extra] = rest;
     if (!what || extra !== undefined) return { kind: 'error', message: usage };
     if (what === 'ammo') return countToken === undefined ? { kind: 'give-ammo' } : { kind: 'error', message: usage };
     if (what === 'armour' || what === 'armor') return countToken === undefined ? { kind: 'give-armour' } : { kind: 'error', message: usage };
-    if (what === 'parachute' || what === 'stim') {
+    const item = what === 'parachute' ? 'parachute' : what === 'stim' ? 'stim' : what === 'lockpick' || what === 'lockpicks' ? 'lockpick' : undefined;
+    if (item) {
       const count = countToken === undefined ? 1 : parseCount(countToken);
-      return count === undefined || count < 1 ? { kind: 'error', message: `Invalid count "${countToken}" — use a whole number of at least 1.` } : { kind: 'give-item', item: what, count };
+      return count === undefined || count < 1 ? { kind: 'error', message: `Invalid count "${countToken}" — use a whole number of at least 1.` } : { kind: 'give-item', item, count };
     }
     if ((GIVE_WEAPON_IDS as string[]).includes(what)) return countToken === undefined ? { kind: 'give-weapon', weapon: what as WeaponId } : { kind: 'error', message: usage };
-    return { kind: 'error', message: `Eish, can't give "${what}". ${usage}` };
+    // Anything else may belong to a lazily loaded feature (give tyres 2). The host owns the answer,
+    // including the honest "nothing in the game is called that".
+    const count = countToken === undefined ? 1 : parseCount(countToken);
+    if (count === undefined || count < 1) return { kind: 'error', message: `Invalid count "${countToken}" — use a whole number of at least 1.` };
+    return { kind: 'give-feature', item: what, count };
   }
   if (head === 'mission') {
     if (rest.length === 0) return { kind: 'mission-list' };
@@ -232,6 +285,9 @@ export function parseCommand(input: string): ConsoleCommand {
 
 export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
   const command = parseCommand(input);
+  // ONE chokepoint, before dispatch: every cheat-classified command marks the save, including a
+  // toggle being turned OFF (the direction that helps makes the toggle a cheat — see CHEAT_EXEMPT).
+  if (commandIsCheat(command)) host.cheatUsed();
   switch (command.kind) {
     case 'noop': return [];
     case 'help': return HELP_LINES;
@@ -264,6 +320,8 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'give-ammo': return [host.giveAmmo()];
     case 'give-armour': return [host.giveArmour()];
     case 'give-item': return [host.giveItem(command.item, command.count)];
+    case 'give-feature': return host.giveFeatureItem(command.item, command.count);
+    case 'opensesame': return [host.toggleOpenSesame()];
     case 'drunk': return [host.setInebriation(command.level)];
     case 'feature': return host.feature(command.args);
     case 'mission-list': return host.missionList();
