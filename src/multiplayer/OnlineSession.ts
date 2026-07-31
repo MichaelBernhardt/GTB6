@@ -54,7 +54,10 @@ export class RemoteAvatar {
     this.group.visible = !state.vehicleId; this.label.visible = !state.dead;
     const visualState: RiggedPedestrianState = {
       state: state.dead ? 'down' : state.locomotion === 'sprint' ? 'flee' : state.locomotion === 'walk' ? 'walk' : 'idle',
-      dead: state.dead, knockdown: false, punching: false, punchElapsed: 0, braced: false, hailing: false, covering: state.aiming, stumbling: false, stumbleAmount: 0,
+      // Remote aim keeps its long-standing covering-pose shim; the NPC aim pose (pistol + arms, built
+      // for arrest officers) is a candidate upgrade here, but multiplayer presentation changes ride
+      // their own PR — this one only restores police cover.
+      dead: state.dead, knockdown: false, punching: false, punchElapsed: 0, braced: false, hailing: false, covering: state.aiming, aiming: false, stumbling: false, stumbleAmount: 0,
     };
     this.visual.setState(visualState);
   }

@@ -61,6 +61,7 @@ export class Pedestrian {
   private deathSpinElapsed = DEATH_SPIN_DURATION;
   private stumbleTimer = 0;
   private covering = false;
+  private aiming = false;
   private phase = Math.random() * Math.PI * 2;
   private legs: THREE.Mesh[] = [];
   private arms: THREE.Mesh[] = [];
@@ -244,6 +245,7 @@ export class Pedestrian {
       braced: this.engaged,
       hailing: this.hailing,
       covering: this.covering,
+      aiming: this.aiming,
       stumbling: this.stumbleTimer > 0,
       stumbleAmount: THREE.MathUtils.clamp(this.stumbleTimer / STUMBLE_DURATION, 0, 1),
     });
@@ -255,7 +257,7 @@ export class Pedestrian {
       this.lodProxy.position.y = down ? 0.36 : Math.sin(this.phase) * 0.025;
       this.lodProxy.scale.y = this.state === 'cower' || this.covering ? 0.7 : 1;
     }
-    this.covering = false;
+    this.covering = false; this.aiming = false;
   }
 
   applyFear(amount: number, origin: THREE.Vector3): void {
@@ -448,6 +450,18 @@ export class Pedestrian {
     this.covering = true;
     if (!this.riggedVisual?.ready) this.setPanicPose(false, true);
   }
+
+  /** Weapon up at the current facing (arrest officers with live fire authorized). Reapplied every
+   *  frame by the police system, like takeCover; composes with it — aim from the crouch. */
+  aimWeapon(): void {
+    this.aiming = true;
+    if (!this.riggedVisual?.ready) { const lead = this.arms[0]; const rear = this.arms[1]; if (lead) lead.rotation.x = 1.35; if (rear) rear.rotation.x = 1.3; }
+  }
+
+  /** True from the police system's cover call until this ped's next update consumes it — the
+   *  per-frame handshake the cover tests assert on. */
+  get takingCover(): boolean { return this.covering; }
+  get aimingWeapon(): boolean { return this.aiming; }
 
   private setPanicPose(armsUp: boolean, crouch: boolean): void {
     for (const arm of this.arms) arm.rotation.x = armsUp ? Math.PI * 0.92 : 0;
