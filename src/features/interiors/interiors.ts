@@ -84,8 +84,15 @@ const RELEASE_DWELL = 0.8;
 /** A prop shorter than this is stepped over, not walked around. The solver's grid uses the same sill. */
 const STEP_OVER = 0.55;
 /** Game-seconds a door you JUST came out of stays open to re-entry without a lock check — the roof
- *  hatch (so a pickless player exploring a roof is never marooned out there) and the street door
- *  (so stepping out to check the street never costs a second dial). */
+ *  hatch and the street door (so stepping out to check the street never costs a second dial).
+ *
+ *  ON A ROOF THE WINDOW CANNOT RUN OUT. A countdown alone shipped the exact trap the one-way lock
+ *  model forbids: walk out of the hatch (free, as every exit is), photograph the skyline for a
+ *  minute, and the only way down asked for a pick you may not carry. So update() RE-ARMS the window
+ *  for as long as the player is still standing on the roof of the graced building — they never
+ *  picked that door shut behind them, so it plausibly stays unlatched — and the countdown only
+ *  starts once they actually leave the roof. The id also survives the save (InteriorsSave.graceId),
+ *  so a reload made out on the roof cannot re-latch the way down either. */
 const EXIT_GRACE = 60;
 /** Drifting this far from where the dial was started cancels it — golf's walk-off-the-ball rule. */
 const PICK_CANCEL_RANGE = 3.0;
@@ -182,8 +189,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
    *  used for the hatch grace window, which is gameplay time, not world generation. */
   let clock = 0;
   /** After leaving a building — by the street door OR the roof hatch — its doors stay open to you
-   *  for EXIT_GRACE game-seconds, so leaving never costs a fresh pick to undo. */
-  let exitGrace: { id: string; until: number } | undefined;
+   *  for EXIT_GRACE game-seconds (re-armed for as long as you stand on its roof — see EXIT_GRACE),
+   *  so leaving never costs a fresh pick to undo. Rehydrated from the save so a reload made out on
+   *  a roof keeps the way down unlatched. */
+  let exitGrace: { id: string; until: number } | undefined =
+    saved?.graceId ? { id: saved.graceId, until: EXIT_GRACE } : undefined;
 
   // ---- the fade. The feature API has no screenFade(), so the feature owns one element and takes it
   // away again in dispose(). #fade is z-index 90; this sits just under it and over the HUD.
@@ -610,19 +620,6 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     act: () => { attemptPick(); },
   });
 
-  /** The honest refusal BEFORE any key is offered: a pickless player gets a prompt that says what
-   *  it will do ("try"), and the act really does it — rattle, explanation, where to buy. Never an
-   *  offer that then declines: that steals the press. */
-  const lockedOffer = (door: InteriorDoor, what: 'door' | 'hatch'): { prompt: string; act(): void } => ({
-    prompt: what === 'door' ? `E  Try the door · ${door.name}` : 'E  Try the hatch',
-    act: () => api.notify(
-      'Locked',
-      what === 'door'
-        ? `Rattles, holds. Jozi Arms or any bottle store sells a lock pick (R${LOCKPICK_PRICE}).`
-        : `Bolted from the inside. Jozi Arms or any bottle store sells a lock pick (R${LOCKPICK_PRICE}).`,
-      false,
-    ),
-  });
 
   /**
    * The qualifying building whose roof the player is standing on, or undefined. Cheap first: no
@@ -648,6 +645,26 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       return door;
     }
     return undefined;
+  };
+
+  /**
+   * The locked doorway the player is standing at with no pick to answer it — the subject of the
+   * passive LOCKED chip in hud(), and NEVER of an E offer. FeatureHost.act() returns true the
+   * instant any rung offers, so an offer at an unanswerable lock — even an "honest" one whose act
+   * only explains — claims the E press from every rung below it in Game's on-foot ladder, and the
+   * rung directly below the door is `E  Enter vehicle`: standing at a locked door beside your own
+   * car, E rattled the door instead of opening the car. That is the protest-rung failure class
+   * (PR #120) reintroduced, which is why the explanation lives on a chip that claims no key at all.
+   * Resolves the same subjects the two entry rungs do (street doorstep, then roof), so the chip
+   * lights exactly where the offer withdrew.
+   */
+  const lockedHintDoor = (): InteriorDoor | undefined => {
+    if (visit || swapping || picking || carriesPick()) return undefined;
+    const position = api.playerPosition();
+    const door = doorNear(position.x, position.z) ?? roofUnderfoot(position);
+    if (!door) return undefined;
+    if (api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) return undefined;
+    return entryLocked(door, api.hour()) ? door : undefined;
   };
 
   // ---- the lift -------------------------------------------------------------------------------------
@@ -858,9 +875,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       },
     },
     {
-      // The roof hatch, from outside: standing on a qualifying building's flat top. The offer must
-      // never fizzle, so a locked hatch still offers — and explains — rather than refusing silently.
-      // (doorLocked is off until the locks pass ships the pick; the shape is already the final one.)
+      // The roof hatch, from outside: standing on a qualifying building's flat top. A hatch the
+      // player can answer offers; one they cannot answer offers NOTHING — the same no-refusal rule
+      // as the street door below (see lockedHintDoor; the passive LOCKED chip explains instead).
+      // The hatch a player walked out of stays in grace for as long as they are on the roof (see
+      // EXIT_GRACE), so the pickless-locked case here is only ever a roof reached some other way.
       id: 'interiors:roofdoor', order: 52, context: 'foot',
       test: (ctx) => {
         if (visit || swapping) return undefined;
@@ -868,7 +887,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         if (!door) return undefined;
         if (picking && picking.via === 'roof' && picking.door.id === door.id) return pickingOffer(picking);
         if (entryLocked(door, ctx.hour)) {
-          if (!carriesPick()) return lockedOffer(door, 'hatch');
+          if (!carriesPick()) return undefined;
           return { prompt: `E  Pick the hatch lock · ${door.name}`, act: () => startPicking(door, 'roof', ctx.position) };
         }
         return { prompt: `E  In through the roof hatch · ${door.name}`, act: () => { enterFromRoof(door); } };
@@ -907,7 +926,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         if (api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) return undefined;
         if (picking && picking.via === 'street' && picking.door.id === door.id) return pickingOffer(picking);
         if (entryLocked(door, ctx.hour)) {
-          if (!carriesPick()) return lockedOffer(door, 'door');
+          // A locked door the player cannot answer offers NOTHING: this rung sits directly above
+          // `E  Enter vehicle` in Game's on-foot ladder, and any offer — even an explainer — would
+          // eat the press that should open the car at the kerb (the PR #120 failure class). The
+          // passive LOCKED chip (lockedHintDoor) carries the explanation without claiming a key.
+          if (!carriesPick()) return undefined;
           return { prompt: `E  Pick the lock · ${door.name}`, act: () => startPicking(door, 'street', ctx.position) };
         }
         return { prompt: `E  Go inside · ${door.name}`, act: () => { enter(door); } };
@@ -927,6 +950,23 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       phase += dt;
       clock += dt;
       tickPicking(dt);
+      // THE ROOF-STRANDING GUARD. The grace window is a countdown, and a countdown alone re-created
+      // the trap the one-way lock model forbids: out through the hatch is free, and sixty seconds
+      // later the way back down wanted a pick. While the player is still standing on the roof of
+      // the graced building the window re-arms, so the door they never picked shut stays unlatched
+      // until they actually leave the roof; back on the ground the countdown runs out normally and
+      // the grace is dropped. Cost: one surfaceHeightAt per frame, and the roofUnderfoot scan only
+      // in the second half of the window and only while the player stands well above the terrain.
+      if (!current && exitGrace) {
+        const elevated = player.y - api.surfaceHeightAt(player.x, player.z) >= 5;
+        if (elevated) {
+          if (exitGrace.until - clock < EXIT_GRACE / 2 && roofUnderfoot(player)?.id === exitGrace.id) {
+            exitGrace.until = clock + EXIT_GRACE;
+          }
+        } else if (clock >= exitGrace.until) {
+          exitGrace = undefined;
+        }
+      }
       // THE MARKERS FADE UP AS YOU REACH THEM. A shop pad pulses at full strength from across the
       // street because there are six of them; there are thousands of front doors, so a door only
       // lights when you are nearly on its step and a street of houses reads as a street of houses.
@@ -961,14 +1001,20 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
     hud: (): FeatureHudEntry[] | undefined => {
       if (!visit) {
-        // The dial: the fill bar IS the sweep, and the chip flares (warn) while the lock bites —
-        // the same meter language golf's POWER/TEMPO chips taught.
-        if (!picking) return undefined;
-        const biting = dialBites(picking);
-        return [{
-          id: 'interiors:pick', label: 'PICK', value: biting ? 'NOW' : '···',
-          fill: Math.round(Math.max(0, Math.min(1, picking.sweep)) * 100), warn: biting,
-        }];
+        if (picking) {
+          // The dial: the fill bar IS the sweep, and the chip flares (warn) while the lock bites —
+          // the same meter language golf's POWER/TEMPO chips taught.
+          const biting = dialBites(picking);
+          return [{
+            id: 'interiors:pick', label: 'PICK', value: biting ? 'NOW' : '···',
+            fill: Math.round(Math.max(0, Math.min(1, picking.sweep)) * 100), warn: biting,
+          }];
+        }
+        // The half of the locked-door story that may NOT live on the E ladder: a pickless player at
+        // a locked door gets a chip, not an offer — a chip claims no key, so E stays with the car
+        // at the kerb. It names the fix, not the door: the door has its own painted board.
+        if (lockedHintDoor()) return [{ id: 'interiors:locked', label: 'LOCKED', value: `Lock pick · R${LOCKPICK_PRICE}` }];
+        return undefined;
       }
       const plan = here(visit);
       return [
@@ -982,7 +1028,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
     interactions: () => rungs,
 
-    serialize: () => ({ visited: [...visited].slice(-32), finds, picks }),
+    // graceId rides the save so a reload made out on a walked-onto roof cannot re-latch the way
+    // down (see EXIT_GRACE). Included whenever the grace is live; update() drops a stale one on the
+    // ground, so the field is absent from almost every save ever written.
+    serialize: () => ({ visited: [...visited].slice(-32), finds, picks, ...(exitGrace ? { graceId: exitGrace.id } : {}) }),
 
     restore: (next) => {
       const incoming = next as InteriorsSave | undefined;
@@ -991,6 +1040,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       finds = incoming?.finds ?? 0;
       picks = incoming?.picks ?? 0;
       picking = undefined;
+      exitGrace = incoming?.graceId ? { id: incoming.graceId, until: clock + EXIT_GRACE } : undefined;
       close(false);
     },
 
@@ -1159,9 +1209,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         const rung = rungs.find((entry) => entry.id === 'interiors:door')!;
         const frame = () => rung.test({ context: 'foot', position: player, vehicle: undefined, hour: api.hour() });
         const first = frame();
-        if (!first) return 'failed:no-offer';
+        // A pickless player at a locked door gets NO offer at all (the rung must not claim E from
+        // the vehicle below) — tell the driver which of the two silences it is standing in.
+        if (!first) return entryLocked(door, api.hour()) && !carriesPick() ? 'failed:no-pick' : 'failed:no-offer';
         if (first.prompt.startsWith('E  Go inside')) return 'failed:not-locked';
-        if (first.prompt.startsWith('E  Try the door')) return 'failed:no-pick';
         first.act(); // starts the dial
         if (!picking) return 'failed:dial-did-not-start';
         for (let step = 0; step < 1200 && picking; step++) {

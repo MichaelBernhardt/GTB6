@@ -14,6 +14,8 @@ import { doorsNear, nearestDoor, resetDoorCache } from './doors';
 import { doorLocked } from './lock';
 import { buildDoorways, buildFloor, markerFade } from './build';
 import { solveFloor } from './floor';
+import { FeatureHost, type FeatureHostContext } from '../host';
+import { sanitizeInteriorsState } from '../interiors.state';
 import type { FeatureGameApi, FeatureMenuView, FeatureSystem, InteractionCtx } from '../types';
 
 /** Flat ground: the door search still runs against the real generated map, which is the half worth
@@ -61,12 +63,12 @@ function harness(): Harness {
   return state;
 }
 
-const ctx = (position: THREE.Vector3): InteractionCtx => ({ context: 'foot', position, vehicle: undefined, hour: 13 });
+const ctx = (position: THREE.Vector3, hour = 13): InteractionCtx => ({ context: 'foot', position, vehicle: undefined, hour });
 
 /** The offer the on-foot ladder would show right now, through the same resolver E goes through. */
-function offer(system: FeatureSystem, position: THREE.Vector3): { prompt: string; act(): void } | undefined {
+function offer(system: FeatureSystem, position: THREE.Vector3, hour = 13): { prompt: string; act(): void } | undefined {
   for (const rung of [...(system.interactions?.() ?? [])].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))) {
-    const found = rung.test(ctx(position));
+    const found = rung.test(ctx(position, hour));
     if (found) return found;
   }
   return undefined;
@@ -574,24 +576,33 @@ describe('third-person interior visibility', () => {
 
 /**
  * THE LOCKS, live. One direction only: entering from the street or the roof asks the lock line;
- * leaving never asks anything. A pickless player gets an offer that ACTS (rattle + where to buy),
- * never one that declines — the protest-rung failure class.
+ * leaving never asks anything. A pickless player at a locked door gets NO offer at all —
+ * FeatureHost.act() returns true the instant any rung offers, so even an "honest" explainer
+ * offer claims the E press from the `E  Enter vehicle` rung directly below (the protest-rung
+ * failure class, PR #120). The passive LOCKED chip explains instead; with a pick, the dial
+ * offers and ACTS.
  */
 describe('locked doors', () => {
   beforeEach(() => { resetDoorCache(); });
 
-  it('offers a pickless player an honest Try-the-door that acts, and does not open', () => {
+  it('claims no key from a pickless player, so E falls through to the vehicle rung below', async () => {
     const test = harness();
-    const system = createFeature(test.api, undefined);
+    // The real host, called exactly the way Game's on-foot E handler calls it: the line after
+    // `if (this.features.act('foot')) return;` is vehicle entry, so act() must answer false here.
+    const context: FeatureHostContext = { api: test.api, suspended: () => false, emit: () => undefined, reportError: () => undefined };
+    const host = new FeatureHost(context, [{
+      id: 'interiors', saveKey: 'interiors', label: 'Building interiors',
+      load: () => Promise.resolve({ createFeature }),
+    }]);
+    await host.open('interiors');
     const door = lockedDoorNear(0, 0)!;
     expect(door).toBeDefined();
     test.player.set(door.x, 0, door.z);
-    const prompt = offer(system, test.player);
-    expect(prompt?.prompt).toBe(`E  Try the door · ${door.name}`);
-    prompt!.act(); // must DO something: the locked toast with the shop pointer
-    expect(test.notes).toContain('Locked');
-    expect(system.qa!('status', {})).toBe('outside');
-    system.dispose();
+    expect(host.offer('foot'), 'a locked door with no pick must not offer').toBeUndefined();
+    expect(host.act('foot'), 'act() must decline so Game reaches beginEnter(vehicle)').toBe(false);
+    // The explanation moved to the passive chip, which claims no key at all.
+    expect(host.hud()?.some((chip) => chip.id === 'interiors:locked' && chip.label === 'LOCKED')).toBe(true);
+    host.dispose();
   }, 120000);
 
   it('with a pick, runs the dial through the real rung and opens on the bite', () => {
@@ -649,5 +660,84 @@ describe('locked doors', () => {
     expect(system.hud!()?.some((chip) => chip.id === 'interiors:pick') ?? false).toBe(false);
     system.dispose();
   }, 120000);
+});
+
+/**
+ * THE ROOF IS NEVER A TRAP. The owner's rule, verbatim: "you don't need to lockpick to get out.
+ * You can always exit a building, either front door or onto the roof. Getting back in is when you
+ * need to lock pick." A hatch that graced re-entry for only sixty seconds shipped the trap anyway:
+ * walk out onto a works roof in hours (free, as every exit is), let night fall — or simply linger —
+ * and the only way down asked for a pick. These tests pin the invariant that killed it: a pickless
+ * player on a roof they walked onto ALWAYS has the way back in, however long they stand out there,
+ * and across a save reload.
+ */
+describe('the roof is never a trap', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  /** A roof-access building that is open in hours and locked at night: the works dock that sprang
+   *  the trap. Searched outward so a sparse origin still answers. */
+  function nightLockedRoofDoor() {
+    for (const radius of [1500, 3000, 6000]) {
+      const found = doorsNear(0, 0, radius)
+        .map((door) => ({ door, core: buildCore(door.facts) }))
+        .filter((entry) => entry.door.roof && entry.core.stair && hasRoofAccess(entry.core)
+          && !doorLocked(entry.door.facts, 'outside', 13)
+          && doorLocked(entry.door.facts, 'outside', 23))
+        .sort((a, b) => Math.hypot(a.door.x, a.door.z) - Math.hypot(b.door.x, b.door.z))[0];
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  it('keeps the hatch a pickless player walked out of unlatched, however long they linger', async () => {
+    const test = harness();
+    let hour = 13;
+    test.api.hour = () => hour;
+    const system = createFeature(test.api, undefined);
+    const roofy = nightLockedRoofDoor();
+    expect(roofy, 'no night-locking roof-access building on the map').toBeDefined();
+    const { door, core } = roofy!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');                       // in through the open works door, in hours
+    expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
+    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);       // out the hatch — free, no pick, no check
+    // Night falls and they photograph the skyline for three whole minutes: far past the 60 s
+    // window, and the building is now night-locked to outsiders on every side.
+    hour = 23;
+    for (let i = 0; i < 180; i++) system.update!(1);
+    expect(doorLocked(door.facts, 'outside', hour), 'the building must night-lock or this test bites nothing').toBe(true);
+    const back = offer(system, test.player, hour);
+    expect(back?.prompt, 'pickless player marooned on a night-locked roof').toContain('In through the roof hatch');
+    back!.act();
+    await new Promise((resolve) => setTimeout(resolve, 500));         // the real 260 ms entry fade
+    const status = system.qa!('status', {});
+    expect(status).toMatch(/^inside\|/);
+    expect(status).toContain(`floor=${core.storeys - 1}`);            // back in at the top, exactly where the hatch leads
+    system.dispose();
+  }, 300000);
+
+  it('keeps the walked-onto roof unlatched across a save reload', () => {
+    const test = harness();
+    let hour = 13;
+    test.api.hour = () => hour;
+    const system = createFeature(test.api, undefined);
+    const roofy = nightLockedRoofDoor();
+    expect(roofy).toBeDefined();
+    const { door, core } = roofy!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
+    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);
+    hour = 23;
+    // The save written out on the roof carries the unlatched door through the sanitizer...
+    const slice = sanitizeInteriorsState(system.serialize!());
+    expect(slice.graceId, 'the unlatched door must survive into the save').toBe(door.id);
+    system.dispose();
+    // ...and a fresh session restored on the same roof still has the way down, still re-arming.
+    const revived = createFeature(test.api, slice);
+    for (let i = 0; i < 180; i++) revived.update!(1);
+    expect(offer(revived, test.player, hour)?.prompt, 'reload on the roof re-latched the way down').toContain('In through the roof hatch');
+    revived.dispose();
+  }, 300000);
 });
 
