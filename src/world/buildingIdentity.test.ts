@@ -6,7 +6,7 @@
  * routing that keeps a school from being prompted as a mosque, and the sign-atlas budget that the
  * whole scheme sits inside.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   boardText, CAFE_NAMES, COMPLEX_NAMES, HOUSE_NAMES, identityBoardTexts, KERK_NAMES, MALL_NAMES,
   MASJID_NAMES, parcelBuildingName, SAAL_NAMES, scatterBuildingName, SKOOL_NAMES, SPAZA_NAMES,
@@ -16,6 +16,12 @@ import { signAtlasLayout } from './ProceduralMaterials';
 import { GENERATED_ROADS } from './mapData';
 
 describe('building identity', () => {
+  // The first name lookup pays for the module's lazy init — the street register is derived from
+  // GENERATED_ROADS, which is most of a megabyte of map. That cost belongs to a hook, not to
+  // whichever test happens to run first: billed to the test it blew the 5 s default on CI while
+  // taking under a second here, so the failure moved with the machine rather than with the code.
+  beforeAll(() => { parcelBuildingName(0, 0, 'suburban', 'porch'); }, 60_000);
+
   it('is deterministic: the same building answers the same name every time', () => {
     for (let i = 0; i < 20; i++) {
       expect(parcelBuildingName(120.5 + i, -880.25, 'mixed-use', 'shopfront'))
