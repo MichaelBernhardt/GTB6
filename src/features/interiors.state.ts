@@ -97,6 +97,11 @@ export interface InteriorsSave {
   /** Lifetime successful lock picks. Drives the practice curve: past PICK_MASTERY the bite window
    *  doubles for good, so the two-hundredth house is effectively instant. */
   picks: number;
+  /** The one door id whose latch is currently off for this player: the door they just left through
+   *  (the body's EXIT_GRACE). Persisted for exactly one reason — a save written while standing on a
+   *  roof they walked out onto must not reload with the way back down re-latched; the body re-arms
+   *  the window for as long as they remain on that roof. Absent from almost every save. */
+  graceId?: string;
 }
 
 /** How many first visits pay out. Small, generous, and then it stops mattering. */
@@ -104,7 +109,7 @@ export const FIND_CAP = 12;
 
 /** Runs inside SaveManager's synchronous deserialize, on an already generically-sanitised blob. */
 export function sanitizeInteriorsState(raw: unknown): InteriorsSave {
-  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown; picks?: unknown };
+  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown; picks?: unknown; graceId?: unknown };
   const visited = Array.isArray(source.visited)
     ? source.visited.filter((entry): entry is string => typeof entry === 'string' && entry.length < 32).slice(0, 32)
     : [];
@@ -114,5 +119,8 @@ export function sanitizeInteriorsState(raw: unknown): InteriorsSave {
   const picks = typeof source.picks === 'number' && Number.isFinite(source.picks)
     ? Math.max(0, Math.min(1_000_000, Math.floor(source.picks)))
     : 0;
-  return { visited, finds, picks };
+  const graceId = typeof source.graceId === 'string' && source.graceId.length > 0 && source.graceId.length < 32
+    ? source.graceId
+    : undefined;
+  return graceId ? { visited, finds, picks, graceId } : { visited, finds, picks };
 }
