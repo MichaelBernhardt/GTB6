@@ -3,8 +3,9 @@
 
 Walks the whole arc the pass shipped:
   1. exempt console commands leave the save organic (everCheated stays false);
-  2. a locked suburban door offers an honest `E  Try the door` that ACTS (toast with the shop
-     pointer) and does not open;
+  2. a locked suburban door claims NO key from a pickless player — no offer, act('foot') declines,
+     the passive LOCKED chip explains — and E beside a parked car enters the CAR (the PR #120
+     press-theft, verified dead);
   3. `give lockpick` (a cheat: the sticky flag flips) arms the dial; the REAL rung starts it, the
      sweep runs in live updates, the press lands in the bite, the door opens;
   4. exit is never gated, and the door just left stays open for the grace window;
@@ -26,8 +27,11 @@ from playwright.sync_api import sync_playwright
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--port', type=int, default=5213)
+ap.add_argument('--host', default='127.0.0.1')
+ap.add_argument('--out', default='/tmp/interior-lock-probe')
 args = ap.parse_args()
-OUT = Path('/tmp/claude-1000/-home-sai-ai-gta3js/bd130fd1-ffb2-44ea-b99e-bff4ccaf6e3b/scratchpad')
+OUT = Path(args.out)
+OUT.mkdir(parents=True, exist_ok=True)
 
 BOOT_JS = r"""
 async () => {
@@ -106,16 +110,33 @@ async (stage) => {
     state.home = door;
     out.door = `${door.id} ${door.name}`;
     standAt(door);
-    const offer = await offerNow();
-    check('pickless prompt is Try the door', !!offer && offer.prompt.startsWith('E  Try the door'), offer ? offer.prompt : 'none');
-    if (offer) { offer.act(); settle(3); }
-    check('Try the door ACTS: locked toast with the shop pointer', toast().includes('Locked') && toast().includes('lock pick'), toast());
+    settle(10);
+    // Pickless at a locked door: NO offer at all — an offer (even an honest explainer) claims E
+    // from the `E  Enter vehicle` rung below, the exact PR #120 press-theft. The passive LOCKED
+    // chip carries the explanation without claiming a key.
+    const offer = g.features.offer('foot');
+    check('pickless locked door offers nothing', !offer, offer ? offer.prompt : 'none');
+    check('act(foot) declines, so the press falls through', g.features.act('foot') === false, 'act(foot)');
+    const hud = g.features.hud() || [];
+    check('passive LOCKED chip explains instead', hud.some(c => c.id === 'interiors:locked'), JSON.stringify(hud));
+    // The verifier's exact repro: an enterable vehicle in reach of the locked doorstep — the E
+    // press must put the player IN THE CAR, not rattle the door.
+    const car = g.population.vehicles.find(v => !v.playerControlled && !v.disabled && !v.occupied) || g.population.vehicles[0];
+    if (!car) return { error: 'no ambient vehicle to park at the kerb' };
+    car.group.position.set(p.x + 2.2, g.city.surfaceHeightAt(p.x + 2.2, p.z), p.z);
+    car.speed = 0;
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE' }));
+    g.update(1/60);
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyE' }));
+    settle(60);
+    check('E beside the locked door enters the CAR', g.activeVehicle === car, `activeVehicle=${g.activeVehicle === car}`);
     const status0 = await qa('status');
-    check('still outside', status0 === 'outside', status0);
+    check('still outside the building', status0 === 'outside', status0);
     return out;
   }
 
   if (stage === 'home-dial') {
+    if (g.activeVehicle) { g.beginExit(g.activeVehicle); settle(60); }
     const door = state.home; standAt(door);
     console_('give lockpick');
     settle(3);
@@ -214,6 +235,21 @@ async (stage) => {
     return out;
   }
 
+  if (stage === 'roof-linger') {
+    // THE STRANDING REPRO, verified dead: linger on the night-locked works roof for 90 game-seconds
+    // — half again past the old 60 s window that shipped the trap. The guard re-arms the latch for
+    // as long as the player stands out here, so the way down must still be the ungated hatch (NOT
+    // the pick dial, and not silence).
+    for (let i = 0; i < 5400; i++) g.update(1/60);
+    const offer = g.features.offer('foot');
+    check('90 s later the hatch is still unlatched', !!offer && offer.prompt.startsWith('E  In through the roof hatch'), offer ? offer.prompt : 'none');
+    if (offer) { offer.act(); await new Promise(r => setTimeout(r, 700)); settle(5); }
+    const st = String(await qa('status'));
+    const floor = /floor=(\d+)/.exec(st); const storeys = /storeys=(\d+)/.exec(st);
+    check('and it still leads back in, onto the top floor', st.startsWith('inside|') && !!floor && !!storeys && Number(floor[1]) === Number(storeys[1]) - 1, st);
+    return out;
+  }
+
   if (stage === 'sesame-on') {
     if (String(await qa('status')).startsWith('inside')) await qa('leave');
     console_('set time 1200');
@@ -261,7 +297,7 @@ async (stage) => {
 # stage -> screenshot taken AFTER it returns (the live loop keeps the state on screen)
 STAGES = [
     ('organic', None),
-    ('home-try', 'lock1-try-the-door-toast'),
+    ('home-try', 'lock1-locked-chip-e-into-car'),
     ('home-dial', 'lock2-dial-midsweep'),
     ('home-pick', 'lock3-inside-after-pick'),
     ('home-leave', 'lock4-grace-go-inside'),
@@ -270,6 +306,7 @@ STAGES = [
     ('works-day', None),
     ('roof-hatch-night', 'lock7-roof-hatch-night'),
     ('roof-exit-free', 'lock8-on-works-roof-night'),
+    ('roof-linger', 'lock8b-roof-linger-still-unlatched'),
     ('sesame-on', 'lock9-opensesame-active'),
     ('sesame-off', 'lock10-cheats-used-badge'),
     ('grant-tyres', None),
@@ -282,7 +319,7 @@ with sync_playwright() as pw:
     page = browser.new_page(viewport={'width': 1100, 'height': 680})
     page.add_init_script("localStorage.clear(); localStorage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({version: 2, settings: {quality: 'low', masterVolume: 0}}))")
     page.set_default_timeout(600000)
-    page.goto(f'http://127.0.0.1:{args.port}/', timeout=120000)
+    page.goto(f'http://{args.host}:{args.port}/', timeout=120000)
     # Wait for the WHOLE boot (prepareAssets ends at mode 'menu') — starting the game mid-boot
     # leaves the loading card up and renderHUD never running, so the DOM shows default markup.
     for _ in range(120):
