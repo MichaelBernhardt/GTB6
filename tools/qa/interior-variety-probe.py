@@ -272,6 +272,56 @@ async () => {
     check('7 roof: street door lands on the doorstep', dStep < 0.5, `${dStep.toFixed(2)}u from step`);
   }
 
+  // ---------- 8. the shopkeeper is mortal: a real round, fired indoors, kills ----------
+  {
+    const e = pick(x => x.core.layout === 'full' && openByDay(x) && x.d.facts.entrance === 'shopfront');
+    if (!e) return { error: 'no shopfront for the shooting' };
+    out.doors.victim = { id: e.d.id, name: e.d.name };
+    goto2(e.d.x, e.d.z);
+    check('8 mortal: enter', await qa('enter', {}) === 'ok', 'enter');
+    settle(20);
+    const keeper = g.population.pedestrians.find(x => x.scripted
+      && Math.hypot(x.group.position.x - p.x, x.group.position.z - p.z) < 40
+      && Math.abs(x.group.position.y - p.y) < 4);
+    check('8 mortal: a fixture stands on this floor at floor height', !!keeper,
+      keeper ? `y=${keeper.group.position.y.toFixed(1)} player y=${p.y.toFixed(1)}` : 'none');
+    if (keeper) {
+      // The outdoor effect pools are out of the census while indoors (the light-loop cut).
+      let hiddenEffects = 0;
+      g.scene.traverse(o => { if (o.isLight && o.name === 'effectlight' && !o.visible) hiddenEffects++; });
+      check('8 mortal: outdoor effect lights out of the indoor census', hiddenEffects >= 9, hiddenEffects);
+      // A REAL round through the real BulletSystem: fired from the player's spot at chest height,
+      // ~30u below the terrain — the exact shot that used to die in imaginary dirt at the muzzle.
+      const cfg = await import('/src/config.ts');
+      const gun = new (p.constructor)(p.x, p.y + 1.4, p.z);
+      const at = keeper.group.position;
+      const health0 = keeper.health;
+      for (let volley = 0; volley < 6 && keeper.state !== 'down'; volley++) {
+        const dir = new (p.constructor)(at.x - gun.x, at.y + 0.9 - gun.y, at.z - gun.z).normalize();
+        g.bullets.spawnShot(p, gun, [dir], 1, cfg.WEAPON_BY_ID.pistol);
+        for (let i = 0; i < 30; i++) g.update(1/60);
+      }
+      check('8 mortal: the shopkeeper takes damage indoors', keeper.health < health0, `health ${health0} -> ${keeper.health}`);
+      check('8 mortal: and dies like anyone', keeper.state === 'down' && keeper.health === 0, `state=${keeper.state} health=${keeper.health}`);
+      const drop = Math.abs(keeper.group.position.y - p.y);
+      check('8 mortal: the body grounds on the FLOOR, not the pavement above', drop < 2.5, `corpse y=${keeper.group.position.y.toFixed(1)} player y=${p.y.toFixed(1)}`);
+      settle(120); // let the spray settle
+      let decalsAtFloor = 0, decalsAboveGround = 0;
+      g.scene.traverse(o => {
+        if (o.name === 'gore-decal') { if (Math.abs(o.position.y - p.y) < 2.5) decalsAtFloor++; else decalsAboveGround++; }
+      });
+      check('8 mortal: blood pools on the room floor, none on the terrain overhead',
+        decalsAtFloor > 0 && decalsAboveGround === 0, `floor=${decalsAtFloor} overhead=${decalsAboveGround}`);
+      g.player.setHeading(Math.atan2(at.x - p.x, at.z - p.z)); settle(50);
+      snap('shopkeeper-down');
+    }
+    await qa('leave', {});
+    await sleep(700); settle(10);   // leave() runs its close under a real 260 ms fade timer
+    let restored = 0;
+    g.scene.traverse(o => { if (o.isLight && o.name === 'effectlight' && o.visible) restored++; });
+    check('8 mortal: effect lights restored outside', restored >= 9, restored);
+  }
+
   out.status = await qa('status', {});
   return out;
 }

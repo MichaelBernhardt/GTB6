@@ -213,6 +213,12 @@ export interface FeatureSystem {
    *  ask "is the player outdoors?" without knowing which features exist (Game.torchWouldHelp: the
    *  torch hint must not fire at someone standing in a lit room). Almost no feature needs this. */
   indoors?(): boolean;
+  /** World-space y of the interior floor the player currently stands on, while indoors() is true.
+   *  The host takes the first defined answer. Exists because the player's OWN y is unreliable
+   *  mid-frame — Player.update grounds against the terrain before the feature's clamp re-pins the
+   *  interior height — so host systems that ground things (gore decals land on "the floor here")
+   *  need the feature's answer, not the player's transient one. */
+  indoorFloorY?(): number | undefined;
   /** Full-fidelity interaction rungs. These replace the eager `approach` entry once loaded. */
   interactions?(): readonly InteractionDescriptor[];
   /** The slice stored under `SavedGame.features[saveKey]`. Must be JSON-safe. */

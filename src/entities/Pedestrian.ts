@@ -56,6 +56,11 @@ export class Pedestrian {
   idleTime = 0;
   route: RoadPoint[] = [];
   private groundY = 0;
+  /** A feature-owned standing surface (an interior floor). When set, it replaces the terrain as
+   *  this ped's ground everywhere the ped asks — walking, the down pose, the ragdoll floor — so a
+   *  fixture standing (or dying) inside a feature interior grounds on the storey it occupies, not
+   *  on the pavement thirty units above it. Owned by the feature that placed the ped. */
+  groundOverride?: number;
   private routeIndex = 0;
   private routed = false;
   private replanCooldown = 0; // seconds until this ped may ask the planner again — set when a plan attempt yields nothing (budget-starved or unreachable) so a ped can't hammer A* every frame
@@ -85,9 +90,14 @@ export class Pedestrian {
   private ragdollCity?: City;
   /** Built once; the ragdoll queries ground/walls through it every step without per-frame closures. */
   private readonly ragdollEnv: RagdollEnvironment = {
-    heightAt: (x, z) => this.ragdollCity ? this.ragdollCity.surfaceHeightAt(x, z) : this.groundY,
+    heightAt: (x, z) => this.groundOverride ?? (this.ragdollCity ? this.ragdollCity.surfaceHeightAt(x, z) : this.groundY),
     blockedAt: (x, z, radius) => this.ragdollCity ? this.ragdollCity.collides(x, z, radius) : false,
   };
+
+  /** The surface this ped stands on: the feature-owned floor when one is set, else the terrain. */
+  private groundAt(city: City, x: number, z: number): number {
+    return this.groundOverride ?? city.surfaceHeightAt(x, z);
+  }
 
   constructor(scene: THREE.Scene, position: THREE.Vector3, index: number, hostile = false, police = false, readonly visualVariant?: NpcCharacterId) {
     this.group.position.copy(position); this.groundY = position.y; this.hostile = hostile; this.police = police; this.state = hostile ? 'hostile' : 'walk';
@@ -152,7 +162,7 @@ export class Pedestrian {
   private updateMotion(dt: number, city: City, choices: RoadPoint[], player: THREE.Vector3): void {
     this.engaged = false; this.pursuing = false;
     if (this.state === 'down') {
-      this.groundY = city.surfaceHeightAt(this.group.position.x, this.group.position.z); this.group.position.y = this.groundY + 0.36;
+      this.groundY = this.groundAt(city, this.group.position.x, this.group.position.z); this.group.position.y = this.groundY + 0.36;
       if (this.deathSpinElapsed < DEATH_SPIN_DURATION) {
         // Impact whip: yaw the felled body away from the shot, fast at first and decaying to rest.
         const ease = (t: number) => 1 - (1 - t) ** 2;
@@ -165,7 +175,7 @@ export class Pedestrian {
       if (this.downTimer <= 0) this.rise(player);
       return;
     }
-    this.groundY = city.surfaceHeightAt(this.group.position.x, this.group.position.z); this.group.position.y = this.groundY;
+    this.groundY = this.groundAt(city, this.group.position.x, this.group.position.z); this.group.position.y = this.groundY;
     this.fear = decayFear(this.fear, dt);
     if (this.stumbleTimer > 0) {
       this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
@@ -230,7 +240,7 @@ export class Pedestrian {
     const step = pace * dt;
     const desired = this.desired.copy(this.group.position).addScaledVector(direction, step);
     const moved = city.clampMove(this.group.position, desired, 0.42); this.group.position.copy(moved);
-    this.groundY = city.surfaceHeightAt(moved.x, moved.z); this.group.position.y = this.groundY;
+    this.groundY = this.groundAt(city, moved.x, moved.z); this.group.position.y = this.groundY;
     if (moved.distanceToSquared(desired) > step * step * 0.25) { // blocked = progress well below the frame step (an absolute threshold never fires at 60fps and pinned peds on walls forever)
       if (this.state !== 'walk') this.pickDestination(this.localTarget(city, choices));
       else if (!this.advanceRoute()) { this.state = 'idle'; this.idleTime = 0.4 + Math.random() * 0.9; } // skip the snagged waypoint; wedged with no route left → brief pause, then a fresh pick

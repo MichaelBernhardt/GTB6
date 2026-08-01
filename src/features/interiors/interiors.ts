@@ -148,7 +148,9 @@ interface Visit {
   shaftBase?: number;
   /** Seconds the second floor has been out of sight; it goes when this passes RELEASE_DWELL. */
   idleFor: number;
-  fixture?: { ped: NonNullable<ReturnType<FeatureGameApi['spawnFixture']>>; y: number };
+  /** The fixture NPC on the current floor, if it has one. Its groundOverride is this floor's y —
+   *  set at placement, cleared at removal — so its whole grounding model lives on the storey. */
+  fixture?: { ped: NonNullable<ReturnType<FeatureGameApi['spawnFixture']>> };
   /** Previous local position, for the axis-separated clamp. */
   last: { x: number; z: number };
   /** Peak floors VISIBLE at once this visit — reported by the QA driver, not guessed at. */
@@ -419,14 +421,15 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   };
 
   const placeFixture = (current: Visit, plan: FloorPlan): void => {
-    if (current.fixture) { api.removeFixture(current.fixture.ped); current.fixture = undefined; }
+    if (current.fixture) { current.fixture.ped.groundOverride = undefined; api.removeFixture(current.fixture.ped); current.fixture = undefined; }
     if (!plan.fixture) return;
     const spot = toWorld(current, current.heading, plan.fixture.x, plan.fixture.z);
     const ped = api.spawnFixture(spot.x, spot.z, plan.fixture.name);
-    // spawnFixture grounds the ped on the terrain, which for an interior is a hundred metres below
-    // the floor it should be standing on. The API has no way to place one at a height, so its y is
-    // pinned here every frame instead. Noted as a gap rather than papered over.
-    if (ped) { ped.group.position.y = floorY(current, current.floor); current.fixture = { ped, y: floorY(current, current.floor) }; }
+    // The fixture's ground IS this storey's floor — groundOverride replaces the old per-frame y
+    // pin, so the ped's whole grounding model (walking, cowering, the down pose, the ragdoll
+    // floor) agrees with the room it stands in. Without it, a shot shopkeeper died toward the
+    // pavement thirty units overhead.
+    if (ped) { ped.groundOverride = floorY(current, current.floor); ped.group.position.y = ped.groundOverride; current.fixture = { ped }; }
   };
 
   const enter = (door: InteriorDoor, instant = false): string => {
@@ -444,7 +447,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (!visit) return;
     const current = visit;
     visit = undefined;
-    if (current.fixture) api.removeFixture(current.fixture.ped);
+    if (current.fixture) { current.fixture.ped.groundOverride = undefined; api.removeFixture(current.fixture.ped); }
     for (const resident of current.resident.values()) resident.built.dispose();
     current.resident.clear();
     // The pool goes with the visit, under the exit fade. The census outside is the same one we left,
@@ -991,7 +994,21 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       if (Math.hypot(player.x - current.x, player.z - current.z) > ABANDON_DISTANCE) { close(false); showFade(false); return; }
       clamp(current, dt);
       cullPartitions(current);
-      if (current.fixture) current.fixture.ped.group.position.y = floorY(current, current.floor);
+      // The fixture grounds itself on the floor via groundOverride now; what the room still owes
+      // it is CONTAINMENT — a shot shopkeeper's flee is ordinary ped movement with no interior
+      // walls to stop it, so hold the panicking body inside its own building's plate. Passing
+      // through a partition while cowering is accepted; sprinting off into the void under the
+      // hidden city is not.
+      if (current.fixture && current.fixture.ped.state !== 'down') {
+        const ped = current.fixture.ped.group.position;
+        const local = toLocal(current, current.heading, ped.x, ped.z);
+        const cx = Math.max(-current.core.width / 2 + 0.6, Math.min(current.core.width / 2 - 0.6, local.x));
+        const cz = Math.max(-current.core.depth / 2 + 0.6, Math.min(current.core.depth / 2 - 0.6, local.z));
+        if (cx !== local.x || cz !== local.z) {
+          const held = toWorld(current, current.heading, cx, cz);
+          ped.x = held.x; ped.z = held.z;
+        }
+      }
       // Load shedding reaches inside: the pool lamps sink with the grid, the pool ambient does not,
       // so the way out is always findable. assignLamps also tracks raise/drop from this frame.
       assignLamps(current);
@@ -1027,6 +1044,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
     /** Under a roof, with the lamps above (dimmed by the grid, never out) and the exit mat behind. */
     indoors: () => Boolean(visit),
+
+    /** The storey's floor height, for host systems that ground things while the player is inside.
+     *  The player's own y is NOT this mid-frame (Player.update grounds it against the terrain
+     *  before this feature's clamp re-pins it), which is exactly why the seam exists. */
+    indoorFloorY: () => (visit ? floorY(visit, visit.floor) : undefined),
 
     interactions: () => rungs,
 

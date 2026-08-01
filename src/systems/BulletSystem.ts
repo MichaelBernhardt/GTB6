@@ -19,7 +19,15 @@ const TRACER_LENGTH = 7;
 const TRACER_MIN_TRAVEL = 3; // no streak in the shooter's face; it fades in past the muzzle
 
 interface Shot { live: number; position: THREE.Vector3; weapon: WeaponId; damage: number; falloffFloor?: number; exclude?: Vehicle; victim?: Pedestrian; killed: boolean; policeHit: boolean; hitPoint?: THREE.Vector3; hitVehicles: Set<Vehicle>; kickedCorpses: Set<Pedestrian>; }
-interface Bullet { shot: Shot; position: THREE.Vector3; direction: THREE.Vector3; speed: number; range: number; traveled: number; primary: boolean; tracer?: THREE.Mesh; }
+interface Bullet {
+  shot: Shot; position: THREE.Vector3; direction: THREE.Vector3; speed: number; range: number; traveled: number; primary: boolean; tracer?: THREE.Mesh;
+  /** True when the round STARTED below the terrain — i.e. inside a feature interior, which stands
+   *  ~30 u under its own building. For such a round the ground far overhead is not a wall it can
+   *  meet: without this, the sampler read "below terrainHeightAt" at its first step and every
+   *  indoor shot died at the muzzle — the owner's "people inside buildings seem immortal".
+   *  Decided once on the first update (spawn has no city in hand); reset on reuse in spawnShot. */
+  subterranean?: boolean;
+}
 interface Effect { mesh: THREE.Mesh; life: number; }
 /** One trigger pull fully resolved (every pellet landed or expired): feed `result` straight into Game.handleGunshot. */
 export interface ResolvedShot { result: ShotResult; position: THREE.Vector3; weapon: WeaponId; }
@@ -52,6 +60,7 @@ export class BulletSystem {
       if (!bullet || !direction) break; // pool exhausted: drop the extra pellets rather than allocate
       bullet.shot = shot; bullet.position.copy(origin); bullet.direction.copy(direction).normalize();
       bullet.speed = spec.bulletSpeed ?? 300; bullet.range = spec.range; bullet.traveled = 0; bullet.primary = i === 0;
+      bullet.subterranean = undefined; // pooled: the previous flight's answer must not leak
       if (spec.tracer) { bullet.tracer = this.tracerPool.pop() ?? this.makeTracer(); bullet.tracer.visible = false; bullet.tracer.quaternion.setFromUnitVectors(this.forward, bullet.direction); this.scene.add(bullet.tracer); }
       shot.live += 1; this.bullets.push(bullet);
     }
@@ -62,6 +71,9 @@ export class BulletSystem {
     const out = this.resolved; this.resolved = [];
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const bullet = this.bullets[i]; if (!bullet) continue;
+      if (bullet.subterranean === undefined) {
+        bullet.subterranean = bullet.position.y < city.terrainHeightAt(bullet.position.x, bullet.position.z) - 2;
+      }
       const step = Math.min(bullet.speed * dt, bullet.range - bullet.traveled);
       let hitT = Infinity; let hitPed: Pedestrian | undefined; let hitVehicle: Vehicle | undefined;
       for (const ped of population.pedestrians) {
@@ -179,7 +191,7 @@ export class BulletSystem {
       const x = bullet.position.x + bullet.direction.x * step * t;
       const y = bullet.position.y + bullet.direction.y * step * t;
       const z = bullet.position.z + bullet.direction.z * step * t;
-      if (y <= city.terrainHeightAt(x, z) + 0.05 || city.collidesAt(x, z, 0.12, y, y)) return t;
+      if ((!bullet.subterranean && y <= city.terrainHeightAt(x, z) + 0.05) || city.collidesAt(x, z, 0.12, y, y)) return t;
     }
     return -1;
   }

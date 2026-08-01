@@ -347,7 +347,14 @@ export class Game {
       this.robotRace.bestTime = this.save.activityRecords.robotRunBest;
     }
     this.combat = new CombatSystem(this.scene, this.audio);
-    this.gore = new GoreSystem(this.scene, (x, z) => this.city.surfaceHeightAt(x, z));
+    // Blood grounds on the surface the fight is happening on, not always the terrain: a feature
+    // interior stands ~30 u below its own building, and terrain-grounded gore from an indoor kill
+    // sprayed decals onto the (hidden) pavement far overhead. The FEATURE answers the floor height
+    // — deliberately not the player's own y, which mid-frame is terrain-grounded by Player.update
+    // until the interior clamp re-pins it AFTER the gore has already run (found live: every indoor
+    // decal at terrain+0.06 while the player "stood" at the floor).
+    this.gore = new GoreSystem(this.scene, (x, z) =>
+      this.features.indoorFloorY() ?? this.city.surfaceHeightAt(x, z));
     this.pickups = new PickupSystem(this.scene);
     this.projectiles = new ProjectileSystem(this.scene);
     this.bullets = new BulletSystem(this.scene);
@@ -1198,7 +1205,7 @@ export class Game {
 
   /**
    * The moment the player steps into or out of a feature interior (interiors is the only feature
-   * that answers indoors() today), two host-side things flip:
+   * that answers indoors() today), three host-side things flip:
    *
    * 1. THE CAMERA. Inside, the on-foot view starts at first person — the owner's ask, and the read
    *    that makes an interior legible: no boom, so no wall ever stands between the lens and the
@@ -1219,6 +1226,15 @@ export class Game {
     if (indoors === this.featureIndoors) return;
     this.featureIndoors = indoors;
     this.city.group.visible = !indoors;
+    // 3. THE OUTDOOR EFFECT LIGHT POOLS GO DARK. Three's forward renderer sizes every fragment's
+    // light loop by the census of VISIBLE lights, intensity notwithstanding — and indoors, every
+    // pixel on screen is a lit interior surface. The vehicle-fire and projectile pools (9 point
+    // lights) serve a world that is hidden while inside; dropping them cuts the per-fragment loop
+    // for the whole room. The census change costs a handful of one-off program variants at first
+    // entry — which entry already pays for the interior's own lamp pool — and the exit restores
+    // the boot census, whose programs are still warm.
+    this.vehicleFire.lights.setVisible(!indoors);
+    this.projectiles.lights.setVisible(!indoors);
     if (indoors) {
       this.indoorFootView = 0;
       if (this.settings.cameraViewFoot !== 0) this.ui.notify('Camera: First person', 'V cycles the view. Your usual view returns outside.');
