@@ -67,6 +67,16 @@ describe('data-driven anchors', () => {
     ...DELIVERY_STOPS.map((stop, index) => [`delivery ${index}`, stop] as [string, { x: number; z: number }]),
   ];
 
+  it('keeps the round-4 pass-2 mission anchors beside real roads', async () => {
+    const { CABLE_YARD_SPOT, PADSTAL_SPOT, SUBSTATION_SPOT } = await import('./placements');
+    for (const [name, spot] of [['cable-yard vantage', CABLE_YARD_SPOT], ['padstal doorstep', PADSTAL_SPOT], ['ophirton feeder apron', SUBSTATION_SPOT]] as const) {
+      expect(inBounds(spot), `${name} in bounds`).toBe(true);
+      const edge = distanceToRoadEdge(spot.x, spot.z);
+      expect(edge, `${name} off the tar`).toBeGreaterThan(-0.6);
+      expect(edge, `${name} near a road`).toBeLessThan(ROAD_EDGE_CAP);
+    }
+  });
+
   it('places every walk-up anchor beside a road, not on the tar and not in the veld', () => {
     for (const [name, spot] of walkUpSpots) {
       expect(inBounds(spot), `${name} in bounds`).toBe(true);

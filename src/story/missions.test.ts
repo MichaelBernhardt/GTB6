@@ -35,12 +35,17 @@ describe('mission content sanity', () => {
 });
 
 describe('Last Coach Home walkthrough', () => {
-  it('completes: ride a train to Park Station, fetch the bag, return (train verb restored)', () => {
+  it('completes: board at Doornfontein, ride IN to Park, fetch the bag, return (train verb restored)', () => {
     const system = sim(); expect(system.start('last-coach-home')).toBe(true);
     expect(system.objective?.kind).toBe('reach');
-    // driving there in a car does NOT count — the objective requires being aboard AND at Park Station
+    // The marker leads to the BOARDING point now (round 4): the old single objective walked the
+    // player straight to Park, where the on-train gate refused them with no hint to board elsewhere.
+    // driving there in a car does NOT count — boarding requires being aboard AND at Doornfontein
     expect(system.update(0.016, { ...base, inVehicle: true, vehicleKind: 'compact' }, true).advanced).toBeUndefined();
     expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Crown Station' }, false).advanced).toBeUndefined();
+    expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Doornfontein Station' }, false).advanced).toBe(true);
+    // …then ride the same train in to Park.
+    expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Doornfontein Station' }, false).advanced).toBeUndefined(); // still at the platform
     expect(system.update(0.016, { ...base, onTrain: true, stationName: 'Johannesburg Park Station' }, false).advanced).toBe(true);
     expect(system.objective?.kind).toBe('collect');
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
@@ -179,6 +184,31 @@ describe('Pier Pressure geometry (owner round 4)', () => {
     expect(Math.hypot(reach.target!.position.x - PIER_POINT.x, reach.target!.position.z - PIER_POINT.z), 'pin at the landmark the copy names').toBeLessThan(30);
     expect(MISSION_SCRIPTS['pier-pressure']?.tier).toBe('journey');
     expect(MISSION_SCRIPTS['pier-pressure']?.journeys).toContain(0);
+  });
+});
+
+describe('promised places geometry (owner round 4, pass 2)', () => {
+  it('ends Copper Wire Blues at a vantage with the Kelvin gate in sight — outside the fence ring', async () => {
+    const { CABLE_YARD_SPOT, KELVIN_FENCE_RADIUS, KELVIN_GATE_SPOT, KELVIN_YARD_CENTER } = await import('../world/placements');
+    const toCentre = Math.hypot(CABLE_YARD_SPOT.x - KELVIN_YARD_CENTER.x, CABLE_YARD_SPOT.z - KELVIN_YARD_CENTER.z);
+    expect(toCentre, 'clocking the yard must not count as breaching it').toBeGreaterThan(KELVIN_FENCE_RADIUS);
+    const toGate = Math.hypot(CABLE_YARD_SPOT.x - KELVIN_GATE_SPOT.x, CABLE_YARD_SPOT.z - KELVIN_GATE_SPOT.z);
+    expect(toGate, 'first sight of the gate: the vantage is up the road, not across town').toBeLessThan(90);
+    expect(toGate).toBeGreaterThan(20);
+  });
+
+  it('puts the Ophirton feeder IN Ophirton, breaker beside the set piece', async () => {
+    const { SUBSTATION_BREAKER, SUBSTATION_SITE, SUBSTATION_SPOT } = await import('../world/placements');
+    const { districtAt } = await import('../world/mapData');
+    expect(districtAt(SUBSTATION_SITE.x, SUBSTATION_SITE.z), 'the copy names Ophirton — the pin must be there').toBe('Ophirton');
+    expect(Math.hypot(SUBSTATION_SPOT.x - SUBSTATION_SITE.x, SUBSTATION_SPOT.z - SUBSTATION_SITE.z)).toBeLessThan(12);
+    expect(Math.hypot(SUBSTATION_BREAKER.x - SUBSTATION_SITE.x, SUBSTATION_BREAKER.z - SUBSTATION_SITE.z)).toBeLessThan(12);
+  });
+
+  it('sends the padstal run to the real Ouma se Padstal landmark', async () => {
+    const { PADSTAL_POINT, PADSTAL_SITE, PADSTAL_SPOT } = await import('../world/placements');
+    expect(Math.hypot(PADSTAL_SPOT.x - PADSTAL_POINT.x, PADSTAL_SPOT.z - PADSTAL_POINT.z), 'pin at the landmark the copy names').toBeLessThan(45);
+    expect(Math.hypot(PADSTAL_SITE.building.x - PADSTAL_SPOT.x, PADSTAL_SITE.building.z - PADSTAL_SPOT.z), 'the stall fronts its own doorstep pad').toBeLessThan(16);
   });
 });
 

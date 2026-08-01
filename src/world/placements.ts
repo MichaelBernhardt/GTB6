@@ -409,16 +409,24 @@ export const THANDI_START: MapPt = { x: ARMS_SITE.pad.x + 2.5, z: ARMS_SITE.pad.
 
 // ---- Story arc (Act 1): stations, riddle streets, the cartel yard ------------------
 
-const stationPoint = (name: string): MapPt => {
-  const station = STATIONS.find((entry) => entry.name === name);
+/** Station lookup, optionally pinned to a LINE: several stations exist twice under one name on
+ *  different lines (Crown East/West, Park Main/North), and "first match wins" made mission anchors
+ *  depend on the map pipeline's emission order. A line pin makes the choice explicit. */
+const stationPoint = (name: string, line?: string): MapPt => {
+  const station = STATIONS.find((entry) => entry.name === name && (line === undefined || entry.line === line));
   return station ? { x: station.x, z: station.z } : { x: CBD_CENTER.x, z: CBD_CENTER.z };
 };
 
 /** Oupa Jakes holds court outside Park Station, where he announced trains for thirty years. */
-export const PARK_STATION_SPOT = walkSpotNear(stationPoint('Johannesburg Park Station'), 3, 5);
+export const PARK_STATION_SPOT = walkSpotNear(stationPoint('Johannesburg Park Station', 'Metrorail Main Line'), 3, 5);
 /** The nephew left the rent bag on the platform at Park Station — a short train hop from Portia
  *  (standard tier; the TRAIN is the mission's verb, restored after the re-anchor gutted it). */
-export const RENT_BAG_PLATFORM: MapPt = stationPoint('Johannesburg Park Station');
+export const RENT_BAG_PLATFORM: MapPt = stationPoint('Johannesburg Park Station', 'Metrorail Main Line');
+/** Where Last Coach Home actually boards: Doornfontein, one Main Line stop OUT from Park. The old
+ *  single objective pointed the marker at Park itself, where the on-train verb gate then refused
+ *  the player who had walked there (round 4: the marker must lead to the boarding point). */
+export const BOARDING_STATION_NAME = 'Doornfontein Station';
+export const BOARDING_STATION: MapPt = stationPoint(BOARDING_STATION_NAME, 'Metrorail Main Line');
 export const RENT_BAG_SPOT = walkSpotNear({ x: RENT_BAG_PLATFORM.x + 7, z: RENT_BAG_PLATFORM.z + 9 }, 3, 5);
 
 /** Riddle chain targets — real named streets with in-world street signs (no map markers). */
@@ -436,9 +444,6 @@ export const KELVIN_GATE_SPOT: MapPt = { x: kelvinKerb.x, z: kelvinKerb.z };
 
 /** The cable buyer's bakkie idles up the block from Bra Vusi (Copper Wire Blues tail). */
 export const QUARRY_SPAWN = kerbVehicleSpot('Pothole Street', { x: VUSI_START.x + 8 * P, z: VUSI_START.z });
-/** The buyer's LOCAL cable yard — a CBD-edge lot a short tail away (the cartel's real Kelvin Yard
- *  in Crown is discovered later, in Act 2's Audition; act 1 stays inside the CBD). */
-export const CABLE_YARD_SPOT = walkSpotNear({ x: CBD_CENTER.x + 70 * P, z: CBD_CENTER.z - 95 * P }, 4, 6);
 
 /** Candice's bottle-green route van, parked on the Newtown Rank kerb where she can see it
  *  (round 4: it drifted to a Commissioner Street kerb 469u from her — a 1.2km fetch before
@@ -475,24 +480,67 @@ export const KELVIN_BREACH_SPOT: MapPt = {
   z: KELVIN_YARD_CENTER.z + kelvinIn.z * (KELVIN_FENCE_RADIUS + 4),
 };
 
+/** Copper Wire Blues' payoff: the tail ends at FIRST SIGHT of the buyer's yard — a vantage kerb up
+ *  the road from the Kelvin gate, safely outside the fence ring (canon: the player clocks the yard
+ *  here in act 1 and only learns whose it is when The Audition takes them through the gate). Round 4:
+ *  the old CABLE_YARD_SPOT was a bare CBD corner with no yard, fence or gate in sight, and the
+ *  mission ended silently at nothing — the owner's "waypoint goal with no purpose". */
+export const CABLE_YARD_SPOT: MapPt = (() => {
+  const spot = bestKerbSpot({
+    near: { x: kelvinKerb.roadX + kelvinKerb.dirX * 52 - kelvinIn.x * 2, z: kelvinKerb.roadZ + kelvinKerb.dirZ * 52 - kelvinIn.z * 2 },
+    clearance: 2.8, ownRadius: 5, minEdge: 0.5,
+  });
+  return { x: spot.x, z: spot.z };
+})();
+
 /** The Ophirton feeder substation Sindi works (Pull the Plug, Catch Them Cutting, The Switch all key
- *  off it). Sited so it's a real ~1-1.3km night drive from BOTH Solly (SE) and Sindi (NW) — above the
- *  standard floor for all three, not the ~260m collapse a Solly-adjacent spot gave Pull the Plug. */
-export const SUBSTATION_SPOT = walkSpotNear(authored({ x: 2424, z: 5314 }), 4, 6);
-export const SUBSTATION_BREAKER: MapPt = { x: SUBSTATION_SPOT.x + 6, z: SUBSTATION_SPOT.z + 4 };
+ *  off it) — IN OPHIRTON now. Round 4: the old authored seed pre-dated the crop and dumped the pin on
+ *  a Maclaren Street kerb in the CBD-west, 2km from the district its own copy names, beside a spaza
+ *  shop and with the breaker marker overhanging the carriageway. The feeder is now a real substation
+ *  set piece (world/MissionRanks.ts) on Booysens Road inside the Ophirton district circle, sited on
+ *  the district's city side so the Sindi legs stay inside the substantial band. */
+const ophirtonFeederKerb = bestKerbSpot({
+  name: 'Booysens Road',
+  // Seed picked by directed-road probe IN BOTH DIRECTIONS (not straight-line, and not outbound-only:
+  // the one-way graph makes return legs longer — the first pick measured Sindi's drive OUT at 2.3km
+  // and never measured the drive BACK, which routed 3.0km, over the substantial ceiling). This is the
+  // Booysens Road kerb where every feeder leg fits the 1,400–2,800m band with real slack, measured
+  // with the grain of the graph and against it: Solly out 2.16km, Sindi out 2.59km, Sindi back 2.65km.
+  near: { x: 1579, z: 3128 },
+  clearance: 10, ownRadius: 13, minEdge: 3, searchRadius: 300,
+});
+export const SUBSTATION_SITE: PlacedSite = {
+  x: ophirtonFeederKerb.x, z: ophirtonFeederKerb.z,
+  heading: Math.atan2(ophirtonFeederKerb.roadX - ophirtonFeederKerb.x, ophirtonFeederKerb.roadZ - ophirtonFeederKerb.z),
+};
+/** The mission pin: the feeder's road-side apron, kerbside of the palisade. */
+export const SUBSTATION_SPOT: MapPt = {
+  x: SUBSTATION_SITE.x + Math.sin(SUBSTATION_SITE.heading) * 8.5,
+  z: SUBSTATION_SITE.z + Math.cos(SUBSTATION_SITE.heading) * 8.5,
+};
+/** The main breaker: an external switchgear cabinet on the apron beside the palisade gate — the yard
+ *  itself is fenced solid (the set piece's palisade colliders are real), so the throwable breaker
+ *  lives on the OUTSIDE where a hand can reach it. */
+export const SUBSTATION_BREAKER: MapPt = {
+  x: SUBSTATION_SITE.x + Math.sin(SUBSTATION_SITE.heading) * 6 + Math.cos(SUBSTATION_SITE.heading) * 4,
+  z: SUBSTATION_SITE.z + Math.cos(SUBSTATION_SITE.heading) * 6 - Math.sin(SUBSTATION_SITE.heading) * 4,
+};
 /** Sindi's flat on the Braamfontein edge (~0.7km, central to her three jobs: the Park Station drop,
  *  the Ophirton feeder, and the Constitution Hill handover). */
 export const SINDI_START = walkSpotNear(toward(braamfontein, 0.4), 3, 5);
 
-/** Generator-subscription collections: three CBD businesses behind on payments. */
+/** Generator-subscription collections: three CBD businesses behind on payments. Round 4 re-picked:
+ *  the first "collection" used to be 169m up Solly's own street (trivial) and the whole round shaved
+ *  its 700m tier floor — the route now opens with a real cross-CBD drive and closes with the holdout
+ *  nearest the yard (muscle right under Solly's nose reads as the point, not an accident). */
 export const GENNY_ROUND_STOPS: MapPt[] = [
-  walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 48 * P, z: CBD_CENTER.z + 105 * P }, 3, 5),
-  walkSpot('Risk-It Street', { x: CBD_CENTER.x + 5 * P, z: CBD_CENTER.z - 50 * P }, 3, 5),
-  walkSpot('Anderson Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 20 * P }, 3, 5),
+  walkSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 67 * P, z: CBD_CENTER.z - 98 * P }, 3, 5), // west on the Albertina Sisulu artery: the long first leg (~1.6km routed — inside the standard band, which the old Lilian Ngoyi pick busted at 2.0km)
+  walkSpot('Martial Street', { x: CBD_CENTER.x + 40 * P, z: CBD_CENTER.z + 8 * P }, 3, 5),        // mid-CBD (off Anderson — the old pick funnelled to 31u from a Rank Cold War stop)
+  walkSpot('Eish-loff Street', { x: CBD_CENTER.x + 48 * P, z: CBD_CENTER.z + 105 * P }, 3, 5),    // the holdout, closest to the yard
 ];
 
 /** Crown Station: where the misplaced diesel consist must stop (The Wrong Train). */
-export const CROWN_STATION = stationPoint('Crown Station');
+export const CROWN_STATION = stationPoint('Crown Station', 'Metrorail East Line'); // two Crowns exist — the consist boards at Booysens (East Line), so it must stop at the East Line one
 /** Board the stolen consist at Booysens: unlike Park Station, this stop shares Crown's east line.
  *  Sending the player to Park produced an impossible job — that train physically has no route to Crown. */
 export const WRONG_TRAIN_START = stationPoint('Booysens Station');
@@ -500,8 +548,9 @@ export const WRONG_TRAIN_START = stationPoint('Booysens Station');
 /** Sindi's dead drop: a platform locker at Park Station — the central rail hub, a landmark a
  *  stranger can find from the station board (the old airport-name pun needed map knowledge). */
 export const PAPER_DROP: MapPt = walkSpotNear({ x: RENT_BAG_PLATFORM.x - 8, z: RENT_BAG_PLATFORM.z + 12 }, 3, 5);
-/** Skywise Sipho waits at a CBD-edge airstrip office; the Kite itself is out at the airport (the flight
- *  is the one earned journey — transport provided). */
+/** Skywise Sipho runs his booking "office" (a plastic table and a clipboard) on the CBD's industrial
+ *  edge near the yard; the Kite itself is out at O.R. Tambourine — the train to Lughawe Halt is the
+ *  sane way there, and the mission copy now says so (the flight is the one earned journey). */
 export const SIPHO_START: MapPt = walkSpotNear({ x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z + 145 * P }, 3, 5);
 export const AIRPORT_APRON: MapPt = stationPoint('Lughawe Halt'); // where the Kite sits (journey target)
 
@@ -516,24 +565,29 @@ export const PIER_POINT = landmarkPoint('Vaalpunt Slipway', { x: CBD_CENTER.x, z
  *  dam (round 4: the mission pin used to sit on a Wemmer Jubilee kerb in the CBD — 7,039u / 9.6km
  *  from the place its own copy names; diary page 9 was already waiting at the real one). */
 export const PIER_SPOT: MapPt = walkSpot('Sloepbaai Road', PIER_POINT, 3, 5);
-/** Ouma se Padstal doorstep (long-haul side run). */
+/** Ouma se Padstal — the REAL landmark, far out west on the Rooibos Route (round 4: the mission pin
+ *  sat on Houghton Drive in the NE suburbs, 7,149u / 9.7km from the landmark its own copy names, and
+ *  even the landmark had no stall on it). The farm-stall run is the arc's one sanctioned SCENIC
+ *  JOURNEY (optional side piece): ~9km of real driving each way, west past Paarlshoop toward the dam.
+ *  The stall itself is a built set piece at the landmark (world/MissionRanks.ts); Grid Diary page 8
+ *  was already waiting here. */
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: northernSuburbs.x, z: northernSuburbs.z });
-// The farm-stall run is the arc's one sanctioned SCENIC JOURNEY (optional side piece): a real drive
-// out over the northern ridge, ~6.6km each way, which the 900s timers and "over the mountain" copy
-// already describe. Round 2 crushed it to a block away (Eish-loff Street) — a promise/geometry lie.
-export const PADSTAL_SPOT: MapPt = walkSpot('Houghton Drive', authored({ x: 4896, z: 1149 }), 3, 5);
+export const PADSTAL_SITE = shopSite('Rooibos Route', PADSTAL_POINT, 7.5, 3.2, 7, 2.5);
+export const PADSTAL_SPOT: MapPt = PADSTAL_SITE.pad;
 
 /** Sindi's evidence van, parked on a CBD-north side street just below Braamfontein (~0.9km from
  *  Solly). Road-agnostic kerb anchored in the dense grid: a named road detoured to 3.3km, and a
  *  raw Braamfontein-edge point sat in a road-sparse block that snapped 1.4km off-target. */
 export const EVIDENCE_VAN_SPOT = kerbVehicleSpot(undefined, { x: CBD_CENTER.x - 10 * P, z: CBD_CENTER.z - 45 * P });
-/** The cartel's diesel tanker on the industrial belt (The Audition). */
-export const TANKER_SPOT = kerbVehicleSpot('De Villiers Street', authored({ x: 2985, z: 4403 })); // ~1.5km careful haul from Kelvin Yard (the audition is the drive)
+/** The cartel's diesel bakkie on De Villiers Street (The Audition). Round 4: nudged ~170u west along
+ *  the street — the drive leg used to measure EXACTLY the substantial floor (1,400m) with zero slack;
+ *  the careful haul home is the audition, so it gets real margin over its band's bottom edge. */
+export const TANKER_SPOT = kerbVehicleSpot('De Villiers Street', authored({ x: 2757, z: 4403 }));
 
 /** Cartel stash sweep (Carcass): three lock-ups across the belt. */
 export const STASH_SPOTS: MapPt[] = [
   walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 35 * P, z: CBD_CENTER.z + 120 * P }, 3, 5), // the industrial belt
-  walkSpot('Risk-It Street', { x: CBD_CENTER.x + 15 * P, z: CBD_CENTER.z + 70 * P }, 3, 5),       // a CBD-edge lock-up
+  walkSpot('Fax Street', { x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z - 30 * P }, 3, 5),           // a north-CBD lock-up (moved off Risk-It — the old spot funnelled to 20u from RANK_STOPS[0])
   walkSpot('Commissioner Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z + 55 * P }, 3, 5),  // west-side yard
 ];
 
@@ -563,7 +617,10 @@ export const DIARY_SPOTS: Array<{ page: number; x: number; z: number }> = (() =>
 
 // ---- Parked vehicles ----------------------------------------------------------------
 
-export interface ParkedVehicleSpot { kind: string; x: number; z: number; heading: number; color?: number; }
+export interface ParkedVehicleSpot { kind: string; x: number; z: number; heading: number; color?: number;
+  /** Multiplier on the spec's health pool — for mission-critical cars that must survive their own
+   *  scripted event (the Hot Copper GTI died to its forced pursuit in honest play). */
+  healthScale?: number; }
 
 const parkedEntry = (kind: string, site: PlacedSite, color?: number): ParkedVehicleSpot =>
   ({ kind, x: site.x, z: site.z, heading: site.heading, ...(color !== undefined ? { color } : {}) });
@@ -579,9 +636,11 @@ export const GTI_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x
 export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('van', PORTIA_CAR_SPOT, 0xd9a53b), // Portia's mustard bakkie (Couch Run) — colour must stay unique among vans (PORTIA_BAKKIE_COLOR in story/scripts.ts)
   parkedEntry('van', CANDICE_VAN_SPOT, 0x2e8b57), // Candice's route van (Rank Cold War)
-  parkedEntry('van', TANKER_SPOT, 0xb8621b), // the diesel tanker (The Audition)
+  parkedEntry('van', TANKER_SPOT, 0xb8621b), // the diesel bakkie (The Audition)
   parkedEntry('van', EVIDENCE_VAN_SPOT, 0xdfe3e6), // Sindi's evidence van (Paper Fire)
-  parkedEntry('sport', GTI_SPOT, 0xd83a40),
+  // The Hot Copper GTI: the boot full of municipal cable is honest ballast — the weakest spec in the
+  // fleet has to live through the mission's own forced 2-star pursuit (it burned in 1 of 2 honest runs).
+  { ...parkedEntry('sport', GTI_SPOT, 0xd83a40), healthScale: 1.7 },
   parkedEntry('van', kerbVehicleSpot('Albertina Sisulu Road', { x: CBD_CENTER.x - 150 * P, z: CBD_CENTER.z - 45 * P })),
   parkedEntry('compact', kerbVehicleSpot('Hairyson Street', { x: CBD_CENTER.x - 35 * P, z: CBD_CENTER.z - 60 * P })),
   parkedEntry('sport', kerbVehicleSpot('Eish-loff Street', { x: CBD_CENTER.x + 48 * P, z: CBD_CENTER.z + 110 * P }), 0x3f6faa),
@@ -598,7 +657,7 @@ export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('motorbike', kerbVehicleSpot('You-Bet Street', { x: CBD_CENTER.x + 32 * P, z: CBD_CENTER.z + 55 * P }, 2)),
   parkedEntry('motorbike', kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 25 * P }, 2)),
   parkedEntry('courier', kerbVehicleSpot('Commissioner Street', { x: COURIER_DEPOT.x, z: COURIER_DEPOT.z }, 2), 0x84f01c),
-  (() => { const near = toward(hillbrow, 0.62); const spot = bestKerbSpot({ near, clearance: 2, ownRadius: 3.4, minEdge: 0.1, minRoadWidth: 7 }); return { kind: 'superbike', x: spot.x, z: spot.z, heading: Math.atan2(spot.dirX, spot.dirZ) }; })(), // northern-suburbs showroom superbike, ~1.5km (Stage Fright)
+  (() => { const near = toward(hillbrow, 0.62); const spot = bestKerbSpot({ near, clearance: 2, ownRadius: 3.4, minEdge: 0.1, minRoadWidth: 7 }); return { kind: 'superbike', x: spot.x, z: spot.z, heading: Math.atan2(spot.dirX, spot.dirZ) }; })(), // top-of-town showroom superbike on the Hillbrow edge, ~1.5km (Stage Fright — the copy says "top of town", which this is; the true northern suburbs are 5km further out)
 ];
 
 // ---- e-toll gantries (on the M1) -----------------------------------------------------
@@ -711,6 +770,11 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: KIOSK_SPOT.x, z: KIOSK_SPOT.z, radius: 7 },
   // Vaalpunt Slipway dressing (ramp, moored boat, board) at the real landmark.
   { x: PIER_POINT.x, z: PIER_POINT.z, radius: 15 },
+  // Ophirton feeder substation set piece on Booysens Road (MissionRanks.ts).
+  { x: SUBSTATION_SITE.x, z: SUBSTATION_SITE.z, radius: 15 },
+  // Ouma se Padstal set piece at the western landmark (MissionRanks.ts).
+  { x: PADSTAL_SITE.building.x, z: PADSTAL_SITE.building.z, radius: 12 },
+  { x: PADSTAL_SITE.pad.x, z: PADSTAL_SITE.pad.z, radius: 5 },
   { x: LOCKUP_SPOT.x, z: LOCKUP_SPOT.z, radius: 9 },
   // Kelvin Yard is a complete authored stealth arena, not just a marker. The generous claim keeps
   // the fence, its rear footpath, and the approach clear even though CityGen uses a deliberately

@@ -2147,7 +2147,11 @@ export class Game {
       const driver = this.population.ejectDriver(vehicle, this.player.group.position); this.reportCrime(this.player.group.position, 18, { victims: [driver], radius: FEAR_EVENTS.assault.radius, cityEvent: 'civilian-assault', label: 'carjacking' });
       this.ui.notify('Hijacking witnessed', `The driver is fleeing. Expect a call to the JMPD.${chopHint}`, false); vehicle.occupied = false;
     }
-    if (this.missions.active?.id === 'hot-property' && vehicle.spec.kind === 'sport' && vehicle.spec.color === 0xd83a40) this.forceWanted(2);
+    // The theft is the crime: the pursuit fires when the GTI is TAKEN (objective 0), not on every
+    // re-entry. It used to re-flag 2 stars each time the player stepped back in — after honestly
+    // losing the heat, touching the car mid-delivery restarted the chase, and the 80hp GTI died to
+    // it in 1 of 2 honest harness runs.
+    if (this.missions.active?.id === 'hot-property' && this.missions.objective?.kind === 'enter-kind' && vehicle.spec.kind === 'sport' && vehicle.spec.color === 0xd83a40) this.forceWanted(2);
     if (!vehicle.occupied) {
       const guard = this.population.pedestrians.find((ped) => ped.carGuard && ped.group.position.distanceTo(vehicle.group.position) < 14);
       if (guard) this.ui.notify('Car guard', '"Sharp sharp boss, I watched it like my own!"');

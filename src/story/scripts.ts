@@ -3,13 +3,13 @@ import type { MapPt } from '../world/mapData';
 import type { PlacedSite } from '../world/placements';
 import {
   CANDICE_VAN_SPOT, DELIVERY_STOPS, EVIDENCE_VAN_SPOT, GENNY_ROUND_STOPS, GTI_SPOT, HOSTILE_SPOTS,
-  CABLE_YARD_SPOT, KELVIN_GATE_SPOT, PIER_SPOT, PORTIA_CAR_SPOT, QUARRY_SPAWN, RANK_STOPS, STASH_SPOTS, SUBSTATION_SPOT, TANKER_SPOT,
+  KELVIN_GATE_SPOT, PIER_SPOT, PORTIA_CAR_SPOT, QUARRY_SPAWN, RANK_STOPS, STASH_SPOTS, SUBSTATION_SPOT, TANKER_SPOT,
 } from '../world/placements';
 
 export const PORTIA_BAKKIE_COLOR = 0xd9a53b; // Portia's mustard bakkie — unique among the world's vans so "find MY bakkie" is findable
 export const CANDICE_VAN_COLOR = 0x2e8b57; // bottle-green, matches her utility streetwear
 export const QUARRY_COLOR = 0x6b4b2a; // the cable buyer's rust-brown bakkie
-export const TANKER_COLOR = 0xb8621b; // the diesel tanker's rusted orange
+export const TANKER_COLOR = 0xb8621b; // the diesel bakkie's rusted orange (no tanker model exists — the copy says bakkie, honestly)
 export const EVIDENCE_VAN_COLOR = 0xdfe3e6; // Sindi's boxy white evidence van
 
 /** Hostile crew spawned when the mission enters an objective (or registers a specific checkpoint stop). */
@@ -99,10 +99,18 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     ],
   },
   'copper-wire-blues': { tier: 'standard', quarry: {
-    spawnObjective: 0, departObjective: 1, kind: 'van', color: QUARRY_COLOR, spawn: QUARRY_SPAWN, destination: CABLE_YARD_SPOT, arriveRadius: 22,
+    // The buyer drives home to HIS yard — the Kelvin gate (the tail's payoff is first sight of it;
+    // the player's own reach objective ends at a vantage kerb up the road, outside the fence ring).
+    spawnObjective: 0, departObjective: 1, kind: 'van', color: QUARRY_COLOR, spawn: QUARRY_SPAWN, destination: KELVIN_GATE_SPOT, arriveRadius: 22,
     followCapSeconds: 45, // you tailed him, you didn't commute behind him
     followCapNote: { title: 'Bra Vusi', detail: 'He\'s turning into his yard up ahead — you clocked it? Pull in and have a look. Nice and easy.' },
-  } },
+    // Round 4: the mission used to end SILENTLY at a bare corner with no yard on it — the owner's
+    // "waypoint goal with no purpose". The payoff now lands where the design always wanted it.
+  },
+  outro: [
+    { speaker: 'Bra Vusi', text: 'A fenced yard on the industrial edge, guards on the gate, diesel drums to the roof. That\'s no cable buyer, boet — that\'s an EMPIRE.' },
+    { speaker: 'Bra Vusi', text: 'They call the place Kelvin Yard. Word is the boss already knows a quiet driver found it. Don\'t be surprised if HE finds YOU.' },
+  ] },
   'rank-cold-war': { tier: 'standard',
     stops: RANK_STOPS,
     vehicle: { color: CANDICE_VAN_COLOR, spot: CANDICE_VAN_SPOT },
@@ -131,11 +139,13 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   // ---- Act 2: "The Payroll" ---------------------------------------------------------
   'the-audition': { tier: 'substantial',
     vehicle: { color: TANKER_COLOR, spot: TANKER_SPOT },
-    radio: [{ objective: 1, title: 'Solly', detail: 'Gently, my laaitie. That tanker is worth more than you are. For now.' }],
-    outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the truck, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
+    radio: [{ objective: 1, title: 'Solly', detail: 'Gently, my laaitie. That diesel is worth more than you are. For now.' }],
+    outro: [{ speaker: 'Solly', text: 'Not a scratch. You\'re on the payroll now — take the bakkie, it\'s cartel property, which means it\'s yours until it isn\'t.' }],
     rewards: { armour: 100, note: 'The crew kits you out — full body armour on Solly\'s tab' },
   },
-  'pull-the-plug': { tier: 'standard',
+  // Round 4: standard -> substantial. The feeder moved to actual Ophirton (Booysens Road) — the
+  // named-place lie was the defect, and the honest night drive is a substantial-band leg now.
+  'pull-the-plug': { tier: 'substantial',
     forceBlackout: 2, // the breaker goes over: the grid dies around you
     wanted: { objective: 2, level: 2 },
     radio: [{ objective: 2, title: 'The city goes dark', detail: 'Every light you can see just died. Somewhere, a control room phone is ringing.' }],
@@ -163,13 +173,17 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     journeys: [1], // driving the consist to Crown IS the mission — the one earned long haul, with transport handed over
     radio: [{ objective: 1, title: 'Solly', detail: 'Crown Station siding. Stop it like you own it, because tonight you do.' }],
   },
-  'crosswinds': { tier: 'journey', grantParachute: 0, journeys: [0, 1, 2] }, // the flight IS the mission — the one earned aviation setpiece (plane provided out at the strip)
+  'crosswinds': { tier: 'journey', grantParachute: 0, journeys: [0, 1, 2], // the flight IS the mission — the one earned aviation setpiece (plane provided out at the strip)
+    // Guidance, not geography (round 4): the Kite is 7km away and "fuelled on the apron" read as
+    // nearby — the copy now routes the player by train, and this backstop repeats it in the field.
+    hints: [{ objective: 0, afterSeconds: 120, detail: 'The apron is out at O.R. Tambourine, my friend. My licence can\'t fly, but the train still runs — Lughawe Halt, right by the airport fence.' }],
+  },
   'two-fires': {},
   'paper-fire': { tier: 'standard',
     quarry: { spawnObjective: 0, kind: 'van', color: EVIDENCE_VAN_COLOR, spawn: EVIDENCE_VAN_SPOT, igniteObjective: 2 },
     wanted: { objective: 2, level: 2 },
   },
-  'catch-them-cutting': { tier: 'standard',
+  'catch-them-cutting': { tier: 'substantial', // Ophirton retarget: Sindi's stakeout is a real cross-town night run now
     waves: [{ objective: 1, spots: around(SUBSTATION_SPOT, [[7, 5], [-6, 4], [5, -6]]) }],
   },
 
@@ -188,7 +202,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
     stops: STASH_SPOTS,
     wanted: { objective: 0, level: 2 },
   },
-  'the-switch': { tier: 'standard',
+  'the-switch': { tier: 'substantial', // Ophirton retarget: the finale dash crosses to the real feeder (timer re-measured: 800s holds at ~2.6km)
     waves: [
       { objective: 1, spots: around(SUBSTATION_SPOT, [[8, 5], [-7, 6], [6, -6], [-5, -7]]) },
       { objective: 2, spots: around(SUBSTATION_SPOT, [[9, 3], [-8, 5], [4, 9]]) },
@@ -196,7 +210,10 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   },
 
   // ---- Side pieces --------------------------------------------------------------------
-  'padstal-run': { tier: 'journey', journeys: [0, 2] }, // the scenic out-and-back drive is the point
+  // Round 4: the run goes to the REAL Ouma se Padstal, far out west (~9km each way; the pin used to
+  // sit in NE suburbia, 9.7km from the landmark the copy names). Timers raised 900 -> 1500s from the
+  // measured route; the scenic out-and-back drive is the point.
+  'padstal-run': { tier: 'journey', journeys: [0, 2] },
   // Round 4: substantial -> journey. The pin now sits at the REAL Vaalpunt Slipway on the dam
   // (~11km road from Candice) instead of a CBD kerb 9.6km from the place the copy names.
   'pier-pressure': { tier: 'journey', journeys: [0], waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },

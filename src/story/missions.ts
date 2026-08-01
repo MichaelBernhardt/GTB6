@@ -2,7 +2,7 @@ import { Vector3 } from 'three';
 import type { MissionDefinition } from '../systems/MissionSystem';
 import type { WorldTarget } from '../types';
 import {
-  CANDICE_START, CON_HILL_SPOT, EVIDENCE_VAN_SPOT, KELVIN_BREACH_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
+  BOARDING_STATION, BOARDING_STATION_NAME, CANDICE_START, CON_HILL_SPOT, EVIDENCE_VAN_SPOT, KELVIN_BREACH_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
   AIRPORT_APRON, CROWN_STATION, LOCKUP_SPOT, PADSTAL_SPOT, PAPER_DROP, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
   CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_PLATFORM, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
   SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START, WRONG_TRAIN_START,
@@ -68,9 +68,13 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'last-coach-home', name: 'Last Coach Home', contact: 'Auntie Portia', reward: 1100, act: 'hustle',
     prerequisites: { missions: ['delivery-run'] },
-    intro: 'My nephew fell asleep on the train and left my rent bag on the platform at Park Station, the silly child. Hop a train out and fetch it before someone honest finds it, boet.',
+    intro: 'My nephew fell asleep on the train and left my rent bag on the platform at Park Station, the silly child. Walk over to Doornfontein, catch a train IN to Park like a commuter, and fetch it before someone honest finds it, boet.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
-      { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Johannesburg Park Station' }, text: 'Ride a train out to Park Station', target: spot(RENT_BAG_PLATFORM, 'Park Station') },
+      // Two legs so the MARKER leads to the boarding point: the old single objective pinned Park
+      // Station itself, walked the player straight to the destination, and let the on-train verb
+      // gate refuse them there with no hint that the train was the point (owner round 4).
+      { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: BOARDING_STATION_NAME }, text: 'Catch a Main Line train at Doornfontein Station', target: spot(BOARDING_STATION, 'Doornfontein Station') },
+      { kind: 'reach', conditionsOnly: true, conditions: { onTrain: true, stationName: 'Johannesburg Park Station' }, text: 'Ride the train in to Park Station', target: spot(RENT_BAG_PLATFORM, 'Park Station'), checkpoint: true },
       { kind: 'collect', text: 'Grab Portia\'s rent bag beside the Park Station platform', target: spot(RENT_BAG_SPOT, 'Rent bag'), checkpoint: true },
       { kind: 'reach', text: 'Bring the bag back to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
@@ -85,7 +89,7 @@ export const MISSIONS: MissionDefinition[] = [
         { kind: 'strayed', value: 150, reason: 'You lost the pickup in traffic' },
         { kind: 'escort-down', reason: 'The pickup is wrecked — no yard today' },
       ] },
-      { kind: 'reach', text: 'Get eyes on the buyer\'s cable yard', target: spot(CABLE_YARD_SPOT, 'The cable yard'), checkpoint: true },
+      { kind: 'reach', text: 'Get eyes on the buyer\'s yard — the gate, the fence, the lot', target: spot(CABLE_YARD_SPOT, 'The buyer\'s yard'), checkpoint: true },
     ],
   },
   {
@@ -115,11 +119,11 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'the-audition', name: 'The Audition', contact: SOLLY, reward: 3000, act: 'payroll',
     prerequisites: { missions: ['copper-wire-blues'] },
-    intro: 'Vusi says you can drive and you can keep quiet. Prove half of that: there\'s a diesel tanker parked over on De Villiers Street that forgot who it belongs to. Bring it all the way home to Kelvin Yard without a scratch.',
+    intro: 'Vusi says you can drive and you can keep quiet. Prove half of that: there\'s a diesel bakkie parked over on De Villiers Street, drums strapped tight, that forgot who it belongs to. Bring it all the way home to Kelvin Yard without a scratch.',
     start: spot(SOLLY_START, 'Solly'), objectives: [
-      { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Take the diesel tanker from De Villiers Street' },
-      { kind: 'reach', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Bring the tanker to Kelvin Yard — gently', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, checkpoint: true, failIf: [
-        { kind: 'vehicle-health-below', value: 0.3, reason: 'The tanker is bleeding diesel — Solly\'s money burns with it' },
+      { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Take the diesel bakkie from De Villiers Street' },
+      { kind: 'reach', vehicleKind: 'van', vehicleColor: TANKER_COLOR, text: 'Bring the diesel to Kelvin Yard — gently', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, checkpoint: true, failIf: [
+        { kind: 'vehicle-health-below', value: 0.3, reason: 'The bakkie is bleeding diesel — Solly\'s money burns with it' },
       ] },
     ],
   },
@@ -136,9 +140,9 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'stage-fright', name: 'Stage Fright', contact: SOLLY, reward: 5000, act: 'payroll',
     prerequisites: { missions: ['pull-the-plug'] },
-    intro: 'There\'s a superbike in a showroom up in the northern suburbs that a friend of mine keeps dreaming about. Fetch it tonight. However loud it gets — it arrives.',
+    intro: 'There\'s a superbike in a showroom window at the top of town, up on the Hillbrow edge, that a friend of mine keeps dreaming about. Fetch it tonight. However loud it gets — it arrives.',
     start: spot(SOLLY_START, 'Solly'), objectives: [
-      { kind: 'enter-kind', vehicleKind: 'superbike', text: 'Take the showroom superbike up north' },
+      { kind: 'enter-kind', vehicleKind: 'superbike', text: 'Take the showroom superbike from the top of town' },
       { kind: 'reach', vehicleKind: 'superbike', text: 'Bring it to Kelvin Yard', target: spot(KELVIN_GATE_SPOT, 'Kelvin Yard'), radius: 12, checkpoint: true },
     ],
   },
@@ -175,9 +179,9 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'crosswinds', name: 'Crosswinds', contact: 'Skywise Sipho', reward: 6000, act: 'payroll',
     prerequisites: { missions: ['genny-round'] },
-    intro: 'Solly\'s "spare parts" fly tonight and my licence doesn\'t. Kite\'s fuelled on the apron. Get high over Ponte — the drop is the roof of the city — and don\'t bend my aeroplane.',
+    intro: 'Solly\'s "spare parts" fly tonight and my licence doesn\'t. Kite\'s fuelled on the apron out at O.R. Tambourine — catch the train to Lughawe Halt, it stops right by the fence. Get high over Ponte — the drop is the roof of the city — and don\'t bend my aeroplane.',
     start: spot(SIPHO_START, 'Skywise Sipho'), objectives: [
-      { kind: 'reach', conditionsOnly: true, conditions: { inPlane: true, altitudeAbove: 40 }, text: 'Get a Karoo Kite in the air', target: spot(AIRPORT_APRON, 'O.R. Tambourine apron') },
+      { kind: 'reach', conditionsOnly: true, conditions: { inPlane: true, altitudeAbove: 40 }, text: 'Get a Karoo Kite in the air — the train to Lughawe Halt reaches the apron', target: spot(AIRPORT_APRON, 'O.R. Tambourine apron') },
       { kind: 'reach', radius: 260, conditions: { inPlane: true, altitudeAbove: 150 }, text: 'Bring the parts high over Ponte Tower', target: spot(PONTE_POINT, 'Over Ponte'), checkpoint: true },
       { kind: 'reach', timeLimit: 300, text: 'Get down to the Ponte forecourt drop — quickly', target: spot(PONTE_FORECOURT, 'Forecourt drop'), checkpoint: true },
     ],
@@ -262,11 +266,11 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'padstal-run', name: 'Ouma se Padstal Run', contact: 'Auntie Portia', reward: 4000, act: 'side',
     prerequisites: { missions: ['last-coach-home'] },
-    intro: 'The aunties\' savings club ordered pastries and dried meat from Grandma\'s farm stall, out over the northern ridge. It\'s a proper drive, boet — take something with a working radio.',
+    intro: 'The aunties\' savings club ordered pastries and dried meat from Grandma\'s farm stall, far out west past Paarlshoop — the Rooibos Route, almost at the dam. It\'s a proper drive, boet — take something with a working radio.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
-      { kind: 'reach', radius: 10, timeLimit: 900, text: 'Drive the order out to the farm stall over the ridge', target: spot(PADSTAL_SPOT, 'Ouma se Padstal') },
+      { kind: 'reach', radius: 10, timeLimit: 1500, text: 'Drive the order list out west to Ouma se Padstal on the Rooibos Route', target: spot(PADSTAL_SPOT, 'Ouma se Padstal') },
       { kind: 'collect', text: 'Load the club\'s order', target: spot(PADSTAL_SPOT, 'The order'), checkpoint: true },
-      { kind: 'reach', timeLimit: 900, text: 'Drive it all the way home before the tea goes cold', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
+      { kind: 'reach', timeLimit: 1500, text: 'Drive it all the way home before the tea goes cold', target: spot(PORTIA_START, 'Auntie Portia'), checkpoint: true },
     ],
   },
   {

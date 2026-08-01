@@ -245,12 +245,12 @@ describe('Act 3 tails and finale', () => {
 });
 
 describe('side pieces', () => {
-  it('Padstal Run: out, load, home — both legs timed', () => {
+  it('Padstal Run: out, load, home — both legs timed for the real western route', () => {
     const system = sim(); system.start('padstal-run');
-    expect(system.remainingTime).toBe(900);
+    expect(system.remainingTime).toBe(1500); // ~9km to the REAL padstal now (was 900s for a 6.5km wrong-suburb drive)
     expect(system.update(1, base, true).advanced).toBe(true);
     expect(system.update(0.016, { ...base, collectedItem: true }, true).advanced).toBe(true);
-    expect(system.remainingTime).toBe(900); // the home leg gets its own clock
+    expect(system.remainingTime).toBe(1500); // the home leg gets its own clock
     expect(system.update(1, base, true).completed?.reward).toBe(4000);
   });
 

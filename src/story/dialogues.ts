@@ -32,7 +32,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'last-coach-home': { id: 'last-coach-home:intro', lines: [
     { speaker: 'Auntie Portia', text: 'Boet! Disaster. My nephew fell asleep on the train and got off without my rent bag — left it on the platform at Park Station.' },
     { speaker: 'You', text: 'Your rent was riding the train?' },
-    { speaker: 'Auntie Portia', text: 'It\'s down beside the platform, right where the silly child left it. Hop a train out — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home before someone honest finds it.' },
+    { speaker: 'Auntie Portia', text: 'It\'s down beside the platform, right where the silly child left it. Walk over to Doornfontein and catch the train IN to Park — the TRAIN, boet, that bag doesn\'t trust cars — and bring it home before someone honest finds it.' },
   ] },
   'copper-wire-blues': { id: 'copper-wire-blues:intro', lines: [
     { speaker: 'Bra Vusi', text: 'That cable from the GTI? The buyer paid cash, no name, no yard. A man like that is worth knowing better.' },
@@ -53,7 +53,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'the-audition': { id: 'the-audition:intro', lines: [
     { speaker: 'Solly', text: 'So this is Vusi\'s quiet driver. You found my yard by following one of my pickups. That was either very good or very stupid.' },
     { speaker: 'You', text: 'Can\'t it be both?' },
-    { speaker: 'Solly', text: 'Hah! Both pays double. There\'s a diesel tanker over on De Villiers Street that forgot who it belongs to. Bring it all the way home without a scratch and you\'re on the payroll, my laaitie.' },
+    { speaker: 'Solly', text: 'Hah! Both pays double. There\'s a bakkie over on De Villiers Street, drums of my diesel strapped on the back, that forgot who it belongs to. Bring it all the way home without a scratch and you\'re on the payroll, my laaitie.' },
   ] },
   'pull-the-plug': { id: 'pull-the-plug:intro', lines: [
     { speaker: 'Solly', text: 'You know what sells generators? Not adverts. Darkness sells generators. Tonight you\'re my salesman.' },
@@ -61,7 +61,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Solly', text: 'Eskom built the blame, I just rent it. The Ophirton feeder, after dark. One breaker. Throw it and walk. Don\'t run — running looks guilty.' },
   ] },
   'stage-fright': { id: 'stage-fright:intro', lines: [
-    { speaker: 'Solly', text: 'A friend of mine dreams about a superbike in a showroom window up in the northern suburbs. Glass, floodlights, a very rude alarm.' },
+    { speaker: 'Solly', text: 'A friend of mine dreams about a superbike in a showroom window at the top of town — the strip up on the Hillbrow edge. Glass, floodlights, a very rude alarm.' },
     { speaker: 'You', text: 'And I fetch it when?' },
     { speaker: 'Solly', text: 'Tonight. However loud that street gets — the bike arrives at my yard. How you keep it quiet is your business.' },
   ] },
@@ -83,7 +83,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'crosswinds': { id: 'crosswinds:intro', lines: [
     { speaker: 'Skywise Sipho', text: 'You\'re Solly\'s new hands? Lucky you. His "spare parts" fly tonight and my licence, tragically, does not.' },
     { speaker: 'You', text: 'So I fly the parts.' },
-    { speaker: 'Skywise Sipho', text: 'The Kite\'s fuelled on the apron. Get HIGH over Ponte — the drop is at the roof of the city, and the fast way down is under your seat. Don\'t bend my aeroplane.' },
+    { speaker: 'Skywise Sipho', text: 'The Kite\'s fuelled on the apron out at O.R. Tambourine — take the train to Lughawe Halt, it stops right by the airport fence. Get HIGH over Ponte — the drop is at the roof of the city, and the fast way down is under your seat. Don\'t bend my aeroplane.' },
   ] },
   'two-fires': { id: 'two-fires:intro', lines: [
     { speaker: 'Solly', text: 'The engineer has a van full of paper with my name in every line. Tonight the van burns.' },
@@ -119,7 +119,7 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Sindi', text: 'Spite. Insurance. A throne someone lost. It doesn\'t matter — whatever you are now, your city dies with that substation. GO.' },
   ] },
   'padstal-run': { id: 'padstal-run:intro', lines: [
-    { speaker: 'Auntie Portia', text: 'The aunties\' savings club put in an order at Grandma\'s farm stall — pastries, dried meat, the works. It\'s a real drive, boet, over the ridge and gone.' },
+    { speaker: 'Auntie Portia', text: 'The aunties\' savings club put in an order at Grandma\'s farm stall — pastries, dried meat, the works. It\'s a REAL drive, boet: far out west, past Paarlshoop, where the Rooibos Route runs for the dam.' },
     { speaker: 'Auntie Portia', text: 'Take something with a working radio and don\'t eat the order. I counted every pastry. I always count.' },
   ] },
   'pier-pressure': { id: 'pier-pressure:intro', lines: [

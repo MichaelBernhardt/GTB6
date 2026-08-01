@@ -339,9 +339,13 @@ describe('cross-city scripted routes (planFar)', () => {
   // legitimately cross the city and must use the citywide cap — the QA harness caught Zoo Lake →
   // Wemmer and CBD → Kelvin Yard reported unreachable through plan().
   it('routes between far mission anchors that the frame-capped plan() gives up on', async () => {
-    const { CANDICE_START, TERMINAL_SPOT, KELVIN_GATE_SPOT, VUSI_START } = await import('../world/placements');
+    const { CANDICE_START, TERMINAL_SPOT, KELVIN_GATE_SPOT, PADSTAL_SPOT, PORTIA_START, SINDI_START, SUBSTATION_SPOT, VUSI_START } = await import('../world/placements');
     const planner = new RoutePlanner(buildVehicleNav(), 2);
-    for (const [from, to] of [[CANDICE_START, TERMINAL_SPOT], [VUSI_START, KELVIN_GATE_SPOT]] as const) {
+    for (const [from, to] of [
+      [CANDICE_START, TERMINAL_SPOT], [VUSI_START, KELVIN_GATE_SPOT],
+      [SINDI_START, SUBSTATION_SPOT], // the Ophirton feeder (Pull the Plug / Catch Them Cutting / The Switch)
+      [PORTIA_START, PADSTAL_SPOT],   // the western padstal journey
+    ] as const) {
       const far = planner.planFar(from.x, from.z, to.x, to.z);
       expect(far?.length ?? 0, `route ${JSON.stringify(from)} -> ${JSON.stringify(to)}`).toBeGreaterThan(2);
     }

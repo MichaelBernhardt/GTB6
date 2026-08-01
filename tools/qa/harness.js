@@ -62,7 +62,11 @@ window.__qa = (() => {
     // multi-km drive like the padstal run. planFar carries the citywide cap.
     const journeyObj = (window.__scripts?.[g.missions.active?.id]?.journeys ?? []).includes(objIndex());
     if (journeyObj || Math.hypot(tx - p.x, tz - p.z) > 2500) return planner().planFar(p.x, p.z, tx, tz);
-    return planner().plan(p.x, p.z, planner().nearest(tx, tz));
+    // plan() carries the 4,000-expansion frame cap — a dense-grid leg under 2,500u straight-line can
+    // legitimately exhaust it (Sindi -> Ophirton feeder). The PLAYER's mission GPS routes through
+    // planFar (RouteGuidance), so fall back to the citywide solve before declaring the world broken;
+    // the distances the tier bands judge are then the same routes the game actually draws.
+    return planner().plan(p.x, p.z, planner().nearest(tx, tz)) ?? planner().planFar(p.x, p.z, tx, tz);
   };
   const routeLength = (pts) => { let d = 0; for (let i = 1; i < pts.length; i++) d += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z); return d; };
   const cruise = () => (g.activeVehicle?.spec.maxSpeed ?? 34) * 0.65;

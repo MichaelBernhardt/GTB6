@@ -786,7 +786,11 @@ export class PopulationSystem {
       // Parked cars never run the driving update that grounds moving traffic — spawn at the surface,
       // not y=0 (terrain relief raised the CBD ~18u and buried the whole kerbside fleet).
       const vehicle = new Vehicle(this.scene, spot.kind as VehicleKind, new THREE.Vector3(spot.x, this.city.surfaceHeightAt(spot.x, spot.z), spot.z), spot.color);
-      vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading; this.vehicles.push(vehicle);
+      vehicle.heading = spot.heading; vehicle.group.rotation.y = vehicle.heading;
+      // Mission-critical durability (placements.healthScale): scale the pool, not the spec — restore()
+      // and restarts refill to maxHealth, so the buff survives every mission reset.
+      if (spot.healthScale !== undefined) { vehicle.maxHealth = Math.round(vehicle.maxHealth * spot.healthScale); vehicle.health = vehicle.maxHealth; }
+      this.vehicles.push(vehicle);
       this.parkedSpots.push([spot.x, spot.z]);
     }
     // Seed opening traffic around the ACTUAL resume point, not always the default CBD spawn. A

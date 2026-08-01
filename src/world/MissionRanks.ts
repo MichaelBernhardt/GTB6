@@ -2,13 +2,18 @@ import * as THREE from 'three';
 import { createSignMesh } from './ProceduralMaterials';
 import { buildTaxiRank } from './models/civic';
 import { buildMooredBoat } from './models/coastal';
+import { buildSubstation } from './models/industrial';
+import { buildPadstal } from './models/rural';
 import { placedCollider } from '../systems/ShopSystem';
-import { NEWTOWN_RANK_SITE, PIER_POINT, PIER_SPOT, WEMMER_RANK_SITE, type PlacedSite } from './placements';
+import {
+  NEWTOWN_RANK_SITE, PADSTAL_SITE, PIER_POINT, PIER_SPOT, SUBSTATION_BREAKER, SUBSTATION_SITE,
+  WEMMER_RANK_SITE, type PlacedSite,
+} from './placements';
 import type { City } from './City';
 
 /**
- * The story's promised places, built for real (mission cohesion round 4). Three set pieces the
- * campaign copy names but the world never had:
+ * The story's promised places, built for real (mission cohesion round 4). Set pieces the campaign
+ * copy names but the world never had:
  *
  *  - NEWTOWN RANK — Candice's home rank on Ntemi Piliso Street ("bring it back to me here at the
  *    Newtown rank"). She is a contact ped (invulnerable) standing at the rank mouth; the structure
@@ -18,6 +23,11 @@ import type { City } from './City';
  *    description" — now they are).
  *  - VAALPUNT SLIPWAY dressing — hard-stand, boat and board at the real dam-side landmark the
  *    Pier Pressure copy names (the pin used to sit on a CBD kerb 9.6 km away).
+ *  - OPHIRTON FEEDER — the substation three missions key off, as a real palisade-and-transformers
+ *    yard on Booysens Road in Ophirton (the pin used to sit beside a CBD spaza shop 2 km from the
+ *    district every line of copy names).
+ *  - OUMA SE PADSTAL — the farm stall at its real western landmark, veranda, crates and
+ *    hand-painted board (even the landmark was bare veld before).
  *
  * Same pattern as KelvinYard.ts: live scripted props anchored in placements, colliders through
  * placedCollider, procedural neighbours kept away by RESERVED_PADS (re-bake on anchor change —
@@ -93,8 +103,70 @@ function plantSlipway(scene: THREE.Scene, city: City): void {
   scene.add(group);
 }
 
+/** The Ophirton feeder: a full substation model (palisade, transformers, gantry) with a name board
+ *  and the throwable main-breaker cabinet on the OUTSIDE of the fence — the yard is fenced solid,
+ *  so the thing a hand must reach lives on the road-side apron where the mission pin points. */
+function plantSubstation(scene: THREE.Scene, city: City): void {
+  const built = buildSubstation(3303, { variant: 1, size: 1 });
+  const y = city.surfaceHeightAt(SUBSTATION_SITE.x, SUBSTATION_SITE.z);
+  built.group.position.set(SUBSTATION_SITE.x, y, SUBSTATION_SITE.z);
+  built.group.rotation.y = SUBSTATION_SITE.heading;
+  built.group.name = 'Ophirton feeder substation';
+  scene.add(built.group);
+  for (const tier of built.tiers) {
+    city.colliders.push(placedCollider(SUBSTATION_SITE, tier.minX, tier.maxX, tier.minZ, tier.maxZ, tier.y1));
+  }
+  // The main breaker cabinet at its own mission anchor, handle out.
+  const cabinetY = city.surfaceHeightAt(SUBSTATION_BREAKER.x, SUBSTATION_BREAKER.z);
+  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.5, 0.5), new THREE.MeshStandardMaterial({ color: 0x5a6168, roughness: 0.5, metalness: 0.5 }));
+  cabinet.position.set(SUBSTATION_BREAKER.x, cabinetY + 0.75, SUBSTATION_BREAKER.z);
+  cabinet.rotation.y = SUBSTATION_SITE.heading;
+  cabinet.castShadow = true;
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.12), new THREE.MeshStandardMaterial({ color: 0xc23a2f, roughness: 0.45 }));
+  handle.position.set(
+    SUBSTATION_BREAKER.x + Math.sin(SUBSTATION_SITE.heading) * 0.28,
+    cabinetY + 1.05,
+    SUBSTATION_BREAKER.z + Math.cos(SUBSTATION_SITE.heading) * 0.28,
+  );
+  handle.rotation.y = SUBSTATION_SITE.heading;
+  scene.add(cabinet, handle);
+  // Identity board on the palisade, facing the street.
+  const steel = new THREE.MeshStandardMaterial({ color: 0x4c565c, roughness: 0.6, metalness: 0.4 });
+  const fx = Math.sin(SUBSTATION_SITE.heading); const fz = Math.cos(SUBSTATION_SITE.heading);
+  const boardX = SUBSTATION_SITE.x + fx * 7.4; const boardZ = SUBSTATION_SITE.z + fz * 7.4;
+  for (const side of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.2, 0.14), steel);
+    post.position.set(boardX + fz * side * 2.4, y + 1.6, boardZ - fx * side * 2.4);
+    post.castShadow = true;
+    scene.add(post);
+  }
+  const board = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.05, 0.16), new THREE.MeshStandardMaterial({ color: 0x1a2226, roughness: 0.55 }));
+  board.position.set(boardX, y + 2.9, boardZ);
+  board.rotation.y = SUBSTATION_SITE.heading;
+  const sign = createSignMesh(new THREE.PlaneGeometry(4.9, 0.9), 'OPHIRTON FEEDER', '#e8c832');
+  sign.position.set(boardX + fx * 0.1, y + 2.9, boardZ + fz * 0.1);
+  sign.rotation.y = SUBSTATION_SITE.heading;
+  scene.add(board, sign);
+}
+
+/** Ouma se Padstal: the farm stall itself at the real landmark, door facing the Rooibos Route. */
+function plantPadstal(scene: THREE.Scene, city: City): void {
+  const built = buildPadstal(4404, { variant: 2, size: 1.4, signName: 'OUMA SE PADSTAL' });
+  const site = PADSTAL_SITE.building;
+  const y = city.surfaceHeightAt(site.x, site.z);
+  built.group.position.set(site.x, y, site.z);
+  built.group.rotation.y = site.heading;
+  built.group.name = 'Ouma se Padstal';
+  scene.add(built.group);
+  for (const tier of built.tiers) {
+    city.colliders.push(placedCollider(site, tier.minX, tier.maxX, tier.minZ, tier.maxZ, tier.y1));
+  }
+}
+
 export function buildMissionRanks(scene: THREE.Scene, city: City): void {
   plantRank(scene, city, NEWTOWN_RANK_SITE, 1101, 'NEWTOWN RANK', '#f0c02f');
   plantRank(scene, city, WEMMER_RANK_SITE, 2202, 'WEMMER LONG-DISTANCE', '#7fd0e8');
   plantSlipway(scene, city);
+  plantSubstation(scene, city);
+  plantPadstal(scene, city);
 }
