@@ -125,6 +125,20 @@ Act gate: completing 2 of the original 4 **plus** Copper Wire Blues raises `act2
   leaves Seepunt Pier (timed pursuit).
 - **Grid Diaries** — 12 hidden lore pages, clued by each other; all 12 → stash + scrap.
 
+**Guidance & pacing (owner round 4 follow-up):**
+- The free-roam breadcrumb tracks the CAMPAIGN SPINE — the lowest uncompleted-unlocked
+  mainline mission — never the nearest giver, and each completion names the next mainline
+  contact out loud. Marker language: gold = objective, pale blue = mainline breadcrumb,
+  jacaranda purple = side quest (beam, map diamond, breadcrumb once the mainline is done).
+- A side quest stays dark until `SIDE_QUEST_DELAY_S` (3 min) of PLAYED time after its
+  giver's last mainline mission completes (StoryDirector.tickSideQuests; persisted in the
+  save so a reload resumes the wait). While cooling: no beam, no map pin, no offer — E at
+  the giver does nothing mission-wise. Never an offered prompt that declines.
+- Boarding objectives (`onTrain`/`drivingTrain` + a station target) re-time the serving
+  consist in the SCHEDULING layer (TrainSystem.assureBoardingAt: a deterministic phase
+  nudge, never a teleport within sight) so a train arrives well under a minute, and the
+  objective card counts it down — "Next train: 40s" — while the player waits.
+
 Verb variety: courier, tail, escort, riddle×2, sabotage, stealth-steal, collections,
 train-ride, train-drive, fly+skydive, timed arson, stakeout, infiltration, convoy,
 hold-out, pursuit, loot-sweep.

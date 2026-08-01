@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeActivityRecords, sanitizeCheats, sanitizeCompletedMissions, sanitizeEverCheated, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeActivityRecords, sanitizeCheats, sanitizeCompletedMissions, sanitizeEverCheated, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeSideQuestWaits, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
 import { ARMOUR_MAX, LOCKPICK_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import type { CheatSettings, GameSettings, Inventory, SavedVehicle, SavedWeapons } from '../types';
 import { MAP_WORLD_SIZE } from '../world/mapData';
@@ -375,8 +375,9 @@ describe('moved waypoints cannot wedge a mid-campaign save (round 4 moved half t
     expect(Object.keys(DEFAULT_SAVE).sort()).toEqual([
       'activityRecords', 'cheats', 'completedMissions', 'diaryPages', 'everCheated', 'features',
       'garage', 'heading', 'inventory', 'livingCity', 'money', 'position', 'safehouses', 'settings',
-      'spawn', 'storyFlags', 'timeOfDay', 'version', 'weapons',
+      'sideQuestWaits', 'spawn', 'storyFlags', 'timeOfDay', 'version', 'weapons',
     ]); // adding activeMission/objectiveIndex/waypoint here means re-answering how moved anchors load
+    // (sideQuestWaits is pacing, not runtime: seconds remaining per side quest, no coordinates in it)
   });
 
   it('keeps orphaned mission ids and drops junk from completedMissions', () => {
@@ -403,5 +404,22 @@ describe('moved waypoints cannot wedge a mid-campaign save (round 4 moved half t
     expect(loaded.diaryPages).toEqual([1, 2]);
     expect(loaded.spawn).toEqual(DEFAULT_SAVE.spawn); // out-of-world spawn → the starter anchor
     expect(loaded.position).toEqual(loaded.spawn); // out-of-world resume point follows the spawn
+  });
+});
+
+describe('side-quest cooldowns survive the save round trip', () => {
+  it('keeps honest waits, drops junk, and never lets junk unlock a side early', () => {
+    expect(sanitizeSideQuestWaits({ 'padstal-run': 120, 'pier-pressure': 0 })).toEqual({ 'padstal-run': 120, 'pier-pressure': 0 });
+    expect(sanitizeSideQuestWaits({ 'padstal-run': -5 })).toEqual({}); // a dropped entry re-arms the wait
+    expect(sanitizeSideQuestWaits({ 'padstal-run': Number.NaN, 'BAD ID': 3, 'x': Infinity })).toEqual({});
+    expect(sanitizeSideQuestWaits({ 'padstal-run': 99999 })).toEqual({}); // an hour+ was never written by this game
+    expect(sanitizeSideQuestWaits(['padstal-run'])).toEqual({});
+    expect(sanitizeSideQuestWaits(undefined)).toEqual({});
+  });
+
+  it('defaults to no stamps for saves that predate side pacing', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({ version: 3, money: 100 }));
+    expect(manager.load().sideQuestWaits).toEqual({});
   });
 });

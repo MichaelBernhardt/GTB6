@@ -113,6 +113,46 @@ export function formatCountdown(seconds: number): string {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 }
 
+/** Seconds until the shuttle next opens its doors at `stopArc` — the honest wait, simulated on the
+ *  real shuttle maths so intermediate dwells and terminus reversals all count. 0 while it is dwelling
+ *  there right now; undefined past `cap` (the schedule cannot promise an arrival, say nothing). */
+export function etaToStop(state: ShuttleState, params: ShuttleParams, stopArc: number, cap = 1800): number | undefined {
+  const atStop = (s: ShuttleState): boolean => Math.abs(s.s - stopArc) < 0.5 && s.dwell > 0;
+  let current = state;
+  if (atStop(current)) return 0;
+  const dt = 0.5;
+  for (let t = 0; t < cap; t += dt) {
+    current = advanceShuttle(current, dt, params);
+    if (atStop(current)) return t + dt;
+  }
+  return undefined;
+}
+
+/** A schedule phase that reaches `stopArc` in roughly `waitS` seconds from a standing start —
+ *  placed on the approach with the longer clear run, never across another stop, always on the
+ *  rails. The mission boarding assist re-times the shuttle with this instead of teleporting a
+ *  consist into view: same train, same line, same physics — just a different point in its cycle.
+ *  Deterministic (no randomness, no wall clock). */
+export function approachPhase(params: ShuttleParams, stopArc: number, waitS: number): ShuttleState {
+  const v = params.maxSpeed; const a = params.accel;
+  // Standing start over distance d with accel a to v then braking: t = d/v + v/a.
+  const ideal = Math.max(10, (waitS - v / a) * v);
+  const clearRun = (direction: 1 | -1): number => {
+    // The run available approaching `stopArc` travelling `direction`, bounded by the nearest stop
+    // or terminus BEHIND the approach (strictly between it and the target).
+    let limit = direction === 1 ? params.trainLength : params.lineLength;
+    for (const stop of params.stops ?? []) {
+      if (direction === 1) { if (stop < stopArc - 1 && stop > limit) limit = stop; }
+      else if (stop > stopArc + 1 && stop < limit) limit = stop;
+    }
+    return Math.max(0, Math.abs(stopArc - limit) - 2);
+  };
+  const direction: 1 | -1 = clearRun(1) >= clearRun(-1) ? 1 : -1;
+  const run = Math.max(5, Math.min(ideal, clearRun(direction))); // a short gap only ever SHORTENS the wait
+  const s = Math.max(params.trainLength, Math.min(params.lineLength, stopArc - direction * run));
+  return { s, direction, dwell: 0, speed: 0 };
+}
+
 /** Arc position on a sampled path closest to (x, z) — projects onto every segment; O(n), load-time only. */
 export function nearestArc(points: RailPoint[], cum: number[], x: number, z: number): number {
   let bestS = 0; let bestD = Infinity;
@@ -230,14 +270,7 @@ export class TrainSystem {
         ride.v = next.v;
         train.state = { s: next.s, direction: next.v > 0.01 ? 1 : next.v < -0.01 ? -1 : train.state.direction, dwell: 0, speed: Math.abs(next.v) };
       } else {
-        train.state = advanceShuttle(train.state, dt, {
-          lineLength: train.cum[train.cum.length - 1]!,
-          trainLength: train.trainLength,
-          maxSpeed: MAX_SPEED,
-          accel: ACCEL,
-          dwellTime: DWELL_S,
-          stops: train.stops,
-        });
+        train.state = advanceShuttle(train.state, dt, this.paramsFor(train));
       }
       if (train.state.s !== before.s || train.state.direction !== before.direction) this.place(train);
     }
@@ -319,6 +352,49 @@ export class TrainSystem {
   boardCountdown(position: THREE.Vector3): number | undefined {
     const hit = this.boardTarget(position);
     return hit && hit.train.state.dwell > 0 && this.ride?.train !== hit.train ? hit.train.state.dwell : undefined;
+  }
+
+  private paramsFor(train: Train): ShuttleParams {
+    return { lineLength: train.cum[train.cum.length - 1]!, trainLength: train.trainLength, maxSpeed: MAX_SPEED, accel: ACCEL, dwellTime: DWELL_S, stops: train.stops };
+  }
+
+  /** The consist + nose stop-arc serving the platform nearest (x, z) — stops AND termini count
+   *  (the airport spur's Lughawe Halt is a line end). Undefined when no line stops within reach. */
+  private stopServing(x: number, z: number): { train: Train; stopArc: number } | undefined {
+    let best: { train: Train; stopArc: number } | undefined; let bestDistance = 35;
+    for (const train of this.trains) {
+      for (const stopArc of [train.trainLength, ...train.stops, train.cum[train.cum.length - 1]!]) {
+        const platform = poseAt(train.points, train.cum, stopArc - train.trainLength / 2); // stop arcs are nose-centred
+        const distance = Math.hypot(platform.x - x, platform.z - z);
+        if (distance < bestDistance) { bestDistance = distance; best = { train, stopArc }; }
+      }
+    }
+    return best;
+  }
+
+  /** Honest "Next train: Ns" for the platform nearest (x, z) — undefined off-platform, while the
+   *  player is aboard that consist, while the player drives it (no schedule to quote), or when the
+   *  schedule cannot promise an arrival inside the simulation cap. */
+  nextArrivalSeconds(x: number, z: number): number | undefined {
+    const hit = this.stopServing(x, z);
+    if (!hit || this.ride?.train === hit.train) return undefined;
+    return etaToStop(hit.train.state, this.paramsFor(hit.train), hit.stopArc);
+  }
+
+  /** Mission boarding assist (owner: "waiting for a train will make any player quit"): when an
+   *  objective needs a boarding at this platform, re-time the serving shuttle so it arrives within
+   *  `maxWaitS` — a PHASE nudge in the scheduling layer (approachPhase), never a teleport the player
+   *  can see: no-op while the consist is ridden/driven, already due, or within sight of the player. */
+  assureBoardingAt(x: number, z: number, maxWaitS: number, player: { x: number; z: number }): void {
+    const hit = this.stopServing(x, z);
+    if (!hit || this.ride?.train === hit.train) return;
+    const params = this.paramsFor(hit.train);
+    const eta = etaToStop(hit.train.state, params, hit.stopArc);
+    if (eta !== undefined && eta <= maxWaitS) return;
+    const nose = poseAt(hit.train.points, hit.train.cum, hit.train.state.s);
+    if (Math.hypot(nose.x - player.x, nose.z - player.z) < 260) return; // never jump a consist in view
+    hit.train.state = approachPhase(params, hit.stopArc, 40);
+    this.place(hit.train);
   }
 
   /** Step aboard the nearest slow/stopped consist within reach; the schedule keeps running. */

@@ -146,7 +146,18 @@ export function sanitizeDiaryPages(raw: unknown): number[] {
   return [...new Set(raw.filter((page): page is number => Number.isInteger(page) && page >= 1 && page <= DIARY_PAGE_COUNT))].sort((a, b) => a - b);
 }
 
-export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY, features: {}, activityRecords: {}, everCheated: false };
+/** Side-quest cooldowns: mission-id keys, finite non-negative seconds (an hour is already absurd);
+ *  junk keys and values drop — a dropped entry merely re-arms the wait, never unlocks early. */
+export function sanitizeSideQuestWaits(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const waits: Record<string, number> = {};
+  for (const [id, left] of Object.entries(raw as Record<string, unknown>)) {
+    if (/^[a-z0-9-]{1,64}$/.test(id) && typeof left === 'number' && Number.isFinite(left) && left >= 0 && left <= 3600) waits[id] = left;
+  }
+  return waits;
+}
+
+export const DEFAULT_SAVE: SavedGame = { version: 3, money: 750, completedMissions: [], storyFlags: [], diaryPages: [], sideQuestWaits: {}, spawn: [...PLAYER_SPAWN], position: [...PLAYER_SPAWN], heading: DEFAULT_HEADING, settings: DEFAULT_SETTINGS, weapons: defaultWeapons(), cheats: DEFAULT_CHEATS, garage: null, livingCity: defaultLivingCityState(), timeOfDay: DEFAULT_TIME_OF_DAY, safehouses: [STARTER_SAFEHOUSE], inventory: DEFAULT_INVENTORY, features: {}, activityRecords: {}, everCheated: false };
 
 export interface StorageLike { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void; }
 
@@ -166,6 +177,7 @@ function deserialize(value: string | null): SavedGame {
       completedMissions: sanitizeCompletedMissions(parsed.completedMissions),
       storyFlags: sanitizeStoryFlags(parsed.storyFlags), // v1/v2 saves carry none — the arc starts fresh
       diaryPages: sanitizeDiaryPages(parsed.diaryPages),
+      sideQuestWaits: sanitizeSideQuestWaits(parsed.sideQuestWaits), // saves that predate side pacing arrive with every wait un-armed
       spawn,
       position: sanitizePosition(parsed.position, spawn), // old saves (no position) resume at the respawn anchor
       heading: sanitizeHeading(parsed.heading),

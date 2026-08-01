@@ -102,6 +102,21 @@ const POTATO_RENDER_SCALE = 0.5; // potato renders at HALF the CSS resolution an
 const POTATO_DENSITY_SCALE = 0.5; // potato halves the ambient ped/car census targets
 const formatRunTime = (seconds: number): string => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 const PERSONAL_WAYPOINT_LABEL = 'Personal waypoint';
+/** Side-quest colour, everywhere a side shows itself: the giver's standing beam, the map diamond,
+ *  the free-roam breadcrumb once the mainline is done. Jacaranda purple — nothing else in the
+ *  marker language uses it (gold = objective, pale blue = mainline breadcrumb, red = retry). */
+const SIDE_QUEST_COLOR = '#b06fd8';
+const SIDE_QUEST_COLOR_HEX = 0xb06fd8;
+
+/** The marker/beacon kit: grounded ring, bright core, wide soft beam — a beacon you can orient by
+ *  from streets away (the old 11u x 12%-opacity beam was invisible). Shared by the objective/
+ *  breadcrumb marker and the side-quest giver beacons so the two always read as the same language. */
+function beaconMeshes(color: number): THREE.Object3D[] {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 8, 28), new THREE.MeshBasicMaterial({ color })); ring.rotation.x = Math.PI / 2;
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.9, 130, 12, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false })); core.position.y = 65;
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.8, 130, 18, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false })); beam.position.y = 65;
+  return [ring, core, beam];
+}
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
@@ -159,6 +174,9 @@ export class Game {
   private quarry?: Vehicle;
   private quarryArrived = false;
   private contactCullTimer = 0;
+  /** Platform countdown for an active boarding objective: refreshed at 1Hz, run down between refreshes. */
+  private trainAssistTimer = 0;
+  private platformEta?: number;
   private objectiveElapsed = 0;
   private missionPassedTimer = 0;
   private missionPassedView?: { name: string; items: string[] };
@@ -202,6 +220,8 @@ export class Game {
   private activeVehicle?: Vehicle;
   private transition?: Transition;
   private marker = new THREE.Group();
+  /** Standing beacons at READY side-quest givers (jacaranda purple; built lazily on first light). */
+  private sideBeacons = new Map<string, THREE.Group>();
   private markerTarget?: WorldTarget;
   /** Which contact the free-roam breadcrumb has already announced arrival at (one nudge per contact). */
   private breadcrumbNudged?: string;
@@ -368,7 +388,7 @@ export class Game {
     if (this.touchMode) this.touch = new TouchControls(this.input, this.renderer.domElement, this.ui.root);
     this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); this.player.cheats = this.cheats; this.applyTeflon();
     this.missions.completed = new Set(this.save.completedMissions);
-    this.story.restore(this.save.storyFlags, this.save.diaryPages);
+    this.story.restore(this.save.storyFlags, this.save.diaryPages, this.save.sideQuestWaits);
     this.restoreGarageVehicle();
     this.population.primeVisualLods(this.player.group.position); // the first menu frame starts culled, not with every citywide actor at full detail
     this.applyWorldBudget(); // potato boots with its rings/fog/crowd budget from the first frame
@@ -590,6 +610,11 @@ export class Game {
       ...(chopShop ? [{ x: chopShop.x, z: chopShop.z, color: '#f28f3b', shape: 'diamond' as const, label: 'Bra Vusi’s Chop Shop' }] : []),
       ...(raceStart ? [{ x: raceStart.x, z: raceStart.z, color: '#d96cff', shape: 'diamond' as const, label: 'Robot Run' }] : []),
       ...(this.customWaypoint ? [{ ...this.customWaypoint, color: '#5ba9ff', shape: 'diamond' as const, label: PERSONAL_WAYPOINT_LABEL, waypoint: true }] : []),
+      // Ready side quests carry their own purple diamonds — the breadcrumb tracks the mainline, so
+      // without these a lit side beam would be invisible on the map. Cooling sides show nothing.
+      ...(!this.online && !this.missions.active ? MISSIONS.filter((mission) => mission.act === 'side' && this.missionOfferable(mission)
+        && !(this.markerTarget?.breadcrumb && this.markerTarget.label === mission.start.label))
+        .map((mission) => ({ x: mission.start.position.x, z: mission.start.position.z, color: SIDE_QUEST_COLOR, shape: 'diamond' as const, label: `Side job: ${mission.contact}` })) : []),
       ...(this.markerTarget && this.markerTarget.label !== PERSONAL_WAYPOINT_LABEL ? [this.markerTarget.breadcrumb
         ? { x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#6fc4d8', shape: 'diamond' as const, label: `Next job: ${this.markerTarget.label}` }
         : { x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true, label: this.markerTarget.label }] : []),
@@ -919,7 +944,7 @@ export class Game {
     this.customWaypoint = undefined;
     this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
-    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.everCheated = false; this.openSesame = false; this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.applyTeflon(); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
+    if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.everCheated = false; this.openSesame = false; this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], [], {}); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.applyTeflon(); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
     this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
     this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
     this.ui.notify('Welcome to Joburg', 'Follow turquoise GPS to story contacts. M opens the map; gold Quantum and lime Sixty-Sekonds blips are repeatable side work.');
@@ -2195,6 +2220,7 @@ export class Game {
 
   private updateMission(dt: number): void {
     this.updateDialogueAbandon();
+    if (!this.online) this.story.tickSideQuests(dt, MISSIONS, this.missions.completed); // side cooldowns run on the sim clock, never wall time
     this.updateContactPresence(dt);
     const objective = this.missions.objective;
     if (this.missions.state === 'active' && objective?.vehicleColor) {
@@ -2257,6 +2283,7 @@ export class Game {
       }
     }
     this.updateRouteGuidance(dt, focus);
+    this.updateTrainAssist(dt);
     this.objectiveElapsed += dt;
     this.updateRiddleHints();
     if (this.missionPassedTimer > 0) { this.missionPassedTimer -= dt; if (this.missionPassedTimer <= 0) this.missionPassedView = undefined; }
@@ -2265,6 +2292,33 @@ export class Game {
   /** Riddle fail-softs: a generous minimap search circle around the answer (offset centre so the
    *  circle never pinpoints it), and hints that sharpen on a clock — the final hint drops a real
    *  blip (owner: markerless one-liners against a whole city are hostile; deduction stays, despair goes). */
+  /** The waiting half of the boarding assist: while a boarding objective is active and the player
+   *  stands at (or nears) the platform, keep the wait bounded (re-assure — covers a player who
+   *  dawdled long past the arm-time nudge) and keep an honest countdown fresh for the objective
+   *  card. 1Hz refresh — etaToStop simulates the whole shuttle cycle and is not a per-frame cost. */
+  private updateTrainAssist(dt: number): void {
+    if (this.platformEta !== undefined) this.platformEta = Math.max(0, this.platformEta - dt);
+    this.trainAssistTimer -= dt;
+    if (this.trainAssistTimer > 0) return;
+    this.trainAssistTimer = 1;
+    const objective = this.missions.objective;
+    const target = objective?.target;
+    const boarding = this.missions.state === 'active' && Boolean(objective?.conditions?.onTrain || objective?.conditions?.drivingTrain);
+    if (this.online || !boarding || !target || this.trains.riding) { this.platformEta = undefined; return; }
+    const at = this.player.group.position;
+    if (Math.hypot(target.position.x - at.x, target.position.z - at.z) > 120) { this.platformEta = undefined; return; }
+    this.trains.assureBoardingAt(target.position.x, target.position.z, 75, { x: at.x, z: at.z });
+    this.platformEta = this.trains.nextArrivalSeconds(target.position.x, target.position.z);
+  }
+
+  /** "Next train: 40s" on the objective card while the player waits at the boarding platform —
+   *  the wait is bounded by the assist; this line is what makes it VISIBLE (owner: an opaque wait
+   *  reads as broken; a counting-down one reads as a train service). */
+  private platformWaitHint(): string {
+    if (this.platformEta === undefined || this.trains.riding) return '';
+    return this.platformEta <= 0.5 ? ' — Train boarding NOW' : ` — Next train: ${Math.ceil(this.platformEta)}s`;
+  }
+
   /** Aboard-a-train guidance for the objective card (owner: "wtf am I supposed to do?" on a train).
    *  Tells the rider the next stop, the stops-to-destination, or that they boarded the wrong way. */
   private trainRideHint(): string {
@@ -2335,6 +2389,14 @@ export class Game {
     if (!mission || this.missions.state !== 'active') return;
     const script = MISSION_SCRIPTS[mission.id];
     const index = this.missions.objectiveIndex;
+    // A boarding objective re-times the serving consist the moment it arms, so the train is already
+    // rolling in while the player walks to the platform (owner: "waiting for a train will make any
+    // player quit"). Scheduling-layer phase nudge only — see TrainSystem.assureBoardingAt.
+    const objective = this.missions.objective;
+    if (!this.online && objective?.target && (objective.conditions?.onTrain || objective.conditions?.drivingTrain) && !this.trains.riding) {
+      const at = this.player.group.position;
+      this.trains.assureBoardingAt(objective.target.position.x, objective.target.position.z, 75, { x: at.x, z: at.z });
+    }
     // If the player reached Kelvin during an outage already in progress, give the full intended
     // infiltration window from the gate. Grid-up arrivals still have to wait and solve the clue.
     if (mission.id === 'dark-house' && index === 1) this.loadShedding.guaranteeActiveWindow(OUTAGE_MIN_SECONDS);
@@ -2479,6 +2541,19 @@ export class Game {
       const name = ped.group.name;
       ped.group.visible = MISSIONS.some((mission) => mission.contact === name && !this.missions.completed.has(mission.id));
     }
+    this.updateSideBeacons(); // same cadence: a side lighting up is a 1.5s-latency event, not a per-frame one
+  }
+
+  /** The campaign spine: the lowest uncompleted-unlocked MAINLINE mission (owner: finishing a job
+   *  must point at the next real story beat, not whatever giver happens to stand closest). */
+  private nextMainlineMission(): MissionDefinition | undefined {
+    return MISSIONS.find((mission) => mission.act !== 'side' && !this.missions.completed.has(mission.id) && this.story.isUnlocked(mission, this.missions.completed));
+  }
+
+  /** May this mission light up and offer right now? Mainline: whenever unlocked. Side: only after
+   *  its giver's mainline is exhausted AND the post-mainline wait has run out (StoryDirector). */
+  private missionOfferable(mission: MissionDefinition): boolean {
+    return !this.missions.completed.has(mission.id) && this.story.isUnlocked(mission, this.missions.completed) && this.story.sideQuestReady(mission);
   }
 
   /** What E would actually do at the player's position — the prompt and the key MUST agree
@@ -2493,7 +2568,9 @@ export class Game {
       if (this.missions.state === 'active' && Math.hypot(active.start.position.x - position.x, active.start.position.z - position.z) < 7) return { kind: 'rebrief', mission: active };
       return undefined;
     }
-    const mission = MISSIONS.find((item) => !this.missions.completed.has(item.id) && this.story.isUnlocked(item, this.missions.completed) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
+    // A side still cooling down is NOT offerable: no prompt, no dialogue — E at that contact does
+    // nothing mission-wise, exactly like any bystander (never a claimed key that answers nothing).
+    const mission = MISSIONS.find((item) => this.missionOfferable(item) && Math.hypot(item.start.position.x - position.x, item.start.position.z - position.z) < 7);
     return mission ? { kind: 'offer', mission } : undefined;
   }
 
@@ -2834,6 +2911,10 @@ export class Game {
       if (outro?.length) this.dialogue.start({ id: `${update.completed.id}:outro`, lines: outro });
       const page = MISSION_SCRIPTS[update.completed.id]?.diaryPage;
       if (page !== undefined && this.story.collectDiaryPage(page)) this.ui.notify('Grid Diary', `Page ${page} of 12 — someone planned all of this.`, true, 'reputation');
+      // Name the next MAINLINE beat out loud (owner: "it isn't showing me the next mainline
+      // mission either") — the pale-blue breadcrumb already points there; this says who it is.
+      const nextMainline = this.online ? undefined : this.nextMainlineMission();
+      if (nextMainline) this.ui.notify('Next job', `${nextMainline.contact} has work — the pale-blue beacon knows the way.`);
       this.quarry = undefined; this.quarryArrived = false; // a parked quarry stays where it arrived
       if (update.completed.id === 'the-switch') this.settleStageSix();
       this.persist();
@@ -2967,16 +3048,22 @@ export class Game {
     const raw = this.missionTargetRaw();
     if (raw) return raw;
     if (!this.missions.active) {
-      let nearest: (typeof MISSIONS)[number] | undefined; let nearestDistance = Infinity;
-      for (const mission of MISSIONS) {
-        if (this.missions.completed.has(mission.id) || !this.story.isUnlocked(mission, this.missions.completed)) continue;
-        const distance = (mission.start.position.x - this.player.group.position.x) ** 2 + (mission.start.position.z - this.player.group.position.z) ** 2;
-        if (distance < nearestDistance) { nearest = mission; nearestDistance = distance; }
+      // The breadcrumb follows the CAMPAIGN SPINE, not proximity: the nearest-giver pick used to
+      // point back at the contact the player just worked for (owner: "it isn't showing me the next
+      // mainline mission either"). Only with the mainline exhausted does it fall to a ready side.
+      let target = this.nextMainlineMission(); let sideCrumb = false;
+      if (!target) {
+        let nearestDistance = Infinity;
+        for (const mission of MISSIONS) {
+          if (mission.act !== 'side' || !this.missionOfferable(mission)) continue;
+          const distance = (mission.start.position.x - this.player.group.position.x) ** 2 + (mission.start.position.z - this.player.group.position.z) ** 2;
+          if (distance < nearestDistance) { target = mission; nearestDistance = distance; sideCrumb = true; }
+        }
       }
       // A plain contact breadcrumb, deliberately NOT objective-styled: the old gold "goal" led the
       // player to a giver and then nothing happened (owner: "a waypoint goal with no purpose").
       // Arrival now hands over to the E-prompt with a nudge (see updateMission).
-      if (nearest) { const position = nearest.start.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...nearest.start, position, color: '#6fc4d8', breadcrumb: true }; }
+      if (target) { const position = target.start.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...target.start, position, color: sideCrumb ? SIDE_QUEST_COLOR : '#6fc4d8', breadcrumb: true }; }
       return undefined;
     }
     if (objective?.kind === 'enter-kind') {
@@ -3061,11 +3148,30 @@ export class Game {
   }
 
   private buildMarker(): void {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 8, 28), new THREE.MeshBasicMaterial({ color: 0xf5c451 })); ring.rotation.x = Math.PI / 2;
-    // A beacon you can orient by from streets away — the old 11u x 12%-opacity beam was invisible.
-    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.9, 130, 12, 1, true), new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false })); core.position.y = 65;
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.8, 130, 18, 1, true), new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false })); beam.position.y = 65;
-    this.marker.add(ring, core, beam); this.scene.add(this.marker);
+    for (const mesh of beaconMeshes(0xf5c451)) this.marker.add(mesh);
+    this.scene.add(this.marker);
+  }
+
+  /** Standing beacons at side-quest givers whose post-mainline wait has run out — a DIFFERENT
+   *  colour from both the gold objective and the pale-blue mainline breadcrumb (owner: "make side
+   *  missions a different colour light beam... so it can light up later as a side quest"). A side
+   *  still cooling down has no beam at all; refreshed on the same 1.5s cadence as contact culling. */
+  private updateSideBeacons(): void {
+    for (const mission of MISSIONS) {
+      if (mission.act !== 'side') continue;
+      const show = !this.online && !this.missions.active && this.missionOfferable(mission);
+      let beacon = this.sideBeacons.get(mission.id);
+      if (!beacon) {
+        if (!show) continue; // never build scenery for a beam that has nothing to say yet
+        beacon = new THREE.Group();
+        for (const mesh of beaconMeshes(SIDE_QUEST_COLOR_HEX)) beacon.add(mesh);
+        const at = mission.start.position;
+        beacon.position.set(at.x, this.city.surfaceHeightAt(at.x, at.z) + 0.2, at.z);
+        this.scene.add(beacon);
+        this.sideBeacons.set(mission.id, beacon);
+      }
+      beacon.visible = show;
+    }
   }
 
   private updateMarker(dt: number): void {
@@ -3224,7 +3330,7 @@ export class Game {
       missionName: this.online.objective.missionName, text: this.online.objective.text, progress: this.online.objective.progress,
       required: this.online.objective.required, remainingSeconds: this.online.objective.remainingSeconds,
     } : undefined : this.missions.objective ? {
-      missionName: this.missions.active?.name ?? '', text: this.missions.objective.text + (riddleHunt ? ' — search inside the circle on your map' : '') + this.trainRideHint(), progress: this.missions.objective.required ? this.missions.progress : undefined,
+      missionName: this.missions.active?.name ?? '', text: this.missions.objective.text + (riddleHunt ? ' — search inside the circle on your map' : '') + this.trainRideHint() + this.platformWaitHint(), progress: this.missions.objective.required ? this.missions.progress : undefined,
       required: this.missions.objective.required, remainingSeconds: this.missions.remainingTime > 0 ? this.missions.remainingTime : undefined,
       failed: !this.online && this.missions.state === 'failed' ? this.missions.failReason ?? 'Mission failed' : undefined,
     } : hotVehicleObjective ?? freeRoamObjective);
@@ -3328,7 +3434,7 @@ export class Game {
     this.livingCity = new LivingCitySystem(this.save.livingCity);
     this.neighbourhoodArrivals.reset(); this.hostileGuardDistricts.clear();
     this.missions.completed = new Set(this.save.completedMissions);
-    this.story.restore(this.save.storyFlags, this.save.diaryPages);
+    this.story.restore(this.save.storyFlags, this.save.diaryPages, this.save.sideQuestWaits);
     if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest;
     this.dayNight.hour = this.save.timeOfDay;
     this.player.heal();
@@ -3411,6 +3517,7 @@ export class Game {
       completedMissions: [...this.missions.completed],
       storyFlags: this.story.serializeFlags(),
       diaryPages: this.story.serializeDiaryPages(),
+      sideQuestWaits: this.story.serializeSideWaits(),
       spawn: this.save.spawn,
       position: [at.x, at.y, at.z],
       heading,

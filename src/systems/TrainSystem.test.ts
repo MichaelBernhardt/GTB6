@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advanceShuttle, cumulativeArc, formatCountdown, nearestArc, nextStop, poseAt, type ShuttleParams, type ShuttleState } from './TrainSystem';
+import { advanceShuttle, approachPhase, cumulativeArc, etaToStop, formatCountdown, nearestArc, nextStop, poseAt, type ShuttleParams, type ShuttleState } from './TrainSystem';
 
 const LINE = [{ x: 0, z: 0 }, { x: 1000, z: 0 }, { x: 1000, z: 1000 }];
 const PARAMS: ShuttleParams = { lineLength: 2000, trainLength: 30, maxSpeed: 20, accel: 1.5, dwellTime: 10 };
@@ -117,5 +117,53 @@ describe('rider-facing helpers', () => {
     expect(formatCountdown(89.5)).toBe('1:30');
     expect(formatCountdown(0.4)).toBe('0:01');
     expect(formatCountdown(-1)).toBe('0:00');
+  });
+});
+
+describe('mission boarding window (owner: waiting for a train makes players quit)', () => {
+  const STOPPING: ShuttleParams = { ...PARAMS, stops: [700, 1400] };
+
+  it('reads zero while the doors are open at the platform', () => {
+    expect(etaToStop({ s: 700, direction: 1, dwell: 5, speed: 0 }, STOPPING, 700)).toBe(0);
+  });
+
+  it('counts the whole honest wait — dwells, the far terminus and the run back', () => {
+    // Nose just past 700 heading away: the consist must serve 1400, turn at 2000, and come home.
+    const eta = etaToStop({ s: 710, direction: 1, dwell: 0, speed: 10 }, STOPPING, 700)!;
+    expect(eta).toBeGreaterThan(120); // ~2,590u of running plus two dwells — never sugar-coated
+    expect(eta).toBeLessThan(400);
+  });
+
+  it('admits it cannot promise an arrival inside the cap instead of lying', () => {
+    expect(etaToStop({ s: 710, direction: 1, dwell: 0, speed: 0 }, STOPPING, 700, 30)).toBeUndefined();
+  });
+
+  it('phases an approach that arrives inside the promised window without crossing another stop', () => {
+    const state = approachPhase(STOPPING, 1400, 40);
+    expect(state.speed).toBe(0);
+    expect(state.dwell).toBe(0);
+    expect(state.s).toBeGreaterThan(700); // the 700→1400 gap is the longer run: no stop crossed
+    expect(state.s).toBeLessThan(1400);
+    const eta = etaToStop(state, STOPPING, 1400)!;
+    expect(eta).toBeGreaterThan(10);
+    expect(eta).toBeLessThanOrEqual(55);
+  });
+
+  it('a short gap clamps the run — the wait only ever gets shorter', () => {
+    const tight: ShuttleParams = { ...PARAMS, stops: [1150, 1250, 1400, 1550] };
+    const state = approachPhase(tight, 1400, 40);
+    const eta = etaToStop(state, tight, 1400)!;
+    expect(eta).toBeLessThanOrEqual(40);
+    // and the run really is inside the adjacent-stop gap, whichever side it picked
+    expect(Math.abs(state.s - 1400)).toBeLessThanOrEqual(150);
+  });
+
+  it('stays on the rails when the target stop is a terminus', () => {
+    for (const terminus of [PARAMS.trainLength, PARAMS.lineLength]) {
+      const state = approachPhase(STOPPING, terminus, 40);
+      expect(state.s).toBeGreaterThanOrEqual(PARAMS.trainLength);
+      expect(state.s).toBeLessThanOrEqual(PARAMS.lineLength);
+      expect(etaToStop(state, STOPPING, terminus)!).toBeLessThanOrEqual(55);
+    }
   });
 });

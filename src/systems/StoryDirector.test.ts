@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
 import type { MissionDefinition } from './MissionSystem';
-import { choiceFlag, DIARY_PAGE_COUNT, StoryDirector } from './StoryDirector';
+import { choiceFlag, DIARY_PAGE_COUNT, SIDE_QUEST_DELAY_S, StoryDirector } from './StoryDirector';
 
 const mission = (id: string, extra: Partial<MissionDefinition> = {}): MissionDefinition => ({
   id, name: id, contact: 'X', intro: '', reward: 0,
@@ -66,5 +66,64 @@ describe('StoryDirector', () => {
     // restore drops junk pages
     next.restore(['act1'], [0, 99, 2.5, 4]);
     expect(next.serializeDiaryPages()).toEqual([4]);
+  });
+});
+
+describe('side-quest pacing (owner: no instant re-offer at the contact you just worked for)', () => {
+  const roster: MissionDefinition[] = [
+    mission('main-a', { contact: 'Auntie P', act: 'hustle' }),
+    mission('main-b', { contact: 'Auntie P', act: 'hustle', prerequisites: { missions: ['main-a'] } }),
+    mission('other', { contact: 'Someone Else', act: 'payroll' }),
+    mission('side-a', { contact: 'Auntie P', act: 'side', prerequisites: { missions: ['main-b'] } }),
+  ];
+  const side = roster[3]!;
+
+  it('keeps a side quest cold while its giver still has mainline work', () => {
+    const director = new StoryDirector();
+    director.tickSideQuests(1, roster, new Set(['main-a']));
+    expect(director.sideQuestReady(side)).toBe(false);
+  });
+
+  it('lights the side only SIDE_QUEST_DELAY_S of played time after the mainline exhausts', () => {
+    const director = new StoryDirector();
+    const completed = new Set(['main-a', 'main-b']);
+    director.tickSideQuests(1, roster, completed); // the stamp lands, no time served yet
+    expect(director.sideQuestReady(side)).toBe(false);
+    director.tickSideQuests(SIDE_QUEST_DELAY_S - 2, roster, completed);
+    expect(director.sideQuestReady(side)).toBe(false);
+    director.tickSideQuests(2, roster, completed);
+    expect(director.sideQuestReady(side)).toBe(true);
+    // the other contact's mainline being incomplete never mattered — the gate is per-giver
+    expect(completed.has('other')).toBe(false);
+  });
+
+  it('a reload mid-wait resumes the clock — never resets it, never skips it', () => {
+    const director = new StoryDirector();
+    const completed = new Set(['main-a', 'main-b']);
+    director.tickSideQuests(1, roster, completed);
+    director.tickSideQuests(SIDE_QUEST_DELAY_S / 2, roster, completed);
+    const reloaded = new StoryDirector();
+    reloaded.restore([], [], director.serializeSideWaits());
+    expect(reloaded.sideQuestReady(side)).toBe(false); // did not skip
+    reloaded.tickSideQuests(SIDE_QUEST_DELAY_S / 2, roster, completed);
+    expect(reloaded.sideQuestReady(side)).toBe(true); // did not reset
+  });
+
+  it('mainline missions are never delayed, and a fresh game re-arms a spent wait', () => {
+    const director = new StoryDirector();
+    expect(director.sideQuestReady(roster[1]!)).toBe(true);
+    const completed = new Set(['main-a', 'main-b']);
+    director.tickSideQuests(1, roster, completed); // stamp lands first…
+    director.tickSideQuests(SIDE_QUEST_DELAY_S + 1, roster, completed); // …then time serves
+    expect(director.sideQuestReady(side)).toBe(true);
+    director.tickSideQuests(1, roster, new Set()); // new game: the giver's mainline is pending again
+    expect(director.sideQuestReady(side)).toBe(false);
+  });
+
+  it('serialize floors negatives to zero and restore drops junk', () => {
+    const director = new StoryDirector();
+    director.restore([], [], { 'side-a': -12, junk: Number.NaN });
+    expect(director.sideQuestReady(side)).toBe(true); // -12 means the wait was already served
+    expect(director.serializeSideWaits()).toEqual({ 'side-a': 0 });
   });
 });

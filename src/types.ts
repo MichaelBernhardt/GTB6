@@ -36,6 +36,9 @@ export interface SavedGame {
   completedMissions: string[];
   storyFlags: string[]; // StoryDirector flags: act gates, choice:<mission>:<option>, taught hints
   diaryPages: number[]; // collected Grid Diary pages (1..12)
+  /** Side-quest cooldowns: missionId → played-time seconds remaining before the side lights up and
+   *  offers (StoryDirector). Persisted so a reload RESUMES the wait — never resets, never skips. */
+  sideQuestWaits: Record<string, number>;
   spawn: [number, number, number]; // death/wasted respawn anchor (last safehouse, or the default)
   position: [number, number, number]; // where the player actually was at the last save (x, y, z) — Continue resumes here
   heading: number; // the direction the player was facing at the last save — restored with position
