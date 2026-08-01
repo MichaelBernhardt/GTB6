@@ -17,7 +17,7 @@
  */
 import * as THREE from 'three';
 import { ARCHITECTURE_VARIANTS, BuildingArchitecture, planShopBays, type BuildingSpec } from '../../src/world/BuildingArchitecture';
-import { allBuildings, buildingStats, CELL_BUILDING_CAP, footprintOverlapXZ, type GeneratedBuilding } from '../../src/world/CityGen';
+import { allBuildings, buildingStats, CELL_BUILDING_CAP, footprintOverlapXZ, urbanIntensity, type GeneratedBuilding } from '../../src/world/CityGen';
 import { GENERATED_ROADS, districtAt } from '../../src/world/mapData';
 import { classifyZone } from '../../src/world/data/zoning';
 import { neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from '../../src/world/data/neighbourhoods';
@@ -142,6 +142,71 @@ for (const building of buildings) {
   if (bays.length > 0) { withBays++; totalBays += bays.length; shuttered += bays.length; }
 }
 console.log(`\nshopfronts (downtown family): ${withBays}/${downtown} buildings carry shop bays (${(100 * withBays / Math.max(1, downtown)).toFixed(1)}%), ${totalBays} bays total, ${shuttered} night shutters`);
+
+// ---- THE GRADIENT, BY RING ---------------------------------------------------------------------
+// The owner's rule is that buildings get smaller and sparser away from the CBD, so it has to be
+// legible as a monotone table, not asserted in prose. Rings are bands of urbanIntensity — the same
+// function the generator grades on — and every column is measured off the built parcels.
+const RINGS: Array<{ name: string; lo: number; hi: number }> = [
+  { name: 'inner city   (>=0.80)', lo: 0.8, hi: 1.01 },
+  { name: 'middle ring  (0.35-0.80)', lo: 0.35, hi: 0.8 },
+  { name: 'outer suburb (0.05-0.35)', lo: 0.05, hi: 0.35 },
+  { name: 'boondocks    (<0.05)', lo: -0.01, hi: 0.05 },
+];
+interface RingTally { samples: number; near: number; far: number; parcels: number; dense: number; area: number; height: number; }
+const ringFrontage = RINGS.map((): RingTally => ({ samples: 0, near: 0, far: 0, parcels: 0, dense: 0, area: 0, height: 0 }));
+const ringOf = (x: number, z: number): number => {
+  const urban = urbanIntensity(x, z);
+  return RINGS.findIndex((ring) => urban >= ring.lo && urban < ring.hi);
+};
+for (const building of buildings) {
+  if (building.zone !== 'residential') continue;
+  const ring = ringFrontage[ringOf(building.x, building.z)];
+  if (!ring) continue;
+  ring.parcels++;
+  if (building.style === 'dense-residential') ring.dense++;
+  ring.area += building.width * building.depth;
+  ring.height += building.height;
+}
+for (const road of GENERATED_ROADS) {
+  if (road.width < 6) continue;
+  const half = road.width / 2;
+  for (let i = 0; i < road.points.length - 1; i++) {
+    const a = road.points[i]!; const b = road.points[i + 1]!;
+    const dx = b.x - a.x; const dz = b.z - a.z; const length = Math.hypot(dx, dz);
+    if (length < 0.01) continue;
+    const dirX = dx / length; const dirZ = dz / length;
+    const steps = Math.max(1, Math.floor(length / STEP));
+    for (let step = 0; step < steps; step++) {
+      const t = (step + 0.5) / steps;
+      const px = a.x + dx * t; const pz = a.z + dz * t;
+      for (const side of [1, -1] as const) {
+        const nx = side * -dirZ; const nz = side * dirX;
+        const fx = px + nx * (half + FRONTAGE_CLEARANCE); const fz = pz + nz * (half + FRONTAGE_CLEARANCE);
+        if (classifyZone(fx, fz, road.width) !== 'residential') continue;
+        const ring = ringFrontage[ringOf(fx, fz)];
+        if (!ring) continue;
+        ring.samples++;
+        // BOTH probes, because the gradient moves the house BACK as well as apart: an outer stand's
+        // front garden alone is deeper than the 8 u probe, so the 8 u column measures the street
+        // wall and the 16 u column measures whether a house is there at all.
+        if (coveredWithin(fx, fz, nx, nz, FAR)) { ring.far++; if (coveredWithin(fx, fz, nx, nz, NEAR)) ring.near++; }
+      }
+    }
+  }
+}
+console.log('\nTHE GRADIENT — residential, by ring of urbanIntensity (the generator\'s own signal):');
+console.log('  ring                        kerb samples  built within 8u   parcels  dense-res   avg footprint   avg height');
+for (const [index, ring] of RINGS.entries()) {
+  const tally = ringFrontage[index]!;
+  console.log(`  ${ring.name.padEnd(26)}${String(tally.samples).padStart(12)}`
+    + `${(100 * tally.far / Math.max(1, tally.samples)).toFixed(1).padStart(11)}%`
+    + `${(100 * tally.near / Math.max(1, tally.samples)).toFixed(1).padStart(10)}%`
+    + `${String(tally.parcels).padStart(10)}`
+    + `${(100 * tally.dense / Math.max(1, tally.parcels)).toFixed(0).padStart(10)}%`
+    + `${(tally.area / Math.max(1, tally.parcels)).toFixed(0).padStart(14)} u²`
+    + `${(tally.height / Math.max(1, tally.parcels)).toFixed(1).padStart(12)} u`);
+}
 
 // ---- HOW PACKED IS THE ROW? ------------------------------------------------------------------
 // Coverage says how much kerb has a building behind it; this says whether those buildings TOUCH.

@@ -73,8 +73,22 @@ const SHRINK_FACTOR = 0.82;
 const SHRINK_ATTEMPTS = 6;
 /** Never shrink a footprint below this on either axis — reject instead (keeps the street clear). */
 const MIN_FOOTPRINT = 5;
-/** Street-wall fit floor: a CBD mass squeezed thinner than this is a fence, not a building — reject. */
-const MIN_STREETWALL_DEPTH = 8;
+/**
+ * Street-wall fit floors: a mass squeezed thinner than this is a fence, not a building — reject.
+ *
+ * Width and depth are separate because a building has to hold an INTERIOR, and the interiors
+ * grammar has its own two floors: the corridor plus a room band each side (FULL_MIN_WIDTH 15.1)
+ * and a staired plate (STAIR_MIN_DEPTH 12). Under those the solver keeps the grammar anyway and
+ * pays for it with a plate bigger than the building — a tardis — which floor.test budgets. The row
+ * builder's narrow-stand ladder is what started spending that budget: at a common floor of 8 u it
+ * emitted slivers 8–11 u wide, every one of them a tardis the moment it had a second storey.
+ * 12 u wide and 9.6 u deep are exactly the footprints the grammar's own 1.4x tardis bound can
+ * carry (15.1 / 1.4 + the 0.9 wall allowance, and 12 / 1.4 + the same), so a stand that gets built
+ * is a stand whose inside fits in it. Narrow shopfront stands survive — 12 u is still a sliver on a
+ * Joburg block face — they simply stop being slivers with impossible interiors.
+ */
+const MIN_STREETWALL_WIDTH = 12;
+const MIN_STREETWALL_DEPTH = 9.6;
 /** Baseline circle-proxy spacing factor between parcels (see Occupancy.free). */
 export const OCCUPANCY_FACTOR = 0.62;
 /**
@@ -222,21 +236,79 @@ const ZONE_SHAPE: Record<Exclude<Zone, 'none'>, ZoneShape> = {
   rural: { style: 'rural', lot: [40, 80], depth: [8, 14], yard: 12, accept: 0.28 },
 };
 
-/** Placement probability for a zone at a point, scaled by the local OSM building density. */
-function acceptance(zone: Exclude<Zone, 'none'>, density: number): number {
+/**
+ * THE GRADIENT — how urban a point is, 1 in the inner city and 0 out in the boondocks.
+ *
+ * The owner's rule: "in less built up areas, the buildings become smaller away from the CBD. We
+ * used to have a lot of single dwelling houses in suburbs and near the dam, or in rural areas, but
+ * now it's all built up." The density passes had no distance term at all — they keyed everything on
+ * the OSM per-district BUILDING COUNT density, and that number measures how finely a district is
+ * platted, not how urban it is. Greenside reads 1,539 and Melville 1,013 while sitting four to five
+ * kilometres out among detached houses; Vaal Marina reads 170 seven kilometres away on the dam. So
+ * the packed treatment reached places it has no business being: measured before this, Vaal Marina
+ * Community Center came out 78% dense-residential at an average height of 17.3 u, and Oranjedorp
+ * 61%. Both are smallholding country.
+ *
+ * Distance from the CBD centre is the signal the owner actually named and the one a player reads
+ * from the driver's seat, so that is what this is: full intensity out to the inner-city ring
+ * (Fordsburg 1,492 u, Doornfontein 1,566, Troyeville 1,832), falling smoothly to nothing by the
+ * outer suburbs (Oaklands 5,211, Montgomery Park 5,665). The OSM density still does its old job of
+ * telling busy districts from sleepy ones — it is simply multiplied by this, so it can differentiate
+ * WITHIN a ring and can no longer promote the veld.
+ */
+export const URBAN_CORE_RADIUS = 2200;
+export const URBAN_EDGE_RADIUS = 5400;
+
+const smoothstep = (edge0: number, edge1: number, value: number): number => {
+  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+};
+
+/** 1 in the inner city, 0 in the boondocks. Pure, deterministic, and the one definition the
+ *  generator, the height curve and tools/qa/frontage-meter.ts all read the gradient from. */
+export function urbanIntensity(x: number, z: number): number {
+  const centre = districtCenter(CBD_NAME);
+  if (!centre) return 1;
+  return 1 - smoothstep(URBAN_CORE_RADIUS, URBAN_EDGE_RADIUS, Math.hypot(x - centre.x, z - centre.z));
+}
+
+/** The erf grows as the city thins: a boondocks stand is this much wider than an inner-city one. */
+const OUTER_STAND_SCALE = 1.55;
+/** …and the house on it is this much smaller. Stand up, building down — which is the whole rule. */
+const OUTER_HOUSE_SCALE = 0.78;
+/** …and it sits further back off the road, behind a front garden instead of on the pavement. */
+const OUTER_YARD_SCALE = 1.35;
+/** Acceptance floor and cap at the two ends of the gradient (residential). The old flat 0.8 floor
+ *  is what filled the veld: at the dam a street should be mostly empty stands with the odd house. */
+const RURAL_ACCEPT_FLOOR = 0.46;
+const URBAN_ACCEPT_FLOOR = 0.8;
+const RURAL_ACCEPT_CAP = 0.72;
+
+/** Placement probability for a zone at a point, scaled by the local OSM building density AND by how
+ *  far out of town it is — the boondocks keep their gaps, which is what makes the inner city read
+ *  as the inner city. */
+function acceptance(zone: Exclude<Zone, 'none'>, density: number, urban: number): number {
   const base = ZONE_SHAPE[zone].accept;
-  // Floor 0.8, curve shifted up: even the sleepiest suburb packs its streets (the owner's rule —
-  // houses are the norm, empty stands the exception); the density term still differentiates busy
-  // districts, and the cap leaves every suburb the odd genuinely vacant stand.
-  if (zone === 'residential') return Math.min(base, Math.max(0.8, 0.45 + density / 400));
-  if (zone === 'commercial-strip') return Math.min(base, 0.5 + density / 800);
+  if (zone === 'residential') {
+    const floor = lerp(RURAL_ACCEPT_FLOOR, URBAN_ACCEPT_FLOOR, urban);
+    const cap = Math.min(base, lerp(RURAL_ACCEPT_CAP, base, urban));
+    return Math.min(cap, Math.max(floor, 0.45 + density / 400));
+  }
+  if (zone === 'commercial-strip') return Math.min(base, (0.5 + density / 800) * lerp(0.55, 1, urban));
   return base;
 }
 
-/** Residential blocks keep one coherent local character instead of shuffling house types lot by lot. */
-function buildingStyle(zone: Exclude<Zone, 'none'>, density: number, x: number, z: number): BuildingStyle {
+/** Residential blocks keep one coherent local character instead of shuffling house types lot by lot.
+ *
+ *  The dense-residential family is what carries the ROW treatment (isRowParcel), so this is the line
+ *  that decides where the city has party walls at all — and its old floor of 0.1 meant every suburb
+ *  in the map, however far out, turned one block in ten into inner-city fabric. It is now gated on
+ *  the gradient, SQUARED, so walk-ups belong to the inner ring the way they do in the real city:
+ *  Hillbrow, Berea, Yeoville, Fordsburg keep them; Melville and Greenside get a scattering; the dam
+ *  and the smallholdings get none at all. */
+function buildingStyle(zone: Exclude<Zone, 'none'>, density: number, x: number, z: number, urban: number): BuildingStyle {
   if (zone !== 'residential') return ZONE_SHAPE[zone].style;
-  const denseChance = Math.min(0.85, Math.max(0.1, (density - 40) / 260));
+  const denseChance = Math.min(0.85, Math.max(0, (density - 40) / 260)) * urban * urban;
   // Quantise the seed to a neighbourhood-sized tile so adjoining parcels read as one district.
   const blockX = Math.floor(x / 180); const blockZ = Math.floor(z / 180);
   return seeded(blockX, blockZ, 61) < denseChance ? 'dense-residential' : 'suburban';
@@ -332,11 +404,15 @@ function buildingHeight(
         ? lerp(CBD_FABRIC_MIN, CBD_FABRIC_LOW_MAX, t / CBD_FABRIC_LOW_SHARE)
         : lerp(CBD_FABRIC_LOW_MAX, CBD_FABRIC_MAX, (t - CBD_FABRIC_LOW_SHARE) / (1 - CBD_FABRIC_LOW_SHARE));
     }
-    case 'commercial-strip': return 10 + s * 16;
+    case 'commercial-strip': return (10 + s * 16) * lerp(OUTER_HOUSE_SCALE, 1, urbanIntensity(x, z));
     case 'industrial': return 8 + s * 9;
     case 'estate': return 7 + s * 5.5;
     case 'rural': return 5 + s * 3;
-    default: return style === 'dense-residential' ? 11 + s * 17 : 6 + s * 5;
+    // A house out of town is a single-storey cottage, not a double-storey townhouse: the same
+    // OUTER_HOUSE_SCALE that shrinks its footprint takes its ridge down with it.
+    default: return style === 'dense-residential'
+      ? 11 + s * 17
+      : (6 + s * 5) * lerp(OUTER_HOUSE_SCALE, 1, urbanIntensity(x, z));
   }
 }
 
@@ -424,8 +500,15 @@ class Occupancy {
           // Exact packing: circles circumscribing big rectangles refuse legal side-by-side
           // neighbours, and a naively smaller factor buries buildings inside each other.
           const need = Math.max(gap, other.gap ?? 0);
-          // Circles clear by the demanded air: rect gap >= centre distance - r1 - r2 >= need.
-          if ((other.x - x) ** 2 + (other.z - z) ** 2 >= (other.r + r + Math.max(0, need)) ** 2) continue;
+          // Cheap reject before the SAT. The circles must clear by need * sqrt(2), NOT by need:
+          // the rule is measured by footprintOverlapXZ on rects GROWN by `need`, and a grown rect's
+          // circumradius is up to r + need/sqrt(2) (hypot(w+n, d+n)/2 <= hypot(w, d)/2 + hypot(n, n)/2).
+          // At the plain `need` this skipped pairs whose grown rects genuinely touch — the SAT gap
+          // along a face axis is <= the true centre-to-centre gap, so a corner-to-corner pair can
+          // clear the circle test and still fail the rule. The gradient's bigger outer stands made
+          // that surface as a real 0.22 u interpenetration between two suburban houses 27.9 u apart
+          // (radii 10.6 + 15.6), which CityGen.test's mirror caught. sqrt(2) makes the reject exact.
+          if ((other.x - x) ** 2 + (other.z - z) ** 2 >= (other.r + r + Math.max(0, need) * Math.SQRT2) ** 2) continue;
           if (need <= 0) { if (footprintOverlapXZ(rect, other.rect) > -need) return false; continue; }
           if (footprintOverlapXZ(grownRect(rect, need), grownRect(other.rect, need)) > 0) return false;
           continue;
@@ -510,12 +593,12 @@ function fitFootprint(
     // failure (a junction mouth, of which the packed row probes thousands at a 4 u retry pitch) from
     // ~50 footprint scans into one: parcel generation went 45.6 s -> 12.9 s on the same layout.
     const floorX = faceX + nX * (MIN_STREETWALL_DEPTH / 2); const floorZ = faceZ + nZ * (MIN_STREETWALL_DEPTH / 2);
-    if (footprintRoadClearance(floorX, floorZ, MIN_STREETWALL_DEPTH, MIN_STREETWALL_DEPTH, heading) < ROAD_CLEARANCE
-      || footprintRailwayClearance(floorX, floorZ, MIN_STREETWALL_DEPTH, MIN_STREETWALL_DEPTH, heading) < RAILWAY_BUILDING_CLEARANCE) {
+    if (footprintRoadClearance(floorX, floorZ, MIN_STREETWALL_WIDTH, MIN_STREETWALL_DEPTH, heading) < ROAD_CLEARANCE
+      || footprintRailwayClearance(floorX, floorZ, MIN_STREETWALL_WIDTH, MIN_STREETWALL_DEPTH, heading) < RAILWAY_BUILDING_CLEARANCE) {
       return undefined;
     }
     for (const widthScale of [1, 0.72, 0.5, 0.34, 0.22]) {
-      const width = Math.max(width0 * widthScale, MIN_STREETWALL_DEPTH);
+      const width = Math.max(width0 * widthScale, MIN_STREETWALL_WIDTH);
       let depth = depth0;
       while (depth >= MIN_STREETWALL_DEPTH) {
         const x = faceX + nX * (depth / 2); const z = faceZ + nZ * (depth / 2);
@@ -525,7 +608,7 @@ function fitFootprint(
         }
         depth *= SHRINK_FACTOR;
       }
-      if (width <= MIN_STREETWALL_DEPTH) break; // already at the floor: narrower scales change nothing
+      if (width <= MIN_STREETWALL_WIDTH) break; // already at the floor: narrower scales change nothing
     }
   }
   let width = width0; let depth = depth0;
@@ -710,7 +793,8 @@ function layoutRoadSide(
     if (zone === 'none') { cursor += 14 * LAYOUT_SCALE; continue; }
     const shape = ZONE_SHAPE[zone];
     const district = nearestDistrict(frontX, frontZ);
-    const style = buildingStyle(zone, district.density, frontX, frontZ);
+    const urban = urbanIntensity(frontX, frontZ);
+    const style = buildingStyle(zone, district.density, frontX, frontZ, urban);
 
     /**
      * PACK TO THE MAX, in the two zones that are packed in the real city.
@@ -730,14 +814,28 @@ function layoutRoadSide(
      */
     const row = isRowParcel({ zone, style });
     const packed = row || zone === 'residential';
-    const lot = lerp(shape.lot[0], shape.lot[1], seeded(frontX, frontZ, 11)) * LAYOUT_SCALE;
-    const depth0 = lerp(shape.depth[0], shape.depth[1], seeded(frontX, frontZ, 12)) * LAYOUT_SCALE;
+    /**
+     * THE STAND GROWS, THE BUILDING SHRINKS. Two scales, deliberately opposed, and between them
+     * they are the whole gradient: out of town the ERF gets wider (the walker strides further, so
+     * neighbours stand apart with real yards between them) while the HOUSE on it gets smaller. One
+     * scale alone would have been wrong in both directions — growing the lot alone just spreads
+     * mansions out, and shrinking the building alone leaves cottages packed shoulder to shoulder.
+     * Zones the map authors as sparse already (industry, estates, the farms) opt out; they have
+     * their own authored spacing and the owner is not complaining about them.
+     */
+    const graded = zone === 'residential' || zone === 'commercial-strip';
+    const standScale = graded ? lerp(OUTER_STAND_SCALE, 1, urban) : 1;
+    const houseScale = graded ? lerp(OUTER_HOUSE_SCALE, 1, urban) : 1;
+    const baseLot = lerp(shape.lot[0], shape.lot[1], seeded(frontX, frontZ, 11)) * LAYOUT_SCALE;
+    const lot = baseLot * standScale;
+    const depth0 = lerp(shape.depth[0], shape.depth[1], seeded(frontX, frontZ, 12)) * LAYOUT_SCALE * houseScale;
     // A row parcel takes its WHOLE lot — the lot range itself (varied per stand) is what stops the
-    // wall reading as one repeated width. Scattered zones keep their building/side-yard split.
+    // wall reading as one repeated width. Scattered zones keep their building/side-yard split, and
+    // their building is measured off the BASE lot so the stand can grow without the house growing.
     const width0 = row ? lot
-      : lot * (packed ? 0.8 + seeded(frontX, frontZ, 13) * 0.14 : 0.72 + seeded(frontX, frontZ, 13) * 0.2);
+      : baseLot * houseScale * (packed ? 0.8 + seeded(frontX, frontZ, 13) * 0.14 : 0.72 + seeded(frontX, frontZ, 13) * 0.2);
     const gap = row ? 0
-      : lot * (packed ? 0.04 + seeded(frontX, frontZ, 14) * 0.08 : 0.12 + seeded(frontX, frontZ, 14) * 0.16);
+      : Math.max(lot - width0, baseLot * (packed ? 0.04 + seeded(frontX, frontZ, 14) * 0.08 : 0.12 + seeded(frontX, frontZ, 14) * 0.16));
     const pitchScale = zone === 'rural' ? 1 : zone === 'estate' ? 0.95 : row ? 1 : 0.85;
 
     // The Vaal shore stays a holiday coast, not a packed suburb: inside the beach band the
@@ -748,7 +846,7 @@ function layoutRoadSide(
     const coastBand = zone === 'residential'
       && BEACH_POLYGONS.some((beach) => frontX > beach.minX - 130 && frontX < beach.maxX + 130 && frontZ > beach.minZ - 130 && frontZ < beach.maxZ + 130);
     // A row has no acceptance lottery — that lottery IS the gaps the owner is complaining about.
-    if (!row && seeded(frontX, frontZ, 20) > acceptance(zone, district.density) * (coastBand ? 0.55 : 1)) {
+    if (!row && seeded(frontX, frontZ, 20) > acceptance(zone, district.density, urban) * (coastBand ? 0.55 : 1)) {
       cursor += (lot + gap) * pitchScale; continue;
     }
 
@@ -766,7 +864,7 @@ function layoutRoadSide(
     // onto the road it fronts.
     let setbackStep = row ? Math.min(ROW_SETBACK_STEPS - 1, Math.floor(seeded(frontX, frontZ, 15) * ROW_SETBACK_STEPS)) : 0;
     if (row && setbackStep === lastSetbackStep) setbackStep = (setbackStep + 1) % ROW_SETBACK_STEPS;
-    const yard = shape.yard * LAYOUT_SCALE
+    const yard = shape.yard * LAYOUT_SCALE * (graded ? lerp(OUTER_YARD_SCALE, 1, urban) : 1)
       + (row ? (setbackStep * ROW_SETBACK_JITTER) / (ROW_SETBACK_STEPS - 1) : 0);
     const faceX = midFrontX + midNX * yard;
     const faceZ = midFrontZ + midNZ * yard;
@@ -798,7 +896,9 @@ function layoutRoadSide(
     const infillAccept = INFILL_ACCEPT[zone] ?? 0;
     let rankFaceX = faceX; let rankFaceZ = faceZ; let rankDepth = fit.depth;
     for (let rank = 0; rank < (INFILL_RANKS[zone] ?? 1); rank++) {
-      if (!(infillAccept > 0) || seeded(frontX, frontZ, 70 + rank * 4) >= infillAccept) break;
+      // The back-yard cottage is an inner-city pattern: a smallholding does not have a flatlet
+      // behind the house, it has a shed and a lot of ground.
+      if (!(infillAccept > 0) || seeded(frontX, frontZ, 70 + rank * 4) >= infillAccept * (graded ? urban : 1)) break;
       const infillDepth = depth0 * (0.65 + seeded(frontX, frontZ, 71 + rank * 4) * 0.18);
       const infillWidth = width0 * (0.7 + seeded(frontX, frontZ, 72 + rank * 4) * 0.18);
       const infillGap = (2.5 + seeded(frontX, frontZ, 73 + rank * 4) * 3) * LAYOUT_SCALE;
