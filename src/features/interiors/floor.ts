@@ -19,12 +19,14 @@
  * about rooms.
  */
 import {
-  buildCore, CEILING, coreFrontZ, coreRandom, CORRIDOR, floorRandom, MIN_ROOM, rectMaxX, rectMaxZ, rectMinX, rectMinZ,
+  buildCore, CEILING, coreBackZ, coreFrontZ, coreRandom, CORRIDOR, floorRandom, MIN_ROOM,
+  rectMaxX, rectMaxZ, rectMinX, rectMinZ,
   type BuildingCore, type BuildingFacts, type Finish, type Rect,
 } from './core';
 import { stableWorldFloat } from '../../world/StableRandom';
 
 const q = stableWorldFloat;
+const clamp = (value: number, low: number, high: number): number => Math.max(low, Math.min(high, value));
 
 export type RoomKind =
   | 'shop' | 'lounge' | 'bedroom' | 'kitchen' | 'office' | 'store' | 'lobby'
@@ -111,44 +113,60 @@ const WALL_NAMES = ['Ngwenya', 'Marabastad', 'Kliptown', 'Alexandra', 'Vrededorp
 // ---- the plan --------------------------------------------------------------------------------
 
 /**
- * The rooms either side of the spine, front to back — the rectangles first, then what each one IS.
+ * The rooms either side of the spine — the rectangles first, then what each one IS.
  *
- * Splitting it that way is what lets the kind list be entered at a per-building offset (so two
- * neighbours do not both put the lounge in the front-left corner) WITHOUT losing the room the floor
- * is named after: once the rectangles are counted, the signature kind — `kinds[0]`, the lounge in a
- * house, the shop behind a shopfront — is dropped back into one of them if the rotation walked past
- * it. A house whose ground floor is a kitchen and a bedroom is not a house.
+ * THE ROOMS FORM AROUND THE STAIR now, not the other way round: the core band (full width, open,
+ * CORE_GAP clear on both faces of the shaft) may stand at the back, in the middle, or just behind
+ * the entry — wherever buildCore's position class put it — and each side band splits into up to
+ * TWO room segments, one in front of the band and one behind it. coreFrontZ/coreBackZ are the
+ * single source of where those segments run, shared with coreContinuity, so the rooms and the
+ * reachability proof cannot disagree about where the stair's ground is.
+ *
+ * Splitting rectangles from kinds is what lets the kind list be entered at a per-building offset
+ * (so two neighbours do not both put the lounge in the front-left corner) WITHOUT losing the room
+ * the floor is named after: once the rectangles are counted, the signature kind — `kinds[0]`, the
+ * lounge in a house, the shop behind a shopfront — is dropped back into one of them if the
+ * rotation walked past it. A house whose ground floor is a kitchen and a bedroom is not a house.
  */
 function layoutRooms(core: BuildingCore, index: number, kinds: readonly RoomKind[], split: number, rotate: boolean): Room[] {
+  if (core.layout === 'small') return [smallRoom(core, index, kinds)];
   const spineMin = core.corridorX - CORRIDOR / 2;
   const spineMax = core.corridorX + CORRIDOR / 2;
   const frontZ = -core.depth / 2;
-  // The bands stop well short of the back wall WHEN THERE IS A CORE: that end of the plate is the
-  // stair's, full width, so no room wall can ever stand across the mouth of a flight (see CORE_GAP).
-  // A single-storey building has no core, and its rooms run all the way to the back wall.
-  const backZ = coreFrontZ(core);
-  const bandDepth = backZ - frontZ;
+  // The z ranges rooms may occupy: in front of the core band, and — on the island classes —
+  // behind it. A single-storey building has no core, and its one segment runs the whole depth.
+  const behind = coreBackZ(core);
+  const segments: { name: 'f' | 'b'; from: number; to: number; countSalt: number; shareSalt: number }[] = [
+    { name: 'f', from: frontZ, to: coreFrontZ(core), countSalt: 11, shareSalt: 20 },
+  ];
+  if (behind !== undefined) segments.push({ name: 'b', from: behind, to: core.depth / 2, countSalt: 13, shareSalt: 26 });
   const slots: { id: string; rect: Rect; side: 'left' | 'right' }[] = [];
   for (const side of ['left', 'right'] as const) {
     const outer = side === 'left' ? core.width / 2 : -core.width / 2;
     const inner = side === 'left' ? spineMax : spineMin;
     const bandWidth = Math.abs(outer - inner);
-    if (bandWidth < MIN_ROOM || bandDepth < MIN_ROOM) continue;
-    // How many rooms fit down this band, from the floor's own hash. Bounded so no room is a cupboard.
-    const most = Math.max(1, Math.floor(bandDepth / MIN_ROOM));
-    const count = Math.max(1, Math.min(most, 1 + Math.floor(floorRandom(core.seed, index, side === 'left' ? 11 : 12) * split)));
-    // Uneven splits, but every share is at least a fair third of an even one, so nothing degenerates.
-    const shares: number[] = [];
-    let total = 0;
-    for (let i = 0; i < count; i++) {
-      const share = 0.7 + floorRandom(core.seed, index, (side === 'left' ? 20 : 40) + i) * 0.6;
-      shares.push(share); total += share;
-    }
-    let z = frontZ;
-    for (let i = 0; i < count; i++) {
-      const d = q(bandDepth * shares[i]! / total);
-      slots.push({ id: `${side}${i}`, side, rect: { x: q((outer + inner) / 2), z: q(z + d / 2), w: q(bandWidth), d } });
-      z += d;
+    if (bandWidth < MIN_ROOM) continue;
+    for (const segment of segments) {
+      const bandDepth = segment.to - segment.from;
+      if (bandDepth < MIN_ROOM) continue;
+      // How many rooms fit down this run, from the floor's own hash. Bounded so no room is a cupboard.
+      const most = Math.max(1, Math.floor(bandDepth / MIN_ROOM));
+      const countSalt = segment.countSalt + (side === 'left' ? 0 : 1);
+      const count = Math.max(1, Math.min(most, 1 + Math.floor(floorRandom(core.seed, index, countSalt) * split)));
+      // Uneven splits, but every share is at least a fair third of an even one, so nothing degenerates.
+      const shareSalt = segment.shareSalt + (side === 'left' ? 0 : 20);
+      const shares: number[] = [];
+      let total = 0;
+      for (let i = 0; i < count; i++) {
+        const share = 0.7 + floorRandom(core.seed, index, shareSalt + i) * 0.6;
+        shares.push(share); total += share;
+      }
+      let z = segment.from;
+      for (let i = 0; i < count; i++) {
+        const d = q(bandDepth * shares[i]! / total);
+        slots.push({ id: `${side}${segment.name === 'b' ? 'b' : ''}${i}`, side, rect: { x: q((outer + inner) / 2), z: q(z + d / 2), w: q(bandWidth), d } });
+        z += d;
+      }
     }
   }
   const offset = rotate ? Math.floor(floorRandom(core.seed, index, 55) * kinds.length) % kinds.length : 0;
@@ -160,6 +178,19 @@ function layoutRooms(core: BuildingCore, index: number, kinds: readonly RoomKind
     doorZ: q(slot.rect.z),
     doorSide: slot.side,
   }));
+}
+
+/** The honest small interior: ONE room, the whole plate, the door straight into it. No corridor,
+ *  no partitions, no pretence — a 6 u spaza is a 6 u room now, not a 15 × 21 hall. The furniture
+ *  anchors to the wall AWAY from the door, so walking in never faces you into a shelf. */
+function smallRoom(core: BuildingCore, index: number, kinds: readonly RoomKind[]): Room {
+  const kind = kinds[0]!;
+  return {
+    id: 'main', kind, name: roomName(kind, core, index, 1),
+    rect: { x: 0, z: 0, w: q(core.width), d: q(core.depth) },
+    doorZ: 0,
+    doorSide: core.entryX <= 0 ? 'left' : 'right',
+  };
 }
 
 function roomName(kind: RoomKind, core: BuildingCore, index: number, salt: number): string {
@@ -422,10 +453,16 @@ export function solveFloor(facts: BuildingFacts, index: number, core = buildCore
   const rooms = layoutRooms(core, index, kinds, split, rotate);
   const walls = buildWalls(core, rooms);
 
-  // The landing: on the spine just in front of the shaft, which is where a stair or a lift puts you
-  // down and, on the ground floor, where the street door leaves you facing the building. A stairless
-  // building has no shaft to land at, so its landing is the back of the spine.
-  const landing = { x: q(core.corridorX), z: q(core.stair ? rectMinZ(core.stair) - 1.4 : core.depth / 2 - 1.4) };
+  // The landing: in the open band just in front of the shaft MOUTH — which is where a stair or a
+  // lift puts you down. The shaft may stand far off the spine now, so the landing follows the
+  // shaft's own x (held a stride inside the plate), not the corridor's: arriving on a floor puts
+  // you AT the stair, wherever the position class put it. A stairless full building has no shaft
+  // to land at, so its landing is the back of the spine; a small building's is its doormat.
+  const landing = core.layout === 'small'
+    ? { x: q(core.entryX), z: q(-core.depth / 2 + 1.7) }
+    : core.stair
+      ? { x: q(clamp(core.stair.x, -core.width / 2 + 1.2, core.width / 2 - 1.2)), z: q(rectMinZ(core.stair) - 1.4) }
+      : { x: q(core.corridorX), z: q(core.depth / 2 - 1.4) };
 
   const grid = new Grid(core);
   for (const wall of walls) grid.blockWall(wall);
@@ -458,8 +495,9 @@ export function solveFloor(facts: BuildingFacts, index: number, core = buildCore
 }
 
 /** The partitions: one run down each side of the spine, cut by a doorway per room, plus the cross
- *  walls between rooms in the same band. */
+ *  walls between rooms in the same band segment. A small layout has no partitions at all. */
 function buildWalls(core: BuildingCore, rooms: readonly Room[]): Wall[] {
+  if (core.layout === 'small') return [];
   const walls: Wall[] = [];
   const spineMin = core.corridorX - CORRIDOR / 2;
   const spineMax = core.corridorX + CORRIDOR / 2;
@@ -484,8 +522,19 @@ function buildWalls(core: BuildingCore, rooms: readonly Room[]): Wall[] {
 }
 
 function lampsFor(core: BuildingCore, rooms: readonly Room[]): Lamp[] {
+  if (core.layout === 'small') {
+    // One bulb over the room, one over the door. A two-bulb building is most of what a small
+    // building IS after dark.
+    return [
+      { x: 0, z: 0, y: q(CEILING - 0.35), color: 0xfff0c4 },
+      { x: q(core.entryX), z: q(-core.depth / 2 + 1.2), y: q(CEILING - 0.35), color: 0xffe6bd },
+    ];
+  }
   const lamps: Lamp[] = [{ x: q(core.corridorX), z: q(-core.depth / 4), y: q(CEILING - 0.35), color: 0xffe6bd }];
-  lamps.push({ x: q(core.corridorX), z: q(core.stair ? rectMinZ(core.stair) - 0.8 : core.depth / 2 - 0.8), y: q(CEILING - 0.35), color: 0xdfe8ff });
+  // The stair-mouth lamp follows the shaft, wherever its class put it.
+  lamps.push(core.stair
+    ? { x: q(core.stair.x), z: q(rectMinZ(core.stair) - 0.8), y: q(CEILING - 0.35), color: 0xdfe8ff }
+    : { x: q(core.corridorX), z: q(core.depth / 2 - 0.8), y: q(CEILING - 0.35), color: 0xdfe8ff });
   for (const room of rooms) lamps.push({ x: q(room.rect.x), z: q(room.rect.z), y: q(CEILING - 0.35), color: 0xfff0c4 });
   return lamps;
 }
@@ -502,7 +551,8 @@ function fixtureFor(core: BuildingCore, index: number, rooms: readonly Room[]): 
       ? rooms.find((room) => room.kind === 'lounge') ?? rooms.find((room) => room.kind === 'dining')
       : undefined);
   if (!host) return undefined;
-  return { x: q(host.rect.x), z: q(host.rect.z + host.rect.d * 0.22), name: FIXTURE_NAMES[host.kind] ?? 'Tenant' };
+  // Held clear of the shop counter's own slab: in a small room the 22% mark IS the counter.
+  return { x: q(host.rect.x), z: q(Math.min(host.rect.z + host.rect.d * 0.22, rectMaxZ(host.rect) - 2.4)), name: FIXTURE_NAMES[host.kind] ?? 'Tenant' };
 }
 
 // ---- furniture --------------------------------------------------------------------------------
@@ -534,11 +584,13 @@ function furnish(core: BuildingCore, index: number, rooms: readonly Room[]): Pro
     switch (room.kind) {
       case 'shop': {
         out.push({ shape: 'counter', x: q(rect.x), z: q(rectMaxZ(rect) - 1.5), y: 0, w: q(rect.w - 2.2), d: 0.9, h: 1.06, color: 0x8a6a3f, solid: true });
-        const bays = 2 + Math.floor(rnd(salt) * 3);
+        // Bays bounded by the room's own depth: a spaza is its true 6 u now, and shelving drawn
+        // for a 21 u hall would run out the back wall of it.
+        const bays = Math.min(2 + Math.floor(rnd(salt) * 3), Math.max(1, Math.floor((rect.d - 1.8) / 1.9)));
         for (let i = 0; i < bays; i++) {
           out.push({ shape: 'shelf', x: wallX(0.55), z: q(rectMinZ(rect) + 1.4 + i * 1.9), y: 0, w: 0.5, d: q(1.5 + rnd(salt + i) * 0.4), h: q(2.0 + rnd(salt + 9 + i) * 0.5), color: pick(STOCK, salt + i), solid: false });
         }
-        out.push({ shape: 'fridge', x: wallX(0.7), z: q(rectMaxZ(rect) - 3.2), y: 0, w: 1.0, d: 2.0, h: 1.9, color: 0xdfe6e4, solid: true });
+        if (rect.d >= 7.5) out.push({ shape: 'fridge', x: wallX(0.7), z: q(rectMaxZ(rect) - 3.2), y: 0, w: 1.0, d: 2.0, h: 1.9, color: 0xdfe6e4, solid: true });
         for (let i = 0; i < 3; i++) out.push({ shape: 'crate', x: q(rect.x + inward * 0.6), z: q(rectMinZ(rect) + 1.1 + i * 0.95), y: q(i % 2 === 0 ? 0 : 0.42), w: 0.8, d: 0.8, h: 0.42, color: pick([0xc8452f, 0x2f6fa8, 0x3f8a4c], salt + 3 + i), solid: false });
         out.push({ shape: 'notice', x: wallX(0.1), z: q(rect.z), y: 2.0, w: 0.05, d: 1.4, h: 0.9, color: 0xf2e6c8, solid: false, text: pick(['NO CREDIT', 'AIRTIME HERE', 'ICE COLD'], salt + 7) });
         break;
@@ -637,7 +689,8 @@ function furnish(core: BuildingCore, index: number, rooms: readonly Room[]): Pro
           }
           bay += 7;
         }
-        for (let i = 0; i < 4; i++) {
+        const pallets = Math.min(4, Math.max(1, Math.floor((rect.d - 2.2) / 1.4) + 1));
+        for (let i = 0; i < pallets; i++) {
           out.push({ shape: 'pallet', x: q(rect.x + inward * (0.4 + (i % 2) * 1.5)), z: q(rectMinZ(rect) + 1.6 + i * 1.4), y: 0, w: 1.2, d: 1.0, h: 0.18, color: 0x9c7b4c, solid: false });
         }
         for (let i = 0; i < 3; i++) {
@@ -728,8 +781,13 @@ class Grid {
         if (Math.abs(x) > core.width / 2 - BODY || Math.abs(z) > core.depth / 2 - BODY) this.count[this.index(ix, iz)]++;
       }
     }
-    // A shaft is not floor: you do not walk through the lift, you ride in it.
+    // A shaft is not floor: you do not walk through the lift, you ride in it — and you do not
+    // PROVE a route through the stair either. The stair is enterable in play (the clamp walks you
+    // up its flights), but with the core standing mid-plate now, a path "through" the shaft would
+    // let the flood fill claim rooms behind an island core are reachable when the walking route
+    // around it is actually sealed. Blocking the shaft keeps the proof about the floor.
     if (core.lift) this.mark(core.lift, 0, 1);
+    if (core.stair) this.mark(core.stair, 0, 1);
   }
 
   private index(ix: number, iz: number): number { return iz * this.nx + ix; }

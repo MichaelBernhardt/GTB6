@@ -16,7 +16,7 @@ import { allScatteredModels } from '../../src/world/ModelScatter';
 import { CELL_SIZE } from '../../src/world/CityGen';
 import { doorsNear } from '../../src/features/interiors/doors';
 import {
-  buildCore, CORRIDOR, MIN_ROOM, LIFT_FROM_STOREYS, hasRoofAccess, rectMaxZ,
+  buildCore, coreBackZ, CORRIDOR, MIN_ROOM, LIFT_FROM_STOREYS, hasRoofAccess, rectMaxZ, TARDIS_MAX,
   type BuildingCore,
 } from '../../src/features/interiors/core';
 import { lockedClass } from '../../src/features/interiors/lock';
@@ -81,6 +81,33 @@ console.log(`  buildings with a lift (storeys >= ${LIFT_FROM_STOREYS}): ${lifted
 
 const stairs = rows.filter((r) => r.core.stair);
 console.log(`\nSTAIRED buildings (storeys >= 2): ${stairs.length} of ${rows.length}`);
+
+// ---- the plate against the building that wears it (round-3: plate = footprint x bounded tardis) --
+console.log('\nPLATE vs FOOTPRINT (round-2 before: width ratio p50 0.96 p90 1.32 max 2.58; depth p50 1.12 p90 1.97 max 4.48):');
+console.log('  plate width / footprint width:  ' + stats(rows.map((r) => r.core.width / Math.max(1, r.door.facts.width))));
+console.log('  plate depth / footprint depth:  ' + stats(rows.map((r) => r.core.depth / Math.max(1, r.door.facts.depth))));
+const overBound = rows.filter((r) => r.core.width / Math.max(1, r.door.facts.width - 0.9) > TARDIS_MAX + 1e-6
+  || r.core.depth / Math.max(1, r.door.facts.depth - 0.9) > TARDIS_MAX + 1e-6);
+const overSingle = overBound.filter((r) => r.core.storeys === 1);
+console.log(`  beyond the ${TARDIS_MAX}x tardis bound (vs bare footprint): ${overBound.length} of ${rows.length}`
+  + ` — ${overSingle.length} single-storey (small-layout camera floor), ${overBound.length - overSingle.length} multi-storey (stair+corridor hard floor)`);
+const smalls = rows.filter((r) => r.core.layout === 'small');
+console.log(`  SMALL layouts (one room, door straight in): ${smalls.length} of ${rows.length}`);
+console.log('  small plate sizes, width: ' + stats(smalls.map((r) => r.core.width)) + '\n                     depth: ' + stats(smalls.map((r) => r.core.depth)));
+const aspects = rows.filter((r) => r.core.layout === 'full').map((r) =>
+  (r.core.width / r.core.depth) / ((r.door.facts.width - 0.9) / Math.max(1, r.door.facts.depth - 0.9)));
+console.log('  aspect fidelity, full layouts (plate w/d over footprint w/d — 1.00 = aspect preserved): ' + stats(aspects));
+
+// ---- the stair position CLASS (round-3: the first thing the seed buys) ---------------------------
+const classCounts = new Map<string, number>();
+for (const r of stairs) classCounts.set(r.core.stairClass ?? '??', (classCounts.get(r.core.stairClass ?? '??') ?? 0) + 1);
+console.log('\nSTAIR POSITION CLASS (was: 100% back-band, x within ±2.8 of the corridor):');
+console.log('  ' + [...classCounts.entries()].sort((a, b) => b[1] - a[1])
+  .map(([k, v]) => `${k}: ${v} (${(100 * v / stairs.length).toFixed(1)}%)`).join('  '));
+const withRoomsBehind = stairs.filter((r) => coreBackZ(r.core) !== undefined);
+console.log(`  island cores with a room band BEHIND the stair: ${withRoomsBehind.length} of ${stairs.length}`);
+console.log('  stair z centre normalised to half-depth [-1 front .. +1 back], histogram:');
+console.log('  ' + hist(stairs.map((r) => r.core.stair!.z / (r.core.depth / 2)), -1, 1, 10));
 
 // ---- corridor x: anchored on the tagged door ---------------------------------------------------
 console.log('\nCORRIDOR X (== entry x, anchored on the model-tagged door):');

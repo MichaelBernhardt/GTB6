@@ -83,16 +83,12 @@ const STREAM_CAP = 22;
 const RELEASE_DWELL = 0.8;
 /** A prop shorter than this is stepped over, not walked around. The solver's grid uses the same sill. */
 const STEP_OVER = 0.55;
-/** Game-seconds a door you JUST came out of stays open to re-entry without a lock check — the roof
- *  hatch and the street door (so stepping out to check the street never costs a second dial).
- *
- *  ON A ROOF THE WINDOW CANNOT RUN OUT. A countdown alone shipped the exact trap the one-way lock
- *  model forbids: walk out of the hatch (free, as every exit is), photograph the skyline for a
- *  minute, and the only way down asked for a pick you may not carry. So update() RE-ARMS the window
- *  for as long as the player is still standing on the roof of the graced building — they never
- *  picked that door shut behind them, so it plausibly stays unlatched — and the countdown only
- *  starts once they actually leave the roof. The id also survives the save (InteriorsSave.graceId),
- *  so a reload made out on the roof cannot re-latch the way down either. */
+/** Game-seconds a STREET door you just came out of stays open to re-entry without a lock check, so
+ *  stepping out to check the street never costs a second dial. The id survives the save
+ *  (InteriorsSave.graceId), so a reload on the doorstep keeps the same courtesy. The roof-side
+ *  half of this machinery — a re-arming window that kept the hatch answerable however long you
+ *  stood up there — is GONE, because the hatch no longer asks: people lock the street door, not
+ *  the roof, so every hatch opens from the roof side, always (see interiors:roofdoor). */
 const EXIT_GRACE = 60;
 /** Drifting this far from where the dial was started cancels it — golf's walk-off-the-ball rule. */
 const PICK_CANCEL_RANGE = 3.0;
@@ -159,11 +155,11 @@ interface Visit {
   peakResident: number;
 }
 
-/** The dial in progress at a locked door: a sweep runs up and falls back until E lands in the bite.
- *  See the "picking dial" block in lock.ts for the tuning and the reasoning. */
+/** The dial in progress at a locked STREET door: a sweep runs up and falls back until E lands in
+ *  the bite. Only the street door ever runs it now — the roof hatch is always open from the roof
+ *  side. See the "picking dial" block in lock.ts for the tuning and the reasoning. */
 interface Picking {
   door: InteriorDoor;
-  via: 'street' | 'roof';
   /** Where the player stood when the dial started; drifting off it cancels (golf's steppedBack). */
   x: number; z: number;
   sweep: number;
@@ -188,10 +184,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /** Monotonic in-game seconds (summed dt — NEVER the wall clock; see the determinism rule). Only
    *  used for the hatch grace window, which is gameplay time, not world generation. */
   let clock = 0;
-  /** After leaving a building — by the street door OR the roof hatch — its doors stay open to you
-   *  for EXIT_GRACE game-seconds (re-armed for as long as you stand on its roof — see EXIT_GRACE),
-   *  so leaving never costs a fresh pick to undo. Rehydrated from the save so a reload made out on
-   *  a roof keeps the way down unlatched. */
+  /** After leaving a building, its STREET door stays open to you for EXIT_GRACE game-seconds, so
+   *  leaving never costs a fresh pick to undo. Rehydrated from the save so a reload on the
+   *  doorstep keeps the courtesy. (The roof hatch needs no grace: it is always open from above.) */
   let exitGrace: { id: string; until: number } | undefined =
     saved?.graceId ? { id: saved.graceId, until: EXIT_GRACE } : undefined;
 
@@ -296,7 +291,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   const holdNeighbour = (current: Visit, local: { x: number; z: number }, dt: number): void => {
     const core = current.core;
     if (!core.stair) return; // a single-storey building has no neighbour to hold
-    const onSpine = Math.abs(local.x - core.corridorX) < CORRIDOR / 2 + 1.6;
+    // The sightline: the spine, the shaft itself, and the open band AROUND the shaft — the stair
+    // can stand far off the spine now, and the walk across the band toward it must find the
+    // neighbouring storey already built, not watch it pop in.
+    const onSpine = Math.abs(local.x - core.corridorX) < CORRIDOR / 2 + 1.6
+      || withinRect(core.stair, local.x, local.z, 3.2);
     const inShaft = withinRect(core.stair, local.x, local.z, 0.6);
     // On the TOP floor the flight in the well leads DOWN, so the neighbour worth pre-warming is the
     // storey below — the old code asked for storeys and got nothing, so the well showed bare void.
@@ -560,10 +559,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   };
 
   /**
-   * THE lock question, asked identically by the street door and the roof hatch — both are entries
-   * from OUTSIDE, so both pass 'outside' to doorLocked (which is where "inside is never locked"
-   * lives; exit paths never ask at all). On top of the classification: `opensesame` opens
-   * everything, and a door you just came out of stays open for the grace window.
+   * THE lock question — asked by the STREET door only now. The roof hatch never asks: it opens
+   * from the roof side always ("people lock the street door, not the roof"), and exit paths never
+   * ask at all. On top of the classification: `opensesame` opens everything, and a door you just
+   * came out of stays open for the grace window.
    */
   const entryLocked = (door: InteriorDoor, hour: number): boolean => {
     if (api.doorsUnlocked?.()) return false;
@@ -575,9 +574,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   // ---- the picking dial (see lock.ts for the tuning constants and the design note) ---------------
 
-  const startPicking = (door: InteriorDoor, via: 'street' | 'roof', at: THREE.Vector3): void => {
+  const startPicking = (door: InteriorDoor, at: THREE.Vector3): void => {
     picking = {
-      door, via, x: at.x, z: at.z, sweep: 0, dir: 1, misses: 0,
+      door, x: at.x, z: at.z, sweep: 0, dir: 1, misses: 0,
       finish: buildCore(door.facts).finish,
     };
   };
@@ -607,10 +606,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (!dialBites(dial)) { dial.misses += 1; dial.sweep = 0; dial.dir = 1; return; }
     picking = undefined;
     picks += 1;
-    api.analytics('picked', { detail: dial.via, value: dial.misses });
+    api.analytics('picked', { detail: 'street', value: dial.misses });
     api.persist();
-    if (dial.via === 'roof') enterFromRoof(dial.door, instant);
-    else enter(dial.door, instant);
+    enter(dial.door, instant);
   };
 
   /** The offer while the dial is running: the SAME rung the door offered keeps offering, so the
@@ -655,13 +653,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
    * rung directly below the door is `E  Enter vehicle`: standing at a locked door beside your own
    * car, E rattled the door instead of opening the car. That is the protest-rung failure class
    * (PR #120) reintroduced, which is why the explanation lives on a chip that claims no key at all.
-   * Resolves the same subjects the two entry rungs do (street doorstep, then roof), so the chip
-   * lights exactly where the offer withdrew.
+   * Street doorsteps only: the roof hatch is never locked from the roof side, so a roof never has
+   * anything to explain.
    */
   const lockedHintDoor = (): InteriorDoor | undefined => {
     if (visit || swapping || picking || carriesPick()) return undefined;
     const position = api.playerPosition();
-    const door = doorNear(position.x, position.z) ?? roofUnderfoot(position);
+    const door = doorNear(position.x, position.z);
     if (!door) return undefined;
     if (api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) return undefined;
     return entryLocked(door, api.hour()) ? door : undefined;
@@ -735,6 +733,12 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // The spine wall between the flights — and on the top floor, the centre rail of the stair head
     // that stands on the same line. A stairless single-storey building has neither.
     if (core.stair) out.push({ x: core.stair.x, z: core.stair.z - core.stair.d * 0.19, w: 0.16, d: core.stair.d * 0.62 });
+    // THE SHAFT'S REAR IS SEALED. The stair may stand as an island now (mid, front, side classes —
+    // and even the back class leaves up to 1.5 u behind it), and the shaft rectangle snaps anyone
+    // inside it to flight height: walking into its open rear at ground level teleported you UP
+    // onto the mid landing, and stepping off the mid landing's rear edge dropped you half a storey.
+    // One thin cap closes both. build.ts draws the matching panel-and-rail on island shafts.
+    if (core.stair) out.push({ x: core.stair.x, z: rectMaxZ(core.stair) - 0.07, w: core.stair.w, d: 0.14 });
     // The half flight that leads nowhere is NOT in this list. The clamp is two-dimensional, and a
     // flat obstacle at the foot of the ground floor's dead down flight would sit directly under the
     // TOP of its up flight — walling off the last step of a climb the player is three metres above.
@@ -875,21 +879,17 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       },
     },
     {
-      // The roof hatch, from outside: standing on a qualifying building's flat top. A hatch the
-      // player can answer offers; one they cannot answer offers NOTHING — the same no-refusal rule
-      // as the street door below (see lockedHintDoor; the passive LOCKED chip explains instead).
-      // The hatch a player walked out of stays in grace for as long as they are on the roof (see
-      // EXIT_GRACE), so the pickless-locked case here is only ever a roof reached some other way.
+      // The roof hatch, from outside: standing on a qualifying building's flat top, the way in is
+      // simply OPEN — always, for everyone, no pick, no grace. People lock the street door, not
+      // the roof: the lock model's whole question belongs to the pavement side of the building.
+      // (This is also what deleted the roof-B stranding edge: jump from a graced roof to its
+      // neighbour and the neighbour's hatch answers like any other.) The accepted trade is stated
+      // where the rule is: reaching a roof by parkour now yields free entry to that top floor.
       id: 'interiors:roofdoor', order: 52, context: 'foot',
       test: (ctx) => {
         if (visit || swapping) return undefined;
         const door = roofUnderfoot(ctx.position);
         if (!door) return undefined;
-        if (picking && picking.via === 'roof' && picking.door.id === door.id) return pickingOffer(picking);
-        if (entryLocked(door, ctx.hour)) {
-          if (!carriesPick()) return undefined;
-          return { prompt: `E  Pick the hatch lock · ${door.name}`, act: () => startPicking(door, 'roof', ctx.position) };
-        }
         return { prompt: `E  In through the roof hatch · ${door.name}`, act: () => { enterFromRoof(door); } };
       },
     },
@@ -924,14 +924,14 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         // into the interior of an invisible building. No offer until the chunk is really built.
         // (Hosts without the seam keep the old behaviour.)
         if (api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) return undefined;
-        if (picking && picking.via === 'street' && picking.door.id === door.id) return pickingOffer(picking);
+        if (picking && picking.door.id === door.id) return pickingOffer(picking);
         if (entryLocked(door, ctx.hour)) {
           // A locked door the player cannot answer offers NOTHING: this rung sits directly above
           // `E  Enter vehicle` in Game's on-foot ladder, and any offer — even an explainer — would
           // eat the press that should open the car at the kerb (the PR #120 failure class). The
           // passive LOCKED chip (lockedHintDoor) carries the explanation without claiming a key.
           if (!carriesPick()) return undefined;
-          return { prompt: `E  Pick the lock · ${door.name}`, act: () => startPicking(door, 'street', ctx.position) };
+          return { prompt: `E  Pick the lock · ${door.name}`, act: () => startPicking(door, ctx.position) };
         }
         return { prompt: `E  Go inside · ${door.name}`, act: () => { enter(door); } };
       },
@@ -950,23 +950,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       phase += dt;
       clock += dt;
       tickPicking(dt);
-      // THE ROOF-STRANDING GUARD. The grace window is a countdown, and a countdown alone re-created
-      // the trap the one-way lock model forbids: out through the hatch is free, and sixty seconds
-      // later the way back down wanted a pick. While the player is still standing on the roof of
-      // the graced building the window re-arms, so the door they never picked shut stays unlatched
-      // until they actually leave the roof; back on the ground the countdown runs out normally and
-      // the grace is dropped. Cost: one surfaceHeightAt per frame, and the roofUnderfoot scan only
-      // in the second half of the window and only while the player stands well above the terrain.
-      if (!current && exitGrace) {
-        const elevated = player.y - api.surfaceHeightAt(player.x, player.z) >= 5;
-        if (elevated) {
-          if (exitGrace.until - clock < EXIT_GRACE / 2 && roofUnderfoot(player)?.id === exitGrace.id) {
-            exitGrace.until = clock + EXIT_GRACE;
-          }
-        } else if (clock >= exitGrace.until) {
-          exitGrace = undefined;
-        }
-      }
+      // The street-door grace is a plain countdown now. The roof half of this machinery — the
+      // re-arm-while-on-the-roof loop, and the elevation gate that kept it honest — existed to
+      // keep the hatch answerable, and the hatch answers unconditionally today: it went with the
+      // roof-side lock, not into an if.
+      if (!current && exitGrace && clock >= exitGrace.until) exitGrace = undefined;
       // THE MARKERS FADE UP AS YOU REACH THEM. A shop pad pulses at full strength from across the
       // street because there are six of them; there are thousands of front doors, so a door only
       // lights when you are nearly on its step and a street of houses reads as a street of houses.
@@ -1028,9 +1016,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
     interactions: () => rungs,
 
-    // graceId rides the save so a reload made out on a walked-onto roof cannot re-latch the way
-    // down (see EXIT_GRACE). Included whenever the grace is live; update() drops a stale one on the
-    // ground, so the field is absent from almost every save ever written.
+    // graceId rides the save so a reload on the doorstep you just stepped out of keeps the street
+    // door's grace (see EXIT_GRACE). Included whenever the grace is live; update() drops it when
+    // the countdown runs out, so the field is absent from almost every save ever written.
     serialize: () => ({ visited: [...visited].slice(-32), finds, picks, ...(exitGrace ? { graceId: exitGrace.id } : {}) }),
 
     restore: (next) => {
@@ -1304,12 +1292,17 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // Which half is "up" is the building's own seeded stairDir, exactly as drawn.
     const lane = shaft.w / 4;
     const up = direction > 0 ? current.core.stairDir : -current.core.stairDir;
-    // Onto the spine first — the corridor is the one route every room opens onto, so this is the
-    // walk a player makes, not a shortcut through a wall.
-    const spine: [number, number][] = [[current.core.corridorX, current.last.z], [current.core.corridorX, rectMinZ(shaft) - 1.6]];
+    // Onto the spine first — the corridor is the one route every room opens onto — then across the
+    // open band to stand square in front of the up flight's own lane before stepping in: the shaft
+    // may be far off the spine now, and a diagonal approach could clip the down-half's front,
+    // which on the ground floor is the step the clamp refuses (no basement).
+    const spine: [number, number][] = [
+      [current.core.corridorX, current.last.z], [current.core.corridorX, rectMinZ(shaft) - 1.6],
+      [shaft.x + up * lane, rectMinZ(shaft) - 1.2],
+    ];
     const path: [number, number][] = [
-      [shaft.x + up * lane, rectMinZ(shaft) + 0.3], [shaft.x + up * lane, rectMaxZ(shaft) - 0.3],
-      [shaft.x - up * lane, rectMaxZ(shaft) - 0.3], [shaft.x - up * lane, rectMinZ(shaft) + 0.3],
+      [shaft.x + up * lane, rectMinZ(shaft) + 0.3], [shaft.x + up * lane, rectMaxZ(shaft) - 0.7],
+      [shaft.x - up * lane, rectMaxZ(shaft) - 0.7], [shaft.x - up * lane, rectMinZ(shaft) + 0.3],
     ];
     let at = { x: current.last.x, z: current.last.z };
     for (const [tx, tz] of [...spine, ...path, [current.core.corridorX, rectMinZ(shaft) - 1.6]] as [number, number][]) {

@@ -181,6 +181,11 @@ export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
       mesh.position.set(x, y, z); shaft.add(mesh); return mesh;
     };
     const shaftKit = { box: shaftBox, solid, keep, group: shaft, mat };
+    // An ISLAND shaft — any stair the position class stood clear of the back wall — shows its rear
+    // to walkable floor, so the rear is sealed: solid up to the mid landing, a balustrade above.
+    // The clamp refuses the crossing either way (see obstacles() in interiors.ts); this draws the
+    // refusal so it reads as a stairwell's back, not an invisible wall.
+    const island = rectMaxZ(core.stair) < plan.depth / 2 - 0.9;
     if (ends.top) {
       // THE TOP OF THE STAIRWELL. The old code drew a full switchback rising into the ceiling with a
       // grey shutter across it — the "blocked off stairs" the owner reported on every top floor.
@@ -191,7 +196,7 @@ export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
       // ladder to a roof hatch instead of a rail, and E under it takes you out onto the real roof.
       buildStairHead(core.stair, core.stairDir, height, ends.hatch, shaftKit);
     } else {
-      buildStair(core.stair, core.stairDir, height, shaftKit);
+      buildStair(core.stair, core.stairDir, height, island, shaftKit);
     }
     if (ends.ground) {
       // THE FOOT OF THE STAIRWELL. Downstairs from the ground floor there is nothing, and the old
@@ -301,10 +306,20 @@ interface Kit {
  *
  * See interiors.ts stairProgress() for the matching altitude function: this draws it, that walks it.
  */
-function buildStair(shaft: Rect, dir: 1 | -1, height: number, kit: Kit): void {
+function buildStair(shaft: Rect, dir: 1 | -1, height: number, sealedRear: boolean, kit: Kit): void {
   const { box, solid } = kit;
   const tread = solid(0x77726a, 0.9);
   const nose = solid(0x3b4143, 0.7);
+  if (sealedRear) {
+    // The back of an island stairwell: panelled to the mid landing, railed above it — what the
+    // back of a free-standing switchback actually looks like from the room behind it.
+    const landingY = STOREY_HEIGHT * 0.5;
+    box(shaft.w, landingY + 0.06, 0.14, solid(0x8d877c, 0.9), shaft.x, (landingY + 0.06) / 2, rectMaxZ(shaft) - 0.07);
+    box(shaft.w, 0.07, 0.08, solid(0x4a5254, 0.5), shaft.x, landingY + 1.02, rectMaxZ(shaft) - 0.07);
+    for (const t of [-0.33, 0, 0.33]) {
+      box(0.07, 1.0, 0.07, solid(0x4a5254, 0.5), shaft.x + t * shaft.w, landingY + 0.5, rectMaxZ(shaft) - 0.07);
+    }
+  }
   const steps = 9;
   const halfW = shaft.w / 2;
   for (let half = 0; half < 2; half++) {

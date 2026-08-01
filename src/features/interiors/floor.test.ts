@@ -14,7 +14,10 @@ import { allBuildings, type GeneratedBuilding } from '../../world/CityGen';
 import { allScatteredModels } from '../../world/ModelScatter';
 import { MODEL_INDEX } from '../../world/models/catalog';
 import { scatterDoorFor } from './doors';
-import { buildCore, coreContinuity, LIFT_FROM_STOREYS, type BuildingFacts } from './core';
+import {
+  buildCore, coreBackZ, coreContinuity, LIFT_FROM_STOREYS, MIN_ROOM, TARDIS_MAX,
+  type BuildingFacts, type StairClass,
+} from './core';
 import { solveFloor } from './floor';
 
 const architecture = new BuildingArchitecture(new THREE.Group());
@@ -87,6 +90,12 @@ describe('the floorplan solver', () => {
       const core = buildCore(facts);
       const plan = solveFloor(facts, 0, core);
       expect(plan.rooms.length, `${facts.id} has no rooms`).toBeGreaterThan(0);
+      if (core.layout === 'small') {
+        // The honest small layout IS one room with the door straight into it: no partitions.
+        expect(plan.rooms, `${facts.id} small layout must be exactly one room`).toHaveLength(1);
+        expect(plan.walls, `${facts.id} small layout must have no partitions`).toHaveLength(0);
+        continue;
+      }
       for (const room of plan.rooms) {
         const wall = plan.walls.find((candidate) => candidate.axis === 'x'
           && candidate.gapWidth !== undefined
@@ -253,6 +262,99 @@ describe('the floorplan solver', () => {
   }, 120000);
 
   /**
+   * ROUND 3: the stair is picked EARLY and can go almost anywhere — the position CLASS is the
+   * first thing the seed buys, so the citywide result is multi-modal (back / mid / side / front),
+   * not one smeared blob near the corridor. This asserts all four classes genuinely occur, that
+   * island cores really do put rooms BEHIND the stair, and — the part that matters — that every
+   * class's floors still flood-fill complete from the landing.
+   */
+  it('spreads the stair across position classes, and every class stays walkable', () => {
+    const staired = sample(400)
+      .map((facts) => ({ facts, core: buildCore(facts) }))
+      .filter((entry) => entry.core.stair);
+    expect(staired.length).toBeGreaterThan(100);
+    const byClass = new Map<StairClass, typeof staired>();
+    for (const entry of staired) {
+      const list = byClass.get(entry.core.stairClass!) ?? [];
+      list.push(entry);
+      byClass.set(entry.core.stairClass!, list);
+    }
+    expect([...byClass.keys()].sort(), 'a position class never occurs in a 400-building sample')
+      .toEqual(['back', 'front', 'mid', 'side']);
+    // Islands really are islands: mid and front cores put a room band behind the stair.
+    for (const name of ['mid', 'front'] as const) {
+      for (const { facts, core } of byClass.get(name)!) {
+        expect(coreBackZ(core), `${name} core ${facts.id} has no rooms behind the stair`).toBeDefined();
+      }
+    }
+    // The spread is real, not classes-in-name-only: normalised stair x reaches past the old ±0.5
+    // corridor blob, and normalised z reaches well off the back wall.
+    const normX = staired.map(({ core }) => core.stair!.x / (core.width / 2));
+    const normZ = staired.map(({ core }) => core.stair!.z / (core.depth / 2));
+    expect(normX.filter((v) => Math.abs(v) > 0.55).length, 'no stairs near the plate edges').toBeGreaterThan(10);
+    expect(normZ.filter((v) => v < 0.1).length, 'no stairs forward of mid-plate').toBeGreaterThan(10);
+    // And every class proves walkable, on the ground floor, one up, and the top.
+    for (const [name, list] of byClass) {
+      for (const { facts, core } of list.slice(0, 12)) {
+        const indices = [...new Set([0, 1, core.storeys - 1])].filter((i) => i >= 0 && i < core.storeys);
+        for (const index of indices) {
+          const plan = solveFloor(facts, index, core);
+          expect(plan.rooms.length, `${name} ${facts.id} floor ${index} has no rooms`).toBeGreaterThan(0);
+          expect(plan.unreachable, `${name} ${facts.id} floor ${index}: ${plan.unreachable} unreachable`).toBe(0);
+        }
+      }
+    }
+  }, 300000);
+
+  /**
+   * ROUND 3: the plate comes from the MODEL. Within the grammar's hard floors the interior is the
+   * footprint times at most TARDIS_MAX, aspect preserved — and a building too small for even that
+   * gets the honest one-room layout instead of inflation.
+   */
+  it('sizes the plate from the footprint, bounded tardis, honest small layouts below it', () => {
+    let floored = 0;
+    for (const facts of sample(400)) {
+      const core = buildCore(facts);
+      if (core.layout === 'small') continue; // asserted over the scatter pass below, where they live
+      const bareW = Math.max(1, facts.width - 0.9);
+      const bareD = Math.max(1, facts.depth - 0.9);
+      // The bound: single-storey full layouts never exceed TARDIS_MAX on either axis. Multi-storey
+      // may exceed it ONLY under the stair-grammar hard floor (width 15.1 / depth 12) or ceiling.
+      const ratioW = core.width / bareW;
+      const ratioD = core.depth / bareD;
+      if (core.storeys === 1) {
+        expect(ratioW, `${facts.id} single-storey width past the tardis bound`).toBeLessThanOrEqual(TARDIS_MAX + 1e-6);
+        expect(ratioD, `${facts.id} single-storey depth past the tardis bound`).toBeLessThanOrEqual(TARDIS_MAX + 1e-6);
+      } else if (ratioW > TARDIS_MAX + 1e-6 || ratioD > TARDIS_MAX + 1e-6) {
+        floored++;
+      }
+    }
+    // The hard floor is allowed but must be the exception, not the rule.
+    expect(floored).toBeLessThan(40);
+    // THE SMALLS live in the scatter pass — the spazas and sheds the old clamp turned into
+    // 15 × 21 halls. Each one: single-storey, no core, camera-floor respected, one walkable room.
+    let smalls = 0;
+    for (const model of allScatteredModels()) {
+      if (smalls >= 8) break;
+      if (!MODEL_INDEX.get(model.name)?.interior) continue;
+      const door = scatterDoorFor(model);
+      if (!door) continue;
+      const core = buildCore(door.facts);
+      if (core.layout !== 'small') continue;
+      smalls++;
+      expect(core.storeys, `${door.id} multi-storey small`).toBe(1);
+      expect(core.stair, `${door.id} small with a stair`).toBeUndefined();
+      expect(core.width, `${door.id} camera floor`).toBeGreaterThanOrEqual(MIN_ROOM - 1e-6);
+      expect(core.depth, `${door.id} camera floor`).toBeGreaterThanOrEqual(MIN_ROOM - 1e-6);
+      const plan = solveFloor(door.facts, 0, core);
+      expect(plan.rooms).toHaveLength(1);
+      expect(plan.walls).toHaveLength(0);
+      expect(plan.unreachable, `${door.id} small layout unreachable`).toBe(0);
+    }
+    expect(smalls, 'the scatter pass produced no small layouts at all').toBeGreaterThan(3);
+  }, 300000);
+
+  /**
    * The owner's placement step 2: the interior entry matches the model's tagged door. The interior
    * frame is the building frame rotated a half turn, so the tag at building-local +x lands at
    * interior-local −x, proportionally scaled where the plate is clamped, held inside the band that
@@ -262,6 +364,7 @@ describe('the floorplan solver', () => {
     let offCentre = 0;
     for (const facts of sample(300)) {
       const core = buildCore(facts);
+      if (core.layout === 'small') continue; // the one-room layout clamps the door by its own rule
       const slack = Math.max(0, core.width / 2 - 3.3 / 2 - 5.6);
       const wanted = -facts.doorX * (core.width / Math.max(1, facts.width));
       const expected = Math.max(-slack, Math.min(slack, wanted));

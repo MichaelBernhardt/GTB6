@@ -97,10 +97,10 @@ export interface InteriorsSave {
   /** Lifetime successful lock picks. Drives the practice curve: past PICK_MASTERY the bite window
    *  doubles for good, so the two-hundredth house is effectively instant. */
   picks: number;
-  /** The one door id whose latch is currently off for this player: the door they just left through
-   *  (the body's EXIT_GRACE). Persisted for exactly one reason — a save written while standing on a
-   *  roof they walked out onto must not reload with the way back down re-latched; the body re-arms
-   *  the window for as long as they remain on that roof. Absent from almost every save. */
+  /** The one door id whose latch is currently off for this player: the STREET door they just left
+   *  through (the body's EXIT_GRACE). Persisted so a save written on the doorstep does not reload
+   *  with that door re-locked in their face. (The roof hatch no longer needs this — it is always
+   *  open from the roof side.) Absent from almost every save. */
   graceId?: string;
 }
 

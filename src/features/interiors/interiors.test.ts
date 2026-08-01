@@ -635,6 +635,25 @@ describe('locked doors', () => {
     system.dispose();
   }, 120000);
 
+  it('carries the street-door grace through the save, so a reload on the doorstep keeps it', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('pick', {}).startsWith('ok')).toBe(true);
+    expect(system.qa!('leave', {})).toBe('ok');
+    // The save written on the doorstep carries the graced door through the sanitizer...
+    const slice = sanitizeInteriorsState(system.serialize!());
+    expect(slice.graceId, 'the graced street door must survive into the save').toBe(door.id);
+    system.dispose();
+    // ...and a PICKLESS fresh session restored on the same doorstep still walks straight in.
+    const revived = createFeature({ ...test.api, inventoryCount: () => 0 }, slice);
+    expect(offer(revived, test.player)?.prompt, 'reload re-locked the door just stepped out of')
+      .toBe(`E  Go inside · ${door.name}`);
+    revived.dispose();
+  }, 120000);
+
   it('opensesame opens everything without a pick', () => {
     const test = harness();
     test.api.doorsUnlocked = () => true;
@@ -663,19 +682,53 @@ describe('locked doors', () => {
 });
 
 /**
- * THE ROOF IS NEVER A TRAP. The owner's rule, verbatim: "you don't need to lockpick to get out.
- * You can always exit a building, either front door or onto the roof. Getting back in is when you
- * need to lock pick." A hatch that graced re-entry for only sixty seconds shipped the trap anyway:
- * walk out onto a works roof in hours (free, as every exit is), let night fall — or simply linger —
- * and the only way down asked for a pick. These tests pin the invariant that killed it: a pickless
- * player on a roof they walked onto ALWAYS has the way back in, however long they stand out there,
- * and across a save reload.
+ * THE MACHINE CLIMBS EVERY CLASS. The stair can stand at the back, mid-plate, against a wall or
+ * beside the door now, and the QA driver's climb is the same walk a player makes — spine, across
+ * the band, into the up flight, around the switchback, out — through the same clamp. One 'run' per
+ * class per source (parcel and scatter where present) is the difference between "the histogram
+ * moved" and "you can actually walk these buildings".
  */
-describe('the roof is never a trap', () => {
+describe('every stair class is climbable', () => {
   beforeEach(() => { resetDoorCache(); });
 
-  /** A roof-access building that is open in hours and locked at night: the works dock that sprang
-   *  the trap. Searched outward so a sparse origin still answers. */
+  it('walks the full loop in a back, mid, side and front stair building', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const seen = new Map<string, { x: number; z: number }>();
+    for (const door of doorsNear(0, 0, 2600)) {
+      const core = buildCore(door.facts);
+      if (!core.stair || core.stairClass === undefined) continue;
+      if (doorLocked(door.facts, 'outside', 13)) continue; // visit mechanics, not locks
+      if (!seen.has(core.stairClass)) seen.set(core.stairClass, { x: door.x, z: door.z });
+      if (seen.size === 4) break;
+    }
+    expect([...seen.keys()].sort(), 'could not find all four classes near the origin')
+      .toEqual(['back', 'front', 'mid', 'side']);
+    for (const [stairClass, spot] of seen) {
+      test.player.set(spot.x, 0, spot.z);
+      const result = system.qa!('run', {});
+      expect(result, `class ${stairClass} at ${spot.x.toFixed(0)},${spot.z.toFixed(0)}: ${result}`).toBe('ok');
+    }
+    system.dispose();
+  }, 300000);
+});
+
+/**
+ * EVERY HATCH OPENS FROM THE ROOF SIDE, ALWAYS. Round 2 kept the hatch behind the lock line plus a
+ * re-arming grace window, and shipped a residual trap anyway (#128): jump from your graced roof A
+ * to neighbouring roof B and B's hatch wanted a pick you might not carry. The owner's call closed
+ * it by deleting the roof-side lock outright — "people lock the street door, not the roof" — with
+ * the stated trade that reaching a roof by parkour now yields free entry to that top floor. These
+ * tests pin the new, simpler invariant: ANY hatch opens from ANY roof — no pick, no grace, no
+ * history, no hour. The street door's own lock, grace and persistence are untouched (see the
+ * locked-doors block above).
+ */
+describe('any hatch opens from any roof', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  /** A roof-access building that is open in hours and locked at night — the strictest subject: at
+   *  23:00 its STREET door refuses outsiders, so an opening hatch proves the roof side asks no
+   *  lock question at all. Searched outward so a sparse origin still answers. */
   function nightLockedRoofDoor() {
     for (const radius of [1500, 3000, 6000]) {
       const found = doorsNear(0, 0, radius)
@@ -689,34 +742,32 @@ describe('the roof is never a trap', () => {
     return undefined;
   }
 
-  it('keeps the hatch a pickless player walked out of unlatched, however long they linger', async () => {
+  it('opens the hatch on a roof reached cold — pickless, at night, never having been inside', () => {
     const test = harness();
-    let hour = 13;
+    const hour = 23;
     test.api.hour = () => hour;
-    const system = createFeature(test.api, undefined);
+    const system = createFeature(test.api, undefined);   // fresh session: no visits, no grace, no pick
     const roofy = nightLockedRoofDoor();
     expect(roofy, 'no night-locking roof-access building on the map').toBeDefined();
     const { door, core } = roofy!;
-    test.player.set(door.x, 0, door.z);
-    expect(system.qa!('enter', {})).toBe('ok');                       // in through the open works door, in hours
-    expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
-    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);       // out the hatch — free, no pick, no check
-    // Night falls and they photograph the skyline for three whole minutes: far past the 60 s
-    // window, and the building is now night-locked to outsiders on every side.
-    hour = 23;
-    for (let i = 0; i < 180; i++) system.update!(1);
     expect(doorLocked(door.facts, 'outside', hour), 'the building must night-lock or this test bites nothing').toBe(true);
+    // Stand on the roof the way a parkour arrival would: on the top tier, via the same resolver.
+    test.player.set(door.x, 0, door.z);
+    const stood = system.qa!('roofstand', {});
+    expect(stood.startsWith('ok'), stood).toBe(true);
+    expect(stood).toContain(door.id);
+    // The way in is simply open: no pick carried, street door locked, roof never graced.
     const back = offer(system, test.player, hour);
-    expect(back?.prompt, 'pickless player marooned on a night-locked roof').toContain('In through the roof hatch');
-    back!.act();
-    await new Promise((resolve) => setTimeout(resolve, 500));         // the real 260 ms entry fade
+    expect(back?.prompt, 'a hatch refused a player on its own roof').toContain('In through the roof hatch');
+    const entered = system.qa!('roofenter', {});
+    expect(entered.startsWith('ok'), entered).toBe(true);
     const status = system.qa!('status', {});
     expect(status).toMatch(/^inside\|/);
-    expect(status).toContain(`floor=${core.storeys - 1}`);            // back in at the top, exactly where the hatch leads
+    expect(status).toContain(`floor=${core.storeys - 1}`);  // in at the top, exactly where the hatch leads
     system.dispose();
   }, 300000);
 
-  it('keeps the walked-onto roof unlatched across a save reload', () => {
+  it('lingering on a roof you exited costs nothing: the way down never expires', () => {
     const test = harness();
     let hour = 13;
     test.api.hour = () => hour;
@@ -725,18 +776,34 @@ describe('the roof is never a trap', () => {
     expect(roofy).toBeDefined();
     const { door, core } = roofy!;
     test.player.set(door.x, 0, door.z);
-    expect(system.qa!('enter', {})).toBe('ok');
+    expect(system.qa!('enter', {})).toBe('ok');                       // in through the open works door, in hours
     expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
-    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);
+    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);       // out the hatch — free, as every exit is
+    // Night falls and they photograph the skyline for three whole minutes — far past any window
+    // the old grace machinery ever kept. There is no window now; there is no lock.
     hour = 23;
-    // The save written out on the roof carries the unlatched door through the sanitizer...
-    const slice = sanitizeInteriorsState(system.serialize!());
-    expect(slice.graceId, 'the unlatched door must survive into the save').toBe(door.id);
+    for (let i = 0; i < 180; i++) system.update!(1);
+    const back = offer(system, test.player, hour);
+    expect(back?.prompt, 'pickless player marooned on a night-locked roof').toContain('In through the roof hatch');
     system.dispose();
-    // ...and a fresh session restored on the same roof still has the way down, still re-arming.
-    const revived = createFeature(test.api, slice);
-    for (let i = 0; i < 180; i++) revived.update!(1);
-    expect(offer(revived, test.player, hour)?.prompt, 'reload on the roof re-latched the way down').toContain('In through the roof hatch');
+  }, 300000);
+
+  it('survives a reload cold: a fresh session on the same roof still gets in, no saved grace needed', () => {
+    const test = harness();
+    const hour = 23;
+    test.api.hour = () => hour;
+    const roofy = nightLockedRoofDoor();
+    expect(roofy).toBeDefined();
+    const { door } = roofy!;
+    test.player.set(door.x, 0, door.z);
+    const scout = createFeature(test.api, undefined);
+    expect(scout.qa!('roofstand', {}).startsWith('ok')).toBe(true);
+    scout.dispose();
+    // A save with NOTHING in it — the old test needed graceId to survive the sanitizer for the
+    // roof to stay answerable; the invariant no longer depends on any state at all.
+    const revived = createFeature(test.api, sanitizeInteriorsState(undefined));
+    for (let i = 0; i < 60; i++) revived.update!(1);
+    expect(offer(revived, test.player, hour)?.prompt, 'a reload re-latched the way down').toContain('In through the roof hatch');
     revived.dispose();
   }, 300000);
 });
