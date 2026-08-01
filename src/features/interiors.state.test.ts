@@ -30,6 +30,15 @@ describe('interiors save slice', () => {
     expect(sanitizeInteriorsState({ visited: ['a:b', 'c:d'], finds: 2, picks: 7 })).toEqual({ visited: ['a:b', 'c:d'], finds: 2, picks: 7 });
   });
 
+  it('carries the unlatched-door id through a reload, and only a plausible one', () => {
+    // The roof-stranding guard: a save written out on a walked-onto roof must reload with the way
+    // back down still unlatched (see InteriorsSave.graceId).
+    expect(sanitizeInteriorsState({ graceId: '-142:2502' })).toEqual({ visited: [], finds: 0, picks: 0, graceId: '-142:2502' });
+    expect(sanitizeInteriorsState({ graceId: 42 })).toEqual({ visited: [], finds: 0, picks: 0 });
+    expect(sanitizeInteriorsState({ graceId: '' })).toEqual({ visited: [], finds: 0, picks: 0 });
+    expect(sanitizeInteriorsState({ graceId: 'x'.repeat(64) })).toEqual({ visited: [], finds: 0, picks: 0 });
+  });
+
   it('survives junk, missing keys and hostile shapes', () => {
     expect(sanitizeInteriorsState(undefined)).toEqual({ visited: [], finds: 0, picks: 0 });
     expect(sanitizeInteriorsState({})).toEqual({ visited: [], finds: 0, picks: 0 });
