@@ -859,6 +859,9 @@ export class Game {
     const shadows = this.baseQuality() !== 'low';
     this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
+    // A quality change mid-visit must not silently re-arm the shadow pass the interior paused —
+    // updateFeatureIndoors only runs on the indoors EDGE, so the pause is re-asserted here.
+    this.renderer.shadowMap.autoUpdate = !this.featureIndoors;
     this.dayNight.setQuality(this.baseQuality());
     this.city.setWaterQuality(this.baseQuality()); // rebuilds water meshes; disposes the old tier's materials and mirror target
     this.applyWorldBudget();
@@ -1205,7 +1208,7 @@ export class Game {
 
   /**
    * The moment the player steps into or out of a feature interior (interiors is the only feature
-   * that answers indoors() today), three host-side things flip:
+   * that answers indoors() today), four host-side things flip:
    *
    * 1. THE CAMERA. Inside, the on-foot view starts at first person — the owner's ask, and the read
    *    that makes an interior legible: no boom, so no wall ever stands between the lens and the
@@ -1235,6 +1238,17 @@ export class Game {
     // the boot census, whose programs are still warm.
     this.vehicleFire.lights.setVisible(!indoors);
     this.projectiles.lights.setVisible(!indoors);
+    // 4. THE SUN'S SHADOW PASS STOPS. Hiding city.group never covered the scene-root casters —
+    // pedestrians, traffic (a dozen meshes per car), trains, the safehouse, the crafted shops,
+    // mission set pieces — and the cascade kept re-rendering all of them into the shadow map every
+    // frame from underground: measured 1,387 casters, ~480 draw calls and 250 k triangles of the
+    // 648-call indoor frame at high, which is precisely the owner's "I think it's doing the full
+    // world render still". No sunlit surface is visible from an interior (they sit below the
+    // terrain; interior meshes neither cast nor receive), so the map simply stops UPDATING —
+    // autoUpdate, not castShadow, because flipping a light's caster flag changes every receiver's
+    // shader defines and would buy a recompile storm both ways. The stale map is sampled by
+    // nothing the player can see; the first outdoor frame refreshes it.
+    this.renderer.shadowMap.autoUpdate = !indoors;
     if (indoors) {
       this.indoorFootView = 0;
       if (this.settings.cameraViewFoot !== 0) this.ui.notify('Camera: First person', 'V cycles the view. Your usual view returns outside.');
