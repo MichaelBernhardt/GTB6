@@ -337,6 +337,16 @@ export class PopulationSystem {
    * people right there (assault, 24 u), a killing by the whole street (kill, 58 u). It does not come
    * back. Returns how many people it cost, for the caller's telemetry and for tests.
    */
+  /** The live pedestrians within `radius` of a world point (XZ). The protest feature's assimilation
+   *  seam — see FeatureGameApi.pedestriansNear. */
+  pedestriansNear(x: number, z: number, radius: number): readonly Pedestrian[] {
+    const radiusSq = radius * radius;
+    return this.pedestrians.filter((ped) => {
+      const dx = ped.group.position.x - x; const dz = ped.group.position.z - z;
+      return dx * dx + dz * dz < radiusSq;
+    });
+  }
+
   breakSolidarity(origin: THREE.Vector3, radius: number): number {
     if (!(radius > 0)) return 0;
     let broken = 0;

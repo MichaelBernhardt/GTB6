@@ -2462,11 +2462,15 @@ export class Game {
     // fear radius. It runs BEFORE the teflon return on purpose: teflon buys the player off the police,
     // not out of what the people standing next to him just watched him do.
     //
-    // The one exemption is `jostle`: a walking shove through a packed crowd escalates to an assault in
+    // Two exemptions. `jostle`: a walking shove through a packed crowd escalates to an assault in
     // JMPD's book (that stays — the heat below is untouched), but it is not an ATTACK in the picket's,
     // and a protest is dense enough that reaching its middle guarantees a few. Only the bump path sets
-    // it, and only when nobody went down — see bumpBreaksSolidarity.
-    if (!options.jostle) this.population.breakSolidarity(position, options.radius ?? WITNESS_RADIUS);
+    // it, and only when nobody went down — see bumpBreaksSolidarity. And RETALIATION: when every victim
+    // was hit while in the hostile state, the crowd watched the victim start it — one in nine ambient
+    // bodies squares up unprovoked, and a picket that unjoined because the player defended himself
+    // against exactly that was the crowd punishing the wrong party. JMPD still books both.
+    const retaliation = !!options.victims?.length && options.victims.every((victim) => victim.hitWhileHostile);
+    if (!options.jostle && !retaliation) this.population.breakSolidarity(position, options.radius ?? WITNESS_RADIUS);
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
     if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the taxi spooks the passenger
     if (this.cheats.teflon) return; // teflon: the heat could not land anyway, so JMPD neither witness nor take the call — no fake dispatch toast, no last-known position
@@ -3382,6 +3386,7 @@ export class Game {
       analytics: () => undefined, // replaced per feature by the host, which binds the feature id
       spawnFixture: (x, z, name) => this.population.spawnFixture(x, z, name),
       removeFixture: (ped) => this.population.removePedestrian(ped),
+      pedestriansNear: (x, z, radius) => this.population.pedestriansNear(x, z, radius),
     };
   }
 }

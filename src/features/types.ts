@@ -122,6 +122,11 @@ export interface FeatureGameApi {
   districtAt(x: number, z: number): string;
   isPark(x: number, z: number): boolean;
   nearestRoadPose(at: Vector3): { position: Vector3; heading: number };
+  /** Ambient pedestrians within `radius` of a world point — the live entities, not copies, so a
+   *  feature may flip per-ped state it owns the lifecycle of (protest assimilates bystanders who
+   *  stand inside its picket). Optional so older/test hosts stay source compatible; a missing seam
+   *  reads as nobody nearby. Call per frame, never retain the array. */
+  pedestriansNear?(x: number, z: number, radius: number): readonly Pedestrian[];
   /** Live player position — call per frame, never retain the returned reference across frames. */
   playerPosition(): Vector3;
   playerHeading(): number;

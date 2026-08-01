@@ -121,6 +121,12 @@ const TAR_REACH = 10;
  * much of the carriageway you actually covered, not by a flag on the tyre.
  */
 const SOLO_SPACING = 4.5;
+/** How far the picket's peace extends: a bystander inside this ring of the barricade behaves as
+ *  crowd (fear capped, mug trigger off) for as long as they stand in it. Comfortably outside the
+ *  crowd ring, comfortably inside the closure — bystanders on the pavement beyond still scatter,
+ *  which is correct. Release is wider than grant so a ped milling on the line doesn't flicker. */
+const ASSIMILATION_RADIUS = 18;
+const ASSIMILATION_RELEASE = 24;
 /** Bearings and radii probed around the player to find a road worth closing. Fixed, so the same
  *  grievance in the same place always shuts the same road; eight by two is 16 `nearestRoadPose`
  *  snaps plus 17 `districtAt` calls, ONCE, on the frame a protest starts — measured in-engine at
@@ -151,6 +157,14 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let phase: Phase = 'idle';
   let barricade: Barricade | undefined;
   let crowd: Pedestrian[] = [];
+  /** Bystanders standing INSIDE the picket, granted the crowd's own solidarity while they stay.
+   *  Without this the one-in-nine `aggressive` personality squared up at the player from within his
+   *  own protest — inside a picket everyone is within its 4.5 u trigger — and the fight that followed
+   *  scattered the rest. 'held' means we granted it and will take it back; 'broken' means something
+   *  in the world revoked it (a punch, a knockdown, the witness sweep) and it must NOT be re-granted —
+   *  revocation does not come back, and re-granting would have quietly reversed that rule for anyone
+   *  standing in the radius. Feature-owned state, released on stand-down, suspend and dispose. */
+  const assimilated = new Map<Pedestrian, 'held' | 'broken'>();
   let size: BlockadeSize = 'daytime';
   let blockadeHoursLeft = 0;
   let lastHour = api.hour();
@@ -323,6 +337,33 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     return true;
   }
 
+  /** The picket assimilates whoever stands in it, and lets them go when they leave. Radii straddle
+   *  the crowd ring with hysteresis so a ped milling on the boundary doesn't flicker. The feature's
+   *  own crowd is skipped — its solidarity has its own lifecycle, and a revoked member re-entering
+   *  the radius must stay revoked. */
+  function assimilate(): void {
+    if (!barricade) return;
+    const site = barricade.site;
+    for (const ped of api.pedestriansNear?.(site.x, site.z, ASSIMILATION_RADIUS) ?? []) {
+      if (ped.solidarity || assimilated.has(ped) || ped.police || ped.hostile || ped.state === 'hostile' || ped.state === 'down' || crowd.includes(ped)) continue;
+      ped.solidarity = true;
+      assimilated.set(ped, 'held');
+    }
+    for (const [ped, status] of assimilated) {
+      if (status === 'held' && !ped.solidarity) { assimilated.set(ped, 'broken'); continue; } // the world revoked it: remember, never re-grant
+      const dx = ped.group.position.x - site.x; const dz = ped.group.position.z - site.z;
+      if (dx * dx + dz * dz > ASSIMILATION_RELEASE * ASSIMILATION_RELEASE || ped.state === 'down') {
+        if (status === 'held') ped.solidarity = false;
+        assimilated.delete(ped);
+      }
+    }
+  }
+
+  function releaseAssimilated(): void {
+    for (const [ped, status] of assimilated) if (status === 'held') ped.solidarity = false;
+    assimilated.clear();
+  }
+
   /** Lay the stains, drop the closure to a smoulder, send the crowd home. */
   function standDown(reason: 'held' | 'faded' | 'scattered'): void {
     if (!barricade) return;
@@ -331,6 +372,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     roadClosures.close('protest:blockade');
     for (const ped of crowd) { ped.solidarity = false; api.removeFixture(ped); }
     crowd = [];
+    releaseAssimilated();
     phase = 'smouldering';
     blockadeHoursLeft = 1.5;
     syncRoad(); // the row across the lane becomes one smouldering heap traffic weaves round
@@ -346,6 +388,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (barricade) { barricade.dispose(); barricade = undefined; }
     for (const ped of crowd) { ped.solidarity = false; api.removeFixture(ped); }
     crowd = [];
+    releaseAssimilated();
     roadClosures.close('protest:blockade');
     phase = 'idle';
     smoke = 0; picketElapsed = 0;
@@ -533,6 +576,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       return;
     }
     barricade.update(dt);
+    assimilate();
     blockadeHoursLeft -= elapsedHours;
 
     if (phase === 'picketing') {
@@ -804,7 +848,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /** PvP: this feature's clock has stopped, so nothing it published may keep steering the city. Its
    *  tyres would never burn down and its road would stay shut for as long as the player stayed online.
    *  `update()` restates the lot on the first frame back — nothing needs a resume hook. */
-  function suspend(): void { retractRoad(); }
+  function suspend(): void {
+    retractRoad();
+    // Suspension stops this feature's clock, so a held bystander would keep capped fear indefinitely
+    // with nobody maintaining the radius. Release them; update()'s assimilate() re-gathers whoever is
+    // still standing there on the first frame back, the same restatement pattern as syncRoad.
+    releaseAssimilated();
+  }
 
   function dispose(): void {
     if (disposed) return;

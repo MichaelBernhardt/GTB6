@@ -9,6 +9,7 @@ import {
 import { FeatureHost } from '../host';
 import { FEATURES } from '../registry';
 import { roadClosures, roadHazards } from '../../systems/NavGraph';
+import type { Pedestrian } from '../../entities/Pedestrian';
 import { setPower } from '../../world/powerGrid';
 import type { FeatureGameApi } from '../types';
 
@@ -16,6 +17,14 @@ import type { FeatureGameApi } from '../types';
 const FLAT = () => 0;
 
 /** A Game stand-in: the whole FeatureGameApi surface, with nothing behind it but arithmetic. */
+/** An ambient pedestrian as assimilate() sees one — deliberately `aggressive`, because that is the
+ *  personality whose square-up the assimilation exists to switch off. */
+function fakeBystander(x: number, z: number): Pedestrian {
+  const ped = { solidarity: false, police: false, hostile: false, aggressive: true, state: 'idle', group: new THREE.Group() };
+  ped.group.position.set(x, 0, z);
+  return ped as unknown as Pedestrian;
+}
+
 function stubApi(overrides: Partial<FeatureGameApi> = {}): FeatureGameApi & { notices: string[]; earned: number; events: string[] } {
   const scene = new THREE.Scene();
   const player = new THREE.Vector3(10, 0, 10);
@@ -740,6 +749,54 @@ describe('what the protest publishes into the simulation', () => {
     system.command?.(['clear']);
     expect(system.qa?.('solidarity', {})).toBe('ok:0/0');
     system.dispose();
+  });
+
+  it('assimilates a bystander standing in the picket, and releases them when they leave', () => {
+    reset();
+    // The owner, inside his own protest: "Some people in the protest randomly attack me too, which
+    // escalates to others running away." The crowd was safe; the BYSTANDERS who wandered into it were
+    // not — one in nine is `aggressive` and squares up inside 4.5 u, and in a picket everyone is
+    // inside 4.5 u. Whoever stands in the picket now counts as crowd for as long as they stand there.
+    const peds: Pedestrian[] = [];
+    const api = stubApi({ pedestriansNear: () => peds });
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const site = roadHazards.list[0]!;
+    const stander = fakeBystander(site.x + 2, site.z + 1);
+    peds.push(stander);
+    system.update?.(0.1);
+    expect(stander.solidarity).toBe(true); // standing in the picket: one of us
+    stander.group.position.set(site.x + 200, 0, site.z); // wanders off
+    system.update?.(0.1);
+    expect(stander.solidarity).toBe(false); // back to an ordinary bystander
+    system.dispose();
+  });
+
+  it('never re-grants what the world revoked, and lets go of everyone on suspend', () => {
+    reset();
+    const peds: Pedestrian[] = [];
+    const api = stubApi({ pedestriansNear: () => peds });
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const site = roadHazards.list[0]!;
+    const punched = fakeBystander(site.x + 1, site.z - 2);
+    peds.push(punched);
+    system.update?.(0.1);
+    expect(punched.solidarity).toBe(true);
+    punched.solidarity = false; // takeDamage / knockdown / the witness sweep — the world took it back
+    system.update?.(0.1);
+    expect(punched.solidarity).toBe(false); // revocation does not come back, however long they stand there
+
+    const held = fakeBystander(site.x - 2, site.z + 1);
+    peds.push(held);
+    system.update?.(0.1);
+    expect(held.solidarity).toBe(true);
+    system.suspend?.();
+    expect(held.solidarity).toBe(false); // a suspended feature holds no one — the garage-blip rule
+    system.update?.(0.1);
+    expect(held.solidarity).toBe(true); // first frame back re-gathers whoever is still standing there
+    system.dispose();
+    expect(held.solidarity).toBe(false);
   });
 
   it('puts a row of circles across the lane a driver can actually see, and clears them on dispose', () => {

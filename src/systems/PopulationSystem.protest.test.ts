@@ -91,8 +91,12 @@ describe('who stops standing with the player', () => {
     // other call site may quietly grant itself the exemption.
     const game = readFileSync(resolve(__dirname, '../Game.ts'), 'utf8');
     expect(game).toMatch(/jostle: !bumpBreaksSolidarity\(bump\)/);
-    expect(game).toMatch(/if \(!options\.jostle\) this\.population\.breakSolidarity\(/);
+    expect(game).toMatch(/if \(!options\.jostle && !retaliation\) this\.population\.breakSolidarity\(/);
     expect(game.match(/jostle: /g)?.length).toBe(1); // exactly one call site sets it: the bump loop
+    // Self-defence: when every victim was hit while hostile, the crowd watched who started it. The
+    // predicate must read the damage-time capture, not live state — a kill overwrites state to 'down'
+    // before the crime is filed, so testing live state would un-exempt exactly the strongest case.
+    expect(game).toMatch(/options\.victims\.every\(\(victim\) => victim\.hitWhileHostile\)/);
   });
 });
 

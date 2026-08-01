@@ -284,8 +284,15 @@ export class Pedestrian {
     else if (response === 'flee') { this.state = 'flee'; this.fleeFrom(origin); }
   }
 
+  /** True when the LAST hit landed while this ped was in the hostile state — i.e. the player struck
+   *  someone who was attacking them. Captured here because takeDamage immediately overwrites `state`
+   *  ('down' on a kill), so by the time Game files the crime the evidence is gone. reportCrime reads
+   *  it to keep self-defence from revoking a picket's solidarity: the crowd watched who started it. */
+  hitWhileHostile = false;
+
   takeDamage(amount: number, origin?: THREE.Vector3): boolean {
     if (this.state === 'down' || this.contact) return false;
+    this.hitWhileHostile = this.state === 'hostile';
     this.solidarity = false; // you cannot un-punch someone: whoever did this is not on their side any more
     this.swing = undefined; this.pendingMeleeHit = false; // a hit interrupts the wind-up: no punches landed from the floor
     this.health = Math.max(0, this.health - amount); this.fear = FEAR_MAX; this.enraged = this.aggressive && this.health > 0;

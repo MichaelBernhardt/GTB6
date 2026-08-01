@@ -125,3 +125,20 @@ describe('solidarity', () => {
     expect(mugged.solidarity).toBe(false);
   });
 });
+
+describe('self-defence evidence', () => {
+  it('records that the hit landed on someone hostile, and keeps it through the kill', () => {
+    // takeDamage overwrites `state` before Game files the crime ('down' on a kill), so whether the
+    // victim was attacking is captured at the moment of the hit. reportCrime reads it to keep
+    // self-defence from revoking a picket's solidarity — the crowd watched who started it.
+    const attacker = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 3);
+    attacker.state = 'hostile';
+    expect(attacker.takeDamage(999)).toBe(true);
+    expect(attacker.state).toBe('down');
+    expect(attacker.hitWhileHostile).toBe(true); // the evidence survives the kill
+
+    const civilian = new Pedestrian(new THREE.Scene(), new THREE.Vector3(), 4);
+    civilian.takeDamage(5);
+    expect(civilian.hitWhileHostile).toBe(false); // an unprovoked victim never reads as one
+  });
+});
