@@ -202,7 +202,7 @@ export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
       buildStair(core.stair, core.stairDir, height, island, {
         low: rectMinX(core.stair) + plan.width / 2 > 0.35 && !liftOnLow,
         high: plan.width / 2 - rectMaxX(core.stair) > 0.35 && !liftOnHigh,
-      }, shaftKit);
+      }, ends.ground, shaftKit);
     }
     if (ends.ground) {
       // THE FOOT OF THE STAIRWELL. Downstairs from the ground floor there is nothing, and the old
@@ -314,11 +314,26 @@ interface Kit {
  */
 function buildStair(
   shaft: Rect, dir: 1 | -1, height: number, sealedRear: boolean,
-  openSides: { low: boolean; high: boolean }, kit: Kit,
+  openSides: { low: boolean; high: boolean }, ground: boolean, kit: Kit,
 ): void {
-  const { box, solid } = kit;
+  const { box, solid, keep, group } = kit;
   const tread = solid(0x77726a, 0.9);
   const nose = solid(0x3b4143, 0.7);
+  if (!ground) {
+    // THE WAY DOWN READS AS A WAY DOWN. The descent to the storey below happens in the −dir half
+    // of the shaft — an opening in this floor's plate — but the shell drew its floor face straight
+    // across it: "just empty floor" (the owner) that you discovered by sinking into it. The
+    // ascending well through the ceiling already reads as a dark rectangle; the floor's well now
+    // gets the same treatment the top floor's stair head always had — the dark mouth, with a
+    // nosing strip across the edge you step down over. The ground floor is the one storey with no
+    // descent; its dead quarter keeps the under-stair cupboard instead.
+    const halfW = shaft.w / 2;
+    const wellX = shaft.x - dir * halfW / 2;
+    const well = new THREE.Mesh(keep(new THREE.BoxGeometry(halfW - 0.1, 0.03, shaft.d - 0.1)), MOUTH_MATERIAL);
+    well.position.set(wellX, 0.015, shaft.z);
+    group.add(well);
+    box(halfW - 0.1, 0.05, 0.09, nose, wellX, 0.03, rectMinZ(shaft) + 0.06);
+  }
   if (sealedRear) {
     // The back of an island stairwell: panelled to the mid landing, railed above it — what the
     // back of a free-standing switchback actually looks like from the room behind it.
