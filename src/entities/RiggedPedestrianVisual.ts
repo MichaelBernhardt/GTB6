@@ -187,6 +187,8 @@ export class RiggedPedestrianVisual {
   private ragdollJitter: number[] = [];
   private readonly ragdollDriver = new RagdollDriver();
   private ragdollGroundY = 0;
+  /** Time source for code-driven pose life (the cower tremble). Visual-only. */
+  private poseClock = 0;
   private impactX?: number;
   private impactZ?: number;
   private impactSpeed?: number;
@@ -234,6 +236,7 @@ export class RiggedPedestrianVisual {
 
   update(dt: number, env?: RagdollEnvironment): void {
     if (!this.ready || !this.mixer || !this.bones) return;
+    this.poseClock += Math.max(0, dt);
     this.group.position.set(0, 0, 0); this.group.rotation.set(0, 0, 0); this.group.scale.set(1, 1, 1);
     if (this.state.state === 'down' && (this.state.knockdown || (this.state.dead && this.ragdollDeath))) { this.updateRagdoll(Math.max(0, dt), env); return; }
     if (this.ragdollDriver.active) this.endRagdoll(); // knocked-down ped is back up: hand the bones back to the mixer
@@ -416,14 +419,26 @@ export class RiggedPedestrianVisual {
     }
     if (this.state.punching) drivePunchArm(this.parent, bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, this.state.punchElapsed);
     if (this.state.state === 'cower' || this.state.covering) {
-      bones.spine.rotation.x += 0.42; bones.chest.rotation.x += 0.26;
       if (this.state.state === 'cower') {
-        bones.leftUpperArm.rotation.x -= 0.72; bones.rightUpperArm.rotation.x -= 0.72;
-        bones.leftUpperArm.rotation.z += 0.42; bones.rightUpperArm.rotation.z -= 0.42;
+        // A TERRIFIED HUDDLE, not a bow. The old pose was a forward bend over half-bent knees —
+        // which, on a body still facing its flee direction, presented a frozen rear to the shooter
+        // (the owner's exact complaint). Now: deep crouch, chin tucked, arms wrapped over the
+        // head, and a small two-frequency tremble so the body reads alive rather than statued.
+        const shiver = Math.sin(this.poseClock * 11) * 0.03 + Math.sin(this.poseClock * 4.3) * 0.02;
+        bones.spine.rotation.x += 0.5 + shiver; bones.chest.rotation.x += 0.3;
+        bones.head.rotation.x += 0.55;
+        bones.leftUpperArm.rotation.x -= 2.05; bones.rightUpperArm.rotation.x -= 2.05;
+        bones.leftLowerArm.rotation.x -= 1.15; bones.rightLowerArm.rotation.x -= 1.15;
+        bones.leftUpperArm.rotation.z += 0.5 + shiver; bones.rightUpperArm.rotation.z -= 0.5 + shiver;
+        bones.leftUpperLeg.rotation.x -= 0.6; bones.rightUpperLeg.rotation.x -= 0.6;
+        bones.leftLowerLeg.rotation.x += 1.0; bones.rightLowerLeg.rotation.x += 1.0;
+        this.group.position.y -= 0.44;
+      } else {
+        bones.spine.rotation.x += 0.42; bones.chest.rotation.x += 0.26;
+        bones.leftUpperLeg.rotation.x -= 0.22; bones.rightUpperLeg.rotation.x -= 0.22;
+        bones.leftLowerLeg.rotation.x += 0.38; bones.rightLowerLeg.rotation.x += 0.38;
+        this.group.position.y -= 0.18;
       }
-      bones.leftUpperLeg.rotation.x -= 0.22; bones.rightUpperLeg.rotation.x -= 0.22;
-      bones.leftLowerLeg.rotation.x += 0.38; bones.rightLowerLeg.rotation.x += 0.38;
-      this.group.position.y -= 0.18;
       if (this.state.covering) {
         // Arrest officers duck DEEP — hidden behind a car boot, not a polite bow. Extra knee bend
         // plus sink keeps the bent legs grounded and brings the head to about bonnet height.
