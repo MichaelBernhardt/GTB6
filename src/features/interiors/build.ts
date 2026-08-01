@@ -535,6 +535,10 @@ export interface BuiltDoorways {
 const FADE_FAR = 26;
 const FADE_NEAR = 11;
 
+const UP = new THREE.Vector3(0, 1, 0);
+/** The torus lies in the XY plane; this turns it floor-flat before the slope lean is applied. */
+const RING_FLAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+
 /** The disc's own opacity at full strength — ShopSystem pulses 0.42..0.60; an ordinary front door
  *  sits well under that, because there are three thousand of them and six of those. */
 const DISC_OPACITY = 0.3;
@@ -555,7 +559,7 @@ export function markerFade(distance: number): number {
  */
 export function buildDoorways(
   doors: readonly InteriorDoor[],
-  surfaceHeightAt: (x: number, z: number) => number,
+  surfaceAt: (x: number, z: number) => { y: number; nx: number; ny: number; nz: number },
 ): BuiltDoorways {
   const group = new THREE.Group();
   group.name = 'InteriorDoors';
@@ -575,11 +579,11 @@ export function buildDoorways(
 
   for (const door of doors) {
     const bay = new THREE.Group();
-    // The frame stands at the DOORSTEP's standing height, not the terrain under the wall plane:
+    // The frame stands at the DOORSTEP's rendered surface, not the terrain under the wall plane:
     // on a foundation-levelled site the model's leaf sits on the plinth, and probing height AT the
     // face would find the building's own roof. The step is where the player stands to use the
     // door, so its surface is the honest base for the joinery too.
-    bay.position.set(door.faceX, surfaceHeightAt(door.x, door.z), door.faceZ);
+    bay.position.set(door.faceX, surfaceAt(door.x, door.z).y, door.faceZ);
     bay.rotation.y = door.heading; // local +z faces the street
     const add = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): void => {
       const mesh = new THREE.Mesh(unitBox, material);
@@ -604,21 +608,20 @@ export function buildDoorways(
     // you are standing in to read it. A house does not have a signboard.
     // The circle on the ground, and nothing standing on it. Its own material per door so the fade is
     // per door and not per street — twenty-two MeshBasic materials is nothing next to one beam.
-    const stepY = surfaceHeightAt(door.x, door.z);
-    // DEPTH-INDEPENDENT, and this is what ends the marker-height defect class (buried in a stoep,
-    // then subsurface under low paving — the drawn ground rides an unknowable 0–0.25 above the
-    // colliders every height source answers). The circle is an interaction marker, not scenery:
-    // with the depth test off it renders over whatever ground the artists drew, on every slope,
-    // plinth and pavement, forever. The distance fade (26 u) bounds the through-wall ghosting to
-    // the door you are already walking toward.
-    const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: DISC_OPACITY, depthWrite: false, depthTest: false }));
-    const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.75, depthWrite: false, depthTest: false }));
+    // The step comes from the caller's probe of the RENDERED surface (see markerSurface in
+    // interiors.ts): its height plus its NORMAL, so on a slope the disc TILTS with the paving
+    // instead of digging a rim in or floating a rim off. Depth testing stays ON — a doorstep
+    // circle marks a spot you can see, never an x-ray through the building. (depthWrite stays
+    // off: it is a transparent overlay and must not punch holes in what draws behind it.)
+    const step = surfaceAt(door.x, door.z);
+    const lean = new THREE.Quaternion().setFromUnitVectors(UP, new THREE.Vector3(step.nx, step.ny, step.nz).normalize());
+    const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: DISC_OPACITY, depthWrite: false }));
+    const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.75, depthWrite: false }));
     const disc = new THREE.Mesh(discGeometry, discMaterial);
-    disc.position.set(door.x, stepY + 0.06, door.z);
-    disc.renderOrder = 2;
+    disc.position.set(door.x, step.y, door.z);
+    disc.quaternion.copy(lean);
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-    ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.015;
-    ring.renderOrder = 2;
+    ring.quaternion.copy(lean).multiply(RING_FLAT); ring.position.copy(disc.position); ring.position.y += 0.015;
     markers.push({ x: door.x, z: door.z, door, disc, ring, bay, discMaterial, ringMaterial });
     group.add(bay, disc, ring);
   }

@@ -448,7 +448,7 @@ describe('the marker on the step', () => {
     resetDoorCache();
     const doors = doorsNear(0, 0, 260).slice(0, 8);
     expect(doors.length).toBeGreaterThan(3);
-    const built = buildDoorways(doors, flat);
+    const built = buildDoorways(doors, () => ({ y: 0, nx: 0, ny: 1, nz: 0 }));
     expect(built.markers).toHaveLength(doors.length);
     let cylinders = 0; let tallest = 0;
     built.group.traverse((object) => {

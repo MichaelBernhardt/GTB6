@@ -272,20 +272,33 @@ async () => {
     check('7 roof: street door lands on the doorstep', dStep < 0.5, `${dStep.toFixed(2)}u from step`);
   }
 
-  // ---------- 7b. every streamed circle is depth-independent: the marker-height defect class ----
+  // ---------- 7b. every streamed circle sits ON its drawn surface: the marker-height audit ------
   {
+    const THREE2 = await import('/node_modules/three/build/three.module.js');
     const doorways = g.scene.getObjectByName('InteriorDoors');
-    let discs = 0, depthOn = 0;
-    doorways?.traverse(o => {
-      if (o.geometry?.type === 'CylinderGeometry' || o.geometry?.type === 'TorusGeometry') {
-        discs++;
-        if (o.material.depthTest !== false) depthOn++;
-      }
-    });
-    // Buried-in-a-stoep, starved, subsurface-under-paving: three height defects in one class.
-    // Depth-independence is what closed it — a marker occluded by ground geometry can never
-    // happen again, so any future height regression is cosmetic, not invisible.
-    check('7b: every door marker renders depth-independent', discs > 0 && depthOn === 0, `${discs} marker meshes, ${depthOn} still depth-tested`);
+    let discs = 0, subsurface = 0, floating = 0, depthOff = 0;
+    const discMeshes = [];
+    doorways?.traverse(o => { if (o.geometry?.type === 'CylinderGeometry') discMeshes.push(o); });
+    for (const disc of discMeshes) {
+      discs++;
+      if (disc.material.depthTest === false) depthOff++;   // the rejected x-ray shortcut must stay dead
+      const ray = new THREE2.Raycaster(new THREE2.Vector3(disc.position.x, disc.position.y + 3, disc.position.z), new THREE2.Vector3(0, -1, 0));
+      const hits = ray.intersectObjects(g.scene.children, true)
+        .filter(h => h.object !== disc && h.object.geometry?.type !== 'TorusGeometry'
+          && h.point.y <= disc.position.y + 0.5   // a ped or car STANDING on the step is not the ground
+          && !(() => { for (let n = h.object; n; n = n.parent) if (n.name === 'InteriorDoors') return true; return false; })());
+      if (!hits.length) continue;
+      const delta = disc.position.y - hits[0].point.y;
+      if (delta < -0.01) { subsurface++; if (subsurface < 4) console.log('SUBSURFACE disc', disc.position.x.toFixed(0), disc.position.z.toFixed(0), 'delta', delta.toFixed(2), 'hit', hits[0].object.name || hits[0].object.parent?.name); }
+      else if (delta > 0.10) floating++;
+    }
+    // Buried-in-a-stoep, starved, subsurface-under-paving: the marker-height defect class. The
+    // disc's y now comes from a raycast of the RENDERED surface at placement, so this must hold
+    // at 0/0 — and any future height change that trades one buried population for another
+    // fails here instead of waiting for the owner to walk into it.
+    check('7b: streamed discs sit on their drawn surface (0 subsurface, 0 floating) with depth testing ON',
+      discs > 0 && subsurface === 0 && floating === 0 && depthOff === 0,
+      `${discs} discs, ${subsurface} subsurface, ${floating} floating, ${depthOff} depth-free`);
   }
 
   // ---------- 8. the shopkeeper is mortal: a real round, fired indoors, kills ----------

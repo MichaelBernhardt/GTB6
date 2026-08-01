@@ -233,26 +233,71 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let doorways: BuiltDoorways | undefined;
   let builtAt: { x: number; z: number } | undefined;
 
+  /** Cache of raycast-derived marker heights, keyed per doorstep. The drawn ground is static, so
+   *  each door pays one ray in its lifetime instead of one per 28 u re-stream; fallback answers
+   *  (chunk not built yet, so no drawn surface to hit) are deliberately NOT cached, so the next
+   *  re-stream refines them once the geometry lands. */
+  const markerHeights = new Map<string, { y: number; nx: number; ny: number; nz: number }>();
+  /** True while any streamed marker stands on a FALLBACK height (its chunk had no drawn surface
+   *  yet when the ray was cast). update() re-streams every ~1.5 s until every marker has a real
+   *  surface under it — without this, a disc placed before its paving landed stayed subtly
+   *  subsurface until the player happened to walk 28 u. */
+  let markersProvisional = false;
+  let provisionalRetry = 0;
+  const markerRay = new THREE.Raycaster();
+  const RAY_DOWN = new THREE.Vector3(0, -1, 0);
+  /** True when a raycast hit belongs to marker furniture or an interior floor — surfaces a street
+   *  disc must never sit on. */
+  const notGround = (object: THREE.Object3D): boolean => {
+    for (let node: THREE.Object3D | null = object; node; node = node.parent) {
+      if (node.name === 'InteriorDoors' || node.name.startsWith('Floor:')) return true;
+    }
+    return false;
+  };
+  /**
+   * The marker's resting height: the RENDERED surface under the doorstep — the paving the player
+   * actually sees — probed by a single downward ray, with a small proudness so seams and slopes
+   * cannot swallow the disc, and extra lift on steep hits so the rim stays clear. The collider
+   * stand height (then terrain) is the fallback while the chunk is still baking. This is the
+   * third and final derivation: terrain height buried discs inside foundation colliders, collider
+   * height left them under the foundation's drawn paving (the visual rides up to ~0.25 above the
+   * collider, unknowably), and only the drawn surface itself is always where the eye says it is.
+   */
+  const markerSurface = (px: number, pz: number): { y: number; nx: number; ny: number; nz: number } => {
+    const key = `${Math.round(px * 4)},${Math.round(pz * 4)}`;
+    const cached = markerHeights.get(key);
+    if (cached !== undefined) return cached;
+    const terrain = api.surfaceHeightAt(px, pz);
+    const stand = api.standHeightAt?.(px, pz) ?? terrain;
+    const reference = Math.max(stand, terrain);
+    markerRay.set(new THREE.Vector3(px, reference + 6, pz), RAY_DOWN);
+    for (const hit of markerRay.intersectObjects(api.scene.children, true)) {
+      if (notGround(hit.object)) continue;
+      // Only surfaces NEAR the standing reference count as ground: a parked car's roof, a tree
+      // canopy or an awning over the step is a transient — and a cached transient would pin the
+      // disc to a car that has since driven off.
+      if (hit.point.y > reference + 1.2 || hit.point.y < terrain - 4) continue;
+      const normal = hit.face && Math.abs(hit.face.normal.y) > 0.05
+        ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
+        : undefined;
+      if (normal && normal.y < 0) normal.negate();
+      const found = { y: hit.point.y + 0.04, nx: normal?.x ?? 0, ny: normal?.y ?? 1, nz: normal?.z ?? 0 };
+      markerHeights.set(key, found);
+      return found;
+    }
+    markersProvisional = true;
+    return { y: reference + 0.04, nx: 0, ny: 1, nz: 0 }; // nothing drawn yet: best-effort, uncached, refined next stream
+  };
+
   const streamDoorways = (x: number, z: number): void => {
     const near = doorsNear(x, z, STREAM_RANGE)
       .sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))
       .slice(0, STREAM_CAP);
     const wanted = near.map((door) => door.id).join('|');
-    if (doorways && wanted === doorways.ids.join('|')) { builtAt = { x, z }; return; }
+    if (doorways && wanted === doorways.ids.join('|') && !markersProvisional) { builtAt = { x, z }; return; }
     doorways?.dispose();
-    // STAND height, not terrain: on a sloped site the city builds the house a levelled foundation,
-    // and a circle at terrain height is entombed inside that plinth — the owner's "there is just
-    // no entry zone circle" at a door that genuinely existed. standHeightAt asks the same collider
-    // the player will stand on; hosts without the seam keep the terrain (and the flat-world tests
-    // cannot tell the difference, which is why the proof of this one is in-engine). On a raised
-    // step the marker gets an extra lift: the foundation's VISUAL paving sits up to ~0.2 above its
-    // own collider (measured 28.446 against a 28.246 support at the owner's repro), so a disc a
-    // mere 0.06 proud of the collider is still under the concrete the player sees.
-    doorways = buildDoorways(near, (px, pz) => {
-      const terrain = api.surfaceHeightAt(px, pz);
-      const stand = api.standHeightAt?.(px, pz) ?? terrain;
-      return stand > terrain + 0.3 ? stand + 0.24 : stand;
-    });
+    markersProvisional = false; // markerSurface re-raises it if any door still lacks drawn ground
+    doorways = buildDoorways(near, markerSurface);
     api.scene.add(doorways.group);
     builtAt = { x, z };
   };
@@ -997,6 +1042,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       const current = visit;
       if (!current && (!builtAt || Math.hypot(player.x - builtAt.x, player.z - builtAt.z) > STREAM_SLACK)) {
         streamDoorways(player.x, player.z);
+      } else if (!current && markersProvisional) {
+        // Some markers were placed before their paving streamed in: retry until every disc has a
+        // real drawn surface under it (each retry re-rays only the uncached doors).
+        provisionalRetry += dt;
+        if (provisionalRetry > 1.5) { provisionalRetry = 0; streamDoorways(player.x, player.z); }
       }
       phase += dt;
       clock += dt;
