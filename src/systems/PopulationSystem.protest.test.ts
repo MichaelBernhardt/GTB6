@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as THREE from 'three';
 import { afterEach, describe, expect, it } from 'vitest';
-import { bumpBreaksSolidarity } from './FearSystem';
+import { bumpIsAttack } from './FearSystem';
 import type { AudioManager } from '../core/AudioManager';
 import type { City } from '../world/City';
 import { roadHazards } from './NavGraph';
@@ -73,30 +73,30 @@ describe('who stops standing with the player', () => {
     expect(population.breakSolidarity(new THREE.Vector3(0, 0, 0), 58)).toBe(1); // kill radius: heard it
   });
 
-  it('a jostle is not an attack: only a body going down ends the picket’s patience', () => {
+  it('a jostle is not an attack: only a body going down makes a bump anyone’s business', () => {
     // The owner's rule, verbatim: people aren't scared of him "unless I actually attack someone". A
-    // walking bump — even the second one that JMPD books as assault — never passes this gate, because a
-    // protest is dense enough that reaching its middle guarantees a few. Game routes the gate's verdict
-    // into reportCrime as `jostle`, whose absence is what triggers the witness sweep. If this table
-    // changes, arriving in your own picket revokes it for everyone within earshot again — the exact
-    // playtest report that created solidarity in the first place.
-    expect(bumpBreaksSolidarity({ knockdown: false, killed: false })).toBe(false); // barging: never
-    expect(bumpBreaksSolidarity({ knockdown: true, killed: false })).toBe(true); // trampled at a sprint
-    expect(bumpBreaksSolidarity({ knockdown: true, killed: true })).toBe(true); // killed outright
+    // walking bump — even the second one that used to be booked as assault — never passes this gate,
+    // because a protest is dense enough that reaching its middle guarantees a few. The gate now fences
+    // reportCrime ENTIRELY: both earlier halves failed one at a time (the witness sweep un-joined his
+    // own picket; then the retained heat had JMPD shooting him over a shoulder-bump at two stars). If
+    // this table changes, one of those comes back.
+    expect(bumpIsAttack({ knockdown: false, killed: false })).toBe(false); // barging: never
+    expect(bumpIsAttack({ knockdown: true, killed: false })).toBe(true); // trampled at a sprint
+    expect(bumpIsAttack({ knockdown: true, killed: true })).toBe(true); // killed outright
   });
 
-  it('Game wires the shove exemption through the jostle flag, and nothing else claims it', () => {
+  it('Game files a bump only past the attack gate, and self-defence reads the damage-time capture', () => {
     // vitest never constructs Game (the boot-order gate exists because of that), so the wiring is
-    // pinned textually: the bump path must consult the gate, reportCrime must honour the flag, and no
-    // other call site may quietly grant itself the exemption.
+    // pinned textually: the bump loop must bail before reportCrime unless the bump was an attack, and
+    // no other bump-shaped path may file heat around the gate.
     const game = readFileSync(resolve(__dirname, '../Game.ts'), 'utf8');
-    expect(game).toMatch(/jostle: !bumpBreaksSolidarity\(bump\)/);
-    expect(game).toMatch(/if \(!options\.jostle && !retaliation\) this\.population\.breakSolidarity\(/);
-    expect(game.match(/jostle: /g)?.length).toBe(1); // exactly one call site sets it: the bump loop
+    expect(game).toMatch(/if \(!bumpIsAttack\(bump\)\) continue;/);
+    expect(game.match(/bumpIsAttack\(bump\)/g)?.length).toBe(1); // exactly one gate, in the bump loop
     // Self-defence: when every victim was hit while hostile, the crowd watched who started it. The
     // predicate must read the damage-time capture, not live state — a kill overwrites state to 'down'
     // before the crime is filed, so testing live state would un-exempt exactly the strongest case.
     expect(game).toMatch(/options\.victims\.every\(\(victim\) => victim\.hitWhileHostile\)/);
+    expect(game).toMatch(/if \(!retaliation\) this\.population\.breakSolidarity\(/);
   });
 });
 

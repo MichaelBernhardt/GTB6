@@ -64,16 +64,18 @@ export function solidarityFear(current: number, amount: number): number {
 }
 
 /**
- * Which player-on-pedestrian contact ends solidarity for the WITNESSES. The owner's rule is
- * "unless I actually attack someone", and a shove is not an attack: a protest is people packed
- * shoulder to shoulder, so walking through your own picket trips the bump-escalation and files an
- * `assault` with JMPD — and routing that through the witness sweep meant the player revoked the
- * whole crowd's solidarity by arriving in it, which is the self-scaring loop solidarity exists to
- * end. The police can keep caring about shoving; the people on your side don't, until a body
- * actually goes down. Knockdown and kill only come from a sprint, which is the honest line between
- * barging and trampling.
+ * Which player-on-pedestrian contact counts as an ATTACK — for everyone: the picket's solidarity,
+ * the witness sweep, and JMPD's blotter alike. The owner's rule is "unless I actually attack
+ * someone", and a shove is not an attack: a protest is people packed shoulder to shoulder, so
+ * walking through your own picket trips the bump-escalation — and both consequences of routing
+ * that through reportCrime were wrong in turn. First the witness sweep revoked the crowd's
+ * solidarity (the player un-joined his own protest by arriving in it); then, with the sweep
+ * exempted but the heat kept, the police shot him over a shoulder-bump once two stars accrued.
+ * So a bump files NOTHING until a body goes down. Knockdown and kill only come from a sprint,
+ * which is the honest line between barging and trampling — and fear still broadcasts either way,
+ * because being barged is frightening even when it isn't criminal.
  */
-export function bumpBreaksSolidarity(bump: { knockdown: boolean; killed: boolean }): boolean {
+export function bumpIsAttack(bump: { knockdown: boolean; killed: boolean }): boolean {
   return bump.knockdown || bump.killed;
 }
 
