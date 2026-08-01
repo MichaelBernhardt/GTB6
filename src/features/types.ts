@@ -219,6 +219,12 @@ export interface FeatureSystem {
    *  interior height — so host systems that ground things (gore decals land on "the floor here")
    *  need the feature's answer, not the player's transient one. */
   indoorFloorY?(): number | undefined;
+  /** A SAFE OUTDOOR world position for this feature's current indoor state — the doorstep of the
+   *  building the player is inside. The save writes THIS as the player's world position while
+   *  indoors, never the raw one (which sits ~30 u under the terrain): any loader that ignores the
+   *  feature slice — an older build, a failed feature load — then spawns the player at the front
+   *  door instead of underground. The feature's own save slice carries the way back in. */
+  outdoorAnchor?(): { x: number; z: number } | undefined;
   /** Full-fidelity interaction rungs. These replace the eager `approach` entry once loaded. */
   interactions?(): readonly InteractionDescriptor[];
   /** The slice stored under `SavedGame.features[saveKey]`. Must be JSON-safe. */

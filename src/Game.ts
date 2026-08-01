@@ -3372,7 +3372,14 @@ export class Game {
   private trackMissionStart(missionId: string): void { this.missionTelemetryStartedAt = performance.now(); analytics.record('mission_start', { missionId }); }
   private missionTelemetryDuration(): number { return this.missionTelemetryStartedAt === undefined ? 0 : Math.max(0, (performance.now() - this.missionTelemetryStartedAt) / 1000); }
   private persist(): void {
-    const at = this.activeVehicle?.group.position ?? this.player.group.position; // live location (the vehicle is the player while driving)
+    // While the player is inside a feature interior their raw position is ~30 u under the terrain —
+    // a loader that restored it verbatim surfaced them on the street ("saving inside respawns you
+    // outside", the owner's report), and a loader without the feature would spawn them underground.
+    // So the SAVED world position while indoors is the building's DOORSTEP (outdoorAnchor); the
+    // interiors save slice carries the building/floor/spot and walks the player back inside on boot.
+    const anchor = this.features.outdoorAnchor();
+    const live = this.activeVehicle?.group.position ?? this.player.group.position; // the vehicle is the player while driving
+    const at = anchor ? new THREE.Vector3(anchor.x, this.city.surfaceHeightAt(anchor.x, anchor.z), anchor.z) : live;
     const heading = this.activeVehicle?.heading ?? this.player.heading;
     // One key per line, deliberately: this used to be a single ~700-character physical line, which
     // made every feature that wanted a save key a merge conflict on the identical line.

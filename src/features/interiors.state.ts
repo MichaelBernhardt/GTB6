@@ -102,6 +102,13 @@ export interface InteriorsSave {
    *  with that door re-locked in their face. (The roof hatch no longer needs this — it is always
    *  open from the roof side.) Absent from almost every save. */
   graceId?: string;
+  /** THE ACTIVE VISIT, when the save was written indoors: which building (door id), which storey,
+   *  and where on that storey (floor-LOCAL x/z — deterministic against the rebuilt plan, never
+   *  world units). The save's WORLD position is deliberately the DOORSTEP while this is present
+   *  (see FeatureSystem.outdoorAnchor): a loader that ignores this field spawns at the front door;
+   *  the interiors body consumes it on boot and walks the player back inside. Absent from every
+   *  save written outdoors. */
+  visit?: { id: string; floor: number; x: number; z: number };
 }
 
 /** How many first visits pay out. Small, generous, and then it stops mattering. */
@@ -109,7 +116,7 @@ export const FIND_CAP = 12;
 
 /** Runs inside SaveManager's synchronous deserialize, on an already generically-sanitised blob. */
 export function sanitizeInteriorsState(raw: unknown): InteriorsSave {
-  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown; picks?: unknown; graceId?: unknown };
+  const source = (raw ?? {}) as { visited?: unknown; finds?: unknown; picks?: unknown; graceId?: unknown; visit?: unknown };
   const visited = Array.isArray(source.visited)
     ? source.visited.filter((entry): entry is string => typeof entry === 'string' && entry.length < 32).slice(0, 32)
     : [];
@@ -122,5 +129,17 @@ export function sanitizeInteriorsState(raw: unknown): InteriorsSave {
   const graceId = typeof source.graceId === 'string' && source.graceId.length > 0 && source.graceId.length < 32
     ? source.graceId
     : undefined;
-  return graceId ? { visited, finds, picks, graceId } : { visited, finds, picks };
+  const rawVisit = (source.visit ?? undefined) as { id?: unknown; floor?: unknown; x?: unknown; z?: unknown } | undefined;
+  const visit = rawVisit
+    && typeof rawVisit.id === 'string' && rawVisit.id.length > 0 && rawVisit.id.length < 32
+    && typeof rawVisit.floor === 'number' && Number.isFinite(rawVisit.floor)
+    && typeof rawVisit.x === 'number' && Number.isFinite(rawVisit.x) && Math.abs(rawVisit.x) <= 64
+    && typeof rawVisit.z === 'number' && Number.isFinite(rawVisit.z) && Math.abs(rawVisit.z) <= 64
+    ? { id: rawVisit.id, floor: Math.max(0, Math.min(64, Math.floor(rawVisit.floor))), x: rawVisit.x, z: rawVisit.z }
+    : undefined;
+  return {
+    visited, finds, picks,
+    ...(graceId ? { graceId } : {}),
+    ...(visit ? { visit } : {}),
+  };
 }

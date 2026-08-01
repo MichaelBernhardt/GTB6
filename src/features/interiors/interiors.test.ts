@@ -714,6 +714,72 @@ describe('every stair class is climbable', () => {
 });
 
 /**
+ * A SAVE WRITTEN INDOORS RELOADS INDOORS. The owner: "when saving with the player inside, they
+ * respawn in the outside world." The save now carries the visit (building, storey, floor-local
+ * spot) while the WORLD position it stores is the doorstep — so a loader without the feature lands
+ * the player at the front door instead of underground, and the feature walks them back inside
+ * through the real entry path on the first update.
+ */
+describe('saving indoors', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  it('reloads inside the same building, on the same storey, on the identical floor plan', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const entry = tallDoor({ x: 0, z: 0 })!;
+    expect(entry.core.storeys).toBeGreaterThan(2);
+    const { door } = entry;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    expect(system.qa!('floor', { n: 2 }).startsWith('ok')).toBe(true);
+    const before = system.qa!('where', {});
+    // The save, through the real sanitizer.
+    const slice = sanitizeInteriorsState(system.serialize!());
+    expect(slice.visit, 'a save written indoors must carry the visit').toBeDefined();
+    expect(slice.visit!.id).toBe(door.id);
+    expect(slice.visit!.floor).toBe(2);
+    // The world position the save should carry is the DOORSTEP, not the buried player.
+    const anchor = (system as { outdoorAnchor?(): { x: number; z: number } | undefined }).outdoorAnchor?.();
+    expect(anchor, 'no outdoor anchor while indoors').toBeDefined();
+    expect(Math.hypot(anchor!.x - door.x, anchor!.z - door.z)).toBeLessThan(0.01);
+    system.dispose();
+
+    // A fresh session boots with the slice, the player standing where the save put them: the step.
+    const revived = createFeature(test.api, slice);
+    test.player.set(door.x, 0, door.z);
+    revived.update!(0.02);
+    const status = revived.qa!('status', {});
+    expect(status, 'the reload must land INSIDE').toMatch(/^inside\|/);
+    expect(status).toContain(door.id);
+    expect(status).toContain('floor=2');
+    expect(test.player.y, 'restored under the terrain, on the storey').toBeLessThan(-20);
+    // The rebuilt floor is the floor they left — same rooms, same walkable tile count.
+    expect(revived.qa!('where', {})).toBe(before);
+    revived.dispose();
+  }, 120000);
+
+  it('drops the anchor and the visit the moment the player steps back outside', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = openDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    expect(sanitizeInteriorsState(system.serialize!()).visit).toBeDefined();
+    expect(system.qa!('leave', {})).toBe('ok');
+    expect(sanitizeInteriorsState(system.serialize!()).visit, 'an outdoor save must not carry a visit').toBeUndefined();
+    expect((system as { outdoorAnchor?(): unknown }).outdoorAnchor?.()).toBeUndefined();
+    system.dispose();
+  }, 120000);
+
+  it('sanitizes a hostile visit slice instead of trusting it', () => {
+    const garbage = sanitizeInteriorsState({ visited: [], finds: 0, picks: 0, visit: { id: 'x'.repeat(80), floor: 1e9, x: Number.NaN, z: 5 } });
+    expect(garbage.visit).toBeUndefined();
+    const fine = sanitizeInteriorsState({ visited: [], finds: 0, picks: 0, visit: { id: '12:34', floor: 3.7, x: -2.25, z: 61 } });
+    expect(fine.visit).toEqual({ id: '12:34', floor: 3, x: -2.25, z: 61 });
+  }, 120000);
+});
+
+/**
  * THE CIRCLE NEVER LIES. The owner pressed E at circle after circle and "nothing happens" — some
  * of it was the chunk-bake window with no explanation, some of it was locked doors whose gold
  * circle promised an interaction the ladder deliberately withholds from a pickless player. Now the

@@ -224,6 +224,16 @@ export class FeatureHost {
     return undefined;
   }
 
+  /** The doorstep to save as the player's world position while indoors. See FeatureSystem.outdoorAnchor. */
+  outdoorAnchor(): { x: number; z: number } | undefined {
+    if (this.context.suspended()) return undefined;
+    for (const system of this.systems.values()) {
+      const anchor = system.outdoorAnchor?.();
+      if (anchor) return anchor;
+    }
+    return undefined;
+  }
+
   /** One context per frame for the eager hooks, in whichever ladder the player is actually in. */
   private eagerFrame(): InteractionCtx {
     return this.frame(this.context.api.drivenVehicle() ? 'vehicle' : 'foot');

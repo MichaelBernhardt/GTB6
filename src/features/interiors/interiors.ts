@@ -199,6 +199,14 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
    *  doorstep keeps the courtesy. (The roof hatch needs no grace: it is always open from above.) */
   let exitGrace: { id: string; until: number } | undefined =
     saved?.graceId ? { id: saved.graceId, until: EXIT_GRACE } : undefined;
+  /** A visit the SAVE says the player was inside — consumed by update() once the door can be
+   *  resolved (the save put the player's world position on that building's doorstep, so it is in
+   *  range by construction). The whole entry path re-runs — install(), the indoors edge, the lot —
+   *  so a restored visit is a real visit, not a teleport that skipped the machinery. Dropped after
+   *  a few seconds if the door cannot be found (a changed map): the player simply stays on the
+   *  doorstep, which is the honest degradation. */
+  let pendingRestore: NonNullable<InteriorsSave['visit']> | undefined = saved?.visit;
+  let restorePatience = 6;
 
   // ---- the fade. The feature API has no screenFade(), so the feature owns one element and takes it
   // away again in dispose(). #fade is z-index 90; this sits just under it and over the HUD.
@@ -987,6 +995,35 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       phase += dt;
       clock += dt;
       tickPicking(dt);
+      // A save written indoors walks back in here, through the REAL entry path.
+      if (pendingRestore && !current && !swapping) {
+        const wanted = pendingRestore;
+        const door = doorsNear(player.x, player.z, 60).find((candidate) => candidate.id === wanted.id);
+        if (door) {
+          pendingRestore = undefined;
+          install(door);
+          const revived = visit;
+          if (revived && wanted.floor > 0 && wanted.floor < revived.core.storeys) {
+            for (const key of [...revived.resident.keys()]) drop(revived, key);
+            revived.floor = wanted.floor;
+            raise(revived, wanted.floor);
+            placeFixture(revived, here(revived));
+          }
+          if (revived) {
+            // The saved spot is floor-local and was stood on when written; determinism rebuilt the
+            // same plan, so it is still open floor. Clamped anyway — a save is outside the clamp.
+            const lx = Math.max(-revived.core.width / 2 + 0.5, Math.min(revived.core.width / 2 - 0.5, wanted.x));
+            const lz = Math.max(-revived.core.depth / 2 + 0.5, Math.min(revived.core.depth / 2 - 0.5, wanted.z));
+            revived.last = { x: lx, z: lz };
+            const spot = toWorld(revived, revived.heading, lx, lz);
+            player.set(spot.x, floorY(revived, revived.floor), spot.z);
+            assignLamps(revived);
+          }
+        } else {
+          restorePatience -= dt;
+          if (restorePatience <= 0) pendingRestore = undefined;
+        }
+      }
       // The street-door grace is a plain countdown now. The roof half of this machinery — the
       // re-arm-while-on-the-roof loop, and the elevation gate that kept it honest — existed to
       // keep the hatch answerable, and the hatch answers unconditionally today: it went with the
@@ -1095,9 +1132,18 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     interactions: () => rungs,
 
     // graceId rides the save so a reload on the doorstep you just stepped out of keeps the street
-    // door's grace (see EXIT_GRACE). Included whenever the grace is live; update() drops it when
-    // the countdown runs out, so the field is absent from almost every save ever written.
-    serialize: () => ({ visited: [...visited].slice(-32), finds, picks, ...(exitGrace ? { graceId: exitGrace.id } : {}) }),
+    // door's grace (see EXIT_GRACE); `visit` rides it so a save written INSIDE a building reloads
+    // inside it — building, storey and floor-local spot (the world position saved alongside is the
+    // DOORSTEP, via outdoorAnchor, so a loader that ignores this field lands at the front door).
+    serialize: () => ({
+      visited: [...visited].slice(-32), finds, picks,
+      ...(exitGrace ? { graceId: exitGrace.id } : {}),
+      ...(visit ? { visit: { id: visit.door.id, floor: visit.floor, x: Math.round(visit.last.x * 100) / 100, z: Math.round(visit.last.z * 100) / 100 } } : {}),
+    }),
+
+    /** The doorstep of the building the player is inside — what the save writes as their world
+     *  position, so nothing that misses the feature slice ever spawns them underground. */
+    outdoorAnchor: () => (visit ? { x: visit.door.x, z: visit.door.z } : undefined),
 
     restore: (next) => {
       const incoming = next as InteriorsSave | undefined;
@@ -1108,6 +1154,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       picking = undefined;
       exitGrace = incoming?.graceId ? { id: incoming.graceId, until: clock + EXIT_GRACE } : undefined;
       close(false);
+      // A checkpoint reload carries its indoor visit the same way a boot does.
+      pendingRestore = incoming?.visit;
+      restorePatience = 6;
     },
 
     menu: (actionId) => {
