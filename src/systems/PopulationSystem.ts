@@ -17,11 +17,12 @@ import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separ
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
 import { MELEE_DAMAGE, MELEE_GLOBAL_STAGGER, MELEE_HEIGHT_REACH, MELEE_START_RANGE, meleeHitLands } from './MeleeSystem';
 import { MISSIONS } from './MissionSystem';
-import { ProgressWatchdog, roadClosures, RoutePlanner, type NavPoint } from './NavGraph';
-import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, vehicleHitDamage } from './TrafficAvoidance';
+import { ProgressWatchdog, roadClosures, roadHazards, RoutePlanner, type NavPoint } from './NavGraph';
+import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, hazardBand, HAZARD_PATIENCE, HAZARD_REHONK, HAZARD_SCAN, HAZARD_STOP_MARGIN, HAZARD_SWERVE_AHEAD, HAZARD_SWERVE_THROTTLE, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, threadHazards, vehicleHitDamage, type HazardBand } from './TrafficAvoidance';
 import type { City, RoadPoint } from '../world/City';
 import { HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
 import { powerOn } from '../world/powerGrid';
+import { stablePositionRandom } from '../world/StableRandom';
 import {
   neighbourhoodPedestrian,
   neighbourhoodTrafficColour,
@@ -89,6 +90,8 @@ export class PopulationSystem {
   private bumpClock = 0;
   private hootCooldown = 0;
   private holdups = new WeakMap<Vehicle, Holdup>();
+  private hazardHolds = new WeakMap<Vehicle, { held: number; honkAt: number }>(); // one blocked-by-junk driver's patience
+  private hazardBands: HazardBand[] = []; // scratch: the hazard scan reuses one array for every driver
   private playerVehicleHits: PlayerVehicleHit[] = [];
   private playerHitCooldown = 0;
   private parkedSpots: Array<[number, number]> = [];
@@ -207,6 +210,11 @@ export class PopulationSystem {
         if (ahead <= 0 || ahead >= scanRange || dx * dx + dz * dz - ahead * ahead >= FOLLOW_PED_CORRIDOR_SQ) continue;
         leadGap = Math.min(leadGap, ahead - vehicle.spec.size[2] / 2 - FOLLOW_PED_RADIUS);
       }
+      // Junk on the tar: thread the gap if there is one, otherwise treat it as a car stopped dead in
+      // the lane and fold it into the same speed-scaled easing above. Costs one integer compare in a
+      // city with nothing burning in it.
+      const hazard = roadHazards.count ? this.avoidHazards(vehicle, forward, dt) : undefined;
+      if (hazard?.stopAt !== undefined) leadGap = Math.min(leadGap, hazard.stopAt);
       const followScale = leadGap === Infinity ? 1 : THREE.MathUtils.clamp((leadGap - FOLLOW_STOP_GAP) / slowZone, 0, 1); // 1 = clear road, 0 = hold at the stop gap
       const blocked = followScale < 0.5; // still "blocked" for the taxi/honk bookkeeping when closing in on a leader
       let playerBlocked = false; let playerHold = false; let dodge: THREE.Vector3 | undefined;
@@ -214,14 +222,16 @@ export class PopulationSystem {
       else this.holdups.delete(vehicle);
       const taxi = taxiKind;
       const junctionPanic = robotsOut && !taxi && this.city.signalNearby(vehicle.group.position);
-      const speedScale = Math.min(followScale, signalScale); // whichever wants us slower: the leader ahead or the robot
+      const hazardEase = hazard?.dodge ? HAZARD_SWERVE_THROTTLE : 1; // you do not take a gap that size at cruise
+      const speedScale = Math.min(followScale, signalScale) * hazardEase; // whichever wants us slower: the leader ahead or the robot
       const throttle = playerHold ? 0 // held: a full stop with hysteresis, no 0.05 creep — this is what arms the honk clock
         : dodge ? DODGE_THROTTLE
-        : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked) * followScale // taxis still ease off a leader (and skip robots)
+        : taxi ? this.taxiThrottle(vehicle, dt, player, blocked || playerBlocked) * followScale * hazardEase // taxis still ease off a leader (and skip robots)
         : playerBlocked ? 0.05
         : junctionPanic ? TRAFFIC_SPEED_FACTOR * 0.75 * speedScale // dead robot (load shedding): a cautious ~75%-speed roll-through, not a crawl
         : TRAFFIC_SPEED_FACTOR * speedScale; // normal cruise, eased down for a leader ahead or a robot
-      vehicle.updateAI(dt, this.city, dodge, throttle);
+      // A person in the road outranks junk in it: the pull-around steer target wins when both are live.
+      vehicle.updateAI(dt, this.city, dodge ?? hazard?.dodge, throttle);
       if (vehicle.collided) { vehicle.collided = false; this.requestCollisionReplan(vehicle); } // hit a wall/prop: reroute out of the jam
       const outsideWorld = Math.abs(vehicle.group.position.x) > WORLD_SIZE / 2 || Math.abs(vehicle.group.position.z) > WORLD_SIZE / 2;
       if (outsideWorld || vehicle.aiStuck > 9) this.rehomeVehicle(vehicle);
@@ -317,6 +327,36 @@ export class PopulationSystem {
     }));
   }
 
+  /**
+   * The player just did violence to somebody. Everyone near enough to have seen it stops standing
+   * with him — the solidarity of a picket line survives being jostled, shouted at and aimed at, and
+   * does not survive an attack.
+   *
+   * WITNESS-SCOPED, not global, and the radius is the crime's own fear radius, so it is the same
+   * "who could perceive this" question the fear broadcast already answers: a shove is noticed by the
+   * people right there (assault, 24 u), a killing by the whole street (kill, 58 u). It does not come
+   * back. Returns how many people it cost, for the caller's telemetry and for tests.
+   */
+  /** The live pedestrians within `radius` of a world point (XZ). The protest feature's assimilation
+   *  seam — see FeatureGameApi.pedestriansNear. */
+  pedestriansNear(x: number, z: number, radius: number): readonly Pedestrian[] {
+    const radiusSq = radius * radius;
+    return this.pedestrians.filter((ped) => {
+      const dx = ped.group.position.x - x; const dz = ped.group.position.z - z;
+      return dx * dx + dz * dz < radiusSq;
+    });
+  }
+
+  breakSolidarity(origin: THREE.Vector3, radius: number): number {
+    if (!(radius > 0)) return 0;
+    let broken = 0;
+    for (const ped of this.pedestrians) {
+      if (!ped.solidarity || ped.group.position.distanceTo(origin) >= radius) continue;
+      ped.solidarity = false; broken += 1;
+    }
+    return broken;
+  }
+
   /** Fear contagion: each freshly panicked ped's shrieking rattles bystanders with a smaller secondary burst (one hop, no recursion). */
   private spreadPanic(sources: Pedestrian[]): void {
     for (const source of sources) for (const ped of this.pedestrians) {
@@ -407,6 +447,77 @@ export class PopulationSystem {
     this.holdups.set(vehicle, fresh);
     if (impact < HOLD_SPEED) { fresh.holding = true; this.runHoldupClock(fresh, vehicle, forward, position, lateral, halfWidth, dt); } // rolled to a stop with him still there: the patience clock arms
     return { blocked: true, hold: fresh.holding };
+  }
+
+  /**
+   * One driver vs whatever is lying in his lane.
+   *
+   * The whole of the owner's second report — "when I throw a burning tyre on the road, cars etc just
+   * drive through it" — is that nothing had ever told a DRIVER a tyre was there. The road closure the
+   * protest already opened is a routing preference: it reroutes traffic that has not committed to the
+   * block yet and says nothing at all to the car halfway down it.
+   *
+   * So: gather the lateral bands the junk ahead denies, ask `threadHazards` for the least sideways
+   * movement that still fits, and either take it (a swerve, held as a steer target exactly like the
+   * pull-around) or, when nothing fits, hand the caller a `stopAt` that enters the ordinary
+   * car-following gap as if a car were parked across the lane. That is what scales the response to
+   * how much of the carriageway is really shut: one tyre by the kerb is a metre of steering, three
+   * laid across it is a wall, and the arithmetic is the same in both cases.
+   */
+  private avoidHazards(vehicle: Vehicle, forward: THREE.Vector3, dt: number): { dodge?: THREE.Vector3; stopAt?: number } | undefined {
+    const position = vehicle.group.position;
+    const halfWidth = vehicle.spec.size[0] / 2; const halfLength = vehicle.spec.size[2] / 2;
+    const bands = this.hazardBands; bands.length = 0;
+    let stopAt = Infinity;
+    for (const hazard of roadHazards.list) {
+      const dx = hazard.x - position.x; const dz = hazard.z - position.z;
+      if (dx * dx + dz * dz > HAZARD_SCAN * HAZARD_SCAN) continue;
+      const band = hazardBand(dx, dz, hazard.r, forward.x, forward.z, halfWidth);
+      if (!band) continue;
+      bands.push(band);
+      stopAt = Math.min(stopAt, band.ahead - halfLength - hazard.r - HAZARD_STOP_MARGIN);
+    }
+    if (bands.length === 0) { this.hazardHolds.delete(vehicle); return undefined; }
+    const offset = threadHazards(bands);
+    if (offset === 0) { this.hazardHolds.delete(vehicle); return undefined; } // all of it sits off to one side
+    // A swerve is only a swerve if the tar it aims at exists: the same collision probe the pull-around
+    // uses, so a driver never solves a barricade by steering into a wall.
+    if (offset !== undefined && !this.city.collides(position.x + forward.x * 3 + forward.z * offset, position.z + forward.z * 3 - forward.x * offset, halfWidth + 0.3)) {
+      this.hazardHolds.delete(vehicle);
+      return {
+        dodge: new THREE.Vector3(
+          position.x + forward.x * HAZARD_SWERVE_AHEAD + forward.z * offset, 0,
+          position.z + forward.z * HAZARD_SWERVE_AHEAD - forward.x * offset,
+        ),
+      };
+    }
+    this.runHazardClock(vehicle, position, dt);
+    return { stopAt };
+  }
+
+  /**
+   * Patience of a driver stopped at something there is no way round: hoot on a jittered cadence, and
+   * ask the planner for a different way on the same beat — the RoadClosures toll the protest opened is
+   * what that reroute actually steers by, and requestCollisionReplan rate-limits itself to one solve
+   * per COLLISION_REPLAN_COOLDOWN so a queue is not an A* storm.
+   *
+   * The drive plan's own ProgressWatchdog is deliberately NOT reset here. That is the deadlock
+   * guarantee: 10 s pinned with no progress backs the car out for a second and replans from where it
+   * ended up, and a third strike rehomes it onto the nearest lane node. A blockade can therefore shut
+   * a road hard without any driver being stuck at it forever.
+   */
+  private runHazardClock(vehicle: Vehicle, position: THREE.Vector3, dt: number): void {
+    if (Math.abs(vehicle.speed) > HOLD_SPEED) { this.hazardHolds.delete(vehicle); return; }
+    // Deterministic per-driver jitter (a stopped car's position does not move), so a queue never honks
+    // in unison and no Math.random enters a simulation path.
+    const jitter = stablePositionRandom(position.x, position.z, 0x9e37) * 0.9;
+    const state = this.hazardHolds.get(vehicle) ?? { held: 0, honkAt: HAZARD_PATIENCE + jitter };
+    this.hazardHolds.set(vehicle, state);
+    state.held += dt;
+    if (state.held < state.honkAt) return;
+    state.honkAt = state.held + HAZARD_REHONK + jitter;
+    this.audio.hornAt(position.x, position.z, vehicle.spec.kind === 'taxi'); this.hootCooldown = 0.6;
+    this.requestCollisionReplan(vehicle);
   }
 
   /** Patience of a held driver: hoot on the jittered cadence, and past giveUpAt try the pull-around. */

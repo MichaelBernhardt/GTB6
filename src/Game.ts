@@ -33,7 +33,7 @@ import { chopShopAccepts, chopShopOffer } from './systems/ChopShopSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
 import { clampT, cornerSide, COVER_ENTER_RANGE, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestGroundedCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { COURIER_MIN_TRIP_DISTANCE, COURIER_STOP_RADIUS, COURIER_STOP_SPEED, CourierJob, courierHudText } from './systems/CourierJobSystem';
-import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
+import { bumpIsAttack, FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { JoziFlowSystem, type JoziFlowEvent } from './systems/JoziFlowSystem';
 import { LoadSheddingSystem, OUTAGE_MIN_SECONDS } from './systems/LoadSheddingSystem';
@@ -48,7 +48,7 @@ import { KELVIN_FENCE_RADIUS, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } from './w
 import { buildKelvinYard } from './world/KelvinYard';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
-import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
+import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, WITNESS_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
 import { BLACKOUT_STEALTH_THRESHOLD, concealedInBlackout, inHeadlightCone, MUZZLE_FLASH_SECONDS } from './systems/BlackoutStealth';
 import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
@@ -1345,6 +1345,11 @@ export class Game {
     for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
       if (!bump.assault) continue;
       this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
+      // A jostle files NOTHING — no heat, no witness sweep, no blotter entry. See bumpIsAttack for
+      // the rule and its two failed halves: first the sweep un-joined the player's own picket, then
+      // the retained heat had JMPD shooting him over a shoulder-bump at two stars. The fear
+      // broadcast above stays: being barged is frightening even when it isn't criminal.
+      if (!bumpIsAttack(bump)) continue;
       this.reportCrime(bump.position, bump.killed ? 24 : BUMP_ASSAULT_HEAT, { victims: [bump.ped], radius: FEAR_EVENTS.assault.radius, cityEvent: bump.killed ? 'civilian-murder' : 'civilian-assault', label: bump.killed ? 'murder' : 'assault' });
       if (bump.killed) this.spawnDrops(bump.ped);
     }
@@ -2494,6 +2499,20 @@ export class Game {
    *  and a sighting; otherwise a surviving victim or a living bystander within radius phones it in after
    *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
   private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
+    // WHAT REVOKES SOLIDARITY, and the reason it is here and not in six call sites: this is the one
+    // funnel every violent thing the player does to a person already passes through — assault, murder,
+    // mugging, hit-and-run, carjacking, explosion, gunfire — and merely AIMING deliberately reports no
+    // crime at all, so drawing a weapon at a picket does not end it. Witness-scoped by the crime's own
+    // fear radius. It runs BEFORE the teflon return on purpose: teflon buys the player off the police,
+    // not out of what the people standing next to him just watched him do.
+    //
+    // One exemption: RETALIATION. When every victim was hit while in the hostile state, the crowd
+    // watched the victim start it — one in nine ambient bodies squares up unprovoked, and a picket
+    // that unjoined because the player defended himself against exactly that was the crowd punishing
+    // the wrong party. JMPD still books it. (Walking shoves never reach this funnel at all: a bump
+    // files a crime only when a body goes down — see bumpIsAttack at its call site.)
+    const retaliation = !!options.victims?.length && options.victims.every((victim) => victim.hitWhileHostile);
+    if (!retaliation) this.population.breakSolidarity(position, options.radius ?? WITNESS_RADIUS);
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
     if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the taxi spooks the passenger
     if (this.cheats.teflon) return; // teflon: the heat could not land anyway, so JMPD neither witness nor take the call — no fake dispatch toast, no last-known position
@@ -3409,6 +3428,7 @@ export class Game {
       analytics: () => undefined, // replaced per feature by the host, which binds the feature id
       spawnFixture: (x, z, name) => this.population.spawnFixture(x, z, name),
       removeFixture: (ped) => this.population.removePedestrian(ped),
+      pedestriansNear: (x, z, radius) => this.population.pedestriansNear(x, z, radius),
     };
   }
 }

@@ -71,6 +71,8 @@ export class FeatureHost {
   /** Ids whose auto-load threw. Never retried automatically; the manual approach press comes back. */
   private readonly preloadFailed = new Set<string>();
   private preloadTimer = 0;
+  /** Edge tracker for FeatureSystem.suspend(): fired once when PvP starts, cleared when it ends. */
+  private suspendedNow = false;
 
   constructor(private readonly context: FeatureHostContext, private readonly registry: readonly FeatureDescriptor[] = FEATURES) {}
 
@@ -114,7 +116,21 @@ export class FeatureHost {
   // ---- frame -----------------------------------------------------------------------------------
 
   update(dt: number): void {
-    if (this.context.suspended()) return;
+    if (this.context.suspended()) {
+      // The suspend EDGE, once. A suspended feature's world "does not exist" (see mapIcons/hud/indoors
+      // below), so it must not be shaping the shared simulation either — a protest whose tyres have
+      // stopped burning is a road shut for as long as the player stays in PvP. Each feature retracts
+      // whatever it published; `update()` republishes on the first frame back.
+      if (!this.suspendedNow) {
+        this.suspendedNow = true;
+        for (const system of this.systems.values()) {
+          try { system.suspend?.(); }
+          catch (error) { console.error('[features] suspend failed', error); }
+        }
+      }
+      return;
+    }
+    this.suspendedNow = false;
     this.preloadTimer -= dt;
     if (this.preloadTimer <= 0) { this.preloadTimer = PRELOAD_INTERVAL; this.preloadNearby(); }
     // The eager slice ticks ONLY while the body is unloaded, and the loaded system's update() takes
