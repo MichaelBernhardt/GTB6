@@ -33,7 +33,7 @@ import { chopShopAccepts, chopShopOffer } from './systems/ChopShopSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
 import { clampT, cornerSide, COVER_ENTER_RANGE, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestGroundedCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { COURIER_MIN_TRIP_DISTANCE, COURIER_STOP_RADIUS, COURIER_STOP_SPEED, CourierJob, courierHudText } from './systems/CourierJobSystem';
-import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
+import { bumpBreaksSolidarity, FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { JoziFlowSystem, type JoziFlowEvent } from './systems/JoziFlowSystem';
 import { LoadSheddingSystem, OUTAGE_MIN_SECONDS } from './systems/LoadSheddingSystem';
@@ -1312,7 +1312,10 @@ export class Game {
     for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
       if (!bump.assault) continue;
       this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
-      this.reportCrime(bump.position, bump.killed ? 24 : BUMP_ASSAULT_HEAT, { victims: [bump.ped], radius: FEAR_EVENTS.assault.radius, cityEvent: bump.killed ? 'civilian-murder' : 'civilian-assault', label: bump.killed ? 'murder' : 'assault' });
+      // A walking shove keeps its police heat but is NOT an attack in the picket's eyes — see
+      // bumpBreaksSolidarity for the rule; without `jostle` the witness sweep in reportCrime made
+      // arriving in your own protest revoke it for everyone within earshot.
+      this.reportCrime(bump.position, bump.killed ? 24 : BUMP_ASSAULT_HEAT, { victims: [bump.ped], radius: FEAR_EVENTS.assault.radius, cityEvent: bump.killed ? 'civilian-murder' : 'civilian-assault', label: bump.killed ? 'murder' : 'assault', jostle: !bumpBreaksSolidarity(bump) });
       if (bump.killed) this.spawnDrops(bump.ped);
     }
     if (this.updateWeaponWheel()) return;
@@ -2451,14 +2454,19 @@ export class Game {
   /** Files a crime with JMPD using only what the world could actually see: a cop nearby means immediate heat
    *  and a sighting; otherwise a surviving victim or a living bystander within radius phones it in after
    *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
-  private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
+  private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel; jostle?: boolean }): void {
     // WHAT REVOKES SOLIDARITY, and the reason it is here and not in six call sites: this is the one
     // funnel every violent thing the player does to a person already passes through — assault, murder,
     // mugging, hit-and-run, carjacking, explosion, gunfire — and merely AIMING deliberately reports no
     // crime at all, so drawing a weapon at a picket does not end it. Witness-scoped by the crime's own
     // fear radius. It runs BEFORE the teflon return on purpose: teflon buys the player off the police,
     // not out of what the people standing next to him just watched him do.
-    this.population.breakSolidarity(position, options.radius ?? WITNESS_RADIUS);
+    //
+    // The one exemption is `jostle`: a walking shove through a packed crowd escalates to an assault in
+    // JMPD's book (that stays — the heat below is untouched), but it is not an ATTACK in the picket's,
+    // and a protest is dense enough that reaching its middle guarantees a few. Only the bump path sets
+    // it, and only when nobody went down — see bumpBreaksSolidarity.
+    if (!options.jostle) this.population.breakSolidarity(position, options.radius ?? WITNESS_RADIUS);
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
     if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the taxi spooks the passenger
     if (this.cheats.teflon) return; // teflon: the heat could not land anyway, so JMPD neither witness nor take the call — no fake dispatch toast, no last-known position

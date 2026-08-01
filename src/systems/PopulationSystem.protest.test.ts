@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import * as THREE from 'three';
 import { afterEach, describe, expect, it } from 'vitest';
+import { bumpBreaksSolidarity } from './FearSystem';
 import type { AudioManager } from '../core/AudioManager';
 import type { City } from '../world/City';
 import { roadHazards } from './NavGraph';
@@ -68,6 +71,28 @@ describe('who stops standing with the player', () => {
     witness.solidarity = true;
     expect(population.breakSolidarity(new THREE.Vector3(0, 0, 0), 24)).toBe(0); // assault radius: too far
     expect(population.breakSolidarity(new THREE.Vector3(0, 0, 0), 58)).toBe(1); // kill radius: heard it
+  });
+
+  it('a jostle is not an attack: only a body going down ends the picket’s patience', () => {
+    // The owner's rule, verbatim: people aren't scared of him "unless I actually attack someone". A
+    // walking bump — even the second one that JMPD books as assault — never passes this gate, because a
+    // protest is dense enough that reaching its middle guarantees a few. Game routes the gate's verdict
+    // into reportCrime as `jostle`, whose absence is what triggers the witness sweep. If this table
+    // changes, arriving in your own picket revokes it for everyone within earshot again — the exact
+    // playtest report that created solidarity in the first place.
+    expect(bumpBreaksSolidarity({ knockdown: false, killed: false })).toBe(false); // barging: never
+    expect(bumpBreaksSolidarity({ knockdown: true, killed: false })).toBe(true); // trampled at a sprint
+    expect(bumpBreaksSolidarity({ knockdown: true, killed: true })).toBe(true); // killed outright
+  });
+
+  it('Game wires the shove exemption through the jostle flag, and nothing else claims it', () => {
+    // vitest never constructs Game (the boot-order gate exists because of that), so the wiring is
+    // pinned textually: the bump path must consult the gate, reportCrime must honour the flag, and no
+    // other call site may quietly grant itself the exemption.
+    const game = readFileSync(resolve(__dirname, '../Game.ts'), 'utf8');
+    expect(game).toMatch(/jostle: !bumpBreaksSolidarity\(bump\)/);
+    expect(game).toMatch(/if \(!options\.jostle\) this\.population\.breakSolidarity\(/);
+    expect(game.match(/jostle: /g)?.length).toBe(1); // exactly one call site sets it: the bump loop
   });
 });
 

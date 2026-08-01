@@ -63,6 +63,20 @@ export function solidarityFear(current: number, amount: number): number {
   return Math.min(SOLIDARITY_FEAR_CAP, accumulateFear(current, amount));
 }
 
+/**
+ * Which player-on-pedestrian contact ends solidarity for the WITNESSES. The owner's rule is
+ * "unless I actually attack someone", and a shove is not an attack: a protest is people packed
+ * shoulder to shoulder, so walking through your own picket trips the bump-escalation and files an
+ * `assault` with JMPD — and routing that through the witness sweep meant the player revoked the
+ * whole crowd's solidarity by arriving in it, which is the self-scaring loop solidarity exists to
+ * end. The police can keep caring about shoving; the people on your side don't, until a body
+ * actually goes down. Knockdown and kill only come from a sprint, which is the honest line between
+ * barging and trampling.
+ */
+export function bumpBreaksSolidarity(bump: { knockdown: boolean; killed: boolean }): boolean {
+  return bump.knockdown || bump.killed;
+}
+
 export function fearResponse(fear: number, aggressive: boolean, bravery: number, fleeing = false): FearResponse {
   if (fear < FLEE_THRESHOLD) return 'calm';
   if (aggressive || bravery >= BRAVE_FIGHT) return 'fight';
