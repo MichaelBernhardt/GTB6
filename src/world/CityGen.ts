@@ -85,7 +85,7 @@ export const OCCUPANCY_FACTOR = 0.62;
  * street-wall masses may ABUT — real Joburg blocks are party-wall continuous — up to this much
  * measured interpenetration, and no further. tools/qa/frontage-meter.ts audits the outcome.
  */
-export const STREETWALL_MAX_OVERLAP = 1.5;
+export const STREETWALL_MAX_OVERLAP = 0.35;
 /**
  * Exact-footprint spacing for residential pairs: the suburbs version of the street-wall rule.
  * The circle proxy refused legal side-by-side houses for the same reason it refused towers —
@@ -131,7 +131,7 @@ export function footprintOverlapXZ(
  *  (at 160: 16 capped cells; at 256: 5, all tower-heavy CBD ring cells). Cells still merge to a
  *  handful of draw calls per material; the cost is triangles and per-cell generation time, which
  *  the frame-budgeted streamer already spreads. */
-export const CELL_BUILDING_CAP = 256;
+export const CELL_BUILDING_CAP = 384;
 const HALF_WORLD = MAP_WORLD_SIZE / 2;
 const UNBUILT_POLYGON_GROUPS = [WATER_POLYGONS, GREEN_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, AERODROME_POLYGONS];
 
@@ -371,8 +371,24 @@ function stationBlocks(x: number, z: number, radius: number): boolean {
  *  walls), positive = at least this much measured clear air between the walls. */
 interface OccupancyEntry { x: number; z: number; r: number; rect?: { x: number; z: number; width: number; depth: number; heading: number }; gap?: number; }
 
-/** The spacing a zone demands of the exact footprint test, or undefined for the circle proxy. */
-export function zonePackingGap(zone: Zone): number | undefined {
+/**
+ * IS THIS PARCEL PART OF A PACKED ROW? The inner city and the dense-residential blocks are laid as
+ * contiguous street wall with party walls; everything else is scattered with real gaps between
+ * stands. Derived from facts the parcel itself carries, so the generator, the occupancy mirror in
+ * CityGen.test and tools/qa/party-walls.ts all answer it from one definition instead of three
+ * guesses — the drift that would otherwise let the packing rule and its audit disagree.
+ */
+export function isRowParcel(parcel: Pick<GeneratedBuilding, 'zone' | 'style'>): boolean {
+  return parcel.zone === 'commercial-highrise' || parcel.style === 'dense-residential';
+}
+
+/** The spacing a parcel demands of the exact footprint test, or undefined for the circle proxy.
+ *  `row` marks a parcel laid as part of a packed street wall (the inner city, and the dense-
+ *  residential blocks): those are PARTY-WALL fabric and are allowed to abut, which is the whole
+ *  point of the row builder. A residential parcel laid the scattered way still keeps its measured
+ *  gap of clear air — a leafy suburb with houses touching would be the opposite mistake. */
+export function zonePackingGap(zone: Zone, row = false): number | undefined {
+  if (row) return -STREETWALL_MAX_OVERLAP;
   if (zone === 'commercial-highrise') return -STREETWALL_MAX_OVERLAP;
   if (zone === 'residential') return RESIDENTIAL_MIN_GAP;
   return undefined;
@@ -481,6 +497,19 @@ function fitFootprint(
     // more rungs take the ladder down to MIN_STREETWALL_DEPTH, and the narrow shopfront stand
     // wedged between two bigger ones is not a compromise — it is what a Joburg CBD block face is
     // actually made of.
+    //
+    // EXACT EARLY-OUT, and the reason the row builder is affordable. Every candidate below is
+    // anchored on the same front face and grows from it — sideways from the same centre line and
+    // inward from the same plane — so the MINIMAL candidate's footprint is a subset of every other
+    // one's, and clearance is a minimum over the footprint. If the smallest mass will not clear the
+    // roads and the rail, none of the larger ones can either. Testing it first turns the common
+    // failure (a junction mouth, of which the packed row probes thousands at a 4 u retry pitch) from
+    // ~50 footprint scans into one: parcel generation went 45.6 s -> 12.9 s on the same layout.
+    const floorX = faceX + nX * (MIN_STREETWALL_DEPTH / 2); const floorZ = faceZ + nZ * (MIN_STREETWALL_DEPTH / 2);
+    if (footprintRoadClearance(floorX, floorZ, MIN_STREETWALL_DEPTH, MIN_STREETWALL_DEPTH, heading) < ROAD_CLEARANCE
+      || footprintRailwayClearance(floorX, floorZ, MIN_STREETWALL_DEPTH, MIN_STREETWALL_DEPTH, heading) < RAILWAY_BUILDING_CLEARANCE) {
+      return undefined;
+    }
     for (const widthScale of [1, 0.72, 0.5, 0.34, 0.22]) {
       const width = Math.max(width0 * widthScale, MIN_STREETWALL_DEPTH);
       let depth = depth0;
@@ -510,7 +539,7 @@ function fitFootprint(
 function commitBuilding(
   fit: FittedFootprint, heading: number, zone: Exclude<Zone, 'none'>, density: number,
   style: BuildingStyle, seedX: number, seedZ: number, salt: number,
-  occ: Occupancy, out: GeneratedBuilding[],
+  occ: Occupancy, out: GeneratedBuilding[], row = false,
 ): boolean {
   const x = stableWorldFloat(fit.x); const z = stableWorldFloat(fit.z);
   const width = stableWorldFloat(fit.width); const depth = stableWorldFloat(fit.depth);
@@ -525,7 +554,7 @@ function commitBuilding(
   const radius = Math.hypot(width, depth) / 2;
   // Exact-packed parcels carry their rect: CBD pairs may abut (STREETWALL_MAX_OVERLAP), houses
   // pack to a measured RESIDENTIAL_MIN_GAP of clear air instead of a circle-proxy stand-off.
-  const packingGap = zonePackingGap(zone);
+  const packingGap = zonePackingGap(zone, row);
   const rect = packingGap !== undefined ? { x, z, width, depth, heading } : undefined;
   if (isBlocked(x, z, radius * 0.6) || stationBlocks(x, z, radius) || !occ.free(x, z, radius, rect, packingGap)) return false;
   occ.add(x, z, radius, rect, packingGap);
@@ -600,48 +629,112 @@ function layoutRealFootprints(occ: Occupancy, out: GeneratedBuilding[]): void {
   }
 }
 
+/** Cumulative arc length along a walked centreline, one entry per walk sample. */
+function arcLengths(walk: WalkPoint[]): number[] {
+  const cum = new Array<number>(walk.length);
+  cum[0] = 0;
+  for (let i = 1; i < walk.length; i++) {
+    cum[i] = cum[i - 1]! + Math.hypot(walk[i]!.x - walk[i - 1]!.x, walk[i]!.z - walk[i - 1]!.z);
+  }
+  return cum;
+}
+
+/**
+ * The centreline point at arc distance `s`, INTERPOLATED between walk samples rather than snapped
+ * to one. The old walker placed each lot at `walk[floor((anchor + i) / 2)]`, i.e. at whichever 8 u
+ * sample happened to sit nearest the middle of the stride — up to 4 u of placement error per lot,
+ * which is invisible when lots are 12 u apart and fatal when they are meant to share a party wall.
+ * `hint` is the last returned index; the cursor only ever moves forward, so the scan is amortised
+ * O(1) and the whole side stays linear in its sample count.
+ */
+function sampleArc(walk: WalkPoint[], cum: number[], s: number, hint: number): { point: WalkPoint; index: number } {
+  let hi = Math.max(1, hint);
+  while (hi < walk.length - 1 && cum[hi]! < s) hi++;
+  const lo = hi - 1;
+  const a = walk[lo]!; const b = walk[hi]!;
+  const span = cum[hi]! - cum[lo]!;
+  const t = span > 1e-6 ? Math.min(1, Math.max(0, (s - cum[lo]!) / span)) : 0;
+  return { point: { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, dirX: a.dirX, dirZ: a.dirZ }, index: hi };
+}
+
+/** Step the cursor takes when a slot is refused (junction mouth, rail reserve, occupied corner). */
+const ROW_RETRY_STEP = 2 * LAYOUT_SCALE;
+/**
+ * THE BUILDING LINE STEPS — the party-wall answer, and it is not decoration.
+ *
+ * Row neighbours abut, so their side walls end up on one plane. That much is harmless: those two
+ * faces point in OPPOSITE directions, so backface culling picks a winner and neither is reachable
+ * by a camera anyway (there is solid geometry on both sides of the plane). The real hazard is the
+ * FRONT wall. Every parcel's front face is anchored the same distance beyond the same frontage
+ * line, so on a straight block face two neighbours land their facades on ONE plane — same-facing,
+ * both rasterised, each with its own facade-UV origin. That is the MARTIAL x SMAL ghost-window bug
+ * one building over, and tools/qa/party-walls.ts measured 52 of them the first time the row builder
+ * ran with a continuous setback jitter (2% of same-street pairs — a continuous random offset
+ * collides inside the depth buffer's 0.054 u resolution about one time in fifty).
+ *
+ * So the setback is QUANTISED to a few discrete building lines and the walker simply never gives
+ * two consecutive parcels the same one. Neighbours are then guaranteed at least
+ * ROW_SETBACK_JITTER / (ROW_SETBACK_STEPS - 1) apart — three and a half times the depth buffer's
+ * resolution at the CBD sightline — and, because a real row of separately-built shops does step in
+ * and out by a few tens of centimetres, the guard and the look are the same change.
+ */
+const ROW_SETBACK_JITTER = 0.9;
+const ROW_SETBACK_STEPS = 4;
+
 function layoutRoadSide(
   road: GeneratedRoad, roadIndex: number, side: 1 | -1, walk: WalkPoint[],
   occ: Occupancy, out: GeneratedBuilding[], rear: GeneratedBuilding[],
 ): void {
   const half = road.width / 2;
-  let acc = seeded(roadIndex, side, 7) * 20; // phase offset so lots don't align across parallel roads
-  let target = 12 * LAYOUT_SCALE;
-  let anchor = 0;
-  for (let i = 1; i < walk.length; i++) {
-    acc += Math.hypot(walk[i]!.x - walk[i - 1]!.x, walk[i]!.z - walk[i - 1]!.z);
-    if (acc < target) continue;
-    const mid = walk[Math.floor((anchor + i) / 2)]!;
-    anchor = i; acc = 0;
+  const cum = arcLengths(walk);
+  const total = cum[walk.length - 1]!;
+  // Arc position of the NEXT parcel's leading edge. The phase offset keeps lots from aligning
+  // across parallel roads; it is the same seed the index-based walker used.
+  let cursor = seeded(roadIndex, side, 7) * 20;
+  let hint = 1;
+  let lastSetbackStep = -1;
+  while (cursor < total) {
+    const edge = sampleArc(walk, cum, cursor, hint); hint = edge.index;
+    const at = edge.point;
 
-    // Frontage line: perpendicular to the road on `side`, one apron beyond the kerb.
-    const nX = side * -mid.dirZ; const nZ = side * mid.dirX; // unit inward normal (into the block)
-    const frontX = mid.x + nX * (half + FRONTAGE_CLEARANCE);
-    const frontZ = mid.z + nZ * (half + FRONTAGE_CLEARANCE);
+    // Frontage line at the leading edge: perpendicular to the road on `side`, one apron beyond the kerb.
+    const nX = side * -at.dirZ; const nZ = side * at.dirX; // unit inward normal (into the block)
+    const frontX = at.x + nX * (half + FRONTAGE_CLEARANCE);
+    const frontZ = at.z + nZ * (half + FRONTAGE_CLEARANCE);
 
     const zone = classifyZone(frontX, frontZ, road.width);
-    if (zone === 'none') { target = 14 * LAYOUT_SCALE; continue; }
+    if (zone === 'none') { cursor += 14 * LAYOUT_SCALE; continue; }
     const shape = ZONE_SHAPE[zone];
     const district = nearestDistrict(frontX, frontZ);
+    const style = buildingStyle(zone, district.density, frontX, frontZ);
 
-    // Street-wall lot arithmetic (CBD): the building takes 90–98% of its lot with 2–8% side gaps,
-    // so built neighbours read as one continuous block face — real Joburg CBD blocks have no side
-    // yards. Residential is packed too — houses take 80–94% of the stand with 4–12% side gaps
-    // (a driveway, not a vacant lot). Everywhere else keeps the 72–92% building / 12–28% gap rhythm.
-    const streetWall = zone === 'commercial-highrise';
-    const packed = streetWall || zone === 'residential';
+    /**
+     * PACK TO THE MAX, in the two zones that are packed in the real city.
+     *
+     * The owner's rule: "For inner city and dense residential a different placement strategy might
+     * be useful: pack to the max. If things are scattered there will be lots of gaps. Packed/stacked
+     * buildings would be more like the real place. There are not gaps in reality, except in lower
+     * density res/ind/comm areas."
+     *
+     * So the inner city (commercial-highrise) and the dense-residential blocks are laid as a ROW:
+     * contiguous parcels sharing party walls, no side gap, no acceptance lottery, the cursor
+     * advancing by exactly the width that was built. The only thing that opens a hole in a row is
+     * geometry genuinely refusing — a junction mouth, a rail reserve, a reserved pad, a park polygon
+     * — which is precisely the set of interruptions a real block face has. Every other zone keeps
+     * the scattered lot-plus-gap rhythm it had, and that contrast IS the realism: you can tell
+     * Fordsburg from Chartwell by whether the buildings touch.
+     */
+    const row = isRowParcel({ zone, style });
+    const packed = row || zone === 'residential';
     const lot = lerp(shape.lot[0], shape.lot[1], seeded(frontX, frontZ, 11)) * LAYOUT_SCALE;
     const depth0 = lerp(shape.depth[0], shape.depth[1], seeded(frontX, frontZ, 12)) * LAYOUT_SCALE;
-    const width0 = lot * (streetWall ? 0.9 + seeded(frontX, frontZ, 13) * 0.08
-      : packed ? 0.8 + seeded(frontX, frontZ, 13) * 0.14
-        : 0.72 + seeded(frontX, frontZ, 13) * 0.2);
-    const gap = lot * (streetWall ? 0.02 + seeded(frontX, frontZ, 14) * 0.06
-      : packed ? 0.04 + seeded(frontX, frontZ, 14) * 0.08
-        : 0.12 + seeded(frontX, frontZ, 14) * 0.16);
-    // Street-wall pitch stays at the full lot+gap: the building already fills ~94% of it, so a
-    // tighter pitch would only make the occupancy grid refuse every second lot.
-    const pitchScale = zone === 'rural' ? 1 : zone === 'estate' ? 0.95 : streetWall ? 1 : 0.85;
-    target = (lot + gap) * pitchScale; // denser frontage in built districts; rural spacing stays open
+    // A row parcel takes its WHOLE lot — the lot range itself (varied per stand) is what stops the
+    // wall reading as one repeated width. Scattered zones keep their building/side-yard split.
+    const width0 = row ? lot
+      : lot * (packed ? 0.8 + seeded(frontX, frontZ, 13) * 0.14 : 0.72 + seeded(frontX, frontZ, 13) * 0.2);
+    const gap = row ? 0
+      : lot * (packed ? 0.04 + seeded(frontX, frontZ, 14) * 0.08 : 0.12 + seeded(frontX, frontZ, 14) * 0.16);
+    const pitchScale = zone === 'rural' ? 1 : zone === 'estate' ? 0.95 : row ? 1 : 0.85;
 
     // The Vaal shore stays a holiday coast, not a packed suburb: inside the beach band the
     // scatter's promenade profile (slipways, kiosks, the seafront venue trio) shares the kerb
@@ -650,34 +743,46 @@ function layoutRoadSide(
     // ModelScatter.nearCoast (mirrored here: importing it would cycle the modules).
     const coastBand = zone === 'residential'
       && BEACH_POLYGONS.some((beach) => frontX > beach.minX - 130 && frontX < beach.maxX + 130 && frontZ > beach.minZ - 130 && frontZ < beach.maxZ + 130);
-    if (seeded(frontX, frontZ, 20) > acceptance(zone, district.density) * (coastBand ? 0.55 : 1)) continue;
+    // A row has no acceptance lottery — that lottery IS the gaps the owner is complaining about.
+    if (!row && seeded(frontX, frontZ, 20) > acceptance(zone, district.density) * (coastBand ? 0.55 : 1)) {
+      cursor += (lot + gap) * pitchScale; continue;
+    }
 
+    // The parcel is centred half a width along from its leading edge, so consecutive row parcels
+    // meet exactly: edge_n+1 = edge_n + width_n.
+    const mid = sampleArc(walk, cum, cursor + width0 / 2, hint).point;
+    const midNX = side * -mid.dirZ; const midNZ = side * mid.dirX;
+    const midFrontX = mid.x + midNX * (half + FRONTAGE_CLEARANCE);
+    const midFrontZ = mid.z + midNZ * (half + FRONTAGE_CLEARANCE);
     // Face the street: local +z (the entrance face) points back toward the road, aligned to the actual road
     // segment (no quarter snap — colliders are oriented boxes now, so diagonal streets get diagonal buildings).
-    const heading = Math.atan2(-nX, -nZ);
-    // Front face line: `yard` beyond the sidewalk apron. Anchored — the building grows from here into
-    // the block, so shrinking never pulls the face onto the road it fronts.
-    const faceX = frontX + nX * (shape.yard * LAYOUT_SCALE);
-    const faceZ = frontZ + nZ * (shape.yard * LAYOUT_SCALE);
+    const heading = Math.atan2(-midNX, -midNZ);
+    // Front face line: `yard` beyond the sidewalk apron, plus the row's per-parcel setback jitter.
+    // Anchored — the building grows from here into the block, so shrinking never pulls the face
+    // onto the road it fronts.
+    let setbackStep = row ? Math.min(ROW_SETBACK_STEPS - 1, Math.floor(seeded(frontX, frontZ, 15) * ROW_SETBACK_STEPS)) : 0;
+    if (row && setbackStep === lastSetbackStep) setbackStep = (setbackStep + 1) % ROW_SETBACK_STEPS;
+    const yard = shape.yard * LAYOUT_SCALE
+      + (row ? (setbackStep * ROW_SETBACK_JITTER) / (ROW_SETBACK_STEPS - 1) : 0);
+    const faceX = midFrontX + midNX * yard;
+    const faceZ = midFrontZ + midNZ * yard;
 
     // A large mass (highrise/estate especially) can reach across a thin block and overhang a
     // neighbouring, cross or rear street. Shrink w&d until the whole footprint clears every road
     // corridor; if even a minimal footprint still overhangs, reject the lot. Correctness (no road
     // overlap) over density — but shrink first so we keep the building wherever it can be made to fit.
-    const fit = fitFootprint(faceX, faceZ, nX, nZ, width0, depth0, heading, packed);
-    // A dead packed slot (a junction mouth, a rail reserve, an occupied corner) retries a
-    // short step later instead of skipping a whole lot pitch of kerb — the walker's slot phase is
-    // part of the deterministic seed stream either way.
-    if (!fit) { if (packed) target = 6 * LAYOUT_SCALE; continue; }
-    const style = buildingStyle(zone, district.density, frontX, frontZ);
-    if (!commitBuilding(fit, heading, zone, district.density, style, frontX, frontZ, 0, occ, out)) { if (packed) target = 6 * LAYOUT_SCALE; continue; }
-    // Advance by what was actually BUILT, not by what was asked for. The seeded lot pitch is right
-    // only when the mass got its seeded width; when fitFootprint had to narrow it — which is most
-    // of what happens on the CBD's short block faces — striding the full pitch anyway leaves the
-    // difference as bare ground beside the stand. That difference is the empty lot the player
-    // spawns next to. Packed zones only: the strip, the works, the estates and the farms are meant
-    // to keep their authored spacing.
-    if (packed) target = Math.min(target, (fit.width + gap) * pitchScale);
+    const fit = fitFootprint(faceX, faceZ, midNX, midNZ, width0, depth0, heading, packed);
+    // A dead packed slot retries a short step later instead of skipping a whole lot pitch of kerb.
+    if (!fit) { cursor += packed ? ROW_RETRY_STEP : (lot + gap) * pitchScale; continue; }
+    if (!commitBuilding(fit, heading, zone, district.density, style, frontX, frontZ, 0, occ, out, row)) {
+      cursor += packed ? ROW_RETRY_STEP : (lot + gap) * pitchScale; continue;
+    }
+    // Advance by what was actually BUILT, not by what was asked for. The seeded pitch is right only
+    // when the mass got its seeded width; when fitFootprint had to narrow it — which is most of what
+    // happens on the CBD's short block faces — striding the full pitch anyway leaves the difference
+    // as bare ground beside the stand. In a row that difference is a hole in the street wall.
+    lastSetbackStep = row ? setbackStep : -1;
+    cursor += packed ? (fit.width + gap) * pitchScale : (lot + gap) * pitchScale;
 
     // THE BLOCK INTERIOR. Eligible urban lots carry further masses behind the street building,
     // each stepping one rank deeper into the block. A frontage-driven generator can only build
@@ -693,11 +798,11 @@ function layoutRoadSide(
       const infillDepth = depth0 * (0.65 + seeded(frontX, frontZ, 71 + rank * 4) * 0.18);
       const infillWidth = width0 * (0.7 + seeded(frontX, frontZ, 72 + rank * 4) * 0.18);
       const infillGap = (2.5 + seeded(frontX, frontZ, 73 + rank * 4) * 3) * LAYOUT_SCALE;
-      rankFaceX += nX * (rankDepth + infillGap);
-      rankFaceZ += nZ * (rankDepth + infillGap);
-      const infill = fitFootprint(rankFaceX, rankFaceZ, nX, nZ, infillWidth, infillDepth, heading, packed);
+      rankFaceX += midNX * (rankDepth + infillGap);
+      rankFaceZ += midNZ * (rankDepth + infillGap);
+      const infill = fitFootprint(rankFaceX, rankFaceZ, midNX, midNZ, infillWidth, infillDepth, heading, packed);
       if (!infill || classifyZone(infill.x, infill.z, road.width) !== zone) break;
-      if (!commitBuilding(infill, heading, zone, district.density, style, frontX, frontZ, 100 + rank * 9, occ, rear)) break;
+      if (!commitBuilding(infill, heading, zone, district.density, style, frontX, frontZ, 100 + rank * 9, occ, rear, row)) break;
       rankDepth = infill.depth;
     }
   }

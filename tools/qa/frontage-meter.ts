@@ -143,6 +143,42 @@ for (const building of buildings) {
 }
 console.log(`\nshopfronts (downtown family): ${withBays}/${downtown} buildings carry shop bays (${(100 * withBays / Math.max(1, downtown)).toFixed(1)}%), ${totalBays} bays total, ${shuttered} night shutters`);
 
+// ---- HOW PACKED IS THE ROW? ------------------------------------------------------------------
+// Coverage says how much kerb has a building behind it; this says whether those buildings TOUCH.
+// It is the number that separates "denser scatter" from "a street wall", and the suburban control
+// row is the point: the owner's rule is that the inner city has no gaps and the low-density suburbs
+// do, so the contrast has to be measurable, not just claimed.
+console.log('\nside gap to the nearest neighbour along the street (0 = party wall):');
+for (const [label, pick] of [
+  ['commercial-highrise', (b: GeneratedBuilding) => b.zone === 'commercial-highrise'],
+  ['dense-residential', (b: GeneratedBuilding) => b.style === 'dense-residential'],
+  ['suburban (control)', (b: GeneratedBuilding) => b.style === 'suburban'],
+] as const) {
+  const gaps: number[] = [];
+  for (const building of buildings) {
+    if (!pick(building)) continue;
+    let best = Infinity;
+    const cos = Math.cos(building.heading); const sin = Math.sin(building.heading);
+    for (const side of [-1, 1]) {
+      for (let t = 0.05; t <= 14; t += 0.25) {
+        const px = building.x + side * (building.width / 2 + t) * cos;
+        const pz = building.z - side * (building.width / 2 + t) * sin;
+        let hit = false;
+        for (const other of hash.get(`${Math.floor(px / HASH_CELL)},${Math.floor(pz / HASH_CELL)}`) ?? []) {
+          if (other !== building && insideOBB(other, px, pz)) { hit = true; break; }
+        }
+        if (hit) { best = Math.min(best, t); break; }
+      }
+    }
+    if (best < Infinity) gaps.push(best);
+  }
+  gaps.sort((a, b) => a - b);
+  const quantile = (q: number): string => (gaps.length ? gaps[Math.min(gaps.length - 1, Math.floor(q * gaps.length))]!.toFixed(2) : 'n/a');
+  const touching = gaps.filter((gap) => gap <= 1).length;
+  console.log(`  ${label.padEnd(20)} n ${String(gaps.length).padStart(5)}   p25 ${quantile(0.25).padStart(5)}   median ${quantile(0.5).padStart(5)}`
+    + `   p75 ${quantile(0.75).padStart(5)}   within 1 u of a neighbour ${(100 * touching / Math.max(1, gaps.length)).toFixed(0).padStart(3)}%`);
+}
+
 // ---- CBD OBB interpenetration audit (footprintOverlapXZ — the generator's own packing rule) ---
 const cbd = buildings.filter((b) => b.zone === 'commercial-highrise');
 let touching = 0; let deep = 0; let maxDepth = 0; let maxAt = '';

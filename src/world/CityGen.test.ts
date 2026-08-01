@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allBuildings, buildingStats, CBD_STOREY, CELL_BUILDING_CAP, CELL_SIZE, footprintOverlapXZ, footprintRailwayClearance, footprintRoadClearance, generateCell, OCCUPANCY_FACTOR, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, zonePackingGap, type GeneratedBuilding } from './CityGen';
+import { allBuildings, buildingStats, CBD_STOREY, CELL_BUILDING_CAP, isRowParcel, CELL_SIZE, footprintOverlapXZ, footprintRailwayClearance, footprintRoadClearance, generateCell, OCCUPANCY_FACTOR, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, zonePackingGap, type GeneratedBuilding } from './CityGen';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_STATS, MAP_WORLD_SIZE, METRES_PER_UNIT, RAILWAY_STATION_SITES, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
@@ -24,7 +24,11 @@ describe('citywide parcel layout', () => {
     const PRE_DENSITY_PARCELS_PER_SQUARE_UNIT = 5158 / 339.4e6;
     const landSquareUnits = ((MAP_STATS.landKm2 ?? 333.3) * 1e6) / METRES_PER_UNIT ** 2;
     expect(all.length).toBeGreaterThanOrEqual(Math.ceil(PRE_DENSITY_PARCELS_PER_SQUARE_UNIT * landSquareUnits * 1.6));
-    expect(all.length).toBeLessThanOrEqual(9000); // absolute runtime cap: streaming + collider memory, not a map-size figure
+    // Absolute runtime cap: streaming + collider memory, not a map-size figure. Raised 9,000 ->
+    // 11,500 for the row builder: the inner city and the dense-residential blocks are now laid as
+    // continuous street wall rather than scattered lots with acceptance rolls, which is the owner's
+    // "there are no gaps in reality" rule, and it costs 8,281 -> 10,332 parcels citywide.
+    expect(all.length).toBeLessThanOrEqual(11_500);
     // buildings must reach well beyond the CBD in every quadrant (inhabited citywide)
     const quadrants = new Set(all.map((b) => `${Math.sign(b.x)},${Math.sign(b.z)}`));
     expect(quadrants.size).toBeGreaterThanOrEqual(4);
@@ -109,10 +113,13 @@ describe('citywide parcel layout', () => {
     // Budget window: the CBD-density pass raised the cap 64 → 160 because at 64 one third of every
     // committed CBD building was silently dropped at bucketing (the empty-lot report); the suburbs
     // pass raised it to 256 because at real-erf pitch the shared CBD/residential cells capped and
-    // dropped whole streets of houses. Cells still merge to a handful of draw calls per material;
-    // the streamer frame-budgets generation cost.
+    // dropped whole streets of houses. The row builder raised it 256 → 384: a capped cell drops
+    // buildings out of a CONTINUOUS street wall, which is a hole in a terrace rather than a wider
+    // gap between stands, and at 256 ten of the inner-city cells were capped. 384 leaves three, and
+    // the sweep showed 448 buying only another 0.4 pp of frontage for 112 more parcels. Cells still
+    // merge to a handful of draw calls per material; the streamer frame-budgets generation cost.
     expect(CELL_BUILDING_CAP).toBeGreaterThanOrEqual(50);
-    expect(CELL_BUILDING_CAP).toBeLessThanOrEqual(256);
+    expect(CELL_BUILDING_CAP).toBeLessThanOrEqual(384);
   });
 
   it('never places a building footprint over a road corridor (no mass overhangs the street)', () => {
@@ -189,21 +196,22 @@ describe('citywide parcel layout', () => {
   }, 20_000);
 
   it('keeps parcel occupancy separated even for the largest estate and tower footprints', () => {
-    // Mirrors Occupancy.free exactly: an exact-packed pair (both zones carry a packing gap) is
-    // held to the real footprint rule — CBD pairs may abut up to STREETWALL_MAX_OVERLAP of
-    // measured interpenetration (party walls, never towers inside towers), residential pairs must
-    // keep RESIDENTIAL_MIN_GAP of clear air (rects grown by the gap stay disjoint), a mixed pair
-    // takes the stricter demand — while every other pair keeps the conservative circle spacing.
+    // Mirrors Occupancy.free exactly: an exact-packed pair (both parcels carry a packing gap) is
+    // held to the real footprint rule — ROW parcels (the inner city and the dense-residential
+    // blocks, isRowParcel) may abut up to STREETWALL_MAX_OVERLAP of measured interpenetration,
+    // which is what a party wall IS; scattered residential pairs must keep RESIDENTIAL_MIN_GAP of
+    // clear air (rects grown by the gap stay disjoint), a mixed pair takes the stricter demand —
+    // while every other pair keeps the conservative circle spacing.
     const grown = (b: GeneratedBuilding, pad: number): GeneratedBuilding => ({ ...b, width: b.width + pad, depth: b.depth + pad });
     const grid = new Map<string, GeneratedBuilding[]>(); const cell = 256;
     for (const building of all) {
       const cx = Math.floor(building.x / cell); const cz = Math.floor(building.z / cell);
       const radius = Math.hypot(building.width, building.depth) / 2;
-      const gap = zonePackingGap(building.zone);
+      const gap = zonePackingGap(building.zone, isRowParcel(building));
       for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
         for (const other of grid.get(`${cx + dx},${cz + dz}`) ?? []) {
           const otherRadius = Math.hypot(other.width, other.depth) / 2;
-          const otherGap = zonePackingGap(other.zone);
+          const otherGap = zonePackingGap(other.zone, isRowParcel(other));
           if (gap !== undefined && otherGap !== undefined) {
             const need = Math.max(gap, otherGap);
             if (need <= 0) expect(footprintOverlapXZ(building, other)).toBeLessThanOrEqual(-need + 1e-6);
