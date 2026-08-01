@@ -1125,6 +1125,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // because a cowering body goes nowhere. The plate clamp stays for ordinary wandering.
       if (current.fixture && current.fixture.ped.state !== 'down') {
         if (current.fixture.ped.state === 'flee') current.fixture.ped.state = 'cower';
+        // A cowerer huddles FACING the threat — the flee frame had turned them away, which read
+        // as a frozen rear presented to the shooter. Recovery is the fear system's own: fear
+        // decays, and once calm they stand back up and resume their post.
+        if (current.fixture.ped.state === 'cower') {
+          const at = api.playerPosition();
+          current.fixture.ped.group.rotation.y = Math.atan2(at.x - current.fixture.ped.group.position.x, at.z - current.fixture.ped.group.position.z);
+        }
         const ped = current.fixture.ped.group.position;
         const local = toLocal(current, current.heading, ped.x, ped.z);
         const cx = Math.max(-current.core.width / 2 + 0.6, Math.min(current.core.width / 2 - 0.6, local.x));
