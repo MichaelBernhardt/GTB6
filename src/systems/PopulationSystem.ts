@@ -14,7 +14,7 @@ import {
 import { Pedestrian } from '../entities/Pedestrian';
 import { Vehicle } from '../entities/Vehicle';
 import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separationPush } from './BumpSystem';
-import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
+import { FEAR_EVENTS, fearContribution, FEAR_MAX, type FearEvent } from './FearSystem';
 import { MELEE_DAMAGE, MELEE_GLOBAL_STAGGER, MELEE_HEIGHT_REACH, MELEE_START_RANGE, meleeHitLands } from './MeleeSystem';
 import { MuzzleFlashPool } from './MuzzleFlashPool';
 import { copHitChance, sightLineClear } from './PoliceSystem';
@@ -369,17 +369,10 @@ export class PopulationSystem {
     return events;
   }
 
+  /** Scatters everyone in earshot of something that HAPPENED. There is deliberately no sibling that
+   *  broadcasts the sight of a weapon — see FEAR_EVENTS for why that one is never coming back. */
   broadcastFear(origin: THREE.Vector3, event: FearEvent): void {
     this.spreadPanic(this.pedestrians.filter((ped) => this.frighten(ped, fearContribution(event, ped.group.position.distanceTo(origin)), origin)));
-  }
-
-  /** A raised weapon frightens only peds who can see it: within radius and facing the player (or close enough to sense). */
-  broadcastBrandish(origin: THREE.Vector3, event: FearEvent = FEAR_EVENTS.brandish): void {
-    this.spreadPanic(this.pedestrians.filter((ped) => {
-      const distance = ped.group.position.distanceTo(origin);
-      if (distance >= event.radius || !seesBrandish(Math.sin(ped.group.rotation.y), Math.cos(ped.group.rotation.y), origin.x - ped.group.position.x, origin.z - ped.group.position.z, distance)) return false;
-      return this.frighten(ped, fearContribution(event, distance), origin);
-    }));
   }
 
   /**

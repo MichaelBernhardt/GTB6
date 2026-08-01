@@ -16,7 +16,7 @@ import { OnlineSession, type OnlineReport } from './multiplayer/OnlineSession';
 import { DEFAULT_SAVE, SaveManager } from './core/SaveManager';
 import { FeatureHost, type FeatureHostContext } from './features/host';
 import { featureMapIcons } from './features/mapIcons';
-import type { FeatureGameApi } from './features/types';
+import type { FeatureCinemaShot, FeatureGameApi } from './features/types';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { FrameProfiler } from './core/FrameProfiler';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolveLockpickPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
@@ -101,6 +101,9 @@ const POTATO_RENDER_SCALE = 0.5; // potato renders at HALF the CSS resolution an
 const POTATO_DENSITY_SCALE = 0.5; // potato halves the ambient ped/car census targets
 const formatRunTime = (seconds: number): string => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 const PERSONAL_WAYPOINT_LABEL = 'Personal waypoint';
+const CINEMA_BARS_IN = 2; // per second: the bars take half a second to arrive, which reads as "the film started" rather than "the UI glitched"
+const CINEMA_BARS_OUT = 3; // …and leave in a third of that, because the player is waiting to drive again
+const CINEMA_CRANE = 2.2; // exponential ease toward the shot: a pull-back, never a cut
 
 interface Transition { vehicle: Vehicle; timer: number; entering: boolean; exitPosition?: THREE.Vector3; }
 
@@ -261,7 +264,6 @@ export class Game {
   private taxiHailCooldown = 0;
   private courierJob = new CourierJob();
   private courierDestination?: THREE.Vector3;
-  private brandishCooldown = 0;
   private scopeLevel = 0;
   private cover?: { spot: CoverSpot; t: number; peek: number; corner: -1 | 0 | 1; exitTimer: number };
   private coverAvailable = false;
@@ -274,6 +276,17 @@ export class Game {
   /** Every lazily loaded feature (src/features/) reaches the game through this one field. See
    *  src/features/README.md — a new feature adds a FILE plus one line in an ARRAY, and zero lines here. */
   private features: FeatureHost;
+  /** The shot a feature has raised through `api.cinema`, or undefined while nobody is filming. It is
+   *  the ONE flag the cutscene needs: it neutralises the control branch, overrides the camera and
+   *  raises the bars, and the world under it carries on exactly as it was. */
+  private cinemaShot?: FeatureCinemaShot;
+  private cinemaHint = '';
+  private cinemaBars = 0; // 0..1 eased coverage; rides its own clock so it can finish leaving over a menu
+  private cinemaBarsShown = -1;
+  private cinemaHintShown = '';
+  private cinemaSkip = false; // the player asked out; consumed by the feature's next cinema() call
+  private cinemaEye = new THREE.Vector3();
+  private cinemaFocus = new THREE.Vector3();
 
   constructor(private container: HTMLElement) {
     bootMark('boot: settings');
@@ -1033,7 +1046,12 @@ export class Game {
     if (this.input.consume('KeyH')) this.useStim();
     if (this.input.consume('KeyL')) { const lit = this.torch.toggle(); this.audio.ui(lit); if (lit) this.torchHint.learned(); } // works on foot, driving, riding, flying — the click doubles as on/off feedback; a player who found L is never lectured about it
 
-    if (this.airborne) this.updateAirborne(dt);
+    // A CUTSCENE OWNS THE CONTROLS. Skipping the whole control branch — rather than filtering keys
+    // inside it — is what makes "the player cannot drive, steer, shoot, exit or hoot during the
+    // scene" one line instead of a rule repeated in six places. Everything below this still runs, so
+    // traffic, police, the clock and the radio carry straight on underneath the bars.
+    if (this.cinemaShot) { if (this.input.consume('KeyE') || this.input.consume('Space')) this.cinemaSkip = true; }
+    else if (this.airborne) this.updateAirborne(dt);
     else if (this.transition) this.updateTransition(dt);
     else if (this.activePlane) this.updateFlying(dt);
     else if (this.trains.riding) this.updateTrainRide();
@@ -1041,8 +1059,10 @@ export class Game {
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     this.updateStreetName(dt, focus);
-    this.brandishCooldown = Math.max(0, this.brandishCooldown - dt);
-    if (this.input.aiming && !this.combat.spec.melee && !this.transition && !this.airborne && this.brandishCooldown === 0) { this.population.broadcastBrandish(focus); this.brandishCooldown = 1.5; } // a raised gun scares witnesses; no police heat for merely aiming
+    // NOTHING HERE FRIGHTENS ANYBODY. Aiming used to broadcast a brandish spike to every ped who
+    // could see the player, once every 1.5s — which meant walking a street with a pistol raised
+    // emptied it, and an emptied street has nobody left to talk to, hail or hire. Sight of a gun
+    // is not an event; only firing it is (see fireWeapon's gunshot broadcast). See FEAR_EVENTS.
     this.profiler.mark('world');
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
@@ -1051,7 +1071,7 @@ export class Game {
     // "Visibly armed" = a firearm SELECTED while on foot: the rigged player carries the current
     // weapon in hand whenever it's selected (holstering only in vehicles/air), so selection is
     // holding. Melee weapons still read as fists — see SidearmSystem for the full deterrence rule.
-    // Drawing remains no crime (the brandish broadcast above stays heat-free): it is a deterrent.
+    // Drawing remains no crime and no fright: it is a deterrent, and it is not violence.
     this.population.update(dt, focus, (amount) => { this.damagePlayer(amount); this.shake = Math.min(0.7, this.shake + 0.18); }, playerOnFoot, playerOnFoot && !this.combat.spec.melee); // hostile punches land with a jolt, not just the damage flash
     for (const hit of this.population.consumePlayerVehicleHits()) { // civilian traffic vs the on-foot player: the driver is AI, the player the victim — no heat, just physics
       if (hit.damage > 0) this.damagePlayer(hit.damage);
@@ -3002,7 +3022,44 @@ export class Game {
     else this.driveSteer *= Math.exp(-dt * 12); // released: the wheel springs back to centre
   }
 
+  /**
+   * The bars, on their own clock.
+   *
+   * Deliberately NOT a CSS transition and deliberately not tied to the shot's lifetime: a skip cuts
+   * the scene mid-slide and the bars have to travel back from wherever they had got to, and the last
+   * half-second of their exit plays over the menu card the scene resolves into — a screen on which
+   * no feature code is running at all, because a paused game runs no sim step.
+   */
+  private updateCinemaBars(dt: number): void {
+    const target = this.cinemaShot ? 1 : 0;
+    if (this.cinemaBars !== target) {
+      const rate = target > 0 ? CINEMA_BARS_IN : CINEMA_BARS_OUT;
+      this.cinemaBars = THREE.MathUtils.clamp(this.cinemaBars + Math.sign(target - this.cinemaBars) * rate * dt, 0, 1);
+    }
+    if (this.cinemaBars === this.cinemaBarsShown && this.cinemaHint === this.cinemaHintShown) return;
+    this.cinemaBarsShown = this.cinemaBars; this.cinemaHintShown = this.cinemaHint;
+    this.ui.setLetterbox(this.cinemaBars, this.cinemaHint);
+  }
+
+  /** A fixed exterior pose the camera CRANES to. The ease is the whole effect: cutting to the pose
+   *  reads as a bug, arriving at it over a second reads as a camera operator. */
+  private applyCinemaShot(dt: number, shot: FeatureCinemaShot): void {
+    this.player.setVisible(!this.player.inVehicle);
+    this.activeVehicle?.setFirstPerson(false); // an exterior shot needs the cabin the driver view hides
+    this.cinemaEye.set(shot.eye.x, shot.eye.y, shot.eye.z);
+    this.cinemaFocus.set(shot.focus.x, shot.focus.y, shot.focus.z);
+    this.camera.position.lerp(this.cinemaEye, 1 - Math.exp(-dt * CINEMA_CRANE));
+    this.camera.lookAt(this.cinemaFocus);
+    this.torch.frame(this.camera, this.cinemaFocus, false, !this.online);
+  }
+
+  /** Drops any live cutscene on the floor: the bars run out on their own clock and the chase camera
+   *  is back next frame. Death and arrest take the screen away from whoever was filming. */
+  private clearCinema(): void { this.cinemaShot = undefined; this.cinemaHint = ''; this.cinemaSkip = false; }
+
   private updateCamera(dt: number): void {
+    this.updateCinemaBars(dt);
+    if (this.cinemaShot) { this.shake = Math.max(0, this.shake - dt); this.applyCinemaShot(dt, this.cinemaShot); return; }
     const flying = this.activePlane;
     const target = flying?.group.position ?? this.activeVehicle?.group.position ?? this.player.group.position;
     // Aboard a train the aisle is first-person only (a boom would sit outside the shell), but at the
@@ -3284,6 +3341,7 @@ export class Game {
     analytics.record('player_death', { mode: this.online ? 'multiplayer' : 'singleplayer' });
     if (this.missions.state === 'active') this.processMissionUpdate(this.missions.fail('You were incapacitated'));
     this.endCourierShift();
+    this.clearCinema(); // dying mid-cutscene must not leave the lens parked on a car you are no longer in
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false); this.player.setDead(true); this.mode = 'dead'; analytics.setMode('paused'); this.deathTimer = 3; this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio(); this.closeWeaponWheel(); this.closeConsole(); this.closeMap(); this.ui.notify('EISH', 'You got klapped. An ambulance is coming just now. Press E after respawning to restart the job.', false); document.exitPointerLock();
   }
   /** `reload` console command: restore the manual checkpoint live (no page refresh) — money, time, kit, cheats,
@@ -3341,6 +3399,7 @@ export class Game {
     if (this.missions.state === 'active') this.processMissionUpdate(this.missions.fail('JMPD nicked you'));
     this.endCourierShift();
     this.cover = undefined; this.airborne = undefined; this.player.setCanopy(false);
+    this.clearCinema(); // ditto for the back of a van
     this.mode = 'busted'; analytics.setMode('paused'); this.bustTimer = 3; this.bustMeter = 0;
     this.audio.setEngine(false); this.audio.setTrafficEngine(false); this.audio.setSiren(false); this.audio.setFire(false); this.audio.stopRadio();
     this.audio.policeRadio(); // dispatch calls the arrest in
@@ -3467,6 +3526,16 @@ export class Game {
       playerPosition: () => this.player.group.position,
       playerHeading: () => this.player.heading,
       cameraPosition: () => this.camera.position,
+      // The cutscene seam. One call sets the pose, raises the bars and neutralises the controls, and
+      // its RETURN is the skip edge — so a feature that forgets to read it still cannot leave the
+      // player stuck, because the same call is how the scene is kept alive frame by frame.
+      cinema: (shot) => {
+        this.cinemaShot = shot;
+        this.cinemaHint = shot?.hint ?? '';
+        if (!shot) { this.cinemaSkip = false; return false; }
+        const skipped = this.cinemaSkip; this.cinemaSkip = false;
+        return skipped;
+      },
       drivenVehicle: () => this.activeVehicle,
       hour: () => this.dayNight.hour,
       blackout: () => this.dayNight.blackoutDarkness,

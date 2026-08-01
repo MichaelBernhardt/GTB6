@@ -25,6 +25,8 @@ import * as THREE from 'three';
 import type { FeatureGameApi, FeatureHudEntry, FeatureMenuRow, FeatureSystem, InteractionCtx, InteractionDescriptor, InteractionOffer } from '../types';
 import type { FeatureMapIcon, FeatureMapSource } from '../host';
 import type { Pedestrian } from '../../entities/Pedestrian';
+import type { Vehicle } from '../../entities/Vehicle';
+import { stablePositionRandom } from '../../world/StableRandom';
 import {
   DEFAULT_STREET_STATE, sanitizeStreetState, STREET_PRODUCTS, STREET_STAFF_RADIUS,
   STREET_UNSTAFF_RADIUS, streetSites,
@@ -37,6 +39,7 @@ import {
   AFTER_WORK_SECONDS, BAD_DATE_LEVY, BAD_DATE_SECONDS, banHours, hoursUntilShift, isQuiet, onShift,
   quietHint, refuseWindow, type Refusal, type WindowState,
 } from './rules';
+import { bodyRock, SCENE_LENGTH, shortTimeShot } from './scene';
 import {
   askPrice, bestDemand, bidPrice, buysHere, carryCap, carrying, demandIndex, PRODUCTS, productSpec,
   quoteBuy, quoteSell, recoverDemand, sellsToYou, supplyProduct, tierFor, tierSpec,
@@ -101,6 +104,19 @@ interface Ride {
   readonly paid: number;
 }
 
+/** A cutscene in flight. It owns nothing the ride does not already own — kill it at any moment and
+ *  the ride still resolves onto the same card with the same payoff. */
+interface Scene {
+  readonly ride: Ride;
+  /** The car the scene is filming. If `drivenVehicle()` ever stops being THIS one, she is gone. */
+  readonly car: Vehicle;
+  /** Stable 0..1 from the pickup kerb and the ride count: the camera's side and the springs' phase. */
+  readonly phase: number;
+  /** Bodywork when the cameras rolled. A hit during the scene ends it. */
+  readonly health: number;
+  t: number;
+}
+
 export function createFeature(api: FeatureGameApi, state: unknown): FeatureSystem & FeatureMapSource {
   const save: StreetSaveState = sanitizeStreetState(state ?? DEFAULT_STREET_STATE);
   // A COPY of the memoized derivation: the QA driver restages a site in front of the player, and
@@ -128,6 +144,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let radio = 0;
   let sales = 0;
   let ride: Ride | undefined;
+  let scene: Scene | undefined;
   let openSite: StreetSite | undefined;
   let disposed = false;
   let dirty = false;
@@ -717,6 +734,71 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     };
   }
 
+  // ---- the cut scene ----------------------------------------------------------------------------
+
+  /**
+   * THE SHORT TIME, AS A CUT SCENE. Camera outside the car, black bars, the springs do the acting,
+   * job done. Nothing explicit exists in this build, reachable or otherwise; the entire joke is in
+   * the framing, which is exactly how the genre has always told it.
+   *
+   * It is PRESENTATION IN FRONT OF THE CARD, never a replacement for it. Every exit from here — the
+   * full seven seconds, a skip, a bullet through the windscreen — lands on the same `finishRide()`,
+   * so `save.rides`, her after-work cooldown, the tip she gives you and the analytics are identical
+   * whichever way you leave. If the payoff could be lost by skipping, the skip would be a punishment
+   * and the scene would be a tax.
+   *
+   * The seam is OPTIONAL by design (`api.cinema`), and a host without it is not a broken host: it
+   * goes straight to the card, which is the feature. See FeatureGameApi.cinema.
+   */
+  function beginScene(): void {
+    const current = ride;
+    const car = api.drivenVehicle();
+    if (!current || !car || !api.cinema) { finishRide(); return; }
+    scene = {
+      ride: current, car, health: car.health, t: 0,
+      // Stable, from the kerb she was picked up at and how many rides deep the player is: the same
+      // pickup replays the same shot, and nothing here can desync a save or a headless capture.
+      phase: stablePositionRandom(current.pickupX, current.pickupZ, save.rides + 1),
+    };
+  }
+
+  /** Puts the body back, hands the camera over, and forgets the scene — WITHOUT resolving the ride.
+   *  The one path that must never show a card: a checkpoint reload or a dispose mid-scene. */
+  function dropScene(): void {
+    if (!scene) return;
+    scene.car.setBodySway(0, 0, 0);
+    scene = undefined;
+    api.cinema?.(undefined);
+  }
+
+  function endScene(how: 'played' | 'skipped' | 'cut'): void {
+    const played = scene?.t ?? 0;
+    dropScene();
+    api.analytics('scene', { detail: how, value: Math.round(played * 10) / 10 });
+    // Bars down and camera released BEFORE the card, because showMenu pauses the world and a paused
+    // world runs no sim step — anything still on this feature's clock would freeze exactly there.
+    finishRide();
+  }
+
+  function advanceScene(dt: number): void {
+    const current = scene;
+    if (!current) return;
+    current.t += dt;
+    const car = api.drivenVehicle();
+    // SHE IS GONE THE MOMENT THE SCENE IS. Dragged out of the car, shot at, or set alight: cut to
+    // the card on the spot. A cutscene that keeps rolling over a firefight is not a joke, it is a
+    // freeze, and the player will report it as one.
+    if (!car || car !== current.car || car.onFire || car.health < current.health - 1) { endScene('cut'); return; }
+    const at = car.group.position;
+    const shot = shortTimeShot(at, car.heading, current.phase, api.surfaceHeightAt(at.x, at.z));
+    if (api.cinema?.({ ...shot, hint: 'E  Skip' })) { endScene('skipped'); return; }
+    // The VISUAL body only. The collider, the nav graph, traffic, police and the camera focus all go
+    // on seeing a parked car — see Vehicle.setBodySway.
+    const rock = bodyRock(current.t, current.phase);
+    car.setBodySway(rock.pitch, rock.roll, rock.lift);
+    if (current.t >= SCENE_LENGTH) endScene('played');
+  }
+
   /**
    * The interlude. A card of conversation on a paused screen — nothing sexual exists in this build,
    * reachable or otherwise — and it grants NO health, no armour and no money back. GTA III's mistake
@@ -801,8 +883,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // Above the trade rungs on purpose: while she is in the car, E belongs to the ride.
       id: 'street:ride', order: 46, context: 'vehicle',
       test: () => {
-        if (!ride) return undefined;
-        return isQuiet(rideSpot()) ? { prompt: 'E  Kill the lights', act: () => finishRide() } : undefined;
+        // While the scene is rolling E belongs to the SKIP, which Game reads directly — a rung that
+        // still offered here would put a second prompt on a screen that has no HUD.
+        if (!ride || scene) return undefined;
+        return isQuiet(rideSpot()) ? { prompt: 'E  Kill the lights', act: () => beginScene() } : undefined;
       },
     },
     {
@@ -932,6 +1016,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   function update(dt: number): void {
     if (disposed) return;
     const hour = api.hour();
+    advanceScene(dt); // first: a scene that ends this step must resolve before anything reads `ride`
     reconcileTimer -= dt;
     if (reconcileTimer <= 0) { reconcileTimer = 0.5; reconcile(hour); }
     tendFixtures(dt);
@@ -1058,7 +1143,19 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       return [`holding ${carrying(save.stock)}`];
     }
     if (verb === 'clear') { save.banned = 0; save.levy = 0; dirty = true; return ['bad-date list cleared, subs written off']; }
-    return ['feature street [status|sites|here|give <product> <n>|clear]'];
+    // Rolls the cut scene on the car you are sitting in, without the drive, the fare or the corner.
+    // It goes through the REAL beginScene, so what you are looking at is what a player would get.
+    if (verb === 'scene') {
+      const car = api.drivenVehicle();
+      if (!car) return ['get in a car first — the scene is shot around one'];
+      const entry = sites.find((candidate) => candidate.kind === 'worker');
+      if (!entry) return ['no worker corner on this map'];
+      const at = car.group.position;
+      ride = { site: entry, worker: workerFor(entry.cast), pickupX: at.x, pickupZ: at.z, paid: 0 };
+      beginScene();
+      return [scene ? 'rolling — E or SPACE to skip' : 'no cinema seam on this host; card only'];
+    }
+    return ['feature street [status|sites|here|give <product> <n>|scene|clear]'];
   }
 
   /**
@@ -1114,6 +1211,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     restore: (next) => {
       const fresh = sanitizeStreetState(next);
       Object.assign(save, fresh, { stock: { ...fresh.stock }, met: [...fresh.met] });
+      dropScene(); // a checkpoint landing mid-scene gets its camera and its bodywork back, and no card
       ride = undefined;
     },
     menu,
@@ -1134,6 +1232,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     qa,
     dispose: () => {
       disposed = true;
+      dropScene(); // the bars and the borrowed camera are scene objects too, and dispose owns all of them
       for (const id of [...fixtures.keys()]) despawn(id);
       // Beacons are meshes we made, so we own their geometry and materials too — a scene removal
       // alone would leak both on every checkpoint reload. Idempotent: the maps are emptied.

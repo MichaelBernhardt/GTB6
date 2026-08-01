@@ -13,6 +13,11 @@ import { TOAST_MS, toastVisibleAt, type CheatWeaponEntry, type DrinkCatalogEntry
 
 export type { CheatWeaponEntry, FeatureHudEntry, FeatureMenuView, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, ShopLockpickEntry, WheelEntry } from './UIModels';
 
+/** Height each bar takes at full coverage, as a fraction of the viewport: a 16:9 frame masked to
+ *  2.39:1 Scope loses (1 - (16/9)/2.39) of its height, half above and half below. A real ratio,
+ *  because "black stripes" and "the film has started" are two different signals. */
+const LETTERBOX_COVERAGE = (1 - (16 / 9) / 2.39) / 2;
+
 export class UIManager {
   root = document.createElement('div');
   hud = document.createElement('div');
@@ -20,6 +25,8 @@ export class UIManager {
   wheel = document.createElement('div');
   vignette = document.createElement('div');
   fade = document.createElement('div');
+  letterbox = document.createElement('div');
+  private letterboxHint = document.createElement('b');
   private hudView: HudView;
   private menuView: MenuView;
   private minimapView = new MinimapView();
@@ -64,12 +71,15 @@ export class UIManager {
   constructor() {
     this.root.id = 'ui'; this.hud.id = 'hud'; this.toast.id = 'toast'; this.toast.setAttribute('role', 'status'); this.toast.setAttribute('aria-live', 'polite'); this.toast.setAttribute('aria-atomic', 'true');
     this.wheel.id = 'weapon-wheel'; this.vignette.id = 'vignette'; this.fade.id = 'fade';
+    this.letterbox.id = 'letterbox'; this.letterbox.setAttribute('aria-hidden', 'true');
+    const topBar = document.createElement('i'); const bottomBar = document.createElement('i');
+    bottomBar.append(this.letterboxHint); this.letterbox.append(topBar, bottomBar);
     this.menuView = new MenuView(document.createElement('div')); this.hudView = new HudView(this.hud);
     this.consoleView.onSubmit = (text) => this.onConsoleCommand?.(text); this.consoleView.onClose = () => this.onConsoleClose?.();
     this.mapView.onClose = () => this.onMapClose?.();
     this.mapView.onWaypoint = (x, z) => this.onMapWaypoint?.(x, z);
     this.mapView.onWaypointClear = () => this.onMapWaypointClear?.();
-    this.root.append(this.vignette, this.hud, this.minimapView.canvas, this.toast, this.wheel, this.mapView.root, this.consoleView.root, this.menuView.root, this.fade); document.body.append(this.root); this.showLoading();
+    this.root.append(this.vignette, this.hud, this.minimapView.canvas, this.toast, this.wheel, this.letterbox, this.mapView.root, this.consoleView.root, this.menuView.root, this.fade); document.body.append(this.root); this.showLoading();
   }
 
   get consoleOpen(): boolean { return this.consoleView.open; }
@@ -86,6 +96,21 @@ export class UIManager {
 
   update(state: HudState): void {
     this.hudView.update(state); if (!toastVisibleAt(performance.now(), this.toastDeadline)) this.toast.classList.remove('is-visible');
+  }
+
+  /**
+   * CINEMA BARS. `amount` is 0..1 of full 2.39:1 coverage and the CALLER owns the easing, so a scene
+   * slides them in, holds them, and slides them out on its own clock rather than a CSS transition
+   * that cannot be interrupted by a skip. Raising them also stands the HUD and the radar down: a
+   * fuel gauge inside a letterbox is the one thing that would break the shot.
+   */
+  setLetterbox(amount: number, hint = ''): void {
+    const clamped = Math.max(0, Math.min(1, amount));
+    const up = clamped > 0.001;
+    this.letterbox.style.setProperty('--bar', `${(clamped * LETTERBOX_COVERAGE * 100).toFixed(2)}vh`);
+    this.letterbox.classList.toggle('is-visible', up);
+    this.root.classList.toggle('is-cinema', up);
+    if (this.letterboxHint.textContent !== hint) this.letterboxHint.textContent = hint;
   }
 
   damageFlash(): void { this.vignette.classList.remove('is-flashing'); void this.vignette.offsetWidth; this.vignette.classList.add('is-flashing'); }
