@@ -91,7 +91,12 @@ export class Pedestrian {
   /** Built once; the ragdoll queries ground/walls through it every step without per-frame closures. */
   private readonly ragdollEnv: RagdollEnvironment = {
     heightAt: (x, z) => this.groundOverride ?? (this.ragdollCity ? this.ragdollCity.surfaceHeightAt(x, z) : this.groundY),
-    blockedAt: (x, z, radius) => this.ragdollCity ? this.ragdollCity.collides(x, z, radius) : false,
+    // The city's wall query is 2D — inside a feature interior the body stands within its own
+    // building's collider footprint, so every ragdoll particle read as "against a wall", the
+    // death kick cancelled, and the corpse FROZE UPRIGHT in under a second: the owner's standing
+    // non-interactive zombie. A grounded interior body collides with nothing but its floor; a
+    // limb settling through a partition edge is cosmetic and accepted.
+    blockedAt: (x, z, radius) => this.groundOverride === undefined && this.ragdollCity ? this.ragdollCity.collides(x, z, radius) : false,
   };
 
   /** The surface this ped stands on: the feature-owned floor when one is set, else the terrain. */

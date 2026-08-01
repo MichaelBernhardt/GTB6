@@ -161,6 +161,10 @@ interface Visit {
   fixture?: { ped: NonNullable<ReturnType<FeatureGameApi['spawnFixture']>> };
   /** Previous local position, for the axis-separated clamp. */
   last: { x: number; z: number };
+  /** The last world y the clamp pinned the player to — the storey plane, or the flight height mid
+   *  climb. This is what indoorFloorY() reports, so Player.update grounds on the stair as well as
+   *  the floor. */
+  lastY?: number;
   /** Peak floors VISIBLE at once this visit — reported by the QA driver, not guessed at. */
   peakResident: number;
 }
@@ -831,7 +835,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         placeFixture(current, here(current));
       }
       const world = toWorld(current, current.heading, x, z);
-      player.set(world.x, floorY(current, current.floor), world.z);
+      current.lastY = floorY(current, current.floor);
+      player.set(world.x, current.lastY, world.z);
     } else {
       if (current.shaftBase === undefined) {
         // Which flight this is: the +x half climbs FROM this storey, the −x half arrives ON it.
@@ -856,7 +861,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       }
       lastProgress = progress;
       const world = toWorld(current, current.heading, x, z);
-      player.set(world.x, floorY(current, current.shaftBase) + progress * STOREY_HEIGHT, world.z);
+      current.lastY = floorY(current, current.shaftBase) + progress * STOREY_HEIGHT;
+      player.set(world.x, current.lastY, world.z);
     }
     holdNeighbour(current, { x, z }, dt);
   };
@@ -1130,7 +1136,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     /** The storey's floor height, for host systems that ground things while the player is inside.
      *  The player's own y is NOT this mid-frame (Player.update grounds it against the terrain
      *  before this feature's clamp re-pins it), which is exactly why the seam exists. */
-    indoorFloorY: () => (visit ? floorY(visit, visit.floor) : undefined),
+    indoorFloorY: () => (visit ? visit.lastY ?? floorY(visit, visit.floor) : undefined),
 
     interactions: () => rungs,
 

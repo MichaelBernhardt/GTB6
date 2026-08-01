@@ -1368,6 +1368,10 @@ export class Game {
   }
 
   private updateOnFoot(dt: number): void {
+    // The interior floor is the player's ground for the WHOLE frame — set before Player.update so
+    // no later system ever sees a terrain-grounded y while the player is indoors. See
+    // Player.groundOverride for the mid-frame oscillation this kills.
+    this.player.groundOverride = this.features.indoorFloorY();
     this.player.update(dt, this.input, this.cameraController.yaw, this.city, this.updateCoverState(dt));
     const fall = this.player.consumeFallDamage(); // hard landings billed through the usual damage path
     if (fall > 0) { this.damagePlayer(fall); this.shake = Math.min(0.7, this.shake + 0.25); this.audio.collision(10 + fall * 0.3); }
