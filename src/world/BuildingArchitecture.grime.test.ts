@@ -128,18 +128,24 @@ describe('planGrimeDecals — where the dirt goes', () => {
     }
   });
 
-  it('keeps street tags in spray reach and upper wash on tall shafts only', () => {
+  /**
+   * Two tag bands, not one. The spray-reach band is unchanged; the FASCIA band above it is the
+   * graffiti-density pass, and it exists because a shopfronted CBD front is blocked solid from the
+   * pavement to 4.2 u by its own bays — the band a writer can actually reach on those buildings is
+   * the one over the shop, off the hood. So a tag may top out either in reach (<= 3.36) or on the
+   * fascia (<= 8.6); above that only the wash streak, and only on a tall shaft.
+   */
+  it('keeps tags in the two reachable bands and upper wash on tall shafts only', () => {
     const short = slab(24, 16, 12); const tall = slab(24, 16, 60);
     for (const [x, z] of SEED_POSITIONS) {
       for (const decal of planGrimeDecals(short, 'mixed-use', 24, 12, x, z)) {
-        expect(decal.y + decal.height / 2).toBeLessThanOrEqual(3.36);
+        expect(decal.y + decal.height / 2).toBeLessThanOrEqual(8.61);
       }
       for (const decal of planGrimeDecals(tall, 'downtown', 24, 60, x, z)) {
         const top = decal.y + decal.height / 2;
-        if (top > 3.4) { // the one allowed high placement is the upper wash streak, never a tag
-          expect(GRIME_ATLAS_CELLS[decal.cell]!.kind).toBe('grime');
-          expect(top).toBeLessThanOrEqual(11.01);
-        }
+        const tag = GRIME_ATLAS_CELLS[decal.cell]!.kind === 'tag';
+        if (tag) expect(top, 'a tag above the fascia band').toBeLessThanOrEqual(8.61);
+        else if (top > 3.4) expect(top, 'a wash streak above the shaft band').toBeLessThanOrEqual(11.01);
       }
     }
   });

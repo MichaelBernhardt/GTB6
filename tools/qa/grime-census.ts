@@ -24,6 +24,12 @@ interface Tally { parcels: number; decorated: number; tags: number; grime: numbe
 const perStyle = new Map<string, Tally>();
 const cellUse = new Array(GRIME_ATLAS_CELLS.length).fill(0) as number[];
 let cbdParcels = 0; let cbdDecorated = 0; let cbdDecals = 0;
+// THE OWNER'S UNIT: "I only saw one [tag]" is a statement about walking a block face, so the
+// headline number is tags per 100 u of the frontage he walks past — the summed street-facing
+// width of every downtown building in the CBD districts, which is what the front decals hang on.
+let cbdFrontage = 0; let cbdTags = 0; let cbdStreetTags = 0;
+/** Decals above this are read off the fascia/shaft rather than from the pavement. */
+const STREET_LEVEL_Y = 4.5;
 
 for (const building of allBuildings()) {
   const style = building.style as BuildingStyle;
@@ -53,6 +59,14 @@ for (const building of allBuildings()) {
     cbdParcels++;
     if (decals.length > 0) cbdDecorated++;
     cbdDecals += decals.length;
+    if (style === 'downtown') {
+      cbdFrontage += building.width;
+      for (const decal of decals) {
+        if (GRIME_ATLAS_CELLS[decal.cell]!.kind !== 'tag') continue;
+        cbdTags++;
+        if (decal.y <= STREET_LEVEL_Y) cbdStreetTags++;
+      }
+    }
   }
 }
 
@@ -65,4 +79,7 @@ for (const [style, tally] of [...perStyle].sort((a, b) => b[1].parcels - a[1].pa
 }
 console.log(`  ${'TOTAL'.padEnd(18)} ${decorated}/${parcels} buildings carry ${quads} decal quads`);
 console.log(`\nCBD (the ${HIGHRISE_DISTRICTS.size} highrise districts): ${cbdDecorated}/${cbdParcels} parcels decorated (${(100 * cbdDecorated / Math.max(1, cbdParcels)).toFixed(1)}%), ${cbdDecals} decals`);
+console.log(`CBD graffiti rate: ${cbdTags} tags over ${cbdFrontage.toFixed(0)} u of downtown street frontage`
+  + ` = ${(100 * cbdTags / Math.max(1, cbdFrontage)).toFixed(2)} tags / 100 u`
+  + ` (${(100 * cbdStreetTags / Math.max(1, cbdFrontage)).toFixed(2)} of them at street level, y <= ${STREET_LEVEL_Y})`);
 console.log(`atlas cell usage (12 cells, 8 tag + 4 grime): [${cellUse.join(', ')}]`);

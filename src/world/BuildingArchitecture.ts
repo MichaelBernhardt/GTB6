@@ -287,9 +287,15 @@ export function glazingBayLayout(width: number): { positions: number[]; windowWi
 export interface GrimeDecal { x: number; y: number; z: number; width: number; height: number; cell: number; flip: boolean; }
 
 /** Fraction of each family's buildings that carry street grime/graffiti. Suburbs, estates and the
- *  rural belt stay clean — the dirt belongs to the CBD, the strips, the walk-ups and the works. */
+ *  rural belt stay clean — the dirt belongs to the CBD, the strips, the walk-ups and the works.
+ *
+ *  Raised across the board after the first playtest of the dirt pass: "Maybe some more graffiti
+ *  density. I only saw one." At 0.6 of downtown carrying an average 0.36 TAGS each, a player could
+ *  walk four blocks of the CBD past nothing but clean wall. A tagged wall is the norm in the inner
+ *  city and a clean one is the exception, so the fractions read that way now; the hold-out share
+ *  that is left keeps a bank or a repainted frontage on most block faces. */
 export const GRIME_DECAL_CHANCE: Partial<Record<BuildingStyle, number>> = {
-  downtown: 0.6, 'mixed-use': 0.5, 'dense-residential': 0.45, industrial: 0.42,
+  downtown: 0.93, 'mixed-use': 0.82, 'dense-residential': 0.7, industrial: 0.8,
 };
 
 /** Above this parcel height a building can also wear an UPPER wash streak (soot bleeding down the
@@ -380,11 +386,24 @@ export function planGrimeDecals(
     }
   };
   const baseBand = style === 'downtown' ? 1.0 : 0.6; // the CBD plinth tops out at 0.9
-  const tags = 1 + Math.floor(roll(702) * 3);
-  for (let i = 0; i < tags; i++) tryPlace('tag', 1.7, 3.4, baseBand, 3.35);
-  const patches = 1 + Math.floor(roll(703) * 2);
+  // Street level, spray-can reach. The width floor came down from 1.7 because on a shopfronted
+  // front the only wall left is the pier between two bays, and nothing 1.7 wide has ever fitted
+  // one: a narrow tag on a pier is exactly what is actually painted there.
+  const tags = 3 + Math.floor(roll(702) * 4);
+  for (let i = 0; i < tags; i++) tryPlace('tag', 1.1, 3.3, baseBand, 3.35);
+  const patches = 1 + Math.floor(roll(703) * 3);
   for (let i = 0; i < patches; i++) tryPlace('grime', 2.4, 4.8, Math.max(0.5, baseBand - 0.4), 3.1);
-  if (height > GRIME_UPPER_MIN_HEIGHT && roll(704) < 0.5) tryPlace('grime', 2.6, 4.6, 6, Math.min(11, height - 3));
+  // THE FASCIA BAND, and the reason a whole CBD session showed one tag. A shopfronted downtown
+  // front is blocked solid from the pavement to 4.2 by its own bays (glass, shutter, hood, board),
+  // so on the 68% of downtown buildings that carry bays — the ones lining every street the player
+  // walks — the street-level band above had NO wall left to paint. The writers' own answer is the
+  // fascia over the shop, reached off the hood, and that band is free on every front.
+  const fasciaTop = Math.min(height - 0.6, 8.6);
+  if (fasciaTop > 6.2) {
+    const fascia = 1 + Math.floor(roll(705) * 3);
+    for (let i = 0; i < fascia; i++) tryPlace('tag', 1.2, 3.1, 4.6, fasciaTop);
+  }
+  if (height > GRIME_UPPER_MIN_HEIGHT && roll(704) < 0.6) tryPlace('grime', 2.6, 4.6, 6, Math.min(11, height - 3));
   return out;
 }
 
