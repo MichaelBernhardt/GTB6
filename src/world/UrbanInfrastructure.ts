@@ -437,7 +437,9 @@ export class UrbanInfrastructure {
       tree.parts.forEach((part, partIndex) => {
         const key = `${tree.variant}:${partIndex}`;
         const batch = batches.get(key) ?? { part, items: [] };
-        batch.items.push({ x: site.x, z: site.z, matrix: placement.clone().multiply(part.matrix) });
+        // Canopy parts carry the per-tree tint as an instance colour (multiplying the baked vertex
+        // shading); wood stays untinted, so bark batches never allocate an instanceColor buffer.
+        batch.items.push({ x: site.x, z: site.z, matrix: placement.clone().multiply(part.matrix), color: part.canopy ? tree.tint : undefined });
         batches.set(key, batch);
       });
     });

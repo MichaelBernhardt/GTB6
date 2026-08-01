@@ -6,14 +6,18 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const MODEL = resolve(process.argv[2] ?? 'public/models/foliage/joburg-trees.glb');
 const MAX_BYTES = 1024 * 1024;
+// Budgets were raised deliberately for the de-Minecraft pass: canopy blobs went from raw 20-face
+// icosahedrons to jittered 80-face icospheres (landmark crowns 320), roughly 2.5x per tree. Roadside,
+// park-ring and scattered trees are all instanced or streamed per cell, so the budget that matters is
+// per-variant, and the whole library must still fit the 1 MiB GLB cap below.
 const TRIANGLE_BUDGET = {
-  jacaranda: 300,
-  'shade-tree': 340,
-  gum: 300,
-  pine: 240,
-  acacia: 300,
-  palm: 260,
-  'landmark-tree': 500,
+  jacaranda: 600,
+  'shade-tree': 700,
+  gum: 460,
+  pine: 540,
+  acacia: 540,
+  palm: 300,
+  'landmark-tree': 2400,
 };
 
 function invariant(value, message) { if (!value) throw new Error(message); }

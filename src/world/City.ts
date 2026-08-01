@@ -48,6 +48,7 @@ import { boardText, parcelBuildingName, scatterBuildingName } from './buildingId
 import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type GeneratedBuilding } from './CityGen';
 import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
+import { buildTreeInstance, type TreeInstancePart } from './FoliageAssets';
 import type { BuiltModel } from './models/kit';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
@@ -786,6 +787,8 @@ const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
 
 const GENERIC_AREA_NAMES = new Set(['park', 'grass', 'forest', 'wood', 'scrub', 'golf_course', 'nature_reserve', 'green', 'water', 'brownfield', 'mine_dump']);
 const PARK_TREE_SPECIES = ['shade-tree', 'jacaranda', 'shade-tree', 'gum', 'pine'] as const;
+/** Perimeter-avenue mix: planes and jacarandas dominate, the odd gum breaks the rhythm. */
+const RING_TREE_SPECIES = ['shade-tree', 'jacaranda', 'pine', 'jacaranda', 'shade-tree', 'gum'] as const;
 
 /** One step of the staged city build: the label for the loading bar and the build fraction 0..1. */
 export interface CityBuildStage { label: string; fraction: number }
@@ -800,6 +803,11 @@ export class City {
    *  furniture…): sub-pixel long before its 1200u range, so it culls far earlier than the world. */
   private detailStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
   private detailCulling = new ChunkVisibility(this.detailStore, DETAIL_VISIBLE_RANGE, DETAIL_HYSTERESIS);
+  /** Coarse grid (3x3 world cells) for the park perimeter avenues: a park's instanced tree batches
+   *  span a handful of coarse cells instead of one InstancedMesh set per 976u cell, keeping the
+   *  ring's draw-call cost near the roadside-tree baseline while still distance-culling whole parks. */
+  private treeStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE * 3);
+  private treeCulling = new ChunkVisibility(this.treeStore);
   /** On-demand building tier: buildings are GENERATED per cell as the player approaches (frame-budgeted)
    *  and their geometry disposed beyond the far radius — regenerable identically from CityGen's seeds. */
   private buildingStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
@@ -880,6 +888,8 @@ export class City {
   private architecture: BuildingArchitecture;
   private infrastructure!: UrbanInfrastructure; // assigned in buildStages (constructor drains it, or the staged boot walks it)
   private parkTreeSites: Array<{ x: number; z: number; seed: number }> = [];
+  /** Perimeter-avenue sites around manicured greens (see plantParkRing); built instanced, never merged. */
+  private parkRingSites: Array<{ x: number; z: number; seed: number }> = [];
   private treeAssetsInstalled = false;
 
   /** `staged: true` skips the build here so an async caller can walk buildStages() itself,
@@ -942,8 +952,38 @@ export class City {
     for (const site of this.parkTreeSites) this.addParkTree(site.x, site.z, site.seed, parks);
     mergeStaticGeometry(parks, MERGE_CHUNK_SIZE, this.chunkStore);
     parks.removeFromParent();
+    this.buildParkRingTrees();
     this.infrastructure.installTreeAssets();
     this.treeAssetsInstalled = true;
+  }
+
+  /** The park perimeter avenues, instanced per chunk cell exactly like the roadside trees (one
+   *  InstancedMesh per species-variant part per cell): thousands of ring trees stay a handful of
+   *  draw calls per park and cost per-instance matrices instead of merged resident geometry. Trunks
+   *  register the same solid 'tree' prop as every other authored tree — one collision rule. */
+  private buildParkRingTrees(): void {
+    interface Batch { part: TreeInstancePart; items: InstanceItem[] }
+    const batches = new Map<string, Batch>();
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const site of this.parkRingSites) {
+      const species = RING_TREE_SPECIES[Math.abs(Math.trunc(site.seed)) % RING_TREE_SPECIES.length]!;
+      const tree = buildTreeInstance(species, site.seed);
+      if (tree.trunkSolid) this.props.register('tree', site.x, site.z, tree.trunkRadius, tree.trunkHeight);
+      const placement = new THREE.Matrix4().compose(
+        new THREE.Vector3(site.x, terrainHeightAt(site.x, site.z), site.z),
+        new THREE.Quaternion().setFromAxisAngle(up, site.seed * 2.399963229728653),
+        new THREE.Vector3(tree.scale, tree.scale, tree.scale),
+      );
+      tree.parts.forEach((part, partIndex) => {
+        const key = `${species}:${tree.variant}:${partIndex}`;
+        const batch = batches.get(key) ?? { part, items: [] };
+        batch.items.push({ x: site.x, z: site.z, matrix: placement.clone().multiply(part.matrix), color: part.canopy ? tree.tint : undefined });
+        batches.set(key, batch);
+      });
+    }
+    for (const { part, items } of batches.values()) {
+      addInstancedChunks(this.treeStore, part.geometry, part.material, items, { cast: true, receive: true });
+    }
   }
 
   update(dt: number): void {
@@ -1015,6 +1055,7 @@ export class City {
   setStreamRanges(world: number, detail: number, buildings = BUILDING_VISIBLE_RANGE): void {
     this.chunkCulling.setRange(world);
     this.detailCulling.setRange(detail);
+    this.treeCulling.setRange(world);
     this.buildingVisibleRange = buildings;
     // A live tier change must not finish the old wider queue after its budget has been pulled inward.
     this.buildQueue = this.buildQueue.filter(([cx, cz]) => cellDistance(this.visibilityFocusX, this.visibilityFocusZ, cx, cz, MERGE_CHUNK_SIZE) <= buildings);
@@ -1031,6 +1072,7 @@ export class City {
     this.visibilityFocusX = focus.x; this.visibilityFocusZ = focus.z;
     this.chunkCulling.update(focus.x, focus.z);
     this.detailCulling.update(focus.x, focus.z);
+    this.treeCulling.update(focus.x, focus.z);
     this.infrastructure.updateVisibility(focus.x, focus.z);
     if (streamModels) this.updateBuildingChunks(focus.x, focus.z);
   }
@@ -2384,6 +2426,7 @@ export class City {
     for (const polygon of GREEN_POLYGONS) {
       this.addGroundCover(polygon, parkMaterial, GROUND_COVER_LIFT); // drapes onto the relief
       this.plantParkTrees(polygon);
+      if (polygon.manicured) this.plantParkRing(polygon); // parks are surrounded by trees; wild veld is not
       if (!GENERIC_AREA_NAMES.has(polygon.name.toLowerCase()) && polygon.area > 4000) this.addParkSign(polygon);
     }
     for (const polygon of DIRT_POLYGONS) this.addGroundCover(polygon, dirtMaterial, 0.04); // mine dumps: Joburg's pale gold heaps, now draped on the terrain
@@ -2402,6 +2445,49 @@ export class City {
       if (terrainHeightAt(x, z) > SNOW_Y * 0.55) continue; // no leafy park trees above the range's rock line
       this.parkTreeSites.push({ x, z, seed: attempt + Math.round(polygon.cx) });
       planted++;
+    }
+  }
+
+  /** Walks a manicured green's boundary and books a tree at a steady pitch just inside it, so parks
+   *  read as tree-lined the way Joburg's actually are. Same rejects as the interior scatter (no tar,
+   *  no ballast, no reserved ground, no water, nothing above the rock line); pitch widens with
+   *  perimeter so a golf course gets an avenue, not a hedgerow. Sites are deterministic (seeded off
+   *  the polygon and station index) and are built as per-chunk instanced batches, not merged clones —
+   *  a few thousand ring trees cost matrices, not resident megabytes (see buildParkRingTrees). */
+  private plantParkRing(polygon: MapPolygon): void {
+    const points = polygon.points;
+    let perimeter = 0;
+    for (let index = 0; index < points.length; index++) {
+      const a = points[index]!; const b = points[(index + 1) % points.length]!;
+      perimeter += Math.hypot(b.x - a.x, b.z - a.z);
+    }
+    if (perimeter < 60) return; // a pocket lawn has no room for an avenue
+    const pitch = THREE.MathUtils.clamp(perimeter / 130, 8, 18);
+    let untilNext = pitch * 0.5; let station = 0;
+    for (let index = 0; index < points.length; index++) {
+      const a = points[index]!; const b = points[(index + 1) % points.length]!;
+      const length = Math.hypot(b.x - a.x, b.z - a.z);
+      if (length < 1e-3) continue;
+      const dirX = (b.x - a.x) / length; const dirZ = (b.z - a.z) / length;
+      let along = untilNext;
+      while (along < length) {
+        station++;
+        const jitterAlong = (seeded(polygon.cx + station, polygon.cz, 33) - 0.5) * pitch * 0.35;
+        const inset = 2.6 + seeded(polygon.cx, polygon.cz + station, 34) * 2.4;
+        const baseX = a.x + dirX * THREE.MathUtils.clamp(along + jitterAlong, 0, length);
+        const baseZ = a.z + dirZ * THREE.MathUtils.clamp(along + jitterAlong, 0, length);
+        along += pitch;
+        // The boundary winding is not guaranteed, so try both normals and keep the inward one.
+        for (const side of [1, -1]) {
+          const x = baseX - dirZ * inset * side; const z = baseZ + dirX * inset * side;
+          if (!pointInPolygon(polygon, x, z)) continue;
+          if (this.inWater(x, z) || this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2)) break;
+          if (distanceToRailwayCorridor(x, z) < 0.7 || terrainHeightAt(x, z) > SNOW_Y * 0.55) break;
+          this.parkRingSites.push({ x, z, seed: station * 7 + Math.round(polygon.cx + polygon.cz) });
+          break;
+        }
+      }
+      untilNext = along - length;
     }
   }
 

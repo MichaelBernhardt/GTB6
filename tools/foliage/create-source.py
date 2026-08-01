@@ -9,10 +9,16 @@ import argparse
 import json
 import math
 import sys
+import zlib
 from pathlib import Path
 
 import bpy
 from mathutils import Vector
+
+
+def stable01(*parts):
+    """Deterministic 0..1 hash (crc32, not random): two machines build byte-identical trees."""
+    return zlib.crc32(":".join(str(part) for part in parts).encode()) / 0xFFFFFFFF
 
 
 def args_after_separator():
@@ -89,10 +95,19 @@ def cone_between(name, start, end, r0, r1, mat, sides=7):
     return obj
 
 
-def ico_cluster(name, location, radius, scale, mat, rotation=0.0):
-    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=radius, location=location)
+def ico_cluster(name, location, radius, scale, mat, rotation=0.0, subdivisions=2, jitter=0.16):
+    # subdivisions=1 is a RAW 20-face icosahedron — the "Minecraft" canopy. Default is now one
+    # subdivision up (80 faces per blob) plus deterministic per-vertex displacement, so blobs read
+    # as foliage clumps instead of dice. Landmark crowns pass subdivisions=3 (320 faces).
+    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=subdivisions, radius=radius, location=location)
     obj = bpy.context.object
     obj.name = name
+    for index, vertex in enumerate(obj.data.vertices):
+        direction = vertex.co.normalized()
+        vertex.co += direction * ((stable01(name, index, "r") - 0.5) * 2.0 * jitter * radius)
+        vertex.co.x += (stable01(name, index, "x") - 0.5) * jitter * 0.7 * radius
+        vertex.co.y += (stable01(name, index, "y") - 0.5) * jitter * 0.7 * radius
+        vertex.co.z += (stable01(name, index, "z") - 0.5) * jitter * 0.7 * radius
     obj.scale = scale
     obj.rotation_euler[2] = rotation
     obj.data.materials.append(MATERIALS[mat])
@@ -202,7 +217,8 @@ def broadleaf(spec, style):
         parts.append(cone_between("trunk", (0, 0, 0), trunk_end, 0.38, 0.19, bark, 8))
         forks = [(-1.55, -0.45, 5.35), (1.45, 0.6, 5.45), (0.35, 1.5, 5.65)]
         clusters = [(-2.15, -0.8, 6.05, 1.65, 1.15), (1.95, 0.75, 6.2, 1.75, 1.1),
-                    (0.1, 1.8, 6.45, 1.55, 1.0), (0.0, -1.6, 6.35, 1.65, 1.08)]
+                    (0.1, 1.8, 6.45, 1.55, 1.0), (0.0, -1.6, 6.35, 1.65, 1.08),
+                    (0.0, 0.15, 6.8, 1.6, 1.0)]
     elif style == "shade-tree":
         height, radius = (8.1 + 0.35 * v), 5.5
         bark = "BarkPale" if v else "BarkWarm"
@@ -211,7 +227,8 @@ def broadleaf(spec, style):
         parts.append(cone_between("trunk", (0, 0, 0), trunk_end, 0.5, 0.22, bark, 9))
         forks = [(-1.75, -0.5, 5.75), (1.8, 0.45, 5.8), (-0.2, 1.8, 5.95), (0.4, -1.55, 5.65)]
         clusters = [(-2.45, -0.9, 6.7, 2.05, 1.28), (2.3, 0.75, 6.85, 2.0, 1.25),
-                    (-0.2, 2.25, 6.95, 1.95, 1.2), (0.25, -2.0, 6.8, 1.95, 1.2), (0, 0, 7.35, 2.25, 1.25)]
+                    (-0.2, 2.25, 6.95, 1.95, 1.2), (0.25, -2.0, 6.8, 1.95, 1.2), (0, 0, 7.35, 2.25, 1.25),
+                    (1.5, 1.7, 6.6, 1.7, 1.18)]
     elif style == "acacia":
         height, radius = (5.5 + 0.25 * v), 3.75
         bark, leaf, accent = "BarkDark", "LeafOlive", "LeafDark"
@@ -247,7 +264,11 @@ def broadleaf(spec, style):
                                   0.06 if style != "landmark-tree" else 0.1, bark, 6))
     for index, (x, y, z, r, squash) in enumerate(clusters):
         use_mat = accent if index % 3 == 1 else leaf
-        parts.append(ico_cluster(f"crown-{index}", (x, y, z), r, (1.0, 0.88 + 0.05 * (index % 2), squash), use_mat, index * 0.71))
+        # The one landmark species (59 scattered instances citywide) affords a finer 320-face crown.
+        crown_subdivisions = 3 if style == "landmark-tree" else 2
+        parts.append(ico_cluster(f"crown-{index}", (x, y, z), r, (1.0, 0.88 + 0.05 * (index % 2), squash), use_mat,
+                                 index * 0.71, subdivisions=crown_subdivisions,
+                                 jitter=0.13 if style == "landmark-tree" else 0.16))
 
     card_count = 8 if style != "landmark-tree" else 12
     for index in range(card_count):
