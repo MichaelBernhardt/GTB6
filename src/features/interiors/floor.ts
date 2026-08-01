@@ -58,7 +58,7 @@ export type PropShape =
   | 'counter' | 'shelf' | 'crate' | 'sack' | 'fridge' | 'bed' | 'wardrobe' | 'sofa' | 'table'
   | 'stool' | 'stove' | 'basin' | 'bucket' | 'tv' | 'desk' | 'cabinet' | 'plant' | 'notice'
   | 'rack' | 'pallet' | 'drum' | 'bench' | 'rug' | 'bath' | 'trunk' | 'rail'
-  | 'toilet' | 'chair' | 'picture' | 'lamp';
+  | 'toilet' | 'chair' | 'picture' | 'lamp' | 'postboxes';
 
 export interface Prop {
   readonly shape: PropShape;
@@ -543,6 +543,13 @@ const FIXTURE_NAMES: Partial<Record<RoomKind, string>> = {
   shop: 'Shopkeeper', lobby: 'Security', warehouse: 'Storeman', lounge: 'Tenant', dining: 'Tenant',
 };
 
+/** Who stands in a lobby follows the building's use, like its furniture: a block of flats has a
+ *  caretaker, not a security desk officer. */
+function fixtureName(kind: RoomKind, core: BuildingCore): string {
+  if (kind === 'lobby' && core.family === 'dense-residential') return 'Caretaker';
+  return FIXTURE_NAMES[kind] ?? 'Tenant';
+}
+
 function fixtureFor(core: BuildingCore, index: number, rooms: readonly Room[]): { x: number; z: number; name: string } | undefined {
   // One person per floor at most, and only where somebody would actually be standing.
   const host = rooms.find((room) => room.kind === 'shop') ?? rooms.find((room) => room.kind === 'lobby')
@@ -552,7 +559,7 @@ function fixtureFor(core: BuildingCore, index: number, rooms: readonly Room[]): 
       : undefined);
   if (!host) return undefined;
   // Held clear of the shop counter's own slab: in a small room the 22% mark IS the counter.
-  return { x: q(host.rect.x), z: q(Math.min(host.rect.z + host.rect.d * 0.22, rectMaxZ(host.rect) - 2.4)), name: FIXTURE_NAMES[host.kind] ?? 'Tenant' };
+  return { x: q(host.rect.x), z: q(Math.min(host.rect.z + host.rect.d * 0.22, rectMaxZ(host.rect) - 2.4)), name: fixtureName(host.kind, core) };
 }
 
 // ---- furniture --------------------------------------------------------------------------------
@@ -724,7 +731,16 @@ function furnish(core: BuildingCore, index: number, rooms: readonly Room[]): Pro
         break;
       }
       case 'lobby': {
-        out.push({ shape: 'counter', x: wallX(1.4), z: q(rect.z), y: 0, w: 1.1, d: q(Math.min(3.2, rect.d - 1.6)), h: 1.06, color: 0x6a5340, solid: true });
+        // THE DESK FOLLOWS THE USE. A commercial or civic lobby has somebody paid to sit in it, so
+        // it keeps the service counter. A block of FLATS does not — the owner's line: "for
+        // residentials they shouldn't have commercial furnishings" — its lobby is a postbox wall
+        // (the blurb has promised one since round 1), a bench, and the levies notice. Same salts
+        // either way, so the split changes furniture, never determinism.
+        if (core.family === 'dense-residential') {
+          out.push({ shape: 'postboxes', x: wallX(0.35), z: q(rect.z), y: 0, w: 0.5, d: q(Math.min(3.4, rect.d - 1.8)), h: 1.7, color: 0x8a8578, solid: true });
+        } else {
+          out.push({ shape: 'counter', x: wallX(1.4), z: q(rect.z), y: 0, w: 1.1, d: q(Math.min(3.2, rect.d - 1.6)), h: 1.06, color: 0x6a5340, solid: true });
+        }
         out.push({ shape: 'plant', x: q(rect.x), z: q(rectMinZ(rect) + 1.0), y: 0, w: 0.8, d: 0.8, h: 1.5, color: 0x3f6a3a, solid: false });
         out.push({ shape: 'notice', x: wallX(0.1), z: q(rectMaxZ(rect) - 1.4), y: 1.9, w: 0.05, d: 1.3, h: 1.0, color: 0xf4efdc, solid: false, text: 'LEVIES DUE' });
         // Somewhere to wait, and something on the wall while you do.

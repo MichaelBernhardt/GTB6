@@ -549,7 +549,11 @@ export function buildDoorways(
 
   for (const door of doors) {
     const bay = new THREE.Group();
-    bay.position.set(door.faceX, surfaceHeightAt(door.faceX, door.faceZ), door.faceZ);
+    // The frame stands at the DOORSTEP's standing height, not the terrain under the wall plane:
+    // on a foundation-levelled site the model's leaf sits on the plinth, and probing height AT the
+    // face would find the building's own roof. The step is where the player stands to use the
+    // door, so its surface is the honest base for the joinery too.
+    bay.position.set(door.faceX, surfaceHeightAt(door.x, door.z), door.faceZ);
     bay.rotation.y = door.heading; // local +z faces the street
     const add = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): void => {
       const mesh = new THREE.Mesh(unitBox, material);
@@ -779,6 +783,23 @@ function buildProp(prop: Prop, kit: Kit): void {
       const posts = Math.max(2, Math.round(prop.d / 1.4));
       for (let i = 0; i < posts; i++) {
         box(0.07, prop.h, 0.07, solid(0x39423f, 0.5), prop.x, base + prop.h / 2, prop.z - prop.d / 2 + i * prop.d / Math.max(1, posts - 1));
+      }
+      break;
+    }
+    case 'postboxes': {
+      // The flats-lobby postbox wall: a backing panel with a grid of pigeonholes, half of them
+      // hanging open — the residential answer to the commercial lobby's service counter.
+      box(prop.w * 0.5, prop.h, prop.d, body, prop.x, base + prop.h / 2 + 0.5, prop.z);
+      const cell = solid(0x6f6a60, 0.6);
+      const openLeaf = solid(0x4a463e, 0.6);
+      const cols = Math.max(2, Math.floor(prop.d / 0.5));
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < cols; col++) {
+          const open = (row * 7 + col * 3) % 5 === 0; // deterministic scatter of sprung-open leaves
+          const along = -prop.d / 2 + 0.28 + col * (prop.d - 0.56) / Math.max(1, cols - 1);
+          box(0.06, 0.34, 0.4, open ? openLeaf : cell,
+            prop.x + (prop.x > 0 ? -1 : 1) * (prop.w * 0.25 + 0.04), base + 0.85 + row * 0.44, prop.z + along);
+        }
       }
       break;
     }

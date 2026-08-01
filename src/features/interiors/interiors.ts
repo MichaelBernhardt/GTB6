@@ -76,8 +76,15 @@ const BASEMENT_DROP = 30;
 const ABANDON_DISTANCE = 90;
 /** How far down the street a doorway is built. Far enough to be a landmark you walk toward. */
 const STREAM_RANGE = 190;
-const STREAM_SLACK = 45;
-const STREAM_CAP = 22;
+/** Rebuild the marker set after this much movement. Tighter than the old 45 for a reason the owner
+ *  found on foot: with the nearest-STREAM_CAP slice, a door dropped as #23 at 60 u could be walked
+ *  to within 16 u and still show no circle, because nothing had re-streamed yet. The slack must be
+ *  small enough that a door can never get inside the marker fade (26 u) while stale. */
+const STREAM_SLACK = 28;
+/** More markers than the old 22: dense suburbs hold 26+ doors inside STREAM_RANGE, and every door
+ *  past the cap was a house with no circle — "many residential buildings don't allow entry". ~6
+ *  meshes per marker keeps 32 of them trivial. */
+const STREAM_CAP = 32;
 /** Hold a floor this long after the player leaves its sightline, so pacing up and down a few steps
  *  cannot thrash generation. */
 const RELEASE_DWELL = 0.8;
@@ -220,7 +227,19 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const wanted = near.map((door) => door.id).join('|');
     if (doorways && wanted === doorways.ids.join('|')) { builtAt = { x, z }; return; }
     doorways?.dispose();
-    doorways = buildDoorways(near, (px, pz) => api.surfaceHeightAt(px, pz));
+    // STAND height, not terrain: on a sloped site the city builds the house a levelled foundation,
+    // and a circle at terrain height is entombed inside that plinth — the owner's "there is just
+    // no entry zone circle" at a door that genuinely existed. standHeightAt asks the same collider
+    // the player will stand on; hosts without the seam keep the terrain (and the flat-world tests
+    // cannot tell the difference, which is why the proof of this one is in-engine). On a raised
+    // step the marker gets an extra lift: the foundation's VISUAL paving sits up to ~0.2 above its
+    // own collider (measured 28.446 against a 28.246 support at the owner's repro), so a disc a
+    // mere 0.06 proud of the collider is still under the concrete the player sees.
+    doorways = buildDoorways(near, (px, pz) => {
+      const terrain = api.surfaceHeightAt(px, pz);
+      const stand = api.standHeightAt?.(px, pz) ?? terrain;
+      return stand > terrain + 0.3 ? stand + 0.24 : stand;
+    });
     api.scene.add(doorways.group);
     builtAt = { x, z };
   };

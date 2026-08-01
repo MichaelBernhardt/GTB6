@@ -164,6 +164,42 @@ describe('the floorplan solver', () => {
     }
   }, 600000);
 
+  /** The owner's line, verbatim: "for a commercial building it makes sense to have a service desk,
+   *  but for residentials they shouldn't have commercial furnishings." A block of flats gets a
+   *  postbox wall in its lobby; an office tower keeps the desk; a house was already all home. */
+  it('keeps commercial furnishings out of residential buildings', () => {
+    const families = perFamily(14);
+    const flats = families.get('dense-residential') ?? [];
+    expect(flats.length).toBeGreaterThan(4);
+    for (const facts of flats) {
+      const ground = solveFloor(facts, 0);
+      expect(ground.props.some((prop) => prop.shape === 'counter'),
+        `${facts.id}: a service counter in a block of flats`).toBe(false);
+      if (ground.rooms.some((room) => room.kind === 'lobby')) {
+        expect(ground.props.some((prop) => prop.shape === 'postboxes'),
+          `${facts.id}: a flats lobby with no postbox wall`).toBe(true);
+      }
+    }
+    for (const facts of (families.get('downtown') ?? []).slice(0, 8)) {
+      const ground = solveFloor(facts, 0);
+      if (ground.rooms.some((room) => room.kind === 'lobby')) {
+        expect(ground.props.some((prop) => prop.shape === 'counter'),
+          `${facts.id}: a commercial lobby lost its desk`).toBe(true);
+      }
+    }
+    for (const style of ['suburban', 'estate', 'rural'] as const) {
+      for (const facts of (families.get(style) ?? []).slice(0, 10)) {
+        const ground = solveFloor(facts, 0);
+        const commercial = ground.props.filter((prop) => prop.shape === 'counter' || prop.shape === 'rack' || prop.shape === 'postboxes');
+        // The handful of genuine rural farm shops (shopfront-tagged) keep their counters — a
+        // padstal IS a shop. Houses proper carry none of it.
+        if (facts.entrance !== 'shopfront') {
+          expect(commercial, `${style} ${facts.id} has commercial furniture: ${commercial.map((p) => p.shape).join(',')}`).toHaveLength(0);
+        }
+      }
+    }
+  }, 300000);
+
   /** A shed must not generate a lounge, and a house must not generate a warehouse bay. */
   it('gives each family its own grammar', () => {
     const families = perFamily(12);
