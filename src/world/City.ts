@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
+import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, planShopBays, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
   BEACH_POLYGONS,
   COASTLINE,
@@ -2604,7 +2604,12 @@ export class City {
     // never opens, so it keeps the old generic-business vocabulary.
     const boardName = profile.entrance ? boardText(parcelBuildingName(spec.x, spec.z, style, profile.entrance.kind)) : undefined;
     if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables, boardName);
-    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName);
+    // A downtown building whose street base is a real shop-bay run (glass + shutters, drawn by the
+    // architecture pass) skips the generic glazing strip — two stacked panes of different sizes on
+    // one wall read as a bug, not a shop. Same planShopBays the architecture draws from.
+    const shopfronted = style === 'downtown'
+      && planShopBays(profile.tiers, w, h, variant % ARCHITECTURE_VARIANTS.downtown, variant, profile.entrance).length > 0;
+    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName, shopfronted);
     this.addRoofEquipment(0, 0, w, d, h, profile.tiers, profile.gables, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.tiers, profile.gables, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
@@ -2896,18 +2901,20 @@ export class City {
     if (variant % 4 === 0) this.addRoofSign(x, z, w, d, tiers, gables, variant);
   }
 
-  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[], boardName?: string): void {
+  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[], boardName?: string, shopfronted = false): void {
     const frame = new THREE.MeshStandardMaterial({ color: 0x273235, metalness: 0.55, roughness: 0.38 });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x315f68, roughness: 0.12, metalness: 0.18, clearcoat: 0.7 });
-    const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
-    for (let bay = 0; bay < bays; bay++) {
-      const px = x - w * 0.39 + bay * (w * 0.78 / Math.max(1, bays - 1));
-      if (Math.abs(px - x) < Math.min(3, w * 0.18)) continue;
-      const commercial = style === 'downtown' || style === 'mixed-use';
-      const windowW = Math.min(3.2, w / bays * 0.62); const windowY = commercial ? 1.55 : 1.65;
-      const facadeZ = frontFacadeZAt(tiers, px, windowY, windowW / 2); if (facadeZ === undefined) continue;
-      const window = new THREE.Mesh(new THREE.BoxGeometry(windowW, commercial ? 2.35 : 1.65, 0.09), glass); window.position.set(px, windowY, facadeZ + 0.025); this.target.add(window);
-      const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, facadeZ + 0.06); this.target.add(sill);
+    if (!shopfronted) { // a shop-bay run already owns this wall's street glazing (see buildOneBuilding)
+      const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
+      for (let bay = 0; bay < bays; bay++) {
+        const px = x - w * 0.39 + bay * (w * 0.78 / Math.max(1, bays - 1));
+        if (Math.abs(px - x) < Math.min(3, w * 0.18)) continue;
+        const commercial = style === 'downtown' || style === 'mixed-use';
+        const windowW = Math.min(3.2, w / bays * 0.62); const windowY = commercial ? 1.55 : 1.65;
+        const facadeZ = frontFacadeZAt(tiers, px, windowY, windowW / 2); if (facadeZ === undefined) continue;
+        const window = new THREE.Mesh(new THREE.BoxGeometry(windowW, commercial ? 2.35 : 1.65, 0.09), glass); window.position.set(px, windowY, facadeZ + 0.025); this.target.add(window);
+        const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, facadeZ + 0.06); this.target.add(sill);
+      }
     }
     if (style === 'downtown' || style === 'mixed-use' || variant % 3 === 0) {
       const colors = [0xc8503f, 0x2f7774, 0xd4a438, 0x586f91];

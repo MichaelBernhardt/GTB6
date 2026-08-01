@@ -660,6 +660,73 @@ export function gennySignEmissiveIntensity(night: number): number { return night
 /** Diffuse scale (1 = untouched): boosted only while blacked out at night — the cheap retro-reflective feel under a beam. */
 export function signDiffuseScale(night: number, blackout: number): number { return 1 + night * blackout * SIGN_RETRO_BOOST; }
 
+// ---- Roller shutters (downtown shop bays) ---------------------------------------------------
+//
+// THE ROLLER DOOR PROBLEM: shop shutters must be DOWN at night and UP by day, but every building
+// bakes into per-cell merged meshes (GeometryBaker), so per-building mesh toggling is gone after
+// the merge. The workable hook is the material: every shutter in the city shares this ONE
+// MeshStandardMaterial — so all of a chunk's shutters merge into a single extra mesh (+1 draw
+// call per chunk, total) — and a vertex-shader uniform slides them.
+//
+// The geometry is authored CLOSED. Each vertex carries `aShutterUp` = the vertex's distance below
+// its own shutter's TOP EDGE, measured in the building-local frame. That distance is invariant
+// under everything the pipeline does to the mesh (yaw to face the street + translation — neither
+// changes a vertical extent), so it survives GeometryBaker's world-transform bake verbatim. In
+// the shader, `y += aShutterUp * (1 - drop)` collapses every shutter toward its own top edge:
+// drop = 1 is a closed door, drop = 0 rolls it up into the hood, and DayNightSystem eases the
+// uniform through dusk and dawn each frame. Zero per-frame CPU work, zero chunk rebuilds.
+const SHUTTER_SLATS = 9;
+export const SHUTTER_ATTRIBUTE = 'aShutterUp';
+const shutterDrop = { value: 1 }; // 1 = down; the world is born at whatever hour, apply() sets it before first render
+
+function createShutterTexture(): THREE.CanvasTexture {
+  const { canvas, context } = canvasTexture(64);
+  context.fillStyle = '#878d90'; context.fillRect(0, 0, 64, 64);
+  const slat = 64 / SHUTTER_SLATS;
+  for (let i = 0; i < SHUTTER_SLATS; i++) {
+    const y = i * slat;
+    context.fillStyle = '#9aa0a3'; context.fillRect(0, y, 64, 1.6); // rolled lip catches the light
+    context.fillStyle = '#5f6568'; context.fillRect(0, y + slat - 1.8, 64, 1.8); // shadow under each slat
+  }
+  // street grime: rust drips and scuffs so a closed CBD shutter reads dirty, not showroom-new
+  for (let i = 0; i < 46; i++) {
+    const x = seeded(i, 61) * 64;
+    context.globalAlpha = 0.05 + seeded(i, 62) * 0.1;
+    context.fillStyle = seeded(i, 63) > 0.4 ? '#4c4640' : '#6e5a41';
+    context.fillRect(x, seeded(i, 64) * 40, 1 + seeded(i, 65) * 2, 10 + seeded(i, 66) * 24);
+  }
+  context.globalAlpha = 1;
+  return finish(canvas);
+}
+
+let shutterMaterial: THREE.MeshStandardMaterial | undefined;
+
+/** The single shared night-roller-shutter material. Lazy: tests and the bake run in node. */
+export function rollerShutterMaterial(): THREE.MeshStandardMaterial {
+  if (shutterMaterial) return shutterMaterial;
+  shutterMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff, metalness: 0.42, roughness: 0.6,
+    map: typeof document === 'undefined' ? null : createShutterTexture(),
+  });
+  shutterMaterial.name = 'roller-shutter';
+  shutterMaterial.onBeforeCompile = (shader) => {
+    shader.uniforms.uShutterDrop = shutterDrop;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\nattribute float ${SHUTTER_ATTRIBUTE};\nuniform float uShutterDrop;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\ntransformed.y += ${SHUTTER_ATTRIBUTE} * (1.0 - uShutterDrop);`);
+  };
+  shutterMaterial.customProgramCacheKey = () => 'roller-shutter';
+  return shutterMaterial;
+}
+
+/** Day/night drive for every roller shutter in the city: 0 = rolled up (day), 1 = down (night). */
+export function setShutterDrop(drop: number): void {
+  shutterDrop.value = Math.min(1, Math.max(0, drop));
+}
+
+/** Current shutter drop factor — probe surface for QA/e2e checks (window.__game paths). */
+export function shutterDropFactor(): number { return shutterDrop.value; }
+
 export function setSignGlow(night: number, blackout: number): void {
   const emissive = signEmissiveIntensity(night, blackout);
   const genny = gennySignEmissiveIntensity(night);

@@ -399,6 +399,65 @@ function landmarkForecourtPass(occ: ScatterOccupancy, buildings: BuildingIndex, 
   }
 }
 
+/** Petrol coverage radius: an arterial stretch with no filling station within this is a hole. */
+const FUEL_COVERAGE_RADIUS = 900;
+/** Arc pitch (units) between forecourt attempts while walking an arterial to fill a hole. */
+const FUEL_WALK_PITCH = 110;
+/** Arterial width floor for the fuel walk — matches zoning's ARTERIAL_WIDTH; stations live on main roads. */
+const FUEL_ARTERIAL_WIDTH = 13;
+
+/**
+ * THE PETROL NETWORK DOES NOT GET STARVED BY DENSITY.
+ *
+ * Filling stations used to exist only as an 8-weight lottery ticket in the commercial-strip
+ * frontage profile. Procedural buildings claim their ground FIRST, so when the city-density pass
+ * packed the strips with real buildings, the lottery slots that used to carry forecourts became
+ * shops — the citywide network fell 19 → 11 and whole suburbs lost their petrol. The fuel feature
+ * is gameplay infrastructure (the owner has driven to a mapped station and found bare veld before;
+ * that class of bug is not allowed back), so coverage is now guaranteed by construction:
+ *
+ * After the frontage lottery has played out, walk every arterial at a fixed arc pitch and, wherever
+ * NO station stands within FUEL_COVERAGE_RADIUS, try to seat a forecourt beside the kerb through
+ * the same tryPlace() gauntlet as everything else (water, roads, rail, crafted pads, buildings,
+ * spacing). Deterministic — fixed iteration order, no rolls — and self-limiting: the coverage test
+ * plus the model's own 260 u spacing stop it carpeting the town, so it adds stations only where
+ * densification (this pass or any future one) has starved a neighbourhood.
+ */
+function fuelNetworkPass(occ: ScatterOccupancy, buildings: BuildingIndex, out: ScatteredModel[]): void {
+  const stations = out.filter((model) => model.name === 'filling-station').map(({ x, z }) => ({ x, z }));
+  const covered = (x: number, z: number): boolean =>
+    stations.some((station) => (station.x - x) ** 2 + (station.z - z) ** 2 < FUEL_COVERAGE_RADIUS ** 2);
+  for (const road of GENERATED_ROADS) {
+    if (road.width < FUEL_ARTERIAL_WIDTH) continue;
+    let acc = 0;
+    for (let i = 0; i < road.points.length - 1; i++) {
+      const a = road.points[i]!; const b = road.points[i + 1]!;
+      const segX = b.x - a.x; const segZ = b.z - a.z; const length = Math.hypot(segX, segZ);
+      if (length < 0.01) continue;
+      const dirX = segX / length; const dirZ = segZ / length;
+      for (acc += length; acc >= FUEL_WALK_PITCH; acc -= FUEL_WALK_PITCH) {
+        const t = 1 - (acc - FUEL_WALK_PITCH) / length;
+        if (t < 0 || t > 1) continue;
+        const mx = a.x + segX * t; const mz = a.z + segZ * t;
+        if (covered(mx, mz)) continue;
+        if (classifyZone(mx, mz, road.width) === 'none') continue; // no forecourts in parks/water/airfield
+        for (const clearance of LANDMARK_FORECOURT_OFFSETS) {
+          let placed = false;
+          for (const side of [1, -1] as const) {
+            const nX = side * -dirZ; const nZ = side * dirX;
+            const at = { x: mx + nX * (road.width / 2 + clearance), z: mz + nZ * (road.width / 2 + clearance) };
+            // Local +z is the forecourt entrance (apron, fascia, totem) — face back at the carriageway.
+            if (tryPlace('filling-station', at.x, at.z, Math.atan2(mx - at.x, mz - at.z), STRUCT_ROAD_CLEARANCE, occ, buildings, out)) {
+              stations.push(at); placed = true; break;
+            }
+          }
+          if (placed) break;
+        }
+      }
+    }
+  }
+}
+
 /** Densely walk a road centreline once, yielding arc-length-spaced frontage anchors per side. */
 /** Chunked: yields its completed fraction every few hundred roads (the whole-map scatter is the
  *  single biggest boot block on mobile). Iteration order untouched — the layout stays identical. */
@@ -496,6 +555,7 @@ export function* scatterStages(): Generator<number> {
   // buildings are indexed above — so both passes below flow deterministically AROUND them.
   landmarkForecourtPass(occ, buildings, out); // a handful of sites the map names; claims first
   for (const f of frontagePass(occ, buildings, out)) yield f * 0.7;
+  fuelNetworkPass(occ, buildings, out); // then guarantee petrol coverage wherever the lottery starved it
   for (const f of areaPass(FARM_POLYGONS, AREA_FARM, occ, buildings, out)) yield 0.7 + f * 0.1;
   for (const f of areaPass(GREEN_POLYGONS, AREA_PARK, occ, buildings, out)) yield 0.8 + f * 0.15;
   for (const f of areaPass(BEACH_POLYGONS, AREA_BEACH, occ, buildings, out)) yield 0.95 + f * 0.05;

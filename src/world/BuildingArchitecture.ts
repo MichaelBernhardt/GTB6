@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { createSignMesh, rollerShutterMaterial, SHUTTER_ATTRIBUTE } from './ProceduralMaterials';
 
 export type BuildingStyle =
   | 'downtown'
@@ -188,6 +189,64 @@ function sized(x: number, z: number, width: number, kind: EntranceKind, mass: re
   const height = top === undefined ? ENTRANCE_H : Math.min(ENTRANCE_H, top - 0.35);
   if (height < MIN_ENTRANCE_H) return undefined;
   return { x, z, width, height, kind };
+}
+
+/** One street-level shop bay on a downtown front: centre x, clear width, and the wall plane it
+ *  mounts on — building-local, like every other architecture coordinate. */
+export interface ShopBay { x: number; width: number; z: number; }
+
+/** Height the shop-bay layout probes the front wall at (inside every ground-floor tier). */
+const SHOP_BAY_Y = 1.6;
+/** Structural gap between neighbouring bays — the pier stands in it. */
+const SHOP_BAY_MARGIN = 0.9;
+/** Vertical extent of a CLOSED roller shutter (the authored state; the shader rolls it up by day). */
+const SHOP_SHUTTER_BOTTOM = 0.25;
+const SHOP_SHUTTER_TOP = 2.9;
+/** Painted trade boards over the bays. A small fixed pool on purpose: every distinct
+ *  text|accent pair costs a sign-atlas slot (1024 citywide), so bay boards spend at most
+ *  SHOP_BAY_SIGNS × SHOP_BAY_ACCENTS = 64 of them however many thousand bays the CBD carries. */
+const SHOP_BAY_SIGNS = [
+  'HAIR SALON', 'CELL REPAIRS', 'TAKE AWAYS', 'CASH & CARRY', 'PAWN SHOP', 'FISH & CHIPS',
+  'INTERNET CAFE', 'BARBER', 'SPARES & PARTS', 'DRY CLEAN', 'SHOE DOKTA', 'AIRTIME - DATA',
+  'FUNERAL COVER', 'GOLD BUYERS', 'SALON & NAILS', 'KOTA CORNER',
+] as const;
+/** Same accent strings the City storefront boards use, so no new text|accent atlas keys per colour. */
+const SHOP_BAY_ACCENTS = ['#f0ae43', '#72d8d2', '#ef6556', '#74e392'] as const;
+
+/**
+ * THE SHOPS AT THE BOTTOM OF THE TOWERS. Joburg CBD street level is shop bay after shop bay —
+ * hair salons, cell-repair counters, takeaways — with a roller shutter over every one of them at
+ * night. This lays those bays out: a pure function of the massing, shared verbatim by the draw
+ * pass (addShopfront) and the QA census (tools/qa/frontage-meter.ts), so the count the meter
+ * reports IS what gets drawn.
+ *
+ * Deterministic hold-outs keep variety: the elliptical tower (massing 4 — its facade is not a
+ * plane), low masses (h <= 14 keep the plain base), and one variant in five (banks, government
+ * blocks, blank podiums — a CBD where literally every building is a spaza row reads as wallpaper).
+ * A bay never covers the planned entrance: the way in stays open, parity-tested, and
+ * unshuttered — a front door rolled shut at night would lock the interiors feature out.
+ */
+export function planShopBays(
+  tiers: readonly MassingTier[], width: number, height: number, massing: number, variant: number,
+  entrance?: EntranceTag,
+): ShopBay[] {
+  if (massing === 4 || height <= 14 || variant % 5 === 2) return [];
+  const mass = tiers.filter((tier) => tier.kind !== 'wall');
+  const bays: ShopBay[] = [];
+  for (const span of frontFacadeSpansAt(mass, SHOP_BAY_Y, -width / 2, width / 2)) {
+    const spanW = span.maxX - span.minX;
+    if (spanW < 5) continue;
+    const count = Math.max(1, Math.min(6, Math.floor(spanW / 5)));
+    const pitch = spanW / count;
+    for (let bay = 0; bay < count; bay++) {
+      const x = span.minX + (bay + 0.5) * pitch;
+      const bayW = pitch - SHOP_BAY_MARGIN;
+      if (bayW < 2.2) continue;
+      if (entrance && Math.abs(x - entrance.x) < (bayW + entrance.width) / 2 + 0.4) continue;
+      bays.push({ x, width: bayW, z: span.z });
+    }
+  }
+  return bays;
 }
 
 /** A gable (or thatch) roof in building-local coordinates: ridge along local z at lx=0, apex `rise`
@@ -1223,6 +1282,10 @@ export class BuildingArchitecture {
       plinth.position.set((span.minX + span.maxX) / 2, 0.55, span.z + 0.11);
       plinth.receiveShadow = true; plinth.name = 'downtown-plinth'; this.place(plinth);
     }
+    // The shop-bay run — the same plan the QA meter censuses. Buildings that carry bays get their
+    // piers ON the bay boundaries (addShopfront); hold-outs keep the old evenly-spread piers.
+    const entrance = planEntrance(w, 'downtown', this.tiers);
+    const bays = planShopBays(this.tiers, w, h, massing, variant, entrance);
     if (h > 14) {
       for (const span of frontFacadeSpansAt(this.tiers, 5.15, left, right)) {
         const width = span.maxX - span.minX;
@@ -1230,6 +1293,7 @@ export class BuildingArchitecture {
         const header = new THREE.Mesh(new THREE.BoxGeometry(width, 0.5, 0.5), this.stone);
         header.position.set((span.minX + span.maxX) / 2, 5.15, span.z + 0.15);
         header.castShadow = true; header.name = 'downtown-header'; this.place(header);
+        if (bays.length > 0) continue;
         // Piers between plinth and header. The glazing pass hangs flat panes on this wall; a vertical
         // every few metres in front of them is what turns a painted-on shopfront into a built one.
         const piers = Math.max(2, Math.min(6, Math.round(width / 6)));
@@ -1241,6 +1305,7 @@ export class BuildingArchitecture {
         }
       }
     }
+    if (bays.length > 0) this.addShopfront(spec, bays);
     if (variant % 2 !== 0) {
       let shaft: MassingTier | undefined;
       for (const tier of this.tiers) if (tier.kind !== 'wall' && (!shaft || tier.y1 > shaft.y1)) shaft = tier;
@@ -1252,19 +1317,72 @@ export class BuildingArchitecture {
         }
       }
     }
-    if (variant % 3 === 1) {
-      const bay = widestFrontFacadeSpanAt(this.tiers, 1.6, left, right, 4.4);
-      if (bay) {
-        const shutterW = Math.min(4.6, (bay.maxX - bay.minX) * 0.36);
-        const wanted = bay.minX + (bay.maxX - bay.minX) * (variant % 2 ? 0.24 : 0.76);
-        const px = THREE.MathUtils.clamp(wanted, bay.minX + shutterW / 2 + 0.25, bay.maxX - shutterW / 2 - 0.25);
-        const shutter = new THREE.Mesh(new THREE.BoxGeometry(shutterW, 2.5, 0.14), this.darkMetal);
-        shutter.position.set(px, 1.75, bay.z + 0.2); shutter.name = 'downtown-shutter'; this.place(shutter);
-        for (const ry of [1, 1.75, 2.5]) {
-          const rib = new THREE.Mesh(new THREE.BoxGeometry(shutterW - 0.14, 0.1, 0.1), this.darkMetal);
-          rib.position.set(px, ry, bay.z + 0.28); this.place(rib);
+    // The old permanently-down decorative shutter (variant % 3 === 1) retired into addShopfront:
+    // every bay now carries a REAL roller door that rides the day/night cycle.
+  }
+
+  /**
+   * Draw the shop-bay run planShopBays laid out: display glass, a night ROLLER SHUTTER and its
+   * hood per bay, piers on the bay boundaries, and painted boards over alternate bays.
+   *
+   * The shutters are the one new material in the city (rollerShutterMaterial — shared, so a whole
+   * chunk's worth merges to +1 draw call); everything else reuses materials every downtown cell
+   * already buckets (glass, stone, darkMetal, the sign atlas). Each shutter vertex carries
+   * SHUTTER_ATTRIBUTE = its distance below the shutter's own top edge — yaw/translation-invariant,
+   * so it survives the GeometryBaker world bake — and the material's vertex shader collapses the
+   * door toward its top edge by day (see ProceduralMaterials). Authored CLOSED; castShadow stays
+   * off because the depth pass cannot see the drop uniform, and a hard shadow of a door that has
+   * rolled up would lie.
+   *
+   * Offsets from the wall plane are deliberately distinct from every neighbour: glass 0.16,
+   * pier 0.09 (front 0.24), shutter 0.30 (back 0.255), plinth 0.11 (front 0.28), hood 0.2 —
+   * nothing coplanar with anything; coplanar infill is how the last z-fighting epidemic started.
+   */
+  private addShopfront(spec: BuildingSpec, bays: readonly ShopBay[]): void {
+    if (!this.drawing) return;
+    const { variant } = spec;
+    const shutterH = SHOP_SHUTTER_TOP - SHOP_SHUTTER_BOTTOM;
+    const shutter = rollerShutterMaterial();
+    // City's per-building storefront board hangs at (x − w·0.2, 3.82) with width min(6.4, w·0.34)
+    // (addStreetLevelDetail); bay boards duck out of its x-footprint so boards never overlap.
+    const bigSignX = spec.x - spec.width * 0.2;
+    const bigSignW = Math.min(6.4, spec.width * 0.34);
+    const piers = new Map<number, { x: number; z: number }>();
+    for (const [index, bay] of bays.entries()) {
+      const pitch = bay.width + SHOP_BAY_MARGIN;
+      for (const edge of [bay.x - pitch / 2, bay.x + pitch / 2]) {
+        piers.set(Math.round(edge * 8), { x: edge, z: bay.z });
+      }
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(bay.width, 2.4, 0.06), this.glass);
+      glass.position.set(bay.x, 2.1, bay.z + 0.16); glass.name = 'downtown-shop-glass'; this.place(glass);
+      const geometry = new THREE.BoxGeometry(bay.width + 0.2, shutterH, 0.09);
+      const position = geometry.getAttribute('position');
+      const up = new Float32Array(position.count);
+      for (let vertex = 0; vertex < position.count; vertex++) up[vertex] = shutterH / 2 - position.getY(vertex);
+      geometry.setAttribute(SHUTTER_ATTRIBUTE, new THREE.BufferAttribute(up, 1));
+      const door = new THREE.Mesh(geometry, shutter);
+      door.position.set(bay.x, (SHOP_SHUTTER_TOP + SHOP_SHUTTER_BOTTOM) / 2, bay.z + 0.3);
+      door.castShadow = false; door.name = 'downtown-shop-shutter'; this.place(door);
+      const hood = new THREE.Mesh(new THREE.BoxGeometry(bay.width + 0.34, 0.3, 0.3), this.darkMetal);
+      hood.position.set(bay.x, SHOP_SHUTTER_TOP + 0.16, bay.z + 0.2);
+      hood.castShadow = true; hood.name = 'downtown-shop-hood'; this.place(hood);
+      if ((index + variant) % 2 === 0) {
+        const signW = Math.min(bay.width * 0.92, 4.6);
+        if (Math.abs(bay.x - bigSignX) > (signW + bigSignW) / 2 + 0.4) {
+          const label = SHOP_BAY_SIGNS[(variant + index * 5) % SHOP_BAY_SIGNS.length]!;
+          const accent = SHOP_BAY_ACCENTS[(variant + index) % SHOP_BAY_ACCENTS.length]!;
+          this.decor(() => {
+            const board = createSignMesh(new THREE.PlaneGeometry(signW, 0.72), label, accent);
+            board.position.set(bay.x, 3.62, bay.z + 0.2); board.name = 'downtown-shop-sign';
+            return board;
+          });
         }
       }
+    }
+    for (const pier of piers.values()) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4, 0.3), this.stone);
+      post.position.set(pier.x, 2.9, pier.z + 0.09);
+      post.castShadow = true; post.name = 'downtown-shopfront-pier'; this.place(post);
     }
   }
 
