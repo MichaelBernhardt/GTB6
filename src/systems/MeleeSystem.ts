@@ -209,6 +209,35 @@ export function driveGuardArm(root: THREE.Object3D, upper: THREE.Object3D, lower
   solveArm(upper, lower, hand, target, forward, side, weight, mirror);
 }
 
+/** Pistol-aim hand offsets from the shoulder: arms extended toward the character's facing. The
+ *  gun hand punches out nearly straight; the support hand wraps in just short of it (two-hand
+ *  hold). Slightly below shoulder height — a combat aim, not a salute. */
+const AIM_FORWARD = 0.5;
+const AIM_SUPPORT_FORWARD = 0.42;
+const AIM_INWARD = 0.1;
+/** Slight UPWARD bias: aim today always composes with the covering lean, whose spine pitch drops
+ *  the shoulders — without the lift the pistol points at the tar instead of the suspect. */
+const AIM_DOWN = -0.08;
+
+/** Hold both arms in a two-hand pistol aim along the character's facing (the caller faces the
+ *  root at the threat first). Same additive-IK layer as the boxing guard: the base clip's relaxed
+ *  arms would otherwise read as an officer standing idle while his hitscan fire lands. */
+export function drivePistolAimArms(root: THREE.Object3D, bones: { rightUpperArm: THREE.Object3D; rightLowerArm: THREE.Object3D; rightHand: THREE.Object3D; leftUpperArm: THREE.Object3D; leftLowerArm: THREE.Object3D; leftHand: THREE.Object3D }, weight: number): void {
+  if (weight <= 0) return;
+  bones.rightUpperArm.updateWorldMatrix(true, false); bones.rightLowerArm.updateWorldMatrix(true, false); bones.rightHand.updateWorldMatrix(true, false);
+  const forward = root.getWorldDirection(JAB_FWD);
+  const side = JAB_SIDE.set(-forward.z, 0, forward.x);
+  const shoulder = JAB_SHOULDER.setFromMatrixPosition(bones.rightUpperArm.matrixWorld);
+  const target = JAB_TARGET.copy(shoulder).addScaledVector(forward, AIM_FORWARD).addScaledVector(side, -AIM_INWARD);
+  target.y -= AIM_DOWN;
+  solveArm(bones.rightUpperArm, bones.rightLowerArm, bones.rightHand, target, forward, side, weight, 1);
+  bones.leftUpperArm.updateWorldMatrix(true, false); bones.leftLowerArm.updateWorldMatrix(true, false); bones.leftHand.updateWorldMatrix(true, false);
+  const supportShoulder = JAB_SHOULDER.setFromMatrixPosition(bones.leftUpperArm.matrixWorld);
+  const support = JAB_TARGET.copy(supportShoulder).addScaledVector(forward, AIM_SUPPORT_FORWARD).addScaledVector(side, AIM_INWARD);
+  support.y -= AIM_DOWN + 0.04;
+  solveArm(bones.leftUpperArm, bones.leftLowerArm, bones.leftHand, support, forward, JAB_SIDE.multiplyScalar(-1), weight, -1);
+}
+
 /** Arm extension over the swing: 0 → 1 at the hit frame → 0 at the end. Drives the
  *  procedural-fallback jab and the additive punch pose on rigged characters. */
 export function swingExtension(elapsed: number): number {

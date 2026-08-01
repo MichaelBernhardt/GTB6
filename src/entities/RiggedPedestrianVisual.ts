@@ -6,8 +6,9 @@ import { findHumanoidBones, type HumanoidBones } from './RiggedPlayerVisual';
 import { NPC_CATALOG, type NpcCharacterId } from './NpcCatalog';
 import type { RagdollEnvironment, VerletRagdoll } from './PedRagdoll';
 import { RagdollDriver } from './RagdollDriver';
-import { driveGuardArm, drivePunchArm, PUNCH_POSE, swingExtension } from '../systems/MeleeSystem';
+import { driveGuardArm, drivePistolAimArms, drivePunchArm, PUNCH_POSE, swingExtension } from '../systems/MeleeSystem';
 import type { PedState } from './Pedestrian';
+import { buildWeaponModel } from './WeaponModels';
 
 export const NPC_ANIMATIONS = ['idle', 'walk', 'sprint', 'punch_right', 'death'] as const;
 export type NpcAnimationName = typeof NPC_ANIMATIONS[number];
@@ -28,6 +29,9 @@ export interface RiggedPedestrianState {
   braced: boolean;
   hailing: boolean;
   covering: boolean;
+  /** Weapon up at the threat (arrest officers with live-fire authorization): two-hand pistol aim
+   *  layered over whatever the base state is — a covering officer aims from the crouch. */
+  aiming: boolean;
   stumbling: boolean;
   stumbleAmount: number;
 }
@@ -176,7 +180,8 @@ export class RiggedPedestrianVisual {
   private mixedRotations = new Map<THREE.Bone, THREE.Quaternion>();
   private current?: THREE.AnimationAction;
   private currentName?: NpcAnimationName;
-  private state: RiggedPedestrianState = { state: 'idle', dead: false, knockdown: false, punching: false, punchElapsed: 0, braced: false, hailing: false, covering: false, stumbling: false, stumbleAmount: 0 };
+  private state: RiggedPedestrianState = { state: 'idle', dead: false, knockdown: false, punching: false, punchElapsed: 0, braced: false, hailing: false, covering: false, aiming: false, stumbling: false, stumbleAmount: 0 };
+  private pistol?: THREE.Group;
   private deathFloor: DeathFloorCurve = { step: DEATH_FLOOR_SAMPLE_STEP, floors: [] };
   private ragdollDeath = false;
   private ragdollJitter: number[] = [];
@@ -315,8 +320,32 @@ export class RiggedPedestrianVisual {
     unregisterRagdoll(this);
   }
 
+  /** Show/park the sidearm. Built lazily on the first draw and left attached (visibility is the
+   *  cheap toggle); the mesh is unique per visual, so dispose() reclaims its geometry explicitly —
+   *  it hangs off a hand bone, outside the procedural model the owning Pedestrian disposes. */
+  private setPistolDrawn(drawn: boolean): void {
+    if (!drawn && !this.pistol) return;
+    if (!this.pistol) {
+      const pistol = buildWeaponModel('pistol'); if (!pistol) return;
+      for (const part of pistol.children) part.position.y += 0.42; // grip up to the palm: the model hangs 0.45 below its pivot
+      pistol.position.set(0, -0.03, 0.02); pistol.rotation.x = -Math.PI / 2; // -Y muzzle out along the hand's forward
+      pistol.name = 'NpcSidearm';
+      this.bones?.rightHand.add(pistol);
+      this.pistol = pistol;
+    }
+    this.pistol.visible = drawn;
+  }
+
   dispose(): void {
     if (this.disposed) return;
+    if (this.pistol) {
+      this.pistol.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        object.geometry.dispose();
+        for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose();
+      });
+      this.pistol = undefined;
+    }
     unregisterRagdoll(this); this.ragdollDriver.release();
     this.disposed = true; this.status = 'disposed'; this.mixer?.stopAllAction();
     if (this.model && this.mixer) this.mixer.uncacheRoot(this.model);
@@ -395,7 +424,18 @@ export class RiggedPedestrianVisual {
       bones.leftUpperLeg.rotation.x -= 0.22; bones.rightUpperLeg.rotation.x -= 0.22;
       bones.leftLowerLeg.rotation.x += 0.38; bones.rightLowerLeg.rotation.x += 0.38;
       this.group.position.y -= 0.18;
+      if (this.state.covering) {
+        // Arrest officers duck DEEP — hidden behind a car boot, not a polite bow. Extra knee bend
+        // plus sink keeps the bent legs grounded and brings the head to about bonnet height.
+        bones.leftUpperLeg.rotation.x -= 0.5; bones.rightUpperLeg.rotation.x -= 0.5;
+        bones.leftLowerLeg.rotation.x += 0.85; bones.rightLowerLeg.rotation.x += 0.85;
+        this.group.position.y -= 0.3;
+      }
     }
+    // Weapon up AFTER the cover lean so the aim IK reads the crouched shoulder position: an
+    // officer ducked behind his cruiser aims over the bonnet, arms following the tucked torso.
+    this.setPistolDrawn(this.state.aiming);
+    if (this.state.aiming) drivePistolAimArms(this.parent, bones, 1);
     if (this.state.hailing && this.state.state === 'idle') {
       bones.rightUpperArm.rotation.x -= 0.95; bones.rightUpperArm.rotation.z -= 0.34; bones.rightLowerArm.rotation.x -= 0.28;
     }
