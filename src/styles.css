@@ -141,6 +141,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 #console { position: absolute; left: 0; right: 0; bottom: 0; z-index: 80; display: none; flex-direction: column; gap: 4px; padding: 12px 18px 14px; background: rgba(10, 15, 14, .88); border-top: 3px solid var(--green); font: 13px/1.55 "Cascadia Code", Consolas, Menlo, monospace; color: #cfe0d8; backdrop-filter: blur(2px); }
 #console.is-visible { display: flex; }
 #console .console-log div { white-space: pre-wrap; word-break: break-word; }
+#console .console-more { color: var(--green); font-weight: 700; } /* the pager footer reads as the console talking, not as output */
 #console .console-line { display: flex; gap: 8px; align-items: baseline; }
 #console .console-line span { color: var(--green); font-weight: 700; }
 #console input { flex: 1; padding: 0; background: transparent; border: none; outline: none; color: #fff; font: inherit; caret-color: var(--green); }
