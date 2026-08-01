@@ -21,6 +21,7 @@ import {
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
+  DISTRICT_CENTERS,
   FARM_POLYGONS,
   JUNCTION_SURFACES,
   junctionPaves,
@@ -39,6 +40,7 @@ import {
   WATER_POLYGONS,
   type MapPolygon,
 } from './mapData';
+import { HIGHRISE_DISTRICTS } from './data/zoning';
 import { damSignedDistance } from './damField';
 import { beachBands, farWaterOutline, isSandZ, OCEAN_Y, shoreColourAt, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
 import { buildAirport } from './Airport';
@@ -54,7 +56,7 @@ import { buildTreeInstance, type TreeInstancePart } from './FoliageAssets';
 import type { BuiltModel } from './models/kit';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { applyFacadeWeathering, applyGrassShader, applySnowShader, CHAINLINK_TILE_WIDTH, chainlinkFenceMaterial, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS, fencePostMaterial, GRIME_ATLAS_CELLS, grimeDecalMaterial, PALISADE_TILE_WIDTH, palisadeFenceMaterial, RAZOR_COIL_TILE_WIDTH, razorCoilMaterial } from './ProceduralMaterials';
+import { applyFacadeWeathering, applyGrassShader, applySnowShader, applyUrbanGroundShader, CHAINLINK_TILE_WIDTH, chainlinkFenceMaterial, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS, fencePostMaterial, GRIME_ATLAS_CELLS, grimeDecalMaterial, PALISADE_TILE_WIDTH, palisadeFenceMaterial, RAZOR_COIL_TILE_WIDTH, razorCoilMaterial } from './ProceduralMaterials';
 import { POTHOLE_SEGMENTS, potholeRimAt, potholeVertexRadius, RIM_MIN_SPAN, type PotholeHazard } from './PotholeShape';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
@@ -1397,6 +1399,10 @@ export class City {
     geometry.computeVertexNormals(); // real normals so slopes catch the light instead of reading flat
     setTerrainGrid(grid, n, step); // from here, terrainHeightAt returns this exact drawn surface
     const groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.groundGrass, roughness: 0.96 });
+    // Downtown is dust, not lawn — the ground between a CBD pavement and a CBD wall. Applied BEFORE
+    // the altitude pass so rock and snow still win on the northern range (the CBD is nowhere near it,
+    // but the ordering is the honest one: geology over land use).
+    applyUrbanGroundShader(groundMat, DISTRICT_CENTERS.filter((district) => HIGHRISE_DISTRICTS.has(district.name)));
     applySnowShader(groundMat, { snowY: SNOW_Y, rockY: SNOW_Y * 0.55 }); // veld → rock → snow up the northern range
     const ground = new THREE.Mesh(geometry, groundMat);
     ground.receiveShadow = true;

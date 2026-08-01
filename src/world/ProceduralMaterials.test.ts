@@ -1,5 +1,6 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { facadeWindowGrammar, facadeWorldTile, SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex } from './ProceduralMaterials';
+import { applyUrbanGroundShader, facadeWindowGrammar, facadeWorldTile, SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex } from './ProceduralMaterials';
 import { STREET_SIGN_JUNCTIONS } from './mapData';
 
 describe('facade physical grammars', () => {
@@ -78,5 +79,45 @@ describe('signSlotIndex — an allocated slot is never overwritten', () => {
     expect(signSlotIndex(capacity, capacity)).toBe(capacity - 1);
     expect(signSlotIndex(capacity + 9999, capacity)).toBe(capacity - 1);
     expect(signSlotIndex(capacity + 9999, capacity)).not.toBe(0);
+  });
+});
+
+/**
+ * The urban-ground pass is shader-only and stacks on whatever the ground material already wears
+ * (the lawn macro pass, then the altitude rock/snow band). Chained onBeforeCompile hooks are easy
+ * to get wrong in exactly two ways — dropping the prior hook, and sharing a program cache key with
+ * an unrelated variant — so both are pinned here rather than left to a screenshot.
+ */
+describe('applyUrbanGroundShader — downtown is dust, not lawn', () => {
+  const material = (): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial();
+  const compile = (mat: THREE.MeshStandardMaterial): { vertexShader: string; fragmentShader: string } => {
+    const shader = {
+      vertexShader: 'void main() {\n#include <common>\n#include <begin_vertex>\n}',
+      fragmentShader: 'void main() {\n#include <common>\n#include <color_fragment>\n}',
+      uniforms: {},
+    };
+    mat.onBeforeCompile!(shader as never, undefined as never);
+    return shader;
+  };
+
+  it('runs a prior hook and then tints, so it composes with the lawn/snow passes', () => {
+    const mat = material();
+    let priorRan = false;
+    mat.onBeforeCompile = () => { priorRan = true; };
+    applyUrbanGroundShader(mat, [{ x: 100, z: -200, radius: 500 }]);
+    const shader = compile(mat);
+    expect(priorRan).toBe(true);
+    expect(shader.vertexShader).toContain('vUrbWorld');
+    expect(shader.fragmentShader).toContain('urbTone');
+    // The anchor survives, so a later pass (applySnowShader) can still find it.
+    expect(shader.fragmentShader).toContain('#include <color_fragment>');
+  });
+
+  it('keys its program per site list, and does nothing at all without sites', () => {
+    const one = material(); applyUrbanGroundShader(one, [{ x: 0, z: 0, radius: 500 }]);
+    const two = material(); applyUrbanGroundShader(two, [{ x: 900, z: 0, radius: 500 }]);
+    expect(one.customProgramCacheKey!()).not.toBe(two.customProgramCacheKey!());
+    const none = material(); applyUrbanGroundShader(none, []);
+    expect(none.onBeforeCompile).toBe(THREE.MeshStandardMaterial.prototype.onBeforeCompile);
   });
 });

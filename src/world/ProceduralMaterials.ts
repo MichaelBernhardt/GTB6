@@ -274,6 +274,58 @@ export function createGrassTexture(variant: GrassVariant, repeat: number, size =
  * northern mountain range reaches these heights (see City.TERRAIN_RIDGE_SCALE / SNOW_Y) — everywhere
  * else the blend factors are zero and the grass renders untouched.
  */
+/** Most sites the urban-ground pass will blend; the loop is unrolled per fragment, so it is bounded. */
+const URBAN_GROUND_MAX_SITES = 12;
+
+/**
+ * DOWNTOWN DOES NOT HAVE A LAWN.
+ *
+ * The whole map's earth is one tessellated sheet wearing one dry-veld grass map, which is right for
+ * 95% of a Highveld city and flatly wrong for the middle of it: the ground the player sees between
+ * a CBD pavement and a CBD wall came out as mown grass. That is half of "I still spawned beside a
+ * basically empty green lot" — the parcel behind it is a placement question, but the GREEN is this.
+ * Real inner-city ground between buildings is trodden dust, ash and cracked hardstanding.
+ *
+ * So the highrise districts blend the diffuse toward a dust tone, on the same world-space two-octave
+ * dither the snow band uses so the boundary is ragged rather than a drawn circle. Shader-only: no
+ * extra mesh, no extra draw call, no geometry — the ground keeps its single material, its grass map
+ * (which still supplies the fine grain) and its existing lawn/snow passes, which this composes with
+ * exactly the way applySnowShader composes with applyGrassShader.
+ */
+export function applyUrbanGroundShader(
+  material: THREE.MeshStandardMaterial, sites: readonly { x: number; z: number; radius: number }[],
+): void {
+  const used = sites.slice(0, URBAN_GROUND_MAX_SITES);
+  if (used.length === 0) return;
+  const prior = material.onBeforeCompile;
+  const key = used.map((site) => `${site.x.toFixed(0)},${site.z.toFixed(0)},${site.radius.toFixed(0)}`).join(';');
+  material.onBeforeCompile = (shader, renderer) => {
+    prior?.call(material, shader, renderer);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vUrbWorld;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvUrbWorld = (modelMatrix * vec4(position, 1.0)).xyz;');
+    const blend = used.map((site) => `
+      urbT = max(urbT, 1.0 - smoothstep(${(site.radius * 0.55).toFixed(1)}, ${site.radius.toFixed(1)},
+        length(vUrbWorld.xz - vec2(${site.x.toFixed(1)}, ${site.z.toFixed(1)})) + urbDither));`).join('');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vUrbWorld;
+        float uHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float uNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(uHash(i), uHash(i + vec2(1.0, 0.0)), u.x), mix(uHash(i + vec2(0.0, 1.0)), uHash(i + vec2(1.0, 1.0)), u.x), u.y); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          float urbDither = (uNoise(vUrbWorld.xz * 0.009) * 0.7 + uNoise(vUrbWorld.xz * 0.04) * 0.3 - 0.5) * 210.0;
+          float urbT = 0.0;${blend}
+          // Dust, not tarmac: a warm grey-brown that lets the grass map's fine grain read as grit,
+          // with a slow mottle so a whole district does not come out as one flat plate.
+          vec3 urbTone = vec3(0.105, 0.095, 0.083) * (0.72 + 0.56 * uNoise(vUrbWorld.xz * 0.025));
+          diffuseColor.rgb = mix(diffuseColor.rgb, urbTone, urbT * 0.93);
+        }`);
+  };
+  material.customProgramCacheKey = () => `${String(prior ?? '')}|urban:${key}`;
+}
+
 export function applySnowShader(material: THREE.MeshStandardMaterial, options: { snowY: number; rockY: number }): void {
   const f = (v: number): string => v.toFixed(1);
   // Compose with any shader already on the material (the lawn wind/macro pass): run it first, then
