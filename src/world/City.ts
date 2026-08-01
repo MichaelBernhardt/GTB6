@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
+import { fenceHazardTouch } from '../core/GameRules';
 import type { BaseQuality, District } from '../types';
 import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, glazingBayLayout, massingTopAt, planGrimeDecals, planShopBays, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingProfile, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier, type ShopBay } from './BuildingArchitecture';
 import {
@@ -46,13 +47,14 @@ import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
 import { boardText, parcelBuildingName, scatterBuildingName } from './buildingIdentity';
 import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type GeneratedBuilding } from './CityGen';
+import { fenceSegmentCollider, planParcelFence, type FencePlan } from './ParcelFences';
 import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
 import { buildTreeInstance, type TreeInstancePart } from './FoliageAssets';
 import type { BuiltModel } from './models/kit';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { applyFacadeWeathering, applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS, GRIME_ATLAS_CELLS, grimeDecalMaterial } from './ProceduralMaterials';
+import { applyFacadeWeathering, applyGrassShader, applySnowShader, CHAINLINK_TILE_WIDTH, chainlinkFenceMaterial, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS, fencePostMaterial, GRIME_ATLAS_CELLS, grimeDecalMaterial, PALISADE_TILE_WIDTH, palisadeFenceMaterial, RAZOR_COIL_TILE_WIDTH, razorCoilMaterial } from './ProceduralMaterials';
 import { POTHOLE_SEGMENTS, potholeRimAt, potholeVertexRadius, RIM_MIN_SPAN, type PotholeHazard } from './PotholeShape';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
@@ -72,7 +74,10 @@ import { foundationIdentityForDistrict, type FoundationIdentity } from './data/f
  *  phase tests against that so a building rotated to a diagonal street stops you at its wall, never at the
  *  corner of an oversized AABB. Axis-aligned (or quarter-snapped) colliders leave `heading` undefined so the
  *  fast AABB path stays exact. */
-export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; y0?: number; heading?: number; hw?: number; hd?: number; }
+export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; y0?: number; heading?: number; hw?: number; hd?: number;
+  /** Touching this collider's TOP hurts (razor-wire / spiked fence runs — see ParcelFences and
+   *  Game's fence-hazard tick). Plain walls and buildings leave it unset. */
+  hazard?: 'spike' | 'razor'; }
 export const colliderBase = (box: Collider): number => box.y0 ?? terrainHeightAt((box.minX + box.maxX) / 2, (box.minZ + box.maxZ) / 2);
 export const colliderTop = (box: Collider): number => colliderBase(box) + box.height;
 
@@ -819,7 +824,7 @@ export class City {
   private buildQueue: Array<[number, number]> = [];
   private queuedCells = new Set<string>();
   /** The cell currently being baked, a few buildings at a time, across frames (spreads the cost). */
-  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; index: number; models: ScatteredModel[]; modelIndex: number; baker: GeometryBaker; colliders: Collider[]; trunks: TrunkProp[]; group: THREE.Group };
+  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; neighbours: GeneratedBuilding[]; index: number; models: ScatteredModel[]; modelIndex: number; baker: GeometryBaker; colliders: Collider[]; trunks: TrunkProp[]; group: THREE.Group };
   /** Where the building meshes for the current build go (a per-building local group, rotated to face
    *  its street, then merged into the cell). Defaults to the root group for up-front geometry. */
   private target: THREE.Group = this.group;
@@ -1271,6 +1276,26 @@ export class City {
     }
     const propTop = this.props.supportTop(x, z, radius, feetY + PLAYER.stepUp, (px, pz) => this.surfaceHeightAt(px, pz));
     return Math.max(this.surfaceHeightAt(x, z), best, propTop ?? -Infinity);
+  }
+
+  /** The worst hazard-tagged fence collider the player's feet are touching the TOP of — crossing
+   *  or standing on razor wire / spike tips (see GameRules.fenceHazardTouch for the band; Game
+   *  applies the damage behind a cooldown). Walking along a fence at ground level touches only
+   *  the plain panel and reports nothing. Same single-cell grid query as every other move test. */
+  fenceHazardAt(x: number, z: number, radius: number, feetY: number): 'spike' | 'razor' | undefined {
+    this.indexNewColliders();
+    const bucket = this.colliderCells.get(`${Math.floor(x / this.colliderCellSize)},${Math.floor(z / this.colliderCellSize)}`);
+    if (!bucket) return undefined;
+    let worst: 'spike' | 'razor' | undefined;
+    for (const index of bucket) {
+      const box = this.colliders[index]!;
+      if (!box.hazard || worst === box.hazard || (worst === 'razor')) continue;
+      if (!fenceHazardTouch(colliderTop(box), feetY)) continue;
+      if (!colliderOverlapsXZ(box, x, z, radius)) continue;
+      worst = box.hazard === 'razor' ? 'razor' : 'spike';
+      if (worst === 'razor') return worst;
+    }
+    return worst;
   }
 
   terrainHeightAt(x: number, z: number): number { return terrainHeightAt(x, z); }
@@ -2578,13 +2603,19 @@ export class City {
         const [cx, cz] = this.buildQueue.shift()!; const key = `${cx},${cz}`;
         this.queuedCells.delete(key);
         if (this.buildingCells.has(key)) continue;
-        this.pending = { key, cellX: cx, cellZ: cz, specs: generateCell(cx, cz), index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], trunks: [], group: this.buildingStore.groupForKey(key) };
+        const specs = generateCell(cx, cz);
+        // Fence planning drops any run that would cross a neighbouring footprint; the 3x3 cell
+        // neighbourhood covers stands whose neighbour sits across a cell boundary. Deterministic:
+        // generateCell is a pure lookup, and the list only ever VETOES segments.
+        const neighbours = [...specs];
+        for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) { if (dx !== 0 || dz !== 0) neighbours.push(...generateCell(cx + dx, cz + dz)); }
+        this.pending = { key, cellX: cx, cellZ: cz, specs, neighbours, index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], trunks: [], group: this.buildingStore.groupForKey(key) };
       }
       const pending = this.pending;
       // One item per budget slice — procedural buildings first, then the scattered structures/foliage;
       // both feed the same per-cell baker so the whole cell still collapses to a handful of draw calls.
       if (pending.index < pending.specs.length) {
-        const { group, colliders } = this.buildOneBuilding(pending.specs[pending.index++]!);
+        const { group, colliders } = this.buildOneBuilding(pending.specs[pending.index++]!, pending.neighbours);
         pending.baker.addObject(group);
         group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); // baker cloned the geometry
         pending.colliders.push(...colliders);
@@ -2631,8 +2662,10 @@ export class City {
   }
 
   /** Build one building at the origin inside its own group, then rotate it to face its street and
-   *  place it. Returns the group (unmerged) and its world-space collision tiers. */
-  private buildOneBuilding(spec: GeneratedBuilding): { group: THREE.Group; colliders: Collider[] } {
+   *  place it. Returns the group (unmerged) and its world-space collision tiers. `neighbours` (the
+   *  cell's 3x3 parcel neighbourhood) lets the per-parcel fence planner veto runs that would cross
+   *  another footprint; omitted (QA single-building rebuilds), the fence simply skips no runs. */
+  private buildOneBuilding(spec: GeneratedBuilding, neighbours: readonly GeneratedBuilding[] = []): { group: THREE.Group; colliders: Collider[] } {
     const group = new THREE.Group();
     const previousTarget = this.target; this.target = group; this.architecture.retarget(group);
     const { width: w, depth: d, height: h, style, variant: sourceVariant } = spec;
@@ -2707,8 +2740,83 @@ export class City {
     if (hMax - hMin > PLAYER.stepUp) {
       colliders.push(...foundations.map((foundation) => this.tierToWorldCollider(foundation, spec.x, spec.z, spec.heading, baseY)));
     }
+    // The suburban norm: a per-parcel fence ring (wall / spiked palisade / razor wire) with a gate
+    // cut at the planned front door. The stoep house (suburban massing 6) carries its own yard
+    // wall in the architecture and is exempt inside the planner.
+    if (spec.zone === 'residential') {
+      const fence = planParcelFence(spec, { massing: profile.massing, entranceX: profile.entrance?.x, neighbours });
+      if (fence) colliders.push(...this.buildParcelFence(group, fence, baseY, foundationMaterials.wall));
+    }
     this.target = previousTarget; this.architecture.retarget(this.group);
     return { group, colliders };
+  }
+
+  /**
+   * Draw one parcel's fence from its plan and return the matching colliders — mesh and collider
+   * come from the SAME segment list, so no fence collider can stand anywhere its panel is not.
+   * Meshes are built in the building's local frame (the group is rotated to the street as a unit)
+   * but grounded per segment on the world terrain, so runs step down slopes like the airport
+   * fence. Materials are shared citywide: garden walls reuse the district's foundation concrete,
+   * posts match the architecture's dark metal, and the three panel materials bucket once per
+   * chunk — the whole layer costs at most ~3 extra draw calls per chunk.
+   */
+  private buildParcelFence(group: THREE.Group, fence: FencePlan, baseY: number, wallMaterial: THREE.MeshStandardMaterial): Collider[] {
+    const colliders: Collider[] = [];
+    const skirt = 0.9; // buried below grade so downhill segment joints show no daylight
+    for (const segment of fence.segments) {
+      const ground = terrainHeightAt(segment.x, segment.z);
+      colliders.push(fenceSegmentCollider(segment, fence, ground));
+      const sideways = segment.along === 'z';
+      if (fence.kind === 'wall') {
+        const wallH = fence.height + skirt;
+        const mesh = new THREE.Mesh(
+          scaleBoxFacadeUvs(new THREE.BoxGeometry(segment.length, wallH, 0.26), segment.length, wallH, 0.26, FOUNDATION_UV_TILE),
+          wallMaterial);
+        mesh.position.set(segment.lx, ground - baseY + fence.height - wallH / 2, segment.lz);
+        if (sideways) mesh.rotation.y = Math.PI / 2;
+        mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh);
+        continue;
+      }
+      const bodyTop = fence.kind === 'palisade' ? fence.height : 1.85; // razor: mesh body, coil covers the rest
+      const bodyH = bodyTop + 0.25; // embedded so slope steps show steel, not daylight
+      const tile = fence.kind === 'palisade' ? PALISADE_TILE_WIDTH : CHAINLINK_TILE_WIDTH;
+      const panel = new THREE.Mesh(
+        this.fencePanelGeometry(segment.length, bodyH, tile, fence.kind === 'palisade' ? 1 : bodyH / CHAINLINK_TILE_WIDTH),
+        fence.kind === 'palisade' ? palisadeFenceMaterial() : chainlinkFenceMaterial());
+      panel.position.set(segment.lx, ground - baseY + bodyTop - bodyH / 2, segment.lz);
+      if (sideways) panel.rotation.y = Math.PI / 2;
+      panel.receiveShadow = true; group.add(panel);
+      if (fence.kind === 'razor') {
+        const coil = new THREE.Mesh(this.fencePanelGeometry(segment.length, 0.6, RAZOR_COIL_TILE_WIDTH), razorCoilMaterial());
+        coil.position.set(segment.lx, ground - baseY + 2.02, segment.lz);
+        if (sideways) coil.rotation.y = Math.PI / 2;
+        group.add(coil);
+      }
+    }
+    for (const post of fence.posts) {
+      const ground = terrainHeightAt(post.x, post.z);
+      if (fence.kind === 'wall') {
+        const pillarH = fence.height + 0.35 + 0.7;
+        const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.42, pillarH, 0.42), wallMaterial);
+        pillar.position.set(post.lx, ground - baseY + fence.height + 0.35 - pillarH / 2, post.lz);
+        pillar.castShadow = true; pillar.receiveShadow = true; group.add(pillar);
+      } else {
+        const postH = fence.height + 0.15 + 0.5;
+        const steel = new THREE.Mesh(new THREE.BoxGeometry(0.12, postH, 0.12), fencePostMaterial());
+        steel.position.set(post.lx, ground - baseY + fence.height + 0.15 - postH / 2, post.lz);
+        steel.castShadow = true; group.add(steel);
+      }
+    }
+    return colliders;
+  }
+
+  /** A fence panel plane with its UVs scaled to the shared texture's world tile, so pale pitch and
+   *  mesh weave stay constant whatever length the segment came out. */
+  private fencePanelGeometry(length: number, height: number, tileWidth: number, vRepeat = 1): THREE.PlaneGeometry {
+    const geometry = new THREE.PlaneGeometry(length, height);
+    const uv = geometry.getAttribute('uv');
+    for (let index = 0; index < uv.count; index++) uv.setXY(index, uv.getX(index) * (length / tileWidth), uv.getY(index) * vRepeat);
+    return geometry;
   }
 
   private foundationMaterialsFor(identity: FoundationIdentity): { wall: THREE.MeshStandardMaterial; accent: THREE.MeshStandardMaterial } {

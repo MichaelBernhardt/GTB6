@@ -46,7 +46,7 @@ export const CELL_SIZE = 976;
  * Unit-denominated layout distances were authored at 2.94 m/unit; LAYOUT_SCALE tracks the real
  * footprint so parcel sizes stay constant in metres at any TARGET_SIZE (3.0 at the 18000u map).
  */
-const LAYOUT_SCALE = 2.94 / METRES_PER_UNIT;
+export const LAYOUT_SCALE = 2.94 / METRES_PER_UNIT;
 /** Frontage line offset beyond the road edge — matches City's sidewalk apron so buildings sit behind it. */
 const FRONTAGE_CLEARANCE = 3.05;
 /** Arc step (units) for walking a road centreline while laying out lots. */

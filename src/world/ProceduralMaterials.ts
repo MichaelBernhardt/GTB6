@@ -1019,3 +1019,144 @@ export function setSignGlow(night: number, blackout: number): void {
     if (!key.includes('powered')) material.color.setScalar(onGenny ? 1 : scale);
   }
 }
+
+// ---- Suburban fence kit (per-parcel fences — see ParcelFences.ts) ---------------------------
+//
+// Three panel looks, three SHARED materials, so GeometryBaker folds every fence in a chunk into
+// at most three extra meshes (garden walls reuse the district foundation material and posts match
+// the architecture's dark-metal properties, so both merge into buckets the cell already has).
+// Panels are alpha-tested planes: the pale/mesh/coil detail is texture, never geometry — the
+// hedge lesson (rounded geometry costs ~50x the triangles) applied to steel.
+
+/** World units of fence length one texture repeat covers (geometry UVs scale by length/tile). */
+export const PALISADE_TILE_WIDTH = 1.8;
+export const CHAINLINK_TILE_WIDTH = 1.28;
+export const RAZOR_COIL_TILE_WIDTH = 1.35;
+
+function createPalisadeTexture(): THREE.CanvasTexture {
+  const { canvas, context } = canvasTexture(256);
+  context.clearRect(0, 0, 256, 256); // transparent between the pales
+  const pales = 10; const pitch = 256 / pales;
+  // Horizontal rails the pales bolt to (heights map bottom=0 to top=1.95u of fence).
+  for (const railY of [200, 54]) {
+    context.fillStyle = '#2a3134'; context.fillRect(0, railY, 256, 9);
+    context.fillStyle = '#3a4448'; context.fillRect(0, railY, 256, 2);
+  }
+  for (let pale = 0; pale < pales; pale++) {
+    const x = pale * pitch + pitch / 2;
+    const w = 8.5 + seeded(pale, 71) * 1.5;
+    const tone = 34 + Math.floor(seeded(pale, 72) * 14);
+    context.fillStyle = `rgb(${tone}, ${tone + 8}, ${tone + 9})`;
+    context.fillRect(x - w / 2, 22, w, 234);
+    // Split spike tip: two prongs, the SA palisade signature.
+    context.beginPath();
+    context.moveTo(x - w / 2, 24); context.lineTo(x - w / 4, 2); context.lineTo(x, 24);
+    context.lineTo(x + w / 4, 2); context.lineTo(x + w / 2, 24); context.closePath();
+    context.fill();
+    // Galvanising catch-light down one edge.
+    context.fillStyle = 'rgba(150, 162, 166, 0.5)';
+    context.fillRect(x - w / 2, 22, 1.6, 234);
+    // Rust bleed at the foot of the odd pale.
+    if (seeded(pale, 73) > 0.6) {
+      context.fillStyle = 'rgba(110, 74, 46, 0.45)';
+      context.fillRect(x - w / 2, 214 + seeded(pale, 74) * 20, w, 22);
+    }
+  }
+  return finish(canvas);
+}
+
+function createChainlinkTexture(): THREE.CanvasTexture {
+  const { canvas, context } = canvasTexture(128);
+  context.clearRect(0, 0, 128, 128);
+  context.lineWidth = 1.7; context.lineCap = 'butt';
+  // Diamond weave: diagonals both ways, wrapping seamlessly at the tile edge.
+  for (const [colour, offset] of [['rgba(60, 66, 68, 0.9)', 1.1], ['rgba(158, 166, 169, 0.95)', 0]] as const) {
+    context.strokeStyle = colour;
+    for (let start = -128; start < 128; start += 16) {
+      context.beginPath(); context.moveTo(start + offset, 0); context.lineTo(start + 128 + offset, 128); context.stroke();
+      context.beginPath(); context.moveTo(start + 128 + offset, 0); context.lineTo(start + offset, 128); context.stroke();
+    }
+  }
+  // Tension wire along the top edge.
+  context.strokeStyle = 'rgba(170, 177, 180, 1)'; context.lineWidth = 2.4;
+  context.beginPath(); context.moveTo(0, 3); context.lineTo(128, 3); context.stroke();
+  return finish(canvas);
+}
+
+function createRazorCoilTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 64;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D is unavailable');
+  context.clearRect(0, 0, 256, 64);
+  // Overlapping coil loops: ellipses marching along the strip, seam-safe (loop 0 == loop N).
+  const loops = 8; const pitch = 256 / loops;
+  for (let loop = 0; loop <= loops; loop++) {
+    const x = loop * pitch;
+    for (const [colour, width] of [['rgba(88, 95, 98, 0.85)', 3.2], ['rgba(196, 203, 206, 0.95)', 1.7]] as const) {
+      context.strokeStyle = colour; context.lineWidth = width;
+      context.beginPath(); context.ellipse(x, 32, pitch * 0.72, 27, 0.28, 0, Math.PI * 2); context.stroke();
+    }
+    // Barbs: short double points around each loop.
+    context.strokeStyle = 'rgba(208, 214, 216, 1)'; context.lineWidth = 1.4;
+    for (let barb = 0; barb < 5; barb++) {
+      const angle = (barb / 5) * Math.PI * 2 + loop * 0.7;
+      const bx = x + Math.cos(angle) * pitch * 0.72; const by = 32 + Math.sin(angle) * 27;
+      context.beginPath(); context.moveTo(bx - 3, by - 2.5); context.lineTo(bx + 3, by + 2.5); context.stroke();
+      context.beginPath(); context.moveTo(bx - 3, by + 2.5); context.lineTo(bx + 3, by - 2.5); context.stroke();
+    }
+  }
+  return finish(canvas);
+}
+
+let palisadeMaterial: THREE.MeshStandardMaterial | undefined;
+let chainlinkMaterial: THREE.MeshStandardMaterial | undefined;
+let razorCoilMaterial_: THREE.MeshStandardMaterial | undefined;
+let fencePostMaterial_: THREE.MeshStandardMaterial | undefined;
+
+/** Spiked steel palisade panel — one shared material citywide. Lazy: tests and the bake run in node. */
+export function palisadeFenceMaterial(): THREE.MeshStandardMaterial {
+  if (!palisadeMaterial) {
+    palisadeMaterial = new THREE.MeshStandardMaterial({
+      metalness: 0.5, roughness: 0.52, side: THREE.DoubleSide, alphaTest: 0.4,
+      map: typeof document === 'undefined' ? null : createPalisadeTexture(),
+    });
+    palisadeMaterial.name = 'fence-palisade';
+  }
+  return palisadeMaterial;
+}
+
+/** Diamond-mesh security fence panel (the body under the razor coil). */
+export function chainlinkFenceMaterial(): THREE.MeshStandardMaterial {
+  if (!chainlinkMaterial) {
+    chainlinkMaterial = new THREE.MeshStandardMaterial({
+      metalness: 0.58, roughness: 0.46, side: THREE.DoubleSide, alphaTest: 0.32,
+      map: typeof document === 'undefined' ? null : createChainlinkTexture(),
+    });
+    chainlinkMaterial.name = 'fence-chainlink';
+  }
+  return chainlinkMaterial;
+}
+
+/** The razor-wire coil strip riding the top of a razor fence — texture, never geometry. */
+export function razorCoilMaterial(): THREE.MeshStandardMaterial {
+  if (!razorCoilMaterial_) {
+    razorCoilMaterial_ = new THREE.MeshStandardMaterial({
+      metalness: 0.72, roughness: 0.3, side: THREE.DoubleSide, alphaTest: 0.3,
+      map: typeof document === 'undefined' ? null : createRazorCoilTexture(),
+    });
+    razorCoilMaterial_.name = 'fence-razor-coil';
+  }
+  return razorCoilMaterial_;
+}
+
+/** Steel fence/gate posts. Property-for-property the architecture's darkMetal (0x283336,
+ *  metalness 0.72, roughness 0.34): GeometryBaker buckets by material PROPERTIES, so every post
+ *  merges into the dark-metal mesh the cell's buildings already carry — zero extra draw calls. */
+export function fencePostMaterial(): THREE.MeshStandardMaterial {
+  if (!fencePostMaterial_) {
+    fencePostMaterial_ = new THREE.MeshStandardMaterial({ color: 0x283336, metalness: 0.72, roughness: 0.34 });
+    fencePostMaterial_.name = 'fence-post';
+  }
+  return fencePostMaterial_;
+}

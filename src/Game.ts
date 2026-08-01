@@ -7,7 +7,7 @@ import { bootMark, bootTimeline } from './core/BootTimeline';
 import { setGrimeDecalsVisible } from './world/ProceduralMaterials';
 import { radioDial } from './core/RadioStations';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
-import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, KNOCKOFF_IMPACT_SPEED, LOCKPICK_MAX, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
+import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, FENCE_HAZARD_COOLDOWN, FENCE_HAZARD_DAMAGE, KNOCKOFF_IMPACT_SPEED, LOCKPICK_MAX, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
 import { gamepadPrompt, type GamepadMode } from './core/GamepadInput';
 import { crashKickSpeed, impactKickSpeed, landingDownSpeed } from './entities/PedRagdoll';
 import { scopeActive, scopeFov, scopeSensitivity, scopeWeapon, scopeZoomLabel, SNIPER_RECOIL, stepScopeLevel, wheelAction } from './core/ScopeRules';
@@ -144,6 +144,8 @@ export class Game {
   /** Burning cars whose drivers still need to bail — drained one per frame (see updateVehicleFires). */
   private pendingEjections: Vehicle[] = [];
   private shake = 0;
+  /** Cooldown between fence-hazard damage ticks (razor/spike tops — see updateOnFoot). */
+  private fenceHazardTimer = 0;
   private wanted = new WantedSystem();
   private knowledge = new PoliceKnowledge<Pedestrian>();
   private police!: PoliceSystem;
@@ -1345,6 +1347,19 @@ export class Game {
     this.player.update(dt, this.input, this.cameraController.yaw, this.city, this.updateCoverState(dt));
     const fall = this.player.consumeFallDamage(); // hard landings billed through the usual damage path
     if (fall > 0) { this.damagePlayer(fall); this.shake = Math.min(0.7, this.shake + 0.25); this.audio.collision(10 + fall * 0.3); }
+    // Crossing (or standing on) a razor-wire or spiked fence top bleeds through the usual damage
+    // funnel, behind a cooldown — the vehicle-contact pattern, never a per-frame drain.
+    this.fenceHazardTimer = Math.max(0, this.fenceHazardTimer - dt);
+    if (this.fenceHazardTimer === 0 && !this.player.ghost) {
+      const feet = this.player.group.position;
+      const hazard = this.city.fenceHazardAt(feet.x, feet.z, PLAYER.radius + 0.25, feet.y);
+      if (hazard) {
+        this.damagePlayer(FENCE_HAZARD_DAMAGE[hazard]);
+        this.fenceHazardTimer = FENCE_HAZARD_COOLDOWN;
+        this.shake = Math.min(0.7, this.shake + (hazard === 'razor' ? 0.3 : 0.15));
+        this.audio.collision(hazard === 'razor' ? 16 : 8);
+      }
+    }
     if (this.player.knockedDown) return; // floored: no bumps, weapons, or interactions until the body is back up (JMPD can still close in and collar)
     for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
       if (!bump.assault) continue;
