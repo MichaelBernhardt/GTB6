@@ -1061,11 +1061,14 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       clamp(current, dt);
       cullPartitions(current);
       // The fixture grounds itself on the floor via groundOverride now; what the room still owes
-      // it is CONTAINMENT — a shot shopkeeper's flee is ordinary ped movement with no interior
-      // walls to stop it, so hold the panicking body inside its own building's plate. Passing
-      // through a partition while cowering is accepted; sprinting off into the void under the
-      // hidden city is not.
+      // it is CONTAINMENT and an honest panic. A shot survivor's FLEE is ordinary ped movement
+      // aimed somewhere outside the building — it pinned against the plate clamp and ran on the
+      // spot, turning, forever (the owner's exact words). Indoors there is nowhere to run TO, so
+      // the honest response is the one the fear system already owns: COWER — duck where you
+      // stand, behind your own counter. It also retires the sprint-through-a-partition residual,
+      // because a cowering body goes nowhere. The plate clamp stays for ordinary wandering.
       if (current.fixture && current.fixture.ped.state !== 'down') {
+        if (current.fixture.ped.state === 'flee') current.fixture.ped.state = 'cower';
         const ped = current.fixture.ped.group.position;
         const local = toLocal(current, current.heading, ped.x, ped.z);
         const cx = Math.max(-current.core.width / 2 + 0.6, Math.min(current.core.width / 2 - 0.6, local.x));
