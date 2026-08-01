@@ -9,10 +9,13 @@
 import * as THREE from 'three';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createFeature } from './interiors';
-import { buildCore } from './core';
+import { buildCore, hasRoofAccess, hatchFoot } from './core';
 import { doorsNear, nearestDoor, resetDoorCache } from './doors';
+import { doorLocked } from './lock';
 import { buildDoorways, buildFloor, markerFade } from './build';
 import { solveFloor } from './floor';
+import { FeatureHost, type FeatureHostContext } from '../host';
+import { sanitizeInteriorsState } from '../interiors.state';
 import type { FeatureGameApi, FeatureMenuView, FeatureSystem, InteractionCtx } from '../types';
 
 /** Flat ground: the door search still runs against the real generated map, which is the half worth
@@ -60,12 +63,12 @@ function harness(): Harness {
   return state;
 }
 
-const ctx = (position: THREE.Vector3): InteractionCtx => ({ context: 'foot', position, vehicle: undefined, hour: 13 });
+const ctx = (position: THREE.Vector3, hour = 13): InteractionCtx => ({ context: 'foot', position, vehicle: undefined, hour });
 
 /** The offer the on-foot ladder would show right now, through the same resolver E goes through. */
-function offer(system: FeatureSystem, position: THREE.Vector3): { prompt: string; act(): void } | undefined {
+function offer(system: FeatureSystem, position: THREE.Vector3, hour = 13): { prompt: string; act(): void } | undefined {
   for (const rung of [...(system.interactions?.() ?? [])].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))) {
-    const found = rung.test(ctx(position));
+    const found = rung.test(ctx(position, hour));
     if (found) return found;
   }
   return undefined;
@@ -73,6 +76,21 @@ function offer(system: FeatureSystem, position: THREE.Vector3): { prompt: string
 
 function floorGroups(scene: THREE.Scene): THREE.Object3D[] {
   return scene.children.filter((child) => child.name.startsWith('Floor:'));
+}
+
+/** A door the lock line leaves OPEN in daylight, so tests about visit mechanics (fades, chunks,
+ *  climbing) are not accidentally about locks. The lock behaviour has its own describe block. */
+function openDoorNear(x: number, z: number) {
+  return doorsNear(x, z, 2000)
+    .filter((door) => !doorLocked(door.facts, 'outside', 13))
+    .sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))[0];
+}
+
+/** A door the lock line LOCKS in daylight — somebody's home. */
+function lockedDoorNear(x: number, z: number) {
+  return doorsNear(x, z, 2000)
+    .filter((door) => doorLocked(door.facts, 'outside', 13))
+    .sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))[0];
 }
 
 /** A door on a building with more than one storey, so the stair has somewhere to go. */
@@ -89,7 +107,11 @@ describe('a visit', () => {
   it('opens on a real doorstep and builds the ground floor of that building, lit', () => {
     const test = harness();
     const system = createFeature(test.api, undefined);
-    const door = nearestDoor(0, 0)!;
+    // An open-class door on a building at least plate-sized, so the position assertion below is
+    // about "under your own building", not about the Tardis clamp on a tiny spaza.
+    const door = doorsNear(0, 0, 2000)
+      .filter((entry) => !doorLocked(entry.facts, 'outside', 13) && entry.facts.width > 15.5 && entry.facts.depth > 21.5)
+      .sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z))[0]!;
     expect(door).toBeDefined();
     test.player.set(door.x, 0, door.z);
 
@@ -99,11 +121,13 @@ describe('a visit', () => {
 
     const groups = floorGroups(test.scene);
     expect(groups, 'no floor in the scene').toHaveLength(1);
-    // Lit: an ambient plus at least one lamp, or you get the void this feature shipped with.
+    // Lit: the visit's ambient plus burning lamps from the POOL (floors own no lights — a floor that
+    // adds or removes a light recompiles every shader in the scene; see build.ts), or you get the
+    // void this feature shipped with.
     const lights: THREE.Light[] = [];
-    groups[0]!.traverse((object) => { if (object instanceof THREE.Light) lights.push(object); });
+    test.scene.traverse((object) => { if (object instanceof THREE.Light) lights.push(object); });
     expect(lights.filter((light) => light instanceof THREE.AmbientLight).length).toBeGreaterThan(0);
-    expect(lights.filter((light) => light instanceof THREE.PointLight).length).toBeGreaterThan(1);
+    expect(lights.filter((light) => light instanceof THREE.PointLight && light.intensity > 0).length).toBeGreaterThan(1);
 
     // The player is under their own building, at the same x and z they walked in on — and BELOW the
     // ground, which is the only band where City.supportHeight leaves them grounded rather than
@@ -136,6 +160,89 @@ describe('a visit', () => {
     test.player.set(tall!.door.x, 0, tall!.door.z);
     expect(system.qa!('run', {})).toBe('ok');
     expect(floorGroups(test.scene), 'floors left behind after leaving').toHaveLength(0);
+    system.dispose();
+  }, 300000);
+
+  /** Walk the player one qa stride at a time toward a floor-local point, through the real clamp,
+   *  until `done(lx, lz)` or the stride budget runs out. Returns the last local position. */
+  function walkUntil(system: FeatureSystem, x: number, z: number, done: (lx: number, lz: number) => boolean, budget = 400): { lx: number; lz: number } {
+    let lx = 0; let lz = 0;
+    for (let i = 0; i < budget; i++) {
+      const r = system.qa!('walk', { x, z });
+      expect(r.startsWith('ok')).toBe(true);
+      const parts = r.split('|');
+      lx = Number(parts[1]); lz = Number(parts[2]);
+      if (done(lx, lz)) break;
+    }
+    return { lx, lz };
+  }
+
+  /**
+   * THE STALL REGRESSION TESTS. The freeze the owner reported was three.js recompiling every shader
+   * in the scene whenever the light census changed — which the old code did on every floor raise
+   * AND drop, i.e. every time the player crossed the spine sightline. The invariant that kills the
+   * whole class: between entering and leaving, the number of lights in the scene NEVER changes.
+   */
+  it('keeps the scene light census constant across floor raises and drops', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const tall = tallDoor({ x: 0, z: 0 })!;
+    test.player.set(tall.door.x, 0, tall.door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    const census = (): string => {
+      let point = 0; let ambient = 0;
+      test.scene.traverse((object) => {
+        if (object instanceof THREE.PointLight) point++;
+        else if (object instanceof THREE.AmbientLight) ambient++;
+      });
+      return `point=${point} ambient=${ambient}`;
+    };
+    const core = tall.core;
+    const offSpine = (lx: number): boolean => Math.abs(lx - core.corridorX) > 3.6; // past holdNeighbour's sightline
+    // On the mat (on the spine): the storey above is raised. Census taken now is the visit's census.
+    walkUntil(system, core.corridorX, core.depth * 0.05, () => true, 1);
+    const reference = census();
+    // Into a room and past the release dwell: the neighbour floor DROPS. No light may go with it.
+    const plan = solveFloor(tall.door.facts, 0, core);
+    const room = plan.rooms[0]!;
+    const spot = walkUntil(system, room.rect.x, room.doorZ, (lx) => offSpine(lx));
+    expect(offSpine(spot.lx), 'never made it off the spine — pick a different fixture').toBe(true);
+    for (let i = 0; i < 70; i++) system.qa!('walk', { x: spot.lx, z: spot.lz }); // 70 strides > 0.8 s dwell
+    expect(census()).toBe(reference);
+    // Back to the spine: the neighbour RAISES again. Still the same lights.
+    walkUntil(system, core.corridorX, room.doorZ, (lx) => Math.abs(lx - core.corridorX) < 0.8);
+    expect(census()).toBe(reference);
+    // And outside, every pooled light is gone with the visit.
+    expect(system.qa!('leave', {})).toBe('ok');
+    expect(census()).toBe('point=0 ambient=0');
+    system.dispose();
+  }, 300000);
+
+  it('re-shows a dropped floor from the cache instead of rebuilding it', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const tall = tallDoor({ x: 0, z: 0 })!;
+    test.player.set(tall.door.x, 0, tall.door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    const core = tall.core;
+    walkUntil(system, core.corridorX, core.depth * 0.05, () => true, 1); // raises floor 1 from the mat
+    const upstairs = test.scene.children.find((child) => child.name === `Floor:${core.id}:1`);
+    expect(upstairs, 'the storey above must exist while the player can see up the shaft').toBeDefined();
+    expect(upstairs!.visible).toBe(true);
+    // Off the sightline and past the dwell: dropped means HIDDEN, not disposed.
+    const plan = solveFloor(tall.door.facts, 0, core);
+    const room = plan.rooms[0]!;
+    const spot = walkUntil(system, room.rect.x, room.doorZ, (lx) => Math.abs(lx - core.corridorX) > 3.6);
+    for (let i = 0; i < 70; i++) system.qa!('walk', { x: spot.lx, z: spot.lz });
+    expect(upstairs!.visible).toBe(false);
+    expect(upstairs!.parent).toBe(test.scene);
+    // Back on the spine: the SAME object returns, no rebuild.
+    walkUntil(system, core.corridorX, room.doorZ, (lx) => Math.abs(lx - core.corridorX) < 0.8);
+    expect(upstairs!.visible).toBe(true);
+    expect(test.scene.children.filter((child) => child.name === `Floor:${core.id}:1`)).toHaveLength(1);
+    // Leaving disposes the cache: nothing of the building survives outside.
+    expect(system.qa!('leave', {})).toBe('ok');
+    expect(floorGroups(test.scene)).toHaveLength(0);
     system.dispose();
   }, 300000);
 
@@ -226,6 +333,84 @@ describe('a visit', () => {
     system.dispose();
   }, 120000);
 
+  /** "There seem to always be stairs, even on single floor buildings" — the owner. A single-storey
+   *  building now has no shaft in its core, no stair group in its scene, and rooms on the whole
+   *  plate; the visit still works end to end. */
+  it('gives a single-storey building no stair at all, and still a walkable visit', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const single = doorsNear(0, 0, 4000)
+      .map((door) => ({ door, core: buildCore(door.facts) }))
+      .find((entry) => entry.core.storeys === 1);
+    expect(single, 'no single-storey building near the origin').toBeDefined();
+    expect(single!.core.stair, 'a single-storey core still carries a stair').toBeUndefined();
+    expect(single!.core.lift).toBeUndefined();
+    test.player.set(single!.door.x, 0, single!.door.z);
+    expect(system.qa!('run', {})).toBe('ok');
+    system.qa!('enter', {});
+    let stairGroups = 0;
+    floorGroups(test.scene)[0]!.traverse((object) => { if (object.name === 'Stair') stairGroups++; });
+    expect(stairGroups, 'a stairless building drew a stair').toBe(0);
+    expect(system.qa!('status', {})).toContain('unreachable=0');
+    system.dispose();
+  }, 300000);
+
+  /** The interaction ladder guarantees a shown prompt's act() runs — an offer that then answers
+   *  'failed:mid-fade' is a stolen keypress, the exact failure class that once made the protest rung
+   *  eat "E Enter vehicle". So during a fade every rung must WITHDRAW, not fizzle. */
+  it('withdraws every offer during the entry fade instead of stealing the keypress', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = openDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    const prompt = offer(system, test.player);
+    expect(prompt?.prompt).toBe(`E  Go inside · ${door.name}`);
+    prompt!.act(); // starts the 260 ms entry fade — the visit does not exist yet
+    expect(offer(system, test.player), 'an offer shown mid-fade would act and fizzle').toBeUndefined();
+    system.dispose(); // clears the pending fade timer
+  }, 120000);
+
+  /** Doors derive from map data, not built geometry: without this gate, E on a doorway frame whose
+   *  building chunk has not streamed in teleports the player into an invisible building. */
+  it('offers nothing while the building chunk is not built, and offers again once it is', () => {
+    const test = harness();
+    let built = false;
+    test.api.chunkBuiltAt = () => built;
+    const system = createFeature(test.api, undefined);
+    const door = openDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(offer(system, test.player), 'a doorway on an unbuilt chunk must not offer').toBeUndefined();
+    built = true;
+    expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    system.dispose();
+  }, 120000);
+
+  /** Nothing reserves the doorstep while the player is inside — a car can park on the exact slab
+   *  they left from. Stepping out must sidestep the bodywork, not restore into it. */
+  it('steps the returning player around a car parked on the doorstep', () => {
+    const test = harness();
+    let parked: { x: number; z: number } | undefined;
+    test.api.vehicleNear = (x, z, radius) => (parked ? Math.hypot(parked.x - x, parked.z - z) < radius : false);
+    const system = createFeature(test.api, undefined);
+    const door = nearestDoor(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    const outside = test.player.clone();
+    system.qa!('enter', {});
+    parked = { x: outside.x, z: outside.z }; // a taxi pulls onto the slab while they are inside
+    system.qa!('leave', {});
+    const away = Math.hypot(test.player.x - outside.x, test.player.z - outside.z);
+    expect(away, 'the player came out inside the parked car').toBeGreaterThan(1.2);
+    expect(away, 'the sidestep must stay by the door, not teleport down the street').toBeLessThan(4);
+    // And with the slab clear, the restore is still exact.
+    parked = undefined;
+    test.player.set(door.x, 0, door.z);
+    const clean = test.player.clone();
+    system.qa!('enter', {});
+    system.qa!('leave', {});
+    expect(test.player.distanceTo(clean)).toBeLessThan(0.001);
+    system.dispose();
+  }, 120000);
+
   // The torch hint asks the host "is the player under a roof?" and must stay silent in here: the
   // lamps dim with the grid but the room keeps its own ambient, so the way out is always findable.
   it('reports itself as indoors only between stepping in and stepping out', () => {
@@ -287,14 +472,92 @@ describe('the marker on the step', () => {
   }, 120000);
 });
 
+/**
+ * ROOF ACCESS. Commercial and industrial buildings taller than two storeys open both ways: the top
+ * stair head carries a ladder out onto the real roof, and standing on such a roof offers the way
+ * down into the top floor. Exit is never gated; entry goes through the same doorLocked() line the
+ * street door will use once the locks pass ships the pick.
+ */
+describe('the roof', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  it('drops into the top floor from the roof, and the street door then puts you out on the doorstep', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const stood = system.qa!('roofstand', {});
+    expect(stood.startsWith('ok'), stood).toBe(true);
+    const doorId = stood.split('|')[1]!;
+    // Standing on the roof: the ladder in, through the same resolver E uses.
+    const prompt = offer(system, test.player);
+    expect(prompt?.prompt, 'no way in from the roof').toContain('roof hatch');
+    const entered = system.qa!('roofenter', {});
+    expect(entered.startsWith('ok'), entered).toBe(true);
+    const status = system.qa!('status', {});
+    const storeys = Number(/storeys=(\d+)/.exec(status)![1]);
+    const floor = Number(/floor=(\d+)/.exec(status)![1]);
+    expect(storeys).toBeGreaterThan(2);
+    expect(floor, 'a roof entry must land on the TOP floor').toBe(storeys - 1);
+    expect(status).toContain('unreachable=0');
+    // Leaving by the street door must NOT restore the roof position — that would teleport the
+    // player back up. It puts them on the doorstep like anyone else. Exit checks nothing, ever.
+    expect(system.qa!('leave', {})).toBe('ok');
+    const door = doorsNear(test.player.x, test.player.z, 60).find((candidate) => candidate.id === doorId);
+    expect(door, 'left somewhere far from the building').toBeDefined();
+    expect(Math.hypot(test.player.x - door!.x, test.player.z - door!.z)).toBeLessThan(0.01);
+    expect(test.player.y).toBeCloseTo(0, 3);
+    system.dispose();
+  }, 300000);
+
+  it('exits the top stair head to the real roof, high above the street', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    expect(system.qa!('roofenter', {}).startsWith('ok')).toBe(true);
+    const inside = test.player.clone();
+    const out = system.qa!('roof', {});
+    expect(out.startsWith('ok'), out).toBe(true);
+    // Interiors live ~30u underground; the roof is the massing top, well above the flat ground.
+    expect(test.player.y, 'the hatch put the player somewhere that is not a roof').toBeGreaterThan(6);
+    expect(test.player.y).toBeGreaterThan(inside.y + 20);
+    expect(system.indoors?.()).toBe(false);
+    // The hatch just used is in grace: the way back down offers immediately.
+    const back = offer(system, test.player);
+    expect(back?.prompt, 'no way back down through a hatch just exited').toContain('roof hatch');
+    system.dispose();
+  }, 300000);
+
+  it('offers the hatch rung at the ladder foot on the top floor of a qualifying building', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const roofy = doorsNear(0, 0, 4000)
+      .map((door) => ({ door, core: buildCore(door.facts) }))
+      .filter((entry) => entry.core.stair && hasRoofAccess(entry.core) && entry.door.roof)
+      .sort((a, b) => a.core.storeys - b.core.storeys)[0];
+    expect(roofy, 'no roof-qualifying building near the origin').toBeDefined();
+    const { door, core } = roofy!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
+    // Walk to the ladder foot (mapped to world through the visit's own frame).
+    const foot = hatchFoot(core.stair!, core.stairDir);
+    for (let i = 0; i < 400; i++) {
+      const step = system.qa!('walk', { x: foot.x, z: foot.z - 1.4 });
+      const parts = step.split('|');
+      if (Math.hypot(Number(parts[1]) - foot.x, Number(parts[2]) - (foot.z - 1.4)) < 0.15) break;
+    }
+    const prompt = offer(system, test.player);
+    expect(prompt?.prompt, 'no roof prompt at the ladder foot').toBe('E  Up to the roof');
+    system.dispose();
+  }, 300000);
+});
+
 describe('third-person interior visibility', () => {
   it('registers both doorway jambs as occluders along with every full-height wall span', () => {
     resetDoorCache();
     const door = nearestDoor(0, 0)!;
     const core = buildCore(door.facts);
     const plan = solveFloor(door.facts, 0, core);
-    const built = buildFloor(plan, { ground: true, top: core.storeys === 1 });
-    let expected = 1; // the stair core
+    const built = buildFloor(plan, { ground: true, top: core.storeys === 1, hatch: false });
+    let expected = core.stair ? 1 : 0; // the stair core, when the building has one
     for (const wall of plan.walls) {
       if (wall.gapWidth === undefined) {
         if (wall.to - wall.from >= 0.02) expected += 1;
@@ -310,3 +573,171 @@ describe('third-person interior visibility', () => {
     built.dispose();
   }, 120000);
 });
+
+/**
+ * THE LOCKS, live. One direction only: entering from the street or the roof asks the lock line;
+ * leaving never asks anything. A pickless player at a locked door gets NO offer at all —
+ * FeatureHost.act() returns true the instant any rung offers, so even an "honest" explainer
+ * offer claims the E press from the `E  Enter vehicle` rung directly below (the protest-rung
+ * failure class, PR #120). The passive LOCKED chip explains instead; with a pick, the dial
+ * offers and ACTS.
+ */
+describe('locked doors', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  it('claims no key from a pickless player, so E falls through to the vehicle rung below', async () => {
+    const test = harness();
+    // The real host, called exactly the way Game's on-foot E handler calls it: the line after
+    // `if (this.features.act('foot')) return;` is vehicle entry, so act() must answer false here.
+    const context: FeatureHostContext = { api: test.api, suspended: () => false, emit: () => undefined, reportError: () => undefined };
+    const host = new FeatureHost(context, [{
+      id: 'interiors', saveKey: 'interiors', label: 'Building interiors',
+      load: () => Promise.resolve({ createFeature }),
+    }]);
+    await host.open('interiors');
+    const door = lockedDoorNear(0, 0)!;
+    expect(door).toBeDefined();
+    test.player.set(door.x, 0, door.z);
+    expect(host.offer('foot'), 'a locked door with no pick must not offer').toBeUndefined();
+    expect(host.act('foot'), 'act() must decline so Game reaches beginEnter(vehicle)').toBe(false);
+    // The explanation moved to the passive chip, which claims no key at all.
+    expect(host.hud()?.some((chip) => chip.id === 'interiors:locked' && chip.label === 'LOCKED')).toBe(true);
+    host.dispose();
+  }, 120000);
+
+  it('with a pick, runs the dial through the real rung and opens on the bite', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(offer(system, test.player)?.prompt).toBe(`E  Pick the lock · ${door.name}`);
+    const picked = system.qa!('pick', {});
+    expect(picked.startsWith('ok'), picked).toBe(true);
+    expect(picked).toContain('picks=1');
+    expect(system.qa!('status', {})).toMatch(/^inside\|/);
+    // EXIT IS NEVER GATED: straight back out, no pick, no check, restored to the slab.
+    expect(system.qa!('leave', {})).toBe('ok');
+    expect(Math.hypot(test.player.x - door.x, test.player.z - door.z)).toBeLessThan(0.01);
+    system.dispose();
+  }, 120000);
+
+  it('holds the door you just left open for the grace window — no second dial to undo a step outside', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('pick', {}).startsWith('ok')).toBe(true);
+    expect(system.qa!('leave', {})).toBe('ok');
+    // Within the grace window the same door opens without the dial.
+    expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    system.dispose();
+  }, 120000);
+
+  it('opensesame opens everything without a pick', () => {
+    const test = harness();
+    test.api.doorsUnlocked = () => true;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    system.dispose();
+  }, 120000);
+
+  it('cancels the dial when the player walks away, costing nothing', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    const start = offer(system, test.player);
+    expect(start?.prompt).toBe(`E  Pick the lock · ${door.name}`);
+    start!.act(); // dial running
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:pick')).toBe(true);
+    test.player.set(door.x + 8, 0, door.z); // walk off the step
+    system.update!(1 / 60);
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:pick') ?? false).toBe(false);
+    system.dispose();
+  }, 120000);
+});
+
+/**
+ * THE ROOF IS NEVER A TRAP. The owner's rule, verbatim: "you don't need to lockpick to get out.
+ * You can always exit a building, either front door or onto the roof. Getting back in is when you
+ * need to lock pick." A hatch that graced re-entry for only sixty seconds shipped the trap anyway:
+ * walk out onto a works roof in hours (free, as every exit is), let night fall — or simply linger —
+ * and the only way down asked for a pick. These tests pin the invariant that killed it: a pickless
+ * player on a roof they walked onto ALWAYS has the way back in, however long they stand out there,
+ * and across a save reload.
+ */
+describe('the roof is never a trap', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  /** A roof-access building that is open in hours and locked at night: the works dock that sprang
+   *  the trap. Searched outward so a sparse origin still answers. */
+  function nightLockedRoofDoor() {
+    for (const radius of [1500, 3000, 6000]) {
+      const found = doorsNear(0, 0, radius)
+        .map((door) => ({ door, core: buildCore(door.facts) }))
+        .filter((entry) => entry.door.roof && entry.core.stair && hasRoofAccess(entry.core)
+          && !doorLocked(entry.door.facts, 'outside', 13)
+          && doorLocked(entry.door.facts, 'outside', 23))
+        .sort((a, b) => Math.hypot(a.door.x, a.door.z) - Math.hypot(b.door.x, b.door.z))[0];
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  it('keeps the hatch a pickless player walked out of unlatched, however long they linger', async () => {
+    const test = harness();
+    let hour = 13;
+    test.api.hour = () => hour;
+    const system = createFeature(test.api, undefined);
+    const roofy = nightLockedRoofDoor();
+    expect(roofy, 'no night-locking roof-access building on the map').toBeDefined();
+    const { door, core } = roofy!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');                       // in through the open works door, in hours
+    expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
+    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);       // out the hatch — free, no pick, no check
+    // Night falls and they photograph the skyline for three whole minutes: far past the 60 s
+    // window, and the building is now night-locked to outsiders on every side.
+    hour = 23;
+    for (let i = 0; i < 180; i++) system.update!(1);
+    expect(doorLocked(door.facts, 'outside', hour), 'the building must night-lock or this test bites nothing').toBe(true);
+    const back = offer(system, test.player, hour);
+    expect(back?.prompt, 'pickless player marooned on a night-locked roof').toContain('In through the roof hatch');
+    back!.act();
+    await new Promise((resolve) => setTimeout(resolve, 500));         // the real 260 ms entry fade
+    const status = system.qa!('status', {});
+    expect(status).toMatch(/^inside\|/);
+    expect(status).toContain(`floor=${core.storeys - 1}`);            // back in at the top, exactly where the hatch leads
+    system.dispose();
+  }, 300000);
+
+  it('keeps the walked-onto roof unlatched across a save reload', () => {
+    const test = harness();
+    let hour = 13;
+    test.api.hour = () => hour;
+    const system = createFeature(test.api, undefined);
+    const roofy = nightLockedRoofDoor();
+    expect(roofy).toBeDefined();
+    const { door, core } = roofy!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
+    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);
+    hour = 23;
+    // The save written out on the roof carries the unlatched door through the sanitizer...
+    const slice = sanitizeInteriorsState(system.serialize!());
+    expect(slice.graceId, 'the unlatched door must survive into the save').toBe(door.id);
+    system.dispose();
+    // ...and a fresh session restored on the same roof still has the way down, still re-arming.
+    const revived = createFeature(test.api, slice);
+    for (let i = 0; i < 180; i++) revived.update!(1);
+    expect(offer(revived, test.player, hour)?.prompt, 'reload on the roof re-latched the way down').toContain('In through the roof hatch');
+    revived.dispose();
+  }, 300000);
+});
+

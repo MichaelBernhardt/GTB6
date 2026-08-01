@@ -44,7 +44,7 @@ export function buildVenue(seed: number, kind: VenueKind, options: BuildOptions 
     kit.box(s % 2 ? stripeB! : stripeA!, stripeW, 0.06, drop, -(hallW + 0.6) / 2 + (s + 0.5) * stripeW, hallH * 0.78, drop / 2 - 0.15, { rx: 0.38, cast: false });
   }
   for (const sx of [-1, 1]) kit.cyl(M.darkMetal, 0.04, 0.04, hallH * 0.72, sx * (hallW / 2 - 0.2), deckH, drop * 0.82, { seg: 6, cast: false });
-  kit.sign(plan.signText, ACCENTS[plan.accentIndex % ACCENTS.length]!, hallW * 0.82, 0.62, 0, hallH * 0.82 + 0.62, 0.08, { background: '#31404a' });
+  kit.sign(options.signName ?? plan.signText, ACCENTS[plan.accentIndex % ACCENTS.length]!, hallW * 0.82, 0.62, 0, hallH * 0.82 + 0.62, 0.08, { background: '#31404a' });
 
   kit.box(M.bleached, terraceW, deckH, terraceD, 0, 0, terraceD / 2, { collide: true }); // terrace deck (step-up height)
   for (const sx of [-1, 1]) kit.box(M.bleached, 0.08, 0.5, terraceD, sx * (terraceW / 2 - 0.06), deckH, terraceD / 2, { cast: false });

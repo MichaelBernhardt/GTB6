@@ -524,6 +524,14 @@ export async function createFeature(api: FeatureGameApi, state: unknown): Promis
       if (actionId === 'r50' || actionId === 'r200' || actionId === 'full') buy(actionId, site, vehicle);
     },
     command,
+    /** The console's generic `give petrol` route (registry.ts `grants`): fills the tank you are
+     *  sitting in. On foot there is no tank to fill, and the line says so — no silent no-op. */
+    grant: () => {
+      const vehicle = api.drivenVehicle();
+      if (!vehicle || !hasTank(vehicle)) return 'No tank to fill — get behind the wheel of something with an engine first.';
+      setLitres(vehicle, tankSize(vehicle));
+      return `Tank filled: ${litresText(tank(vehicle))} of ${vehicle.spec.name}. The forecourt saw nothing.`;
+    },
     qa,
     dispose: () => {
       // Fixtures and bookkeeping, and that is the whole list: this feature adds NO meshes and NO

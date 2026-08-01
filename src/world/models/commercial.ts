@@ -20,10 +20,14 @@ export function buildStripMall(seed: number, options: BuildOptions = {}): BuiltM
   kit.box(M.concrete, w + 0.4, 0.22, 2.6, 0, 3.1, d / 2 + 1.3, { cast: false, collide: true }); // walkway canopy / balcony — standable
   kit.box(M.paving, w, 0.14, 3, 0, 0, d / 2 + 1.5, { cast: false });
   for (let unit = 0; unit <= units; unit++) kit.box(M.steel, 0.14, 3.1, 0.14, -w / 2 + unit * unitW, 0, d / 2 + 2.4);
+  // The unit whose door the entrance tag keeps is the one closest to centre (ties go to the -x
+  // side — Kit.entranceAt's own rule), so THAT unit's board carries the building's identity name.
+  const entranceUnit = Math.floor((units - 1) / 2);
   for (let unit = 0; unit < units; unit++) {
     const x = -w / 2 + unitW * (unit + 0.5);
     kit.door(M.glassDark, unitW - 1.1, 2.5, 0.12, x, 0.14, d / 2 + 0.05, 'shopfront', { cast: false });
-    kit.sign(kit.pick(10 + unit, SHOP_NAMES), kit.pick(20 + unit, ACCENTS), unitW - 1.4, 0.85, x, 3.85, d / 2 + 0.32);
+    const name = unit === entranceUnit ? options.signName ?? kit.pick(10 + unit, SHOP_NAMES) : kit.pick(10 + unit, SHOP_NAMES);
+    kit.sign(name, kit.pick(20 + unit, ACCENTS), unitW - 1.4, 0.85, x, 3.85, d / 2 + 0.32);
   }
   for (let vent = 0; vent < units - 1; vent++) kit.box(M.steel, 1.1, 0.7, 1.1, -w / 2 + unitW * (vent + 1), h, -d * 0.2, { collide: true }); // roof plant — standable
   return kit.done();
@@ -39,7 +43,7 @@ export function buildSpazaShop(seed: number, options: BuildOptions = {}): BuiltM
 
   kit.box(wall, w, h, d, 0, 0, 0, { collide: true });
   kit.box(M.galv, w + 0.7, 0.1, d + 0.8, 0, h + 0.18, 0.1, { rx: 0.06 });
-  const name = kit.pick(4, ['KWIK SPAZA', 'BLESSINGS TUCK SHOP', 'KOTA KING', 'TOPS-ISH BOTTLE STORE', 'SLAP CHIPS HERE']);
+  const name = options.signName ?? kit.pick(4, ['KWIK SPAZA', 'BLESSINGS TUCK SHOP', 'KOTA KING', 'TOPS-ISH BOTTLE STORE', 'SLAP CHIPS HERE']);
   kit.sign(name, kit.pick(5, ACCENTS), w * 0.92, 0.72, 0, h - 0.42, d / 2 + 0.07);
   kit.box(M.glassDark, w * 0.42, 1.1, 0.1, -w * 0.2, 0.85, d / 2 + 0.03, { cast: false });
   for (let bar = 0; bar < 3; bar++) kit.box(M.darkMetal, 0.04, 1.15, 0.06, -w * 0.2 - w * 0.14 + bar * w * 0.14, 0.83, d / 2 + 0.1, { cast: false });
@@ -68,7 +72,9 @@ export function buildFillingStation(seed: number, options: BuildOptions = {}): B
   const kioskW = 7 + size * 2;
   kit.box(M.plaster, kioskW, 3.4, 5.5, 0, 0, -canopyD / 2 - 3.4, { collide: true });
   kit.door(M.glassDark, kioskW * 0.7, 2.2, 0.12, 0, 0.1, -canopyD / 2 - 0.62, 'shopfront', { cast: false });
-  kit.sign(`${brand.name} SHOP`, brand.accent, kioskW * 0.8, 0.7, 0, 2.6, -canopyD / 2 - 0.55);
+  // The kiosk is the shop the door opens into — it wears the building's own name; the canopy fascia
+  // and the pylon keep the FUEL brand, exactly like a real forecourt.
+  kit.sign(options.signName ?? `${brand.name} SHOP`, brand.accent, kioskW * 0.8, 0.7, 0, 2.6, -canopyD / 2 - 0.55);
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) kit.box(M.steel, 0.45, canopyH, 0.45, sx * canopyW * 0.32, 0, sz * canopyD * 0.28);
   kit.box(M.whiteMetal, canopyW, 0.45, canopyD, 0, canopyH, 0, { collide: true }); // canopy slab — standable
   kit.box(brand.trim, canopyW + 0.1, 0.5, canopyD + 0.1, 0, canopyH + 0.45, 0, { cast: false }); // fascia band
@@ -107,7 +113,7 @@ export function buildOfficeBlock(seed: number, options: BuildOptions = {}): Buil
   kit.box(wall, w * 0.24, h + 1, d * 0.3, -w * 0.34, 0, 0.1, { collide: true }); // stair/lift core proud of the face
   kit.box(M.concrete, 4.4, 0.2, 1.8, w * 0.12, 3, d / 2 + 0.9, { cast: false }); // entrance canopy
   kit.door(M.glassDark, 3.4, 2.6, 0.12, w * 0.12, 0, d / 2 + 0.06, 'lobby', { cast: false });
-  kit.sign(kit.pick(4, ['SANLAMB', 'OLD NEUTRAL', 'MEDIOCRE HOLDINGS', 'PRICEY WATERHOUSE', 'DISCOVERY CHANNEL MEDICAL']), '#c8d6dd', w * 0.5, 0.7, 0, h - 0.6, d / 2 + 0.08);
+  kit.sign(options.signName ?? kit.pick(4, ['SANLAMB', 'OLD NEUTRAL', 'MEDIOCRE HOLDINGS', 'PRICEY WATERHOUSE', 'DISCOVERY CHANNEL MEDICAL']), '#c8d6dd', w * 0.5, 0.7, 0, h - 0.6, d / 2 + 0.08);
   for (let unit = 0; unit < 2; unit++) kit.box(M.steel, 1.4, 0.9, 1.1, -w * 0.1 + unit * 3, h, -d * 0.18, { collide: true }); // roof plant — standable
   return kit.done();
 }
@@ -128,9 +134,9 @@ export function buildBigBox(seed: number, options: BuildOptions = {}): BuiltMode
   kit.box(paint(0x8e8c82, 0.9), w, 1.6, d * 0.02 + 0.3, 0, h * 0.55, d / 2 + 0.12, { cast: false }); // fascia stripe
   kit.box(wall, w * 0.28, h + 1.6, 2.2, 0, 0, d / 2 + 0.9, { collide: true }); // entrance portal
   kit.door(M.glassDark, w * 0.2, 3.6, 0.14, 0, 0, d / 2 + 2.05, 'shopfront', { cast: false });
-  kit.sign(brand.name, brand.accent, w * 0.24, 1.3, 0, h + 0.5, d / 2 + 2.02);
+  kit.sign(options.signName ?? brand.name, brand.accent, w * 0.24, 1.3, 0, h + 0.5, d / 2 + 2.02);
   kit.box(M.steel, 0.5, 8.5, 0.5, w / 2 + 2.6, 0, d / 2 - 1); // pylon
-  kit.sign(brand.name, brand.accent, 3.6, 1.7, w / 2 + 2.6, 9.6, d / 2 - 1, { doubleSide: true });
+  kit.sign(options.signName ?? brand.name, brand.accent, 3.6, 1.7, w / 2 + 2.6, 9.6, d / 2 - 1, { doubleSide: true });
   for (let unit = 0; unit < 4 + variant * 2; unit++) {
     kit.box(M.steel, 1.6, 1, 1.3, -w * 0.3 + (unit % 3) * w * 0.3, h, -d * 0.28 + Math.floor(unit / 3) * d * 0.3, { collide: true }); // roof HVAC — standable
   }
@@ -156,7 +162,7 @@ export function buildMixedUseCorner(seed: number, options: BuildOptions = {}): B
     kit.door(M.glass, w / shops * 0.55, 2.3, 0.12, x, 0.15, d / 2 + 0.07, 'shopfront', { cast: false });
   }
   kit.box(variant % 2 ? M.corrRed : M.corrGreen, w * 0.82, 0.16, 1.5, -w * 0.04, 3, d / 2 + 0.68, { rx: -0.08 });
-  kit.sign(kit.pick(8, ['VILAKAZI CORNER', 'EGOLI ARCADE', 'BRAAM BAZAAR']), '#f1c552', w * 0.48, 0.8, -w * 0.05, 3.65, d / 2 + 0.09);
+  kit.sign(options.signName ?? kit.pick(8, ['VILAKAZI CORNER', 'EGOLI ARCADE', 'BRAAM BAZAAR']), '#f1c552', w * 0.48, 0.8, -w * 0.05, 3.65, d / 2 + 0.09);
   return kit.done();
 }
 

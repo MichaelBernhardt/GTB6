@@ -9,9 +9,9 @@ import { HudView } from './HudView';
 import { MapView, type MapViewFrame } from './MapView';
 import { MenuView } from './MenuView';
 import { MinimapView, type MapMarker, type MapPoint } from './MinimapView';
-import { TOAST_MS, toastVisibleAt, type CheatWeaponEntry, type DrinkCatalogEntry, type FeatureMenuView, type HudState, type LoadingState, type MainMenuSummary, type NotificationTone, type ShopArmourEntry, type ShopCatalogEntry, type WheelEntry } from './UIModels';
+import { TOAST_MS, toastVisibleAt, type CheatWeaponEntry, type DrinkCatalogEntry, type FeatureMenuView, type HudState, type LoadingState, type MainMenuSummary, type MenuScreen, type NotificationTone, type ShopArmourEntry, type ShopCatalogEntry, type ShopLockpickEntry, type WheelEntry } from './UIModels';
 
-export type { CheatWeaponEntry, FeatureHudEntry, FeatureMenuView, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, WheelEntry } from './UIModels';
+export type { CheatWeaponEntry, FeatureHudEntry, FeatureMenuView, HudState, MainMenuSummary, ShopArmourEntry, ShopCatalogEntry, ShopLockpickEntry, WheelEntry } from './UIModels';
 
 export class UIManager {
   root = document.createElement('div');
@@ -48,6 +48,7 @@ export class UIManager {
   onBuyWeapon?: (id: WeaponId) => void;
   onBuyAmmo?: (id: WeaponId) => void;
   onBuyArmour?: () => void;
+  onBuyLockpick?: () => void;
   onBuyDrink?: (id: DrinkId) => void;
   onMissionChoice?: (id: MissionChoice['id']) => void;
   /** The ONE callback every feature menu routes through — bound once in Game.bindUI(). */
@@ -108,6 +109,9 @@ export class UIManager {
     this.toast.className = `is-visible tone-${resolved}`; this.toastDeadline = performance.now() + TOAST_MS;
   }
   hideMenu(): void { this.menuView.hide(); }
+  /** Which menu screen is up right now — so a purchase shared by two counters can re-render the one
+   *  the player is actually standing at (the lock pick sells at Jozi Arms AND the bottle stores). */
+  menuScreen(): MenuScreen { return this.menuView.screen; }
 
   back(): boolean {
     if (this.menuView.screen === 'shop' || this.menuView.screen === 'bottle' || this.menuView.screen === 'safehouse' || this.menuView.screen === 'feature') { this.onResume?.(); return true; }
@@ -151,8 +155,8 @@ export class UIManager {
     this.lastSettings = settings; this.menuView.pause(settings, { resume: () => this.onResume?.(), restart: () => this.onRestart?.(), controls: () => this.showControls(), cheats: () => this.onShowCheats?.(), reset: () => this.onResetSave?.(), settings: (value) => this.onSettings?.(value) });
   }
   showControls(fromMain = false): void { this.controlsFromMain = fromMain; this.menuView.controls(fromMain, () => this.back()); }
-  showShop(entries: ShopCatalogEntry[], balance: number, armour?: ShopArmourEntry): void { this.menuView.shop(entries, balance, { buy: (id) => this.onBuyWeapon?.(id), ammo: (id) => this.onBuyAmmo?.(id), armour: () => this.onBuyArmour?.(), leave: () => this.back() }, armour); }
-  showBottleStore(name: string, entries: DrinkCatalogEntry[], balance: number, inebriation: number): void { this.menuView.bottle(name, entries, balance, inebriation, { buy: (id) => this.onBuyDrink?.(id), leave: () => this.back() }); }
+  showShop(entries: ShopCatalogEntry[], balance: number, armour?: ShopArmourEntry, lockpick?: ShopLockpickEntry): void { this.menuView.shop(entries, balance, { buy: (id) => this.onBuyWeapon?.(id), ammo: (id) => this.onBuyAmmo?.(id), armour: () => this.onBuyArmour?.(), lockpick: () => this.onBuyLockpick?.(), leave: () => this.back() }, armour, lockpick); }
+  showBottleStore(name: string, entries: DrinkCatalogEntry[], balance: number, inebriation: number, lockpick?: ShopLockpickEntry): void { this.menuView.bottle(name, entries, balance, inebriation, { buy: (id) => this.onBuyDrink?.(id), lockpick: () => this.onBuyLockpick?.(), leave: () => this.back() }, lockpick); }
   showMissionChoice(title: string, choices: MissionChoice[]): void { this.menuView.choice(title, choices, (id) => this.onMissionChoice?.(id)); }
   /** Host-owned feature screen: one show, one action callback, for every feature there will ever be. */
   showFeatureMenu(view: FeatureMenuView): void { this.menuView.feature(view, { choose: (actionId) => this.onFeatureMenuAction?.(view.featureId, actionId), leave: () => this.back() }); }

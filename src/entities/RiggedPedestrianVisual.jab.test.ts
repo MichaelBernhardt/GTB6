@@ -21,7 +21,7 @@ const loadNpc = async (): Promise<GLTF> => {
   return new GLTFLoader().parseAsync(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength), '/models/npcs/');
 };
 const state = (overrides: Partial<RiggedPedestrianState> = {}): RiggedPedestrianState => ({
-  state: 'hostile', dead: false, knockdown: false, punching: true, punchElapsed: 0, braced: true, hailing: false, covering: false, stumbling: false, stumbleAmount: 0, ...overrides,
+  state: 'hostile', dead: false, knockdown: false, punching: true, punchElapsed: 0, braced: true, hailing: false, covering: false, aiming: false, stumbling: false, stumbleAmount: 0, ...overrides,
 });
 
 describe("jab mechanics regression", () => {

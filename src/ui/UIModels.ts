@@ -65,7 +65,8 @@ export interface HudState {
   navMs: number; // wall-time per second spent in A* (ms)
   position: { x: number; y: number; z: number }; // player world position, shown on the perf line
   settings: GameSettings;
-  cheatsOn: boolean;
+  cheatsOn: boolean; // a cheat is switched on RIGHT NOW (cheat toggles, opensesame)
+  cheatedEver: boolean; // the save's permanent mark: some cheat was used at least once, ever
   inebriation: number; // 0..100 skinful; the HUD shows a dop badge once it climbs off zero
   features?: FeatureHudEntry[]; // host-owned strip: every lazily loaded feature's chips share this one key
 }
@@ -82,6 +83,8 @@ export interface CheatWeaponEntry { id: WeaponId; name: string; owned: boolean; 
 export interface WheelEntry { name: string; ammo: string; highlighted: boolean; equipped: boolean; locked: boolean; }
 export interface ShopCatalogEntry { id: WeaponId; name: string; owned: boolean; price: number; ammoPrice: number; reserve: number; ammoFull: boolean; canBuy: boolean; canRefill: boolean; }
 export interface ShopArmourEntry { price: number; full: boolean; canBuy: boolean; }
+/** The lock-pick SKU, sold at Jozi Arms and every bottle store: a reusable tool for locked doors. */
+export interface ShopLockpickEntry { price: number; count: number; full: boolean; canBuy: boolean; }
 export interface DrinkCatalogEntry { id: DrinkId; name: string; note: string; price: number; potency: number; canBuy: boolean; }
 
 export interface PauseModel { settings: GameSettings; }

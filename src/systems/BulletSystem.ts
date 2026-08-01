@@ -36,6 +36,9 @@ export class BulletSystem {
   private tracerPool: THREE.Mesh[] = [];
   private point = new THREE.Vector3(); // scratch: per-frame advance is allocation-free
   private forward = new THREE.Vector3(0, 0, 1);
+  // Shared spark geometry — impacts used to new an IcosahedronGeometry per hit and never dispose it,
+  // the same per-event GPU-buffer churn the explosion path had (puffs, decals). One buffer forever.
+  private impactGeometry = new THREE.IcosahedronGeometry(0.12, 0);
 
   constructor(private scene: THREE.Scene) {
     for (let i = 0; i < MAX_BULLETS; i++) this.free.push({ shot: undefined as unknown as Shot, position: new THREE.Vector3(), direction: new THREE.Vector3(), speed: 0, range: 0, traveled: 0, primary: false });
@@ -98,7 +101,7 @@ export class BulletSystem {
     for (let i = this.effects.length - 1; i >= 0; i--) {
       const effect = this.effects[i]; if (!effect) continue; effect.life -= dt;
       effect.mesh.scale.multiplyScalar(1 + dt * 4); (effect.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, effect.life * 4);
-      if (effect.life <= 0) { this.scene.remove(effect.mesh); this.effects.splice(i, 1); }
+      if (effect.life <= 0) { this.scene.remove(effect.mesh); (effect.mesh.material as THREE.MeshBasicMaterial).dispose(); this.effects.splice(i, 1); } // per-impact material (opacity animates); geometry is shared
     }
     return out;
   }
@@ -188,7 +191,7 @@ export class BulletSystem {
   }
 
   private impact(position: THREE.Vector3, color: number): void {
-    const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.12, 0), new THREE.MeshBasicMaterial({ color, transparent: true }));
+    const mesh = new THREE.Mesh(this.impactGeometry, new THREE.MeshBasicMaterial({ color, transparent: true }));
     mesh.position.copy(position); this.scene.add(mesh); this.effects.push({ mesh, life: 0.24 });
   }
 }

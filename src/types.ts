@@ -12,8 +12,9 @@ export interface SavedWeaponState { ammo: number; reserve: number; owned: boolea
 export interface SavedWeapons { current: WeaponId; loadout: Record<WeaponId, SavedWeaponState>; }
 /** `teflon`: the police never take an interest — wanted heat can never rise while it is set. */
 export interface CheatSettings { fastRun: boolean; bigJump: boolean; invulnerable: boolean; teflon: boolean; }
-/** Carried kit beside the weapon loadout: an armour pool plus consumable stims and parachutes. */
-export interface Inventory { armour: number; stims: number; parachutes: number; }
+/** Carried kit beside the weapon loadout: an armour pool plus consumable stims and parachutes.
+ *  Lock picks are TOOLS, not consumables — they open locked doors (interiors) and never wear out. */
+export interface Inventory { armour: number; stims: number; parachutes: number; lockpicks: number; }
 export interface SavedVehicle { kind: VehicleKind; color: number; health: number; }
 /** Best results from replayable open-world activities. Optional fields keep future activities additive. */
 export interface ActivityRecords {
@@ -43,6 +44,11 @@ export interface SavedGame {
    *  save key. Adding a feature never touches this file again — see src/features/README.md. */
   features: Record<string, unknown>;
   activityRecords: ActivityRecords;
+  /** STICKY, MONOTONIC: true the moment ANY cheat is ever used in this save — a cheat-classified
+   *  console command (see Console.commandIsCheat) or a Testing-tools grant/toggle — and never unset
+   *  again for the life of the save. Reloading an earlier checkpoint does not lower it; only a new
+   *  game starts clean. This is what tells a truly organic save apart from one that was ever helped. */
+  everCheated: boolean;
 }
 /** Tiers the world subsystems understand. `ultra` is a render-only super-tier (High visuals + extra AA);
  *  it maps down to `high` for everything except the renderer's pixel ratio and post-processing.

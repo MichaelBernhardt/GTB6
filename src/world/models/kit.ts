@@ -41,6 +41,12 @@ export interface BuildOptions {
   variant?: number;
   /** 0..1 lerp across the model's size range; defaults to a seeded value. */
   size?: number;
+  /** The building's ONE identity, in board capitals (see buildingIdentity.ts), supplied by the
+   *  placement pass for every model a person can walk into. A builder that paints a name board
+   *  letters THIS on the board its entrance answers to (`options.signName ?? <its own pick>`), so
+   *  the facade and the E prompt can never disagree. Ads, brand pylons and warning plates are not
+   *  names and keep their own text. */
+  signName?: string;
 }
 
 export type ModelBuilder = (seed: number, options?: BuildOptions) => BuiltModel;
