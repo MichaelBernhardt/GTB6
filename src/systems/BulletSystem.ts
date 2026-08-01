@@ -6,6 +6,7 @@ import type { Vehicle } from '../entities/Vehicle';
 import type { PopulationSystem } from './PopulationSystem';
 import type { City } from '../world/City';
 import type { ShotResult } from './CombatSystem';
+import { type PropCollider, type PropRegistry, SHOT_KNOCK_SPEED } from './PropSystem';
 
 /** Hard cap on live rounds — the pool is preallocated and pellets past the cap are dropped, never allocated. */
 export const MAX_BULLETS = 240;
@@ -15,6 +16,8 @@ const CORPSE_HIT_RADIUS = 0.8; // a sprawled body covers more ground than a stan
 const CORPSE_HIT_HEIGHT = 0.5; // ...but hugs it
 const VEHICLE_HIT_MARGIN = 0.12;
 const WALL_SAMPLE = 0.8; // stride for sampling city geometry along the swept segment
+const ROUND_RADIUS = 0.12; // the round's own girth, used by every city-geometry probe
+const PROP_QUERY_MARGIN = 1; // widest shootable prop plus slop: the grid pre-filter around the swept segment
 const TRACER_LENGTH = 7;
 const TRACER_MIN_TRAVEL = 3; // no streak in the shooter's face; it fades in past the muzzle
 
@@ -60,10 +63,11 @@ export class BulletSystem {
 
   update(dt: number, city: City, population: PopulationSystem, policeVehicles: Vehicle[]): ResolvedShot[] {
     const out = this.resolved; this.resolved = [];
+    const props = city.props as PropRegistry | undefined; // sim tests mock City without a prop registry
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const bullet = this.bullets[i]; if (!bullet) continue;
       const step = Math.min(bullet.speed * dt, bullet.range - bullet.traveled);
-      let hitT = Infinity; let hitPed: Pedestrian | undefined; let hitVehicle: Vehicle | undefined;
+      let hitT = Infinity; let hitPed: Pedestrian | undefined; let hitVehicle: Vehicle | undefined; let hitProp: PropCollider | undefined;
       for (const ped of population.pedestrians) {
         if (ped.state === 'down') {
           // Overkill: rounds pass THROUGH a settled corpse (it never shields a live target or eats the
@@ -87,9 +91,16 @@ export class BulletSystem {
         const t = this.vehicleInterceptT(bullet, step, vehicle);
         if (t >= 0 && t < hitT) { hitT = t; hitPed = undefined; hitVehicle = vehicle; }
       }
+      const propHit = props ? this.propInterceptT(props, city, bullet, step, Math.min(hitT, 1)) : undefined;
+      if (propHit && propHit.t < hitT) { hitT = propHit.t; hitPed = undefined; hitVehicle = undefined; hitProp = propHit.prop; }
       const wallT = this.wallInterceptT(city, bullet, step, Math.min(hitT, 1));
-      if (wallT >= 0 && wallT < hitT) { hitT = wallT; hitPed = undefined; hitVehicle = undefined; }
-      if (hitT <= 1) { this.land(out, bullet, i, step * hitT, hitPed, hitVehicle, true); continue; }
+      // Strictly closer, so a wall SAMPLE that landed inside the hydrant it flew into does not steal the hit
+      // from the prop sweep: the sweep reports the disc's entry point, which is never later than that sample.
+      if (wallT >= 0 && wallT < hitT) { hitT = wallT; hitPed = undefined; hitVehicle = undefined; hitProp = undefined; }
+      if (hitT <= 1) {
+        if (hitProp) props?.fell(hitProp, bullet.direction.x, bullet.direction.z, SHOT_KNOCK_SPEED); // bursts down the car's path
+        this.land(out, bullet, i, step * hitT, hitPed, hitVehicle, true); continue;
+      }
       bullet.position.addScaledVector(bullet.direction, step); bullet.traveled += step;
       if (bullet.traveled >= bullet.range - 1e-6) { this.land(out, bullet, i, 0, undefined, undefined, false); continue; }
       if (bullet.tracer) { // streak trails the round; scale covers the ramp-up just past the muzzle
@@ -170,6 +181,41 @@ export class BulletSystem {
     return tMin;
   }
 
+  /** Where the swept round ENTERS a shootable prop's circle (today: a fire hydrant), nearest first.
+   *
+   *  It needs its own test rather than a ride on the wall sampler above. That sampler walks the segment in
+   *  0.8u strides, and a hydrant is 0.6u across: unless the round is within ~0.18u of dead centre the stride
+   *  steps clean over it, so leaning on it would make bursting a hydrant a coin flip. This is exact — the
+   *  same swept circle used for a pedestrian, plus the prop's vertical band, so a round that sails OVER the
+   *  bonnet leaves it standing. Entry, not closest approach: it must not be later than the wall sample that
+   *  the same hydrant would have tripped, or the wall would win the tie and swallow the burst. */
+  private propInterceptT(props: PropRegistry, city: City, bullet: Bullet, step: number, limit: number): { prop: PropCollider; t: number } | undefined {
+    const dx = bullet.direction.x * step; const dz = bullet.direction.z * step;
+    const lengthSq = dx * dx + dz * dz;
+    if (lengthSq < 1e-8) return undefined;
+    const length = Math.sqrt(lengthSq);
+    let best: { prop: PropCollider; t: number } | undefined;
+    for (const prop of props.shootableNear(bullet.position.x + dx / 2, bullet.position.z + dz / 2, length / 2 + PROP_QUERY_MARGIN)) {
+      const fx = bullet.position.x - prop.x; const fz = bullet.position.z - prop.z;
+      const reach = prop.radius + ROUND_RADIUS;
+      const b = 2 * (fx * dx + fz * dz);
+      const discriminant = b * b - 4 * lengthSq * (fx * fx + fz * fz - reach * reach);
+      if (discriminant < 0) continue;
+      const root = Math.sqrt(discriminant);
+      const enter = Math.max(0, (-b - root) / (2 * lengthSq));
+      const exit = Math.min(1, (-b + root) / (2 * lengthSq));
+      if (exit < enter || enter > limit + 1e-6 || (best && enter >= best.t)) continue;
+      // Band test over the whole chord, not just its ends: a steeply angled round can enter the circle above
+      // the cap and still be at hydrant height by the middle of it.
+      const base = city.surfaceHeightAt(prop.x, prop.z);
+      const yEnter = bullet.position.y + bullet.direction.y * step * enter;
+      const yExit = bullet.position.y + bullet.direction.y * step * exit;
+      if (Math.max(yEnter, yExit) < base || Math.min(yEnter, yExit) > base + prop.height) continue; // over the top, or under the pavement
+      best = { prop, t: enter };
+    }
+    return best;
+  }
+
   /** Sampled 3D occupancy along the segment — the same collidesAt/terrain tests the rocket flies against. */
   private wallInterceptT(city: City, bullet: Bullet, step: number, limit: number): number {
     const samples = Math.max(1, Math.ceil(step / WALL_SAMPLE));
@@ -179,7 +225,7 @@ export class BulletSystem {
       const x = bullet.position.x + bullet.direction.x * step * t;
       const y = bullet.position.y + bullet.direction.y * step * t;
       const z = bullet.position.z + bullet.direction.z * step * t;
-      if (y <= city.terrainHeightAt(x, z) + 0.05 || city.collidesAt(x, z, 0.12, y, y)) return t;
+      if (y <= city.terrainHeightAt(x, z) + 0.05 || city.collidesAt(x, z, ROUND_RADIUS, y, y)) return t;
     }
     return -1;
   }

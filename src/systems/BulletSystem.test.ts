@@ -6,6 +6,8 @@ import type { Vehicle } from '../entities/Vehicle';
 import { BulletSystem, MAX_BULLETS, type ResolvedShot } from './BulletSystem';
 import type { PopulationSystem } from './PopulationSystem';
 import type { City } from '../world/City';
+import type { AudioManager } from '../core/AudioManager';
+import { PropRegistry, PropSystem } from './PropSystem';
 
 const DT = 1 / 60;
 const openCity = { collidesAt: () => false, terrainHeightAt: () => -10 } as unknown as City;
@@ -37,6 +39,14 @@ const flyUntilResolved = (system: BulletSystem, pop: PopulationSystem, city = op
 };
 
 const aimAt = (target: THREE.Vector3): THREE.Vector3[] => [target.clone().sub(muzzle).normalize()];
+
+/** Flat pavement whose only geometry is the prop registry — the wiring a real hydrant stands in. */
+const propCity = (registry: PropRegistry): City => ({
+  props: registry,
+  surfaceHeightAt: () => 0,
+  terrainHeightAt: () => 0,
+  collidesAt: (x: number, z: number, radius: number, y0: number, y1: number) => registry.blockedBetween(x, z, radius, y0, y1, () => 0),
+} as unknown as City);
 
 describe('BulletSystem', () => {
   it('takes real time of flight: the sniper round reaches a 170u target in about half a second', () => {
@@ -169,5 +179,60 @@ describe('BulletSystem', () => {
     const resolved = system.update(DT, openCity, population(), []);
     expect(resolved.length).toBeGreaterThanOrEqual(40); // the dropped trigger pulls still report as misses
     expect(system.bullets.length).toBeLessThanOrEqual(MAX_BULLETS);
+  });
+});
+
+describe('rounds vs fire hydrants', () => {
+  /** A hydrant on flat pavement plus the effects system that answers its knock event, wired as Game wires them. */
+  const hydrantScene = (x: number, z: number) => {
+    const registry = new PropRegistry();
+    const scene = new THREE.Scene();
+    const record = { hidden: 0, hiss: 0, knocks: 0 };
+    const audio = { propKnock: () => { record.knocks += 1; }, hydrantHiss: () => { record.hiss += 1; } } as unknown as AudioManager;
+    const prop = registry.register('hydrant', x, z, 0.3, 0.9, { hide: () => { record.hidden += 1; }, debris: () => new THREE.Group() });
+    return { registry, scene, record, prop, city: propCity(registry), fx: new PropSystem(scene, registry, audio) };
+  };
+
+  it('bursts a hydrant a round strikes, down the same path a car bumper takes', () => {
+    const { registry, scene, record, prop, city, fx } = hydrantScene(0, 8);
+    const system = new BulletSystem(new THREE.Scene());
+    system.spawnShot(shooter, muzzle, aimAt(new THREE.Vector3(0, 0.5, 8)), 1, WEAPON_BY_ID.pistol);
+    const { resolution } = flyUntilResolved(system, population(), city);
+    expect(resolution?.result.victim).toBeUndefined(); // a hydrant is not a victim; the round just stops here
+    expect(prop.down).toBe(true);
+    expect(record.hidden).toBe(1); // its OWN instances hidden, by its own handler
+    expect(registry.blocked(0, 8, 0.4)).toBe(false); // debris now, not a wall
+    fx.update(DT);
+    expect(record.knocks).toBe(1);
+    expect(record.hiss).toBe(1); // the water is running — the same spray a knock-over opens
+    for (let step = 0; step < 20; step++) fx.update(0.05);
+    expect(scene.children.length).toBeGreaterThan(10); // fallen debris plus droplets in flight
+  });
+
+  it('leaves a hydrant standing when the same shot goes past it or sails over it', () => {
+    for (const target of [new THREE.Vector3(1.5, 0.5, 8), new THREE.Vector3(0, 1.4, 8)]) {
+      const { record, prop, city, fx } = hydrantScene(0, 8);
+      const system = new BulletSystem(new THREE.Scene());
+      system.spawnShot(shooter, muzzle, aimAt(target), 1, WEAPON_BY_ID.pistol);
+      flyUntilResolved(system, population(), city);
+      fx.update(DT);
+      expect(prop.down).toBe(false);
+      expect(record.hidden).toBe(0);
+      expect(record.hiss).toBe(0);
+    }
+  });
+
+  it('never fells the street furniture that is not shootable, whatever the round hits', () => {
+    const registry = new PropRegistry();
+    const lamp = registry.register('streetlight', 0, 8, 0.2, 6.5);
+    const bench = registry.register('bench', 1, 8, 0.85, 1.1);
+    const system = new BulletSystem(new THREE.Scene());
+    for (const target of [new THREE.Vector3(0, 0.5, 8), new THREE.Vector3(1, 0.5, 8)]) {
+      system.spawnShot(shooter, muzzle, aimAt(target), 1, WEAPON_BY_ID.pistol);
+      flyUntilResolved(system, population(), propCity(registry));
+    }
+    expect(lamp.down).toBe(false);
+    expect(bench.down).toBe(false);
+    expect(registry.consumeKnockdowns()).toHaveLength(0);
   });
 });

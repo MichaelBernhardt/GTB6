@@ -13,6 +13,15 @@ export const PROP_TIERS: Record<PropKind, PropTier> = {
 /** Flat-topped street furniture the player can genuinely stand on; poles, trunks and crowns stay walls-only. */
 export const STANDABLE_PROPS: ReadonlySet<PropKind> = new Set(['shelter', 'bench', 'fountain', 'monument']);
 
+/** Street furniture a ROUND can fell, deliberately NOT the whole knock-over tier: a bullet that topples a
+ *  streetlight, a road sign or a park bench is slapstick. A hydrant is a thin cast-iron shell over a
+ *  pressurised main — hole it and it goes exactly the way it goes under a bumper, which is the ask. */
+export const SHOOTABLE_PROPS: ReadonlySet<PropKind> = new Set(['hydrant']);
+
+/** Impact "speed" a round reports into the knock-over path. Only the knock sound reads it (propKnock scales
+ *  on intensity/30) and a bullet is neither a nudge nor a car at sixty. Fixed, so every shot sounds the same. */
+export const SHOT_KNOCK_SPEED = 12;
+
 export const KNOCKOVER_MIN_SPEED = 9; // m/s — below this a knock-over prop only nudges the car to a stop
 export const KNOCKOVER_SPEED_KEEP = 0.8; // car keeps 80% of its speed per felled prop (~20% loss)
 export const SOLID_PROP_DAMAGE_FACTOR = 0.55; // building walls use 0.35 — wrapping a car around a tree hurts more
@@ -126,9 +135,23 @@ export class PropRegistry {
     let felled = 0;
     for (const prop of this.grid.nearby(x, z, radius)) {
       if (prop.down || prop.tier !== 'knockover' || !overlaps(prop, x, z, radius)) continue;
-      prop.down = true; prop.hide?.(); this.knockdowns.push({ prop, dirX, dirZ, speed }); felled++;
+      if (this.fell(prop, dirX, dirZ, speed)) felled++;
     }
     return felled;
+  }
+
+  /** The ONE door into the knock-over path: down, visual hidden, event queued for PropSystem — which is what
+   *  animates the fall, plays the knock and, for a hydrant, opens the water. A car arrives through
+   *  tryKnockdown and a bullet through BulletSystem, and neither can drift from the other. */
+  fell(prop: PropCollider, dirX: number, dirZ: number, speed: number): boolean {
+    if (prop.down) return false;
+    prop.down = true; prop.hide?.(); this.knockdowns.push({ prop, dirX, dirZ, speed });
+    return true;
+  }
+
+  /** Standing props a round can fell, near a point: the candidate list for BulletSystem's swept test. */
+  shootableNear(x: number, z: number, radius: number): PropCollider[] {
+    return this.grid.nearby(x, z, radius).filter((prop) => !prop.down && SHOOTABLE_PROPS.has(prop.kind));
   }
 
   consumeKnockdowns(): PropKnockEvent[] { return this.knockdowns.splice(0); }
