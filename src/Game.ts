@@ -264,7 +264,6 @@ export class Game {
   private taxiHailCooldown = 0;
   private courierJob = new CourierJob();
   private courierDestination?: THREE.Vector3;
-  private brandishCooldown = 0;
   private scopeLevel = 0;
   private cover?: { spot: CoverSpot; t: number; peek: number; corner: -1 | 0 | 1; exitTimer: number };
   private coverAvailable = false;
@@ -1060,8 +1059,10 @@ export class Game {
     else this.updateOnFoot(dt);
     const focus = this.activeVehicle?.group.position ?? this.player.group.position;
     this.updateStreetName(dt, focus);
-    this.brandishCooldown = Math.max(0, this.brandishCooldown - dt);
-    if (this.input.aiming && !this.combat.spec.melee && !this.transition && !this.airborne && this.brandishCooldown === 0) { this.population.broadcastBrandish(focus); this.brandishCooldown = 1.5; } // a raised gun scares witnesses; no police heat for merely aiming
+    // NOTHING HERE FRIGHTENS ANYBODY. Aiming used to broadcast a brandish spike to every ped who
+    // could see the player, once every 1.5s — which meant walking a street with a pistol raised
+    // emptied it, and an emptied street has nobody left to talk to, hail or hire. Sight of a gun
+    // is not an event; only firing it is (see fireWeapon's gunshot broadcast). See FEAR_EVENTS.
     this.profiler.mark('world');
     this.livingCity.update(dt); this.updateLivingCityRuntime(dt, focus);
     this.audio.updateListener(focus.x, focus.z, this.cameraController.yaw, this.city.isPark(focus.x, focus.z));
@@ -1070,7 +1071,7 @@ export class Game {
     // "Visibly armed" = a firearm SELECTED while on foot: the rigged player carries the current
     // weapon in hand whenever it's selected (holstering only in vehicles/air), so selection is
     // holding. Melee weapons still read as fists — see SidearmSystem for the full deterrence rule.
-    // Drawing remains no crime (the brandish broadcast above stays heat-free): it is a deterrent.
+    // Drawing remains no crime and no fright: it is a deterrent, and it is not violence.
     this.population.update(dt, focus, (amount) => { this.damagePlayer(amount); this.shake = Math.min(0.7, this.shake + 0.18); }, playerOnFoot, playerOnFoot && !this.combat.spec.melee); // hostile punches land with a jolt, not just the damage flash
     for (const hit of this.population.consumePlayerVehicleHits()) { // civilian traffic vs the on-foot player: the driver is AI, the player the victim — no heat, just physics
       if (hit.damage > 0) this.damagePlayer(hit.damage);
