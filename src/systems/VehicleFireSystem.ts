@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { splashDamage } from '../core/GameRules';
 import type { Pedestrian } from '../entities/Pedestrian';
 import type { Vehicle } from '../entities/Vehicle';
+import { EffectLightPool } from './EffectLightPool';
 
 export type FireStage = 'none' | 'smoke' | 'critical';
 
@@ -42,6 +43,8 @@ interface FireFx { cones: THREE.Mesh[]; rig?: THREE.Group; light?: THREE.PointLi
 interface Particle { mesh: THREE.Mesh; life: number; maxLife: number; rise: number; grow: number; opacity: number; }
 
 const FLAME_COLORS = [0xffc23d, 0xff8c2a, 0xff6a1f];
+/** Pool slots held back from per-vehicle fire lights so burnout flashes always have one. */
+const FLASH_RESERVE = 2;
 
 export class VehicleFireSystem {
   private states = new Map<Vehicle, FireFx>();
@@ -49,8 +52,14 @@ export class VehicleFireSystem {
   private flashes: THREE.PointLight[] = [];
   private puffGeometry = new THREE.SphereGeometry(0.5, 10, 8);
   private coneGeometry = new THREE.ConeGeometry(0.34, 1.05, 7);
+  /** Fixed-at-boot light budget: CHAIN_CAP burning cars + 2 explosion flashes. Lights past the budget
+   *  are simply skipped — the cones/smoke/puffs still render. See EffectLightPool for why the pool
+   *  (and never scene.add/remove) is load-bearing: runtime light-count changes recompile shaders. */
+  readonly lights: EffectLightPool;
 
-  constructor(private scene: THREE.Scene) {}
+  constructor(private scene: THREE.Scene) {
+    this.lights = new EffectLightPool(scene, CHAIN_CAP + 2);
+  }
 
   update(dt: number, vehicles: Vehicle[], pedestrians: Pedestrian[], playerPosition: THREE.Vector3): FireEvents {
     const events: FireEvents = { ignitions: [], burnouts: [] };
@@ -72,11 +81,11 @@ export class VehicleFireSystem {
       const particle = this.particles[i]; if (!particle) continue; particle.life -= dt;
       particle.mesh.position.y += particle.rise * dt; particle.mesh.scale.multiplyScalar(1 + particle.grow * dt);
       (particle.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, (particle.life / particle.maxLife) * particle.opacity);
-      if (particle.life <= 0) { this.scene.remove(particle.mesh); this.particles.splice(i, 1); }
+      if (particle.life <= 0) { this.removeParticle(particle); this.particles.splice(i, 1); }
     }
     for (let i = this.flashes.length - 1; i >= 0; i--) {
       const flash = this.flashes[i]; if (!flash) continue; flash.intensity *= Math.exp(-dt * 7);
-      if (flash.intensity < 0.08) { this.scene.remove(flash); this.flashes.splice(i, 1); }
+      if (flash.intensity < 0.08) { this.lights.release(flash); this.flashes.splice(i, 1); }
     }
     return events;
   }
@@ -89,7 +98,7 @@ export class VehicleFireSystem {
 
   private updateFlames(vehicle: Vehicle, fx: FireFx, stage: FireStage): void {
     const flaming = !vehicle.wrecked && (vehicle.onFire || stage === 'critical');
-    if (!flaming) { if (fx.rig) fx.rig.visible = false; if (fx.light) fx.light.intensity = 0; return; }
+    if (!flaming) { if (fx.rig) fx.rig.visible = false; if (fx.light) { this.lights.release(fx.light); fx.light = undefined; } return; }
     const small = vehicle.spec.twoWheeler ? 0.55 : 1; // two-wheelers burn too, just on a braai scale
     if (!fx.rig) {
       fx.rig = new THREE.Group(); fx.rig.name = 'firefx';
@@ -110,9 +119,16 @@ export class VehicleFireSystem {
       (cone.material as THREE.MeshBasicMaterial).color.setHex(FLAME_COLORS[Math.floor(Math.random() * FLAME_COLORS.length)] ?? 0xffa030);
     });
     if (vehicle.onFire) {
-      if (!fx.light) { fx.light = new THREE.PointLight(0xff8c2d, 0, 9 * small); fx.light.position.set(0, 1.4 * small, 0); vehicle.group.add(fx.light); }
-      fx.light.intensity = (2.2 + progress * 1.6 + Math.random() * 0.9) * small;
-    } else if (fx.light) fx.light.intensity = 0;
+      // Pooled: the light stays a scene-root child (pool invariant) and tracks the vehicle by position.
+      // Fires never dip into the last FLASH_RESERVE slots, so an explosion flash always finds a light
+      // even with more than CHAIN_CAP cars burning; a fire past the budget burns lightless (cones and
+      // smoke still render — indistinguishable in the orange melee of a chain).
+      if (!fx.light && this.lights.available > FLASH_RESERVE) fx.light = this.lights.acquire(0xff8c2d, 0, 9 * small);
+      if (fx.light) {
+        fx.light.position.copy(vehicle.group.position); fx.light.position.y += 1.4 * small;
+        fx.light.intensity = (2.2 + progress * 1.6 + Math.random() * 0.9) * small;
+      }
+    } else if (fx.light) { this.lights.release(fx.light); fx.light = undefined; }
   }
 
   private emitSmoke(dt: number, vehicle: Vehicle, fx: FireFx, stage: FireStage): void {
@@ -133,7 +149,13 @@ export class VehicleFireSystem {
   }
 
   private explode(vehicle: Vehicle, vehicles: Vehicle[], pedestrians: Pedestrian[], playerPosition: THREE.Vector3, burningCount: number): Burnout {
-    const position = vehicle.group.position.clone().setY(0.9);
+    // Blast centre rides the vehicle. It used to be pinned at ABSOLUTE y=0.9 — right only where the
+    // ground happens to sit near sea level. Jozi's roads run from −34u to +237u, and every check below
+    // is a 3D distanceTo, so across most of the map the centre sat 15+ units underground: splash
+    // damage, chain ignition and player damage from cook-offs were silently dead, and the fireball
+    // puffs rendered inside the terrain. (Verified by staged clusters at y=+16.9/−34.4: zero victims,
+    // zero ignitions before this line; the RPG path always used the rocket's real position.)
+    const position = vehicle.group.position.clone(); position.y += 0.9;
     this.puff(position, 0xfff0b8, 0.7, 0.28, 0.6, 10, 0.95);
     this.puff(position, 0xffc45e, 1.05, 0.38, 0.8, 8, 0.9);
     this.puff(position, 0xff7a30, 1.35, 0.5, 1, 6.5, 0.8);
@@ -141,8 +163,8 @@ export class VehicleFireSystem {
       const offset = new THREE.Vector3((Math.random() - 0.5) * 2, Math.random() * 1.4, (Math.random() - 0.5) * 2);
       this.puff(position.clone().add(offset), 0x555b5e, 0.9, 1.2, 1.4, 2.1, 0.5);
     }
-    const flash = new THREE.PointLight(0xffa53d, 7, BURNOUT_RADIUS * 4);
-    flash.position.copy(position).setY(1.4); this.scene.add(flash); this.flashes.push(flash);
+    const flash = this.lights.acquire(0xffa53d, 7, BURNOUT_RADIUS * 4);
+    if (flash) { flash.position.copy(position); flash.position.y += 0.5; this.flashes.push(flash); } // vehicle + 1.4, not absolute 1.4 (underground on most streets)
     const victims: BurnVictim[] = [];
     for (const ped of pedestrians) {
       if (ped.state === 'down') continue;
@@ -175,7 +197,9 @@ export class VehicleFireSystem {
     const seen = new Set(vehicles);
     for (const [vehicle, fx] of this.states) {
       if (seen.has(vehicle)) continue;
-      fx.rig?.removeFromParent(); fx.light?.removeFromParent(); this.states.delete(vehicle);
+      fx.rig?.removeFromParent(); this.lights.release(fx.light); // pooled: released, never removed from the scene
+      for (const cone of fx.cones) (cone.material as THREE.MeshBasicMaterial).dispose(); // per-rig materials; the cone geometry is shared
+      this.states.delete(vehicle);
     }
   }
 
@@ -183,6 +207,12 @@ export class VehicleFireSystem {
     const mesh = new THREE.Mesh(this.puffGeometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
     mesh.position.copy(position); mesh.scale.setScalar(scale);
     this.scene.add(mesh); this.particles.push({ mesh, life, maxLife: life, rise, grow, opacity });
-    while (this.particles.length > 260) { const oldest = this.particles.shift(); if (oldest) this.scene.remove(oldest.mesh); }
+    while (this.particles.length > 260) { const oldest = this.particles.shift(); if (oldest) this.removeParticle(oldest); }
+  }
+
+  /** Every puff owns its material (opacity animates per particle); dispose it or long sessions leak GPU programs/uniforms. */
+  private removeParticle(particle: Particle): void {
+    this.scene.remove(particle.mesh);
+    (particle.mesh.material as THREE.MeshBasicMaterial).dispose();
   }
 }

@@ -30,6 +30,50 @@ export const REBOARD_RANGE = 46;
 /** Below two stars JMPD only follows and shouts; live fire starts at two. */
 export const SHOOT_MIN_WANTED = 2;
 
+/** Cover slot geometry: how far past the cruiser's centre (away from the suspect) an officer digs
+ *  in, and the lateral fan between the two crew members so they split across bonnet and boot. */
+export const COVER_SLOT_BACK = 2.4;
+export const COVER_SLOT_SIDE = 1.1;
+/** Enter ring for the cover crouch, on the HORIZONTAL slot distance (squared). MUST admit the ped's
+ *  own generic arrival ring: Pedestrian.updateMotion parks any non-pursuing hostile ped at
+ *  distSq < 5 and refuses to walk closer, so a tighter gate here is unreachable and the officer
+ *  ping-pongs at the ring edge forever, standing. The last stretch from the ring into the exact
+ *  slot is walked by the police system itself (the settle shuffle below), not by the ped. */
+export const COVER_ENTER_SQ = 5;
+/** Break ring (hysteresis): the slot tracks the live player, so a flanking player swings it around
+ *  the car; once it has moved this far from the ducked officer they break cover and re-hustle. */
+export const COVER_BREAK_SQ = 9;
+/** Ducked shuffle pace (u/s) for the settle from the arrival ring into the exact slot. */
+export const COVER_SETTLE_PACE = 2.2;
+
+/** The spot an officer defends from: past the car's centre AWAY from the suspect — the cruiser is
+ *  the cover object — fanned laterally per crew side so the pair straddle bonnet and boot. */
+export function coverSlot(carX: number, carZ: number, playerX: number, playerZ: number, side: 1 | -1): { x: number; z: number } {
+  let awayX = carX - playerX; let awayZ = carZ - playerZ;
+  const length = Math.hypot(awayX, awayZ);
+  if (length < 0.1) { awayX = 0; awayZ = 1; } else { awayX /= length; awayZ /= length; }
+  return { x: carX + awayX * COVER_SLOT_BACK - awayZ * side * COVER_SLOT_SIDE, z: carZ + awayZ * COVER_SLOT_BACK + awayX * side * COVER_SLOT_SIDE };
+}
+
+/** Cover hysteresis on the horizontal squared slot distance. NEVER fold the officer's height into
+ *  this: the slot is a flat XZ aim point while the officer stands on the terrain — a 3D distance
+ *  put the crouch behind ~y² of unreachable threshold the day terrain relief shipped, and cover
+ *  silently became dead code for a fortnight. */
+export function shouldHoldCover(covering: boolean, slotDistanceSq: number): boolean {
+  return slotDistanceSq <= (covering ? COVER_BREAK_SQ : COVER_ENTER_SQ);
+}
+
+/** A fresh report that did NOT relocate (same corner, new timestamp) must still recall a roaming
+ *  unit that has searched its way out of eyeshot of the scene. The roam walk widens on purpose
+ *  (each leg is ROAM_MIN_LEG+ from the unit's own position) and never returns on its own; wanted
+ *  units are never distance-culled and hold down the dispatch cap — so without this recall, a
+ *  suspect re-offending on the original corner re-engages NOBODY: the whole response drifts
+ *  hundreds of units out, sirens on, forever. Units still within sight range of the scene keep
+ *  their local search — the sighting path takes over from there. */
+export function roamRecalledByFreshReport(roaming: boolean, unitDistanceToReport: number): boolean {
+  return roaming && unitDistanceToReport > SIGHT_RADIUS;
+}
+
 /** An on-foot officer within this range of the suspect counts as "contacting" — crowding them for the collar. */
 export const ARREST_CONTACT_RANGE = 3;
 /** Break away from every officer and the bust meter empties this fast (fully drained in this many seconds). */
@@ -171,7 +215,14 @@ export type PoliceEvent =
   | { kind: 'abandoned'; vehicle: Vehicle };
 
 interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; baseX: number; baseZ: number; offX: number; offZ: number; aimX: number; aimZ: number; leaving: number; mode: UnitMode; shootIn: number; contactIn: number; bumpIn: number; watchdog: ProgressWatchdog; backoff: number; }
-interface Officer { ped: Pedestrian; car?: Vehicle; role: 'cover' | 'chase'; side: 1 | -1; shootIn: number; }
+interface Officer { ped: Pedestrian; car?: Vehicle; role: 'cover' | 'chase'; side: 1 | -1; shootIn: number; covering: boolean; }
+
+/** Shared muzzle-flash resources: police fire is probabilistic hitscan with no projectile, so a
+ *  brief additive glow at the muzzle (plus the report) is the entire visible event. */
+const FLASH_SECONDS = 0.07;
+const FLASH_GEOMETRY = new THREE.SphereGeometry(0.13, 8, 6);
+const FLASH_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+interface MuzzleFlash { mesh: THREE.Mesh; ttl: number; }
 
 export class PoliceSystem {
   vehicles: Vehicle[] = [];
@@ -182,6 +233,7 @@ export class PoliceSystem {
   private brains = new WeakMap<Vehicle, PoliceBrain>();
   private planner: RoutePlanner;
   private scratch = new THREE.Vector3();
+  private flashes: MuzzleFlash[] = [];
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.planner = new RoutePlanner(city.vehicleNav, 2);
@@ -189,6 +241,13 @@ export class PoliceSystem {
 
   /** Deploy shouts, spawned/retiring officer peds and abandoned cruisers, for the caller to route into the world. */
   consumeEvents(): PoliceEvent[] { return this.events.splice(0); }
+
+  /** The live cover picture: each ducked officer with the cruiser he is actually using. Readout
+   *  for tests (an officer must be verified against HIS car, not whichever cruiser parked nearer)
+   *  and for any future UI. */
+  coverAssignments(): { ped: Pedestrian; car: Vehicle }[] {
+    return this.officers.filter((officer) => officer.covering && officer.car).map((officer) => ({ ped: officer.ped, car: officer.car! }));
+  }
 
   /** Deployed foot officers currently crowding the suspect (within arrest-contact range and still on their feet)
    *  — the caller fills its bust meter from this count. */
@@ -241,9 +300,11 @@ export class PoliceSystem {
       if (playerInVehicle && seen && brain.mode === 'drive' && wanted.level >= SHOOT_MIN_WANTED && distance < 34 && brain.shootIn <= 0) {
         brain.shootIn = 1.3 + Math.random() * 0.9;
         this.audio.copGunshot(vehicle.group.position.x, vehicle.group.position.z);
+        this.muzzleFlashAt(vehicle.group.position.x, vehicle.group.position.y + 1.05, vehicle.group.position.z, playerPosition.x, playerPosition.z);
         if (Math.random() < copHitChance(distance)) damageCar(3 + wanted.level * 1.2);
       }
     }
+    for (const flash of this.flashes) if (flash.ttl > 0) { flash.ttl -= dt; if (flash.ttl <= 0) flash.mesh.visible = false; }
     this.separateUnits(dt, active, playerPosition);
     this.updateOfficers(dt, playerPosition, playerInVehicle, wanted, known, damagePlayer, damageCar, sightRange);
     const alive = this.vehicles.filter((vehicle) => !vehicle.wrecked);
@@ -257,8 +318,19 @@ export class PoliceSystem {
     for (const vehicle of this.vehicles) this.scene.remove(vehicle.group);
     const peds = this.officers.map((officer) => officer.ped);
     for (const ped of peds) this.scene.remove(ped.group);
-    this.vehicles = []; this.officers = []; this.events = [];
+    for (const flash of this.flashes) this.scene.remove(flash.mesh);
+    this.vehicles = []; this.officers = []; this.events = []; this.flashes = [];
     return peds;
+  }
+
+  /** A briefly-lit muzzle glow at the shot origin, nudged toward the target. Pooled: the pool's
+   *  high-water mark is the number of simultaneous unexpired flashes, a handful at worst. */
+  private muzzleFlashAt(x: number, y: number, z: number, towardX: number, towardZ: number): void {
+    const dx = towardX - x; const dz = towardZ - z; const length = Math.hypot(dx, dz) || 1;
+    let flash = this.flashes.find((candidate) => candidate.ttl <= 0);
+    if (!flash) { flash = { mesh: new THREE.Mesh(FLASH_GEOMETRY, FLASH_MATERIAL), ttl: 0 }; this.flashes.push(flash); this.scene.add(flash.mesh); }
+    flash.mesh.position.set(x + (dx / length) * 0.5, y, z + (dz / length) * 0.5);
+    flash.mesh.visible = true; flash.ttl = FLASH_SECONDS;
   }
 
   /** Nearest empty cruiser in grabbing range — pair with release() when the player actually takes it. */
@@ -289,6 +361,11 @@ export class PoliceSystem {
         brain.baseX = known.x; brain.baseZ = known.z;
         const angle = Math.random() * Math.PI * 2; const radius = Math.random() * DISPATCH_JITTER;
         brain.offX = Math.cos(angle) * radius; brain.offZ = Math.sin(angle) * radius;
+        brain.roaming = false; brain.dwell = 0; brain.path = []; brain.index = 0; brain.replanIn = 0; brain.chasing = false;
+      } else if (roamRecalledByFreshReport(brain.roaming, Math.hypot(vehicle.group.position.x - known.x, vehicle.group.position.z - known.z))) {
+        // Same-spot fresh intel: pull far-flung roamers back to the scene. One-shot (roaming flips
+        // off), so a continuously-sighted player refreshing the timestamp every frame cannot wipe
+        // paths repeatedly and starve the shared A* budget.
         brain.roaming = false; brain.dwell = 0; brain.path = []; brain.index = 0; brain.replanIn = 0; brain.chasing = false;
       }
     }
@@ -382,7 +459,7 @@ export class PoliceSystem {
       const door = vehicle.group.position.clone().add(new THREE.Vector3(Math.cos(vehicle.heading), 0, -Math.sin(vehicle.heading)).multiplyScalar(side * 1.6));
       const ped = new Pedestrian(this.scene, door, 91 + this.serials++, false, true, JMPD_PATROL_NPC_ID);
       ped.state = 'hostile'; ped.destination.copy(door);
-      this.officers.push({ ped, car: vehicle, role: 'cover', side, shootIn: 0.8 + Math.random() * 0.6 });
+      this.officers.push({ ped, car: vehicle, role: 'cover', side, shootIn: 0.8 + Math.random() * 0.6, covering: false });
       spawned.push(ped);
     }
     this.audio.policeShout(vehicle.group.position.x, vehicle.group.position.z);
@@ -415,8 +492,10 @@ export class PoliceSystem {
     this.events.push({ kind: 'reboard', officers: covers.map((officer) => officer.ped) });
   }
 
-  /** Foot officers: crouch in cover at the car doors or run the suspect down (on belief — live position only
-   *  with their own line of sight). Two stars releases hitscan fire with distance falloff and cooldowns. */
+  /** Foot officers: dig in behind the cruiser — crouched on the far side from the suspect, weapon
+   *  up, breaking cover to re-hustle when the suspect flanks — or run them down (on belief — live
+   *  position only with their own line of sight). Two stars releases hitscan fire with distance
+   *  falloff, cooldowns and a visible muzzle flash. */
   private updateOfficers(dt: number, playerPosition: THREE.Vector3, playerInVehicle: boolean, wanted: WantedSystem, known: KnownPosition | null, damagePlayer: (amount: number) => void, damageCar: (amount: number) => void, sightRange = SIGHT_RADIUS): void {
     for (let index = this.officers.length - 1; index >= 0; index--) {
       const officer = this.officers[index]; if (!officer) continue;
@@ -432,13 +511,30 @@ export class PoliceSystem {
       if (position.distanceTo(playerPosition) > 130) { ped.state = 'walk'; this.officers.splice(index, 1); continue; }
       if (officer.role === 'cover' && officer.car) {
         const car = officer.car.group.position;
-        const away = this.scratch.copy(car).sub(playerPosition).setY(0);
-        if (away.lengthSq() < 0.01) away.set(0, 0, 1);
-        away.normalize();
-        ped.destination.set(car.x + away.x * 2.4 - away.z * officer.side * 1.1, 0, car.z + away.z * 2.4 + away.x * officer.side * 1.1);
-        if (position.distanceToSquared(ped.destination) > 2.2) ped.state = 'hostile'; // hustle to the door
-        else { ped.state = 'idle'; ped.idleTime = 6; ped.takeCover(); ped.group.rotation.y = Math.atan2(playerPosition.x - position.x, playerPosition.z - position.z); }
+        const slot = coverSlot(car.x, car.z, playerPosition.x, playerPosition.z, officer.side);
+        ped.destination.set(slot.x, 0, slot.z);
+        const slotDistanceSq = (slot.x - position.x) ** 2 + (slot.z - position.z) ** 2; // horizontal ONLY — see shouldHoldCover
+        if (!shouldHoldCover(officer.covering, slotDistanceSq)) {
+          officer.covering = false;
+          ped.state = 'hostile'; // hustle: ped movement walks them in as far as its own arrival ring, which sits inside COVER_ENTER_SQ
+        } else {
+          officer.covering = true;
+          ped.state = 'idle'; ped.idleTime = 6; ped.takeCover();
+          if (wanted.level >= SHOOT_MIN_WANTED) ped.aimWeapon(); // weapon out only once fire is authorized: below two stars they duck and shout
+          ped.group.rotation.y = Math.atan2(playerPosition.x - position.x, playerPosition.z - position.z);
+          // Settle the last stretch: an idle ped's own update returns before moving, so the ducked
+          // shuffle from the arrival ring into the exact slot is driven here — wall-clamped and
+          // re-grounded like every other ped move, and tracking the slot as it drifts with the player.
+          const slotDistance = Math.sqrt(slotDistanceSq);
+          if (slotDistance > 0.05) {
+            const step = Math.min(slotDistance, COVER_SETTLE_PACE * dt);
+            const next = this.scratch.set(position.x + ((slot.x - position.x) / slotDistance) * step, position.y, position.z + ((slot.z - position.z) / slotDistance) * step);
+            position.copy(this.city.clampMove(position, next, 0.42));
+            position.y = this.city.surfaceHeightAt(position.x, position.z);
+          }
+        }
       } else {
+        officer.covering = false;
         ped.state = 'hostile';
         if (position.distanceTo(playerPosition) < sightRange && this.hasLineOfSight(position, playerPosition)) { ped.destination.copy(playerPosition); ped.destination.x += officer.side * 0.9; } // shoulder-width apart, not one dogpile point
         else if (known) ped.destination.set(known.x, 0, known.z);
@@ -449,6 +545,7 @@ export class PoliceSystem {
         if (distance > 2.4 && distance < Math.min(44, sightRange) && this.hasLineOfSight(position, playerPosition)) { // concealed-in-blackout: no live fire at a suspect they can't make out
           officer.shootIn = 0.9 + Math.random() * 0.9;
           this.audio.copGunshot(position.x, position.z);
+          this.muzzleFlashAt(position.x, position.y + 1.25, position.z, playerPosition.x, playerPosition.z); // held above the crouch, at the height of a pistol fired over the bodywork: the flash must clear the car's silhouette or the shot reads as nothing from the suspect's side
           if (Math.random() < copHitChance(distance)) { if (playerInVehicle) damageCar(4); else damagePlayer(4 + wanted.level); }
         }
       }
