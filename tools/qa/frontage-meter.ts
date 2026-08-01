@@ -64,6 +64,10 @@ function coveredWithin(x: number, z: number, nx: number, nz: number, reach: numb
 // ---- frontage walk ---------------------------------------------------------------------------
 interface ZoneTally { samples: number; near: number; far: number; }
 const zones = new Map<string, ZoneTally>();
+// Residential coverage BY DISTRICT — the suburbs-density pass is judged per suburb, not citywide,
+// so a packed Greenside can't hide an empty Chartwell. Same samples, same probe, keyed by the
+// nearest district centre (exactly the lookup zoning itself uses).
+const residentialDistricts = new Map<string, ZoneTally>();
 for (const road of GENERATED_ROADS) {
   if (road.width < 6) continue;
   const half = road.width / 2;
@@ -85,9 +89,17 @@ for (const road of GENERATED_ROADS) {
         let tally = zones.get(zone);
         if (!tally) { tally = { samples: 0, near: 0, far: 0 }; zones.set(zone, tally); }
         tally.samples++;
-        if (coveredWithin(fx, fz, nx, nz, FAR)) {
-          tally.far++;
-          if (coveredWithin(fx, fz, nx, nz, NEAR)) tally.near++;
+        const far = coveredWithin(fx, fz, nx, nz, FAR);
+        const near = far && coveredWithin(fx, fz, nx, nz, NEAR);
+        if (far) tally.far++;
+        if (near) tally.near++;
+        if (zone === 'residential') {
+          const name = districtAt(fx, fz);
+          let dt = residentialDistricts.get(name);
+          if (!dt) { dt = { samples: 0, near: 0, far: 0 }; residentialDistricts.set(name, dt); }
+          dt.samples++;
+          if (far) dt.far++;
+          if (near) dt.near++;
         }
       }
     }
@@ -97,6 +109,12 @@ for (const road of GENERATED_ROADS) {
 console.log(`frontage samples (roads >= 6 u wide, ${STEP} u pitch, both sides), coverage by building OBB probe:`);
 for (const [zone, tally] of [...zones].sort((x, y) => y[1].samples - x[1].samples)) {
   console.log(`  ${zone.padEnd(20)} samples ${String(tally.samples).padStart(6)}   within ${FAR}u ${(100 * tally.far / tally.samples).toFixed(1).padStart(5)}%   within ${NEAR}u ${(100 * tally.near / tally.samples).toFixed(1).padStart(5)}%`);
+}
+
+const bigDistricts = [...residentialDistricts].filter(([, t]) => t.samples >= 300).sort((x, y) => y[1].samples - x[1].samples);
+console.log(`\nresidential frontage by district (districts with >= 300 samples, ${bigDistricts.length} of ${residentialDistricts.size}):`);
+for (const [name, tally] of bigDistricts) {
+  console.log(`  ${name.padEnd(24)} samples ${String(tally.samples).padStart(5)}   within ${FAR}u ${(100 * tally.far / tally.samples).toFixed(1).padStart(5)}%   within ${NEAR}u ${(100 * tally.near / tally.samples).toFixed(1).padStart(5)}%`);
 }
 
 // ---- parcel stats ----------------------------------------------------------------------------

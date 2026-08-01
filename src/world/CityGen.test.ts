@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintOverlapXZ, footprintRailwayClearance, footprintRoadClearance, generateCell, OCCUPANCY_FACTOR, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, STREETWALL_MAX_OVERLAP, type GeneratedBuilding } from './CityGen';
+import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintOverlapXZ, footprintRailwayClearance, footprintRoadClearance, generateCell, OCCUPANCY_FACTOR, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, zonePackingGap, type GeneratedBuilding } from './CityGen';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_STATS, MAP_WORLD_SIZE, METRES_PER_UNIT, RAILWAY_STATION_SITES, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
@@ -81,11 +81,13 @@ describe('citywide parcel layout', () => {
 
   it('never exceeds the per-cell building cap (bounds draw calls + generation cost)', () => {
     expect(buildingStats().maxPerCell).toBeLessThanOrEqual(CELL_BUILDING_CAP);
-    // Budget window: the city-density pass raised the cap 64 → 128 because at 64 one third of every
-    // committed CBD building was silently dropped at bucketing (the empty-lot report). Cells still
-    // merge to a handful of draw calls per material; the streamer frame-budgets generation cost.
+    // Budget window: the CBD-density pass raised the cap 64 → 160 because at 64 one third of every
+    // committed CBD building was silently dropped at bucketing (the empty-lot report); the suburbs
+    // pass raised it to 256 because at real-erf pitch the shared CBD/residential cells capped and
+    // dropped whole streets of houses. Cells still merge to a handful of draw calls per material;
+    // the streamer frame-budgets generation cost.
     expect(CELL_BUILDING_CAP).toBeGreaterThanOrEqual(50);
-    expect(CELL_BUILDING_CAP).toBeLessThanOrEqual(160);
+    expect(CELL_BUILDING_CAP).toBeLessThanOrEqual(256);
   });
 
   it('never places a building footprint over a road corridor (no mass overhangs the street)', () => {
@@ -162,18 +164,25 @@ describe('citywide parcel layout', () => {
   }, 20_000);
 
   it('keeps parcel occupancy separated even for the largest estate and tower footprints', () => {
-    // Mirrors Occupancy.free exactly: a street-wall (CBD) pair is held to the exact-footprint rule
-    // — abutting party walls up to STREETWALL_MAX_OVERLAP of measured interpenetration, never
-    // towers inside towers — while every other pair keeps the conservative circle spacing.
+    // Mirrors Occupancy.free exactly: an exact-packed pair (both zones carry a packing gap) is
+    // held to the real footprint rule — CBD pairs may abut up to STREETWALL_MAX_OVERLAP of
+    // measured interpenetration (party walls, never towers inside towers), residential pairs must
+    // keep RESIDENTIAL_MIN_GAP of clear air (rects grown by the gap stay disjoint), a mixed pair
+    // takes the stricter demand — while every other pair keeps the conservative circle spacing.
+    const grown = (b: GeneratedBuilding, pad: number): GeneratedBuilding => ({ ...b, width: b.width + pad, depth: b.depth + pad });
     const grid = new Map<string, GeneratedBuilding[]>(); const cell = 256;
     for (const building of all) {
       const cx = Math.floor(building.x / cell); const cz = Math.floor(building.z / cell);
       const radius = Math.hypot(building.width, building.depth) / 2;
+      const gap = zonePackingGap(building.zone);
       for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
         for (const other of grid.get(`${cx + dx},${cz + dz}`) ?? []) {
           const otherRadius = Math.hypot(other.width, other.depth) / 2;
-          if (building.zone === 'commercial-highrise' && other.zone === 'commercial-highrise') {
-            expect(footprintOverlapXZ(building, other)).toBeLessThanOrEqual(STREETWALL_MAX_OVERLAP + 1e-6);
+          const otherGap = zonePackingGap(other.zone);
+          if (gap !== undefined && otherGap !== undefined) {
+            const need = Math.max(gap, otherGap);
+            if (need <= 0) expect(footprintOverlapXZ(building, other)).toBeLessThanOrEqual(-need + 1e-6);
+            else expect(footprintOverlapXZ(grown(building, need), grown(other, need)), `${building.zone}@${building.x.toFixed(0)},${building.z.toFixed(0)} vs ${other.zone}`).toBeLessThanOrEqual(1e-6);
           } else {
             expect(Math.hypot(building.x - other.x, building.z - other.z)).toBeGreaterThanOrEqual((radius + otherRadius) * OCCUPANCY_FACTOR + 1.5 - 1e-6);
           }
@@ -182,7 +191,7 @@ describe('citywide parcel layout', () => {
       const key = `${cx},${cz}`; const bucket = grid.get(key);
       if (bucket) bucket.push(building); else grid.set(key, [building]);
     }
-  });
+  }, 30_000); // ~8,300 parcels; the residential-rect SAT mirror is quadratic in dense cells
 
   it('reports exactly the capped set returned by all generated cells', () => {
     const cells = new Set(all.map((building) => cellOf(building).join(',')));

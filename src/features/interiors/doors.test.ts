@@ -187,11 +187,12 @@ describe('doors on scattered models', () => {
 
   it('opens essentially every scattered model a person would live or work in', () => {
     const enterable = allScatteredModels().filter((model) => MODEL_INDEX.get(model.name)?.interior);
-    // Floor recalibrated for the city-density pass: procedural parcels claim frontage before
-    // scatter, and packing the CBD/suburbs (3,712 → ~5,450 parcels) displaced a few hundred
-    // scattered houses. The city has MORE enterable buildings than before — they moved from the
-    // scatter column to the parcel column. The 0.99 open ratio below is the real guard.
-    expect(enterable.length).toBeGreaterThan(2500);
+    // Floor recalibrated for the city-density passes: procedural parcels claim frontage before
+    // scatter, and packing the CBD (3,712 → ~5,450 parcels) then the suburbs (→ ~8,370) moved
+    // enterable buildings from the scatter column to the parcel column (~2,550 → ~1,740 scattered
+    // enterables, while the combined universe GREW ~8,000 → ~10,100). The 0.99 open ratio below
+    // is the real guard; this floor only proves scatter still contributes a real share.
+    expect(enterable.length).toBeGreaterThan(1500);
     const open = enterable.filter((model) => scatterDoorFor(model)).length;
     expect(open / enterable.length, `only ${open} of ${enterable.length} scattered buildings open`).toBeGreaterThan(0.99);
   }, 900000);

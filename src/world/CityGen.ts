@@ -29,6 +29,8 @@ import {
   pointInAnyPolygon,
   REAL_FOOTPRINTS,
   RAILWAY_STATION_SITES,
+  LANDMARKS,
+  BEACH_POLYGONS,
   type GeneratedRoad,
 } from './mapData';
 import { classifyZone, type Zone } from './data/zoning';
@@ -81,6 +83,15 @@ export const OCCUPANCY_FACTOR = 0.62;
  * measured interpenetration, and no further. tools/qa/frontage-meter.ts audits the outcome.
  */
 export const STREETWALL_MAX_OVERLAP = 1.5;
+/**
+ * Exact-footprint spacing for residential pairs: the suburbs version of the street-wall rule.
+ * The circle proxy refused legal side-by-side houses for the same reason it refused towers —
+ * a circle circumscribing a 45×25 house claims a whole second stand of empty ground. Houses do
+ * NOT abut (no party walls in the suburbs): two residential footprints must keep this much
+ * measured clear gap between their walls, tested by the same 2D SAT the CBD uses (rects grown by
+ * the gap, then required disjoint). tools/qa/frontage-meter.ts audits the outcome per district.
+ */
+export const RESIDENTIAL_MIN_GAP = 1.5;
 
 /**
  * Separating-axis interpenetration depth of two parcel footprints in the XZ plane: 0 when the
@@ -109,11 +120,15 @@ export function footprintOverlapXZ(
   return depth;
 }
 /** Per-cell hard cap on buildings — bounds both draw calls and per-cell generation cost.
- *  Raised 64 → 160 for the city-density pass: at 64, one third of every committed CBD building
+ *  Raised 64 → 160 for the CBD-density pass: at 64, one third of every committed CBD building
  *  (545 of them) was silently dropped at bucketing, so the empty-lot fixes could never reach the
- *  street. Cells still merge to a handful of draw calls per material; the cost is triangles and
- *  per-cell generation time, which the frame-budgeted streamer already spreads. */
-export const CELL_BUILDING_CAP = 160;
+ *  street. Raised again 160 → 256 for the suburbs pass: with houses at real-erf pitch the inner
+ *  residential cells (Doornfontein, Fordsburg — cells they share with CBD towers) hit 160 and
+ *  silently dropped whole streets of houses, taking residential frontage DOWN as density went up
+ *  (at 160: 16 capped cells; at 256: 5, all tower-heavy CBD ring cells). Cells still merge to a
+ *  handful of draw calls per material; the cost is triangles and per-cell generation time, which
+ *  the frame-budgeted streamer already spreads. */
+export const CELL_BUILDING_CAP = 256;
 const HALF_WORLD = MAP_WORLD_SIZE / 2;
 const UNBUILT_POLYGON_GROUPS = [WATER_POLYGONS, GREEN_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, AERODROME_POLYGONS];
 
@@ -191,7 +206,14 @@ const ZONE_SHAPE: Record<Exclude<Zone, 'none'>, ZoneShape> = {
   // that the CBD has no empty lots — a slot only stays empty when geometry genuinely refuses it.
   'commercial-highrise': { style: 'downtown', lot: [16, 28], depth: [12, 26], yard: 0.6, accept: 1 },
   'commercial-strip': { style: 'mixed-use', lot: [12, 22], depth: [14, 22], yard: 2.2, accept: 0.9 },
-  residential: { style: 'suburban', lot: [15, 25], depth: [9, 14], yard: 4, accept: 0.82 },
+  // Residential stands re-sized against THIS map's block grid for the suburbs-density pass (the
+  // same fix the CBD got): the old 15–25 authored lots became 32–54 u (44–73 m) stands after the
+  // map shrink — triple a real Joburg erf — so one mansion ate three stands of kerb and every
+  // rejection lost a whole mansion-width of street. At 10–18 (21–39 u) several houses pack each
+  // block face. Yard 3 (~9 m building line) brings the face toward the street the way a suburb
+  // actually sits. Accept cap raised 0.82 → 0.9: houses are the norm, empty stands the exception;
+  // the density scaling in acceptance() keeps a floor AND this cap.
+  residential: { style: 'suburban', lot: [10, 18], depth: [7, 11], yard: 3, accept: 0.95 },
   industrial: { style: 'industrial', lot: [26, 46], depth: [22, 40], yard: 3, accept: 0.72 },
   estate: { style: 'estate', lot: [60, 110], depth: [30, 52], yard: 10, accept: 0.78 },
   rural: { style: 'rural', lot: [40, 80], depth: [8, 14], yard: 12, accept: 0.28 },
@@ -200,7 +222,10 @@ const ZONE_SHAPE: Record<Exclude<Zone, 'none'>, ZoneShape> = {
 /** Placement probability for a zone at a point, scaled by the local OSM building density. */
 function acceptance(zone: Exclude<Zone, 'none'>, density: number): number {
   const base = ZONE_SHAPE[zone].accept;
-  if (zone === 'residential') return Math.min(base, 0.3 + density / 400);
+  // Floor 0.8, curve shifted up: even the sleepiest suburb packs its streets (the owner's rule —
+  // houses are the norm, empty stands the exception); the density term still differentiates busy
+  // districts, and the cap leaves every suburb the odd genuinely vacant stand.
+  if (zone === 'residential') return Math.min(base, Math.max(0.8, 0.45 + density / 400));
   if (zone === 'commercial-strip') return Math.min(base, 0.5 + density / 800);
   return base;
 }
@@ -229,10 +254,24 @@ function buildingHeight(zone: Exclude<Zone, 'none'>, _density: number, s: number
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
+/**
+ * The map's own named petrol stations (crafted-first rule): ModelScatter's landmarkForecourtPass
+ * stands a real forecourt on verge slots 16–31u off the road beside each pin — and it runs with
+ * parcels already fixed, so PARCELS must not claim that verge first. This reserve lives here (not
+ * in RESERVED_PADS) because scatter's own craftedBlocks() checks those pads: a shared reserve
+ * would block the very forecourt it exists to protect. The suburbs-density pass packed the shore
+ * lanes and buried the Bayshore star until this. A labelled star must always have petrol under it.
+ */
+const FUEL_LANDMARK_RESERVES = LANDMARKS.filter((entry) => entry.kind === 'fuel');
+/** Candidates sit up to ~33u from the pin; scatter's circle test then needs forecourt-footprint
+ *  (18u) + house-circumradius of air beyond that — 52 is the Kelvin-Yard class of claim. */
+const FUEL_LANDMARK_RESERVE_RADIUS = 52;
+
 /** True when (x, z) is inside a reserved anchor pad or a manicured site footprint (kept clear). */
 function isBlocked(x: number, z: number, radius: number): boolean {
   for (const pad of RESERVED_PADS) if ((pad.x - x) ** 2 + (pad.z - z) ** 2 < (pad.radius + radius) ** 2) return true;
   for (const site of MANICURED_FOOTPRINTS) if ((site.x - x) ** 2 + (site.z - z) ** 2 < (site.radius + radius) ** 2) return true;
+  for (const pin of FUEL_LANDMARK_RESERVES) if ((pin.x - x) ** 2 + (pin.z - z) ** 2 < (FUEL_LANDMARK_RESERVE_RADIUS + radius) ** 2) return true;
   return false;
 }
 
@@ -242,30 +281,49 @@ function stationBlocks(x: number, z: number, radius: number): boolean {
   return RAILWAY_STATION_SITES.some((station) => (station.x - x) ** 2 + (station.z - z) ** 2 < (RAILWAY_STATION_CLEARANCE + radius) ** 2);
 }
 
-/** One parcel footprint as the occupancy grid keeps it. `rect` is present on street-wall (CBD)
- *  parcels, which are separated by exact OBB overlap instead of the circle proxy. */
-interface OccupancyEntry { x: number; z: number; r: number; rect?: { x: number; z: number; width: number; depth: number; heading: number }; }
+/** One parcel footprint as the occupancy grid keeps it. `rect` is present on exact-packed parcels
+ *  (CBD street wall, residential), which are separated by real 2D SAT instead of the circle proxy.
+ *  `gap` is that parcel's spacing demand: negative = interpenetration allowed up to -gap (party
+ *  walls), positive = at least this much measured clear air between the walls. */
+interface OccupancyEntry { x: number; z: number; r: number; rect?: { x: number; z: number; width: number; depth: number; heading: number }; gap?: number; }
+
+/** The spacing a zone demands of the exact footprint test, or undefined for the circle proxy. */
+export function zonePackingGap(zone: Zone): number | undefined {
+  if (zone === 'commercial-highrise') return -STREETWALL_MAX_OVERLAP;
+  if (zone === 'residential') return RESIDENTIAL_MIN_GAP;
+  return undefined;
+}
+
+/** A footprint rect grown by `pad` on each axis (pad/2 per side) — SAT on grown rects being
+ *  disjoint is exactly "the real rects keep pad of clear air on some separating axis". */
+function grownRect(rect: NonNullable<OccupancyEntry['rect']>, pad: number): NonNullable<OccupancyEntry['rect']> {
+  return { x: rect.x, z: rect.z, width: rect.width + pad, depth: rect.depth + pad, heading: rect.heading };
+}
 
 /** Coarse occupancy grid so parcels from different roads don't stack at intersections.
- *  Two street-wall entries (both carrying a rect) are separated by the exact footprint test —
- *  they may abut up to STREETWALL_MAX_OVERLAP of measured interpenetration (party walls);
- *  every other pair keeps the conservative circle rule. Symmetric in the pair, so the rule is
- *  order-independent and CityGen.test can assert it over unordered pairs. */
+ *  Two exact-packed entries (both carrying a rect) are separated by the real footprint test at
+ *  the stricter of their two gap demands — CBD pairs may abut up to STREETWALL_MAX_OVERLAP of
+ *  measured interpenetration (party walls), residential pairs must keep RESIDENTIAL_MIN_GAP of
+ *  clear air; every other pair keeps the conservative circle rule. Symmetric in the pair, so the
+ *  rule is order-independent and CityGen.test can assert it over unordered pairs. */
 class Occupancy {
   private cells = new Map<string, OccupancyEntry[]>();
   private maxRadius = 0;
   constructor(private cell = 64) {}
   private key(x: number, z: number): string { return `${Math.floor(x / this.cell)},${Math.floor(z / this.cell)}`; }
-  free(x: number, z: number, r: number, rect?: OccupancyEntry['rect']): boolean {
+  free(x: number, z: number, r: number, rect?: OccupancyEntry['rect'], gap = 0): boolean {
     const cx = Math.floor(x / this.cell); const cz = Math.floor(z / this.cell);
     const reach = Math.max(1, Math.ceil(((r + this.maxRadius) * OCCUPANCY_FACTOR + 1.5) / this.cell) + 1);
     for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
       for (const other of this.cells.get(`${cx + dx},${cz + dz}`) ?? []) {
         if (rect && other.rect) {
-          // Exact street-wall packing: circles circumscribing big rectangles refuse legal
-          // side-by-side towers, and a naively smaller factor buries towers inside each other.
-          if ((other.x - x) ** 2 + (other.z - z) ** 2 >= (other.r + r) ** 2) continue; // circles clear: rects cannot touch
-          if (footprintOverlapXZ(rect, other.rect) > STREETWALL_MAX_OVERLAP) return false;
+          // Exact packing: circles circumscribing big rectangles refuse legal side-by-side
+          // neighbours, and a naively smaller factor buries buildings inside each other.
+          const need = Math.max(gap, other.gap ?? 0);
+          // Circles clear by the demanded air: rect gap >= centre distance - r1 - r2 >= need.
+          if ((other.x - x) ** 2 + (other.z - z) ** 2 >= (other.r + r + Math.max(0, need)) ** 2) continue;
+          if (need <= 0) { if (footprintOverlapXZ(rect, other.rect) > -need) return false; continue; }
+          if (footprintOverlapXZ(grownRect(rect, need), grownRect(other.rect, need)) > 0) return false;
           continue;
         }
         const min = (other.r + r) * OCCUPANCY_FACTOR + 1.5;
@@ -274,9 +332,9 @@ class Occupancy {
     }
     return true;
   }
-  add(x: number, z: number, r: number, rect?: OccupancyEntry['rect']): void {
+  add(x: number, z: number, r: number, rect?: OccupancyEntry['rect'], gap = 0): void {
     const key = this.key(x, z);
-    const entry: OccupancyEntry = { x, z, r, rect };
+    const entry: OccupancyEntry = { x, z, r, rect, gap };
     const bucket = this.cells.get(key);
     if (bucket) bucket.push(entry); else this.cells.set(key, [entry]);
     this.maxRadius = Math.max(this.maxRadius, r);
@@ -315,26 +373,34 @@ interface FittedFootprint { x: number; z: number; width: number; depth: number; 
 
 /** Fit a mass behind an anchored front face without ever pulling that face back toward the street.
  *
- *  `streetWall` (the CBD): the highrise lots are the city's deepest while its street grid is the
- *  tightest, so most masses reach across the thin block onto the rear/cross street — and the
- *  uniform shrink-then-reject schedule below threw away 56% of CBD lots, which is where the empty
- *  kerbs came from. A street-wall fit gives up DEPTH first and keeps the full frontage width
- *  (a 30u-wide mass squeezed to 14u deep IS a Joburg street-wall building), rejecting only below
- *  MIN_STREETWALL_DEPTH; the uniform schedule then still runs as the fallback for masses whose
- *  WIDTH is what overhangs a cross street. */
+ *  `packed` (CBD street wall + residential): the deep lots on tight street grids reach across
+ *  thin blocks onto the rear/cross street — and the uniform shrink-then-reject schedule below
+ *  threw away 56% of CBD lots, which is where the empty kerbs came from. A packed fit gives up
+ *  DEPTH first and keeps the full frontage width (a 30u-wide mass squeezed to 14u deep IS a
+ *  Joburg street-wall building; a wide shallow house is a real suburban plan), rejecting only
+ *  below MIN_STREETWALL_DEPTH; the uniform schedule then still runs as the fallback for masses
+ *  whose WIDTH is what overhangs a cross street. */
 function fitFootprint(
   faceX: number, faceZ: number, nX: number, nZ: number,
-  width0: number, depth0: number, heading: number, streetWall = false,
+  width0: number, depth0: number, heading: number, packed = false,
 ): FittedFootprint | undefined {
-  if (streetWall) {
-    let depth = depth0;
-    while (depth >= MIN_STREETWALL_DEPTH) {
-      const x = faceX + nX * (depth / 2); const z = faceZ + nZ * (depth / 2);
-      if (footprintRoadClearance(x, z, width0, depth, heading) >= ROAD_CLEARANCE
-        && footprintRailwayClearance(x, z, width0, depth, heading) >= RAILWAY_BUILDING_CLEARANCE) {
-        return { x, z, width: width0, depth };
+  if (packed) {
+    // Widths are tried full-first, then progressively narrower: a junction mouth or a thin block
+    // that refuses the seeded width still deserves a narrow corner stand rather than bare kerb —
+    // the diagnostic showed "no footprint fits" was the single biggest source of empty suburban
+    // kerb (28% of all residential frontage samples) once the lots themselves were right-sized.
+    for (const widthScale of [1, 0.72, 0.5]) {
+      const width = Math.max(width0 * widthScale, MIN_STREETWALL_DEPTH);
+      let depth = depth0;
+      while (depth >= MIN_STREETWALL_DEPTH) {
+        const x = faceX + nX * (depth / 2); const z = faceZ + nZ * (depth / 2);
+        if (footprintRoadClearance(x, z, width, depth, heading) >= ROAD_CLEARANCE
+          && footprintRailwayClearance(x, z, width, depth, heading) >= RAILWAY_BUILDING_CLEARANCE) {
+          return { x, z, width, depth };
+        }
+        depth *= SHRINK_FACTOR;
       }
-      depth *= SHRINK_FACTOR;
+      if (width <= MIN_STREETWALL_DEPTH) break; // already at the floor: narrower scales change nothing
     }
   }
   let width = width0; let depth = depth0;
@@ -365,10 +431,12 @@ function commitBuilding(
     if (UNBUILT_POLYGON_GROUPS.some((polygons) => pointInAnyPolygon(polygons, sampleX, sampleZ))) return false;
   }
   const radius = Math.hypot(width, depth) / 2;
-  // Street-wall parcels carry their exact rect so they may abut (see STREETWALL_MAX_OVERLAP).
-  const rect = zone === 'commercial-highrise' ? { x, z, width, depth, heading } : undefined;
-  if (isBlocked(x, z, radius * 0.6) || stationBlocks(x, z, radius) || !occ.free(x, z, radius, rect)) return false;
-  occ.add(x, z, radius, rect);
+  // Exact-packed parcels carry their rect: CBD pairs may abut (STREETWALL_MAX_OVERLAP), houses
+  // pack to a measured RESIDENTIAL_MIN_GAP of clear air instead of a circle-proxy stand-off.
+  const packingGap = zonePackingGap(zone);
+  const rect = packingGap !== undefined ? { x, z, width, depth, heading } : undefined;
+  if (isBlocked(x, z, radius * 0.6) || stationBlocks(x, z, radius) || !occ.free(x, z, radius, rect, packingGap)) return false;
+  occ.add(x, z, radius, rect, packingGap);
   out.push({
     x, z, heading, width, depth,
     height: stableWorldFloat(buildingHeight(zone, density, seeded(seedX, seedZ, 30 + salt), style)),
@@ -404,7 +472,9 @@ const INFILL_ACCEPT: Partial<Record<Exclude<Zone, 'none'>, number>> = {
   // to fill. Street-wall commits come first; infill takes what's left.
   'commercial-highrise': 0.35,
   'commercial-strip': 0.45,
-  residential: 0.35,
+  // Suburbs-density pass: more than half of eligible stands carry a back-yard cottage/flatlet —
+  // the granny-flat/backroom pattern that makes real Joburg stands read full from the street.
+  residential: 0.55,
   industrial: 0.3,
 };
 
@@ -453,18 +523,31 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
 
     // Street-wall lot arithmetic (CBD): the building takes 90–98% of its lot with 2–8% side gaps,
     // so built neighbours read as one continuous block face — real Joburg CBD blocks have no side
-    // yards. Everywhere else keeps the suburban 72–92% building / 12–28% gap rhythm.
+    // yards. Residential is packed too — houses take 80–94% of the stand with 4–12% side gaps
+    // (a driveway, not a vacant lot). Everywhere else keeps the 72–92% building / 12–28% gap rhythm.
     const streetWall = zone === 'commercial-highrise';
+    const packed = streetWall || zone === 'residential';
     const lot = lerp(shape.lot[0], shape.lot[1], seeded(frontX, frontZ, 11)) * LAYOUT_SCALE;
     const depth0 = lerp(shape.depth[0], shape.depth[1], seeded(frontX, frontZ, 12)) * LAYOUT_SCALE;
-    const width0 = lot * (streetWall ? 0.9 + seeded(frontX, frontZ, 13) * 0.08 : 0.72 + seeded(frontX, frontZ, 13) * 0.2);
-    const gap = lot * (streetWall ? 0.02 + seeded(frontX, frontZ, 14) * 0.06 : 0.12 + seeded(frontX, frontZ, 14) * 0.16);
+    const width0 = lot * (streetWall ? 0.9 + seeded(frontX, frontZ, 13) * 0.08
+      : packed ? 0.8 + seeded(frontX, frontZ, 13) * 0.14
+        : 0.72 + seeded(frontX, frontZ, 13) * 0.2);
+    const gap = lot * (streetWall ? 0.02 + seeded(frontX, frontZ, 14) * 0.06
+      : packed ? 0.04 + seeded(frontX, frontZ, 14) * 0.08
+        : 0.12 + seeded(frontX, frontZ, 14) * 0.16);
     // Street-wall pitch stays at the full lot+gap: the building already fills ~94% of it, so a
     // tighter pitch would only make the occupancy grid refuse every second lot.
     const pitchScale = zone === 'rural' ? 1 : zone === 'estate' ? 0.95 : streetWall ? 1 : 0.85;
     target = (lot + gap) * pitchScale; // denser frontage in built districts; rural spacing stays open
 
-    if (seeded(frontX, frontZ, 20) > acceptance(zone, district.density)) continue;
+    // The Vaal shore stays a holiday coast, not a packed suburb: inside the beach band the
+    // scatter's promenade profile (slipways, kiosks, the seafront venue trio) shares the kerb
+    // with houses, and at full suburban acceptance the houses crowd every last venue out — the
+    // interiors suite caught seafront-restaurant vanishing citywide. Same 130u pad as
+    // ModelScatter.nearCoast (mirrored here: importing it would cycle the modules).
+    const coastBand = zone === 'residential'
+      && BEACH_POLYGONS.some((beach) => frontX > beach.minX - 130 && frontX < beach.maxX + 130 && frontZ > beach.minZ - 130 && frontZ < beach.maxZ + 130);
+    if (seeded(frontX, frontZ, 20) > acceptance(zone, district.density) * (coastBand ? 0.55 : 1)) continue;
 
     // Face the street: local +z (the entrance face) points back toward the road, aligned to the actual road
     // segment (no quarter snap — colliders are oriented boxes now, so diagonal streets get diagonal buildings).
@@ -478,13 +561,13 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
     // neighbouring, cross or rear street. Shrink w&d until the whole footprint clears every road
     // corridor; if even a minimal footprint still overhangs, reject the lot. Correctness (no road
     // overlap) over density — but shrink first so we keep the building wherever it can be made to fit.
-    const fit = fitFootprint(faceX, faceZ, nX, nZ, width0, depth0, heading, streetWall);
-    // A dead street-wall slot (a junction mouth, a rail reserve, an occupied corner) retries a
+    const fit = fitFootprint(faceX, faceZ, nX, nZ, width0, depth0, heading, packed);
+    // A dead packed slot (a junction mouth, a rail reserve, an occupied corner) retries a
     // short step later instead of skipping a whole lot pitch of kerb — the walker's slot phase is
     // part of the deterministic seed stream either way.
-    if (!fit) { if (streetWall) target = 6 * LAYOUT_SCALE; continue; }
+    if (!fit) { if (packed) target = 6 * LAYOUT_SCALE; continue; }
     const style = buildingStyle(zone, district.density, frontX, frontZ);
-    if (!commitBuilding(fit, heading, zone, district.density, style, frontX, frontZ, 0, occ, out)) { if (streetWall) target = 6 * LAYOUT_SCALE; continue; }
+    if (!commitBuilding(fit, heading, zone, district.density, style, frontX, frontZ, 0, occ, out)) { if (packed) target = 6 * LAYOUT_SCALE; continue; }
 
     // Eligible urban lots can carry a second, smaller mass behind the street building. It stays
     // deterministic and must still be in the same zone and pass every normal clearance/blocker rule.
@@ -495,7 +578,7 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
       const infillGap = (2.5 + seeded(frontX, frontZ, 73) * 3) * LAYOUT_SCALE;
       const infillFaceX = faceX + nX * (fit.depth + infillGap);
       const infillFaceZ = faceZ + nZ * (fit.depth + infillGap);
-      const infill = fitFootprint(infillFaceX, infillFaceZ, nX, nZ, infillWidth, infillDepth, heading, streetWall);
+      const infill = fitFootprint(infillFaceX, infillFaceZ, nX, nZ, infillWidth, infillDepth, heading, packed);
       if (infill && classifyZone(infill.x, infill.z, road.width) === zone) {
         commitBuilding(infill, heading, zone, district.density, style, frontX, frontZ, 100, occ, out);
       }
