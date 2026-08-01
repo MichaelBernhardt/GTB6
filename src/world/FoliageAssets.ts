@@ -96,6 +96,22 @@ export const SOLID_TRUNK_MIN_DIAMETER = 0.5;
 export const trunkIsSolid = (colliderW: number, colliderD: number): boolean =>
   Math.max(colliderW, colliderD) >= SOLID_TRUNK_MIN_DIAMETER;
 
+/**
+ * THE FATTEST WALL A TREE CAN BE, in world units of radius.
+ *
+ * The widest authored trunk in the library is the landmark-tree v1 at 1.70 m across
+ * (art/foliage/recipe.json), and per-tree scale jitter only ever shrinks a tree — resolveTree's
+ * scale is 0.84 + size·0.16, so it tops out at exactly 1.0. That makes 0.85 the true worst case for
+ * every instance of every species, not an average.
+ *
+ * Placement rules that must not seal a route need this bound BEFORE the GLB has loaded (the scatter
+ * layout is computed in node during the bake, with no library resident at all), so it is stated here
+ * beside the library facts rather than measured off a built tree. FoliageCollision.test pins it
+ * against the real asset at full scale, so re-authoring a fatter trunk fails the gate instead of
+ * quietly narrowing the clearance ModelScatter keeps around a pavement.
+ */
+export const FATTEST_TRUNK_RADIUS = 0.85;
+
 export class TreeLibraryError extends Error {
   constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'TreeLibraryError'; }
 }

@@ -275,9 +275,13 @@ const TOWER_CORE_DISTRICTS: ReadonlyArray<{ name: string; radius: number; peak: 
   { name: 'Hillbrow', radius: 260, peak: 0.54 },
   { name: 'Braamfontein', radius: 230, peak: 0.42 },
 ];
+/** The landmark cores are 420 u because that is exactly the radius buildingIdentity.landmarkAnchors
+ *  searches for a parcel tall enough to carry the name: a pin that says "Ponte Tower" has to have a
+ *  tower somewhere in the ground it claims, and the row builder re-laid the CBD parcels around it
+ *  (nearest commercial-highrise stand is 245 u out) until a 260 u core stopped reaching any of them. */
 const TOWER_CORE_LANDMARKS: ReadonlyArray<{ name: string; radius: number; peak: number }> = [
-  { name: 'Ponte Tower', radius: 260, peak: 0.9 },
-  { name: 'Hillbrow tower', radius: 260, peak: 0.9 },
+  { name: 'Ponte Tower', radius: 420, peak: 0.9 },
+  { name: 'Hillbrow tower', radius: 420, peak: 0.9 },
 ];
 
 let towerCores: TowerCore[] | undefined;

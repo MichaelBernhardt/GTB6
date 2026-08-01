@@ -13,7 +13,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import {
-  buildTreeAsset, buildTreeInstance, installTreeLibrary, resetTreeLibraryForTests,
+  buildTreeAsset, buildTreeInstance, FATTEST_TRUNK_RADIUS, installTreeLibrary, resetTreeLibraryForTests,
   SOLID_TRUNK_MIN_DIAMETER, TREE_SPECIES, trunkIsSolid,
 } from './FoliageAssets';
 import { trunkProp } from './City';
@@ -52,6 +52,12 @@ describe('the solid-trunk rule', () => {
       expect(trunk.y0).toBe(0);
       expect(trunk.y1).toBeGreaterThan(2); // tall enough to stop a body, not a kerb you step over
       expect(buildTreeInstance(species, 11 + variant, { variant }).trunkSolid).toBe(true);
+      // ModelScatter refuses to plant a trunk within FATTEST_TRUNK_RADIUS + a body of a pedestrian
+      // walk line, and that clearance is only honest while no authored trunk is fatter than the
+      // constant. size: 1 asks for the top of the 0.84..1.0 scale band, i.e. the widest this asset
+      // can ever be in world; re-authoring a fatter trunk has to fail here, not narrow a walk lane.
+      expect(buildTreeInstance(species, 11 + variant, { variant, size: 1 }).trunkRadius, `${species} v${variant} radius`)
+        .toBeLessThanOrEqual(FATTEST_TRUNK_RADIUS);
     }
   });
 

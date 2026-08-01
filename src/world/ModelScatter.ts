@@ -47,6 +47,9 @@ import { MANICURED_FOOTPRINTS } from './data/manicured';
 import { MODEL_INDEX } from './models/catalog';
 import { CELL_SIZE, RAILWAY_STATION_CLEARANCE, allBuildings, footprintRailwayClearance, footprintRoadClearance } from './CityGen';
 import { stablePositionRandom, stableWorldFloat } from './StableRandom';
+import { FATTEST_TRUNK_RADIUS, TREE_SPECIES } from './FoliageAssets';
+import { buildCityNavPaths, ROAD_NETWORK } from './roadPaths';
+import { PLAYER } from '../config';
 
 /** One placed model: which catalog builder to run, where, and the seed/variant it builds from. */
 export interface ScatteredModel {
@@ -73,6 +76,23 @@ export const SCATTER_CELL_CAP = 170;
 export const STRUCT_ROAD_CLEARANCE = 2.5;
 /** Foliage may hug the verge but never a live lane (keeps trunks off the tar). */
 export const FOLIAGE_ROAD_CLEARANCE = 0.7;
+/**
+ * A SOLID TRUNK NEVER STANDS IN A PEDESTRIAN LANE.
+ *
+ * An authored tree's trunk is a SOLID prop (City.trunkProp) — a wall that stops a body and stops a
+ * car — so where a scattered tree lands is a gameplay fact, not dressing. FOLIAGE_ROAD_CLEARANCE
+ * only holds trunks off the road SURFACE, and that is not the same question: the walk polylines the
+ * ped nav graph routes on are DECIMATED to every second sample (see roadPaths.buildCityNavPaths), so
+ * through a bend a walk segment chords across the verge and runs several units off the kerb. The pine
+ * that forced this rule sat 5.91 u clear of the built road edge and 1.33 u from the segment peds walk:
+ * legal by every surface test the pass had, and an invisible wall in the middle of a pedestrian lane.
+ *
+ * The clearance is the widest trunk in the library plus a whole body, so a ped (or the player)
+ * following the lane never has to resolve a blocked step against wood, plus 0.1 u of margin so the
+ * rule is not decided on the last bit of a float. Purely geometric, so it stays deterministic by
+ * construction — no roll, no ordering dependence.
+ */
+export const WALK_LINE_TRUNK_CLEARANCE = FATTEST_TRUNK_RADIUS + PLAYER.radius + 0.1;
 /** Frontage verge line: one apron beyond the kerb, matching the sidewalk setback. */
 const VERGE_CLEARANCE = 3.05;
 /** Arc-length pitch (units) between frontage placement attempts. */
@@ -316,6 +336,66 @@ class BuildingIndex {
   }
 }
 
+/** The species that build into a solid trunk. Read straight off TREE_SPECIES so a newly authored
+ *  species owes the walk-lane clearance the day it is added to the library, not the day somebody
+ *  remembers to extend a list here. */
+const SOLID_TREE_NAMES: ReadonlySet<string> = new Set(TREE_SPECIES);
+
+interface WalkSegment { ax: number; az: number; bx: number; bz: number; }
+
+/**
+ * The pedestrian walk polylines, hashed once for the whole scatter.
+ *
+ * They are STATIC — a pure function of the generated road network — and the scatter asks about them
+ * for every tree candidate citywide, so the build is lazy (nothing pays for it unless a tree is
+ * actually considered) and happens exactly once per process. Each segment is filed into every cell
+ * its bounding box touches rather than into the cell of its midpoint: the decimated walk polyline
+ * contains 40 u+ chords, and a midpoint hash would let a long segment miss the very bend it cuts
+ * across. With the segments supercovered, a 3x3 neighbourhood at CELL 24 u is EXACT for any query
+ * radius below 24 u, which WALK_LINE_TRUNK_CLEARANCE (1.6 u) comfortably is — so the query stays
+ * nine bucket lookups and a handful of point-segment distances, not a scan.
+ */
+class WalkLineIndex {
+  private cells: Map<string, WalkSegment[]> | undefined;
+  constructor(private cell = 24) {}
+
+  private build(): Map<string, WalkSegment[]> {
+    const cells = new Map<string, WalkSegment[]>();
+    for (const path of buildCityNavPaths(ROAD_NETWORK).walks) {
+      for (let index = 0; index < path.points.length - 1; index++) {
+        const a = path.points[index]!; const b = path.points[index + 1]!;
+        const segment: WalkSegment = { ax: a.x, az: a.z, bx: b.x, bz: b.z };
+        const minX = Math.floor(Math.min(a.x, b.x) / this.cell); const maxX = Math.floor(Math.max(a.x, b.x) / this.cell);
+        const minZ = Math.floor(Math.min(a.z, b.z) / this.cell); const maxZ = Math.floor(Math.max(a.z, b.z) / this.cell);
+        for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
+          const key = `${cx},${cz}`; const bucket = cells.get(key);
+          if (bucket) bucket.push(segment); else cells.set(key, [segment]);
+        }
+      }
+    }
+    return cells;
+  }
+
+  /** True when (x, z) is within `clearance` of any walk segment. */
+  blocks(x: number, z: number, clearance: number): boolean {
+    const cells = this.cells ??= this.build();
+    const cx = Math.floor(x / this.cell); const cz = Math.floor(z / this.cell);
+    const limit = clearance * clearance;
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      for (const segment of cells.get(`${cx + dx},${cz + dz}`) ?? []) {
+        const sx = segment.bx - segment.ax; const sz = segment.bz - segment.az;
+        const lengthSquared = sx * sx + sz * sz;
+        const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((x - segment.ax) * sx + (z - segment.az) * sz) / lengthSquared));
+        const offX = x - (segment.ax + sx * t); const offZ = z - (segment.az + sz * t);
+        if (offX * offX + offZ * offZ < limit) return true;
+      }
+    }
+    return false;
+  }
+}
+
+const walkLines = new WalkLineIndex();
+
 // ---- Coast proximity ---------------------------------------------------------------------------
 
 /** True near a beach (padded bbox) — promotes any frontage there to the coastal promenade set.
@@ -347,6 +427,9 @@ function tryPlace(
   // the hard exclusions (water, runway, road/rail corridors) at the actual centre, where a set-back could
   // otherwise drift a mass off the buildable ground.
   if (pointInAnyPolygon(WATER_POLYGONS, x, z) || pointInAnyPolygon(AERODROME_POLYGONS, x, z)) return false;
+  // Solid wood may not stand in a pedestrian lane. Gated on the species set first, so only the models
+  // that actually build a trunk collider pay for the walk-line lookup (see WALK_LINE_TRUNK_CLEARANCE).
+  if (SOLID_TREE_NAMES.has(name) && walkLines.blocks(x, z, WALK_LINE_TRUNK_CLEARANCE)) return false;
   if (footprintRoadClearance(x, z, w, d, heading) < roadClear) return false;
   if (footprintRailwayClearance(x, z, w, d, heading) < roadClear) return false;
   const footR = Math.hypot(w, d) / 2;
