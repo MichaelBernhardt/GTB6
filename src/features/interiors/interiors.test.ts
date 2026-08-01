@@ -812,7 +812,7 @@ describe('the circle, the chip and the rung agree', () => {
     // Pickless at a locked door: grey circle, no offer, LOCKED chip — three signals, one truth.
     const grey = discFor(test.scene, locked)!;
     expect(grey, 'no disc built for the locked door').toBeDefined();
-    expect((grey.material as THREE.MeshBasicMaterial).color.getHex(), 'a silent door must not glow gold').toBe(0x8a939b);
+    expect((grey.material as THREE.MeshBasicMaterial).color.getHex(), 'a silent door must not glow gold').toBe(0xc3ccd4);
     expect(offer(system, test.player)).toBeUndefined();
     expect(system.hud!()?.some((chip) => chip.id === 'interiors:locked')).toBe(true);
     // Buy a pick: the same circle turns gold, because the ladder now offers the dial.

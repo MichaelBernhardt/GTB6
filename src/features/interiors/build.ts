@@ -501,11 +501,13 @@ export interface DoorMarker {
   readonly ringMaterial: THREE.MeshBasicMaterial;
 }
 
-/** Marker palette: gold = walking up will offer (enter, or the pick dial); grey = the ladder will
- *  stay silent (locked and no pick carried) — the LOCKED chip carries the words, the circle now
- *  carries the colour, and both read the same predicate as the rung. */
+/** Marker palette: gold = walking up will offer (enter, or the pick dial); silver = the ladder
+ *  will stay silent (locked and no pick carried) — the LOCKED chip carries the words, the circle
+ *  carries the colour, and both read the same predicate as the rung. Silver, not grey: the first
+ *  locked tint vanished against concrete paving, which recreated the invisible-circle defect the
+ *  tint was meant to fix. */
 export const MARKER_OPEN = { disc: 0xe8b64c, ring: 0xf5c451 } as const;
-export const MARKER_LOCKED = { disc: 0x8a939b, ring: 0xa3adb5 } as const;
+export const MARKER_LOCKED = { disc: 0xc3ccd4, ring: 0xdde4ea } as const;
 
 export interface BuiltDoorways {
   readonly group: THREE.Group;
@@ -603,12 +605,20 @@ export function buildDoorways(
     // The circle on the ground, and nothing standing on it. Its own material per door so the fade is
     // per door and not per street — twenty-two MeshBasic materials is nothing next to one beam.
     const stepY = surfaceHeightAt(door.x, door.z);
-    const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: DISC_OPACITY, depthWrite: false }));
-    const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.75, depthWrite: false }));
+    // DEPTH-INDEPENDENT, and this is what ends the marker-height defect class (buried in a stoep,
+    // then subsurface under low paving — the drawn ground rides an unknowable 0–0.25 above the
+    // colliders every height source answers). The circle is an interaction marker, not scenery:
+    // with the depth test off it renders over whatever ground the artists drew, on every slope,
+    // plinth and pavement, forever. The distance fade (26 u) bounds the through-wall ghosting to
+    // the door you are already walking toward.
+    const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: DISC_OPACITY, depthWrite: false, depthTest: false }));
+    const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.75, depthWrite: false, depthTest: false }));
     const disc = new THREE.Mesh(discGeometry, discMaterial);
     disc.position.set(door.x, stepY + 0.06, door.z);
+    disc.renderOrder = 2;
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
     ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.015;
+    ring.renderOrder = 2;
     markers.push({ x: door.x, z: door.z, door, disc, ring, bay, discMaterial, ringMaterial });
     group.add(bay, disc, ring);
   }

@@ -272,6 +272,22 @@ async () => {
     check('7 roof: street door lands on the doorstep', dStep < 0.5, `${dStep.toFixed(2)}u from step`);
   }
 
+  // ---------- 7b. every streamed circle is depth-independent: the marker-height defect class ----
+  {
+    const doorways = g.scene.getObjectByName('InteriorDoors');
+    let discs = 0, depthOn = 0;
+    doorways?.traverse(o => {
+      if (o.geometry?.type === 'CylinderGeometry' || o.geometry?.type === 'TorusGeometry') {
+        discs++;
+        if (o.material.depthTest !== false) depthOn++;
+      }
+    });
+    // Buried-in-a-stoep, starved, subsurface-under-paving: three height defects in one class.
+    // Depth-independence is what closed it — a marker occluded by ground geometry can never
+    // happen again, so any future height regression is cosmetic, not invisible.
+    check('7b: every door marker renders depth-independent', discs > 0 && depthOn === 0, `${discs} marker meshes, ${depthOn} still depth-tested`);
+  }
+
   // ---------- 8. the shopkeeper is mortal: a real round, fired indoors, kills ----------
   {
     const e = pick(x => x.core.layout === 'full' && openByDay(x) && x.d.facts.entrance === 'shopfront');
