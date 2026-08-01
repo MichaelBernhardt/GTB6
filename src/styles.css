@@ -184,6 +184,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 #vignette.is-flashing { animation: damage-flash .45s ease-out; }@keyframes damage-flash { 0% { opacity: 1; } 100% { opacity: 0; } }
 #fade { position: absolute; inset: 0; z-index: 90; background: var(--ink); opacity: 0; pointer-events: none; transition: opacity .3s; }#fade.is-active { opacity: 1; }
 
+/* Cutscene letterbox. The bar height is driven per frame from --bar (see UIManager.setLetterbox), so
+   the caller's own easing owns the slide and a skip can cut it off mid-travel. */
+#letterbox { position: absolute; inset: 0; z-index: 78; display: none; pointer-events: none; }
+#letterbox.is-visible { display: block; }
+#letterbox i { position: absolute; left: 0; right: 0; height: var(--bar, 0); background: #000; }
+#letterbox i:first-child { top: 0; }
+#letterbox i:last-child { bottom: 0; display: flex; align-items: center; justify-content: center; }
+#letterbox b { color: rgba(242, 237, 218, .55); font: 900 10px Inter, sans-serif; letter-spacing: 2.6px; text-transform: uppercase; white-space: nowrap; }
+#ui.is-cinema #hud, #ui.is-cinema #minimap { opacity: 0; transition: opacity .25s; }
+
 /* Weapon wheel */
 #weapon-wheel { position: absolute; top: 50%; left: 50%; z-index: 75; width: 0; height: 0; display: none; }
 #weapon-wheel.is-visible { display: block; }
