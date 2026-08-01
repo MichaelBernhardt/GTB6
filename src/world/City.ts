@@ -70,7 +70,7 @@ import { CITY_JUNCTIONS, type JunctionDefinition, signalHoldsDriver, signalSlowF
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
-import { neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from './data/neighbourhoods';
+import { districtGrimeScale, neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from './data/neighbourhoods';
 import { foundationIdentityForDistrict, type FoundationIdentity } from './data/foundations';
 
 /** XZ AABB with a real vertical span: `height` above `y0`. `y0` is world-space; when omitted the collider is
@@ -2841,7 +2841,7 @@ export class City {
       ? planShopBays(profile.tiers, w, h, variant % ARCHITECTURE_VARIANTS.downtown, variant, profile.entrance) : [];
     const shopfronted = shopBays.length > 0;
     if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName, shopfronted);
-    this.addGrimeDecals(spec, style, profile, shopBays);
+    this.addGrimeDecals(spec, style, profile, shopBays, districtGrimeScale(district));
     this.addRoofEquipment(0, 0, w, d, h, profile.tiers, profile.gables, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.tiers, profile.gables, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
@@ -3210,9 +3210,11 @@ export class City {
 
   /** Street grime and graffiti quads on the deterministic subset planGrimeDecals selects — one
    *  shared atlas material, so a chunk's whole decal layer merges to a single extra mesh. Placement
-   *  is the pure plan's job; this pass only cuts the quads and points their UVs at the atlas. */
-  private addGrimeDecals(spec: GeneratedBuilding, style: BuildingStyle, profile: BuildingProfile, bays: readonly ShopBay[]): void {
-    const decals = planGrimeDecals(profile.tiers, style, spec.width, spec.height, spec.x, spec.z, profile.entrance, bays);
+   *  is the pure plan's job; this pass only cuts the quads and points their UVs at the atlas.
+   *  `grimeScale` is the district's wealth term, resolved by the caller from the district it has
+   *  already looked up — the planner stays pure so the census plans the identical wall. */
+  private addGrimeDecals(spec: GeneratedBuilding, style: BuildingStyle, profile: BuildingProfile, bays: readonly ShopBay[], grimeScale: number): void {
+    const decals = planGrimeDecals(profile.tiers, style, spec.width, spec.height, spec.x, spec.z, profile.entrance, bays, grimeScale);
     if (decals.length === 0) return;
     const material = grimeDecalMaterial();
     for (const decal of decals) {

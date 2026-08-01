@@ -14,7 +14,7 @@ import { GRIME_ATLAS_CELLS, GRIME_TAG_CLASSES, type GrimeTagClass } from '../../
 import { allBuildings } from '../../src/world/CityGen';
 import { districtAt } from '../../src/world/mapData';
 import { HIGHRISE_DISTRICTS } from '../../src/world/data/zoning';
-import { neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from '../../src/world/data/neighbourhoods';
+import { districtAffluence, districtGrimeScale, neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from '../../src/world/data/neighbourhoods';
 import { facadeWorldTile } from '../../src/world/ProceduralMaterials';
 
 const architecture = new BuildingArchitecture(new THREE.Group());
@@ -40,6 +40,28 @@ const cbdClassTags = zeroed(); const cbdClassStreet = zeroed(); const cbdClassAr
 /** A CBD block face — the run of frontage the player walks past between two corners. */
 const BLOCK_FACE_U = 60;
 
+/**
+ * THE THIRD UNIT: WEALTH. Tagging is a poverty-and-inner-city fact, so the per-style chance is
+ * scaled by a per-district term off districtAffluence, and the meter has to be legible on that axis.
+ *
+ * Two frontage denominators, deliberately, because the structural pass is concurrently moving which
+ * STYLE lands where and one of them would otherwise absorb the other's change:
+ *   - ALL frontage is the honest player-facing rate — what a walk down a ridge street looks like,
+ *     including all the clean suburban houses that can never carry a decal.
+ *   - DIRTY-FAMILY frontage (the four styles GRIME_DECAL_CHANCE authors at all) isolates the
+ *     multiplier itself: it is the rate on the walls that could have been painted, so it moves only
+ *     when this pass moves it, not when the generator rezones a district.
+ */
+const WEALTH_BANDS: ReadonlyArray<{ label: string; max: number }> = [
+  { label: 'poor     a<=0.20', max: 0.2 },
+  { label: 'working  0.20-0.45', max: 0.45 },
+  { label: 'middle   0.45-0.70', max: 0.7 },
+  { label: 'ridge     a>0.70', max: Infinity },
+];
+interface BandTally { parcels: number; dirtyParcels: number; decorated: number; frontage: number; dirtyFrontage: number; tags: number; grime: number; scaleByFrontage: number; }
+const byBand: BandTally[] = WEALTH_BANDS.map(() => ({ parcels: 0, dirtyParcels: 0, decorated: 0, frontage: 0, dirtyFrontage: 0, tags: 0, grime: 0, scaleByFrontage: 0 }));
+const bandOf = (affluence: number): number => WEALTH_BANDS.findIndex((band) => affluence <= band.max);
+
 for (const building of allBuildings()) {
   const style = building.style as BuildingStyle;
   const district = districtAt(building.x, building.z);
@@ -53,7 +75,7 @@ for (const building of allBuildings()) {
   const bays = style === 'downtown'
     ? planShopBays(profile.tiers, building.width, building.height, variant % ARCHITECTURE_VARIANTS.downtown, variant, profile.entrance)
     : [];
-  const decals = planGrimeDecals(profile.tiers, style, building.width, building.height, building.x, building.z, profile.entrance, bays);
+  const decals = planGrimeDecals(profile.tiers, style, building.width, building.height, building.x, building.z, profile.entrance, bays, districtGrimeScale(district));
   let tally = perStyle.get(style);
   if (!tally) { tally = { parcels: 0, decorated: 0, tags: 0, grime: 0, upper: 0 }; perStyle.set(style, tally); }
   tally.parcels++;
@@ -63,6 +85,18 @@ for (const building of allBuildings()) {
     if (GRIME_ATLAS_CELLS[decal.cell]!.kind === 'tag') tally.tags++;
     else if (decal.y > 4) tally.upper++;
     else tally.grime++;
+  }
+  const band = byBand[bandOf(districtAffluence(district))]!;
+  band.parcels++; band.frontage += building.width;
+  if (GRIME_DECAL_CHANCE[style] !== undefined) {
+    band.dirtyParcels++; band.dirtyFrontage += building.width;
+    // Frontage-weighted, because that is what makes a flat band aggregate readable: a band whose
+    // paintable wall all sits at one affluence reads as one scale however wide the band's edges are.
+    band.scaleByFrontage += districtGrimeScale(district) * building.width;
+  }
+  if (decals.length > 0) band.decorated++;
+  for (const decal of decals) {
+    if (GRIME_ATLAS_CELLS[decal.cell]!.kind === 'tag') band.tags++; else band.grime++;
   }
   if (HIGHRISE_DISTRICTS.has(district)) {
     cbdParcels++;
@@ -90,6 +124,18 @@ for (const [style, tally] of [...perStyle].sort((a, b) => b[1].parcels - a[1].pa
   console.log(`  ${style.padEnd(18)} ${String(tally.decorated).padStart(5)}/${String(tally.parcels).padEnd(5)} decorated (${(100 * tally.decorated / tally.parcels).toFixed(1).padStart(5)}%${chance !== undefined ? ` of an authored ${Math.round(chance * 100)}%` : ' — authored 0%'})   tags ${String(tally.tags).padStart(5)}   base grime ${String(tally.grime).padStart(4)}   upper wash ${String(tally.upper).padStart(4)}`);
 }
 console.log(`  ${'TOTAL'.padEnd(18)} ${decorated}/${parcels} buildings carry ${quads} decal quads`);
+console.log('\nby wealth band (districtAffluence — the axis the per-district grime multiplier is cut on):');
+console.log(`  ${'band'.padEnd(18)} ${'parcels'.padStart(7)} ${'paintable'.padStart(9)} ${'decorated'.padStart(9)} ${'scale'.padStart(5)}   ${'tags/100u'.padStart(9)} ${'/100u paintable'.padStart(15)}   ${'grime/100u'.padStart(10)}`);
+for (const [index, band] of WEALTH_BANDS.entries()) {
+  const row = byBand[index]!;
+  console.log(`  ${band.label.padEnd(18)} ${String(row.parcels).padStart(7)} ${String(row.dirtyParcels).padStart(9)}`
+    + ` ${(100 * row.decorated / Math.max(1, row.dirtyParcels)).toFixed(1).padStart(8)}%`
+    + ` ${(row.scaleByFrontage / Math.max(1, row.dirtyFrontage)).toFixed(2).padStart(5)}`
+    + `   ${(100 * row.tags / Math.max(1, row.frontage)).toFixed(2).padStart(9)}`
+    + ` ${(100 * row.tags / Math.max(1, row.dirtyFrontage)).toFixed(2).padStart(15)}`
+    + `   ${(100 * row.grime / Math.max(1, row.frontage)).toFixed(2).padStart(10)}`
+    + `   (frontage ${Math.round(row.frontage).toLocaleString()} u, of it paintable ${Math.round(row.dirtyFrontage).toLocaleString()} u)`);
+}
 console.log(`\nCBD (the ${HIGHRISE_DISTRICTS.size} highrise districts): ${cbdDecorated}/${cbdParcels} parcels decorated (${(100 * cbdDecorated / Math.max(1, cbdParcels)).toFixed(1)}%), ${cbdDecals} decals`);
 console.log(`CBD graffiti rate: ${cbdTags} tags over ${cbdFrontage.toFixed(0)} u of downtown street frontage`
   + ` = ${(100 * cbdTags / Math.max(1, cbdFrontage)).toFixed(2)} tags / 100 u`

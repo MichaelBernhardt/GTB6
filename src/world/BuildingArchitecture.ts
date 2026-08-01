@@ -296,7 +296,13 @@ export interface GrimeDecal { x: number; y: number; z: number; width: number; he
  *  density. I only saw one." At 0.6 of downtown carrying an average 0.36 TAGS each, a player could
  *  walk four blocks of the CBD past nothing but clean wall. A tagged wall is the norm in the inner
  *  city and a clean one is the exception, so the fractions read that way now; the hold-out share
- *  that is left keeps a bank or a repainted frontage on most block faces. */
+ *  that is left keeps a bank or a repainted frontage on most block faces.
+ *
+ *  This is only HALF the rate. Each figure is scaled per district by the caller's `grimeScale`
+ *  (districtGrimeScale, in data/neighbourhoods — see planGrimeDecals): x1.10 in the inner city and
+ *  the townships, x1.00 through the ordinary middle, x0.34 on the ridge. Never read a number here
+ *  as the realised share; `npx tsx tools/qa/grime-census.ts` prints the realised one per wealth
+ *  band, which is the only figure worth tuning against. */
 export const GRIME_DECAL_CHANCE: Partial<Record<BuildingStyle, number>> = {
   downtown: 0.93, 'mixed-use': 0.82, 'dense-residential': 0.7, industrial: 0.8,
 };
@@ -360,15 +366,32 @@ const grimeTagClassAt = (mix: GrimeTagMix, roll: number): GrimeTagClass =>
  *   - WHICH tag goes where is weighted, not uniform: see the mix constants above. Quick mono
  *     handstyles carry street level, colour and pieces are drawn bigger and take the widest blank
  *     span of the fascia band. All of it is one atlas and one material, so the mix is free.
+ *
+ * `grimeScale` is the DISTRICT's wealth term (districtGrimeScale, in data/neighbourhoods): paint is
+ * a money fact before it is a style fact, and the table above can say a walk-up is dirtier than a
+ * villa but not that the same walk-up is wall-to-wall tags in Hillbrow and repainted twice a year
+ * in Killarney. It arrives as a PARAMETER rather than a lookup for two reasons, and both are load
+ * bearing. Purity: the drawer (City.addGrimeDecals) and the census (tools/qa/grime-census.ts) must
+ * be able to call this and get the identical plan, which is the shared-definition contract this
+ * whole module is built on. And layering: this file is lifted into its own `world-geometry` bundle
+ * chunk, which is only legal while it is a LEAF — importing the district tables here closes a
+ * vehicle-models -> world-geometry -> simulation cycle that neither tsc nor vitest can see, and
+ * only `npm run build` reports. The callers already hold the district; they resolve the term.
+ *
+ * It defaults to 1 — the pre-wealth behaviour — so a caller with no district (fixtures, single
+ * building QA rebuilds) still gets the authored per-style rate rather than a silent clean wall.
  */
 export function planGrimeDecals(
   tiers: readonly MassingTier[], style: BuildingStyle, width: number, height: number,
   worldX: number, worldZ: number, entrance?: EntranceTag, bays: readonly ShopBay[] = [],
+  grimeScale = 1,
 ): GrimeDecal[] {
   const chance = GRIME_DECAL_CHANCE[style];
   if (chance === undefined || height < 4 || width < 6) return [];
   const roll = (salt: number) => stablePositionRandom(worldX, worldZ, salt);
-  if (roll(701) >= chance) return [];
+  // Clamped, not renormalised: an inner-city downtown front wants "every wall", and 0.93 x 1.10 is
+  // the planner's way of saying so. The hold-out share it eats is a couple of parcels per block.
+  if (roll(701) >= Math.min(1, chance * grimeScale)) return [];
   const mass = tiers.filter((tier) => tier.kind !== 'wall');
   const out: GrimeDecal[] = [];
   // Keep-out ranges are x-bands with a HEIGHT: a ground-floor window must not push a wash streak

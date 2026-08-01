@@ -359,3 +359,35 @@ export class NeighbourhoodArrivalTracker {
     this.announced = undefined;
   }
 }
+
+/**
+ * HOW PAINTED A DISTRICT'S WALLS ARE, as a multiplier on BuildingArchitecture's per-style grime
+ * chance — the wealth half of "some colourful grafitti too", one axis on from the density half.
+ *
+ * It lives HERE and not beside planGrimeDecals for a build reason worth stating: BuildingArchitecture
+ * is lifted into its own `world-geometry` chunk, and the one rule for a lifted chunk (see
+ * manualChunk() in vite.config.ts) is that it must be a genuine LEAF — nothing in it may import back
+ * into `simulation`. This module value-imports NpcCatalog for its pedestrian casts, so a single
+ * districtAffluence call from BuildingArchitecture closed the loop
+ * vehicle-models -> world-geometry -> simulation -> vehicle-models and the build refused it. The
+ * planner therefore takes the number as a PARAMETER, and the callers that already know their
+ * district — City's chunk builder and tools/qa/grime-census.ts — resolve it here.
+ *
+ * The curve pivots at the middle of the wealth range rather than at the CBD's own 0.35, for a
+ * measured reason: the eight highrise districts are not one wealth value. Hillbrow and Berea are
+ * 0.12, but Braamfontein, Newtown and Maboneng are 0.50 — the actual street-art heartland of the
+ * real city — and pivoting at 0.35 taxed those three and dropped the playtested CBD rate. Below the
+ * pivot the chance lifts a little (the inner city and the township are the tagging capitals;
+ * downtown's 0.93 simply clamps at 1.0 there); above it, it falls away to GRIME_SCALE_RIDGE, so a
+ * paintable frontage on the ridge runs about a third as painted as the same wall in town.
+ * Re-measure with `npx tsx tools/qa/grime-census.ts`, which prints tags / 100 u per wealth band.
+ */
+const GRIME_SCALE_PIVOT = 0.5;
+const GRIME_SCALE_POOR_BOOST = 0.15;
+const GRIME_SCALE_RIDGE = 0.22;
+export function districtGrimeScale(district: string): number {
+  const money = Math.min(1, Math.max(0, districtAffluence(district)));
+  return money <= GRIME_SCALE_PIVOT
+    ? 1 + GRIME_SCALE_POOR_BOOST * (GRIME_SCALE_PIVOT - money) / GRIME_SCALE_PIVOT
+    : 1 - (1 - GRIME_SCALE_RIDGE) * (money - GRIME_SCALE_PIVOT) / (1 - GRIME_SCALE_PIVOT);
+}

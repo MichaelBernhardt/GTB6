@@ -17,7 +17,7 @@ import {
   type GeneratedBuilding,
 } from '../../src/world/CityGen';
 import { districtAt, pointInAnyPolygon, WATER_POLYGONS } from '../../src/world/mapData';
-import { neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from '../../src/world/data/neighbourhoods';
+import { districtAffluence, neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from '../../src/world/data/neighbourhoods';
 import { facadeWorldTile } from '../../src/world/ProceduralMaterials';
 import {
   FENCE_RAIL_CLEARANCE, FENCE_ROAD_CLEARANCE, FENCE_THICKNESS,
@@ -46,6 +46,24 @@ interface Row { residential: number; fenced: number; wall: number; palisade: num
 const emptyRow = (): Row => ({ residential: 0, fenced: 0, wall: 0, palisade: 0, razor: 0 });
 const byDistrict = new Map<string, Row>();
 const byStyle = new Map<string, Row>();
+/**
+ * WEALTH BANDS — the axis the kind mix is now cut on (districtAffluence: 0 a township, 1 the ridge).
+ * The by-style table below is no longer the primary read: the structural pass moves which STYLE
+ * lands where, so its absolute counts drift run to run, whereas the per-band mix is the thing being
+ * authored. Read this table first, and read it as SHARES.
+ *
+ * The story it has to tell is a U in HARDNESS (palisade + razor), not a ramp: razor wire and spiked
+ * palisade on the poorest streets, low garden walls through the ordinary middle, and the ridge
+ * hardening again into walls-and-palisade-gates rather than back into razor.
+ */
+const WEALTH_BANDS: ReadonlyArray<{ label: string; max: number }> = [
+  { label: 'poor     a<=0.20', max: 0.2 },
+  { label: 'working  0.20-0.45', max: 0.45 },
+  { label: 'middle   0.45-0.70', max: 0.7 },
+  { label: 'ridge     a>0.70', max: Infinity },
+];
+const bandOf = (affluence: number): number => WEALTH_BANDS.findIndex((band) => affluence <= band.max);
+const byBand = WEALTH_BANDS.map(() => emptyRow());
 const totals = emptyRow();
 let residentialParcels = 0; let stoepExempt = 0; let unluckyRoll = 0;
 let segments = 0; let colliders = 0; let posts = 0; let gates = 0; let fenceLength = 0;
@@ -72,14 +90,15 @@ for (const parcel of parcels) {
   const plan = planParcelFence(parcel, options);
   const districtRow = byDistrict.get(district) ?? emptyRow(); byDistrict.set(district, districtRow);
   const styleRow = byStyle.get(parcel.style) ?? emptyRow(); byStyle.set(parcel.style, styleRow);
-  districtRow.residential++; styleRow.residential++; totals.residential++;
+  const bandRow = byBand[bandOf(districtAffluence(district))]!;
+  districtRow.residential++; styleRow.residential++; bandRow.residential++; totals.residential++;
   if (!plan) {
     if (parcel.style === 'suburban' && massing === 6) stoepExempt++;
     else unluckyRoll++; // (or, rarely, nothing survived the clearance checks — counted below)
     continue;
   }
-  totals.fenced++; districtRow.fenced++; styleRow.fenced++;
-  totals[plan.kind]++; districtRow[plan.kind]++; styleRow[plan.kind]++;
+  totals.fenced++; districtRow.fenced++; styleRow.fenced++; bandRow.fenced++;
+  totals[plan.kind]++; districtRow[plan.kind]++; styleRow[plan.kind]++; bandRow[plan.kind]++;
   gates++;
   posts += plan.posts.length;
   if (!samples.has(plan.kind) && plan.segments.some((segment) => segment.along === 'x' && segment.lz > 0 && segment.length >= 4)) samples.set(plan.kind, { parcel, plan });
@@ -113,6 +132,17 @@ console.log('fenced: %d (%s of residential)   wall %d / palisade %d / razor %d',
 console.log('unfenced: stoep-house exempt (own yard wall) %d, open-stand roll/no-surviving-run %d', stoepExempt, unluckyRoll);
 console.log('segments %d = colliders %d (%d hazard-tagged)   posts %d   gates %d   fence line %s units (%s km real at 1.359 m/u)',
   segments, colliders, hazardColliders, posts, gates, Math.round(fenceLength).toLocaleString(), (fenceLength * 1.359 / 1000).toFixed(1));
+console.log('\nby wealth band (districtAffluence — the axis the kind mix is cut on):');
+console.log('  %s %s  %s   %s %s %s   %s', 'band'.padEnd(18), 'parcels'.padStart(7), 'fenced'.padStart(6),
+  'wall'.padStart(6), 'palis'.padStart(6), 'razor'.padStart(6), 'hardened (palis+razor)');
+for (const [index, band] of WEALTH_BANDS.entries()) {
+  const row = byBand[index]!;
+  console.log('  %s %s  %s   %s %s %s   %s', band.label.padEnd(18), String(row.residential).padStart(7),
+    pct(row.fenced, row.residential).padStart(6), pct(row.wall, row.fenced).padStart(6),
+    pct(row.palisade, row.fenced).padStart(6), pct(row.razor, row.fenced).padStart(6),
+    pct(row.palisade + row.razor, row.fenced).padStart(6));
+}
+
 console.log('\nby style:');
 for (const [style, row] of byStyle) {
   console.log('  %s: %d parcels, fenced %s — wall %s / palisade %s / razor %s', style.padEnd(18), row.residential,

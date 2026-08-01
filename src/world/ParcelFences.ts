@@ -27,7 +27,8 @@ import {
   LAYOUT_SCALE,
   type GeneratedBuilding,
 } from './CityGen';
-import { distanceToRoadEdge, pointInAnyPolygon, WATER_POLYGONS } from './mapData';
+import { districtAffluence } from './data/neighbourhoods';
+import { districtAt, distanceToRoadEdge, pointInAnyPolygon, WATER_POLYGONS } from './mapData';
 import { stablePositionRandom } from './StableRandom';
 
 export type FenceKind = 'wall' | 'palisade' | 'razor';
@@ -80,8 +81,19 @@ function doorstepLane(parcel: GeneratedBuilding): { x: number; z: number; width:
     width: parcel.width * 0.7, depth: DOORSTEP_LANE, heading: parcel.heading,
   };
 }
-/** Chance a parcel is fenced at all — fences are the norm, the odd open stand the exception. */
-const FENCED_CHANCE = 0.93;
+/**
+ * Chance a parcel is fenced at all — fences are the norm, the odd open stand the exception, and
+ * WHICH stands stay open is a money question. A wall is a purchase: on the poorest streets a stand
+ * may carry a wire strand, a hedge or nothing at all, while on the ridge a stand without a wall
+ * does not exist. The spread is deliberately narrow — 0.90 at the township end to 0.97 on the
+ * ridge, weighting out at the old flat 0.93 citywide — because the owner's rule for this layer is
+ * still "everyone has a fence, some with razor wire, some with spikes". The money story belongs in
+ * the KIND, not in whether there is one; this is a thumb on the scale, not the mechanism.
+ */
+const FENCED_CHANCE_POOR = 0.9;
+const FENCED_CHANCE_RIDGE = 0.97;
+export const fencedChanceFor = (affluence: number): number =>
+  FENCED_CHANCE_POOR + (FENCED_CHANCE_RIDGE - FENCED_CHANCE_POOR) * Math.min(1, Math.max(0, affluence));
 /** How far out from its gate a stand may look for the street before the ring is refused. A front
  *  run stands FRONT_MARGIN beyond the building face and the frontage line puts that a couple of
  *  units behind the kerb, so a stand that is genuinely on a street finds tarmac inside a handful
@@ -176,22 +188,67 @@ export interface FenceCollider {
 
 const seeded = stablePositionRandom;
 
+/** Kind fractions as [wall, palisade, razor], summing to 1, at one anchor on the wealth axis. */
+type FenceMix = readonly [wall: number, palisade: number, razor: number];
+
+/**
+ * THE SECURITY MIX IS A U, NOT A RAMP — which is the whole point of reading wealth here.
+ *
+ * The obvious model (poor = razor, rich = nothing) is wrong about Joburg in both directions. What
+ * actually happens is that HARDNESS bottoms out in the middle:
+ *   - the poorest streets run razor wire and spiked palisade on principle, because that is what is
+ *     affordable and what is expected — mesh and a coil, not masonry;
+ *   - the ordinary middle runs the low garden wall, which is a boundary marker with a gate in it
+ *     rather than a defence, and is why 'wall' peaks here and nowhere else;
+ *   - the leafy old-money ridge hardens again into the paranoid look: high walls, electric strands
+ *     and a palisade gate you can see the garden through. It goes back UP the hardness axis, but as
+ *     palisade rather than razor — razor wire is not a Westcliff material.
+ * So the three anchors below are interpolated piecewise about FENCE_MIX_PIVOT, and the U shows up
+ * in palisade+razor: ~0.88 poor, ~0.34 ordinary, ~0.50 ridge. tools/qa/fence-census.ts prints
+ * exactly that column per wealth band; it is the number to re-read after touching these.
+ *
+ * WEALTH IS THE ONLY AXIS HERE, and dropping the old per-STYLE split is deliberate rather than a
+ * simplification. CityGen now decides the house/flat/villa family off the same districtAffluence,
+ * so a dense-residential parcel IS mostly a poor-district parcel — reading both would count one
+ * fact twice and over-drive the razor tail in the inner city. A house in Yeoville has razor wire on
+ * its wall; the fence belongs to the street, not to the massing standing behind it.
+ */
+const FENCE_MIX_POOR: FenceMix = [0.12, 0.36, 0.52];
+const FENCE_MIX_ORDINARY: FenceMix = [0.66, 0.28, 0.06];
+const FENCE_MIX_RIDGE: FenceMix = [0.5, 0.47, 0.03];
+/** Where the ordinary middle — the bottom of the U — sits on the 0..1 affluence axis. */
+const FENCE_MIX_PIVOT = 0.5;
+
+export function fenceMixFor(affluence: number): FenceMix {
+  const money = Math.min(1, Math.max(0, affluence));
+  const above = money > FENCE_MIX_PIVOT;
+  const from = above ? FENCE_MIX_ORDINARY : FENCE_MIX_POOR;
+  const to = above ? FENCE_MIX_RIDGE : FENCE_MIX_ORDINARY;
+  const t = above ? (money - FENCE_MIX_PIVOT) / (1 - FENCE_MIX_PIVOT) : money / FENCE_MIX_PIVOT;
+  return [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t];
+}
+
 /**
  * The deterministic fence roll for a parcel: fenced or not, and which kind. Kind is quantised to
  * the same 180u neighbourhood tile CityGen uses for house styles (70/30 blended with a per-stand
- * roll), so a street reads as runs of matching fences with the odd upgrade — not confetti.
- * Dense-residential blocks run razor-heavier than the leafy suburbs, as in the real city.
+ * roll), so a street reads as runs of matching fences with the odd upgrade — not confetti. The
+ * thresholds those runs are cut against come from the stand's own district (see fenceMixFor): the
+ * tile decides WHERE in the mix a stand lands, the district decides what the mix is. A tile that
+ * straddles a district line therefore changes character across the line, which is what a Joburg
+ * boundary street actually looks like, and every other per-parcel system (facades, casts, traffic)
+ * reads the same per-parcel district rather than a tile-quantised one.
  */
-export function fenceKindFor(parcel: Pick<GeneratedBuilding, 'x' | 'z' | 'zone' | 'style'>): FenceKind | undefined {
+export function fenceKindFor(parcel: Pick<GeneratedBuilding, 'x' | 'z' | 'zone'>): FenceKind | undefined {
   if (parcel.zone !== 'residential') return undefined;
-  if (seeded(parcel.x, parcel.z, 83) >= FENCED_CHANCE) return undefined;
+  const affluence = districtAffluence(districtAt(parcel.x, parcel.z));
+  if (seeded(parcel.x, parcel.z, 83) >= fencedChanceFor(affluence)) return undefined;
   const blockX = Math.floor(parcel.x / 180); const blockZ = Math.floor(parcel.z / 180);
   // Wrap-around blend, NOT a weighted average: (block + 0.3·stand) mod 1 stays UNIFORM (adding an
   // independent offset mod 1 preserves the marginal), so the kind fractions below are exact —
   // a plain 70/30 average is trapezoidal and starved the razor tail to a third of its share.
   const roll = (seeded(blockX, blockZ, 84) + seeded(parcel.x, parcel.z, 85) * 0.3) % 1;
-  if (parcel.style === 'dense-residential') return roll < 0.3 ? 'wall' : roll < 0.65 ? 'palisade' : 'razor';
-  return roll < 0.5 ? 'wall' : roll < 0.85 ? 'palisade' : 'razor';
+  const mix = fenceMixFor(affluence);
+  return roll < mix[0] ? 'wall' : roll < mix[0] + mix[1] ? 'palisade' : 'razor';
 }
 
 interface FenceRun { along: 'x' | 'z'; at: number; from: number; to: number; }
