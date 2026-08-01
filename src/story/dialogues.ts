@@ -8,9 +8,10 @@ import type { MissionDefinition } from '../systems/MissionSystem';
  */
 export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
   'delivery-run': { id: 'delivery-run:intro', lines: [
-    { speaker: 'Auntie Portia', text: 'Howzit boet. Sold the couch online, but the pickup is gone. GONE.' },
-    { speaker: 'You', text: 'A couch. In a Citi Golf?' },
-    { speaker: 'Auntie Portia', text: 'It FITS. Two drops, right away — not later, NOW. The buyers change their minds like traffic lights change to red.' },
+    { speaker: 'Auntie Portia', text: 'Howzit boet. Sold the couch online, but my bakkie is gone. GONE.' },
+    { speaker: 'You', text: 'Gone gone? Or gone like your reading glasses?' },
+    { speaker: 'Auntie Portia', text: 'GONE, boet. Some skelm took it for a jol and dumped it out south-east, past Salisbury Street — the aunties phoned, the couch is still strapped on the back, thank the ancestors.' },
+    { speaker: 'Auntie Portia', text: 'Fetch it and make my two drops, right away — not later, NOW. The buyers change their minds like traffic lights change to red.' },
     { speaker: 'Auntie Portia', text: 'And if the lights go while you drive, don\'t stop at the dead traffic lights. Nobody else does.' },
   ] },
   'hot-property': { id: 'hot-property:intro', lines: [
@@ -122,9 +123,9 @@ export const INTRO_DIALOGUES: Readonly<Record<string, DialogueScript>> = {
     { speaker: 'Auntie Portia', text: 'Take something with a working radio and don\'t eat the order. I counted every pastry. I always count.' },
   ] },
   'pier-pressure': { id: 'pier-pressure:intro', lines: [
-    { speaker: 'Candice', text: 'A fare ran on Ricardo. Airport run, coastal tolls, waiting time — a BIG fare. Now he\'s bragging at the Vaalpunt Slipway before his boat leaves.' },
-    { speaker: 'You', text: 'And the interest rate?' },
-    { speaker: 'Candice', text: 'Whatever his face can afford. Go collect, sweetie.' },
+    { speaker: 'Candice', text: 'A fare ran on Ricardo. Airport run, dam-road tolls, waiting time — a BIG fare. Now he\'s bragging at the Vaalpunt Slipway before his boat goes in the water.' },
+    { speaker: 'You', text: 'The slipway? That\'s the other side of the dam.' },
+    { speaker: 'Candice', text: 'That\'s why the interest is whatever his face can afford. Take something with a full tank. Go collect, sweetie.' },
   ] },
 };
 

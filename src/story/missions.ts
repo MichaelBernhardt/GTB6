@@ -2,12 +2,12 @@ import { Vector3 } from 'three';
 import type { MissionDefinition } from '../systems/MissionSystem';
 import type { WorldTarget } from '../types';
 import {
-  CANDICE_START, CON_HILL_SPOT, ESCAPE_SPOT, EVIDENCE_VAN_SPOT, KELVIN_BREACH_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
-  AIRPORT_APRON, CROWN_STATION, KIOSK_SPOT, LOCKUP_SPOT, PADSTAL_SPOT, PAPER_DROP, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
+  CANDICE_START, CON_HILL_SPOT, EVIDENCE_VAN_SPOT, KELVIN_BREACH_SPOT, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT,
+  AIRPORT_APRON, CROWN_STATION, LOCKUP_SPOT, PADSTAL_SPOT, PAPER_DROP, PARK_STATION_SPOT, PERMIT_SPOT, PIER_SPOT, PONTE_FORECOURT,
   CABLE_YARD_SPOT, PONTE_POINT, PORTIA_START, QUARRY_SPAWN, RENT_BAG_PLATFORM, RENT_BAG_SPOT, RIDDLE_SPOTS, SAFEHOUSE_SITE, SINDI_START, SIPHO_START,
   SOLLY_START, SUBSTATION_BREAKER, SUBSTATION_SPOT, TERMINAL_SPOT, THANDI_START, VUSI_START, WRONG_TRAIN_START,
 } from '../world/placements';
-import { CANDICE_VAN_COLOR, TANKER_COLOR } from './scripts';
+import { CANDICE_VAN_COLOR, PORTIA_BAKKIE_COLOR, TANKER_COLOR } from './scripts';
 
 const SOLLY = 'Solly the Genny King';
 const SINDI = 'Sindi Mokoena';
@@ -23,11 +23,11 @@ export const spot = (place: { x: number; z: number }, label: string): WorldTarge
 export const MISSIONS: MissionDefinition[] = [
   {
     id: 'delivery-run', name: 'Couch Run', contact: 'Auntie Portia', reward: 900, act: 'hustle',
-    intro: 'Howzit boet. I sold the couch online but my pickup is gone. Take my yellow Citi Golf — two drops round the corner. The couch fits, I promise.',
+    intro: 'Howzit boet. I sold the couch online but my bakkie is GONE — some skelm dumped it out past Salisbury Street, couch still strapped on the back. Fetch it, make my two drops, bring it home.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
-      { kind: 'enter-kind', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Enter Auntie Portia\'s yellow Citi Golf' },
+      { kind: 'enter-kind', vehicleKind: 'van', vehicleColor: PORTIA_BAKKIE_COLOR, text: 'Find Auntie Portia\'s mustard bakkie — dumped out south-east, past Salisbury Street' },
       { kind: 'checkpoints', text: 'Make the two drops quickly — no dawdling', required: 2, checkpoint: true },
-      { kind: 'reach', vehicleKind: 'compact', vehicleColor: 0xf1c232, text: 'Return the Citi Golf to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia\'s driveway'), checkpoint: true },
+      { kind: 'reach', vehicleKind: 'van', vehicleColor: PORTIA_BAKKIE_COLOR, text: 'Bring the bakkie home to Auntie Portia', target: spot(PORTIA_START, 'Auntie Portia\'s driveway'), checkpoint: true },
     ],
   },
   {
@@ -46,8 +46,11 @@ export const MISSIONS: MissionDefinition[] = [
       { kind: 'reach', text: 'Travel to the Wemmer taxi terminal', target: spot(TERMINAL_SPOT, 'Wemmer terminal') },
       { kind: 'defeat', text: 'Take down the rank enforcers', required: 3, checkpoint: true },
       { kind: 'collect', text: 'Grab the route permit', target: spot(PERMIT_SPOT, 'Route permit'), checkpoint: true },
-      { kind: 'escape', text: 'Escape the terminal perimeter', target: spot(ESCAPE_SPOT, 'Safe route'), checkpoint: true },
-      { kind: 'reach', text: 'Bring it to Candice at the Newtown rank', target: spot(KIOSK_SPOT, 'Candice'), checkpoint: true },
+      // A perimeter that IS a perimeter: no marker to chase — just get 150u clear of the terminal
+      // in any direction (the map shows the ring). The old version pointed at a "Safe route" dot
+      // 518u away on Commissioner Street, which the owner rightly called much more than a perimeter.
+      { kind: 'escape', minDistance: 150, text: 'Get clear of the terminal — put distance behind you', target: spot(TERMINAL_SPOT, 'Terminal perimeter'), checkpoint: true },
+      { kind: 'reach', text: 'Bring it to Candice at the Newtown rank', target: spot(CANDICE_START, 'Candice'), checkpoint: true },
     ],
   },
   {
@@ -269,9 +272,13 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 'pier-pressure', name: 'Pier Pressure', contact: 'Candice from Boksburg', reward: 3000, act: 'side',
     prerequisites: { missions: ['rank-cold-war'] },
-    intro: 'A fare ran on Ricardo — a BIG fare, airport run, coastal toll, the lot. He\'s bragging at the Vaalpunt Slipway before his boat leaves. Go collect. With interest.',
+    intro: 'A fare ran on Ricardo — a BIG fare, airport run, dam-road tolls, the lot. He\'s bragging at the Vaalpunt Slipway before his boat goes in the water. It\'s the far side of the world, sweetie — go collect. With interest.',
     start: spot(CANDICE_START, 'Candice'), objectives: [
-      { kind: 'reach', radius: 12, timeLimit: 960, text: 'Catch the fare-skipper before his boat leaves the Vaalpunt Slipway', target: spot(PIER_SPOT, 'Vaalpunt Slipway') },
+      // The REAL Vaalpunt Slipway on the dam — an 11km cross-map haul, so this is a sanctioned
+      // journey (round 4: the pin used to sit on a CBD kerb 9.6km from the place the copy names).
+      // Timer from the measured route: harness road route 8,120u; even a Hilux Bakkie (slowest
+      // cruise, ~17.6u/s at 65%) does it in ~462s, x1.6x1.8 bumbling band = 1,330s; 1,500s clears.
+      { kind: 'reach', radius: 12, timeLimit: 1500, text: 'Catch the fare-skipper at the Vaalpunt Slipway before his boat goes in', target: spot(PIER_SPOT, 'Vaalpunt Slipway') },
       { kind: 'defeat', required: 1, text: 'Convince him', checkpoint: true },
       { kind: 'collect', text: 'Take what he owes — plus interest', target: spot(PIER_SPOT, 'The fare'), checkpoint: true },
     ],

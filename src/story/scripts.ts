@@ -6,6 +6,7 @@ import {
   CABLE_YARD_SPOT, KELVIN_GATE_SPOT, PIER_SPOT, PORTIA_CAR_SPOT, QUARRY_SPAWN, RANK_STOPS, STASH_SPOTS, SUBSTATION_SPOT, TANKER_SPOT,
 } from '../world/placements';
 
+export const PORTIA_BAKKIE_COLOR = 0xd9a53b; // Portia's mustard bakkie — unique among the world's vans so "find MY bakkie" is findable
 export const CANDICE_VAN_COLOR = 0x2e8b57; // bottle-green, matches her utility streetwear
 export const QUARRY_COLOR = 0x6b4b2a; // the cable buyer's rust-brown bakkie
 export const TANKER_COLOR = 0xb8621b; // the diesel tanker's rusted orange
@@ -64,9 +65,11 @@ const around = (point: MapPt, offsets: Array<[number, number]>): MapPt[] => offs
 
 export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
   // ---- On-ramp + Act 1 --------------------------------------------------------------
-  'delivery-run': { tier: 'favour',
+  // Round 4: favour -> standard. The owner doubled the drop spacing ("the current ones are too
+  // close again"), and the harness-measured legs (1,475 / 1,665 / 1,711 m road) are standard-band drives.
+  'delivery-run': { tier: 'standard',
     stops: DELIVERY_STOPS,
-    vehicle: { color: 0xf1c232, spot: PORTIA_CAR_SPOT },
+    vehicle: { color: PORTIA_BAKKIE_COLOR, spot: PORTIA_CAR_SPOT },
     rewards: { armour: 50, note: 'Auntie Portia sends you off with cash and her late husband\'s body armour' },
     forceBlackout: 1, // the opener's thesis, 90 seconds in: the grid dies around the player mid-drive
     radio: [
@@ -74,7 +77,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
       { objective: 2, title: 'Auntie Portia', detail: 'Second buyer paid short — says his genny subscription is due. EVERYONE\'S genny subscription is due. Since when is light a subscription, boet?' },
     ],
     outro: [
-      { speaker: 'Auntie Portia', text: 'You drove through that blackout like a taxi driver. Sharp. Keep the Golf as long as you need it.' },
+      { speaker: 'Auntie Portia', text: 'My bakkie, my couch money, AND you drove through that blackout like a taxi driver. Sharp. Keep the bakkie as long as you need it.' },
       { speaker: 'Auntie Portia', text: 'And take this — my late Sipho\'s vest. Everyone in this city pays twice for light now, and Vusi says there\'s cash in that. Pothole Street. Don\'t sign anything.' },
     ],
   },
@@ -194,5 +197,7 @@ export const MISSION_SCRIPTS: Readonly<Record<string, MissionScript>> = {
 
   // ---- Side pieces --------------------------------------------------------------------
   'padstal-run': { tier: 'journey', journeys: [0, 2] }, // the scenic out-and-back drive is the point
-  'pier-pressure': { tier: 'substantial', waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
+  // Round 4: substantial -> journey. The pin now sits at the REAL Vaalpunt Slipway on the dam
+  // (~11km road from Candice) instead of a CBD kerb 9.6km from the place the copy names.
+  'pier-pressure': { tier: 'journey', journeys: [0], waves: [{ objective: 1, spots: around(PIER_SPOT, [[5, 3]]) }] },
 };

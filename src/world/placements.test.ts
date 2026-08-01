@@ -3,18 +3,22 @@ import { CBD_CENTER, districtAt, distanceToRoadEdge, MAP_WORLD_SIZE, METRES_PER_
 import {
   ARMS_SITE,
   CANDICE_START,
+  CANDICE_VAN_SPOT,
   DELIVERY_STOPS,
-  ESCAPE_SPOT,
   ETOLL_SPOTS,
   GARAGE_PARK,
   GARAGE_SITE,
   GTI_SPOT,
   HOSTILE_SPOTS,
   HOTDOG_SITE,
+  KELVIN_GATE_SPOT,
   KIOSK_SPOT,
   LOCKUP_SPOT,
+  NEWTOWN_RANK_SITE,
   PARKED_VEHICLES,
   PERMIT_SPOT,
+  PIER_POINT,
+  PIER_SPOT,
   PLAYER_SPAWN,
   PORTIA_CAR_SPOT,
   PORTIA_START,
@@ -27,6 +31,7 @@ import {
   THANDI_START,
   TRANSIT_STOPS,
   VUSI_START,
+  WEMMER_RANK_SITE,
 } from './placements';
 
 const HALF = MAP_WORLD_SIZE / 2;
@@ -56,8 +61,8 @@ describe('data-driven anchors', () => {
     ['vusi', VUSI_START],
     ['candice', CANDICE_START],
     ['thandi', THANDI_START],
-    ['escape', ESCAPE_SPOT],
     ['kiosk', KIOSK_SPOT],
+    ['pier', PIER_SPOT],
     ['lockup', LOCKUP_SPOT],
     ...DELIVERY_STOPS.map((stop, index) => [`delivery ${index}`, stop] as [string, { x: number; z: number }]),
   ];
@@ -86,15 +91,46 @@ describe('data-driven anchors', () => {
 
   it('parks every kerbside vehicle just off a road', () => {
     expect(PARKED_VEHICLES.some((spot) => spot.kind === 'cab')).toBe(false);
-    expect(PARKED_VEHICLES.filter((spot) => spot.kind === 'taxi')).toHaveLength(2);
+    expect(PARKED_VEHICLES.filter((spot) => spot.kind === 'taxi')).toHaveLength(5); // 2 CBD strays + 3 rank-dressing Quantums
     for (const spot of PARKED_VEHICLES) {
       expect(inBounds(spot), `${spot.kind} in bounds`).toBe(true);
       const edge = distanceToRoadEdge(spot.x, spot.z);
       expect(edge, `${spot.kind} hugs a kerb`).toBeLessThan(6);
       expect(edge, `${spot.kind} not mid-lane`).toBeGreaterThan(-1.5);
     }
-    expect(Math.hypot(PORTIA_CAR_SPOT.x - PORTIA_START.x, PORTIA_CAR_SPOT.z - PORTIA_START.z)).toBeLessThan(60 * SCALE); // mission car near its contact
     expect(distanceToRoadEdge(GTI_SPOT.x, GTI_SPOT.z)).toBeLessThan(6);
+  });
+
+  it('dumps Portia\'s bakkie genuinely GONE: 300u+ away, opposite the first drop', () => {
+    // Round 4 (owner): the old assertion pinned the mission car within ~44u of Portia — the exact
+    // opposite of the mission's own fiction ("my bakkie is GONE"). Consciously replaced: the bakkie
+    // must be at least 300u out AND in the opposite direction to the first delivery goal.
+    const away = Math.hypot(PORTIA_CAR_SPOT.x - PORTIA_START.x, PORTIA_CAR_SPOT.z - PORTIA_START.z);
+    expect(away).toBeGreaterThan(300);
+    const dot = (PORTIA_CAR_SPOT.x - PORTIA_START.x) * (DELIVERY_STOPS[0]!.x - PORTIA_START.x)
+      + (PORTIA_CAR_SPOT.z - PORTIA_START.z) * (DELIVERY_STOPS[0]!.z - PORTIA_START.z);
+    expect(dot, 'bakkie sits opposite the first drop, not on the way to it').toBeLessThan(0);
+  });
+
+  it('keeps Candice, her van and her kiosk at the Newtown Rank', () => {
+    // Owner: "she should be located at some taxi rank (Newtown Rank)… a protected mission object",
+    // and her green route van was a 1.2km fetch — both now live at the rank set piece.
+    expect(Math.hypot(CANDICE_START.x - NEWTOWN_RANK_SITE.x, CANDICE_START.z - NEWTOWN_RANK_SITE.z)).toBeLessThan(10);
+    expect(Math.hypot(CANDICE_VAN_SPOT.x - CANDICE_START.x, CANDICE_VAN_SPOT.z - CANDICE_START.z)).toBeLessThan(40);
+    expect(Math.hypot(KIOSK_SPOT.x - NEWTOWN_RANK_SITE.x, KIOSK_SPOT.z - NEWTOWN_RANK_SITE.z)).toBeLessThan(45);
+  });
+
+  it('keeps the rival Wemmer terminal off the Kelvin Yard doorstep', () => {
+    // It sat 76u from the cartel gate (rival terminal on the cartel's own kerb). 300-500u band.
+    const gap = Math.hypot(TERMINAL_SPOT.x - KELVIN_GATE_SPOT.x, TERMINAL_SPOT.z - KELVIN_GATE_SPOT.z);
+    expect(gap).toBeGreaterThan(300);
+    expect(gap).toBeLessThan(600);
+    expect(Math.hypot(TERMINAL_SPOT.x - WEMMER_RANK_SITE.x, TERMINAL_SPOT.z - WEMMER_RANK_SITE.z)).toBeLessThan(10);
+    for (const hostile of HOSTILE_SPOTS) expect(Math.hypot(hostile.x - TERMINAL_SPOT.x, hostile.z - TERMINAL_SPOT.z), 'enforcers defend the rank itself').toBeLessThan(30);
+  });
+
+  it('pins the Pier Pressure spot at the real Vaalpunt Slipway landmark', () => {
+    expect(Math.hypot(PIER_SPOT.x - PIER_POINT.x, PIER_SPOT.z - PIER_POINT.z)).toBeLessThan(30);
   });
 
   it('spans the M1 with both gantries and marks the terminal off-road', () => {
@@ -134,7 +170,8 @@ describe('data-driven anchors', () => {
       ['spray', SPRAY_SITE.building, 13],
       ['garage', GARAGE_SITE.building, 11],
       ['safehouse', SAFEHOUSE_SITE.building, 12],
-      ['terminal', TERMINAL_SPOT, 15],
+      ['wemmer rank', WEMMER_RANK_SITE, 17],
+      ['newtown rank', NEWTOWN_RANK_SITE, 17],
     ];
     for (let a = 0; a < majors.length; a++) for (let b = a + 1; b < majors.length; b++) {
       const [nameA, padA, radiusA] = majors[a]!; const [nameB, padB, radiusB] = majors[b]!;

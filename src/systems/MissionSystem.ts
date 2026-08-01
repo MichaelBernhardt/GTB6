@@ -42,6 +42,10 @@ export interface MissionObjective {
   failIf?: FailCondition[];
   /** Reach radius override (default 8; escapes 12; hidden riddles 20). Sky objectives need hundreds. */
   radius?: number;
+  /** Perimeter escape: the objective completes when the player is at least this far from `target`
+   *  in ANY direction (Game renders the ring on the map instead of a goal marker). Only meaningful
+   *  on `escape`; escapes WITHOUT it keep their reach-a-point semantics (Dark House's breach). */
+  minDistance?: number;
   /** When the answer is a whole STREET (riddles), the trigger is the street's road corridor, not a
    *  dot: reached = the player is within a lane's width of any point on this named road's polyline. */
   streetName?: string;

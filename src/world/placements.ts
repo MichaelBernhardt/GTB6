@@ -343,11 +343,13 @@ const zooLakeCenter: MapPt = zooLake ? { x: zooLake.cx, z: zooLake.cz } : { x: b
 
 /** Auntie Portia (Couch Run): You-Bet Street, around the corner from spawn. */
 export const PORTIA_START = walkSpot('You-Bet Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z + 25 * P }, 3, 5);
-/** The couch drops: two roadside spots a short hop from Portia — the opener must be
- *  winnable by anyone who can drive (the old 3-district, 210s route measured impossible). */
+/** The couch drops. Round 4 (owner): the old pair sat 631/916 m out — "too close again" — so both
+ *  moved to ~double the road distance (harness-measured 1,475 m and 1,665 m legs, return 1,711 m; the
+ *  mission re-tiered favour → standard to match). Drop 2 deliberately leaves Newtown alone: it used
+ *  to land 15 u from where Candice permanently stands, which made "go meet Candice" a non-trip. */
 export const DELIVERY_STOPS: MapPt[] = [
-  walkSpot('Commissioner Street', { x: CBD_CENTER.x - 15 * P, z: CBD_CENTER.z - 20 * P }, 3, 5),
-  walkSpotNear({ x: newtown.x, z: newtown.z }, 3, 5),
+  walkSpot('Commissioner Street', { x: CBD_CENTER.x - 119 * P, z: CBD_CENTER.z - 61 * P }, 3, 5), // CBD west end
+  walkSpot('Sophie de Bruyn Street', { x: CBD_CENTER.x + 142 * P, z: CBD_CENTER.z - 356 * P }, 3, 5), // Doornfontein/Hillbrow edge
 ];
 
 /** Bra Vusi (Hot Copper): Pothole Street block. */
@@ -356,19 +358,44 @@ export const VUSI_START = walkSpot('Pothole Street', { x: CBD_CENTER.x + 30 * P,
  *  cross-town delivery, and the JMPD pursuit is the event en route). */
 export const LOCKUP_SPOT = walkSpotNear({ x: braamfontein.x - 18 * P, z: braamfontein.z + 22 * P }, 4.5, 6);
 
-/** Candice (Rank Business): the Newtown taxi rank — where the ranks actually live (was Zoo Lake). */
-export const CANDICE_START = walkSpotNear({ x: newtown.x + 6 * P, z: newtown.z - 4 * P }, 3, 5);
-/** The rival Wemmer crew's terminal: the industrial belt south of the CBD (a standard drive from Newtown). */
-const terminalSpot = bestKerbSpot({ name: 'Wemmer Jubilee Road', near: { x: CBD_CENTER.x + 20 * P, z: CBD_CENTER.z + 115 * P }, clearance: 6, ownRadius: 12, minEdge: 5 });
-export const TERMINAL_SPOT: MapPt = { x: terminalSpot.x, z: terminalSpot.z };
-export const PERMIT_SPOT: MapPt = {
-  x: terminalSpot.x + (terminalSpot.x - terminalSpot.roadX) * 0.7,
-  z: terminalSpot.z + (terminalSpot.z - terminalSpot.roadZ) * 0.7,
+/** Candice's NEWTOWN RANK: a real taxi-rank set piece on Ntemi Piliso Street at the Newtown
+ *  centre — shade port, benches, name board, minibus taxis on the kerb. Built as a live scripted
+ *  prop (world/MissionRanks.ts); the reserved pad below keeps procedural buildings and scatter off
+ *  the plot (RESERVED_PADS feeds CityGen/ModelScatter, so changing this forces a re-bake).
+ *  Every "Newtown rank" reference in the story points HERE, and Candice stands at the rank mouth
+ *  (owner: "she should be located at some taxi rank (Newtown Rank) … a protected mission object" —
+ *  protection = her contact-ped invulnerability + this structure + its reserved pad). */
+const newtownRankKerb = bestKerbSpot({ name: 'Ntemi Piliso Street', near: { x: newtown.x + 6 * P, z: newtown.z - 4 * P }, clearance: 9, ownRadius: 13, minEdge: 3 });
+export const NEWTOWN_RANK_SITE: PlacedSite = {
+  x: newtownRankKerb.x, z: newtownRankKerb.z,
+  heading: Math.atan2(newtownRankKerb.roadX - newtownRankKerb.x, newtownRankKerb.roadZ - newtownRankKerb.z),
 };
-/** Escape marker: back toward the CBD, clear of the terminal perimeter. */
-export const ESCAPE_SPOT = walkSpot('Commissioner Street', { x: CBD_CENTER.x - 20 * P, z: CBD_CENTER.z + 40 * P }, 3, 5);
-/** Candice's braai kiosk beside her Newtown rank. */
-export const KIOSK_SPOT = walkSpotNear({ x: newtown.x - 8 * P, z: newtown.z + 8 * P }, 3.4, 5);
+/** Candice from Boksburg holds court at the mouth of her rank, between the shade port and the kerb. */
+export const CANDICE_START: MapPt = {
+  x: NEWTOWN_RANK_SITE.x + Math.sin(NEWTOWN_RANK_SITE.heading) * 6.5,
+  z: NEWTOWN_RANK_SITE.z + Math.cos(NEWTOWN_RANK_SITE.heading) * 6.5,
+};
+/** The rival Wemmer crew's LONG-DISTANCE TERMINAL: a second rank structure further out the
+ *  industrial belt. Round 4 moved it ~340u east — it used to sit 76u from the Kelvin Yard gate,
+ *  which parked the rival terminal on the cartel's own doorstep and stacked seven story locations
+ *  onto ~90u of one road. The thugs the mission promises now defend an actual rank. */
+const terminalKerb = bestKerbSpot({ name: 'Wemmer Jubilee Road', near: { x: CBD_CENTER.x + 227 * P, z: CBD_CENTER.z + 151 * P }, clearance: 9, ownRadius: 13, minEdge: 5 });
+export const WEMMER_RANK_SITE: PlacedSite = {
+  x: terminalKerb.x, z: terminalKerb.z,
+  heading: Math.atan2(terminalKerb.roadX - terminalKerb.x, terminalKerb.roadZ - terminalKerb.z),
+};
+/** The terminal reach point: the rank mouth, kerbside of the structure. */
+export const TERMINAL_SPOT: MapPt = {
+  x: WEMMER_RANK_SITE.x + Math.sin(WEMMER_RANK_SITE.heading) * 6.5,
+  z: WEMMER_RANK_SITE.z + Math.cos(WEMMER_RANK_SITE.heading) * 6.5,
+};
+/** The stolen route permit: stashed behind the terminal canopy, away from the road. */
+export const PERMIT_SPOT: MapPt = {
+  x: WEMMER_RANK_SITE.x - Math.sin(WEMMER_RANK_SITE.heading) * 9.5,
+  z: WEMMER_RANK_SITE.z - Math.cos(WEMMER_RANK_SITE.heading) * 9.5,
+};
+/** Candice's braai kiosk on the rank's south approach. */
+export const KIOSK_SPOT = walkSpotNear({ x: NEWTOWN_RANK_SITE.x - 2, z: NEWTOWN_RANK_SITE.z + 26 }, 3.4, 5);
 
 /** Rank enforcer spawn spots around the terminal. */
 export const HOSTILE_SPOTS: MapPt[] = [
@@ -413,8 +440,10 @@ export const QUARRY_SPAWN = kerbVehicleSpot('Pothole Street', { x: VUSI_START.x 
  *  in Crown is discovered later, in Act 2's Audition; act 1 stays inside the CBD). */
 export const CABLE_YARD_SPOT = walkSpotNear({ x: CBD_CENTER.x + 70 * P, z: CBD_CENTER.z - 95 * P }, 4, 6);
 
-/** Candice's bottle-green route van at her CBD rank. */
-export const CANDICE_VAN_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z + 40 * P });
+/** Candice's bottle-green route van, parked on the Newtown Rank kerb where she can see it
+ *  (round 4: it drifted to a Commissioner Street kerb 469u from her — a 1.2km fetch before
+ *  Rank Cold War even started; her own route van belongs at her own rank). */
+export const CANDICE_VAN_SPOT = kerbVehicleSpot('Ntemi Piliso Street', { x: NEWTOWN_RANK_SITE.x, z: NEWTOWN_RANK_SITE.z });
 /** The two contested ranks on her route — both CBD-local (were Hillbrow/Newtown district centres). */
 export const RANK_STOPS: MapPt[] = [
   walkSpot('Risk-It Street', { x: CBD_CENTER.x + 30 * P, z: CBD_CENTER.z + 55 * P }, 3.4, 5),
@@ -480,10 +509,13 @@ export const AIRPORT_APRON: MapPt = stationPoint('Lughawe Halt'); // where the K
 export const PONTE_POINT = landmarkPoint('Ponte Tower', { x: CBD_CENTER.x, z: CBD_CENTER.z });
 export const PONTE_FORECOURT = walkSpotNear(PONTE_POINT, 3, 5);
 
-/** Constitution Hill handover (Carcass) and the coastal pier (Pier Pressure). */
+/** Constitution Hill handover (Carcass) and the dam slipway (Pier Pressure). */
 export const CON_HILL_SPOT = walkSpotNear(landmarkPoint('Constitution Hill', { x: hillbrow.x, z: hillbrow.z }), 3, 5);
 export const PIER_POINT = landmarkPoint('Vaalpunt Slipway', { x: CBD_CENTER.x, z: CBD_CENTER.z });
-export const PIER_SPOT: MapPt = walkSpot('Wemmer Jubilee Road', { x: CBD_CENTER.x + 65 * P, z: CBD_CENTER.z + 135 * P }, 3, 5);
+/** The slipway kerb itself: Sloepbaai Road dead-ends at the REAL Vaalpunt Slipway landmark on the
+ *  dam (round 4: the mission pin used to sit on a Wemmer Jubilee kerb in the CBD — 7,039u / 9.6km
+ *  from the place its own copy names; diary page 9 was already waiting at the real one). */
+export const PIER_SPOT: MapPt = walkSpot('Sloepbaai Road', PIER_POINT, 3, 5);
 /** Ouma se Padstal doorstep (long-haul side run). */
 export const PADSTAL_POINT = landmarkPoint('Ouma se Padstal', { x: northernSuburbs.x, z: northernSuburbs.z });
 // The farm-stall run is the arc's one sanctioned SCENIC JOURNEY (optional side piece): a real drive
@@ -536,13 +568,16 @@ export interface ParkedVehicleSpot { kind: string; x: number; z: number; heading
 const parkedEntry = (kind: string, site: PlacedSite, color?: number): ParkedVehicleSpot =>
   ({ kind, x: site.x, z: site.z, heading: site.heading, ...(color !== undefined ? { color } : {}) });
 
-/** Auntie Portia's yellow Citi Golf — mission-critical, kerb near her driveway. */
-export const PORTIA_CAR_SPOT = kerbVehicleSpot('You-Bet Street', { x: PORTIA_START.x, z: PORTIA_START.z });
+/** Auntie Portia's mustard bakkie — mission-critical, and genuinely GONE: dumped on a Salisbury
+ *  Street kerb ~340u SOUTH-EAST of her stoep, the opposite direction to her first drop (owner:
+ *  the old spot was 12u away — "make it gone somewhere in the opposite direction of the first
+ *  goal by at least 300u"). placements.test.ts pins both the distance and the direction. */
+export const PORTIA_CAR_SPOT = kerbVehicleSpot('Salisbury Street', { x: CBD_CENTER.x + 162 * P, z: CBD_CENTER.z + 143 * P });
 /** The hot red GTI — mission-critical, Commissioner Street kerb. */
 export const GTI_SPOT = kerbVehicleSpot('Commissioner Street', { x: CBD_CENTER.x + 55 * P, z: CBD_CENTER.z - 55 * P });
 
 export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
-  parkedEntry('compact', PORTIA_CAR_SPOT, 0xf1c232),
+  parkedEntry('van', PORTIA_CAR_SPOT, 0xd9a53b), // Portia's mustard bakkie (Couch Run) — colour must stay unique among vans (PORTIA_BAKKIE_COLOR in story/scripts.ts)
   parkedEntry('van', CANDICE_VAN_SPOT, 0x2e8b57), // Candice's route van (Rank Cold War)
   parkedEntry('van', TANKER_SPOT, 0xb8621b), // the diesel tanker (The Audition)
   parkedEntry('van', EVIDENCE_VAN_SPOT, 0xdfe3e6), // Sindi's evidence van (Paper Fire)
@@ -554,6 +589,10 @@ export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('compact', kerbVehicleSpot('Loadshed Lane', { x: CBD_CENTER.x - 25 * P, z: CBD_CENTER.z - 90 * P })),
   parkedEntry('taxi', kerbVehicleSpot('Risk-It Street', { x: CBD_CENTER.x + 5 * P, z: CBD_CENTER.z - 55 * P })),
   parkedEntry('taxi', kerbVehicleSpot('Fax Street', { x: CBD_CENTER.x + 60 * P, z: CBD_CENTER.z - 35 * P })),
+  // Rank dressing: Quantums on the kerb at both story ranks — a rank without taxis is a bus stop.
+  parkedEntry('taxi', kerbVehicleSpot('Ntemi Piliso Street', { x: NEWTOWN_RANK_SITE.x, z: NEWTOWN_RANK_SITE.z - 20 })),
+  parkedEntry('taxi', kerbVehicleSpot('Ntemi Piliso Street', { x: NEWTOWN_RANK_SITE.x, z: NEWTOWN_RANK_SITE.z + 20 })),
+  parkedEntry('taxi', kerbVehicleSpot('Wemmer Jubilee Road', { x: WEMMER_RANK_SITE.x - 20, z: WEMMER_RANK_SITE.z })),
   parkedEntry('bicycle', kerbVehicleSpot('Main Main Street', { x: CBD_CENTER.x + 25 * P, z: CBD_CENTER.z - 20 * P }, 2.4)),
   parkedEntry('bicycle', kerbVehicleSpot('Pothole Street', { x: CBD_CENTER.x - 40 * P, z: CBD_CENTER.z - 78 * P }, 2.4), 0xc44f9a),
   parkedEntry('motorbike', kerbVehicleSpot('You-Bet Street', { x: CBD_CENTER.x + 32 * P, z: CBD_CENTER.z + 55 * P }, 2)),
@@ -664,10 +703,14 @@ export const RESERVED_PADS: ReservedPad[] = [
   { x: COURIER_DEPOT.x, z: COURIER_DEPOT.z, radius: 7 },
   { x: PORTIA_START.x, z: PORTIA_START.z, radius: 7 },
   { x: VUSI_START.x, z: VUSI_START.z, radius: 7 },
-  { x: CANDICE_START.x, z: CANDICE_START.z, radius: 7 },
-  { x: TERMINAL_SPOT.x, z: TERMINAL_SPOT.z, radius: 15 },
+  // The two rank set pieces (MissionRanks.ts): generous claims keep procedural buildings and
+  // scatter off the shade ports, their kerbs and the walk-up approaches.
+  { x: NEWTOWN_RANK_SITE.x, z: NEWTOWN_RANK_SITE.z, radius: 17 },
+  { x: WEMMER_RANK_SITE.x, z: WEMMER_RANK_SITE.z, radius: 17 },
   { x: PERMIT_SPOT.x, z: PERMIT_SPOT.z, radius: 8 },
   { x: KIOSK_SPOT.x, z: KIOSK_SPOT.z, radius: 7 },
+  // Vaalpunt Slipway dressing (ramp, moored boat, board) at the real landmark.
+  { x: PIER_POINT.x, z: PIER_POINT.z, radius: 15 },
   { x: LOCKUP_SPOT.x, z: LOCKUP_SPOT.z, radius: 9 },
   // Kelvin Yard is a complete authored stealth arena, not just a marker. The generous claim keeps
   // the fence, its rear footpath, and the approach clear even though CityGen uses a deliberately

@@ -7,7 +7,14 @@ export type GameMode = 'loading' | 'menu' | 'playing' | 'paused' | 'dead' | 'bus
 /** District names come from the generated OSM map (place nodes, plus names-overrides renames). */
 export type District = string;
 export interface Damageable { health: number; maxHealth: number; takeDamage(amount: number): void; }
-export interface WorldTarget { position: Vector3; label: string; color?: string; }
+export interface WorldTarget {
+  position: Vector3;
+  label: string;
+  color?: string;
+  /** Free-roam "next job" contact breadcrumb — plain styling, never gold objective styling
+   *  (owner: a gold goal you reach and nothing happens is a broken promise). */
+  breadcrumb?: boolean;
+}
 export interface SavedWeaponState { ammo: number; reserve: number; owned: boolean; }
 export interface SavedWeapons { current: WeaponId; loadout: Record<WeaponId, SavedWeaponState>; }
 /** `teflon`: the police never take an interest — wanted heat can never rise while it is set. */

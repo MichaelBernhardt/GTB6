@@ -173,6 +173,14 @@ window.__qa = (() => {
           if (hitOwn === samples.length) note(`street corridor "${o.streetName}": all ${samples.length} same-named road segments trigger (name reused ${ownRoads.length}x)`);
         }
       }
+    } else if (o.kind === 'escape' && o.minDistance) {
+      // Perimeter escape: deliberately marker-free (there is no goal dot to drive to) — the game
+      // must surface the ring on the map instead, centred on the anchor with the ring's own radius.
+      const anchor = raw;
+      const ring = g.mapMarkers().find((m) => m.area && anchor && Math.abs(m.x - anchor.position.x) < 2 && Math.abs(m.z - anchor.position.z) < 2 && Math.abs(m.area - o.minDistance) < 2);
+      if (!ring) finding('fail', `perimeter escape "${o.text}" surfaces no map ring around its anchor`);
+      else note(`perimeter escape: map ring r=${o.minDistance} at the anchor, no goal dot (by design)`);
+      if (marker) finding('fail', `perimeter escape "${o.text}" still shows a goal marker (${marker.label}) — the old chase-a-dot bug`);
     } else if (['reach', 'escape', 'collect', 'checkpoints', 'enter-kind', 'follow'].includes(o.kind)) {
       if (!marker) finding(o.conditionsOnly && !o.target ? 'warn' : 'fail', `no world marker for located objective "${o.text}"`);
       if (marker) {
@@ -192,8 +200,9 @@ window.__qa = (() => {
       }
     }
     // route + timer feasibility for anything with a physical destination
+    // (perimeter escapes have an anchor to get AWAY from, not a destination — skip)
     const destination = marker ?? raw;
-    if (destination && !['choice', 'lose-wanted', 'survive', 'defeat'].includes(o.kind) && !o.conditions?.inPlane && !o.conditions?.onTrain && !o.conditions?.drivingTrain) {
+    if (destination && !(o.kind === 'escape' && o.minDistance) && !['choice', 'lose-wanted', 'survive', 'defeat'].includes(o.kind) && !o.conditions?.inPlane && !o.conditions?.onTrain && !o.conditions?.drivingTrain) {
       const pts = roadRoute(destination.position.x, destination.position.z);
       if (!pts?.length) finding('fail', `no road route from player to "${destination.label}"`);
       else {
@@ -264,6 +273,21 @@ window.__qa = (() => {
         return advanced() ? 'ok' : 'stuck:entered-but-not-advanced';
       }
       case 'reach': case 'escape': case 'checkpoints': case 'collect': {
+        if (o.kind === 'escape' && o.minDistance) {
+          // Perimeter escape: no goal dot — play it like a player would, heading out toward the
+          // NEXT objective's target (or any road away from the anchor). Advance fires from the
+          // real distance check the moment the ring is cleared.
+          const anchor = g.missionTargetRaw?.();
+          if (!anchor) return 'stuck:no-escape-anchor';
+          const next = g.missions.active?.objectives[objIndex() + 1]?.target;
+          const goalX = next ? next.position.x : anchor.position.x + o.minDistance + 80;
+          const goalZ = next ? next.position.z : anchor.position.z;
+          const pts = roadRoute(goalX, goalZ);
+          if (!pts?.length) return 'stuck:no-escape-route';
+          driveRoute(pts, 400);
+          step(5);
+          return advanced() ? 'ok' : 'stuck:never-cleared-perimeter';
+        }
         if (g.trains.riding && !o.conditions?.onTrain && !o.conditions?.drivingTrain) {
           let exit = g.trains.dismount();
           for (let tries = 0; !exit && tries < 12 && g.trains.ride; tries++) { g.trains.ride.train.state.s += 6; exit = g.trains.dismount(); } // nudge along the line for clear ground

@@ -46,6 +46,7 @@ import { DIARY_STASH_NOTE, DIARY_STASH_REWARD, DIARY_TEXTS, DIARY_WORLD_PAGES } 
 import { DEPOT_DARK_THRESHOLD, DepotSecurity, depotDark, guardSees } from './systems/DepotSecurity';
 import { KELVIN_FENCE_RADIUS, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } from './world/placements';
 import { buildKelvinYard } from './world/KelvinYard';
+import { buildMissionRanks } from './world/MissionRanks';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
 import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, WITNESS_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
@@ -202,6 +203,8 @@ export class Game {
   private transition?: Transition;
   private marker = new THREE.Group();
   private markerTarget?: WorldTarget;
+  /** Which contact the free-roam breadcrumb has already announced arrival at (one nudge per contact). */
+  private breadcrumbNudged?: string;
   private customWaypoint?: MapPoint;
   private routeGuidance!: RouteGuidance;
   private guidanceRoute: readonly NavPoint[] = [];
@@ -326,6 +329,7 @@ export class Game {
     this.torch = new TorchSystem(this.scene);
     this.shops = new ShopSystem(this.scene, this.city);
     buildKelvinYard(this.scene, this.city);
+    buildMissionRanks(this.scene, this.city);
     this.safehouses = new SafehouseSystem(this.scene, this.city);
     await breathe(44, 'Opening the safehouses');
     bootMark('boot: player + population');
@@ -586,8 +590,11 @@ export class Game {
       ...(chopShop ? [{ x: chopShop.x, z: chopShop.z, color: '#f28f3b', shape: 'diamond' as const, label: 'Bra Vusi’s Chop Shop' }] : []),
       ...(raceStart ? [{ x: raceStart.x, z: raceStart.z, color: '#d96cff', shape: 'diamond' as const, label: 'Robot Run' }] : []),
       ...(this.customWaypoint ? [{ ...this.customWaypoint, color: '#5ba9ff', shape: 'diamond' as const, label: PERSONAL_WAYPOINT_LABEL, waypoint: true }] : []),
-      ...(this.markerTarget && this.markerTarget.label !== PERSONAL_WAYPOINT_LABEL ? [{ x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true, label: this.markerTarget.label }] : []),
+      ...(this.markerTarget && this.markerTarget.label !== PERSONAL_WAYPOINT_LABEL ? [this.markerTarget.breadcrumb
+        ? { x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#6fc4d8', shape: 'diamond' as const, label: `Next job: ${this.markerTarget.label}` }
+        : { x: this.markerTarget.position.x, z: this.markerTarget.position.z, color: this.markerTarget.color ?? '#f5c542', objective: true, label: this.markerTarget.label }] : []),
       ...((area) => area ? [{ x: area.x, z: area.z, color: '#f5c542', area: area.radius, label: 'Riddle search area' }] : [])(this.riddleSearchArea()),
+      ...((ring) => ring ? [{ x: ring.x, z: ring.z, color: '#e3533f', area: ring.radius, label: 'Get clear of this area' }] : [])(this.escapePerimeter()),
       ...(this.taxiHailPed ? [{ x: this.taxiHailPed.group.position.x, z: this.taxiHailPed.group.position.z, color: '#f2c521', label: 'Taxi passenger' }] : []),
     ];
   }
@@ -2184,7 +2191,10 @@ export class Game {
     (this.lastFocus ??= new THREE.Vector3()).copy(focus);
     const reached = objective?.streetName
       ? this.onNamedStreet(objective.streetName, focus.x, focus.z) // street-answer riddle: the whole road corridor triggers
-      : Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
+      : objective?.minDistance !== undefined
+        ? Boolean(target && focus.distanceTo(target.position) >= objective.minDistance) // perimeter escape: OUT of the ring, any direction
+        : Boolean(target && focus.distanceTo(target.position) < (objective?.radius ?? (objective?.hidden ? 20 : objective?.kind === 'escape' ? 12 : 8)));
+    let reachedForUpdate = reached;
     if (objective?.kind === 'checkpoints' && reached) {
       const stopIndex = this.deliveryIndex;
       const stopObjective = this.missions.objectiveIndex; // captured BEFORE the register: the final stop advances the index
@@ -2192,8 +2202,13 @@ export class Game {
       const result = this.missions.registerCheckpoint(); this.deliveryIndex += 1;
       for (const wave of MISSION_SCRIPTS[missionId]?.waves ?? []) if (wave.objective === stopObjective && wave.checkpoint === stopIndex) this.population.spawnHostileWave(wave.spots);
       this.processMissionUpdate(result);
+      // `reached` was measured against the STOP we just registered. If that was the final stop the
+      // mission has advanced, and feeding the stale true into update() would instantly complete a
+      // following reach objective at the drop kerb (Couch Run's "bring it home" leg never got
+      // driven — round-4 harness caught the missing leg). Re-measure next frame, honestly.
+      reachedForUpdate = false;
     }
-    const result = this.missions.update(dt, this.buildMissionSnapshot(focus), reached);
+    const result = this.missions.update(dt, this.buildMissionSnapshot(focus), reachedForUpdate);
     this.processMissionUpdate(result);
     if (!this.missions.active && waypointReached(this.customWaypoint, focus)) {
       this.clearCustomWaypoint(false);
@@ -2211,8 +2226,18 @@ export class Game {
     }
     // Marker truth lives in the sim step, not the render loop: the frame a mission starts or an
     // objective advances, the gold marker and minimap blip already point at the new target
-    // (owner playtest: accepting Couch Run left the marker on Portia instead of the Golf).
+    // (owner playtest: accepting Couch Run left the marker on Portia instead of the bakkie).
     this.markerTarget = this.currentTarget();
+    // Reaching the free-roam contact breadcrumb must DO something: hand over to the E-prompt out
+    // loud, once per contact (owner: chased the post-mission "objective", arrived, nothing happened).
+    if (!this.online && !this.missions.active && this.markerTarget?.breadcrumb) {
+      const near = Math.hypot(this.markerTarget.position.x - focus.x, this.markerTarget.position.z - focus.z) < 10;
+      if (near && this.breadcrumbNudged !== this.markerTarget.label) {
+        this.breadcrumbNudged = this.markerTarget.label;
+        this.audio.ui(true);
+        this.ui.notify('Next job', `${this.markerTarget.label} is right here — press E to hear the job.`);
+      }
+    }
     this.updateRouteGuidance(dt, focus);
     this.objectiveElapsed += dt;
     this.updateRiddleHints();
@@ -2253,6 +2278,13 @@ export class Game {
       }
     }
     return false;
+  }
+
+  /** The ring a perimeter escape must clear, drawn on the map instead of a goal dot. */
+  private escapePerimeter(): { x: number; z: number; radius: number } | undefined {
+    const objective = this.missions.objective;
+    if (this.missions.state !== 'active' || objective?.minDistance === undefined || !objective.target) return undefined;
+    return { x: objective.target.position.x, z: objective.target.position.z, radius: objective.minDistance };
   }
 
   private riddleSearchArea(): { x: number; z: number; radius: number } | undefined {
@@ -2912,6 +2944,7 @@ export class Game {
     }
     const objective = this.missions.objective;
     if (objective?.hidden && !this.riddleRevealed) return undefined; // riddles: search circle + hints, exact blip only after the final hint
+    if (objective?.minDistance !== undefined) return undefined; // perimeter escape: no goal dot — the map draws the ring to get OUT of (escapePerimeter)
     if (objective?.kind === 'follow' && this.quarry) return { position: this.quarry.group.position, label: 'The bakkie', color: '#e8a13d' };
     const raw = this.missionTargetRaw();
     if (raw) return raw;
@@ -2922,7 +2955,10 @@ export class Game {
         const distance = (mission.start.position.x - this.player.group.position.x) ** 2 + (mission.start.position.z - this.player.group.position.z) ** 2;
         if (distance < nearestDistance) { nearest = mission; nearestDistance = distance; }
       }
-      if (nearest) { const position = nearest.start.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...nearest.start, position }; }
+      // A plain contact breadcrumb, deliberately NOT objective-styled: the old gold "goal" led the
+      // player to a giver and then nothing happened (owner: "a waypoint goal with no purpose").
+      // Arrival now hands over to the E-prompt with a nudge (see updateMission).
+      if (nearest) { const position = nearest.start.position.clone(); position.y = this.city.surfaceHeightAt(position.x, position.z); return { ...nearest.start, position, color: '#6fc4d8', breadcrumb: true }; }
       return undefined;
     }
     if (objective?.kind === 'enter-kind') {
@@ -3163,7 +3199,7 @@ export class Game {
           }
         : {
             missionName: this.missions.completed.size === 0 ? 'FIRST MOVE' : 'NEXT JOB',
-            text: `Meet ${this.markerTarget.label} at the gold beacon — follow the turquoise GPS line`,
+            text: `Meet ${this.markerTarget.label} — follow the turquoise GPS line and press E to talk`,
           }
       : undefined;
     const objective: ObjectiveView | undefined = raceObjective ?? (this.online ? this.online.objective ? {

@@ -6,12 +6,13 @@ const snapshot = { playerPosition: new Vector3(), inVehicle: false, wantedLevel:
 
 describe('MissionSystem', () => {
   it('progresses delivery objectives and awards completion metadata', () => {
+    // Round 4: the mission vehicle is Portia's mustard bakkie (kind 'van'), genuinely gone 300u+ out.
     const system = new MissionSystem(); expect(system.start('delivery-run')).toBe(true);
-    system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'compact', vehicleColor: 0xf1c232 }, false);
+    system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'van', vehicleColor: 0xd9a53b }, false);
     expect(system.objective?.kind).toBe('checkpoints');
     system.registerCheckpoint(); system.registerCheckpoint(); system.registerCheckpoint();
     expect(system.objective?.kind).toBe('reach');
-    const result = system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'compact', vehicleColor: 0xf1c232 }, true);
+    const result = system.update(0, { ...snapshot, inVehicle: true, vehicleKind: 'van', vehicleColor: 0xd9a53b }, true);
     expect(result.completed?.reward).toBe(900);
     expect(system.completed.has('delivery-run')).toBe(true);
   });

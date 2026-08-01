@@ -146,6 +146,42 @@ describe('act gating end-to-end', () => {
   });
 });
 
+describe('Rank Business geometry (owner round 4)', () => {
+  it('ends on Candice herself, and escapes a real perimeter', async () => {
+    const { CANDICE_START, TERMINAL_SPOT } = await import('../world/placements');
+    const mission = MISSIONS.find((entry) => entry.id === 'dockside-signal')!;
+    // Giver/pin agreement: the final objective labelled 'Candice' must target where her body stands
+    // (it used to point at a kiosk spot 110u across a field from her).
+    const final = mission.objectives[mission.objectives.length - 1]!;
+    expect(final.target?.label).toBe('Candice');
+    expect(Math.hypot(final.target!.position.x - CANDICE_START.x, final.target!.position.z - CANDICE_START.z)).toBeLessThan(1);
+    // The "perimeter" is a ring around the terminal, not a far-away dot (it used to be 518u out).
+    const escape = mission.objectives.find((objective) => objective.kind === 'escape')!;
+    expect(escape.minDistance).toBe(150);
+    expect(Math.hypot(escape.target!.position.x - TERMINAL_SPOT.x, escape.target!.position.z - TERMINAL_SPOT.z)).toBeLessThan(1);
+    // And the mission-start anchor IS Candice's spot (contact body spawns at the first-listed start).
+    expect(Math.hypot(mission.start.position.x - CANDICE_START.x, mission.start.position.z - CANDICE_START.z)).toBeLessThan(1);
+  });
+
+  it('Dark House keeps its reach-a-point escape (no minDistance)', () => {
+    const darkHouse = MISSIONS.find((entry) => entry.id === 'dark-house')!;
+    const escape = darkHouse.objectives.find((objective) => objective.kind === 'escape')!;
+    expect(escape.minDistance).toBeUndefined();
+    expect(escape.radius).toBe(6);
+  });
+});
+
+describe('Pier Pressure geometry (owner round 4)', () => {
+  it('sends the fare hunt to the real Vaalpunt Slipway as a sanctioned journey', async () => {
+    const { PIER_POINT } = await import('../world/placements');
+    const mission = MISSIONS.find((entry) => entry.id === 'pier-pressure')!;
+    const reach = mission.objectives[0]!;
+    expect(Math.hypot(reach.target!.position.x - PIER_POINT.x, reach.target!.position.z - PIER_POINT.z), 'pin at the landmark the copy names').toBeLessThan(30);
+    expect(MISSION_SCRIPTS['pier-pressure']?.tier).toBe('journey');
+    expect(MISSION_SCRIPTS['pier-pressure']?.journeys).toContain(0);
+  });
+});
+
 describe('Kelvin Yard geometry', () => {
   it('keeps the gate and rear escape outside the detection ring and the office inside it', async () => {
     const { KELVIN_BREACH_SPOT, KELVIN_FENCE_RADIUS, KELVIN_GATE_SPOT, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } = await import('../world/placements');
