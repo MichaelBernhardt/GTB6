@@ -176,23 +176,37 @@ describe('doors', () => {
 describe('doors on scattered models', () => {
   beforeEach(() => { resetDoorCache(); });
 
-  /** The exact spot the owner reported: "-3011.8,484.1 has a common building type with no entrance."
-   *  It is a scattered office-block, six metres off, and the parcel pass has nothing within 38 u. */
-  it('offers a prompt at the coordinate the owner reported as shut', () => {
-    const door = doorNear(-3011.8, 484.1);
-    expect(door, 'no prompt at -3011.8,484.1').toBeDefined();
-    expect(door!.id.startsWith('s'), 'the door there should be a scattered model, not a parcel').toBe(true);
-    expect(doorNear(door!.x, door!.z)?.id).toBe(door!.id);
+  /**
+   * The exact spot the owner reported: "-3011.8,484.1 has a common building type with no entrance."
+   *
+   * RE-AIMED AT THE RULE, deliberately. The scattered office-block that stood on this coordinate was
+   * displaced by the row-builder pass — parcels claim ground before scatter, and the inner-city and
+   * dense-residential zones now claim it continuously, so the nearest building here is a 37 x 47 u
+   * mixed-use parcel 25 u away and the spot itself is open pavement. Pinning "a prompt fires at
+   * exactly this coordinate" was pinning WHICH pass happened to own that ground, which is not what
+   * the report was about. The report was about walking up to a building and finding no way in, so
+   * that is what is asserted now: nothing enterable-looking stands here shut, and there is still an
+   * openable building within a short walk.
+   */
+  it('leaves nothing shut at the coordinate the owner reported as shut', () => {
+    const shut = allScatteredModels().filter((model) => MODEL_INDEX.get(model.name)?.interior
+      && Math.hypot(model.x + 3011.8, model.z - 484.1) < 14 && !scatterDoorFor(model));
+    expect(shut.map((model) => `${model.name}@${model.x.toFixed(1)},${model.z.toFixed(1)}`)).toEqual([]);
+    const nearest = nearestDoor(-3011.8, 484.1);
+    expect(nearest, 'no openable building anywhere near -3011.8,484.1').toBeDefined();
+    expect(Math.hypot(nearest!.x + 3011.8, nearest!.z - 484.1)).toBeLessThan(40);
   }, 300000);
 
   it('opens essentially every scattered model a person would live or work in', () => {
     const enterable = allScatteredModels().filter((model) => MODEL_INDEX.get(model.name)?.interior);
-    // Floor recalibrated for the city-density passes: procedural parcels claim frontage before
-    // scatter, and packing the CBD (3,712 → ~5,450 parcels) then the suburbs (→ ~8,370) moved
-    // enterable buildings from the scatter column to the parcel column (~2,550 → ~1,740 scattered
-    // enterables, while the combined universe GREW ~8,000 → ~10,100). The 0.99 open ratio below
-    // is the real guard; this floor only proves scatter still contributes a real share.
-    expect(enterable.length).toBeGreaterThan(1500);
+    // Floor recalibrated once per density pass, for one reason each time: procedural parcels claim
+    // frontage BEFORE scatter, so every parcel added moves an enterable building from the scatter
+    // column to the parcel column while the combined universe grows. CBD pass 3,712 → ~5,450
+    // parcels, suburbs pass → ~8,370, row builder → 10,284; scattered enterables ~2,550 → ~1,740 →
+    // ~1,206, combined ~8,000 → ~10,100 → ~11,500. The 0.99 open ratio below is the real guard —
+    // it says every enterable-LOOKING building opens, which is the owner's actual complaint — and
+    // this floor only proves scatter still contributes a substantial share of them.
+    expect(enterable.length).toBeGreaterThan(1150);
     const open = enterable.filter((model) => scatterDoorFor(model)).length;
     expect(open / enterable.length, `only ${open} of ${enterable.length} scattered buildings open`).toBeGreaterThan(0.99);
   }, 900000);
