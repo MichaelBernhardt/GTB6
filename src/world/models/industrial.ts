@@ -28,7 +28,7 @@ export function buildWarehouse(seed: number, options: BuildOptions = {}): BuiltM
     kit.box(M.glassDark, w * 0.22, 1.2, 0.1, -w / 2 + w * 0.15, 1.1, d / 2 + 4.05, { cast: false });
   }
   for (const side of [-1, 1]) kit.cyl(M.steel, 0.09, 0.09, h, side * (w / 2 - 0.4), 0, d / 2 + 0.12, { seg: 6 }); // downpipes
-  kit.sign(kit.pick(4, ['TRANSVAAL TRANSPORT', 'BRAKPAN BEARINGS', 'VAALIE VATS', 'EISH LOGISTICS']), '#c8d6dd', w * 0.42, 0.8, 0, h - 0.9, d / 2 + 0.08);
+  kit.sign(options.signName ?? kit.pick(4, ['TRANSVAAL TRANSPORT', 'BRAKPAN BEARINGS', 'VAALIE VATS', 'EISH LOGISTICS']), '#c8d6dd', w * 0.42, 0.8, 0, h - 0.9, d / 2 + 0.08);
   return kit.done();
 }
 
@@ -53,7 +53,7 @@ export function buildFactory(seed: number, options: BuildOptions = {}): BuiltMod
   }
   kit.door(M.darkMetal, 3.6, 3.6, 0.12, w * 0.2, 0, d / 2 + 0.07, 'dock', { cast: false }); // goods door
   kit.box(M.steel, w * 0.3, 1.2, 1, -w * 0.24, h - 1.4, d / 2 + 0.5, { cast: false }); // extraction duct
-  kit.sign(kit.pick(4, ['GERMISTON GASKETS', 'VULKANISEER WERKE', 'BOKSBURG BOILERS', 'STAAL & SEUNS']), '#e0c48a', w * 0.4, 0.8, 0, h - 0.8, d / 2 + 0.08);
+  kit.sign(options.signName ?? kit.pick(4, ['GERMISTON GASKETS', 'VULKANISEER WERKE', 'BOKSBURG BOILERS', 'STAAL & SEUNS']), '#e0c48a', w * 0.4, 0.8, 0, h - 0.8, d / 2 + 0.08);
   return kit.done();
 }
 
@@ -173,11 +173,15 @@ export function buildWorkshopRow(seed: number, options: BuildOptions = {}): Buil
   const kit = new Kit(seed); const variant = (options.variant ?? kit.int(1, 0, 2)) % 3; const size = options.size ?? kit.rnd(2);
   const bays = 3 + variant; const bayW = 4.6 + size; const w = bays * bayW; const d = 9 + size * 2; const h = 4.3;
   kit.box(kit.pick(3, [M.faceBrick, M.concrete, M.tan]), w, h, d, 0, 0, 0, { collide: true });
+  // The bay whose roller the entrance tag keeps is the centre one (ties to -x — Kit.entranceAt's
+  // rule); its board wears the building's identity name, the other units keep their own trade.
+  const entranceBay = Math.floor((bays - 1) / 2);
   for (let bay = 0; bay < bays; bay++) {
     const x = -w / 2 + bayW * (bay + 0.5);
     kit.door(M.corrCharcoal, bayW * 0.68, 3.1, 0.12, x, 0, d / 2 + 0.07, 'dock', { cast: false });
     kit.box(bay % 2 ? M.corrRed : M.corrBlue, bayW * 0.8, 0.14, 1.35, x, 3.45, d / 2 + 0.62, { rx: -0.08 });
-    kit.sign(kit.pick(20 + bay, ['TYRE & BRAAI', 'BOETIE MOTORS', 'PANEL BEAT-ISH', 'DIESEL DOCTOR']), '#e5c45d', bayW * 0.75, 0.55, x, 4.05, d / 2 + 0.1);
+    const name = bay === entranceBay ? options.signName ?? kit.pick(20 + bay, ['TYRE & BRAAI', 'BOETIE MOTORS', 'PANEL BEAT-ISH', 'DIESEL DOCTOR']) : kit.pick(20 + bay, ['TYRE & BRAAI', 'BOETIE MOTORS', 'PANEL BEAT-ISH', 'DIESEL DOCTOR']);
+    kit.sign(name, '#e5c45d', bayW * 0.75, 0.55, x, 4.05, d / 2 + 0.1);
   }
   kit.box(M.paving, w, 0.12, 4.5, 0, 0, d / 2 + 2.2, { cast: false });
   for (let drum = 0; drum < 3; drum++) kit.cyl(M.corrRust, 0.4, 0.4, 0.85, -w / 2 + 1 + drum * 0.9, 0.12, d / 2 + 1.1, { seg: 12 });
@@ -200,6 +204,6 @@ export function buildLogisticsDepot(seed: number, options: BuildOptions = {}): B
     kit.box(M.steel, w / docks * 0.64, 0.25, 2.1, x, 0.55, d / 2 + 1, { collide: true });
   }
   for (let monitor = 0; monitor < 3; monitor++) kit.box(M.glassDark, w * 0.18, 1.1, d * 0.18, -w * 0.24 + monitor * w * 0.24, h + 0.25, -d * 0.12, { collide: true });
-  kit.sign(variant ? 'VRRR PHAA LOGISTICS' : 'TRANS-VAAL DEPOT', '#e7bf4d', 7, 1, -w * 0.24, h * 0.52, d / 2 + 0.11, { background: '#343c3f' });
+  kit.sign(options.signName ?? (variant ? 'VRRR PHAA LOGISTICS' : 'TRANS-VAAL DEPOT'), '#e7bf4d', 7, 1, -w * 0.24, h * 0.52, d / 2 + 0.11, { background: '#343c3f' });
   return kit.done();
 }

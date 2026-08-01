@@ -71,6 +71,8 @@ export class FeatureHost {
   /** Ids whose auto-load threw. Never retried automatically; the manual approach press comes back. */
   private readonly preloadFailed = new Set<string>();
   private preloadTimer = 0;
+  /** Edge tracker for FeatureSystem.suspend(): fired once when PvP starts, cleared when it ends. */
+  private suspendedNow = false;
 
   constructor(private readonly context: FeatureHostContext, private readonly registry: readonly FeatureDescriptor[] = FEATURES) {}
 
@@ -114,7 +116,21 @@ export class FeatureHost {
   // ---- frame -----------------------------------------------------------------------------------
 
   update(dt: number): void {
-    if (this.context.suspended()) return;
+    if (this.context.suspended()) {
+      // The suspend EDGE, once. A suspended feature's world "does not exist" (see mapIcons/hud/indoors
+      // below), so it must not be shaping the shared simulation either — a protest whose tyres have
+      // stopped burning is a road shut for as long as the player stays in PvP. Each feature retracts
+      // whatever it published; `update()` republishes on the first frame back.
+      if (!this.suspendedNow) {
+        this.suspendedNow = true;
+        for (const system of this.systems.values()) {
+          try { system.suspend?.(); }
+          catch (error) { console.error('[features] suspend failed', error); }
+        }
+      }
+      return;
+    }
+    this.suspendedNow = false;
     this.preloadTimer -= dt;
     if (this.preloadTimer <= 0) { this.preloadTimer = PRELOAD_INTERVAL; this.preloadNearby(); }
     // The eager slice ticks ONLY while the body is unloaded, and the loaded system's update() takes
@@ -336,6 +352,34 @@ export class FeatureHost {
     if (!system) { void this.open(id); return [`Loading ${feature.label}… run the command again once it's up.`]; }
     if (!system.command) return [`${feature.label} takes no console commands.`];
     return system.command(rest);
+  }
+
+  /**
+   * `give <item> [n]` for items a FEATURE owns (burning tyres and the like). Returns undefined when
+   * no feature declares the item, so the console can answer with its own honest error.
+   *
+   * A feature that is not loaded is LOADED for the grant — never a silent no-op: the console line
+   * says the fetch started, the grant lands the moment the body is up (announced via notify), and a
+   * failed fetch announces itself too. Suspension (online PvP) refuses loudly for the same reason.
+   */
+  grant(item: string, count: number): string[] | undefined {
+    const wanted = item.toLowerCase();
+    const owner = this.registry.find((feature) =>
+      feature.grants?.some((grant) => grant.item === wanted || grant.aliases?.includes(wanted)));
+    if (!owner) return undefined;
+    if (this.context.suspended()) return [`No ${wanted} in online play — features are suspended there.`];
+    const deliver = (system: FeatureSystem | undefined): string => {
+      if (!system) return `${owner.label} failed to load — nothing granted.`;
+      if (!system.grant) return `${owner.label} declares "${wanted}" but ships no grant handler — nothing granted. That is a bug.`;
+      return system.grant(wanted, count);
+    };
+    const loaded = this.systems.get(owner.id);
+    if (loaded) return [deliver(loaded)];
+    void this.open(owner.id).then((system) => {
+      // The console line already scrolled; the grant's own outcome arrives as a toast instead.
+      this.context.api.notify(system ? 'Granted' : 'Grant failed', deliver(system), Boolean(system));
+    });
+    return [`Loading ${owner.label} — the ${wanted} land the moment it's up.`];
   }
 
   /** Machine playthrough entry point, reached from tools/qa/harness.js as `needs:feature:<id>`. */

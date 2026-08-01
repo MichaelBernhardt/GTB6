@@ -25,9 +25,17 @@ export class CombatSystem {
   onShot?: (position: THREE.Vector3, origin: THREE.Vector3, directions: THREE.Vector3[], count: number, spec: WeaponSpec, exclude?: Vehicle) => void;
   private raycaster = new THREE.Raycaster();
   private pellets = Array.from({ length: 8 }, () => new THREE.Vector3()); // scratch fan, sized past the widest pellet count
-  private muzzle?: THREE.PointLight;
+  /** One permanent muzzle light, driven by intensity only. It used to be scene.add/removed per shot,
+   *  and every add/remove re-keys all ~1,700 lit materials against the changed light count (a
+   *  40–150 ms sweep twice per trigger pull; a NOVEL count recompiles ~25 shaders for seconds).
+   *  Same fixed-population rule as EffectLightPool / DayNight's streetlight pool. */
+  private muzzle: THREE.PointLight;
 
-  constructor(private scene: THREE.Scene, private audio: AudioManager) {}
+  constructor(private scene: THREE.Scene, private audio: AudioManager) {
+    this.muzzle = new THREE.PointLight(0xffb43b, 0, 7);
+    this.muzzle.name = 'muzzlelight'; this.muzzle.castShadow = false;
+    this.scene.add(this.muzzle);
+  }
 
   get spec(): WeaponSpec { return WEAPON_BY_ID[this.current]; }
   get state(): { ammo: number; reserve: number; owned: boolean } { return this.loadout[this.current]; }
@@ -86,7 +94,7 @@ export class CombatSystem {
       this.reloading -= dt;
       if (this.reloading <= 0) { const state = this.state; const count = Math.min(this.spec.magazine - state.ammo, state.reserve); state.ammo += count; state.reserve -= count; }
     }
-    if (this.muzzle) { this.muzzle.intensity *= 0.72; if (this.muzzle.intensity < 0.05) { this.scene.remove(this.muzzle); this.muzzle = undefined; } }
+    if (this.muzzle.intensity > 0) { this.muzzle.intensity *= 0.72; if (this.muzzle.intensity < 0.05) this.muzzle.intensity = 0; }
   }
 
   tryReload(input: InputManager): void {
@@ -103,8 +111,7 @@ export class CombatSystem {
       this.cooldown = 0.25; this.audio.emptyClick(); this.startReload(); return { fired: false };
     }
     state.ammo -= 1; this.cooldown = spec.cooldown * (options.cooldownScale ?? 1); this.shotsFired += 1; this.audio.gunshot(spec.sound);
-    if (this.muzzle) this.scene.remove(this.muzzle);
-    this.muzzle = new THREE.PointLight(0xffb43b, 3, 7); this.muzzle.position.copy(origin).add(new THREE.Vector3(0, 1.3, 0)); this.scene.add(this.muzzle);
+    this.muzzle.intensity = 3; this.muzzle.position.copy(origin).add(new THREE.Vector3(0, 1.3, 0));
     const hip = options.aim === false;
     let rayOrigin: THREE.Vector3; let baseDirection: THREE.Vector3;
     if (hip) { baseDirection = new THREE.Vector3(Math.sin(options.heading ?? 0), 0, Math.cos(options.heading ?? 0)); rayOrigin = origin.clone().add(new THREE.Vector3(0, 1.35, 0)).addScaledVector(baseDirection, 0.5); }

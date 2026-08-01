@@ -42,6 +42,8 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     id: 'fuel', saveKey: 'fuel', label: 'Petrol',
     sanitize: sanitizeFuelSave,
     load: () => import('./fuel/fuel'),
+    // `give petrol` fills the tank you are sitting in — the only fuel "object" there is to grant.
+    grants: [{ item: 'petrol', aliases: ['fuel'], label: 'Petrol' }],
     // Petrol is the one feature that has to be TRUE before the player opts in — a tank that only
     // starts draining once you have pulled into a garage is a mechanic you can decline, and a gauge
     // that only appears once the chunk lands is a gauge nobody ever sees. Both live in the eager
@@ -59,6 +61,9 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     id: 'protest', saveKey: 'protest', label: 'Protests + burning tyres',
     sanitize: sanitizeProtestState,
     load: () => import('./protest/protest'),
+    // `give tyres [n]` — the owner's named example for the testing grants. Metadata only; the
+    // granting itself is the body's grant() and an unloaded body is fetched, never no-opped.
+    grants: [{ item: 'tyre', aliases: ['tyres'], label: 'burning tyres' }],
     // The grievance is a SIMULATION — outage hours the player personally stood in — so it belongs on
     // the sim sub-step like every other one, and the chip that shows it belongs beside the fuel gauge.
     // Both hooks are one call each into the eager `protest.state.ts`, and the loaded body calls the
@@ -95,6 +100,12 @@ export const FEATURES: readonly FeatureDescriptor[] = [
     id: 'street', saveKey: 'street', label: 'Street economy',
     sanitize: sanitizeStreetState,
     load: () => import('./street/street'),
+    // The carried trade stock, by product and by street name, for `give zol 5` and friends.
+    grants: [
+      { item: 'zol', aliases: ['bankie', 'bankies'], label: 'the street economy' },
+      { item: 'buttons', aliases: ['button'], label: 'the street economy' },
+      { item: 'nyaope', aliases: ['straw', 'straws', 'whoonga'], label: 'the street economy' },
+    ],
     // The proximity ring. FeatureHost.preloadNearby() watches this every 0.4 s and loads the body
     // the moment the player is inside it, so the corners are staffed, lit and blipped BEFORE the
     // player is close enough to see anybody — which is the whole difference between "there are

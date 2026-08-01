@@ -200,7 +200,7 @@ export function buildPadstal(seed: number, options: BuildOptions = {}): BuiltMod
   kit.box(M.paving, w * 0.9, 0.2, 2, 0, 0, d / 2 + 1, { cast: false });
   for (const side of [-1, 1]) kit.box(M.timber, 0.13, 2.4, 0.13, side * w * 0.36, 0.2, d / 2 + 1.7);
   kit.box(roof, w * 0.95, 0.08, 2.5, 0, 2.72, d / 2 + 1.05, { rx: 0.14 });
-  kit.sign(kit.pick(5, ['PADSTAL', 'PLAASWINKEL', 'DROËWORS 100M', 'MOER KOFFIE']), '#e8d9a0', w * 0.8, 0.7, 0, h + 0.9, d / 2 + 0.36, { background: '#4a3a20' });
+  kit.sign(options.signName ?? kit.pick(5, ['PADSTAL', 'PLAASWINKEL', 'DROËWORS 100M', 'MOER KOFFIE']), '#e8d9a0', w * 0.8, 0.7, 0, h + 0.9, d / 2 + 0.36, { background: '#4a3a20' });
   kit.box(M.glassDark, w * 0.4, 1, 0.1, -w * 0.18, 0.9, d / 2 + 0.04, { cast: false }); // serving hatch
   kit.door(M.darkTimber, 0.9, 2.05, 0.08, w * 0.28, 0, d / 2 + 0.05, 'shopfront', { cast: false });
   for (let crate = 0; crate < 2 + variant; crate++) kit.box(M.timber, 0.55, 0.4, 0.55, w / 2 - 0.6 - crate * 0.7, 0.2, d / 2 + 1.4, { cast: false });

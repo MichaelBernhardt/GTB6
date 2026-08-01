@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
+import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
 import {
   BEACH_POLYGONS,
   COASTLINE,
@@ -44,6 +44,7 @@ import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
+import { boardText, parcelBuildingName, scatterBuildingName } from './buildingIdentity';
 import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type GeneratedBuilding } from './CityGen';
 import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
@@ -51,6 +52,7 @@ import type { BuiltModel } from './models/kit';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
 import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS } from './ProceduralMaterials';
+import { POTHOLE_SEGMENTS, potholeRimAt, potholeVertexRadius, RIM_MIN_SPAN, type PotholeHazard } from './PotholeShape';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
 import { PropRegistry } from '../systems/PropSystem';
@@ -159,6 +161,11 @@ export function storefrontSignLabel(variant: number): string {
 export function industrialSignLabel(variant: number): string {
   return INDUSTRIAL_SIGNS[((variant % INDUSTRIAL_SIGNS.length) + INDUSTRIAL_SIGNS.length) % INDUSTRIAL_SIGNS.length]!;
 }
+
+/** World units per UV repeat on foundation/retaining-wall concrete. The concrete texture carries
+ *  its own 10x repeat, so this is 3 u per visible concrete tile — the mid-point of the per-face
+ *  pitches the unscaled boxes used to show. See the foundation pass in buildOneBuilding. */
+export const FOUNDATION_UV_TILE = { width: 30, height: 30 };
 
 export const ROAD_SURFACE_OFFSET = 0.15;
 export const SIDEWALK_RISE = 0.22;
@@ -943,7 +950,7 @@ export class City {
   private target: THREE.Group = this.group;
   colliders: Collider[] = [];
   props = new PropRegistry();
-  potholes: Array<{ x: number; z: number; r: number }> = []; // road features, not props: no collider, cars rattle over them
+  potholes: PotholeHazard[] = []; // road features, not props: no collider, cars rattle over them
   roadPoints: RoadPoint[] = [];
   sidewalkPoints: RoadPoint[] = [];
   roadsidePoints: RoadsidePoint[] = [];
@@ -1338,6 +1345,14 @@ export class City {
     if (this.collidesAt(output.x, from.z, radius, y0, y1)) output.x = from.x;
     if (this.collidesAt(output.x, output.z, radius, y0, y1)) output.z = from.z;
     return output;
+  }
+
+  /** Whether the building/scatter chunk cell under a point has actually been BUILT this session.
+   *  Doors derive from map data, not geometry, so a doorway can otherwise offer a prompt on a
+   *  building that is not there yet — E on a steel frame standing on bare sand teleported the player
+   *  into the interior of an invisible building. The interiors rung gates its offer on this. */
+  hasBuiltStructuresAt(x: number, z: number): boolean {
+    return this.buildingCells.has(`${Math.floor(x / MERGE_CHUNK_SIZE)},${Math.floor(z / MERGE_CHUNK_SIZE)}`);
   }
 
   /** Highest standable surface whose top sits at or below feetY + stepUp: stacked building tiers, containers
@@ -1900,13 +1915,26 @@ export class City {
   }
 
   private buildPotholes(): void {
-    for (const point of this.roadPoints) {
-      if (seeded(point.x, point.z, 55) <= 0.96) continue;
-      const x = point.x + (seeded(point.x, point.z, 56) - 0.5) * 3;
-      const z = point.z + (seeded(point.x, point.z, 57) - 0.5) * 3;
-      if (!this.isOnRoad(x, z, -2)) continue;
-      if (CITY_JUNCTIONS.some((junction) => Math.hypot(x - junction.x, z - junction.z) < 16)) continue;
-      this.potholes.push({ x, z, r: 1.1 + seeded(point.x, point.z, 58) * 0.9 });
+    // Walked as ROUTES rather than as the flat roadPoints list (which is exactly these routes
+    // concatenated) purely so each hole can read the bearing of the lane it sits in: PotholeShape
+    // stretches it along the traffic that broke the tar, and that is the one thing about a hole's
+    // shape that its own coordinates cannot tell you.
+    for (const route of this.trafficRoutes) {
+      for (let index = 0; index < route.length; index++) {
+        const point = route[index]!;
+        if (seeded(point.x, point.z, 55) <= 0.96) continue;
+        const x = point.x + (seeded(point.x, point.z, 56) - 0.5) * 3;
+        const z = point.z + (seeded(point.x, point.z, 57) - 0.5) * 3;
+        if (!this.isOnRoad(x, z, -2)) continue;
+        if (CITY_JUNCTIONS.some((junction) => Math.hypot(x - junction.x, z - junction.z) < 16)) continue;
+        const back = route[Math.max(0, index - 1)]!; const forward = route[Math.min(route.length - 1, index + 1)]!;
+        const runX = forward.x - back.x; const runZ = forward.z - back.z;
+        this.potholes.push({
+          x, z,
+          r: 1.1 + seeded(point.x, point.z, 58) * 0.9,
+          axis: runX === 0 && runZ === 0 ? 0 : Math.atan2(runZ, runX),
+        });
+      }
     }
     // Each pothole is DRAPED onto the road surface (every vertex sampled at roadHeightAt) rather than a flat
     // disc laid at its centre's height — so on a slope, or across a crease where the tar steps to a steeper
@@ -1914,40 +1942,61 @@ export class City {
     // winding never culls them; merged into two meshes so they fold into the chunked road buckets.
     const holeParts: THREE.BufferGeometry[] = []; const rimParts: THREE.BufferGeometry[] = [];
     for (const pothole of this.potholes) {
-      holeParts.push(this.drapedPotholeDisc(pothole.x, pothole.z, pothole.r, 0.03));
-      rimParts.push(this.drapedPotholeRing(pothole.x, pothole.z, pothole.r, pothole.r * 1.22, 0.036));
+      holeParts.push(this.drapedPotholeDisc(pothole, 0.03));
+      const rim = this.drapedPotholeRing(pothole, 0.036);
+      if (rim) rimParts.push(rim);
     }
     if (!holeParts.length) return;
     const holeMesh = new THREE.Mesh(mergeGeometries(holeParts, false), new THREE.MeshBasicMaterial({ color: 0x0d1113, side: THREE.DoubleSide }));
+    this.group.add(holeMesh);
+    if (!rimParts.length) return;
     const rimMesh = new THREE.Mesh(mergeGeometries(rimParts, false), new THREE.MeshBasicMaterial({ color: 0x3f4649, side: THREE.DoubleSide }));
-    this.group.add(holeMesh, rimMesh);
+    this.group.add(rimMesh);
   }
 
-  /** A pothole's dark disc, tessellated (centre + two radial rings × 14) and draped onto the road so it
-   *  follows slopes and crease transitions instead of a flat plane the tar swallows. */
-  private drapedPotholeDisc(cx: number, cz: number, r: number, lift: number): THREE.BufferGeometry {
-    const SEG = 14;
-    const positions: number[] = [cx, this.roadHeightAt(cx, cz) + lift, cz]; // centre = index 0
-    for (const rad of [r * 0.55, r]) for (let s = 0; s < SEG; s++) {
-      const ang = (s / SEG) * Math.PI * 2; const x = cx + Math.cos(ang) * rad; const z = cz + Math.sin(ang) * rad;
+  /** A pothole's dark shape: a fan of POTHOLE_SEGMENTS wedges, every vertex draped onto the road so it
+   *  follows slopes and crease transitions instead of a flat plane the tar swallows. The fan's outer
+   *  edge rides PotholeShape's outline rather than a constant radius, so the silhouette the player
+   *  sees is the same irregular edge Game and JoziFlowSystem measure their clearances against.
+   *
+   *  The disc used to carry a second ring at 0.55r to sharpen the drape. Measured across all 1361
+   *  potholes, the terrain pokes through the fan on 10 of them against 4 with the extra ring — the
+   *  median hole sits inside one terrain-grid triangle, where the surface is planar and the ring buys
+   *  exactly nothing. It cost 40 triangles on every hole in the city to rescue six, so it is gone and
+   *  the budget went into the silhouette instead. */
+  private drapedPotholeDisc(hole: PotholeHazard, lift: number): THREE.BufferGeometry {
+    const SEG = POTHOLE_SEGMENTS;
+    const positions: number[] = [hole.x, this.roadHeightAt(hole.x, hole.z) + lift, hole.z]; // centre = index 0
+    for (let s = 0; s < SEG; s++) {
+      const ang = (s / SEG) * Math.PI * 2; const rad = potholeVertexRadius(hole, s);
+      const x = hole.x + Math.cos(ang) * rad; const z = hole.z + Math.sin(ang) * rad;
       positions.push(x, this.roadHeightAt(x, z) + lift, z);
     }
     const indices: number[] = [];
-    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; indices.push(0, 1 + s, 1 + s1); } // centre fan to the inner ring
-    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; const a = 1 + s; const b = 1 + s1; const c = 1 + SEG + s; const d = 1 + SEG + s1; indices.push(a, c, b, b, c, d); }
+    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; indices.push(0, 1 + s, 1 + s1); }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices);
     return geometry;
   }
 
-  /** A pothole's grey rim ring, draped onto the road like the disc. */
-  private drapedPotholeRing(cx: number, cz: number, rIn: number, rOut: number, lift: number): THREE.BufferGeometry {
-    const SEG = 14; const positions: number[] = []; const indices: number[] = [];
+  /** A pothole's broken-tar collar, draped onto the road like the shape it surrounds. Its width varies
+   *  around the circumference and closes entirely where the tar still holds: those segments emit no
+   *  quad at all rather than a degenerate one, which is what pays for the finer tessellation. Returns
+   *  null when a hole's collar closes the whole way round. */
+  private drapedPotholeRing(hole: PotholeHazard, lift: number): THREE.BufferGeometry | null {
+    const SEG = POTHOLE_SEGMENTS; const positions: number[] = []; const indices: number[] = [];
+    const spans: number[] = [];
     for (let s = 0; s < SEG; s++) {
       const ang = (s / SEG) * Math.PI * 2; const c = Math.cos(ang); const sn = Math.sin(ang);
-      for (const rad of [rIn, rOut]) { const x = cx + c * rad; const z = cz + sn * rad; positions.push(x, this.roadHeightAt(x, z) + lift, z); }
+      const rim = potholeRimAt(hole, s); spans.push(rim.outer - rim.inner);
+      for (const rad of [rim.inner, rim.outer]) { const x = hole.x + c * rad; const z = hole.z + sn * rad; positions.push(x, this.roadHeightAt(x, z) + lift, z); }
     }
-    for (let s = 0; s < SEG; s++) { const s1 = (s + 1) % SEG; const a = s * 2; const b = s * 2 + 1; const c = s1 * 2; const d = s1 * 2 + 1; indices.push(a, c, b, b, c, d); }
+    for (let s = 0; s < SEG; s++) {
+      const s1 = (s + 1) % SEG;
+      if (spans[s]! < RIM_MIN_SPAN * hole.r && spans[s1]! < RIM_MIN_SPAN * hole.r) continue;
+      const a = s * 2; const b = s * 2 + 1; const c = s1 * 2; const d = s1 * 2 + 1; indices.push(a, c, b, b, c, d);
+    }
+    if (!indices.length) return null;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); geometry.setIndex(indices);
     return geometry;
@@ -2674,7 +2723,16 @@ export class City {
     const foundationMaterials = this.foundationMaterialsFor(foundationIdentity);
     for (const foundation of foundations) {
       const foundationW = foundation.maxX - foundation.minX; const foundationH = foundation.y1 - foundation.y0; const foundationD = foundation.maxZ - foundation.minZ;
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(foundationW, foundationH, foundationD), foundationMaterials.wall);
+      // World-pitched concrete: a plain box face spans 0..1 UV whatever its size, so two abutting
+      // foundation tiers of different depths used to change concrete scale 1.8x across one
+      // continuous retaining wall (the MARTIAL x SMAL corner). Every face at least one
+      // FOUNDATION_UV_TILE wide/tall now shares one world pitch; smaller faces clamp to a single
+      // whole repeat — the pre-fix look — because a fractional repeat samples an arbitrary
+      // sub-window of the photo and renders whole short walls flat grey (owner-reported when this
+      // briefly shipped unfloored).
+      const mesh = new THREE.Mesh(
+        scaleBoxFacadeUvs(new THREE.BoxGeometry(foundationW, foundationH, foundationD), foundationW, foundationH, foundationD, FOUNDATION_UV_TILE),
+        foundationMaterials.wall);
       mesh.position.set((foundation.minX + foundation.maxX) / 2, (foundation.y0 + foundation.y1) / 2, (foundation.minZ + foundation.maxZ) / 2);
       mesh.receiveShadow = true; group.add(mesh);
       this.addFoundationCharacter(group, foundation, foundationIdentity, foundationMaterials.accent, sourceVariant);
@@ -2683,8 +2741,12 @@ export class City {
     this.addLedge(profile.tiers, Math.min(h - 0.5, 3.6));
     if (profile.entrance) this.addEntrance(style, profile.entrance);
     if (detailed && style === 'dense-residential') this.addBalconies(0, w, h, profile.tiers);
-    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables);
-    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers);
+    // The name on the board is the building's ONE identity — the same derivation the interiors
+    // feature puts on the E prompt (see buildingIdentity.ts). A building with no tagged entrance
+    // never opens, so it keeps the old generic-business vocabulary.
+    const boardName = profile.entrance ? boardText(parcelBuildingName(spec.x, spec.z, style, profile.entrance.kind)) : undefined;
+    if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables, boardName);
+    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName);
     this.addRoofEquipment(0, 0, w, d, h, profile.tiers, profile.gables, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.tiers, profile.gables, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
@@ -2801,8 +2863,12 @@ export class City {
    *  comes back as a 'tree' prop for the caller to register, exactly like the roadside and park trees.
    *  Every structure registers its (true-3D, standable-aware) tier colliders. */
   private buildOneModel(spec: ScatteredModel): { group: THREE.Group; colliders: Collider[]; trunk?: TrunkProp } {
-    const built = buildModel(spec.name, spec.seed, { variant: spec.variant });
-    const foliage = MODEL_INDEX.get(spec.name)?.category === 'foliage';
+    const def = MODEL_INDEX.get(spec.name);
+    // Every model a person can walk into gets its ONE name handed to the builder, so the board it
+    // paints is the name the interiors feature will put on the prompt (see buildingIdentity.ts).
+    const signName = def?.interior ? boardText(scatterBuildingName(spec.x, spec.z, def.interior.family, def.interior.kind, spec.name)) : undefined;
+    const built = buildModel(spec.name, spec.seed, { variant: spec.variant, signName });
+    const foliage = def?.category === 'foliage';
     // Footprint from the model's massing tiers (local AABB union).
     let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
     for (const tier of built.tiers) { minX = Math.min(minX, tier.minX); maxX = Math.max(maxX, tier.maxX); minZ = Math.min(minZ, tier.minZ); maxZ = Math.max(maxZ, tier.maxZ); }
@@ -2933,7 +2999,7 @@ export class City {
     }
   }
 
-  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, variant: number, tiers: readonly MassingTier[], gables: readonly GableSpec[]): void {
+  private addIndustrialDetail(x: number, z: number, w: number, d: number, h: number, variant: number, tiers: readonly MassingTier[], gables: readonly GableSpec[], boardName?: string): void {
     const shutterH = Math.min(5, h * 0.48); const shutterY = shutterH / 2 + 0.2;
     const shutterSpan = widestFrontFacadeSpanAt(tiers, shutterY, x - w / 2, x + w / 2, 3.2);
     if (shutterSpan) {
@@ -2954,7 +3020,7 @@ export class City {
       const signW = Math.min(7.5, signSpan.maxX - signSpan.minX - 0.45);
       const signX = THREE.MathUtils.clamp(shutterX, signSpan.minX + signW / 2, signSpan.maxX - signW / 2);
       const accent = variant % 2 ? '#f0ae43' : '#72d8d2';
-      const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.2), industrialSignLabel(variant), accent, { powered: variant % 3 === 0 });
+      const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.2), boardName ?? industrialSignLabel(variant), accent, { powered: variant % 3 === 0 });
       sign.name = 'procedural-industrial-sign'; sign.position.set(signX, signY, signSpan.z + 0.08); this.target.add(sign);
     }
     for (const side of [-1, 1]) {
@@ -2972,7 +3038,7 @@ export class City {
     if (variant % 4 === 0) this.addRoofSign(x, z, w, d, tiers, gables, variant);
   }
 
-  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[]): void {
+  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[], boardName?: string): void {
     const frame = new THREE.MeshStandardMaterial({ color: 0x273235, metalness: 0.55, roughness: 0.38 });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x315f68, roughness: 0.12, metalness: 0.18, clearcoat: 0.7 });
     const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
@@ -2998,7 +3064,7 @@ export class City {
       const facadeZ = frontFacadeZAt(tiers, signX, signY, signW / 2);
       if (facadeZ !== undefined) {
         const accents = ['#f0ae43', '#72d8d2', '#ef6556', '#74e392'];
-        const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.05), storefrontSignLabel(variant), accents[variant % accents.length] ?? '#f0ae43', { powered: variant % 2 === 0 });
+        const sign = createSignMesh(new THREE.PlaneGeometry(signW, 1.05), boardName ?? storefrontSignLabel(variant), accents[variant % accents.length] ?? '#f0ae43', { powered: variant % 2 === 0 });
         sign.name = 'procedural-storefront-sign'; sign.position.set(signX, signY, facadeZ + 0.08); this.target.add(sign);
       }
     }
