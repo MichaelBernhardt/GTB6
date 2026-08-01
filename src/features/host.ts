@@ -214,6 +214,33 @@ export class FeatureHost {
     return false;
   }
 
+  /** The interior floor height under the player, or undefined outdoors. See FeatureSystem.indoorFloorY. */
+  indoorFloorY(): number | undefined {
+    if (this.context.suspended()) return undefined;
+    for (const system of this.systems.values()) {
+      const y = system.indoorFloorY?.();
+      if (y !== undefined) return y;
+    }
+    return undefined;
+  }
+
+  /** True while any feature owns the player's hands in a modal interaction. See FeatureSystem.handsBusy. */
+  handsBusy(): boolean {
+    if (this.context.suspended()) return false;
+    for (const system of this.systems.values()) if (system.handsBusy?.()) return true;
+    return false;
+  }
+
+  /** The doorstep to save as the player's world position while indoors. See FeatureSystem.outdoorAnchor. */
+  outdoorAnchor(): { x: number; z: number } | undefined {
+    if (this.context.suspended()) return undefined;
+    for (const system of this.systems.values()) {
+      const anchor = system.outdoorAnchor?.();
+      if (anchor) return anchor;
+    }
+    return undefined;
+  }
+
   /** One context per frame for the eager hooks, in whichever ladder the player is actually in. */
   private eagerFrame(): InteractionCtx {
     return this.frame(this.context.api.drivenVehicle() ? 'vehicle' : 'foot');

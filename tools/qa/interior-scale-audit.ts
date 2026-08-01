@@ -9,7 +9,7 @@ import { allScatteredModels } from '../../src/world/ModelScatter';
 import { CELL_SIZE } from '../../src/world/CityGen';
 import { doorsNear } from '../../src/features/interiors/doors';
 import {
-  buildCore, CEILING, CORRIDOR, FACADE_STOREY, MIN_PLATE, STOREY_HEIGHT,
+  buildCore, CEILING, CORRIDOR, FACADE_STOREY, FLAT_MIN_DEPTH, FULL_MIN_WIDTH, STOREY_HEIGHT, TARDIS_MAX,
   type BuildingCore,
 } from '../../src/features/interiors/core';
 import { MAP_STATS } from '../../src/world/mapData';
@@ -35,7 +35,7 @@ const scatterDoors = all.filter((d) => d.id.startsWith('s'));
 const M = MAP_STATS.metresPerUnit; // exterior: real-world metres per game unit, from the shipped fit
 console.log(`DENOMINATOR: ${all.length} unique enterable doors (${parcelDoors.length} parcel + ${scatterDoors.length} scattered), from ${cellKeys.size} chunk cells`);
 console.log(`EXTERIOR SCALE: stats.fit.scale=${MAP_STATS.fit?.scale} u/projected-metre -> ${M} m/unit; player ${PLAYER.height}u tall, r=${PLAYER.radius}u`);
-console.log(`INTERIOR CONSTANTS: storey ${STOREY_HEIGHT}u (clear ${CEILING}u), facade storey ${FACADE_STOREY}u, corridor ${CORRIDOR}u, partition doorway 2.0u, exit door 2.2u, min plate ${MIN_PLATE[0]}x${MIN_PLATE[1]}u`);
+console.log(`INTERIOR CONSTANTS: storey ${STOREY_HEIGHT}u (clear ${CEILING}u), facade storey ${FACADE_STOREY}u, corridor ${CORRIDOR}u, partition doorway 2.0u, exit door 2.2u, tardis max ${TARDIS_MAX}x, full-grammar floor ${FULL_MIN_WIDTH.toFixed(1)}x${FLAT_MIN_DEPTH.toFixed(1)}u`);
 console.log('');
 
 interface Row { door: InteriorDoor; core: BuildingCore }

@@ -91,6 +91,25 @@ export interface FeatureEagerSlice {
 /** Analytics payload: flat, small, and bounded server-side (see server/analytics.mjs). */
 export interface FeatureEventProps { detail?: string; value?: number }
 
+/** A plain world point. Deliberately not a THREE.Vector3: a cutscene hands the game NUMBERS, so the
+ *  shot can be computed, asserted and unit-tested without a scene graph. */
+export interface FeaturePoint { readonly x: number; readonly y: number; readonly z: number }
+
+/**
+ * One frame of a cutscene: where the lens is and what it looks at.
+ *
+ * The camera EASES to `eye` rather than cutting to it, which is what makes a pull-back read as a
+ * crane rather than a teleport, and it is why the whole shot is expressed as an absolute pose the
+ * feature can recompute every tick instead of a one-shot command.
+ */
+export interface FeatureCinemaShot {
+  readonly eye: FeaturePoint;
+  readonly focus: FeaturePoint;
+  /** The one line printed in the lower bar. Say how to get out — a cutscene with no visible exit is
+   *  reported as a freeze, every time. */
+  readonly hint?: string;
+}
+
 /**
  * Everything a feature may touch. Deliberately FLAT and all-callable: every volatile value is a
  * method, so there is no way to accidentally cache a stale player position or a stale balance. The
@@ -133,6 +152,23 @@ export interface FeatureGameApi {
   /** Live render-camera position. Optional so older/test feature hosts remain source compatible;
    *  interiors use it to hide only the walls that really sit between the lens and the player. */
   cameraPosition?(): Vector3;
+  /**
+   * CINEMA — the game's cutscene seam, and its first user is the street's short time.
+   *
+   * Pass a shot to raise it: the letterbox bars slide in, the camera cranes to that pose, and the
+   * player's controls go neutral. The WORLD KEEPS RUNNING underneath — traffic, weather, the clock
+   * and the radio — because a cutscene that silences the car stereo throws away the only soundtrack
+   * it had. Pass `undefined` to lower the bars and hand the camera back to the chase cam.
+   *
+   * Call it EVERY tick while the scene runs, with the pose you want this tick, and read the return:
+   * it is TRUE on the tick the player asked out (E or SPACE). A scene that ignores that answer is a
+   * scene the player is trapped in, so treat a `true` as "cut to the end state, now".
+   *
+   * Optional so older/test feature hosts stay source compatible. A MISSING SEAM MUST NOT BREAK THE
+   * FEATURE: check for it before you commit to a scene and go straight to whatever the scene was
+   * presentation for, because the payoff is the feature and the scene is only the way in.
+   */
+  cinema?(shot: FeatureCinemaShot | undefined): boolean;
   /** The vehicle the player is driving, or undefined on foot. */
   drivenVehicle(): Vehicle | undefined;
   /** Hour of day, 0..24 (fractional). */
@@ -213,6 +249,23 @@ export interface FeatureSystem {
    *  ask "is the player outdoors?" without knowing which features exist (Game.torchWouldHelp: the
    *  torch hint must not fire at someone standing in a lit room). Almost no feature needs this. */
   indoors?(): boolean;
+  /** World-space y of the interior floor the player currently stands on, while indoors() is true.
+   *  The host takes the first defined answer. Exists because the player's OWN y is unreliable
+   *  mid-frame — Player.update grounds against the terrain before the feature's clamp re-pins the
+   *  interior height — so host systems that ground things (gore decals land on "the floor here")
+   *  need the feature's answer, not the player's transient one. */
+  indoorFloorY?(): number | undefined;
+  /** A SAFE OUTDOOR world position for this feature's current indoor state — the doorstep of the
+   *  building the player is inside. The save writes THIS as the player's world position while
+   *  indoors, never the raw one (which sits ~30 u under the terrain): any loader that ignores the
+   *  feature slice — an older build, a failed feature load — then spawns the player at the front
+   *  door instead of underground. The feature's own save slice carries the way back in. */
+  outdoorAnchor?(): { x: number; z: number } | undefined;
+  /** True while this feature owns the player's HANDS in a modal interaction — the lock-picking
+   *  dial today. The host ORs it; Game yields the shared prompt slot to the feature's own
+   *  guidance and holds cover entry while it is true, so "Q Take cover" can never paper over
+   *  "E Turn it — NOW" mid-bite. */
+  handsBusy?(): boolean;
   /** Full-fidelity interaction rungs. These replace the eager `approach` entry once loaded. */
   interactions?(): readonly InteractionDescriptor[];
   /** The slice stored under `SavedGame.features[saveKey]`. Must be JSON-safe. */

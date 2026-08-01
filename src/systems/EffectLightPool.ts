@@ -55,4 +55,13 @@ export class EffectLightPool {
 
   /** Idle slots remaining (for tests and the console). */
   get available(): number { return this.free.length; }
+
+  /** Drop the whole pool out of (or back into) the renderer's light census. Used while the player
+   *  is inside a feature interior: the outdoor world these lights serve is hidden there, but a
+   *  visible light — even at intensity 0 — still costs every rendered fragment a loop iteration.
+   *  Borrow/release bookkeeping is untouched; an effect firing while hidden simply renders without
+   *  its glow, which is already the pool-exhausted contract. */
+  setVisible(visible: boolean): void {
+    for (const light of this.lights) light.visible = visible;
+  }
 }

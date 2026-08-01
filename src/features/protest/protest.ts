@@ -314,7 +314,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // means it's not much of a protest." It is granted here rather than on `E  Join the picket`,
       // because a crowd that scatters as you walk up is a picket there is nothing left to join. It
       // lasts exactly as long as the barricade stands, and hurting anybody in sight ends it — see
-      // SOLIDARITY_FEAR_CAP in FearSystem and PopulationSystem.breakSolidarity.
+      // HOLD_GROUND_CAP in FearSystem and PopulationSystem.breakSolidarity.
       ped.solidarity = true;
       crowd.push(ped);
     }

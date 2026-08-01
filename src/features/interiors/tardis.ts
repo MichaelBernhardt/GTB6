@@ -1,12 +1,11 @@
 /**
  * THE TARDIS TRANSFORM — the one place interior coordinates are related to the real building.
  *
- * Interiors are deliberately bigger than the buildings that hold them: the plate is clamped to
- * MIN_PLATE..MAX_PLATE so a room can hold the 9.5 u camera boom (see core.ts), which makes 58.6%
- * of this city's 7,415 interiors exceed their own massing on at least one axis — the worst case
- * measured citywide is a 5.9 × 5.0 u spaza wearing a 15.1 × 21 u interior, 4.2× deeper than the
- * shed it lives in (tools/qa/interior-scale-audit.ts). Nothing notices while the interior stays
- * sealed 30 u underground. The moment anything relates INSIDE to OUTSIDE, a raw world-unit
+ * Interiors can be bigger than the buildings that hold them: the plate is the footprint times a
+ * bounded Tardis factor (see core.ts — the factor exists so a room can hold the 9.5 u camera
+ * boom), which still leaves 20.3% of this city's 7,415 interiors exceeding their own massing on
+ * at least one axis (was 58.6% under the old MIN_PLATE clamp; tools/qa/interior-scale-audit.ts).
+ * Nothing notices while the interior stays sealed 30 u underground. The moment anything relates INSIDE to OUTSIDE, a raw world-unit
  * mapping puts the point in the neighbour's yard: roof exits hit this first (the hatch must open
  * onto the real massing top), and exterior-view windows hit it next. So every inside↔outside
  * mapping goes through here, PROPORTIONALLY — an interior point maps by where it sits ON THE

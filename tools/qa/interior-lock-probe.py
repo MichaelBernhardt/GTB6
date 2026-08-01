@@ -110,6 +110,11 @@ async (stage) => {
     state.home = door;
     out.door = `${door.id} ${door.name}`;
     standAt(door);
+    // The organic stage's `reload` disposed every loaded feature; the pickless checks below expect
+    // SILENCE from the ladder, so unlike every other stage they cannot let offerNow() absorb the
+    // re-load — wait for the body explicitly or the silence proves nothing.
+    for (let i = 0; i < 50 && !g.features.isLoaded('interiors'); i++) { settle(2); await new Promise(r => setTimeout(r, 200)); }
+    check('interiors body loaded', g.features.isLoaded('interiors'), String(g.features.isLoaded('interiors')));
     settle(10);
     // Pickless at a locked door: NO offer at all — an offer (even an honest explainer) claims E
     // from the `E  Enter vehicle` rung below, the exact PR #120 press-theft. The passive LOCKED
