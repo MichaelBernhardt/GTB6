@@ -504,7 +504,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   /**
    * Where the hatch puts you out: the stair's own spot mapped back onto the REAL roof. The interior
-   * plate is scaled relative to the footprint (58.6% of interiors exceed their massing on an axis),
+   * plate is scaled relative to the footprint (20.3% of interiors still exceed their massing on an axis),
    * so the stair position goes through the shared Tardis transform (tardis.ts — the one place
    * inside is related to outside) and is then clamped a metre inside the top tier — NEVER mapped
    * one-to-one, or half the city's hatches would open onto thin air beside the building. Altitude
