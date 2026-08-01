@@ -714,6 +714,80 @@ describe('every stair class is climbable', () => {
 });
 
 /**
+ * THE RAILS ARE REAL. The owner's follow-up, verbatim: "it's a little tricky to climb the stairs
+ * because you just fall off the sides as you go up and around the flights if you're not super
+ * careful." The side edges of the shaft are sealed by the clamp now (and railed by build.ts), so
+ * this walks the exact failure: up the switchback PRESSING OUTWARD the whole way — every stride
+ * aimed two metres past the open edge — and asserts the player stays on the flight, arrives on
+ * floor 1, and can still walk the ground floor past the stair afterwards.
+ */
+describe('the stair rails hold', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  it('climbs the switchback hugging the outside of the turn without falling off', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    // A mid-class island in the open, so falling off the side would be a real half-storey drop
+    // AND the ground floor genuinely walks past the shaft (both halves of the fix in one room).
+    const entry = doorsNear(0, 0, 2600)
+      .map((door) => ({ door, core: buildCore(door.facts) }))
+      .filter(({ door, core }) => core.stairClass === 'mid' && !doorLocked(door.facts, 'outside', 13))
+      .sort((a, b) => Math.hypot(a.door.x, a.door.z) - Math.hypot(b.door.x, b.door.z))[0];
+    expect(entry, 'no open mid-class building near the origin').toBeDefined();
+    const { door, core } = entry!;
+    const s = core.stair!;
+    const lane = s.w / 4;
+    const up = core.stairDir;
+    const minZ = s.z - s.d / 2, maxZ = s.z + s.d / 2;
+    const outside = s.x + up * (s.w / 2 + 2);       // two metres past the open edge of the up flight
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+
+    const walk = (x: number, z: number, max = 400): string => {
+      let last = '';
+      for (let i = 0; i < max; i++) {
+        last = system.qa!('walk', { x, z });
+        const [, lx, lz] = last.split('|');
+        if (Math.hypot(parseFloat(lx!) - x, parseFloat(lz!) - z) < 0.18) break;
+      }
+      return last;
+    };
+    // Onto the spine and square in front of the up lane, then IN.
+    walk(core.corridorX, minZ - 1.6);
+    walk(s.x + up * lane, minZ - 1.2);
+    walk(s.x + up * lane, minZ + 0.3);
+    // Up the flight aiming OUTWARD at every step — the owner's hug. The rail must hold the x while
+    // the z (and therefore the altitude) climbs.
+    const baseY = parseFloat(walk(outside, minZ + 0.3).split('|')[3]!.slice(2));
+    let highest = baseY;
+    for (const z of [minZ + s.d * 0.35, minZ + s.d * 0.7, maxZ - 0.7]) {
+      const state = walk(outside, z);
+      const [, lx, , y] = state.split('|');
+      expect(Math.abs(parseFloat(lx!) - s.x) < s.w / 2 - 0.3,
+        `pressed past the rail at z=${z.toFixed(1)}: ${state}`).toBe(true);
+      highest = Math.max(highest, parseFloat(y!.slice(2)));
+    }
+    expect(highest - baseY, 'the hug never gained height — not on the flight at all').toBeGreaterThan(1.2);
+    // Around the turn (still pressing outward on the OTHER side) and out one storey up.
+    walk(s.x - up * lane, maxZ - 0.7);
+    walk(s.x - up * (s.w / 2 + 2), minZ + 0.5, 500);
+    walk(s.x - up * lane, minZ + 0.3);
+    walk(s.x, minZ - 1.6);
+    const upStatus = system.qa!('status', {});
+    expect(upStatus, 'hugging the rails the whole way must still deliver floor 1').toContain('floor=1');
+    // Back down clean, then the other half of the promise: the ground floor still walks PAST the
+    // shaft — the side caps are the shaft's edge, not a fence around the room.
+    expect(system.qa!('floor', { n: 0 }).startsWith('ok')).toBe(true);
+    walk(core.corridorX, minZ - 1.6);
+    const behind = walk(core.corridorX, maxZ + 1.6, 600);
+    expect(behind.startsWith('ok'), `ground floor no longer passes the stair: ${behind}`).toBe(true);
+    const [, , lz] = behind.split('|');
+    expect(parseFloat(lz!), 'never reached the band behind the island').toBeGreaterThan(maxZ + 1.0);
+    system.dispose();
+  }, 300000);
+});
+
+/**
  * EVERY HATCH OPENS FROM THE ROOF SIDE, ALWAYS. Round 2 kept the hatch behind the lock line plus a
  * re-arming grace window, and shipped a residual trap anyway (#128): jump from your graced roof A
  * to neighbouring roof B and B's hatch wanted a pick you might not carry. The owner's call closed

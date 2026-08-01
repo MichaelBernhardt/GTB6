@@ -196,7 +196,13 @@ export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
       // ladder to a roof hatch instead of a rail, and E under it takes you out onto the real roof.
       buildStairHead(core.stair, core.stairDir, height, ends.hatch, shaftKit);
     } else {
-      buildStair(core.stair, core.stairDir, height, island, shaftKit);
+      // Which side edges are OPEN floor (rail wanted) rather than plate wall or lift shaft.
+      const liftOnLow = core.lift !== undefined && Math.abs(rectMaxX(core.lift) - rectMinX(core.stair)) < 0.5;
+      const liftOnHigh = core.lift !== undefined && Math.abs(rectMinX(core.lift) - rectMaxX(core.stair)) < 0.5;
+      buildStair(core.stair, core.stairDir, height, island, {
+        low: rectMinX(core.stair) + plan.width / 2 > 0.35 && !liftOnLow,
+        high: plan.width / 2 - rectMaxX(core.stair) > 0.35 && !liftOnHigh,
+      }, shaftKit);
     }
     if (ends.ground) {
       // THE FOOT OF THE STAIRWELL. Downstairs from the ground floor there is nothing, and the old
@@ -306,7 +312,10 @@ interface Kit {
  *
  * See interiors.ts stairProgress() for the matching altitude function: this draws it, that walks it.
  */
-function buildStair(shaft: Rect, dir: 1 | -1, height: number, sealedRear: boolean, kit: Kit): void {
+function buildStair(
+  shaft: Rect, dir: 1 | -1, height: number, sealedRear: boolean,
+  openSides: { low: boolean; high: boolean }, kit: Kit,
+): void {
   const { box, solid } = kit;
   const tread = solid(0x77726a, 0.9);
   const nose = solid(0x3b4143, 0.7);
@@ -336,9 +345,29 @@ function buildStair(shaft: Rect, dir: 1 | -1, height: number, sealedRear: boolea
   // The spine wall between the two flights: it is what stops you stepping sideways off a half
   // landing, and it is the thing that makes the shaft read as a stairwell rather than a ramp.
   box(0.12, height, shaft.d * 0.62, solid(0x8d877c, 0.9), shaft.x, height / 2, shaft.z - shaft.d * 0.19);
-  // A handrail down the outside of each flight.
-  for (const sign of [-1, 1] as const) {
-    box(0.07, 0.07, shaft.d, solid(0x4a5254, 0.5), shaft.x + sign * (halfW - 0.08), STOREY_HEIGHT * (sign === dir ? 0.25 : 0.75) + 1.0, shaft.z);
+  // RAILS DOWN THE OPEN SIDES — sloped with their own flight, posted, and REAL: the clamp carries a
+  // matching collider along both side edges (see obstacles() in interiors.ts), because the owner's
+  // report was walking up a switchback and drifting off the side of it. The old version drew one
+  // floating horizontal rail per side and enforced nothing. A side standing against the plate wall
+  // or the lift shaft draws no rail (there is a wall there); the collider holds regardless.
+  const steel = solid(0x4a5254, 0.5);
+  const rise = STOREY_HEIGHT / 2;
+  const slope = Math.atan2(rise, shaft.d);
+  for (const side of [-1, 1] as const) {
+    if (!(side === -1 ? openSides.low : openSides.high)) continue;
+    const railX = shaft.x + side * (halfW - 0.06);
+    // This side's flight: the `dir` half rises front→back, the other arrives from above.
+    const upThisSide = side === dir;
+    const flightY = (z: number): number => {
+      const t = (z - (shaft.z - shaft.d / 2)) / shaft.d;
+      return upThisSide ? t * rise : STOREY_HEIGHT - t * rise;
+    };
+    const rail = box(0.07, 0.07, Math.hypot(shaft.d, rise), steel,
+      railX, (upThisSide ? rise * 0.5 : STOREY_HEIGHT - rise * 0.5) + 1.0, shaft.z);
+    rail.rotation.x = upThisSide ? -slope : slope;
+    for (const z of [shaft.z - shaft.d / 2 + 0.4, shaft.z, shaft.z + shaft.d / 2 - 0.4]) {
+      box(0.07, 1.0, 0.07, steel, railX, flightY(z) + 0.5, z);
+    }
   }
 }
 

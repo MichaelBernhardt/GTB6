@@ -739,6 +739,20 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // onto the mid landing, and stepping off the mid landing's rear edge dropped you half a storey.
     // One thin cap closes both. build.ts draws the matching panel-and-rail on island shafts.
     if (core.stair) out.push({ x: core.stair.x, z: rectMaxZ(core.stair) - 0.07, w: core.stair.w, d: 0.14 });
+    // AND SO ARE ITS SIDES — the owner's report, verbatim: "you just fall off the sides as you go
+    // up and around the flights if you're not super careful". Stepping across a side edge mid-climb
+    // resolved the storey from lastProgress and dropped the player half a flight; stepping IN from
+    // the side at ground level hoisted them onto it. Two thin caps along the side edges make the
+    // mouth (the front face) the only crossing, at every altitude — which also makes the stair
+    // head's rails on the top floor real instead of aspirational (side entry used to drop you into
+    // the well). No altitude test needed: there is no legitimate side crossing at ANY height —
+    // "under the stair" does not exist in this model (every point in the rect is flight), walking
+    // beside the shaft stays clear (the caps sit ON the edge, thin as a wall), and both landing
+    // ends cross the FRONT edge, which stays open. build.ts draws the sloped rails these enforce.
+    if (core.stair) {
+      out.push({ x: rectMinX(core.stair) + 0.07, z: core.stair.z, w: 0.14, d: core.stair.d });
+      out.push({ x: rectMaxX(core.stair) - 0.07, z: core.stair.z, w: 0.14, d: core.stair.d });
+    }
     // The half flight that leads nowhere is NOT in this list. The clamp is two-dimensional, and a
     // flat obstacle at the foot of the ground floor's dead down flight would sit directly under the
     // TOP of its up flight — walling off the last step of a climb the player is three metres above.

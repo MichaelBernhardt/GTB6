@@ -82,11 +82,18 @@ async () => {
     return all[0];
   };
   const openByDay = (x) => !lockMod.doorLocked(x.d.facts, 'outside', 13);
-  /** Climb one storey and back through the real clamp, the QA climber's own waypoints. */
+  /** Climb one storey and back through the real clamp, the QA climber's own waypoints — with the
+   *  owner's exact failure folded in: halfway up, press OUTWARD past the open edge and confirm the
+   *  rail holds the line (still on the flight, still elevated). */
   const climbUpDown = async (label, core) => {
     const s = core.stair, lane = s.w / 4, up = core.stairDir;
     const minZ = s.z - s.d / 2, maxZ = s.z + s.d / 2;
-    const upPath = [[s.x + up*lane, minZ - 1.2], [s.x + up*lane, minZ + 0.3], [s.x + up*lane, maxZ - 0.7],
+    for (const [x, z] of [[s.x + up*lane, minZ - 1.2], [s.x + up*lane, minZ + 0.3]]) await walkTo(x, z);
+    const hug = await walkTo(s.x + up * (s.w / 2 + 2), s.z, 200);   // aim well past the edge, mid-flight
+    const [, hx, , hy] = String(hug).split('|');
+    check(label + ': rail holds an outward hug mid-flight',
+      String(hug).startsWith('ok') && Math.abs(parseFloat(hx) - s.x) < s.w / 2 - 0.3 && parseFloat(hy.slice(2)) > -1e9, hug);
+    const upPath = [[s.x + up*lane, maxZ - 0.7],
       [s.x - up*lane, maxZ - 0.7], [s.x - up*lane, minZ + 0.3], [s.x, minZ - 1.6]];
     for (const [x, z] of upPath) await walkTo(x, z);
     let st = await qa('status', {});
