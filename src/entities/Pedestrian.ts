@@ -4,6 +4,7 @@ import type { PedestrianVisualLod } from '../config';
 import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems/BumpSystem';
 import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, FEAR_MAX, solidarityFear } from '../systems/FearSystem';
 import { advanceSwing, beginSwing, MELEE_COOLDOWN_JITTER, MELEE_COOLDOWN_MIN, MELEE_ENGAGE_RANGE, MELEE_ENGAGE_RELEASE, swingExtension, type MeleeSwing } from '../systems/MeleeSystem';
+import { GUN_ENGAGE_RANGE, GUN_ENGAGE_RELEASE, gunDeterrence, isArmedCitizen } from '../systems/SidearmSystem';
 import { ProgressWatchdog } from '../systems/NavGraph';
 import type { City, RoadPoint } from '../world/City';
 import type { VoiceSex } from '../core/VoicePools';
@@ -44,6 +45,17 @@ export class Pedestrian {
    */
   solidarity = false;
   aggressive = false;
+  /** Rare concealed-carry trait (SidearmSystem.isArmedCitizen — deterministic index arithmetic,
+   *  ~1 in 12, deliberately overlapping `aggressive` at 1 in 36). An armed citizen fights an
+   *  armed player: their 'fight' fear response survives gunDeterrence and they draw. */
+  armed = false;
+  /** Sidearm out (armed citizen, mid-fight, player visibly armed). Sticky while 'hostile' —
+   *  they do not holster because the player did — and cleared the moment the fight ends. */
+  gunDrawn = false;
+  /** The player is visibly holding a firearm this frame. Stamped by PopulationSystem.update from
+   *  Game (entities never read Game state sideways); defaults false so direct-driven unit peds
+   *  behave exactly as before. Read wherever a fear response is consumed — see gunDeterrence. */
+  playerArmed = false;
   mugged = false;
   frozen = false; // set by PopulationSystem distance culling: a frozen ped receives no update() at all
   wallet = 0;
@@ -92,7 +104,7 @@ export class Pedestrian {
   constructor(scene: THREE.Scene, position: THREE.Vector3, index: number, hostile = false, police = false, readonly visualVariant?: NpcCharacterId) {
     this.group.position.copy(position); this.groundY = position.y; this.hostile = hostile; this.police = police; this.state = hostile ? 'hostile' : 'walk';
     this.group.name = police ? 'JMPD Officer' : hostile ? 'Rank Enforcer' : 'Citizen'; this.group.userData.pedestrian = this;
-    this.aggressive = !hostile && !police && index % 9 === 0; this.wallet = 25 + (index * 47) % 180; this.bravery = ((index * 37 + 11) % 100) / 100;
+    this.aggressive = !hostile && !police && index % 9 === 0; this.armed = isArmedCitizen(index, hostile, police); this.wallet = 25 + (index * 47) % 180; this.bravery = ((index * 37 + 11) % 100) / 100;
     this.proceduralModel.name = 'ProceduralPedestrianFallback'; this.group.add(this.proceduralModel);
     scene.add(this.group); this.buildModel(index);
     this.lodProxy = instantiatePedestrianLodProxy(index, hostile, police, visualVariant); this.group.add(this.lodProxy);
@@ -182,8 +194,25 @@ export class Pedestrian {
     }
     if (this.enraged) { if (this.fear < CALM_THRESHOLD) { this.enraged = false; this.setPanicPose(false, false); this.pickDestination(this.localTarget(city, choices)); } else { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; } }
     if (this.state === 'flee' && this.fear < CALM_THRESHOLD) this.pickDestination(this.localTarget(city, choices)); // calm down even when a wall kept the flee point unreachable
-    if (this.aggressive && !this.contact && !this.solidarity && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; }
+    // Square-up gate: an unarmed aggressive does not START a fight with a visibly armed player
+    // (owner rule — no walking up to a drawn gun and punching it). The armed aggressive still
+    // squares up: he has an answer, and draws it below.
+    if (this.aggressive && (this.armed || !this.playerArmed) && !this.contact && !this.solidarity && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; }
     if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; }
+    // THE DETERRENT, mid-fight: a citizen currently punching who sees the player's firearm come
+    // out breaks off THROUGH THE FEAR MODEL — a brandish-sized spike whose 'fight' response
+    // gunDeterrence collapses to flight — so bravery and cowering behave exactly as for any other
+    // fright, and this one branch also backstops every enrage path (takeDamage, mug, rise).
+    // Armed citizens instead go to guns below and keep coming. JMPD are exempt (facing an armed
+    // suspect is the job — a shared path here would rout the arrest flow), and so are Rank
+    // Enforcer crews (constructor-hostile mission combatants; a wave that scatters at the first
+    // drawn pistol breaks every defeat objective, and they read as committed criminals anyway).
+    if (this.state === 'hostile' && !this.hostile && !this.police && this.playerArmed && !this.armed) {
+      this.enraged = false; this.pursuing = false; this.engagedHold = false;
+      this.applyFear(FEAR_EVENTS.brandish.base, player);
+    }
+    if (this.state !== 'hostile') this.gunDrawn = false;
+    else if (this.armed && this.playerArmed) this.gunDrawn = true;
     if (this.swing) {
       const { hit, done } = advanceSwing(this.swing, dt);
       if (hit) this.pendingMeleeHit = true;
@@ -204,11 +233,18 @@ export class Pedestrian {
     // glowers up (swings and damage are height-gated in PopulationSystem) instead of grinding
     // the wall forever. Hysteresis on the release: once squared up, a short shuffle out to
     // MELEE_ENGAGE_RELEASE keeps the stance — the guard must not flicker off between swings.
+    // A drawn sidearm holds ground much further out than fists: same square-up/hysteresis
+    // machinery, gun-sized rings. The aim handshake reuses the police path exactly — aimWeapon()
+    // per frame drives the rig's drivePistolAimArms + visible pistol (or the procedural raised
+    // arms), consumed by the next visual update like every other per-frame pose flag.
     const horizontal = Math.hypot(player.x - this.group.position.x, player.z - this.group.position.z);
-    if (this.pursuing && horizontal < (this.engagedHold ? MELEE_ENGAGE_RELEASE : MELEE_ENGAGE_RANGE)) {
+    const engageRange = this.gunDrawn ? GUN_ENGAGE_RANGE : MELEE_ENGAGE_RANGE;
+    const engageRelease = this.gunDrawn ? GUN_ENGAGE_RELEASE : MELEE_ENGAGE_RELEASE;
+    if (this.pursuing && horizontal < (this.engagedHold ? engageRelease : engageRange)) {
       this.engaged = true; this.engagedHold = true; this.watchdog.reset();
       this.group.rotation.y = Math.atan2(player.x - this.group.position.x, player.z - this.group.position.z);
-      this.phase += dt * 5.5 * 2.4; // keep the guard-pose bounce alive while holding ground
+      if (this.gunDrawn) this.aimWeapon();
+      else this.phase += dt * 5.5 * 2.4; // keep the guard-pose bounce alive while holding ground
       return;
     }
     this.engagedHold = false;
@@ -280,7 +316,9 @@ export class Pedestrian {
     // takeDamage/knockdown/mug set fear directly and clear the flag on the way past.
     if (this.solidarity) { this.fear = solidarityFear(this.fear, amount); this.threat.copy(origin); return; }
     this.fear = accumulateFear(this.fear, amount); this.threat.copy(origin);
-    const response = fearResponse(this.fear, this.aggressive, this.bravery, this.state === 'flee');
+    // gunDeterrence: an unarmed good samaritan's 'fight' collapses to flight while the player
+    // visibly holds a firearm — fists only pick fights with fists. Armed citizens still fight.
+    const response = gunDeterrence(fearResponse(this.fear, this.aggressive, this.bravery, this.state === 'flee'), this.playerArmed, this.armed);
     if (response === 'fight') { this.enraged = true; this.state = 'hostile'; this.destination.copy(origin); }
     else if (response === 'cower') this.state = 'cower';
     else if (response === 'flee') { this.state = 'flee'; this.fleeFrom(origin); }
@@ -367,10 +405,12 @@ export class Pedestrian {
     return outcome.killed;
   }
 
-  /** Back on their feet after a knockdown: personality decides fight or flight. */
+  /** Back on their feet after a knockdown: personality decides fight or flight — through the
+   *  same gunDeterrence gate as every other fight decision, so nobody rises swinging fists at
+   *  a drawn firearm (an armed citizen rises, goes hostile, and draws). */
   private rise(player: THREE.Vector3): void {
     this.group.rotation.z = 0; this.group.position.y = this.groundY; this.knockedDown = false;
-    const response = fearResponse(this.fear, this.aggressive, this.bravery);
+    const response = gunDeterrence(fearResponse(this.fear, this.aggressive, this.bravery), this.playerArmed, this.armed);
     if (response === 'fight') { this.enraged = true; this.state = 'hostile'; this.destination.copy(player); }
     else if (response === 'cower') this.state = 'cower';
     else { this.state = 'flee'; this.fleeFrom(this.threat); }
@@ -463,6 +503,11 @@ export class Pedestrian {
 
   /** Able to start a fresh swing right now. */
   get meleeReady(): boolean { return !this.swing && this.meleeCooldown <= 0 && this.state !== 'down'; }
+
+  /** Sidearm out AND settled in the hold-ground aim stance (inside the gun engage ring, with
+   *  its hysteresis): the only posture PopulationSystem fires civilian shots from — the muzzle
+   *  flash always has a matching two-hand aim behind it, never a mid-sprint hip shot. */
+  get gunAimed(): boolean { return this.gunDrawn && this.engagedHold && this.state === 'hostile'; }
 
   /** True exactly once per swing, on the frame the fist reaches full extension. The caller
    *  (PopulationSystem) then decides whether the hit lands — still in range and in the arc. */

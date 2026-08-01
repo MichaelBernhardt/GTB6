@@ -7,6 +7,7 @@ import type { City } from '../world/City';
 import { policeSightRadius } from './BlackoutStealth';
 import { ProgressWatchdog, replanInterval, RoutePlanner, type NavPoint } from './NavGraph';
 import { ARRIVE_RADIUS, pickRoamGoal, ROAM_MIN_LEG, ROAM_RADIUS, SIGHT_RADIUS, type KnownPosition, type PoliceKnowledge } from './PoliceKnowledge';
+import { MuzzleFlashPool } from './MuzzleFlashPool';
 import type { WantedSystem } from './WantedSystem';
 
 /** Max active interceptors per wanted level: 1-2 stars field two, escalating to eight at five stars. */
@@ -217,13 +218,6 @@ export type PoliceEvent =
 interface PoliceBrain { serial: number; path: NavPoint[]; index: number; replanIn: number; chasing: boolean; roaming: boolean; dwell: number; knownTime: number; baseX: number; baseZ: number; offX: number; offZ: number; aimX: number; aimZ: number; leaving: number; mode: UnitMode; shootIn: number; contactIn: number; bumpIn: number; watchdog: ProgressWatchdog; backoff: number; }
 interface Officer { ped: Pedestrian; car?: Vehicle; role: 'cover' | 'chase'; side: 1 | -1; shootIn: number; covering: boolean; }
 
-/** Shared muzzle-flash resources: police fire is probabilistic hitscan with no projectile, so a
- *  brief additive glow at the muzzle (plus the report) is the entire visible event. */
-const FLASH_SECONDS = 0.07;
-const FLASH_GEOMETRY = new THREE.SphereGeometry(0.13, 8, 6);
-const FLASH_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
-interface MuzzleFlash { mesh: THREE.Mesh; ttl: number; }
-
 export class PoliceSystem {
   vehicles: Vehicle[] = [];
   private officers: Officer[] = [];
@@ -233,10 +227,14 @@ export class PoliceSystem {
   private brains = new WeakMap<Vehicle, PoliceBrain>();
   private planner: RoutePlanner;
   private scratch = new THREE.Vector3();
-  private flashes: MuzzleFlash[] = [];
+  /** Police fire is probabilistic hitscan with no projectile: a pooled additive glow at the
+   *  muzzle (plus the report) is the entire visible event — see MuzzleFlashPool, shared with
+   *  armed-civilian fire in PopulationSystem. */
+  private flashPool: MuzzleFlashPool;
 
   constructor(private scene: THREE.Scene, private city: City, private audio: AudioManager) {
     this.planner = new RoutePlanner(city.vehicleNav, 2);
+    this.flashPool = new MuzzleFlashPool(scene);
   }
 
   /** Deploy shouts, spawned/retiring officer peds and abandoned cruisers, for the caller to route into the world. */
@@ -304,7 +302,7 @@ export class PoliceSystem {
         if (Math.random() < copHitChance(distance)) damageCar(3 + wanted.level * 1.2);
       }
     }
-    for (const flash of this.flashes) if (flash.ttl > 0) { flash.ttl -= dt; if (flash.ttl <= 0) flash.mesh.visible = false; }
+    this.flashPool.update(dt);
     this.separateUnits(dt, active, playerPosition);
     this.updateOfficers(dt, playerPosition, playerInVehicle, wanted, known, damagePlayer, damageCar, sightRange);
     const alive = this.vehicles.filter((vehicle) => !vehicle.wrecked);
@@ -318,19 +316,14 @@ export class PoliceSystem {
     for (const vehicle of this.vehicles) this.scene.remove(vehicle.group);
     const peds = this.officers.map((officer) => officer.ped);
     for (const ped of peds) this.scene.remove(ped.group);
-    for (const flash of this.flashes) this.scene.remove(flash.mesh);
-    this.vehicles = []; this.officers = []; this.events = []; this.flashes = [];
+    this.flashPool.reset();
+    this.vehicles = []; this.officers = []; this.events = [];
     return peds;
   }
 
-  /** A briefly-lit muzzle glow at the shot origin, nudged toward the target. Pooled: the pool's
-   *  high-water mark is the number of simultaneous unexpired flashes, a handful at worst. */
+  /** A briefly-lit muzzle glow at the shot origin, nudged toward the target (the shared pool). */
   private muzzleFlashAt(x: number, y: number, z: number, towardX: number, towardZ: number): void {
-    const dx = towardX - x; const dz = towardZ - z; const length = Math.hypot(dx, dz) || 1;
-    let flash = this.flashes.find((candidate) => candidate.ttl <= 0);
-    if (!flash) { flash = { mesh: new THREE.Mesh(FLASH_GEOMETRY, FLASH_MATERIAL), ttl: 0 }; this.flashes.push(flash); this.scene.add(flash.mesh); }
-    flash.mesh.position.set(x + (dx / length) * 0.5, y, z + (dz / length) * 0.5);
-    flash.mesh.visible = true; flash.ttl = FLASH_SECONDS;
+    this.flashPool.flashAt(x, y, z, towardX, towardZ);
   }
 
   /** Nearest empty cruiser in grabbing range — pair with release() when the player actually takes it. */

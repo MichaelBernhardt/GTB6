@@ -16,6 +16,9 @@ import { Vehicle } from '../entities/Vehicle';
 import { BUMP_COOLDOWN, BUMP_FEAR, BUMP_RADIUS, bumpEscalates, recordBump, separationPush } from './BumpSystem';
 import { FEAR_EVENTS, fearContribution, FEAR_MAX, seesBrandish, type FearEvent } from './FearSystem';
 import { MELEE_DAMAGE, MELEE_GLOBAL_STAGGER, MELEE_HEIGHT_REACH, MELEE_START_RANGE, meleeHitLands } from './MeleeSystem';
+import { MuzzleFlashPool } from './MuzzleFlashPool';
+import { copHitChance, sightLineClear } from './PoliceSystem';
+import { CIVILIAN_FIRE_RANGE, CIVILIAN_GUN_DAMAGE, civilianFireDelay } from './SidearmSystem';
 import { MISSIONS } from './MissionSystem';
 import { ProgressWatchdog, roadClosures, roadHazards, RoutePlanner, type NavPoint } from './NavGraph';
 import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, hazardBand, HAZARD_PATIENCE, HAZARD_REHONK, HAZARD_SCAN, HAZARD_STOP_MARGIN, HAZARD_SWERVE_AHEAD, HAZARD_SWERVE_THROTTLE, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, threadHazards, vehicleHitDamage, type HazardBand } from './TrafficAvoidance';
@@ -103,6 +106,12 @@ export class PopulationSystem {
   private forward = new THREE.Vector3();
   private bumpDirection = new THREE.Vector3();
   private playerPos = new THREE.Vector3(); // last known player position; biases new traffic goals player-ward
+  /** Armed-citizen fire (the police pistol path, reused): per-shooter cadence, the shared pooled
+   *  muzzle flashes, and a per-shot serial that salts stablePositionRandom — a standing shooter's
+   *  position is constant, so without the serial every roll at one spot would land identically. */
+  private civilianFireCooldown = new WeakMap<Pedestrian, number>();
+  private flashPool: MuzzleFlashPool;
+  private civilianShotSerial = 0;
 
   constructor(
     private scene: THREE.Scene,
@@ -113,6 +122,7 @@ export class PopulationSystem {
     this.playerPos.set(initialPosition.x, 0, initialPosition.z);
     this.vehiclePlanner = new RoutePlanner(city.vehicleNav, 2);
     this.pedPlanner = new RoutePlanner(city.pedNav, 2);
+    this.flashPool = new MuzzleFlashPool(scene);
     this.spawnVehicles(); this.spawnPedestrians();
   }
 
@@ -136,12 +146,16 @@ export class PopulationSystem {
     }
   }
 
-  update(dt: number, player: THREE.Vector3, damagePlayer?: (amount: number) => void, playerOnFoot = false): void {
+  update(dt: number, player: THREE.Vector3, damagePlayer?: (amount: number) => void, playerOnFoot = false, playerArmed = false): void {
     this.playerPos.copy(player);
     this.vehiclePlanner.beginFrame(); this.pedPlanner.beginFrame(); this.frame += 1;
     this.hostileAttackCooldown = Math.max(0, this.hostileAttackCooldown - dt);
     this.playerHitCooldown = Math.max(0, this.playerHitCooldown - dt);
     this.pedestrians.forEach((ped, index) => {
+      // Every ped (frozen and downed included) knows whether the player is visibly holding a
+      // firearm — the gunDeterrence input for fear responses that fire outside ped.update
+      // (broadcast fear, the knockdown rise). Game supplies it; entities never read Game state.
+      ped.playerArmed = playerArmed;
       if ((this.frame + index) % FREEZE_CHECK_FRAMES === 0) {
         const distanceSq = ped.group.position.distanceToSquared(player);
         const wasFrozen = ped.frozen;
@@ -239,21 +253,28 @@ export class PopulationSystem {
     this.handleVehiclePedestrianImpacts();
     this.handleTrafficSeparation(dt);
     this.updateTrafficEngineAudio(player);
-    this.resolveMelee(player, damagePlayer, playerOnFoot);
+    this.resolveHostileAttacks(dt, player, damagePlayer, playerOnFoot);
+    this.flashPool.update(dt);
   }
 
-  /** Hostile melee. Swings START here (readable one-at-a-time cadence via the global stagger)
-   *  and RESOLVE here: damage lands only on the swing's hit frame, and only if the player is
-   *  still in reach and in front of the attacker — backing off mid-windup escapes clean, and
-   *  there is never damage without the matching punch animation. Arrest officers reuse the
+  /** Hostile melee AND armed-citizen gunfire. Swings START here (readable one-at-a-time cadence
+   *  via the global stagger) and RESOLVE here: damage lands only on the swing's hit frame, and
+   *  only if the player is still in reach and in front of the attacker — backing off mid-windup
+   *  escapes clean, and there is never damage without the matching punch animation. A shooter
+   *  with the sidearm out retires the fists entirely and fires the POLICE pistol path instead:
+   *  probabilistic hitscan (copHitChance), the same 3D sight line, the shared pooled muzzle
+   *  flash, the JMPD report — one gun path, civilian trigger. Arrest officers reuse the
    *  'hostile' ped state to hustle to the cruiser, so police are excluded: the bust flow stays
-   *  proximity-only. Everything gates on the player being on foot — nobody punches a car door. */
-  private resolveMelee(player: THREE.Vector3, damagePlayer: ((amount: number) => void) | undefined, playerOnFoot: boolean): void {
+   *  proximity-only. Everything gates on the player being on foot — nobody punches a car door,
+   *  and nobody empties a magazine into one either. */
+  private resolveHostileAttacks(dt: number, player: THREE.Vector3, damagePlayer: ((amount: number) => void) | undefined, playerOnFoot: boolean): void {
     if (!damagePlayer) return;
     for (const ped of this.pedestrians) {
       if (ped.police || ped.frozen) continue;
       const dx = player.x - ped.group.position.x; const dz = player.z - ped.group.position.z;
       const heightGap = player.y - ped.group.position.y;
+      if (ped.gunDrawn) { this.resolveCivilianFire(ped, dt, player, damagePlayer, playerOnFoot); continue; } // gun out: no swings, no melee bookkeeping
+      this.civilianFireCooldown.delete(ped);
       if (ped.consumeMeleeHit()) {
         const distance = Math.hypot(dx, dz);
         const facingDot = distance > 1e-4 ? (Math.sin(ped.group.rotation.y) * dx + Math.cos(ped.group.rotation.y) * dz) / distance : 1;
@@ -268,6 +289,34 @@ export class PopulationSystem {
         this.hostileAttackCooldown = MELEE_GLOBAL_STAGGER;
       }
     }
+  }
+
+  /** One armed citizen's trigger discipline: shots come ONLY from the settled aim stance
+   *  (gunAimed — inside the gun engage ring with its hysteresis, weapon-up pose live), on the
+   *  police cadence shape with the first delay doubling as the draw beat, distance-falloff hit
+   *  odds and the 3D sight line both borrowed from JMPD, and each report frightening the street
+   *  like any other gunshot. Randomness is stablePositionRandom salted by a per-shot serial —
+   *  deterministic, per the project rule, yet varying between shots from one standing spot. */
+  private resolveCivilianFire(ped: Pedestrian, dt: number, player: THREE.Vector3, damagePlayer: (amount: number) => void, playerOnFoot: boolean): void {
+    ped.consumeMeleeHit(); // discard any swing that was mid-air at the draw: no fist damage from a shooter
+    if (!ped.gunAimed || !playerOnFoot) { this.civilianFireCooldown.delete(ped); return; }
+    const position = ped.group.position;
+    const held = this.civilianFireCooldown.get(ped);
+    const cooldown = held === undefined
+      ? civilianFireDelay(stablePositionRandom(position.x, position.z, 0x51de + this.civilianShotSerial)) // fresh aim: the draw beat — the stance reads before it wounds
+      : Math.max(0, held - dt);
+    const distance = Math.hypot(player.x - position.x, player.z - position.z);
+    if (cooldown > 0 || distance >= CIVILIAN_FIRE_RANGE
+      || !sightLineClear(position, player, (x, z, y0, y1) => this.city.collidesAt(x, z, 0.4, y0, y1))) {
+      this.civilianFireCooldown.set(ped, cooldown);
+      return;
+    }
+    this.civilianShotSerial += 1;
+    this.civilianFireCooldown.set(ped, civilianFireDelay(stablePositionRandom(position.x, position.z, 0x51de + this.civilianShotSerial)));
+    this.audio.copGunshot(position.x, position.z);
+    this.flashPool.flashAt(position.x, position.y + 1.25, position.z, player.x, player.z);
+    if (stablePositionRandom(position.x, position.z, 0xf12e + this.civilianShotSerial) < copHitChance(distance)) damagePlayer(CIVILIAN_GUN_DAMAGE);
+    this.broadcastFear(position, FEAR_EVENTS.gunshot); // a street gunfight scatters the street — same event a player shot broadcasts
   }
 
   private updateTrafficEngineAudio(player: THREE.Vector3): void {
