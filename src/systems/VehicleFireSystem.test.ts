@@ -147,6 +147,24 @@ describe('burnout splash damage', () => {
     expect(far.health).toBe(farHealth);
   });
 
+  // Regression: the blast centre used to be pinned at ABSOLUTE y=0.9 while every check is a 3D
+  // distanceTo. Anywhere the ground is not near sea level (CBD +16.9, the valley −34.4 — most of the
+  // map) the centre sat 15+ units inside the terrain, so cook-offs silently damaged and chained NOTHING.
+  it.each([[16.9], [-34.4]])('connects at ground elevation %su: the centre rides the vehicle, not sea level', (y) => {
+    const scene = new THREE.Scene();
+    const system = new VehicleFireSystem(scene);
+    const bomb = new Vehicle(scene, 'compact', new THREE.Vector3(0, y, 0));
+    const neighbour = new Vehicle(scene, 'compact', new THREE.Vector3(6, y, 0));
+    const bystander = makePed(new THREE.Vector3(2.5, y, 0));
+    bomb.ignite(() => 0);
+    const { burnouts } = burnOut(system, bomb, [bomb, neighbour], [bystander], new THREE.Vector3(1.5, y, 0));
+    const boom = burnouts[0]!;
+    expect(boom.position.y).toBeCloseTo(y + 0.9, 1); // ~the vehicle's own y + 0.9 (body rides a hair above spawn y)
+    expect(boom.victims.some((victim) => victim.ped === bystander)).toBe(true);
+    expect(boom.playerDamage).toBeGreaterThan(0);
+    expect(neighbour.onFire).toBe(true); // the chain actually fires up here now
+  });
+
   it("spares the player's own car a forced ignition but still scorches it", () => {
     const scene = new THREE.Scene();
     const system = new VehicleFireSystem(scene);

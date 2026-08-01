@@ -139,6 +139,8 @@ export class Game {
   private bullets!: BulletSystem;
   private propFx!: PropSystem;
   private vehicleFire!: VehicleFireSystem;
+  /** Burning cars whose drivers still need to bail — drained one per frame (see updateVehicleFires). */
+  private pendingEjections: Vehicle[] = [];
   private shake = 0;
   private wanted = new WantedSystem();
   private knowledge = new PoliceKnowledge<Pedestrian>();
@@ -396,6 +398,26 @@ export class Game {
         this.ui.showLoading({ progress: 86 + fraction * 13, label: 'Opening your neighbourhood', detail: `Nearby building blocks · ${complete} of ${total} ready.` });
       });
       if (attempt !== this.assetLoadAttempt) return;
+      // Warm-up: compile the whole scene's shader programs behind the loading card, with the effect
+      // light pools already in place, so neither the first menu frame nor the first shot/fire/blast
+      // pays a compile. Counts never change after boot (EffectLightPool), so this set stays warm.
+      // The primer parks one tiny mesh per effect material (blood, decal, puff/fire/tracer family,
+      // rocket) under the city so the compile sweep also covers materials that otherwise first exist
+      // mid-explosion — measured without it: one link + a ~200 ms decal-texture upload land in the
+      // session's first kill frame. initTexture uploads the canvas textures compile() does not touch.
+      this.ui.showLoading({ progress: 99, label: 'Warming the shaders', detail: 'Compiling city materials on your GPU.' });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const primer = new THREE.Group(); primer.name = 'shader-warmup'; primer.position.y = -500;
+      const primerGeometry = new THREE.PlaneGeometry(0.01, 0.01);
+      for (const material of [...this.gore.warmupMaterials(), ...this.projectiles.warmupMaterials()]) {
+        primer.add(new THREE.Mesh(primerGeometry, material));
+        const map = (material as THREE.MeshStandardMaterial).map; if (map) this.renderer.initTexture(map);
+      }
+      this.scene.add(primer);
+      try { await this.renderer.compileAsync(this.scene, this.camera); }
+      catch (error) { console.warn('[render] shader warm-up failed; first frames may hitch.', error); }
+      this.scene.remove(primer); primerGeometry.dispose(); // materials stay: the systems own them
+      if (attempt !== this.assetLoadAttempt) return;
       this.ui.showLoading({ progress: 100, label: 'Joburg is ready', detail: 'Welcome to the city.' });
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       this.requiredAssetsReady = true; this.mode = 'menu'; analytics.setMode('menu'); this.ui.showMainMenu(this.mainMenuSummary());
@@ -410,6 +432,10 @@ export class Game {
   }
 
   private setupRenderer(): void {
+    // Dev keeps shader diagnostics. In production the default (true) makes three block on
+    // getProgramParameter/getProgramInfoLog at every program's first draw — a synchronous driver
+    // round-trip that concentrated the old explosion recompile storm into one multi-second frame.
+    this.renderer.debug.checkShaderErrors = import.meta.env.DEV;
     this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = this.baseQuality() !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
@@ -1236,8 +1262,14 @@ export class Game {
     const fire = this.vehicleFire.update(dt, allVehicles, this.population.pedestrians, this.player.group.position);
     for (const vehicle of fire.ignitions) {
       if (vehicle === this.activeVehicle || vehicle === this.transition?.vehicle) this.ui.notify('Vehicle on fire', 'Bail out before it blows.', false);
-      else if (vehicle.occupied) { this.population.ejectDriver(vehicle, vehicle.group.position.clone(), vehicle.police); vehicle.occupied = false; }
+      else if (vehicle.occupied) { vehicle.occupied = false; this.pendingEjections.push(vehicle); }
     }
+    // Ejecting a driver constructs a FULL Pedestrian (unique geometry, LOD proxy, rigged-visual load,
+    // spawn probes). An RPG that ignites three cars used to build all three in the blast frame,
+    // sidestepping LifecycleSystem's 2-per-update construction budget. One per frame: the car burns
+    // 4–6 s before it blows, so a driver bailing a frame or two late is invisible — the frame spike isn't.
+    const bail = this.pendingEjections.shift();
+    if (bail && !bail.wrecked && allVehicles.includes(bail)) this.population.ejectDriver(bail, bail.group.position.clone(), bail.police);
     for (const boom of fire.burnouts) {
       this.audio.explosion(boom.position.x, boom.position.z);
       this.population.broadcastFear(boom.position, FEAR_EVENTS.kill);
