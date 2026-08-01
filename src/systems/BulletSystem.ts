@@ -77,6 +77,10 @@ export class BulletSystem {
       const step = Math.min(bullet.speed * dt, bullet.range - bullet.traveled);
       let hitT = Infinity; let hitPed: Pedestrian | undefined; let hitVehicle: Vehicle | undefined;
       for (const ped of population.pedestrians) {
+        // An indoor round lives UNDER the terrain; a body at or above the surface is in another
+        // world as far as it is concerned. The sampled terrain check below can race a ped
+        // intercept inside one fast step, so the boundary is enforced on the target too.
+        if (bullet.subterranean && ped.group.position.y >= city.terrainHeightAt(ped.group.position.x, ped.group.position.z) - 1.5) continue;
         if (ped.state === 'down') {
           // Overkill: rounds pass THROUGH a settled corpse (it never shields a live target or eats the
           // hit) but jolt its ragdoll — once per trigger pull, so a shotgun blast is one kick, not nine.
@@ -89,15 +93,18 @@ export class BulletSystem {
         const t = this.pedInterceptT(bullet, step, ped);
         if (t >= 0 && t < hitT) { hitT = t; hitPed = ped; }
       }
-      for (const vehicle of population.vehicles) {
-        if (vehicle === bullet.shot.exclude) continue;
-        const t = this.vehicleInterceptT(bullet, step, vehicle);
-        if (t >= 0 && t < hitT) { hitT = t; hitPed = undefined; hitVehicle = vehicle; }
-      }
-      for (const vehicle of policeVehicles) {
-        if (vehicle === bullet.shot.exclude) continue;
-        const t = this.vehicleInterceptT(bullet, step, vehicle);
-        if (t >= 0 && t < hitT) { hitT = t; hitPed = undefined; hitVehicle = vehicle; }
+      // Vehicles never stand inside a feature interior; an indoor round cannot bill one.
+      if (!bullet.subterranean) {
+        for (const vehicle of population.vehicles) {
+          if (vehicle === bullet.shot.exclude) continue;
+          const t = this.vehicleInterceptT(bullet, step, vehicle);
+          if (t >= 0 && t < hitT) { hitT = t; hitPed = undefined; hitVehicle = vehicle; }
+        }
+        for (const vehicle of policeVehicles) {
+          if (vehicle === bullet.shot.exclude) continue;
+          const t = this.vehicleInterceptT(bullet, step, vehicle);
+          if (t >= 0 && t < hitT) { hitT = t; hitPed = undefined; hitVehicle = vehicle; }
+        }
       }
       const wallT = this.wallInterceptT(city, bullet, step, Math.min(hitT, 1));
       if (wallT >= 0 && wallT < hitT) { hitT = wallT; hitPed = undefined; hitVehicle = undefined; }
@@ -191,7 +198,13 @@ export class BulletSystem {
       const x = bullet.position.x + bullet.direction.x * step * t;
       const y = bullet.position.y + bullet.direction.y * step * t;
       const z = bullet.position.z + bullet.direction.z * step * t;
-      if ((!bullet.subterranean && y <= city.terrainHeightAt(x, z) + 0.05) || city.collidesAt(x, z, 0.12, y, y)) return t;
+      // The terrain stops rounds from WHICHEVER side they meet it: an outdoor round buries itself
+      // in the ground, and an indoor (subterranean) round fired upward dies in the earth above the
+      // room's ceiling instead of sailing through the pavement into the street's pedestrians.
+      const terrainStops = bullet.subterranean
+        ? y >= city.terrainHeightAt(x, z) - 0.05
+        : y <= city.terrainHeightAt(x, z) + 0.05;
+      if (terrainStops || city.collidesAt(x, z, 0.12, y, y)) return t;
     }
     return -1;
   }
