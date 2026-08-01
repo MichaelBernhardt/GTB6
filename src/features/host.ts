@@ -224,6 +224,13 @@ export class FeatureHost {
     return undefined;
   }
 
+  /** True while any feature owns the player's hands in a modal interaction. See FeatureSystem.handsBusy. */
+  handsBusy(): boolean {
+    if (this.context.suspended()) return false;
+    for (const system of this.systems.values()) if (system.handsBusy?.()) return true;
+    return false;
+  }
+
   /** The doorstep to save as the player's world position while indoors. See FeatureSystem.outdoorAnchor. */
   outdoorAnchor(): { x: number; z: number } | undefined {
     if (this.context.suspended()) return undefined;

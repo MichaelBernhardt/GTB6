@@ -225,6 +225,11 @@ export interface FeatureSystem {
    *  feature slice — an older build, a failed feature load — then spawns the player at the front
    *  door instead of underground. The feature's own save slice carries the way back in. */
   outdoorAnchor?(): { x: number; z: number } | undefined;
+  /** True while this feature owns the player's HANDS in a modal interaction — the lock-picking
+   *  dial today. The host ORs it; Game yields the shared prompt slot to the feature's own
+   *  guidance and holds cover entry while it is true, so "Q Take cover" can never paper over
+   *  "E Turn it — NOW" mid-bite. */
+  handsBusy?(): boolean;
   /** Full-fidelity interaction rungs. These replace the eager `approach` entry once loaded. */
   interactions?(): readonly InteractionDescriptor[];
   /** The slice stored under `SavedGame.features[saveKey]`. Must be JSON-safe. */

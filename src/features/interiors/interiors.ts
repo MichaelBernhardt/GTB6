@@ -1193,6 +1193,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     /** Under a roof, with the lamps above (dimmed by the grid, never out) and the exit mat behind. */
     indoors: () => Boolean(visit),
 
+    /** The picking dial owns the hands: the host prompt slot yields to the dial's own guidance and
+     *  cover entry waits, so Q cannot yank the camera in the middle of the bite. */
+    handsBusy: () => Boolean(picking),
+
     /** The storey's floor height, for host systems that ground things while the player is inside.
      *  The player's own y is NOT this mid-frame (Player.update grounds it against the terrain
      *  before this feature's clamp re-pins it), which is exactly why the seam exists. */

@@ -1608,6 +1608,9 @@ export class Game {
   private updateCoverState(dt: number): CoverPose | undefined {
     const position = this.player.group.position;
     if (this.footView() === 0 || this.player.tumbling || this.player.knockedDown) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble or knockdown knocks you out of cover
+    // A modal interaction (the picking dial) owns the hands: cover entry waits so Q cannot yank the
+    // camera mid-bite, and starting a dial from cover stands the player up out of it.
+    if (this.features.handsBusy()) { this.cover = undefined; this.coverAvailable = false; return undefined; }
     if (!this.cover) {
       const spot = nearestGroundedCoverSpot(position.x, position.z, this.player.onGround, this.city.colliders, COVER_ENTER_RANGE, position.y); // only faces that shield the player's elevation
       this.coverAvailable = Boolean(spot);
@@ -3138,6 +3141,10 @@ export class Game {
         }
       }
       else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  V  Camera  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
+      // A feature that OWNS THE HANDS owns the prompt slot: mid-pick-dial, "Q Take cover" (or any
+      // other rung of this ladder) papering over "E Turn it — NOW" is a stolen bite — the owner's
+      // report, and the rule fixes the slot, not the one pair. Modal guidance first, always.
+      else if (this.features.handsBusy() && featureOffer) prompt = featureOffer.prompt;
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
       else if (this.missions.state === 'failed' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 10) prompt = 'E  Restart mission';

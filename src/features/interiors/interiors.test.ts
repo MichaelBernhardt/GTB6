@@ -664,6 +664,21 @@ describe('locked doors', () => {
     system.dispose();
   }, 120000);
 
+  it('owns the hands while the dial runs, so cover can neither mask the prompt nor yank the bite', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    expect(system.handsBusy?.(), 'idle hands').toBe(false);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    offer(system, test.player)!.act();   // the dial starts
+    expect(system.handsBusy?.(), 'the dial owns the hands').toBe(true);
+    test.player.set(door.x + 8, 0, door.z); // walk off: dial cancels
+    system.update!(1 / 60);
+    expect(system.handsBusy?.(), 'hands free after the dial ends').toBe(false);
+    system.dispose();
+  }, 120000);
+
   it('cancels the dial when the player walks away, costing nothing', () => {
     const test = harness();
     test.api.inventoryCount = () => 1;
