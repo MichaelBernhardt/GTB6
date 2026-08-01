@@ -1,6 +1,24 @@
 export type FearResponse = 'calm' | 'fight' | 'flee' | 'cower';
 export interface FearEvent { base: number; radius: number; }
 
+/**
+ * FEAR COMES FROM VIOLENCE, NEVER FROM THE SIGHT OF A WEAPON.
+ *
+ * The owner: "They shouldn't scare away at all unless actually shot at or punched. Seeing a gun or
+ * whatever spooks them now is not enough."
+ *
+ * That is a rule about this table, so the table enforces it: every entry below is a thing that
+ * HAPPENED — a round went off, a body hit the pavement, someone was struck, a car came through.
+ * There is no entry for a gun being drawn, held, aimed or carried past, and nothing broadcasts
+ * one, because a player walking a street with a pistol out is not doing anything to anybody.
+ * The cost of getting this wrong is the whole street: peds who scatter on approach cannot be
+ * talked to, hailed, mugged, guarded by, or bought from, so a passive-sight fear source silently
+ * deletes every pedestrian interaction within its radius.
+ *
+ * If you are about to add an event here, ask: did something happen TO someone? If the answer is
+ * "the player was holding a gun", it does not belong in this table — see DRAWN_ON_ME_FEAR for the
+ * one and only place a firearm frightens anyone, and note that it is not broadcast either.
+ */
 export const FEAR_EVENTS = {
   gunshot: { base: 34, radius: 48 },
   sniperShot: { base: 42, radius: 84 }, // a rifle crack carries: witnesses well beyond a pistol's earshot
@@ -8,15 +26,18 @@ export const FEAR_EVENTS = {
   kill: { base: 62, radius: 58 },
   assault: { base: 42, radius: 24 },
   body: { base: 22, radius: 10 },
-  brandish: { base: 45, radius: 30 }, // a raised gun, applied only to peds who can see it
   panic: { base: 16, radius: 12 }, // contagion: a shrieking ped spooks bystanders a little
 } as const satisfies Record<string, FearEvent>;
 
-export const BRANDISH_SENSE_RADIUS = 8;
-/** A ped notices a raised gun when it's in their forward half-plane, or close enough to sense regardless of facing. */
-export function seesBrandish(facingX: number, facingZ: number, dx: number, dz: number, distance: number): boolean {
-  return distance < BRANDISH_SENSE_RADIUS || facingX * dx + facingZ * dz > 0;
-}
+/**
+ * The single exception, and it is not a sight: someone who is CURRENTLY PUNCHING THE PLAYER sees
+ * the player's firearm come out mid-fight and breaks off (Pedestrian.updateMotion). That is an
+ * event in a fight they started, aimed at them personally, so it is applied to that one attacker
+ * by hand — deliberately a bare number rather than a FearEvent, because a FearEvent is a thing
+ * `broadcastFear` can scatter a street with and this must never be one. Sized above
+ * FLEE_THRESHOLD so the break is decisive, below `kill` so a raised gun is not a murder.
+ */
+export const DRAWN_ON_ME_FEAR = 45;
 
 export const FEAR_MAX = 100;
 export const FLEE_THRESHOLD = 35;

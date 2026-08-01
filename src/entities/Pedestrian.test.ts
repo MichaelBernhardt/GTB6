@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { City } from '../world/City';
 import { DEATH_SPIN_DURATION, Pedestrian } from './Pedestrian';
-import { FEAR_EVENTS, FLEE_THRESHOLD } from '../systems/FearSystem';
+import { DRAWN_ON_ME_FEAR, FEAR_EVENTS, FLEE_THRESHOLD } from '../systems/FearSystem';
 
 const flatCity = { surfaceHeightAt: () => 0 } as unknown as City;
 const step = (ped: Pedestrian, seconds: number): void => {
@@ -85,7 +85,7 @@ describe('solidarity', () => {
   it('holds the line through the fear that scatters an ordinary crowd', () => {
     const ped = protester();
     ped.applyFear(FEAR_EVENTS.assault.base, player); // barged into twice inside the bump window
-    ped.applyFear(FEAR_EVENTS.brandish.base, player); // and a gun raised in their face
+    ped.applyFear(DRAWN_ON_ME_FEAR, player); // and a gun pulled on them mid-scuffle
     ped.applyFear(FEAR_EVENTS.kill.base, player);
     expect(ped.state).toBe('idle');
     expect(ped.fear).toBeLessThan(FLEE_THRESHOLD);

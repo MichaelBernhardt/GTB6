@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { PedestrianVisualLod } from '../config';
 import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems/BumpSystem';
-import { accumulateFear, CALM_THRESHOLD, decayFear, FEAR_EVENTS, fearResponse, FEAR_MAX, solidarityFear } from '../systems/FearSystem';
+import { accumulateFear, CALM_THRESHOLD, decayFear, DRAWN_ON_ME_FEAR, FEAR_EVENTS, fearResponse, FEAR_MAX, solidarityFear } from '../systems/FearSystem';
 import { advanceSwing, beginSwing, MELEE_COOLDOWN_JITTER, MELEE_COOLDOWN_MIN, MELEE_ENGAGE_RANGE, MELEE_ENGAGE_RELEASE, swingExtension, type MeleeSwing } from '../systems/MeleeSystem';
 import { GUN_ENGAGE_RANGE, GUN_ENGAGE_RELEASE, gunDeterrence, isArmedCitizen } from '../systems/SidearmSystem';
 import { ProgressWatchdog } from '../systems/NavGraph';
@@ -215,16 +215,19 @@ export class Pedestrian {
     if (this.aggressive && (this.armed || !this.playerArmed) && !this.contact && !this.solidarity && distance < 4.5 && this.state !== 'flee') { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; }
     if (this.hostile && distance < 70) { this.state = 'hostile'; this.destination.copy(player); this.pursuing = true; }
     // THE DETERRENT, mid-fight: a citizen currently punching who sees the player's firearm come
-    // out breaks off THROUGH THE FEAR MODEL — a brandish-sized spike whose 'fight' response
+    // out breaks off THROUGH THE FEAR MODEL — a DRAWN_ON_ME_FEAR spike whose 'fight' response
     // gunDeterrence collapses to flight — so bravery and cowering behave exactly as for any other
     // fright, and this one branch also backstops every enrage path (takeDamage, mug, rise).
+    // This is the ONLY place a firearm frightens anyone, and it is not a sight rule: the gate is
+    // `state === 'hostile'`, i.e. this person is mid-swing at the player. A bystander watching the
+    // same gun from the same distance feels nothing, by design — see FEAR_EVENTS.
     // Armed citizens instead go to guns below and keep coming. JMPD are exempt (facing an armed
     // suspect is the job — a shared path here would rout the arrest flow), and so are Rank
     // Enforcer crews (constructor-hostile mission combatants; a wave that scatters at the first
     // drawn pistol breaks every defeat objective, and they read as committed criminals anyway).
     if (this.state === 'hostile' && !this.hostile && !this.police && this.playerArmed && !this.armed) {
       this.enraged = false; this.pursuing = false; this.engagedHold = false;
-      this.applyFear(FEAR_EVENTS.brandish.base, player);
+      this.applyFear(DRAWN_ON_ME_FEAR, player);
     }
     if (this.state !== 'hostile') this.gunDrawn = false;
     else if (this.armed && this.playerArmed) this.gunDrawn = true;
