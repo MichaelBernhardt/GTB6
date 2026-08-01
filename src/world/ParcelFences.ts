@@ -27,7 +27,7 @@ import {
   LAYOUT_SCALE,
   type GeneratedBuilding,
 } from './CityGen';
-import { pointInAnyPolygon, WATER_POLYGONS } from './mapData';
+import { distanceToRoadEdge, pointInAnyPolygon, WATER_POLYGONS } from './mapData';
 import { stablePositionRandom } from './StableRandom';
 
 export type FenceKind = 'wall' | 'palisade' | 'razor';
@@ -67,8 +67,78 @@ export const GATE_HALF_WIDTH = 1.35;
 /** A fence run may interpenetrate a neighbouring building footprint by at most this before the
  *  segment is dropped (backyard cottages, corner stands at odd angles). */
 const NEIGHBOUR_TOLERANCE = 0.05;
+/** Depth of the keep-clear strip in front of a neighbour's front face — their doorstep. Kept tight
+ *  (a stride) so it only ever catches a panel genuinely standing in a doorway, not the ordinary
+ *  boundary between two stands that happen to face each other across a street. */
+const DOORSTEP_LANE = 2.6;
+
+/** The strip immediately in front of a parcel's front face, as a footprint rect. */
+function doorstepLane(parcel: GeneratedBuilding): { x: number; z: number; width: number; depth: number; heading: number } {
+  const lz = parcel.depth / 2 + DOORSTEP_LANE / 2;
+  return {
+    x: parcel.x + lz * Math.sin(parcel.heading), z: parcel.z + lz * Math.cos(parcel.heading),
+    width: parcel.width * 0.7, depth: DOORSTEP_LANE, heading: parcel.heading,
+  };
+}
 /** Chance a parcel is fenced at all — fences are the norm, the odd open stand the exception. */
 const FENCED_CHANCE = 0.93;
+/** How far out from its gate a stand may look for the street before the ring is refused. A front
+ *  run stands FRONT_MARGIN beyond the building face and the frontage line puts that a couple of
+ *  units behind the kerb, so a stand that is genuinely on a street finds tarmac inside a handful
+ *  of units; 26 is generous enough to allow a deep corner yard and short enough to be cheap. */
+const GATE_EXIT_REACH = 26;
+const GATE_EXIT_STEP = 0.5;
+
+/** Point (world) inside a parcel-shaped rectangle grown by `side` on x and by `front`/`back` on z. */
+function insideGrownFootprint(
+  x: number, z: number, parcel: GeneratedBuilding, side: number, front: number, back: number,
+): boolean {
+  const cos = Math.cos(parcel.heading); const sin = Math.sin(parcel.heading);
+  const dx = x - parcel.x; const dz = z - parcel.z;
+  const lx = dx * cos - dz * sin; const lz = dx * sin + dz * cos;
+  return Math.abs(lx) <= parcel.width / 2 + side && lz >= -(parcel.depth / 2 + back) && lz <= parcel.depth / 2 + front;
+}
+
+/**
+ * A GATE HAS TO LEAD SOMEWHERE. This is the cross-parcel half of the fence planner, and the fix for
+ * the citywide reachability audit's headline finding: 394 front doors were sealed off from the
+ * street by fences. Every one of those rings had a gate — the gate simply opened into a pocket that
+ * the NEXT stand's ring, or the building it belongs to, closed again. Almost all of them were
+ * back-yard masses: CityGen's rear infill puts a cottage behind the street house, ParcelFences
+ * ringed it as if it were a stand of its own, and its gate opened onto the back wall of the house
+ * in front. A backroom does not have its own fence and its own gate inside somebody else's yard.
+ *
+ * So a ring is only planned when a straight walk out of its gate reaches a road without crossing a
+ * neighbour's walls or a neighbour's yard. Straight rather than a flood fill on purpose: this runs
+ * per parcel inside the chunk builder, the answer has to be the same for the drawer, the collider
+ * push and the census, and a conservative test can only ever REFUSE a ring — it can never leave one
+ * standing across a door. Stands that face their own street pass it in a few units; a mass buried
+ * in the middle of a block does not, and goes unfenced, sitting inside the yard it actually belongs
+ * to. tools/qa/door-reachability.ts is the audit that holds this to zero.
+ */
+function gateReachesStreet(
+  parcel: GeneratedBuilding, gateX: number, gateZ: number, neighbours: readonly GeneratedBuilding[],
+): boolean {
+  const outX = Math.sin(parcel.heading); const outZ = Math.cos(parcel.heading);
+  const cull: GeneratedBuilding[] = [];
+  for (const other of neighbours) {
+    if (other.x === parcel.x && other.z === parcel.z) continue;
+    const reach = GATE_EXIT_REACH + (other.width + other.depth) / 2 + FRONT_MARGIN;
+    if ((other.x - gateX) ** 2 + (other.z - gateZ) ** 2 > reach * reach) continue;
+    cull.push(other);
+  }
+  for (let t = GATE_EXIT_STEP; t <= GATE_EXIT_REACH; t += GATE_EXIT_STEP) {
+    const x = gateX + outX * t; const z = gateZ + outZ * t;
+    if (distanceToRoadEdge(x, z) <= 0.5) return true;
+    for (const other of cull) {
+      // The neighbour's walls, and — where the neighbour is a stand that will ring itself — the
+      // yard inside that ring. Either one is a wall across this gate's way out.
+      const fenced = other.zone === 'residential';
+      if (insideGrownFootprint(x, z, other, fenced ? SIDE_MARGIN : 0, fenced ? FRONT_MARGIN : 0, fenced ? SIDE_MARGIN : 0)) return false;
+    }
+  }
+  return false;
+}
 
 /** One straight fence piece: world placement for colliders/audits, building-local placement for
  *  the mesh (the chunk builder adds meshes in the parcel's rotated frame). `along` is the local
@@ -152,6 +222,10 @@ export function planParcelFence(
   const gateLx = Math.min(halfWidth - GATE_HALF_WIDTH - 1.2,
     Math.max(-(halfWidth - GATE_HALF_WIDTH - 1.2), options.entranceX ?? 0));
 
+  const cosH = Math.cos(parcel.heading); const sinH = Math.sin(parcel.heading);
+  if (!gateReachesStreet(parcel, parcel.x + gateLx * cosH + frontZ * sinH, parcel.z - gateLx * sinH + frontZ * cosH,
+    options.neighbours ?? [])) return undefined;
+
   const runs: FenceRun[] = [
     { along: 'x', at: frontZ, from: -halfWidth, to: gateLx - GATE_HALF_WIDTH },
     { along: 'x', at: frontZ, from: gateLx + GATE_HALF_WIDTH, to: halfWidth },
@@ -197,8 +271,13 @@ export function planParcelFence(
       let blocked = false;
       for (const other of neighbours) {
         if (other.x === parcel.x && other.z === parcel.z) continue; // the parcel's own footprint is a margin away by construction
-        if ((other.x - x) ** 2 + (other.z - z) ** 2 > ((length + other.width + other.depth) / 2 + 2) ** 2) continue;
+        if ((other.x - x) ** 2 + (other.z - z) ** 2 > ((length + other.width + other.depth) / 2 + DOORSTEP_LANE + 2) ** 2) continue;
         if (footprintOverlapXZ(rect, other) > NEIGHBOUR_TOLERANCE) { blocked = true; break; }
+        // …and not across their DOORSTEP either, which is the same rule one step out from the wall:
+        // the audit's one surviving fence-sealed door was a stand with no ring of its own walled in
+        // by a neighbour whose own gate led out perfectly well. A panel standing in the strip
+        // immediately in front of a neighbour's front face is a panel across their way in.
+        if (footprintOverlapXZ(rect, doorstepLane(other)) > NEIGHBOUR_TOLERANCE) { blocked = true; break; }
       }
       if (blocked) continue;
       segments.push({ x, z, heading, length, lx, lz, along: run.along });

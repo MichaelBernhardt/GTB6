@@ -5,9 +5,9 @@ import {
 } from '../core/GameRules';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import {
-  allBuildings, CELL_SIZE, footprintOverlapXZ, footprintRoadClearance, type GeneratedBuilding,
+  allBuildings, CELL_SIZE, footprintOverlapXZ, footprintRoadClearance, LAYOUT_SCALE, type GeneratedBuilding,
 } from './CityGen';
-import { districtAt } from './mapData';
+import { districtAt, distanceToRoadEdge } from './mapData';
 import { neighbourhoodBuildingVariant } from './data/neighbourhoods';
 import {
   FENCE_ROAD_CLEARANCE, FENCE_SEGMENT_MAX, FENCE_SPECS, FENCE_THICKNESS,
@@ -207,5 +207,42 @@ describe('the climb contract (collider height IS the mechanic)', () => {
     expect(fenceHazardTouch(FENCE_SPECS.palisade.height, 0)).toBe(false);
     // Standing ON the top is a touch.
     expect(fenceHazardTouch(FENCE_SPECS.razor.height, FENCE_SPECS.razor.height)).toBe(true);
+  });
+});
+
+/**
+ * THE GATE HAS TO LEAD SOMEWHERE — the cross-parcel rule, and the fix for the citywide
+ * reachability audit's headline finding (tools/qa/door-reachability.ts: 394 front doors sealed off
+ * from the street by fences, every ring with a gate, every gate opening into a closed pocket).
+ */
+describe('a ring is only planned where its gate reaches the street', () => {
+  const cells = cellBuckets();
+  const fenced = allBuildings().filter((parcel) => parcel.zone === 'residential'
+    && planParcelFence(parcel, { massing: massingOf(parcel), neighbours: neighbourhood(cells, parcel) }));
+
+  it('rings stands that face a street, and never a mass buried in a block', () => {
+    // The front fence line stands FRONT_MARGIN beyond the building face, and the frontage line puts
+    // that a couple of units behind the kerb — so a ringed stand ALWAYS has tarmac within a few
+    // units of its gate. A back-yard cottage's "front" faces the back wall of the house in front of
+    // it, tens of units from any road; those are the parcels that used to be ringed anyway.
+    expect(fenced.length).toBeGreaterThan(1500); // the suburbs are still fenced, and heavily
+    let landlocked = 0;
+    for (const parcel of fenced) {
+      const front = parcel.depth / 2 + 3 * LAYOUT_SCALE;
+      const gateX = parcel.x + front * Math.sin(parcel.heading);
+      const gateZ = parcel.z + front * Math.cos(parcel.heading);
+      if (distanceToRoadEdge(gateX, gateZ) > 12) landlocked++;
+    }
+    expect(landlocked, `${landlocked} ringed stands have no street within reach of their gate`).toBe(0);
+  });
+
+  it('refuses the ring rather than the gate — a planned ring always keeps its gate gap', () => {
+    for (const parcel of fenced.slice(0, 400)) {
+      const plan = planParcelFence(parcel, { massing: massingOf(parcel), neighbours: neighbourhood(cells, parcel) })!;
+      const frontZ = parcel.depth / 2 + 3 * LAYOUT_SCALE - 1;
+      const across = plan.segments.filter((segment) => segment.along === 'x' && Math.abs(segment.lz - frontZ) < 1e-6
+        && Math.abs(segment.lx - plan.gateLx) < segment.length / 2 + GATE_HALF_WIDTH - 0.01);
+      expect(across.length, `a front run crosses the gate at ${parcel.x},${parcel.z}`).toBe(0);
+    }
   });
 });
