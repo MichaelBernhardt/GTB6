@@ -475,6 +475,9 @@ export const EXIT_MAT_IN = 1.7;
 export interface DoorMarker {
   /** The doorstep, for the distance test. */
   readonly x: number; readonly z: number;
+  /** The door this marker stands for, so the per-frame pass can tint the circle by the SAME lock
+   *  predicate the rung answers — a circle must never promise an E the ladder will not offer. */
+  readonly door: InteriorDoor;
   readonly disc: THREE.Mesh;
   readonly ring: THREE.Mesh;
   /** Frame, sign and glow — everything mounted on the wall itself. */
@@ -482,6 +485,12 @@ export interface DoorMarker {
   readonly discMaterial: THREE.MeshBasicMaterial;
   readonly ringMaterial: THREE.MeshBasicMaterial;
 }
+
+/** Marker palette: gold = walking up will offer (enter, or the pick dial); grey = the ladder will
+ *  stay silent (locked and no pick carried) — the LOCKED chip carries the words, the circle now
+ *  carries the colour, and both read the same predicate as the rung. */
+export const MARKER_OPEN = { disc: 0xe8b64c, ring: 0xf5c451 } as const;
+export const MARKER_LOCKED = { disc: 0x8a939b, ring: 0xa3adb5 } as const;
 
 export interface BuiltDoorways {
   readonly group: THREE.Group;
@@ -585,7 +594,7 @@ export function buildDoorways(
     disc.position.set(door.x, stepY + 0.06, door.z);
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
     ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.015;
-    markers.push({ x: door.x, z: door.z, disc, ring, bay, discMaterial, ringMaterial });
+    markers.push({ x: door.x, z: door.z, door, disc, ring, bay, discMaterial, ringMaterial });
     group.add(bay, disc, ring);
   }
 

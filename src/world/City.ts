@@ -2472,6 +2472,12 @@ export class City {
    */
   private updateBuildingChunks(focusX: number, focusZ: number, budgetMs = BUILD_FRAME_BUDGET_MS): void {
     const size = MERGE_CHUNK_SIZE; const range = this.buildingVisibleRange;
+    // THE CELL THE PLAYER IS STANDING IN bakes at the warm budget, not the trickle. A dense cell
+    // needs 600-1,000 ms of geometry work, and at 2 ms a frame that is seconds of a world whose
+    // doors are all silent (the interiors rung gates on the cell being BUILT) — the owner's "I
+    // press E and nothing happens", fresh in every cell he drives into. 8 ms only while the
+    // focus cell itself is pending — the same budget the pre-menu warm-up already spends.
+    const focusKey = `${Math.floor(focusX / size)},${Math.floor(focusZ / size)}`;
     for (const { cellX: cx, cellZ: cz, key } of cellsWithinRange(focusX, focusZ, range, size)) {
       if (this.buildingCells.has(key) || this.queuedCells.has(key)) continue;
       this.queuedCells.add(key); this.buildQueue.push([cx, cz]);
@@ -2485,7 +2491,8 @@ export class City {
     if (this.pending && cellDistance(focusX, focusZ, this.pending.cellX, this.pending.cellZ, size) > range + CHUNK_HYSTERESIS) this.abortPending();
 
     const start = performance.now();
-    while (performance.now() - start < budgetMs) {
+    while (performance.now() - start
+      < (this.pending?.key === focusKey ? Math.max(budgetMs, WARM_BUILD_FRAME_BUDGET_MS) : budgetMs)) {
       if (!this.pending) {
         if (this.buildQueue.length === 0) break;
         this.buildQueue.sort((a, b) => cellDistance(focusX, focusZ, a[0], a[1], size) - cellDistance(focusX, focusZ, b[0], b[1], size));

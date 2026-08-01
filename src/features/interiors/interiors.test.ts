@@ -714,6 +714,79 @@ describe('every stair class is climbable', () => {
 });
 
 /**
+ * THE CIRCLE NEVER LIES. The owner pressed E at circle after circle and "nothing happens" — some
+ * of it was the chunk-bake window with no explanation, some of it was locked doors whose gold
+ * circle promised an interaction the ladder deliberately withholds from a pickless player. Now the
+ * circle, the chip and the rung all read the same predicates: a grey circle means the ladder will
+ * stay silent (locked, no pick), gold means walking up offers (enter or the dial), and a door in a
+ * still-baking chunk explains itself with the STREAMING chip instead of dead air.
+ */
+describe('the circle, the chip and the rung agree', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  /** The disc mesh nearest a doorstep, fished out of the built doorway group. */
+  function discFor(scene: THREE.Scene, door: { x: number; z: number }): THREE.Mesh | undefined {
+    let found: THREE.Mesh | undefined;
+    scene.getObjectByName('InteriorDoors')?.traverse((object) => {
+      if (found || !(object instanceof THREE.Mesh)) return;
+      if (object.geometry.type !== 'CylinderGeometry') return;
+      if (Math.hypot(object.position.x - door.x, object.position.z - door.z) < 1.5) found = object;
+    });
+    return found;
+  }
+
+  it('tints locked-silent doors grey, pickable and open doors gold — same predicate as the rung', () => {
+    const test = harness();
+    let picks = 0;
+    test.api.inventoryCount = () => picks;
+    const system = createFeature(test.api, undefined);
+    const locked = lockedDoorNear(0, 0)!;
+    test.player.set(locked.x, 0, locked.z);
+    system.update!(0.02); system.update!(0.02);
+    // Pickless at a locked door: grey circle, no offer, LOCKED chip — three signals, one truth.
+    const grey = discFor(test.scene, locked)!;
+    expect(grey, 'no disc built for the locked door').toBeDefined();
+    expect((grey.material as THREE.MeshBasicMaterial).color.getHex(), 'a silent door must not glow gold').toBe(0x8a939b);
+    expect(offer(system, test.player)).toBeUndefined();
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:locked')).toBe(true);
+    // Buy a pick: the same circle turns gold, because the ladder now offers the dial.
+    picks = 1;
+    system.update!(0.02);
+    expect((grey.material as THREE.MeshBasicMaterial).color.getHex(), 'a pickable door earns the gold back').toBe(0xe8b64c);
+    expect(offer(system, test.player)?.prompt).toContain('Pick the lock');
+    // An open door was always gold, and always offers.
+    picks = 0;
+    const open = openDoorNear(0, 0)!;
+    test.player.set(open.x, 0, open.z);
+    system.update!(0.02); system.update!(0.02);
+    const gold = discFor(test.scene, open)!;
+    expect(gold, 'no disc built for the open door').toBeDefined();
+    expect((gold.material as THREE.MeshBasicMaterial).color.getHex()).toBe(0xe8b64c);
+    expect(offer(system, test.player)?.prompt).toContain('Go inside');
+    system.dispose();
+  }, 120000);
+
+  it('explains a still-baking chunk with the STREAMING chip instead of dead air', () => {
+    const test = harness();
+    test.api.chunkBuiltAt = () => false;   // the whole city mid-bake, as after a teleport
+    const system = createFeature(test.api, undefined);
+    const door = openDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    system.update!(0.02);
+    // The rung must stay silent (E may not enter an unbuilt building) — but never unexplained.
+    expect(offer(system, test.player)).toBeUndefined();
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:streaming'),
+      'silence with no explanation is the bug the owner reported').toBe(true);
+    // The chunk lands: chip yields to the offer.
+    test.api.chunkBuiltAt = () => true;
+    system.update!(0.02);
+    expect(offer(system, test.player)?.prompt).toContain('Go inside');
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:streaming') ?? false).toBe(false);
+    system.dispose();
+  }, 120000);
+});
+
+/**
  * THE RAILS ARE REAL. The owner's follow-up, verbatim: "it's a little tricky to climb the stairs
  * because you just fall off the sides as you go up and around the flights if you're not super
  * careful." The side edges of the shaft are sealed by the clamp now (and railed by build.ts), so

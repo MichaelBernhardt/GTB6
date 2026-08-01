@@ -49,7 +49,8 @@ import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescrip
 import { PLAYER } from '../../config';
 import { FIND_CAP, type InteriorDoor, type InteriorsSave } from '../interiors.state';
 import {
-  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, INTERIOR_LAMP_INTENSITY, markerFade, toLocal, toWorld,
+  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, INTERIOR_LAMP_INTENSITY, MARKER_LOCKED, MARKER_OPEN,
+  markerFade, toLocal, toWorld,
   type BuiltDoorways, type BuiltFloor,
 } from './build';
 import {
@@ -997,11 +998,20 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       // See markerFade / the note over it in build.ts.
       const pulse = 0.24 + Math.sin(phase * 2.6) * 0.09;
       if (doorways) {
+        // The circle carries the lock state now: gold where walking up will offer (open, graced,
+        // or pickable-with-your-pick), grey where the ladder will stay silent. Same predicate as
+        // the rung — entryLocked plus the pick in the pocket — evaluated per lit marker per frame
+        // so nightfall, buying a pick, or a grace window re-tint the street without a rebuild.
+        const hour = api.hour();
+        const picked = carriesPick();
         for (const marker of doorways.markers) {
           const fade = markerFade(Math.hypot(marker.x - player.x, marker.z - player.z));
           const lit = fade > 0.001;
           marker.disc.visible = lit; marker.ring.visible = lit; marker.bay.visible = lit;
           if (!lit) continue;
+          const silent = entryLocked(marker.door, hour) && !picked;
+          marker.discMaterial.color.setHex(silent ? MARKER_LOCKED.disc : MARKER_OPEN.disc);
+          marker.ringMaterial.color.setHex(silent ? MARKER_LOCKED.ring : MARKER_OPEN.ring);
           marker.discMaterial.opacity = pulse * fade;
           marker.ringMaterial.opacity = 0.7 * fade;
           marker.disc.rotation.y += dt * 0.9;
@@ -1047,6 +1057,19 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
             id: 'interiors:pick', label: 'PICK', value: biting ? 'NOW' : '···',
             fill: Math.round(Math.max(0, Math.min(1, picking.sweep)) * 100), warn: biting,
           }];
+        }
+        // THE STREAMING CHIP: a door whose chunk has not finished baking offers nothing (the E
+        // press must not drop a player into an invisible building) — but a dense cell is seconds
+        // of geometry work, and to a player mid-window that silence read as "the game is broken":
+        // the owner pressed E at door after door and nothing happened OR explained itself. The
+        // chip carries the explanation the rung may not (press-theft rule), and vanishes the
+        // moment the cell lands and the offer takes over.
+        if (!swapping) {
+          const position = api.playerPosition();
+          const door = doorNear(position.x, position.z);
+          if (door && api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) {
+            return [{ id: 'interiors:streaming', label: 'STREAMING', value: 'This block is still building — a moment' }];
+          }
         }
         // The half of the locked-door story that may NOT live on the E ladder: a pickless player at
         // a locked door gets a chip, not an offer — a chip claims no key, so E stays with the car
