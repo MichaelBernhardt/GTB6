@@ -67,6 +67,89 @@ export function pullAroundSide(playerLateral: number, clearPositive: boolean, cl
   return (away === 1 ? clearNegative : clearPositive) ? -away as -1 | 1 : 0;
 }
 
+// ---- junk in the carriageway ---------------------------------------------------------------------
+
+/**
+ * A driver meeting something lying in his lane — a burning tyre, a heap of barricade junk.
+ *
+ * The rule the design wanted: a driver who can go round goes round, a driver who cannot stops, and
+ * which of those it is falls out of HOW MUCH OF THE CARRIAGEWAY is actually blocked rather than out of
+ * a hand-set flag on the obstruction. One tyre near the kerb is a metre of steering. Three tyres laid
+ * across the lane is a wall, and it is a wall for exactly the same reason a real one is: there is no
+ * longer a gap wide enough for a car.
+ *
+ * All of it is scalar geometry in the driver's own frame, so it tests without a scene, a City or a
+ * Vehicle — and PopulationSystem does the wiring, exactly as it does for the on-foot player above.
+ */
+
+/** How far down his own lane a driver looks for something on the tar. */
+export const HAZARD_SCAN = 30;
+/** Lateral slack a driver wants between his tyre wall and a burning one. */
+export const HAZARD_CLEARANCE = 0.55;
+/** The most a driver will move sideways to thread a gap: about one lane. Past this he is not going
+ *  round it, he is driving into oncoming traffic or up the pavement — so he stops instead. */
+export const HAZARD_SWERVE_MAX = 3.4;
+/** Where the swerve steer-target is placed down the road (the pull-around's DODGE_AHEAD, for junk). */
+export const HAZARD_SWERVE_AHEAD = 9;
+/** Ease off while threading: you do not take a gap that size at cruise. */
+export const HAZARD_SWERVE_THROTTLE = 0.7;
+/** Extra bumper room held off burning junk, ON TOP of the ordinary car-following gap: you stop a bit
+ *  further back from a fire than from a bakkie's tailgate. */
+export const HAZARD_STOP_MARGIN = 1.2;
+/** Stopped at junk this long: hoot, and ask the planner for a different way round. */
+export const HAZARD_PATIENCE = 3.5;
+export const HAZARD_REHONK = 2.6;
+
+/** The band of lateral offsets ONE hazard denies the driver's own centreline. */
+export interface HazardBand { readonly ahead: number; readonly lo: number; readonly hi: number; }
+
+/**
+ * Sample one hazard in the driver's frame. `undefined` when it is behind him, past the scan, or so
+ * far to the side that no reachable swerve could ever be constrained by it — which is the common
+ * case and the reason this allocates nothing for the tyre burning on the next street.
+ *
+ * Lateral sign matches `avoidPlayer`: positive is the car's right.
+ */
+export function hazardBand(
+  dx: number, dz: number, radius: number,
+  forwardX: number, forwardZ: number,
+  halfWidth: number, scan = HAZARD_SCAN,
+): HazardBand | undefined {
+  const ahead = dx * forwardX + dz * forwardZ;
+  if (ahead <= 0 || ahead > scan) return undefined;
+  const side = dx * forwardZ - dz * forwardX;
+  const half = radius + halfWidth + HAZARD_CLEARANCE;
+  if (Math.abs(side) > half + HAZARD_SWERVE_MAX) return undefined;
+  return { ahead, lo: side - half, hi: side + half };
+}
+
+/**
+ * The smallest lateral shift that threads every band, or `undefined` when nothing inside ±limit fits.
+ *
+ * Bands are merged, then the only offsets worth testing are 0 and each merged band's two edges — the
+ * least movement wins, so a driver drifts a metre round a kerbside tyre and does not swing a whole
+ * lane for it. `undefined` is what makes a barricade a barricade.
+ *
+ * Deterministic on ties (the more negative offset wins), so two identical cars behave identically.
+ */
+export function threadHazards(bands: readonly HazardBand[], limit = HAZARD_SWERVE_MAX): number | undefined {
+  if (bands.length === 0) return 0;
+  const merged: Array<[number, number]> = [];
+  for (const band of [...bands].sort((a, b) => a.lo - b.lo || a.hi - b.hi)) {
+    const last = merged[merged.length - 1];
+    if (last && band.lo <= last[1]) last[1] = Math.max(last[1], band.hi);
+    else merged.push([band.lo, band.hi]);
+  }
+  const free = (offset: number): boolean => merged.every(([lo, hi]) => offset <= lo || offset >= hi);
+  if (free(0)) return 0;
+  let best: number | undefined;
+  for (const [lo, hi] of merged) for (const offset of [lo, hi]) {
+    if (Math.abs(offset) > limit || !free(offset)) continue;
+    if (best === undefined || Math.abs(offset) < Math.abs(best) || (Math.abs(offset) === Math.abs(best) && offset < best)) best = offset;
+  }
+  return best;
+}
+
 /** Player↔car overlap resolution in the car's frame: the player may never occupy the car's volume.
  *  Returns the car-frame displacement along the axis of least penetration, or undefined when clear. */
 export function overlapPush(ahead: number, lateral: number, halfLength: number, halfWidth: number, playerRadius: number): { ahead: number; lateral: number } | undefined {

@@ -134,6 +134,75 @@ export class RoadClosures {
  *  does not have to be wired to traffic, police and pedestrian routing one at a time. */
 export const roadClosures = new RoadClosures();
 
+// ---- runtime road hazards ------------------------------------------------------------------------
+
+/**
+ * One physical obstruction lying IN the carriageway: a burning tyre, a heap of barricade junk.
+ *
+ * Deliberately NOT the same thing as a RoadClosure, and both are needed. A closure is a ROUTING
+ * preference — "prefer not to plan through this circle" — at the granularity A* can see, which is a
+ * junction or two. It reroutes the traffic that has not committed yet and does nothing whatsoever to
+ * the driver already on the block, which is exactly the owner's report: the road was closed in the
+ * planner and the car still drove through the fire, because nothing had ever told a DRIVER the fire
+ * was there. A hazard is the thing itself, at the granularity a driver sees: something in his lane he
+ * has to steer round or stop short of.
+ *
+ * The shape is `{x, z, r}` on purpose — the same triple City already uses for potholes and
+ * JoziFlowSystem already consumes as a FlowHazard. Junk on the tar is junk on the tar.
+ */
+export interface RoadHazard { readonly x: number; readonly z: number; readonly r: number; }
+
+/**
+ * What is currently lying on the tar, published per OWNER.
+ *
+ * Owner-scoped rather than per-id because the callers are features whose whole hazard set moves
+ * together (a barricade goes up, three tyres burn out) and because it makes teardown one call that
+ * cannot half-succeed: `retract(owner)` and every circle that owner ever put on a road is gone. That
+ * matters more than it sounds — a feature is SUSPENDED rather than disposed when the player enters
+ * online PvP, and a phantom hazard blocking a road in a city with no protest in it is worse than cars
+ * driving through fire.
+ *
+ * DIRECTION OF DEPENDENCY. This module imports nothing at all and sits in its own `navigation` chunk,
+ * so a lazily-loaded feature may import it (protest already does, for RoadClosures) without ever
+ * putting an edge back into the feature chunk. The simulation reads this; it never reads the feature.
+ * The reverse — JoziFlowSystem or PopulationSystem importing src/features/protest — would make the
+ * eager chunk depend on a lazy one and is the cycle that has broken production on this project before.
+ */
+export class RoadHazards {
+  private owners = new Map<string, readonly RoadHazard[]>();
+  private flat: RoadHazard[] = [];
+
+  /** Cheap "is there anything at all" gate: an ordinary city pays one integer compare per driver. */
+  get count(): number { return this.flat.length; }
+  get list(): readonly RoadHazard[] { return this.flat; }
+
+  /** Replaces everything this owner had on the road. Silently drops malformed circles rather than
+   *  poisoning every driver's scan with a NaN. */
+  publish(owner: string, hazards: readonly RoadHazard[]): void {
+    const clean = hazards.filter((hazard) => Number.isFinite(hazard.x) && Number.isFinite(hazard.z) && hazard.r > 0 && Number.isFinite(hazard.r));
+    if (clean.length === 0) { this.retract(owner); return; }
+    this.owners.set(owner, clean);
+    this.rebuild();
+  }
+
+  retract(owner: string): void {
+    if (!this.owners.delete(owner)) return;
+    this.rebuild();
+  }
+
+  clear(): void { if (this.owners.size) { this.owners.clear(); this.flat = []; } }
+
+  private rebuild(): void {
+    const flat: RoadHazard[] = [];
+    for (const list of this.owners.values()) flat.push(...list);
+    this.flat = flat;
+  }
+}
+
+/** The one shared set of things in the road. Read by PopulationSystem's drivers; written by whoever
+ *  put something there. */
+export const roadHazards = new RoadHazards();
+
 export function nearestNode(graph: NavGraph, x: number, z: number): number {
   let best = -1; let bestDistance = Infinity;
   for (let index = 0; index < graph.nodes.length; index++) {
