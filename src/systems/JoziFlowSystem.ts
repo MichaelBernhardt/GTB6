@@ -1,5 +1,6 @@
 import type { VehicleKind } from '../config';
 import type { FeatureHudEntry } from '../features/types';
+import { potholeRadiusToward, type PotholeHazard } from '../world/PotholeShape';
 
 /**
  * The tiny structural slice Jozi Flow needs from a vehicle. Keeping the scorer independent of the
@@ -27,11 +28,10 @@ export interface NearMissProbe {
   readonly heightGap: number;
 }
 
-export interface FlowHazard {
-  readonly x: number;
-  readonly z: number;
-  readonly r: number;
-}
+/** A pothole, as the scorer sees it. Its `r` is the equivalent-area radius, NOT the distance to the
+ *  nearest edge — the outline is ragged and stretched along the lane, so the reach that matters is
+ *  direction-dependent and comes from PotholeShape. */
+export type FlowHazard = PotholeHazard;
 
 export interface PotholePassProbe {
   readonly ahead: number;
@@ -131,10 +131,16 @@ export function potholePassProbe(driver: FlowVehicle, pothole: FlowHazard): Poth
   const forwardX = Math.sin(driver.heading); const forwardZ = Math.cos(driver.heading);
   const rightX = Math.cos(driver.heading); const rightZ = -Math.sin(driver.heading);
   const side = dx * rightX + dz * rightZ;
+  // Measured to the edge the DRIVER CAN SEE, not to a mean radius. A hole is stretched along the lane
+  // and ragged around it, so the reach that faces the tyre line — the outline radius pointing from the
+  // hole back across the driver's path — is the only honest thing to subtract. Paying an award for a
+  // gap that was visibly tar, or none for a gap that was visibly clear, is worse than a round pothole.
+  const facing = side >= 0 ? -1 : 1;
+  const reach = potholeRadiusToward(pothole, rightX * facing, rightZ * facing);
   return {
     ahead: dx * forwardX + dz * forwardZ,
     side,
-    clearance: Math.abs(side) - pothole.r,
+    clearance: Math.abs(side) - reach,
     playerSpeed: driver.speed,
   };
 }

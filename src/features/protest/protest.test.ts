@@ -4,11 +4,12 @@ import { Barricade, ScorchField, TyreFire } from './Barricade';
 import { createFeature } from './protest';
 import {
   outageLedger, ProhibitedTyreHostError, RIPE_OUTAGE_HOURS, SCORCH_CAP, SITE_MIN_METRES,
-  TYRE_CARRY_CAP,
+  SOLO_TYRE_SECONDS, TYRE_CARRY_CAP,
 } from '../protest.state';
 import { FeatureHost } from '../host';
 import { FEATURES } from '../registry';
-import { roadClosures } from '../../systems/NavGraph';
+import { roadClosures, roadHazards } from '../../systems/NavGraph';
+import type { Pedestrian } from '../../entities/Pedestrian';
 import { setPower } from '../../world/powerGrid';
 import type { FeatureGameApi } from '../types';
 
@@ -16,6 +17,14 @@ import type { FeatureGameApi } from '../types';
 const FLAT = () => 0;
 
 /** A Game stand-in: the whole FeatureGameApi surface, with nothing behind it but arithmetic. */
+/** An ambient pedestrian as assimilate() sees one — deliberately `aggressive`, because that is the
+ *  personality whose square-up the assimilation exists to switch off. */
+function fakeBystander(x: number, z: number): Pedestrian {
+  const ped = { solidarity: false, police: false, hostile: false, aggressive: true, state: 'idle', group: new THREE.Group() };
+  ped.group.position.set(x, 0, z);
+  return ped as unknown as Pedestrian;
+}
+
 function stubApi(overrides: Partial<FeatureGameApi> = {}): FeatureGameApi & { notices: string[]; earned: number; events: string[] } {
   const scene = new THREE.Scene();
   const player = new THREE.Vector3(10, 0, 10);
@@ -708,5 +717,156 @@ describe('no tyre hangs in the air', () => {
     for (let press = 0; press < 60; press++) barricade.addTyre();
     expect(unsupported(tyresOf(barricade, () => 0))).toEqual([]);
     barricade.dispose();
+  });
+});
+
+/**
+ * THE OWNER'S REPORTS, both of them, at the feature's own boundary.
+ *
+ *  (1) "when I join a protest, everyone gets scared of me and runs away, which means it's not much of
+ *      a protest."
+ *  (2) "when I throw a burning tyre on the road, cars etc just drive through it. Isn't it supposed to
+ *      do something like block them?"
+ *
+ * The simulation half of both lives in src/systems (see PopulationSystem.protest.test.ts). What is
+ * proved here is the contract between them: who this feature grants solidarity to and when it takes
+ * it back, and that everything it lays on a road is taken off again — on stand-down, on dispose, and
+ * on the PvP suspend, which does NOT dispose the feature and has left phantom state behind before.
+ */
+describe('what the protest publishes into the simulation', () => {
+  const reset = () => { roadClosures.clear(); roadHazards.clear(); };
+
+  it('gives the whole crowd solidarity while the barricade stands, and takes it back when it comes down', () => {
+    reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const crowd = Number(system.qa?.('crowd', {})?.slice(3));
+    expect(crowd).toBeGreaterThan(0);
+    // Granted on RAISE, not on join: a crowd that scatters as you walk up is a picket there is
+    // nothing left to join.
+    expect(system.qa?.('solidarity', {})).toBe(`ok:${crowd}/${crowd}`);
+    system.command?.(['clear']);
+    expect(system.qa?.('solidarity', {})).toBe('ok:0/0');
+    system.dispose();
+  });
+
+  it('assimilates a bystander standing in the picket, and releases them when they leave', () => {
+    reset();
+    // The owner, inside his own protest: "Some people in the protest randomly attack me too, which
+    // escalates to others running away." The crowd was safe; the BYSTANDERS who wandered into it were
+    // not — one in nine is `aggressive` and squares up inside 4.5 u, and in a picket everyone is
+    // inside 4.5 u. Whoever stands in the picket now counts as crowd for as long as they stand there.
+    const peds: Pedestrian[] = [];
+    const api = stubApi({ pedestriansNear: () => peds });
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const site = roadHazards.list[0]!;
+    const stander = fakeBystander(site.x + 2, site.z + 1);
+    peds.push(stander);
+    system.update?.(0.1);
+    expect(stander.solidarity).toBe(true); // standing in the picket: one of us
+    stander.group.position.set(site.x + 200, 0, site.z); // wanders off
+    system.update?.(0.1);
+    expect(stander.solidarity).toBe(false); // back to an ordinary bystander
+    system.dispose();
+  });
+
+  it('never re-grants what the world revoked, and lets go of everyone on suspend', () => {
+    reset();
+    const peds: Pedestrian[] = [];
+    const api = stubApi({ pedestriansNear: () => peds });
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const site = roadHazards.list[0]!;
+    const punched = fakeBystander(site.x + 1, site.z - 2);
+    peds.push(punched);
+    system.update?.(0.1);
+    expect(punched.solidarity).toBe(true);
+    punched.solidarity = false; // takeDamage / knockdown / the witness sweep — the world took it back
+    system.update?.(0.1);
+    expect(punched.solidarity).toBe(false); // revocation does not come back, however long they stand there
+
+    const held = fakeBystander(site.x - 2, site.z + 1);
+    peds.push(held);
+    system.update?.(0.1);
+    expect(held.solidarity).toBe(true);
+    system.suspend?.();
+    expect(held.solidarity).toBe(false); // a suspended feature holds no one — the garage-blip rule
+    system.update?.(0.1);
+    expect(held.solidarity).toBe(true); // first frame back re-gathers whoever is still standing there
+    system.dispose();
+    expect(held.solidarity).toBe(false);
+  });
+
+  it('puts a row of circles across the lane a driver can actually see, and clears them on dispose', () => {
+    reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    expect(roadHazards.count).toBe(0);
+    system.qa?.('raise', {});
+    // A barricade is published as several circles laid across its own lane, never one big one — so a
+    // car on the cross street meets only the part in front of him, and the "can I get round this"
+    // arithmetic is the same one the player's own tyres go through.
+    expect(roadHazards.count).toBeGreaterThan(2);
+    system.dispose();
+    expect(roadHazards.count).toBe(0);
+    expect(roadClosures.count).toBe(0);
+  });
+
+  it('drops one circle per tyre the player lights, and takes it off again when the tyre burns out', () => {
+    reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('tyre', { n: 2 });
+    expect(system.qa?.('burn', {})).toBe('ok:1');
+    expect(roadHazards.count).toBe(1);
+    // SOLO_SPACING is 4.5 now, not 22: three carried tyres lay a real line across a lane. A wider
+    // spacing than the road meant the player could never build anything, which is half of report (2).
+    api.playerPosition().x += 5;
+    expect(system.qa?.('burn', {})).toBe('ok:2');
+    expect(roadHazards.count).toBe(2);
+    for (let second = 0; second < SOLO_TYRE_SECONDS + 2; second++) system.update?.(1);
+    expect(roadHazards.count).toBe(0);
+    expect(roadClosures.count).toBe(0);
+    system.dispose();
+  });
+
+  it('takes everything off the road when the feature is SUSPENDED, and puts it back when it resumes', () => {
+    reset();
+    const api = stubApi();
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const standing = roadHazards.count;
+    expect(standing).toBeGreaterThan(0);
+    expect(roadClosures.count).toBeGreaterThan(0);
+
+    // PvP: no ticks, so its tyres never burn down. Leaving them registered shuts a road for as long
+    // as the player stays online, in a city with no protest in it.
+    system.suspend?.();
+    expect(roadHazards.count).toBe(0);
+    expect(roadClosures.count).toBe(0);
+
+    // ...and the very first frame back restates the lot. No resume hook anywhere.
+    system.update?.(1 / 60);
+    expect(roadHazards.count).toBe(standing);
+    expect(roadClosures.ids).toContain('protest:blockade');
+    system.dispose();
+  });
+
+  it('leaves one threadable heap behind while it smoulders, so traffic weaves rather than stops', () => {
+    reset();
+    let clock = 5;
+    const api = stubApi({ hour: () => clock });
+    const system = createFeature(api, undefined);
+    system.qa?.('raise', {});
+    const standing = roadHazards.count;
+    // The blockade stands BLOCKADE_HOURS of GAME time, and hourDelta clamps each step to half an hour.
+    for (let step = 0; step < 16; step++) { clock += 0.4; system.update?.(1); }
+    expect(system.qa?.('status', {})).toContain('phase=smouldering');
+    expect(roadHazards.count).toBeLessThan(standing);
+    expect(roadHazards.count).toBe(1);
+    expect(roadClosures.ids).not.toContain('protest:blockade'); // the road is open again, junk and all
+    system.dispose();
   });
 });

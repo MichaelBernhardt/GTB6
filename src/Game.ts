@@ -33,7 +33,7 @@ import { chopShopAccepts, chopShopOffer } from './systems/ChopShopSystem';
 import { heatAfterStarDrop, runConsoleCommand, type ConsoleHost } from './systems/Console';
 import { clampT, cornerSide, COVER_ENTER_RANGE, COVER_EXIT_HOLD, coverHeading, coverPosition, coverT, movingAway, nearestGroundedCoverSpot, PEEK_OUT, PEEK_STEP, SLIDE_SPEED, type CoverSpot } from './systems/CoverSystem';
 import { COURIER_MIN_TRIP_DISTANCE, COURIER_STOP_RADIUS, COURIER_STOP_SPEED, CourierJob, courierHudText } from './systems/CourierJobSystem';
-import { FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
+import { bumpIsAttack, FEAR_EVENTS, FEAR_MAX } from './systems/FearSystem';
 import { GoreSystem } from './systems/GoreSystem';
 import { JoziFlowSystem, type JoziFlowEvent } from './systems/JoziFlowSystem';
 import { LoadSheddingSystem, OUTAGE_MIN_SECONDS } from './systems/LoadSheddingSystem';
@@ -48,7 +48,7 @@ import { KELVIN_FENCE_RADIUS, KELVIN_OFFICE_SPOT, KELVIN_YARD_CENTER } from './w
 import { buildKelvinYard } from './world/KelvinYard';
 import { CAR_TARGET_CAP, clampBusy, isAmbientPedestrian, LifecycleSystem, PED_TARGET_CAP } from './systems/LifecycleSystem';
 import { PickupSystem, type Pickup } from './systems/PickupSystem';
-import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
+import { determineReporter, PoliceKnowledge, radioCallout, REPORT_DELAY, SIGHT_RADIUS, WITNESS_RADIUS, type CrimeLabel, type WitnessCandidate } from './systems/PoliceKnowledge';
 import { BLACKOUT_STEALTH_THRESHOLD, concealedInBlackout, inHeadlightCone, MUZZLE_FLASH_SECONDS } from './systems/BlackoutStealth';
 import { nextBustMeter, PoliceSystem, separationPush, toggleSiren } from './systems/PoliceSystem';
 import { PopulationSystem } from './systems/PopulationSystem';
@@ -84,6 +84,7 @@ import { City, ROAD_NETWORK } from './world/City';
 import { CBD_CENTER, distanceToRailwayCorridor, GENERATED_ROADS, METRES_PER_UNIT } from './world/mapData';
 import { COURIER_DEPOT, LOCKUP_SPOT, PLAYER_SPAWN, POLICE_STATION } from './world/placements';
 import { DayNightSystem, nightFactor } from './world/DayNight';
+import { POTHOLE_MAX_RADIUS_FACTOR, potholeRadiusToward } from './world/PotholeShape';
 import { BUILDING_VISIBLE_RANGE, CHUNK_VISIBLE_RANGE, DETAIL_VISIBLE_RANGE, POTATO_BUILDING_RANGE, POTATO_CHUNK_RANGE, POTATO_DETAIL_RANGE } from './world/ChunkVisibility';
 import { buildEnvironment, fogDensity, type EnvironmentHandle } from './world/Environment';
 import { CITY_JUNCTIONS, ETOLL_GANTRIES } from './world/UrbanInfrastructure';
@@ -139,6 +140,8 @@ export class Game {
   private bullets!: BulletSystem;
   private propFx!: PropSystem;
   private vehicleFire!: VehicleFireSystem;
+  /** Burning cars whose drivers still need to bail — drained one per frame (see updateVehicleFires). */
+  private pendingEjections: Vehicle[] = [];
   private shake = 0;
   private wanted = new WantedSystem();
   private knowledge = new PoliceKnowledge<Pedestrian>();
@@ -396,6 +399,26 @@ export class Game {
         this.ui.showLoading({ progress: 86 + fraction * 13, label: 'Opening your neighbourhood', detail: `Nearby building blocks · ${complete} of ${total} ready.` });
       });
       if (attempt !== this.assetLoadAttempt) return;
+      // Warm-up: compile the whole scene's shader programs behind the loading card, with the effect
+      // light pools already in place, so neither the first menu frame nor the first shot/fire/blast
+      // pays a compile. Counts never change after boot (EffectLightPool), so this set stays warm.
+      // The primer parks one tiny mesh per effect material (blood, decal, puff/fire/tracer family,
+      // rocket) under the city so the compile sweep also covers materials that otherwise first exist
+      // mid-explosion — measured without it: one link + a ~200 ms decal-texture upload land in the
+      // session's first kill frame. initTexture uploads the canvas textures compile() does not touch.
+      this.ui.showLoading({ progress: 99, label: 'Warming the shaders', detail: 'Compiling city materials on your GPU.' });
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const primer = new THREE.Group(); primer.name = 'shader-warmup'; primer.position.y = -500;
+      const primerGeometry = new THREE.PlaneGeometry(0.01, 0.01);
+      for (const material of [...this.gore.warmupMaterials(), ...this.projectiles.warmupMaterials()]) {
+        primer.add(new THREE.Mesh(primerGeometry, material));
+        const map = (material as THREE.MeshStandardMaterial).map; if (map) this.renderer.initTexture(map);
+      }
+      this.scene.add(primer);
+      try { await this.renderer.compileAsync(this.scene, this.camera); }
+      catch (error) { console.warn('[render] shader warm-up failed; first frames may hitch.', error); }
+      this.scene.remove(primer); primerGeometry.dispose(); // materials stay: the systems own them
+      if (attempt !== this.assetLoadAttempt) return;
       this.ui.showLoading({ progress: 100, label: 'Joburg is ready', detail: 'Welcome to the city.' });
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       this.requiredAssetsReady = true; this.mode = 'menu'; analytics.setMode('menu'); this.ui.showMainMenu(this.mainMenuSummary());
@@ -410,6 +433,10 @@ export class Game {
   }
 
   private setupRenderer(): void {
+    // Dev keeps shader diagnostics. In production the default (true) makes three block on
+    // getProgramParameter/getProgramInfoLog at every program's first draw — a synchronous driver
+    // round-trip that concentrated the old explosion recompile storm into one multi-second frame.
+    this.renderer.debug.checkShaderErrors = import.meta.env.DEV;
     this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = this.baseQuality() !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
@@ -1236,8 +1263,14 @@ export class Game {
     const fire = this.vehicleFire.update(dt, allVehicles, this.population.pedestrians, this.player.group.position);
     for (const vehicle of fire.ignitions) {
       if (vehicle === this.activeVehicle || vehicle === this.transition?.vehicle) this.ui.notify('Vehicle on fire', 'Bail out before it blows.', false);
-      else if (vehicle.occupied) { this.population.ejectDriver(vehicle, vehicle.group.position.clone(), vehicle.police); vehicle.occupied = false; }
+      else if (vehicle.occupied) { vehicle.occupied = false; this.pendingEjections.push(vehicle); }
     }
+    // Ejecting a driver constructs a FULL Pedestrian (unique geometry, LOD proxy, rigged-visual load,
+    // spawn probes). An RPG that ignites three cars used to build all three in the blast frame,
+    // sidestepping LifecycleSystem's 2-per-update construction budget. One per frame: the car burns
+    // 4–6 s before it blows, so a driver bailing a frame or two late is invisible — the frame spike isn't.
+    const bail = this.pendingEjections.shift();
+    if (bail && !bail.wrecked && allVehicles.includes(bail)) this.population.ejectDriver(bail, bail.group.position.clone(), bail.police);
     for (const boom of fire.burnouts) {
       this.audio.explosion(boom.position.x, boom.position.z);
       this.population.broadcastFear(boom.position, FEAR_EVENTS.kill);
@@ -1312,6 +1345,11 @@ export class Game {
     for (const bump of this.population.bumpPlayer(dt, this.player.group.position, this.player.moving, this.player.sprinting)) {
       if (!bump.assault) continue;
       this.population.broadcastFear(bump.position, FEAR_EVENTS.assault);
+      // A jostle files NOTHING — no heat, no witness sweep, no blotter entry. See bumpIsAttack for
+      // the rule and its two failed halves: first the sweep un-joined the player's own picket, then
+      // the retained heat had JMPD shooting him over a shoulder-bump at two stars. The fear
+      // broadcast above stays: being barged is frightening even when it isn't criminal.
+      if (!bumpIsAttack(bump)) continue;
       this.reportCrime(bump.position, bump.killed ? 24 : BUMP_ASSAULT_HEAT, { victims: [bump.ped], radius: FEAR_EVENTS.assault.radius, cityEvent: bump.killed ? 'civilian-murder' : 'civilian-assault', label: bump.killed ? 'murder' : 'assault' });
       if (bump.killed) this.spawnDrops(bump.ped);
     }
@@ -1656,7 +1694,16 @@ export class Game {
     this.potholeCooldown = Math.max(0, this.potholeCooldown - dt);
     if (this.potholeCooldown === 0 && Math.abs(vehicle.speed) > 9) {
       const position = vehicle.group.position;
-      const hit = this.city.potholes.find((hole) => (hole.x - position.x) ** 2 + (hole.z - position.z) ** 2 < hole.r * hole.r);
+      // Against the DRAWN outline, not a circle of r: a hole is stretched along the lane, so tar that
+      // looks clear beside it must not bill you for wheel alignment. The squared-distance reject uses
+      // the shape's analytic bound, so the common case of this whole-city scan hashes nothing.
+      const hit = this.city.potholes.find((hole) => {
+        const dx = position.x - hole.x; const dz = position.z - hole.z;
+        const gap = dx * dx + dz * dz;
+        if (gap >= (hole.r * POTHOLE_MAX_RADIUS_FACTOR) ** 2) return false;
+        const reach = potholeRadiusToward(hole, dx, dz);
+        return gap < reach * reach;
+      });
       if (hit) {
         vehicle.speed *= 0.8; vehicle.bounce = Math.min(0.28, Math.abs(vehicle.speed) * 0.012); vehicle.takeDamage(2);
         this.recordCourierCrash(7);
@@ -2452,6 +2499,20 @@ export class Game {
    *  and a sighting; otherwise a surviving victim or a living bystander within radius phones it in after
    *  REPORT_DELAY (stars land when the report matures); nobody left alive means no report at all. */
   private reportCrime(position: THREE.Vector3, heat: number, options: { victims?: Pedestrian[]; radius?: number; copWitnessed?: boolean; copOnly?: boolean; cityEvent?: CityEvent['kind']; label: CrimeLabel }): void {
+    // WHAT REVOKES SOLIDARITY, and the reason it is here and not in six call sites: this is the one
+    // funnel every violent thing the player does to a person already passes through — assault, murder,
+    // mugging, hit-and-run, carjacking, explosion, gunfire — and merely AIMING deliberately reports no
+    // crime at all, so drawing a weapon at a picket does not end it. Witness-scoped by the crime's own
+    // fear radius. It runs BEFORE the teflon return on purpose: teflon buys the player off the police,
+    // not out of what the people standing next to him just watched him do.
+    //
+    // One exemption: RETALIATION. When every victim was hit while in the hostile state, the crowd
+    // watched the victim start it — one in nine ambient bodies squares up unprovoked, and a picket
+    // that unjoined because the player defended himself against exactly that was the crowd punishing
+    // the wrong party. JMPD still books it. (Walking shoves never reach this funnel at all: a bump
+    // files a crime only when a body goes down — see bumpIsAttack at its call site.)
+    const retaliation = !!options.victims?.length && options.victims.every((victim) => victim.hitWhileHostile);
+    if (!retaliation) this.population.breakSolidarity(position, options.radius ?? WITNESS_RADIUS);
     if (options.cityEvent) this.recordCityEvent(options.cityEvent, position);
     if (this.taxiRide.phase === 'riding' && this.activeVehicle && position.distanceTo(this.activeVehicle.group.position) < GUNFIRE_FEAR_RADIUS) this.taxiRide.frighten(heat * GUNFIRE_FEAR_SCALE); // violence near the taxi spooks the passenger
     if (this.cheats.teflon) return; // teflon: the heat could not land anyway, so JMPD neither witness nor take the call — no fake dispatch toast, no last-known position
@@ -3367,6 +3428,7 @@ export class Game {
       analytics: () => undefined, // replaced per feature by the host, which binds the feature id
       spawnFixture: (x, z, name) => this.population.spawnFixture(x, z, name),
       removeFixture: (ped) => this.population.removePedestrian(ped),
+      pedestriansNear: (x, z, radius) => this.population.pedestriansNear(x, z, radius),
     };
   }
 }

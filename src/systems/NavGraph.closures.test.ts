@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findPath, RoadClosures, roadClosures, RoutePlanner, type NavGraph } from './NavGraph';
+import { findPath, RoadClosures, roadClosures, RoadHazards, roadHazards, RoutePlanner, type NavGraph } from './NavGraph';
 
 /**
  * The runtime closure overlay. A blockade must be able to shut a road without anybody rewriting the
@@ -119,5 +119,65 @@ describe('findPath with a closure', () => {
     expect(detour?.some((point) => point.x === 2 && point.z === 0)).toBe(false);
     roadClosures.clear();
     expect(planner.plan(0, 0, 4)?.map((point) => point.x)).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+/**
+ * The OTHER runtime overlay. A closure is a routing preference at junction scale; a hazard is the
+ * object itself, at the scale a driver sees. The protest needs both, and the reason the second one
+ * exists at all is that the first cannot stop a car that is already on the block.
+ */
+describe('road hazards', () => {
+  it('starts empty and costs one integer compare to ask', () => {
+    const hazards = new RoadHazards();
+    expect(hazards.count).toBe(0);
+    expect(hazards.list).toEqual([]);
+  });
+
+  it('replaces an owner wholesale rather than accumulating', () => {
+    const hazards = new RoadHazards();
+    hazards.publish('protest', [{ x: 0, z: 0, r: 2 }, { x: 4, z: 0, r: 2 }]);
+    expect(hazards.count).toBe(2);
+    hazards.publish('protest', [{ x: 9, z: 9, r: 1 }]);
+    expect(hazards.list).toEqual([{ x: 9, z: 9, r: 1 }]);
+  });
+
+  it('keeps owners apart, so one feature clearing up never removes another feature’s junk', () => {
+    const hazards = new RoadHazards();
+    hazards.publish('protest', [{ x: 0, z: 0, r: 2 }]);
+    hazards.publish('roadworks', [{ x: 20, z: 0, r: 3 }]);
+    expect(hazards.count).toBe(2);
+    hazards.retract('protest');
+    expect(hazards.list).toEqual([{ x: 20, z: 0, r: 3 }]);
+  });
+
+  it('retracts everything an owner ever put down in one call — the teardown a suspend must not half-do', () => {
+    const hazards = new RoadHazards();
+    hazards.publish('protest', [{ x: 0, z: 0, r: 2 }, { x: 3, z: 0, r: 2 }, { x: 6, z: 0, r: 2 }]);
+    hazards.retract('protest');
+    expect(hazards.count).toBe(0);
+    hazards.retract('protest'); // idempotent: a second teardown is not an error
+    expect(hazards.count).toBe(0);
+  });
+
+  it('publishing nothing is the same as retracting', () => {
+    const hazards = new RoadHazards();
+    hazards.publish('protest', [{ x: 0, z: 0, r: 2 }]);
+    hazards.publish('protest', []);
+    expect(hazards.count).toBe(0);
+  });
+
+  it('drops malformed circles instead of poisoning every driver scan with a NaN', () => {
+    const hazards = new RoadHazards();
+    hazards.publish('protest', [{ x: NaN, z: 0, r: 2 }, { x: 0, z: 0, r: 0 }, { x: 1, z: 1, r: -3 }, { x: 2, z: 2, r: 1.6 }]);
+    expect(hazards.list).toEqual([{ x: 2, z: 2, r: 1.6 }]);
+  });
+
+  it('shares one process-wide set, exactly as the closures do', () => {
+    expect(roadHazards.count).toBe(0);
+    roadHazards.publish('test', [{ x: 1, z: 1, r: 1 }]);
+    expect(roadHazards.count).toBe(1);
+    roadHazards.clear();
+    expect(roadHazards.count).toBe(0);
   });
 });

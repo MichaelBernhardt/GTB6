@@ -13,8 +13,10 @@ import {
   potholePassProbe,
   scorableNearMiss,
   scorablePotholePass,
+  type FlowHazard,
   type FlowVehicle,
 } from './JoziFlowSystem';
+import { potholeRadiusToward } from '../world/PotholeShape';
 
 function vehicle(
   x: number,
@@ -95,9 +97,16 @@ describe('Jozi Flow loop', () => {
 
   it('chains a close pothole dodge with traffic, but rejects a hit or a wide miss', () => {
     const driver = vehicle(0, 0);
-    const pothole = { x: 1.6, z: 0.2, r: 1 };
+    const pothole = { x: 1.3, z: 0.2, r: 1, axis: Math.PI / 2 }; // stretched down the lane the driver is in
     const probe = potholePassProbe(driver, pothole);
-    expect(probe.clearance).toBeCloseTo(0.6);
+    // Clearance is the gap to the edge the driver can SEE — the outline reach facing the tyre line —
+    // never to a circle of radius r. A hole broken along the lane is narrower across it than `r` says:
+    // here the drawn edge is a quarter of a unit further from the tyre line than the scalar claims,
+    // which is the difference between paying for a slalom and paying for a shave. The drawn shape and
+    // the scored shape must never be allowed to drift apart silently.
+    expect(probe.clearance).toBeCloseTo(Math.abs(probe.side) - potholeRadiusToward(pothole, -1, 0));
+    expect(probe.clearance).toBeCloseTo(0.542, 2);
+    expect(Math.abs(probe.side) - pothole.r).toBeCloseTo(0.3);
     expect(scorablePotholePass(0.2, { ...probe, ahead: -0.2 }, 1 / 60)).toBe(true);
     expect(scorablePotholePass(0.2, { ...probe, ahead: -0.2, clearance: POTHOLE_PASS_MIN_CLEARANCE - 0.01 }, 1 / 60)).toBe(false);
     expect(scorablePotholePass(0.2, { ...probe, ahead: -0.2, clearance: POTHOLE_PASS_MAX_CLEARANCE + 0.01 }, 1 / 60)).toBe(false);
@@ -123,9 +132,12 @@ describe('Jozi Flow loop', () => {
   });
 });
 
-function flowUpdateAcrossPothole(driver: FlowVehicle, pothole: { x: number; z: number; r: number }) {
+/** The DRIVER crosses the hole, not the other way round: a pothole's outline is derived from its own
+ *  world position, so teleporting the hazard across the axle line would legitimately reshape it. */
+function flowUpdateAcrossPothole(driver: FlowVehicle, pothole: FlowHazard) {
   const flow = new JoziFlowSystem();
-  flow.update(1 / 60, driver, [], [], true, 0, [pothole]);
-  pothole.z = -0.2;
-  return flow.update(1 / 60, driver, [], [], true, 0, [pothole]);
+  const moving = { ...driver, group: { position: { ...driver.group.position } } };
+  flow.update(1 / 60, moving, [], [], true, 0, [pothole]);
+  moving.group.position.z += 0.4;
+  return flow.update(1 / 60, moving, [], [], true, 0, [pothole]);
 }
