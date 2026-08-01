@@ -50,6 +50,23 @@ export interface NeighbourhoodProfile {
   readonly pedestrians: readonly NpcCharacterId[];
   readonly traffic: readonly VehicleKind[];
   readonly trafficColours: readonly number[];
+  /**
+   * HOW MONEYED THE PLACE IS — 0 a township, 1 the ridge. The owner's rule: "some suburbs that
+   * might be fancier should tend to single dwelling houses whereas poor suburbs can be more cheap
+   * apartment blocks. Either based on actual suburbs, if easy, or else selected somehow."
+   *
+   * It is based on actual suburbs, because this table already carries their real names. The values
+   * are ordinary Joburg knowledge — Houghton and Westcliff are the old-money ridge, Hillbrow and
+   * Berea are wall-to-wall walk-up flats, Refengkgotso is a township — and they are the ONE place
+   * to argue with them: change a number here and the whole city follows, because CityGen reads its
+   * house/flat/villa split off this and nothing else. Districts the map invents later fall back to
+   * a deterministic middling value rather than silently inheriting the ridge.
+   *
+   * It is a SEPARATE axis from distance. Wealth decides WHAT gets built (a villa on its own erf, a
+   * cottage, a walk-up flat, an RDP row); distance decides how much and how tall. A township is
+   * poor AND far out AND densely packed AND low — which is a combination no single axis can say.
+   */
+  readonly affluence: number;
 }
 
 const ALL_AMBIENT = [...AMBIENT_NPC_CHARACTER_IDS] as const;
@@ -79,6 +96,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ALL_AMBIENT,
     traffic: ['taxi', 'compact', 'taxi', 'sport', 'motorbike', 'courier', 'van'],
     trafficColours: CBD_COLOURS,
+    affluence: 0.35,
   },
   'creative-core': {
     id: 'creative-core',
@@ -89,6 +107,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['braamfontein-creative', 'newtown-producer', 'maboneng-courier', 'melville-creative', 'braamfontein-creative'],
     traffic: ['compact', 'courier', 'taxi', 'motorbike', 'compact', 'bicycle'],
     trafficColours: CREATIVE_COLOURS,
+    affluence: 0.5,
   },
   'inner-city': {
     id: 'inner-city',
@@ -99,6 +118,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['newtown-producer', 'maboneng-courier', 'braamfontein-creative', 'fordsburg-restaurateur', 'newtown-producer'],
     traffic: ['taxi', 'taxi', 'compact', 'van', 'taxi', 'motorbike'],
     trafficColours: INNER_COLOURS,
+    affluence: 0.12,
   },
   'market-west': {
     id: 'market-west',
@@ -109,6 +129,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['fordsburg-restaurateur', 'fordsburg-restaurateur', 'newtown-producer', 'maboneng-courier', 'sandton-professional'],
     traffic: ['taxi', 'van', 'compact', 'taxi', 'motorbike', 'courier'],
     trafficColours: MARKET_COLOURS,
+    affluence: 0.3,
   },
   'bohemian-west': {
     id: 'bohemian-west',
@@ -119,6 +140,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['melville-creative', 'braamfontein-creative', 'parkhurst-architect', 'newtown-producer', 'melville-creative'],
     traffic: ['compact', 'motorbike', 'courier', 'compact', 'bicycle', 'van'],
     trafficColours: WEST_COLOURS,
+    affluence: 0.55,
   },
   'rosebank-mixed': {
     id: 'rosebank-mixed',
@@ -129,6 +151,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['sandton-professional', 'rosebank-athlete', 'parkhurst-architect', 'maboneng-courier', 'sandton-professional'],
     traffic: ['sport', 'compact', 'courier', 'compact', 'superbike', 'taxi'],
     trafficColours: ROSEBANK_COLOURS,
+    affluence: 0.8,
   },
   'parktown-ridge': {
     id: 'parktown-ridge',
@@ -139,6 +162,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['parkhurst-architect', 'sandton-professional', 'rosebank-athlete', 'melville-creative', 'parkhurst-architect'],
     traffic: ['compact', 'van', 'sport', 'compact', 'motorbike', 'van'],
     trafficColours: PARKTOWN_COLOURS,
+    affluence: 0.92,
   },
   'old-money-ridge': {
     id: 'old-money-ridge',
@@ -149,6 +173,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['sandton-professional', 'rosebank-athlete', 'parkhurst-architect', 'sandton-professional', 'melville-creative'],
     traffic: ['sport', 'compact', 'compact', 'van', 'superbike', 'sport'],
     trafficColours: RIDGE_COLOURS,
+    affluence: 0.9,
   },
   'industrial-belt': {
     id: 'industrial-belt',
@@ -159,6 +184,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['newtown-producer', 'maboneng-courier', 'fordsburg-restaurateur', 'parkhurst-architect'],
     traffic: ['van', 'van', 'compact', 'taxi', 'courier', 'motorbike'],
     trafficColours: INDUSTRIAL_COLOURS,
+    affluence: 0.2,
   },
   'joburg-suburbs': {
     id: 'joburg-suburbs',
@@ -169,6 +195,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ALL_AMBIENT,
     traffic: ['compact', 'taxi', 'van', 'compact', 'motorbike', 'sport'],
     trafficColours: SUBURB_COLOURS,
+    affluence: 0.5,
   },
   'vaal-township': {
     id: 'vaal-township',
@@ -179,6 +206,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['newtown-producer', 'maboneng-courier', 'braamfontein-creative', 'fordsburg-restaurateur', 'newtown-producer'],
     traffic: ['taxi', 'taxi', 'compact', 'van', 'motorbike', 'compact'],
     trafficColours: TOWNSHIP_COLOURS,
+    affluence: 0.08,
   },
   'vaal-marina': {
     id: 'vaal-marina',
@@ -189,6 +217,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['rosebank-athlete', 'parkhurst-architect', 'melville-creative', 'sandton-professional', 'maboneng-courier'],
     traffic: ['compact', 'van', 'sport', 'bicycle', 'compact', 'taxi'],
     trafficColours: MARINA_COLOURS,
+    affluence: 0.68,
   },
   'vaal-farms': {
     id: 'vaal-farms',
@@ -199,6 +228,7 @@ export const NEIGHBOURHOODS: Readonly<Record<NeighbourhoodId, NeighbourhoodProfi
     pedestrians: ['parkhurst-architect', 'fordsburg-restaurateur', 'newtown-producer', 'melville-creative'],
     traffic: ['van', 'compact', 'motorbike', 'van', 'taxi'],
     trafficColours: FARM_COLOURS,
+    affluence: 0.4,
   },
 };
 
@@ -229,6 +259,26 @@ export const CURATED_NEIGHBOURHOOD_DISTRICTS: ReadonlySet<string> = new Set(DIST
 /** Unknown future districts get a safe, varied Jozi-suburb identity until deliberately curated. */
 export function neighbourhoodForDistrict(district: string): NeighbourhoodProfile {
   return DISTRICT_PROFILES.get(district) ?? NEIGHBOURHOODS['joburg-suburbs'];
+}
+
+/**
+ * How moneyed a district is, 0..1 — the wealth axis of the city, read from the curated table above.
+ *
+ * An UNCURATED name does not inherit the fallback profile's 0.5 wholesale: that would make every
+ * future district identically middling and, worse, identical to each other. It gets a deterministic
+ * spread around it instead, hashed from the name itself, so a map rebuild that invents "Kensington"
+ * gets a plausible and stable character until somebody curates it on purpose. Pure and stable: the
+ * generator, the fence planner and the QA meters all read the same number for the same name.
+ */
+export function districtAffluence(district: string): number {
+  const curated = DISTRICT_PROFILES.get(district);
+  if (curated) return curated.affluence;
+  let hash = 2166136261;
+  for (let index = 0; index < district.length; index++) {
+    hash ^= district.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return 0.34 + ((hash >>> 8) % 1000) / 1000 * 0.36; // 0.34..0.70 — ordinary suburbs, never the ridge
 }
 
 function positiveModulo(value: number, length: number): number {

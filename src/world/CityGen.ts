@@ -37,6 +37,7 @@ import {
   type GeneratedRoad,
 } from './mapData';
 import { classifyZone, type Zone } from './data/zoning';
+import { districtAffluence } from './data/neighbourhoods';
 import { RESERVED_PADS } from './placements';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
 import type { BuildingStyle } from './BuildingArchitecture';
@@ -272,6 +273,36 @@ export function urbanIntensity(x: number, z: number): number {
   return 1 - smoothstep(URBAN_CORE_RADIUS, URBAN_EDGE_RADIUS, Math.hypot(x - centre.x, z - centre.z));
 }
 
+/**
+ * THE WEALTH AXIS, and where each of its three answers lives.
+ *
+ * The owner: "some suburbs that might be fancier should tend to single dwelling houses whereas poor
+ * suburbs can be more cheap apartment blocks." Wealth comes from the curated real-Joburg district
+ * table (data/neighbourhoods.districtAffluence), so the assignment is arguable by NAME rather than
+ * emergent from a curve nobody can point at.
+ *
+ * It is a second axis, not a rescaling of the first. Distance says how much city there is; wealth
+ * says what kind. The four corners it has to be able to express:
+ *   inner + poor    -> walk-up flats, packed, the Hillbrow block
+ *   inner + moneyed -> the gentrified core, houses and lofts, still packed
+ *   outer + moneyed -> a villa on a big erf behind a wall, sparse (the ridge, Houghton, Saxonwold)
+ *   outer + poor    -> a township: SMALL, LOW and PACKED, which is the case a distance-only
+ *                      gradient gets exactly backwards, because it is far out AND dense
+ */
+/** Above this affluence nobody builds a cheap walk-up: the roll is dead by the ridge. */
+const FLAT_WEALTH_CEILING = 0.6;
+/** Below this affluence nobody builds a villa. */
+const VILLA_WEALTH_FLOOR = 0.55;
+/** …and even the ridge is not ONLY villas — the rest is ordinary suburban houses. */
+const VILLA_MAX_SHARE = 0.62;
+/** How far wealth tilts the erf and the house on top of the distance gradient (+/- at the extremes). */
+const WEALTH_STAND_TILT = 0.35;
+const WEALTH_HOUSE_TILT = 0.22;
+/** A district this poor keeps its streets packed however far out it is — the township case. */
+const TOWNSHIP_WEALTH = 0.2;
+/** How much of the distance gradient's loosening a township is spared. */
+const TOWNSHIP_PACKING = 0.75;
+
 /** The erf grows as the city thins: a boondocks stand is this much wider than an inner-city one. */
 const OUTER_STAND_SCALE = 1.55;
 /** …and the house on it is this much smaller. Stand up, building down — which is the whole rule. */
@@ -287,11 +318,15 @@ const RURAL_ACCEPT_CAP = 0.72;
 /** Placement probability for a zone at a point, scaled by the local OSM building density AND by how
  *  far out of town it is — the boondocks keep their gaps, which is what makes the inner city read
  *  as the inner city. */
-function acceptance(zone: Exclude<Zone, 'none'>, density: number, urban: number): number {
+function acceptance(zone: Exclude<Zone, 'none'>, density: number, urban: number, wealth: number): number {
   const base = ZONE_SHAPE[zone].accept;
   if (zone === 'residential') {
-    const floor = lerp(RURAL_ACCEPT_FLOOR, URBAN_ACCEPT_FLOOR, urban);
-    const cap = Math.min(base, lerp(RURAL_ACCEPT_CAP, base, urban));
+    // A township is far out and PACKED, so the distance loosening is largely held off where the
+    // money is not; the ridge is the other way and gets the loosening in full plus a little more.
+    const poor = Math.max(0, 1 - wealth / TOWNSHIP_WEALTH);
+    const packing = Math.min(1, urban + poor * TOWNSHIP_PACKING);
+    const floor = lerp(RURAL_ACCEPT_FLOOR, URBAN_ACCEPT_FLOOR, packing);
+    const cap = Math.min(base, lerp(RURAL_ACCEPT_CAP, base, packing));
     return Math.min(cap, Math.max(floor, 0.45 + density / 400));
   }
   if (zone === 'commercial-strip') return Math.min(base, (0.5 + density / 800) * lerp(0.55, 1, urban));
@@ -306,12 +341,26 @@ function acceptance(zone: Exclude<Zone, 'none'>, density: number, urban: number)
  *  the gradient, SQUARED, so walk-ups belong to the inner ring the way they do in the real city:
  *  Hillbrow, Berea, Yeoville, Fordsburg keep them; Melville and Greenside get a scattering; the dam
  *  and the smallholdings get none at all. */
-function buildingStyle(zone: Exclude<Zone, 'none'>, density: number, x: number, z: number, urban: number): BuildingStyle {
+function buildingStyle(
+  zone: Exclude<Zone, 'none'>, density: number, x: number, z: number, urban: number, wealth: number,
+): BuildingStyle {
   if (zone !== 'residential') return ZONE_SHAPE[zone].style;
-  const denseChance = Math.min(0.85, Math.max(0, (density - 40) / 260)) * urban * urban;
-  // Quantise the seed to a neighbourhood-sized tile so adjoining parcels read as one district.
+  // A CHEAP FLAT is an inner-city AND a poor building: the walk-up is what gets built where land is
+  // dear and tenants are not. Wealth cuts the roll hard — the ridge never grows one — while the
+  // distance term keeps it out of the veld.
+  const flatChance = Math.min(0.85, Math.max(0, (density - 40) / 260))
+    * urban * urban * Math.max(0, 1 - wealth / FLAT_WEALTH_CEILING);
+  // A VILLA is the opposite corner: money, and room to put it on. Not gated on distance, because
+  // Houghton is four kilometres out and Sandton further — the ridge is a wealth fact, not a
+  // distance one. The estate family already exists (porches, dormers, wings, its own facade pool).
+  const villaChance = Math.max(0, (wealth - VILLA_WEALTH_FLOOR) / (1 - VILLA_WEALTH_FLOOR)) * VILLA_MAX_SHARE;
+  // Quantise the seed to a neighbourhood-sized tile so adjoining parcels read as one district: a
+  // street of flats, then a street of houses, rather than one of each alternating.
   const blockX = Math.floor(x / 180); const blockZ = Math.floor(z / 180);
-  return seeded(blockX, blockZ, 61) < denseChance ? 'dense-residential' : 'suburban';
+  const roll = seeded(blockX, blockZ, 61);
+  if (roll < flatChance) return 'dense-residential';
+  if (roll > 1 - villaChance) return 'estate';
+  return 'suburban';
 }
 
 /** One facade storey, the unit the CBD street wall is actually talked about in. */
@@ -410,9 +459,13 @@ function buildingHeight(
     case 'rural': return 5 + s * 3;
     // A house out of town is a single-storey cottage, not a double-storey townhouse: the same
     // OUTER_HOUSE_SCALE that shrinks its footprint takes its ridge down with it.
-    default: return style === 'dense-residential'
-      ? 11 + s * 17
-      : (6 + s * 5) * lerp(OUTER_HOUSE_SCALE, 1, urbanIntensity(x, z));
+    // Three houses, one zone. The walk-up flat is the tall one and keeps its own curve; the villa
+    // is a generous double storey; the ordinary house is a cottage that shrinks with the gradient.
+    default: {
+      if (style === 'dense-residential') return 11 + s * 17;
+      const shrink = lerp(OUTER_HOUSE_SCALE, 1, urbanIntensity(x, z));
+      return style === 'estate' ? (8.5 + s * 5.5) * shrink : (6 + s * 5) * shrink;
+    }
   }
 }
 
@@ -794,7 +847,8 @@ function layoutRoadSide(
     const shape = ZONE_SHAPE[zone];
     const district = nearestDistrict(frontX, frontZ);
     const urban = urbanIntensity(frontX, frontZ);
-    const style = buildingStyle(zone, district.density, frontX, frontZ, urban);
+    const wealth = districtAffluence(district.name);
+    const style = buildingStyle(zone, district.density, frontX, frontZ, urban, wealth);
 
     /**
      * PACK TO THE MAX, in the two zones that are packed in the real city.
@@ -824,8 +878,12 @@ function layoutRoadSide(
      * their own authored spacing and the owner is not complaining about them.
      */
     const graded = zone === 'residential' || zone === 'commercial-strip';
-    const standScale = graded ? lerp(OUTER_STAND_SCALE, 1, urban) : 1;
-    const houseScale = graded ? lerp(OUTER_HOUSE_SCALE, 1, urban) : 1;
+    // …and wealth tilts both scales. A villa stand is bigger than the gradient alone would make it
+    // and the villa on it is bigger too; a township stand is smaller on both counts, which is what
+    // keeps an RDP row reading as a row of small houses rather than a thin suburb.
+    const money = zone === 'residential' ? (wealth - 0.5) * 2 : 0;   // -1 township .. +1 ridge
+    const standScale = graded ? lerp(OUTER_STAND_SCALE, 1, urban) * (1 + money * WEALTH_STAND_TILT) : 1;
+    const houseScale = graded ? lerp(OUTER_HOUSE_SCALE, 1, urban) * (1 + money * WEALTH_HOUSE_TILT) : 1;
     const baseLot = lerp(shape.lot[0], shape.lot[1], seeded(frontX, frontZ, 11)) * LAYOUT_SCALE;
     const lot = baseLot * standScale;
     const depth0 = lerp(shape.depth[0], shape.depth[1], seeded(frontX, frontZ, 12)) * LAYOUT_SCALE * houseScale;
@@ -846,7 +904,7 @@ function layoutRoadSide(
     const coastBand = zone === 'residential'
       && BEACH_POLYGONS.some((beach) => frontX > beach.minX - 130 && frontX < beach.maxX + 130 && frontZ > beach.minZ - 130 && frontZ < beach.maxZ + 130);
     // A row has no acceptance lottery — that lottery IS the gaps the owner is complaining about.
-    if (!row && seeded(frontX, frontZ, 20) > acceptance(zone, district.density, urban) * (coastBand ? 0.55 : 1)) {
+    if (!row && seeded(frontX, frontZ, 20) > acceptance(zone, district.density, urban, wealth) * (coastBand ? 0.55 : 1)) {
       cursor += (lot + gap) * pitchScale; continue;
     }
 
