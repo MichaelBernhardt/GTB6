@@ -42,6 +42,9 @@ export const fallAngle = (elapsed: number, duration = FALL_DURATION): number => 
 export interface PropCollider {
   id: number; kind: PropKind; tier: PropTier;
   x: number; z: number; radius: number; height: number; down: boolean;
+  /** Top the player actually STANDS on, when that is not the top of the blocking band: a bench blocks up to
+   *  its backrest but you stand on its seat. Defaults to `height`, which is right for a flat-topped prop. */
+  standHeight?: number;
   /** Removes the standing visual (zeroes the InstancedMesh slots); props animated in place skip this. */
   hide?: () => void;
   /** Base-pivoted stand-in that animates the fall and then stays behind as drive-over debris. */
@@ -83,7 +86,7 @@ export class PropRegistry {
   private grid = new PropGrid();
   private knockdowns: PropKnockEvent[] = [];
 
-  register(kind: PropKind, x: number, z: number, radius: number, height: number, visual: Pick<PropCollider, 'hide' | 'debris'> = {}): PropCollider {
+  register(kind: PropKind, x: number, z: number, radius: number, height: number, visual: Pick<PropCollider, 'hide' | 'debris' | 'standHeight'> = {}): PropCollider {
     const prop: PropCollider = { id: this.props.length, kind, tier: PROP_TIERS[kind], x, z, radius, height, down: false, ...visual };
     this.props.push(prop); this.grid.add(prop); return prop;
   }
@@ -111,7 +114,7 @@ export class PropRegistry {
     let best: number | undefined;
     for (const prop of this.grid.nearby(x, z, radius)) {
       if (prop.down || !STANDABLE_PROPS.has(prop.kind) || !overlaps(prop, x, z, radius)) continue;
-      const top = baseOf(prop.x, prop.z) + prop.height;
+      const top = baseOf(prop.x, prop.z) + (prop.standHeight ?? prop.height);
       if (top <= limit && (best === undefined || top > best)) best = top;
     }
     return best;
