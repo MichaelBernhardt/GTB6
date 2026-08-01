@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { applyUrbanGroundShader, facadeWindowGrammar, facadeWorldTile, SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex } from './ProceduralMaterials';
+import { applyUrbanGroundShader, facadeWindowGrammar, facadeWorldTile, GRIME_ATLAS_CELLS, GRIME_TAG_CELLS_BY_CLASS, GRIME_TAG_CLASSES, grimeTagClass, SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex, type GrimeTagClass } from './ProceduralMaterials';
 import { STREET_SIGN_JUNCTIONS } from './mapData';
 
 describe('facade physical grammars', () => {
@@ -17,6 +17,47 @@ describe('facade physical grammars', () => {
     expect(facadeWindowGrammar(7)).toBe('curtained');
     expect(facadeWindowGrammar(10)).toBe('clerestory');
     expect(facadeWindowGrammar(-1)).toBe('clerestory');
+  });
+});
+
+/**
+ * The colour classification is MEASURED data about a binary asset, not taste, and the planner
+ * weights the whole city off it (planGrimeDecals picks a class first and a cell second). Nothing at
+ * runtime can catch it drifting out of step with the sheet — a wrong entry just quietly paints the
+ * CBD the wrong colour — so the table's own invariants are pinned here. If the generated sheet is
+ * ever re-rendered, re-measure the p98 chroma per cell and update BOTH the table and its comment.
+ */
+describe('grime tag colour classification (the measured mono/colour/piece split of the atlas)', () => {
+  it('classifies every tag cell, and only the tag cells', () => {
+    const tagCells = GRIME_ATLAS_CELLS.filter((cell) => cell.kind === 'tag');
+    expect(GRIME_TAG_CLASSES).toHaveLength(tagCells.length);
+    for (let cell = 0; cell < GRIME_ATLAS_CELLS.length; cell++) {
+      const expected = GRIME_ATLAS_CELLS[cell]!.kind === 'tag';
+      expect(grimeTagClass(cell) !== undefined, `cell ${cell}`).toBe(expected);
+    }
+    expect(grimeTagClass(99)).toBeUndefined();
+  });
+
+  it('holds the shipped sheet\'s measured 4 mono / 2 colour / 2 piece split', () => {
+    // Measured off public/textures/graffiti-tags-gpt.png: cells 0/1/4/6 are p98 chroma <= 43
+    // (white, black, white-black bubble, dark-olive bubble); 3/7 carry a teal at chroma 151/164;
+    // 2/5 carry the largest saturated masses (chroma 228 red, 176 teal) and earn the piece tier.
+    expect(GRIME_TAG_CELLS_BY_CLASS.mono).toEqual([0, 1, 4, 6]);
+    expect(GRIME_TAG_CELLS_BY_CLASS.colour).toEqual([3, 7]);
+    expect(GRIME_TAG_CELLS_BY_CLASS.piece).toEqual([2, 5]);
+  });
+
+  it('keeps at least two cells in every class, so no class repeats one image citywide', () => {
+    const classes: GrimeTagClass[] = ['mono', 'colour', 'piece'];
+    const seen = new Set<number>();
+    for (const cls of classes) {
+      expect(GRIME_TAG_CELLS_BY_CLASS[cls].length, cls).toBeGreaterThanOrEqual(2);
+      for (const cell of GRIME_TAG_CELLS_BY_CLASS[cls]) {
+        expect(seen.has(cell), `cell ${cell} in two classes`).toBe(false);
+        seen.add(cell);
+      }
+    }
+    expect(seen.size).toBe(GRIME_TAG_CLASSES.length); // the pools partition the tag band exactly
   });
 });
 

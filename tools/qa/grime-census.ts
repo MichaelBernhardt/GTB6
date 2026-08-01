@@ -10,7 +10,7 @@
  */
 import * as THREE from 'three';
 import { ARCHITECTURE_VARIANTS, BuildingArchitecture, GRIME_DECAL_CHANCE, planGrimeDecals, planShopBays, type BuildingSpec, type BuildingStyle } from '../../src/world/BuildingArchitecture';
-import { GRIME_ATLAS_CELLS } from '../../src/world/ProceduralMaterials';
+import { GRIME_ATLAS_CELLS, GRIME_TAG_CLASSES, type GrimeTagClass } from '../../src/world/ProceduralMaterials';
 import { allBuildings } from '../../src/world/CityGen';
 import { districtAt } from '../../src/world/mapData';
 import { HIGHRISE_DISTRICTS } from '../../src/world/data/zoning';
@@ -30,6 +30,15 @@ let cbdParcels = 0; let cbdDecorated = 0; let cbdDecals = 0;
 let cbdFrontage = 0; let cbdTags = 0; let cbdStreetTags = 0;
 /** Decals above this are read off the fascia/shaft rather than from the pavement. */
 const STREET_LEVEL_Y = 4.5;
+// THE SECOND UNIT: "the one I saw was all white." Count is only half the complaint — a wall reads
+// alive because of COLOUR, so the mix is metered too, per class and per band, alongside the painted
+// AREA each class puts on the street. Area is the honest measure of whether a piece reads: a piece
+// tier that is 10% of the quads but a third of the paint is doing its job.
+const CLASSES: GrimeTagClass[] = ['mono', 'colour', 'piece'];
+const zeroed = (): Record<GrimeTagClass, number> => ({ mono: 0, colour: 0, piece: 0 });
+const cbdClassTags = zeroed(); const cbdClassStreet = zeroed(); const cbdClassArea = zeroed();
+/** A CBD block face — the run of frontage the player walks past between two corners. */
+const BLOCK_FACE_U = 60;
 
 for (const building of allBuildings()) {
   const style = building.style as BuildingStyle;
@@ -64,7 +73,10 @@ for (const building of allBuildings()) {
       for (const decal of decals) {
         if (GRIME_ATLAS_CELLS[decal.cell]!.kind !== 'tag') continue;
         cbdTags++;
-        if (decal.y <= STREET_LEVEL_Y) cbdStreetTags++;
+        const cls = GRIME_TAG_CLASSES[decal.cell]!;
+        cbdClassTags[cls]++;
+        cbdClassArea[cls] += decal.width * decal.height;
+        if (decal.y <= STREET_LEVEL_Y) { cbdStreetTags++; cbdClassStreet[cls]++; }
       }
     }
   }
@@ -82,4 +94,21 @@ console.log(`\nCBD (the ${HIGHRISE_DISTRICTS.size} highrise districts): ${cbdDec
 console.log(`CBD graffiti rate: ${cbdTags} tags over ${cbdFrontage.toFixed(0)} u of downtown street frontage`
   + ` = ${(100 * cbdTags / Math.max(1, cbdFrontage)).toFixed(2)} tags / 100 u`
   + ` (${(100 * cbdStreetTags / Math.max(1, cbdFrontage)).toFixed(2)} of them at street level, y <= ${STREET_LEVEL_Y})`);
+const per100 = (n: number): number => 100 * n / Math.max(1, cbdFrontage);
+console.log(`\nCBD colour mix (target 60% mono handstyles / 30% colour throw-ups / 10% pieces):`);
+for (const cls of CLASSES) {
+  const share = 100 * cbdClassTags[cls] / Math.max(1, cbdTags);
+  const areaShare = 100 * cbdClassArea[cls] / Math.max(1, CLASSES.reduce((sum, c) => sum + cbdClassArea[c], 0));
+  console.log(`  ${cls.padEnd(7)} ${String(cbdClassTags[cls]).padStart(5)} tags  ${share.toFixed(1).padStart(5)}% of tags`
+    + `   ${per100(cbdClassTags[cls]).toFixed(2).padStart(5)} / 100 u`
+    + `   ${(100 * cbdClassStreet[cls] / Math.max(1, cbdClassTags[cls])).toFixed(0).padStart(3)}% at street level`
+    + `   ${cbdClassArea[cls].toFixed(0).padStart(6)} m² painted (${areaShare.toFixed(1).padStart(4)}% of paint)`);
+}
+const colourTags = cbdClassTags.colour + cbdClassTags.piece;
+console.log(`  colour of any kind: ${per100(colourTags).toFixed(2)} / 100 u`
+  + ` = ${(BLOCK_FACE_U * colourTags / Math.max(1, cbdFrontage)).toFixed(2)} per ${BLOCK_FACE_U} u block face`);
+console.log(`  pieces:             ${per100(cbdClassTags.piece).toFixed(2)} / 100 u`
+  + ` = ${(BLOCK_FACE_U * cbdClassTags.piece / Math.max(1, cbdFrontage)).toFixed(2)} per ${BLOCK_FACE_U} u block face`
+  + ` (one every ${(cbdFrontage / Math.max(1, cbdClassTags.piece) / BLOCK_FACE_U).toFixed(2)} block faces)`);
 console.log(`atlas cell usage (12 cells, 8 tag + 4 grime): [${cellUse.join(', ')}]`);
+console.log(`  by class: ${CLASSES.map((c) => `${c} [${GRIME_TAG_CLASSES.flatMap((k, i) => (k === c ? [i] : [])).join(',')}]`).join('  ')}`);

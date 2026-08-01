@@ -3,7 +3,7 @@ import {
   glazingBayLayout, GRIME_DECAL_CHANCE, planEntrance, planGrimeDecals, planShopBays,
   type BuildingStyle, type MassingTier,
 } from './BuildingArchitecture';
-import { GRIME_ATLAS_CELLS } from './ProceduralMaterials';
+import { GRIME_ATLAS_CELLS, GRIME_TAG_CLASSES, type GrimeTagClass } from './ProceduralMaterials';
 
 const slab = (width: number, depth: number, height: number): MassingTier[] => [
   { minX: -width / 2, maxX: width / 2, minZ: -depth / 2, maxZ: depth / 2, y0: 0, y1: height },
@@ -135,6 +135,84 @@ describe('planGrimeDecals — where the dirt goes', () => {
    * the one over the shop, off the hood. So a tag may top out either in reach (<= 3.36) or on the
    * fascia (<= 8.6); above that only the wash streak, and only on a tall shaft.
    */
+  /**
+   * THE MIX, which is the other half of the playtest note: "I only saw one, so maybe they already
+   * area, but the one I saw was all white." Half the atlas tag cells are monochrome, and the draw
+   * used to be uniform over all eight, so half of every wall in the city was white or black at one
+   * size in a random gap. The planner now picks a CLASS first (weighted per band) and a cell second.
+   *
+   * These bounds are wide on purpose. The realised mix is an emergent number — it depends on how
+   * many attempts each band lands, which depends on massing, bays and the size ladder — so the test
+   * pins the SHAPE (mono is the bulk, pieces are the rare big ones, the ladder and the band skew are
+   * the right way round) rather than the exact weights, which are tuned against the citywide census
+   * (`npx tsx tools/qa/grime-census.ts`, landing 59.5 / 31.1 / 9.3 across the CBD's 79 k u of
+   * downtown frontage — that is the number to re-check after any change here, not this fixture).
+   */
+  describe('the colour mix on the wall', () => {
+    const width = 30; const height = 40;
+    const tiers = slab(width, 20, height);
+    const entrance = planEntrance(width, 'downtown', tiers);
+    const sample = (bays?: ReturnType<typeof planShopBays>) => {
+      const count: Record<GrimeTagClass, number> = { mono: 0, colour: 0, piece: 0 };
+      const area: Record<GrimeTagClass, number> = { mono: 0, colour: 0, piece: 0 };
+      const street: Record<GrimeTagClass, number> = { mono: 0, colour: 0, piece: 0 };
+      let tags = 0;
+      for (const [x, z] of SEED_POSITIONS) {
+        for (const decal of planGrimeDecals(tiers, 'downtown', width, height, x, z, entrance, bays)) {
+          if (GRIME_ATLAS_CELLS[decal.cell]!.kind !== 'tag') continue;
+          const cls = GRIME_TAG_CLASSES[decal.cell]!;
+          tags++; count[cls]++; area[cls] += decal.width * decal.height;
+          if (decal.y <= 4.5) street[cls]++;
+        }
+      }
+      return { tags, count, area, street };
+    };
+
+    it('makes quick mono handstyles the bulk and pieces the rare exception', () => {
+      const { tags, count } = sample();
+      expect(tags).toBeGreaterThan(300); // enough of a sample for the shares to mean anything
+      expect(count.mono / tags).toBeGreaterThan(0.45);
+      expect(count.mono).toBeGreaterThan(count.colour);
+      expect(count.colour).toBeGreaterThan(count.piece);
+      expect(count.piece / tags).toBeGreaterThan(0.04); // a piece per couple of block faces, not per district
+      expect(count.piece / tags).toBeLessThan(0.20);
+    });
+
+    it('draws colour bigger than mono and a piece bigger again — 10% of the quads, a fifth of the paint', () => {
+      const { count, area } = sample();
+      const mean = (cls: GrimeTagClass): number => area[cls] / Math.max(1, count[cls]);
+      expect(mean('colour')).toBeGreaterThan(mean('mono') * 1.2);
+      expect(mean('piece')).toBeGreaterThan(mean('colour') * 1.2);
+    });
+
+    it('clusters quick tags at street level and lifts the big colour onto the fascia', () => {
+      // The shopfronted CBD case: bays block the pavement band, so this is the front the owner walks.
+      const bays = planShopBays(tiers, width, height, 0, 0, entrance);
+      const { count, street } = sample(bays);
+      const streetShare = (cls: GrimeTagClass): number => street[cls] / Math.max(1, count[cls]);
+      expect(streetShare('mono')).toBeGreaterThan(streetShare('colour'));
+      expect(streetShare('colour')).toBeGreaterThan(streetShare('piece'));
+      expect(streetShare('piece')).toBeLessThan(0.15);
+    });
+
+    it('lands a piece on the WIDEST blank span, never on the offcut beside it', () => {
+      // Stepped massing: a 15 u front plane and an 11 u one, both present through the fascia band.
+      const stepped: MassingTier[] = [
+        { minX: -13, maxX: 2, minZ: -9, maxZ: 9, y0: 0, y1: 36 },
+        { minX: 2, maxX: 13, minZ: -9, maxZ: 5, y0: 0, y1: 14 },
+      ];
+      let pieces = 0;
+      for (const [x, z] of SEED_POSITIONS) {
+        for (const decal of planGrimeDecals(stepped, 'downtown', 26, 36, x, z)) {
+          if (GRIME_TAG_CLASSES[decal.cell] !== 'piece') continue;
+          pieces++;
+          expect(decal.x + decal.width / 2, 'a piece on the narrow offcut').toBeLessThanOrEqual(2 + 1e-6);
+        }
+      }
+      expect(pieces).toBeGreaterThan(0);
+    });
+  });
+
   it('keeps tags in the two reachable bands and upper wash on tall shafts only', () => {
     const short = slab(24, 16, 12); const tall = slab(24, 16, 60);
     for (const [x, z] of SEED_POSITIONS) {

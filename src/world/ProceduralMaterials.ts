@@ -856,25 +856,90 @@ export const GRIME_ATLAS_CELLS: readonly GrimeAtlasCell[] = [
   grimeCell(512, 768, 256, 256, 'grime'), grimeCell(768, 768, 256, 256, 'grime'),
 ];
 
-const SPRAY_COLOURS = ['#e8e4da', '#c94f3e', '#4fb8ae', '#e0b43c', '#7db3d6', '#d07030'] as const;
+/**
+ * WHAT IS ACTUALLY PAINTED IN EACH TAG CELL — the colour contract the placement planner works from.
+ *
+ * The owner walked the CBD and reported "the one I saw was all white". That is a true reading of a
+ * UNIFORM pick over these eight cells: half of them are monochrome, so half of all graffiti in the
+ * city was white or black, spread with no thought for where the colour landed. planGrimeDecals is
+ * pure and runs with no DOM, so it cannot look at pixels; the sheet's colour content is therefore
+ * measured ONCE, off-line, and stated here as data that both the planner and the fallback painter
+ * obey.
+ *
+ * Measured on public/textures/graffiti-tags-gpt.png — p98 of per-pixel chroma (max(rgb) - min(rgb))
+ * over the whole cell, and the share of the cell covered by strongly saturated ink (HSV s > 0.3):
+ *   cell 0  JOZI  chroma  14   sat-cover  0.0%   white handstyle        -> mono
+ *   cell 1  KASI  chroma  21   sat-cover  0.1%   black handstyle        -> mono
+ *   cell 2  SBU   chroma 228   sat-cover 22.3%   red handstyle          -> piece
+ *   cell 3  ZAR   chroma 151   sat-cover 22.4%   teal handstyle         -> colour
+ *   cell 4  KEK   chroma   8   sat-cover  0.0%   white/black throw-up   -> mono
+ *   cell 5  BOVA  chroma 176   sat-cover 28.3%   teal/white throw-up    -> piece
+ *   cell 6  RIM   chroma  43   sat-cover  1.6%   dark/olive throw-up    -> mono
+ *   cell 7  TUNO  chroma 164   sat-cover  5.1%   dark/cyan throw-up     -> colour
+ * Re-derive with PIL: crop each cell per GRIME_ATLAS_CELLS, take max(rgb)-min(rgb) per pixel, p98.
+ *
+ * `piece` is NOT a separate artwork family — the sheet holds no multi-colour burner. It is the two
+ * cells carrying the largest saturated MASS, and the tier is earned by scale and placement (drawn
+ * big, on the widest blank span) rather than by a different drawing. Splitting piece from colour by
+ * ink mass rather than by hue is what keeps the tier honest against this sheet.
+ */
+export type GrimeTagClass = 'mono' | 'colour' | 'piece';
+export const GRIME_TAG_CLASSES: readonly GrimeTagClass[] = [
+  'mono', 'mono', 'piece', 'colour', 'mono', 'piece', 'mono', 'colour',
+];
+
+const tagCellsOfClass = (want: GrimeTagClass): readonly number[] =>
+  GRIME_TAG_CLASSES.flatMap((cls, index) => (cls === want ? [index] : []));
+
+/** Atlas cell indices per class, so the planner can weight a draw without rescanning the table.
+ *  Every class holds at least two cells — a one-cell class would repeat one image across the city. */
+export const GRIME_TAG_CELLS_BY_CLASS: Readonly<Record<GrimeTagClass, readonly number[]>> = {
+  mono: tagCellsOfClass('mono'), colour: tagCellsOfClass('colour'), piece: tagCellsOfClass('piece'),
+};
+
+/** Colour class of an atlas cell; undefined for the grime band, which carries no colour story. */
+export function grimeTagClass(cell: number): GrimeTagClass | undefined { return GRIME_TAG_CLASSES[cell]; }
+
+// Fallback palettes, split to MATCH the table above. A cell the table calls mono must actually
+// paint mono: the class split is a placement contract, and the planner has no way to check, so a
+// fallback that sprayed a random hue into cell 0 would silently break the authored mix.
+const MONO_SPRAY = ['#e8e4da', '#1c1b19'] as const;
+const COLOUR_SPRAY = ['#c94f3e', '#4fb8ae', '#e0b43c', '#7db3d6', '#d07030', '#b8409a'] as const;
 const TAG_WORDS = ['JOZI', 'KASI', 'VUKA', 'ZAR', 'SBU', 'MZI', 'DLALA', '4DK', 'TSOTSI', 'BRA Z', 'GOGO', 'EGOLI'] as const;
 
 function drawSprayTag(context: CanvasRenderingContext2D, index: number, x: number, y: number, w: number, h: number): void {
   const word = TAG_WORDS[Math.floor(seeded(index, 401) * TAG_WORDS.length)]!;
-  const fill = SPRAY_COLOURS[Math.floor(seeded(index, 402) * SPRAY_COLOURS.length)]!;
-  const outline = seeded(index, 403) > 0.6 ? '#1a1a20' : seeded(index, 404) > 0.5 ? '#e8e4da' : '#22262c';
+  const mono = (GRIME_TAG_CLASSES[index] ?? 'mono') === 'mono';
+  // The square cells are bubble THROW-UPS (fat letters, fill inside a contrasting outline); the
+  // wide cells are quick HANDSTYLES (slanted, one pass of paint). Two forms, one drawing routine.
+  const throwUp = w <= h * 1.2;
+  // Salt 416 for the colour band is chosen, not arbitrary: it is the salt that gives the four
+  // colour cells four DIFFERENT hues. Salt 402 handed two of them the same teal, and two identical
+  // hues out of four halves the colour variety a player sees on a street.
+  const palette = mono ? MONO_SPRAY : COLOUR_SPRAY;
+  const fill = palette[Math.floor(seeded(index, mono ? 402 : 416) * palette.length)]!;
+  // Outline is picked for CONTRAST against the fill, never by taste: a white outline on a white
+  // fill is an invisible throw-up, and mono cells only have two inks to choose between.
+  const outline = mono
+    ? (fill === MONO_SPRAY[0] ? '#1a1a20' : '#d5d0c4')
+    : (seeded(index, 403) > 0.45 ? '#141317' : '#ece7db');
   const cx = x + w / 2; const cy = y + h / 2;
   context.save();
   context.beginPath(); context.rect(x + 4, y + 4, w - 8, h - 8); context.clip();
   context.translate(cx, cy);
-  context.rotate((seeded(index, 405) - 0.5) * 0.14);
-  context.transform(1, 0, (seeded(index, 406) - 0.5) * 0.5, 1, 0, 0); // handstyle slant
-  const size = Math.min(h * 0.52, (w - 40) / (word.length * 0.62));
-  context.font = `900 italic ${Math.round(size)}px Arial`;
+  context.rotate((seeded(index, 405) - 0.5) * (throwUp ? 0.06 : 0.14));
+  context.transform(1, 0, throwUp ? 0 : (seeded(index, 406) - 0.5) * 0.5, 1, 0, 0); // handstyle slant
+  const size = Math.min(h * (throwUp ? 0.46 : 0.52), (w - 40) / (word.length * (throwUp ? 0.74 : 0.62)));
+  context.font = `900 ${throwUp ? '' : 'italic '}${Math.round(size)}px Arial`;
   context.textAlign = 'center'; context.textBaseline = 'middle';
   // Overspray halo first: the soft cloud a can leaves around every stroke.
   context.shadowColor = fill; context.shadowBlur = size * 0.34;
-  context.lineWidth = Math.max(6, size * 0.16); context.lineJoin = 'round';
+  context.lineJoin = 'round';
+  if (throwUp) { // outer keyline, so the outline reads as a band between two edges rather than a fringe
+    context.lineWidth = Math.max(10, size * 0.44); context.strokeStyle = '#141317'; context.globalAlpha = 0.85;
+    context.strokeText(word, 0, 0);
+  }
+  context.lineWidth = Math.max(6, size * (throwUp ? 0.28 : 0.16));
   context.strokeStyle = outline; context.globalAlpha = 0.9;
   context.strokeText(word, 0, 0);
   context.shadowBlur = size * 0.12; context.fillStyle = fill; context.globalAlpha = 0.92;
@@ -986,6 +1051,9 @@ let grimeMaterial: THREE.MeshLambertMaterial | undefined;
  * Upgrade seam: if a generated `/textures/graffiti-tags-gpt.png` ships (same fixed grid, tag cells
  * only), it replaces the procedural TAG band on load; the grime band below is always procedural
  * (soft alpha wash suits canvas better than imagegen). Missing file = procedural look, no error.
+ * That sheet DOES ship, so the canvas tag band is a fallback, not the shipped look: it is on screen
+ * only for the frames before the PNG decodes, and permanently only if the file 404s. It still has
+ * to obey GRIME_TAG_CLASSES, because the planner weights placement off that table either way.
  */
 export function grimeDecalMaterial(): THREE.MeshLambertMaterial {
   if (grimeMaterial) return grimeMaterial;

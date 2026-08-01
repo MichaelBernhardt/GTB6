@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { applyFacadeWeathering, createSignMesh, GRIME_ATLAS_CELLS, rollerShutterMaterial, SHUTTER_ATTRIBUTE } from './ProceduralMaterials';
+import {
+  applyFacadeWeathering, createSignMesh, GRIME_ATLAS_CELLS, GRIME_TAG_CELLS_BY_CLASS, type GrimeTagClass,
+  rollerShutterMaterial, SHUTTER_ATTRIBUTE,
+} from './ProceduralMaterials';
 import { stablePositionRandom } from './StableRandom';
 
 export type BuildingStyle =
@@ -302,6 +305,44 @@ export const GRIME_DECAL_CHANCE: Partial<Record<BuildingStyle, number>> = {
  *  shaft from a scupper) — the "subtle overlay wear higher up" layer. */
 const GRIME_UPPER_MIN_HEIGHT = 22;
 
+/** The four soft-wash cells, resolved once — the tag cells are chosen by class, not by scan. */
+const GRIME_PATCH_CELLS: readonly number[] = GRIME_ATLAS_CELLS
+  .flatMap((cell, index) => (cell.kind === 'grime' ? [index] : []));
+
+/**
+ * THE MIX ON THE WALL, and why it is weighted rather than uniform. Half the atlas tag cells are
+ * monochrome (GRIME_TAG_CLASSES holds the measured chroma), so a uniform draw painted the city
+ * 50% white-or-black, 50% colour, all at the same size, in whatever gap the planner found first —
+ * which is how a whole CBD session produced "the one I saw was all white".
+ *
+ * Real inner-city walls are not an even draw. Quick mono handstyles are the bulk of what is on a
+ * street-level pier because they take ten seconds; a two-colour throw-up takes a couple of minutes
+ * and wants a bit of blank wall; a piece takes an evening and only ever goes where there is a big
+ * empty plane and nobody watching. So the weights differ BY BAND, and each triple is
+ * [mono, colour, piece] summing to 1:
+ *   - street level is where the quick work is, so it is overwhelmingly handstyles;
+ *   - the first fascia slot (above the shop, off the hood — the only clear plane on a shopfronted
+ *     CBD front) is the statement slot: it takes the widest span on the parcel at piece scale;
+ *   - the remaining fascia slots fill in around it with quick work again, so a front reads as one
+ *     piece amongst many tags rather than a gallery wall.
+ * Weighted against the measured 40/60 street/fascia split of placed CBD tags, this lands on the
+ * authored 60 / 30 / 10 spread. Re-measure with `npx tsx tools/qa/grime-census.ts` after any change
+ * to the band counts — the two are coupled and only the census can tell you the realised mix.
+ */
+type GrimeTagMix = readonly [mono: number, colour: number, piece: number];
+const GRIME_STREET_MIX: GrimeTagMix = [0.78, 0.20, 0.02];
+const GRIME_FASCIA_STATEMENT_MIX: GrimeTagMix = [0.16, 0.56, 0.28];
+const GRIME_FASCIA_FILL_MIX: GrimeTagMix = [0.68, 0.28, 0.04];
+
+/** Quad-size multiplier per class. A throw-up is bigger than a handstyle and a piece is bigger
+ *  again — this is what makes 10% of the quads carry a third of the visible paint. The band still
+ *  caps the result, so a piece that cannot fit its band is simply not drawn there (the attempt
+ *  re-rolls into a smaller class), which keeps big colour off narrow piers by construction. */
+const GRIME_CLASS_SCALE: Readonly<Record<GrimeTagClass, number>> = { mono: 1, colour: 1.3, piece: 1.85 };
+
+const grimeTagClassAt = (mix: GrimeTagMix, roll: number): GrimeTagClass =>
+  (roll < mix[0] ? 'mono' : roll < mix[0] + mix[1] ? 'colour' : 'piece');
+
 /**
  * WHERE THE DIRT GOES. A pure plan, shared verbatim by the draw pass (City.addGrimeDecals) and the
  * QA census (tools/qa/grime-census.ts), exactly like planShopBays: what the census counts IS what
@@ -315,7 +356,10 @@ const GRIME_UPPER_MIN_HEIGHT = 22;
  *     arithmetic the drawer uses) or the industrial roller door;
  *   - tags sit in the spray-reach band; grime patches hug the base; tall buildings may add one
  *     upper wash streak. Everything else near the wall stands PROUD of the 0.035 decal plane
- *     (piers 0.09+, windows 0.07, signs 0.08), so overlaps resolve as paint behind architecture.
+ *     (piers 0.09+, windows 0.07, signs 0.08), so overlaps resolve as paint behind architecture;
+ *   - WHICH tag goes where is weighted, not uniform: see the mix constants above. Quick mono
+ *     handstyles carry street level, colour and pieces are drawn bigger and take the widest blank
+ *     span of the fascia band. All of it is one atlas and one material, so the mix is free.
  */
 export function planGrimeDecals(
   tiers: readonly MassingTier[], style: BuildingStyle, width: number, height: number,
@@ -357,30 +401,46 @@ export function planGrimeDecals(
     blocked.every((b) => (b.tagsOnly && kind === 'grime')
       || Math.abs(x - b.x) >= b.half + halfW || y - halfH >= b.y1 || y + halfH <= b.y0);
   let salt = 710;
-  const tryPlace = (kind: 'tag' | 'grime', widthMin: number, widthMax: number, bandLow: number, bandHigh: number): void => {
-    const cells: number[] = [];
-    GRIME_ATLAS_CELLS.forEach((cell, index) => { if (cell.kind === kind) cells.push(index); });
+  const tryPlace = (
+    kind: 'tag' | 'grime', widthMin: number, widthMax: number, bandLow: number, bandHigh: number,
+    mix: GrimeTagMix = GRIME_STREET_MIX,
+  ): void => {
     for (let attempt = 0; attempt < 10; attempt++) {
-      const base = salt; salt += 6;
-      const cellIndex = cells[Math.floor(roll(base) * cells.length)]!;
+      const base = salt; salt += 8;
+      // Class first, cell second: the mix decides WHAT kind of paint this is, and only then which of
+      // that class's cells carries it. Rolling the cell directly is the uniform draw we came from.
+      const cls = kind === 'tag' ? grimeTagClassAt(mix, roll(base)) : 'mono';
+      const pool = kind === 'tag' ? GRIME_TAG_CELLS_BY_CLASS[cls] : GRIME_PATCH_CELLS;
+      const cellIndex = pool[Math.floor(roll(base + 6) * pool.length)]!;
       const aspect = GRIME_ATLAS_CELLS[cellIndex]!.aspect;
-      // A square throw-up must still fit its band: clamp the width to what the band can carry.
-      const widthCap = kind === 'tag' ? Math.min(widthMax, (bandHigh - bandLow) * aspect) : widthMax;
-      if (widthCap < widthMin) continue;
-      const w = widthMin + roll(base + 1) * (widthCap - widthMin);
+      const scale = kind === 'tag' ? GRIME_CLASS_SCALE[cls] : 1;
+      const scaledMin = widthMin * scale;
+      // A square throw-up must still fit its band: clamp the width to what the band can carry. A
+      // piece that cannot make its scale in this band fails the attempt and re-rolls — which is the
+      // mechanism that keeps the big colour on the fascia and off a 1.1 u street-level pier.
+      const widthCap = kind === 'tag' ? Math.min(widthMax * scale, (bandHigh - bandLow) * aspect) : widthMax;
+      if (widthCap < scaledMin) continue;
+      const w = scaledMin + roll(base + 1) * (widthCap - scaledMin);
       const h = kind === 'tag' ? w / aspect : Math.min(bandHigh - bandLow, 1.5 + roll(base + 2) * 1.3);
       if (bandLow + h > bandHigh + 1e-6) continue;
       const y = bandLow + h / 2 + roll(base + 3) * Math.max(0, bandHigh - bandLow - h);
       const spans = frontFacadeSpansAt(mass, y, -width / 2, width / 2).filter((span) => span.maxX - span.minX >= w + 1.6);
       if (spans.length === 0) continue;
-      const span = spans[Math.floor(roll(base + 4) * spans.length)]!;
+      // Colour is a statement and a statement wants a blank wall, so anything but a quick handstyle
+      // takes the WIDEST qualifying span on the parcel rather than a random one. Quick tags keep the
+      // random pick — they cluster wherever there is a gap, which is exactly where they really go.
+      const span = cls === 'mono'
+        ? spans[Math.floor(roll(base + 4) * spans.length)]!
+        : spans.reduce((best, candidate) => (candidate.maxX - candidate.minX > best.maxX - best.minX ? candidate : best));
       const x = span.minX + 0.8 + w / 2 + roll(base + 5) * (span.maxX - span.minX - 1.6 - w);
       if (!clearOf(kind, x, w / 2, y, h / 2)) continue;
       // The quad must ride ONE wall plane over its full height — a step mid-quad means floating paint.
       const zTop = frontFacadeZAt(mass, x, y + h / 2 - 0.05, w / 2);
       const zBottom = frontFacadeZAt(mass, x, y - h / 2 + 0.05, w / 2);
       if (zTop === undefined || zBottom === undefined || Math.abs(zTop - span.z) > 1e-3 || Math.abs(zBottom - span.z) > 1e-3) continue;
-      out.push({ x, y, z: span.z + 0.035, width: w, height: h, cell: cellIndex, flip: roll(base + 5) > 0.5 });
+      // Flip gets its own salt: sharing base+5 with the x offset meant every mirrored tag sat in the
+      // right-hand half of its span, a systematic that shows up once there are ten tags on a face.
+      out.push({ x, y, z: span.z + 0.035, width: w, height: h, cell: cellIndex, flip: roll(base + 7) > 0.5 });
       blocked.push({ x, half: w / 2 + 0.3, y0: y - h / 2 - 0.3, y1: y + h / 2 + 0.3 }); // decals never overlap each other either
       return;
     }
@@ -390,7 +450,7 @@ export function planGrimeDecals(
   // front the only wall left is the pier between two bays, and nothing 1.7 wide has ever fitted
   // one: a narrow tag on a pier is exactly what is actually painted there.
   const tags = 3 + Math.floor(roll(702) * 4);
-  for (let i = 0; i < tags; i++) tryPlace('tag', 1.1, 3.3, baseBand, 3.35);
+  for (let i = 0; i < tags; i++) tryPlace('tag', 1.1, 3.3, baseBand, 3.35, GRIME_STREET_MIX);
   const patches = 1 + Math.floor(roll(703) * 3);
   for (let i = 0; i < patches; i++) tryPlace('grime', 2.4, 4.8, Math.max(0.5, baseBand - 0.4), 3.1);
   // THE FASCIA BAND, and the reason a whole CBD session showed one tag. A shopfronted downtown
@@ -398,10 +458,15 @@ export function planGrimeDecals(
   // so on the 68% of downtown buildings that carry bays — the ones lining every street the player
   // walks — the street-level band above had NO wall left to paint. The writers' own answer is the
   // fascia over the shop, reached off the hood, and that band is free on every front.
+  // It is also the only plane on the parcel big enough to carry a piece, so the FIRST fascia slot
+  // is drawn from the statement mix onto the widest span while that span is still whole; the rest
+  // fill in around it. Order matters: a fill tag placed first fragments the wall a piece needs.
   const fasciaTop = Math.min(height - 0.6, 8.6);
   if (fasciaTop > 6.2) {
     const fascia = 1 + Math.floor(roll(705) * 3);
-    for (let i = 0; i < fascia; i++) tryPlace('tag', 1.2, 3.1, 4.6, fasciaTop);
+    for (let i = 0; i < fascia; i++) {
+      tryPlace('tag', 1.2, 3.1, 4.6, fasciaTop, i === 0 ? GRIME_FASCIA_STATEMENT_MIX : GRIME_FASCIA_FILL_MIX);
+    }
   }
   if (height > GRIME_UPPER_MIN_HEIGHT && roll(704) < 0.6) tryPlace('grime', 2.6, 4.6, 6, Math.min(11, height - 3));
   return out;
