@@ -4,6 +4,7 @@ import { PLAYER, VEHICLE_SPECS, WEAPON_BY_ID, WEAPONS, type VehicleKind, type We
 import { analytics } from './analytics/Telemetry';
 import { AudioManager } from './core/AudioManager';
 import { bootMark, bootTimeline } from './core/BootTimeline';
+import { setGrimeDecalsVisible } from './world/ProceduralMaterials';
 import { radioDial } from './core/RadioStations';
 import { CAMERA_VIEW_NAMES, CameraController, cycleView } from './core/CameraController';
 import { absorbDamage, ARMOUR_MAX, canFireFromVehicle, crosshairVisible, cycleWeapon, DRIVEBY_COOLDOWN_SCALE, Economy, fallDamage, KNOCKOFF_IMPACT_SPEED, LOCKPICK_MAX, PARACHUTE_MAX, riderImpactDamage, rollDrops, shouldKnockOff, STIM_MAX, stimHeal, type PedKind } from './core/GameRules';
@@ -889,6 +890,9 @@ export class Game {
       potato ? POTATO_BUILDING_RANGE : BUILDING_VISIBLE_RANGE,
     );
     this.lifecycle.densityScale = potato ? POTATO_DENSITY_SCALE : 1;
+    // Street grime decals are decoration, not world: the Skorokoro tier keeps the identical city
+    // (multiplayer parity — every collider exists on every tier) but skips drawing the decal layer.
+    setGrimeDecalsVisible(!potato);
     (this.scene.fog as THREE.FogExp2).density = fogDensity(potato ? 'potato' : this.baseQuality());
   }
 

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
 import type { BaseQuality, District } from '../types';
-import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, planShopBays, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
+import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, glazingBayLayout, massingTopAt, planGrimeDecals, planShopBays, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingProfile, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier, type ShopBay } from './BuildingArchitecture';
 import {
   BEACH_POLYGONS,
   COASTLINE,
@@ -51,7 +51,7 @@ import { buildModel, MODEL_INDEX } from './models/catalog';
 import type { BuiltModel } from './models/kit';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS } from './ProceduralMaterials';
+import { applyFacadeWeathering, applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS, GRIME_ATLAS_CELLS, grimeDecalMaterial } from './ProceduralMaterials';
 import { POTHOLE_SEGMENTS, potholeRimAt, potholeVertexRadius, RIM_MIN_SPAN, type PotholeHazard } from './PotholeShape';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
 import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
@@ -2574,7 +2574,7 @@ export class City {
     const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);
     // emissiveIntensity starts at the CURRENT window-glow level, not 0: this material may be born at
     // midnight, halfway across the map from wherever the cycle last walked the list (see setFacadeGlow).
-    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: this.facadeGlow, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
+    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: this.facadeGlow, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); applyFacadeWeathering(facade); this.buildingMaterial.set(materialKey, facade); }
     const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial, facadeTile: facadeWorldTile(facadeIndex) });
     const foundations = foundationTiers(profile.tiers, -plinthDrop);
     const foundationIdentity = foundationIdentityForDistrict(district);
@@ -2607,9 +2607,11 @@ export class City {
     // A downtown building whose street base is a real shop-bay run (glass + shutters, drawn by the
     // architecture pass) skips the generic glazing strip — two stacked panes of different sizes on
     // one wall read as a bug, not a shop. Same planShopBays the architecture draws from.
-    const shopfronted = style === 'downtown'
-      && planShopBays(profile.tiers, w, h, variant % ARCHITECTURE_VARIANTS.downtown, variant, profile.entrance).length > 0;
+    const shopBays = style === 'downtown'
+      ? planShopBays(profile.tiers, w, h, variant % ARCHITECTURE_VARIANTS.downtown, variant, profile.entrance) : [];
+    const shopfronted = shopBays.length > 0;
     if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName, shopfronted);
+    this.addGrimeDecals(spec, style, profile, shopBays);
     this.addRoofEquipment(0, 0, w, d, h, profile.tiers, profile.gables, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.tiers, profile.gables, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
@@ -2901,19 +2903,40 @@ export class City {
     if (variant % 4 === 0) this.addRoofSign(x, z, w, d, tiers, gables, variant);
   }
 
+  /** Street grime and graffiti quads on the deterministic subset planGrimeDecals selects — one
+   *  shared atlas material, so a chunk's whole decal layer merges to a single extra mesh. Placement
+   *  is the pure plan's job; this pass only cuts the quads and points their UVs at the atlas. */
+  private addGrimeDecals(spec: GeneratedBuilding, style: BuildingStyle, profile: BuildingProfile, bays: readonly ShopBay[]): void {
+    const decals = planGrimeDecals(profile.tiers, style, spec.width, spec.height, spec.x, spec.z, profile.entrance, bays);
+    if (decals.length === 0) return;
+    const material = grimeDecalMaterial();
+    for (const decal of decals) {
+      const geometry = new THREE.PlaneGeometry(decal.width, decal.height);
+      const cell = GRIME_ATLAS_CELLS[decal.cell]!;
+      const uv = geometry.getAttribute('uv');
+      const u0 = decal.flip ? cell.u1 : cell.u0; const u1 = decal.flip ? cell.u0 : cell.u1;
+      for (let index = 0; index < uv.count; index++) {
+        uv.setXY(index, THREE.MathUtils.lerp(u0, u1, uv.getX(index)), THREE.MathUtils.lerp(cell.v0, cell.v1, uv.getY(index)));
+      }
+      const quad = new THREE.Mesh(geometry, material);
+      quad.position.set(decal.x, decal.y, decal.z);
+      quad.receiveShadow = true; quad.name = 'street-grime-decal';
+      this.target.add(quad);
+    }
+  }
+
   private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[], boardName?: string, shopfronted = false): void {
     const frame = new THREE.MeshStandardMaterial({ color: 0x273235, metalness: 0.55, roughness: 0.38 });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x315f68, roughness: 0.12, metalness: 0.18, clearcoat: 0.7 });
     if (!shopfronted) { // a shop-bay run already owns this wall's street glazing (see buildOneBuilding)
-      const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
-      for (let bay = 0; bay < bays; bay++) {
-        const px = x - w * 0.39 + bay * (w * 0.78 / Math.max(1, bays - 1));
-        if (Math.abs(px - x) < Math.min(3, w * 0.18)) continue;
+      const glazing = glazingBayLayout(w); // shared with planGrimeDecals: tags avoid these exact bays
+      for (const bayX of glazing.positions) {
+        const px = x + bayX;
         const commercial = style === 'downtown' || style === 'mixed-use';
-        const windowW = Math.min(3.2, w / bays * 0.62); const windowY = commercial ? 1.55 : 1.65;
+        const windowW = glazing.windowWidth; const windowY = commercial ? 1.55 : 1.65;
         const facadeZ = frontFacadeZAt(tiers, px, windowY, windowW / 2); if (facadeZ === undefined) continue;
         const window = new THREE.Mesh(new THREE.BoxGeometry(windowW, commercial ? 2.35 : 1.65, 0.09), glass); window.position.set(px, windowY, facadeZ + 0.025); this.target.add(window);
-        const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, facadeZ + 0.06); this.target.add(sill);
+        const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, windowW * 1.1), 0.1, 0.18), frame); sill.position.set(px, 0.4, facadeZ + 0.06); this.target.add(sill);
       }
     }
     if (style === 'downtown' || style === 'mixed-use' || variant % 3 === 0) {

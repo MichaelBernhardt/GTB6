@@ -28,6 +28,7 @@ San Cordova does not ship third-party art or audio assets.
 
 - `public/textures/asphalt-gpt.jpg` - seamless coastal-city asphalt generated for this project with OpenAI GPT Image, then resized and JPEG-optimized locally.
 - `public/textures/concrete-gpt.jpg` - seamless weathered concrete pavement generated for this project with OpenAI GPT Image, then resized and JPEG-optimized locally.
+- `public/textures/graffiti-tags-gpt.png` - spray-tag sprite sheet (8 invented Joburg handstyles/throw-ups) generated for this project with OpenAI GPT Image via the codex CLI, then chroma-keyed, cell-aligned and PNG-optimized locally. Cell grid contract in `src/world/ProceduralMaterials.ts` (`GRIME_ATLAS_CELLS`).
 - `art/character/references/protagonist-turnaround.jpg` and `protagonist-face.jpg` - original character modeling references generated with OpenAI's built-in image-generation tool.
 - `art/character/materials/protagonist-jacket-source.png` and `protagonist-denim-source.png` - seamless material sources generated with OpenAI's built-in image-generation tool, then converted into the protagonist's 2K runtime base-colour maps.
 - `art/npcs/references/*-turnaround.png` - sixteen original adult Johannesburg NPC modeling references generated with OpenAI's built-in image-generation tool.

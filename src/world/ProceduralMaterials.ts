@@ -522,6 +522,50 @@ export function createFacadeTexture(style: number): THREE.CanvasTexture {
       context.globalAlpha = 1;
     }
     if (spec.band) { context.fillStyle = wallDark; context.fillRect(column * cellW, (row + 1) * cellH - 5, cellW, 4); }
+    // WEATHERING, PER WINDOW: rain finds every sill. Dirty runs bleed from the sill line on most
+    // windows — the single strongest "this city is lived in" cue a facade texture can carry, and
+    // because it hangs off the windows it stays honest wherever the tile repeats up a tower shaft.
+    const sillSeed = row * columns + column;
+    if (seeded(sillSeed, style + 71) > 0.35) {
+      const runs = 1 + Math.floor(seeded(sillSeed, style + 72) * 3);
+      for (let run = 0; run < runs; run++) {
+        const rx = x + 2 + seeded(sillSeed * 9 + run, style + 73) * (glassW - 6);
+        const top = y + glassH + 10;
+        const length = 10 + seeded(sillSeed * 9 + run, style + 74) * Math.min(46, cellH * 0.8);
+        const streak = context.createLinearGradient(0, top, 0, top + length);
+        const strength = 0.1 + seeded(sillSeed * 9 + run, style + 75) * 0.16;
+        streak.addColorStop(0, `rgba(28, 26, 22, ${strength.toFixed(3)})`); streak.addColorStop(1, 'rgba(28,26,22,0)');
+        context.fillStyle = streak; context.fillRect(rx, top, 1.6 + seeded(sillSeed * 9 + run, style + 76) * 3, length);
+      }
+    }
+  }
+  // WEATHERING, PER WALL: pollution blotches and, on the industrial family, rust bleeding down from
+  // fixings. Wrap-stamped across both edges so the tile still joins seamlessly.
+  const stampWrapped = (px: number, py: number, extent: number, draw: (sx: number, sy: number) => void): void => {
+    const xs = [px]; if (px - extent < 0) xs.push(px + 512); if (px + extent > 512) xs.push(px - 512);
+    const ys = [py]; if (py - extent < 0) ys.push(py + 512); if (py + extent > 512) ys.push(py - 512);
+    for (const sx of xs) for (const sy of ys) draw(sx, sy);
+  };
+  for (let i = 0; i < 9; i++) {
+    const px = seeded(i, style + 81) * 512; const py = seeded(i, style + 82) * 512;
+    const radius = 26 + seeded(i, style + 83) * 60;
+    const alpha = 0.035 + seeded(i, style + 84) * 0.05;
+    stampWrapped(px, py, radius, (sx, sy) => {
+      const blotch = context.createRadialGradient(sx, sy, 0, sx, sy, radius);
+      blotch.addColorStop(0, `rgba(30, 27, 22, ${alpha.toFixed(3)})`); blotch.addColorStop(1, 'rgba(30,27,22,0)');
+      context.fillStyle = blotch; context.beginPath(); context.arc(sx, sy, radius, 0, Math.PI * 2); context.fill();
+    });
+  }
+  if (spec.family === 'industrial') {
+    for (let i = 0; i < 14; i++) {
+      const px = seeded(i, style + 86) * 512; const py = seeded(i, style + 87) * 512;
+      const length = 24 + seeded(i, style + 88) * 90;
+      const rust = context.createLinearGradient(0, py, 0, py + length);
+      const alpha = 0.1 + seeded(i, style + 89) * 0.14;
+      rust.addColorStop(0, `rgba(122, 74, 42, ${alpha.toFixed(3)})`); rust.addColorStop(1, 'rgba(122,74,42,0)');
+      context.fillStyle = rust;
+      stampWrapped(px, py, length, (sx, sy) => context.fillRect(sx, sy, 1.4 + seeded(i, style + 90) * 2.4, length));
+    }
   }
   const texture = finish(canvas);
   return texture;
@@ -726,6 +770,241 @@ export function setShutterDrop(drop: number): void {
 
 /** Current shutter drop factor — probe surface for QA/e2e checks (window.__game paths). */
 export function shutterDropFactor(): number { return shutterDrop.value; }
+
+// ---- Street grime & graffiti (the dirt pass) ------------------------------------------------
+//
+// Joburg CBD walls are not showroom plaster: they carry spray tags, soot wash, rising damp and
+// rain streaks. Three cooperating layers deliver that without per-building draw calls:
+//   1. createFacadeTexture below bakes weathering INTO every facade family (free, citywide);
+//   2. applyFacadeWeathering() adds world-space macro dirt via onBeforeCompile (free, non-repeating);
+//   3. decal quads over a single shared atlas material — all of a chunk's decals merge into ONE
+//      extra mesh (GeometryBaker buckets by material), so the whole layer costs +1 draw call/chunk.
+//
+// The atlas is a 1024x1024 RGBA CanvasTexture in fixed cells (table below — the layout is a
+// CONTRACT shared with the placement planner in BuildingArchitecture.planGrimeDecals and with any
+// generated `graffiti-tags-gpt.png` drop-in, which must follow the same grid). Deterministic:
+// the file's `seeded` hash only, no Math.random.
+
+export type GrimeCellKind = 'tag' | 'grime';
+export interface GrimeAtlasCell { u0: number; v0: number; u1: number; v1: number; kind: GrimeCellKind; aspect: number; }
+
+const GRIME_ATLAS_SIZE = 1024;
+const grimeCell = (x: number, y: number, w: number, h: number, kind: GrimeCellKind): GrimeAtlasCell => ({
+  u0: x / GRIME_ATLAS_SIZE, v0: 1 - (y + h) / GRIME_ATLAS_SIZE, u1: (x + w) / GRIME_ATLAS_SIZE, v1: 1 - y / GRIME_ATLAS_SIZE,
+  kind, aspect: w / h,
+});
+
+/** Fixed cell table: 4 wide tags (512x256), 4 square throw-ups (256x256), 4 grime patches (256x256). */
+export const GRIME_ATLAS_CELLS: readonly GrimeAtlasCell[] = [
+  grimeCell(0, 0, 512, 256, 'tag'), grimeCell(512, 0, 512, 256, 'tag'),
+  grimeCell(0, 256, 512, 256, 'tag'), grimeCell(512, 256, 512, 256, 'tag'),
+  grimeCell(0, 512, 256, 256, 'tag'), grimeCell(256, 512, 256, 256, 'tag'),
+  grimeCell(512, 512, 256, 256, 'tag'), grimeCell(768, 512, 256, 256, 'tag'),
+  grimeCell(0, 768, 256, 256, 'grime'), grimeCell(256, 768, 256, 256, 'grime'),
+  grimeCell(512, 768, 256, 256, 'grime'), grimeCell(768, 768, 256, 256, 'grime'),
+];
+
+const SPRAY_COLOURS = ['#e8e4da', '#c94f3e', '#4fb8ae', '#e0b43c', '#7db3d6', '#d07030'] as const;
+const TAG_WORDS = ['JOZI', 'KASI', 'VUKA', 'ZAR', 'SBU', 'MZI', 'DLALA', '4DK', 'TSOTSI', 'BRA Z', 'GOGO', 'EGOLI'] as const;
+
+function drawSprayTag(context: CanvasRenderingContext2D, index: number, x: number, y: number, w: number, h: number): void {
+  const word = TAG_WORDS[Math.floor(seeded(index, 401) * TAG_WORDS.length)]!;
+  const fill = SPRAY_COLOURS[Math.floor(seeded(index, 402) * SPRAY_COLOURS.length)]!;
+  const outline = seeded(index, 403) > 0.6 ? '#1a1a20' : seeded(index, 404) > 0.5 ? '#e8e4da' : '#22262c';
+  const cx = x + w / 2; const cy = y + h / 2;
+  context.save();
+  context.beginPath(); context.rect(x + 4, y + 4, w - 8, h - 8); context.clip();
+  context.translate(cx, cy);
+  context.rotate((seeded(index, 405) - 0.5) * 0.14);
+  context.transform(1, 0, (seeded(index, 406) - 0.5) * 0.5, 1, 0, 0); // handstyle slant
+  const size = Math.min(h * 0.52, (w - 40) / (word.length * 0.62));
+  context.font = `900 italic ${Math.round(size)}px Arial`;
+  context.textAlign = 'center'; context.textBaseline = 'middle';
+  // Overspray halo first: the soft cloud a can leaves around every stroke.
+  context.shadowColor = fill; context.shadowBlur = size * 0.34;
+  context.lineWidth = Math.max(6, size * 0.16); context.lineJoin = 'round';
+  context.strokeStyle = outline; context.globalAlpha = 0.9;
+  context.strokeText(word, 0, 0);
+  context.shadowBlur = size * 0.12; context.fillStyle = fill; context.globalAlpha = 0.92;
+  context.fillText(word, 0, 0);
+  context.shadowBlur = 0;
+  // Underline flourish on some tags.
+  if (seeded(index, 407) > 0.45) {
+    context.strokeStyle = fill; context.lineWidth = Math.max(3, size * 0.08); context.globalAlpha = 0.75;
+    context.beginPath(); context.moveTo(-w * 0.3, size * 0.52);
+    context.quadraticCurveTo(0, size * 0.66, w * 0.32, size * 0.44); context.stroke();
+  }
+  context.restore();
+  // Drips run in cell space (unrotated): gravity does not care about the writer's slant.
+  context.save();
+  context.beginPath(); context.rect(x + 4, y + 4, w - 8, h - 8); context.clip();
+  const drips = 3 + Math.floor(seeded(index, 408) * 5);
+  for (let drip = 0; drip < drips; drip++) {
+    const dx = cx + (seeded(index * 17 + drip, 409) - 0.5) * w * 0.6;
+    const dy = cy + (seeded(index * 17 + drip, 410) - 0.3) * h * 0.3;
+    const len = 12 + seeded(index * 17 + drip, 411) * (h * 0.3);
+    const gradient = context.createLinearGradient(0, dy, 0, dy + len);
+    gradient.addColorStop(0, fill); gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    context.globalAlpha = 0.5; context.fillStyle = gradient;
+    context.fillRect(dx, dy, 1.6 + seeded(index * 17 + drip, 412) * 2, len);
+  }
+  context.restore();
+}
+
+function drawGrimePatch(context: CanvasRenderingContext2D, variant: number, x: number, y: number, size: number): void {
+  context.save();
+  context.beginPath(); context.rect(x, y, size, size); context.clip();
+  if (variant === 0) {
+    // Soot blotch: layered soft dark clouds, densest in the middle, ragged at the rim.
+    for (let i = 0; i < 26; i++) {
+      const px = x + size * (0.5 + (seeded(i, 421) - 0.5) * 0.7); const py = y + size * (0.5 + (seeded(i, 422) - 0.5) * 0.7);
+      const r = size * (0.08 + seeded(i, 423) * 0.2);
+      const g = context.createRadialGradient(px, py, 0, px, py, r);
+      const a = 0.05 + seeded(i, 424) * 0.1;
+      g.addColorStop(0, `rgba(24, 21, 17, ${a.toFixed(3)})`); g.addColorStop(1, 'rgba(24,21,17,0)');
+      context.fillStyle = g; context.beginPath(); context.arc(px, py, r, 0, Math.PI * 2); context.fill();
+    }
+  } else if (variant === 1) {
+    // Rain-wash streaks: vertical runs from the top edge — hangs under sills, hoods, copings.
+    for (let i = 0; i < 46; i++) {
+      const px = x + seeded(i, 431) * size; const len = size * (0.25 + seeded(i, 432) * 0.7);
+      const wdt = 1.5 + seeded(i, 433) * 5;
+      const g = context.createLinearGradient(0, y, 0, y + len);
+      const a = 0.06 + seeded(i, 434) * 0.14;
+      g.addColorStop(0, `rgba(30, 28, 24, ${a.toFixed(3)})`); g.addColorStop(1, 'rgba(30,28,24,0)');
+      context.fillStyle = g; context.fillRect(px, y, wdt, len);
+    }
+  } else if (variant === 2) {
+    // Rising damp: strongest at the BOTTOM, fading up — the base-of-wall skirt.
+    const g = context.createLinearGradient(0, y + size, 0, y + size * 0.25);
+    g.addColorStop(0, 'rgba(32, 28, 22, 0.4)'); g.addColorStop(0.55, 'rgba(36, 32, 26, 0.18)'); g.addColorStop(1, 'rgba(36,32,26,0)');
+    context.fillStyle = g; context.fillRect(x, y, size, size);
+    for (let i = 0; i < 130; i++) { // mould speckle thickening toward the ground
+      const t = seeded(i, 441); const py = y + size * (1 - t * t * 0.7);
+      context.globalAlpha = 0.1 + seeded(i, 442) * 0.2; context.fillStyle = seeded(i, 443) > 0.5 ? '#232019' : '#3a352b';
+      const s = 1 + seeded(i, 444) * 3.4; context.fillRect(x + seeded(i, 445) * size, py, s, s);
+    }
+  } else {
+    // Flaked paint / patched plaster: irregular slabs of a wrong-tone repair plus edge crumble.
+    for (let patch = 0; patch < 5; patch++) {
+      const px = x + seeded(patch, 451) * size * 0.7; const py = y + seeded(patch, 452) * size * 0.7;
+      const pw = size * (0.12 + seeded(patch, 453) * 0.24); const ph = size * (0.1 + seeded(patch, 454) * 0.22);
+      context.globalAlpha = 0.16 + seeded(patch, 455) * 0.14;
+      context.fillStyle = seeded(patch, 456) > 0.5 ? '#4b463c' : '#8d867a';
+      context.beginPath();
+      context.moveTo(px + pw * 0.1, py);
+      context.lineTo(px + pw, py + ph * (0.1 + seeded(patch, 457) * 0.2));
+      context.lineTo(px + pw * (0.7 + seeded(patch, 458) * 0.25), py + ph);
+      context.lineTo(px, py + ph * 0.75);
+      context.closePath(); context.fill();
+      context.globalAlpha = 0.3;
+      for (let i = 0; i < 26; i++) {
+        context.fillStyle = '#37332b';
+        context.fillRect(px + seeded(patch * 31 + i, 459) * pw, py + seeded(patch * 31 + i, 460) * ph, 1.4, 1.4);
+      }
+    }
+  }
+  context.globalAlpha = 1;
+  context.restore();
+}
+
+/** Paint the full grime/graffiti atlas. Exported for the QA harness; gameplay reaches it through
+ *  grimeDecalMaterial(). Transparent background — decals hold only their own pigment. */
+export function createGrimeAtlasCanvas(): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = GRIME_ATLAS_SIZE;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D is unavailable');
+  GRIME_ATLAS_CELLS.forEach((cell, index) => {
+    const x = cell.u0 * GRIME_ATLAS_SIZE; const w = (cell.u1 - cell.u0) * GRIME_ATLAS_SIZE;
+    const y = (1 - cell.v1) * GRIME_ATLAS_SIZE; const h = (cell.v1 - cell.v0) * GRIME_ATLAS_SIZE;
+    if (cell.kind === 'tag') drawSprayTag(context, index, x, y, w, h);
+    else drawGrimePatch(context, index - 8, x, y, Math.min(w, h));
+  });
+  return canvas;
+}
+
+let grimeMaterial: THREE.MeshLambertMaterial | undefined;
+
+/**
+ * The single shared street-decal material — every grime/graffiti quad in the city samples this one
+ * atlas, so GeometryBaker folds a whole chunk's decals into one mesh (+1 draw call per chunk,
+ * total). depthWrite stays off: the quads float 0.035u proud of their wall and must never occlude.
+ *
+ * Upgrade seam: if a generated `/textures/graffiti-tags-gpt.png` ships (same fixed grid, tag cells
+ * only), it replaces the procedural TAG band on load; the grime band below is always procedural
+ * (soft alpha wash suits canvas better than imagegen). Missing file = procedural look, no error.
+ */
+export function grimeDecalMaterial(): THREE.MeshLambertMaterial {
+  if (grimeMaterial) return grimeMaterial;
+  grimeMaterial = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false, opacity: 1 });
+  grimeMaterial.name = 'street-grime-decal';
+  return grimeMaterial;
+}
+
+/** Paint + upload the atlas on FIRST need. The Skorokoro tier never shows the decal layer, so it
+ *  never pays the ~5.6 MB the mipped 1024² atlas costs on the GPU — the material exists (the
+ *  merged meshes need it at build time) but its map stays null until the layer first turns on. */
+function ensureGrimeAtlas(): void {
+  const material = grimeDecalMaterial();
+  if (material.map || typeof document === 'undefined') return;
+  const canvas = createGrimeAtlasCanvas();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  material.map = texture; material.needsUpdate = true;
+  const image = new Image();
+  image.onload = () => { // drop-in generated tag band (cells 0–7 live in the top 768px)
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, GRIME_ATLAS_SIZE, 768);
+    context.drawImage(image, 0, 0, GRIME_ATLAS_SIZE, GRIME_ATLAS_SIZE);
+    texture.needsUpdate = true;
+  };
+  image.src = '/textures/graffiti-tags-gpt.png';
+}
+
+/** Decoration-only tier lever: the Skorokoro tier keeps the identical world but skips drawing the
+ *  decal layer (an invisible material's meshes are skipped by the renderer — zero draw calls). */
+export function setGrimeDecalsVisible(visible: boolean): void {
+  const material = grimeDecalMaterial();
+  if (visible) ensureGrimeAtlas();
+  material.visible = visible;
+}
+
+/** Probe surface for QA/e2e checks. */
+export function grimeDecalsVisible(): boolean { return grimeDecalMaterial().visible; }
+
+/**
+ * World-space macro dirt for facade materials, injected via onBeforeCompile (no geometry, no draw
+ * calls; the material object is shared so it survives the static merge). Two signals multiply into
+ * the diffuse: a large blotch field (~20u and ~6u octaves) that stops a street wall reading as one
+ * flat sheet, and a vertical streak field (tall thin noise) that reads as decades of rain and soot
+ * wash. Both are WORLD-space, so unlike texture-band grime they never repeat with the facade tile
+ * (CBD facades repeat every ~30u vertically — baked-in grime bands would recur mid-shaft).
+ * Emissive (the lit windows) is deliberately untouched.
+ */
+export function applyFacadeWeathering(material: THREE.MeshStandardMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGrimeWorld;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGrimeWorld = (modelMatrix * vec4(position, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vGrimeWorld;
+        float wHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float wNoise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(wHash(i), wHash(i + vec2(1.0, 0.0)), u.x), mix(wHash(i + vec2(0.0, 1.0)), wHash(i + vec2(1.0, 1.0)), u.x), u.y); }`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        {
+          float wBlotch = wNoise(vGrimeWorld.xz * 0.05) * 0.6 + wNoise(vGrimeWorld.xz * 0.17) * 0.4;
+          float wStreak = wNoise(vec2((vGrimeWorld.x + vGrimeWorld.z) * 1.15, vGrimeWorld.y * 0.055));
+          float wDirt = clamp(wBlotch * 0.62 + wStreak * 0.55 - 0.42, 0.0, 1.0);
+          diffuseColor.rgb *= mix(vec3(1.0), vec3(0.78, 0.76, 0.72), wDirt);
+        }`);
+  };
+  material.customProgramCacheKey = () => 'facade-weathering';
+}
 
 export function setSignGlow(night: number, blackout: number): void {
   const emissive = signEmissiveIntensity(night, blackout);

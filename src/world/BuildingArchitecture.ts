@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { createSignMesh, rollerShutterMaterial, SHUTTER_ATTRIBUTE } from './ProceduralMaterials';
+import { applyFacadeWeathering, createSignMesh, GRIME_ATLAS_CELLS, rollerShutterMaterial, SHUTTER_ATTRIBUTE } from './ProceduralMaterials';
+import { stablePositionRandom } from './StableRandom';
 
 export type BuildingStyle =
   | 'downtown'
@@ -249,6 +250,128 @@ export function planShopBays(
   return bays;
 }
 
+/** Street-glazing bay layout City.addStreetLevelDetail draws on non-shopfronted commercial and
+ *  walk-up fronts — extracted and exported so the grime planner keeps spray tags off the display
+ *  windows with the SAME arithmetic the drawer uses (shared function, no drift). Positions are
+ *  building-local; the centre bay is skipped (that zone belongs to the entrance). */
+export function glazingBayLayout(width: number): { positions: number[]; windowWidth: number } {
+  const bays = Math.max(2, Math.min(5, Math.floor(width / 5)));
+  const windowWidth = Math.min(3.2, width / bays * 0.62);
+  const positions: number[] = [];
+  for (let bay = 0; bay < bays; bay++) {
+    const px = -width * 0.39 + bay * (width * 0.78 / Math.max(1, bays - 1));
+    if (Math.abs(px) < Math.min(3, width * 0.18)) continue;
+    positions.push(px);
+  }
+  return { positions, windowWidth };
+}
+
+/** One street decal: a quad hung 0.035u proud of a real front wall, sampling one atlas cell.
+ *  Building-local coordinates, like every other architecture fact. */
+export interface GrimeDecal { x: number; y: number; z: number; width: number; height: number; cell: number; flip: boolean; }
+
+/** Fraction of each family's buildings that carry street grime/graffiti. Suburbs, estates and the
+ *  rural belt stay clean — the dirt belongs to the CBD, the strips, the walk-ups and the works. */
+export const GRIME_DECAL_CHANCE: Partial<Record<BuildingStyle, number>> = {
+  downtown: 0.6, 'mixed-use': 0.5, 'dense-residential': 0.45, industrial: 0.42,
+};
+
+/** Above this parcel height a building can also wear an UPPER wash streak (soot bleeding down the
+ *  shaft from a scupper) — the "subtle overlay wear higher up" layer. */
+const GRIME_UPPER_MIN_HEIGHT = 22;
+
+/**
+ * WHERE THE DIRT GOES. A pure plan, shared verbatim by the draw pass (City.addGrimeDecals) and the
+ * QA census (tools/qa/grime-census.ts), exactly like planShopBays: what the census counts IS what
+ * gets drawn.
+ *
+ * Per-building entropy comes from stablePositionRandom on the parcel's WORLD coordinates (the local
+ * variant repeats every few streets and would repeat the same tag with it). Placement rules:
+ *   - only on real front spans (frontFacadeSpansAt), verified across the quad's full height, so a
+ *     setback or arcade never gets a floating tag;
+ *   - never over the planned entrance, a shop bay, a display window (glazingBayLayout — same
+ *     arithmetic the drawer uses) or the industrial roller door;
+ *   - tags sit in the spray-reach band; grime patches hug the base; tall buildings may add one
+ *     upper wash streak. Everything else near the wall stands PROUD of the 0.035 decal plane
+ *     (piers 0.09+, windows 0.07, signs 0.08), so overlaps resolve as paint behind architecture.
+ */
+export function planGrimeDecals(
+  tiers: readonly MassingTier[], style: BuildingStyle, width: number, height: number,
+  worldX: number, worldZ: number, entrance?: EntranceTag, bays: readonly ShopBay[] = [],
+): GrimeDecal[] {
+  const chance = GRIME_DECAL_CHANCE[style];
+  if (chance === undefined || height < 4 || width < 6) return [];
+  const roll = (salt: number) => stablePositionRandom(worldX, worldZ, salt);
+  if (roll(701) >= chance) return [];
+  const mass = tiers.filter((tier) => tier.kind !== 'wall');
+  const out: GrimeDecal[] = [];
+  // Keep-out ranges are x-bands with a HEIGHT: a ground-floor window must not push a wash streak
+  // off the shaft eight metres above it. `tagsOnly` marks display glazing — those boxes stand
+  // proud of the decal plane and cleanly clip whatever sits behind them, so a soft grime wash may
+  // run in behind them, but a spray TAG half-hidden behind a window is a wasted tag.
+  const blocked: Array<{ x: number; half: number; y0: number; y1: number; tagsOnly?: boolean }> = [];
+  if (entrance) blocked.push({ x: entrance.x, half: entrance.width / 2 + 0.4, y0: 0, y1: entrance.height + 0.6 });
+  for (const bay of bays) blocked.push({ x: bay.x, half: (bay.width + SHOP_BAY_MARGIN) / 2, y0: 0, y1: 4.2 });
+  if (bays.length === 0 && style !== 'industrial') {
+    const glazing = glazingBayLayout(width);
+    for (const px of glazing.positions) blocked.push({ x: px, half: glazing.windowWidth / 2 + 0.2, y0: 0, y1: 2.9, tagsOnly: true });
+  }
+  if (style === 'mixed-use') {
+    // The strip family also draws its own shop glass (addMixedUseDetail) — same arithmetic here.
+    const shopBays = Math.max(2, Math.min(5, Math.floor(width / 5)));
+    const shopW = Math.min(3.2, width / shopBays * 0.72);
+    for (let bay = 0; bay < shopBays; bay++) {
+      blocked.push({ x: -width * 0.36 + bay * (width * 0.72 / Math.max(1, shopBays - 1)), half: shopW / 2 + 0.2, y0: 0, y1: 2.6, tagsOnly: true });
+    }
+  }
+  if (style === 'industrial') {
+    // The works family hangs its big roller door on the widest span (addIndustrialDetail); block
+    // that region rather than recompute the exact door, with margin for the sign over it.
+    const shutterH = Math.min(5, height * 0.48);
+    const span = widestFrontFacadeSpanAt(mass, shutterH / 2 + 0.2, -width / 2, width / 2, 3.2);
+    if (span) blocked.push({ x: (span.minX + span.maxX) / 2, half: Math.min(width * 0.21, (span.maxX - span.minX) / 2) + 0.4, y0: 0, y1: shutterH + 2.4 });
+  }
+  const clearOf = (kind: 'tag' | 'grime', x: number, halfW: number, y: number, halfH: number): boolean =>
+    blocked.every((b) => (b.tagsOnly && kind === 'grime')
+      || Math.abs(x - b.x) >= b.half + halfW || y - halfH >= b.y1 || y + halfH <= b.y0);
+  let salt = 710;
+  const tryPlace = (kind: 'tag' | 'grime', widthMin: number, widthMax: number, bandLow: number, bandHigh: number): void => {
+    const cells: number[] = [];
+    GRIME_ATLAS_CELLS.forEach((cell, index) => { if (cell.kind === kind) cells.push(index); });
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const base = salt; salt += 6;
+      const cellIndex = cells[Math.floor(roll(base) * cells.length)]!;
+      const aspect = GRIME_ATLAS_CELLS[cellIndex]!.aspect;
+      // A square throw-up must still fit its band: clamp the width to what the band can carry.
+      const widthCap = kind === 'tag' ? Math.min(widthMax, (bandHigh - bandLow) * aspect) : widthMax;
+      if (widthCap < widthMin) continue;
+      const w = widthMin + roll(base + 1) * (widthCap - widthMin);
+      const h = kind === 'tag' ? w / aspect : Math.min(bandHigh - bandLow, 1.5 + roll(base + 2) * 1.3);
+      if (bandLow + h > bandHigh + 1e-6) continue;
+      const y = bandLow + h / 2 + roll(base + 3) * Math.max(0, bandHigh - bandLow - h);
+      const spans = frontFacadeSpansAt(mass, y, -width / 2, width / 2).filter((span) => span.maxX - span.minX >= w + 1.6);
+      if (spans.length === 0) continue;
+      const span = spans[Math.floor(roll(base + 4) * spans.length)]!;
+      const x = span.minX + 0.8 + w / 2 + roll(base + 5) * (span.maxX - span.minX - 1.6 - w);
+      if (!clearOf(kind, x, w / 2, y, h / 2)) continue;
+      // The quad must ride ONE wall plane over its full height — a step mid-quad means floating paint.
+      const zTop = frontFacadeZAt(mass, x, y + h / 2 - 0.05, w / 2);
+      const zBottom = frontFacadeZAt(mass, x, y - h / 2 + 0.05, w / 2);
+      if (zTop === undefined || zBottom === undefined || Math.abs(zTop - span.z) > 1e-3 || Math.abs(zBottom - span.z) > 1e-3) continue;
+      out.push({ x, y, z: span.z + 0.035, width: w, height: h, cell: cellIndex, flip: roll(base + 5) > 0.5 });
+      blocked.push({ x, half: w / 2 + 0.3, y0: y - h / 2 - 0.3, y1: y + h / 2 + 0.3 }); // decals never overlap each other either
+      return;
+    }
+  };
+  const baseBand = style === 'downtown' ? 1.0 : 0.6; // the CBD plinth tops out at 0.9
+  const tags = 1 + Math.floor(roll(702) * 3);
+  for (let i = 0; i < tags; i++) tryPlace('tag', 1.7, 3.4, baseBand, 3.35);
+  const patches = 1 + Math.floor(roll(703) * 2);
+  for (let i = 0; i < patches; i++) tryPlace('grime', 2.4, 4.8, Math.max(0.5, baseBand - 0.4), 3.1);
+  if (height > GRIME_UPPER_MIN_HEIGHT && roll(704) < 0.5) tryPlace('grime', 2.6, 4.6, 6, Math.min(11, height - 3));
+  return out;
+}
+
 /** A gable (or thatch) roof in building-local coordinates: ridge along local z at lx=0, apex `rise`
  *  above the eaves plane `y`, optionally yawed by `ry` (only quarter turns are used). */
 export interface GableSpec { x: number; z: number; width: number; depth: number; y: number; rise: number; ry: number; }
@@ -434,7 +557,11 @@ export class BuildingArchitecture {
    *  geometry is allocated. See plan(). */
   private drawing = true;
 
-  constructor(private parent: THREE.Group) {}
+  constructor(private parent: THREE.Group) {
+    // The pale trim (plinths, piers, headers, parapets) rides the same world-space dirt as the
+    // facades behind it — a clean white pier on a weathered wall reads as a repair, citywide.
+    applyFacadeWeathering(this.stone);
+  }
 
   /** Retarget where subsequent build() output is added — the on-demand chunk builder points this at
    *  a fresh per-building group so the whole building can be rotated to face its street as a unit. */
