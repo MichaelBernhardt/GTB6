@@ -504,10 +504,24 @@ function placeShafts(
   return { stair: { x: stairX, z: backZ, w: stairW, d: shaftD }, lift, stairClass };
 }
 
+/**
+ * The lift shaft, stuck to the stair's side with a structural joint between them — and AS DEEP AS
+ * THE STAIR, which is the whole point.
+ *
+ * It used to be capped at 2.8 while the stair runs to 5.4, and a shallower neighbour leaves a strip
+ * of floor fore and aft of it. Wherever the block stands against a plate wall — the `side` class
+ * with the lift outboard — that strip is walled by the plate on one flank, by the stair on the
+ * other, by the lift in front, and its only way out is the 0.3 u joint, which no body fits through.
+ * The result was a sealed pocket: the packed city's first dense-residential plate to draw that
+ * combination (30 x 17.25, side class, lift outboard) had 15 unreachable tiles behind the lift, and
+ * the floor-solver suite caught it. A stair and a lift beside it are ONE core in any real building,
+ * so they are one rectangle here too: the joint between them is now fully enclosed by the two
+ * solids, holds no walkable tile, and can seal nothing.
+ */
 function liftAt(stairX: number, side: 1 | -1, backZ: number, stairW: number, shaftD: number): Rect {
   return {
     x: stableWorldFloat(stairX + side * (stairW / 2 + 0.3 + LIFT_W / 2)),
-    z: backZ, w: LIFT_W, d: stableWorldFloat(Math.min(shaftD, 2.8)),
+    z: backZ, w: LIFT_W, d: stableWorldFloat(shaftD),
   };
 }
 
