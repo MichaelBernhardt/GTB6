@@ -180,6 +180,12 @@ export const SIDEWALK_INNER_EDGE = 0.38;
  *  the footprint that rail, station platforms and roadside placement are all held clear of. */
 export const SIDEWALK_WIDTH = ROAD_BUILD_MARGIN - SIDEWALK_INNER_EDGE;
 export const SIDEWALK_CENTER = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH / 2;
+/** Width of the walkable sidewalk band beyond a road edge — a point this far off the tar reads as pavement.
+ *  It is load-bearing that this is the SAME number the paving ribbon is drawn out to (both are
+ *  ROAD_BUILD_MARGIN by derivation): surfaceHeightAt returns the pavement plane exactly where the pavement
+ *  is laid and bare terrain exactly where it stops, so nothing grounded through it is left hovering over
+ *  the paving edge or bedded into it. Widening one without the other reopens the hover. City.test.ts pins it. */
+export const SIDEWALK_BAND = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH;
 /** The verge line: where addRoadsidePoints and buildStreetlampPoints put every furniture anchor, as a
  *  distance beyond the kerb. Note it sits only 0.45u inside the pavement's outer edge, so a pass that
  *  steps OUTWARD from it is stepping onto the grass — see UrbanInfrastructure's kerb-distance table. */
@@ -635,6 +641,135 @@ export function buildStreetlampPoints(network: RoadDefinition[] = ROAD_NETWORK):
   return lamps;
 }
 
+/**
+ * A road's centreline as a placement pass sees it: sampled exactly like the rendered geometry, carrying the
+ * cumulative arc length at each sample so a position along the street can be resolved — and slid — by
+ * DISTANCE. One of these per road definition, shared by every station on it.
+ */
+export interface SampledRoad { name: string; width: number; closed: boolean; points: RoadPoint[]; cum: number[]; length: number; }
+
+/** One fire-hydrant station: how far along a road it stands, and which kerb. Resolved to a world point by
+ *  hydrantStationPoint, so a station costs three numbers instead of a RoadsidePoint per slide candidate. */
+export interface HydrantStation { road: SampledRoad; arc: number; side: -1 | 1; }
+
+/**
+ * Fire-hydrant pitch, as arc length along a street. SANS 10090 table 9 spaces hydrants by RISK CATEGORY,
+ * not by road class: 85 m for category A, 120 m for B, 200 m for C and D2-D4, 300 m where houses stand
+ * more than 30 m apart; the City of Johannesburg Emergency Services by-laws restate 120 m / 180 m. Three
+ * lamp spans is 78 u = 106 m, inside category B everywhere and generous against the 200 m the standard
+ * allows a residential street — and the achieved figure after junction dropout is ~113 m of street each.
+ *
+ * A uniform pitch produces the graded outcome by itself, because a dense district has more street per unit
+ * area: measured walk-up is a 20 u median in Joburg CBD against 29 u in leafy Saxonwold, whose large plots
+ * are exactly the category the standard is loosest about. A district-varying pitch would also have to step
+ * discontinuously mid-road, since roads cross district boundaries.
+ */
+// Five lamp spans, not three. Three (78 u) was tuned to minimise the walk, and the owner's verdict on
+// walking it was that hydrants looked right but there were too many — so the pitch is set by how often one
+// should catch the eye, not by how short the walk can be made.
+//
+// Count does NOT scale inversely with pitch, which is worth knowing before the next retune: every road is
+// guaranteed at least one station regardless of its length, so short roads pin a floor. Measured placed
+// counts are 78 u -> 4,311, 130 u -> 2,991, 156 u -> 2,708, 208 u -> 2,344 — so widening the pitch by 67%
+// removed 31% of the hydrants, not 40%, and the curve flattens hard after this. Straight-line walk-up at
+// this pitch: median 28 u, p90 70, 77.5% of the pavement network within 50 u.
+export const HYDRANT_STATION_SPACING = STREETLAMP_SPACING * 5;
+/** Station phase: a FIXED offset, not half a pitch. Two things follow. Every station lands exactly half a
+ *  lamp span from a lamp station, so no hydrant ever stands in front of a lamp post; and a later pitch
+ *  retune stays a refinement — each hydrant slides at most half a pitch along its OWN kerb instead of the
+ *  whole city reshuffling, which is what made a stride change take 1u walk-ups to 300u. */
+export const HYDRANT_STATION_PHASE = STREETLAMP_SPACING;
+/** Arc step of the slide rescue's ladder — fine enough to find the gap beside a crossing, coarse enough
+ *  that a station never tries 40 spots. */
+const HYDRANT_SLIDE_STEP = 2;
+
+/**
+ * Pure builder for the fire-hydrant stations: walk each road's centreline by arc length and drop a station
+ * every HYDRANT_STATION_SPACING, alternating kerbs, exactly as buildStreetlampPoints does for lamps.
+ *
+ * Distance-spaced, per road, because the alternative is a modulus over a GLOBAL index into roadsidePoints,
+ * and that is not a coverage rule at all — it is a lottery whose ticket numbers change when the modulus
+ * does. Measured on the previous attempt: taking that stride from 19 to 11 nearly tripled the count but
+ * left 25% of the pavement FARTHER from a hydrant than before, 661 points that had one within reach now
+ * more than 150 u away, and a Melrose pavement that had a hydrant underfoot ended up 303 u from one. A
+ * station's position here depends only on its own road's geometry and its own index on that road, so
+ * nothing elsewhere on the map can move it.
+ *
+ * Exported so coverage is unit-testable without constructing a City (which needs THREE + textures).
+ */
+export function buildHydrantStations(network: RoadDefinition[] = ROAD_NETWORK): HydrantStation[] {
+  const stations: HydrantStation[] = [];
+  for (const definition of network) {
+    if (definition.width < STREETLAMP_MIN_WIDTH) continue; // same floor as the lamps: only kerbless dirt tracks go without
+    const closed = definition.closed ?? false;
+    const sampled = sampleRoadPath(definition.points, closed, ROAD_SAMPLE_SPACING);
+    const points = closed ? [...sampled, sampled[0]].filter((point): point is RoadPoint => Boolean(point)) : sampled;
+    const cum: number[] = [0];
+    for (let index = 0; index < points.length - 1; index++) {
+      const start = points[index]!; const end = points[index + 1]!;
+      cum.push(cum[index]! + Math.hypot(end.x - start.x, end.z - start.z));
+    }
+    const length = cum[cum.length - 1] ?? 0;
+    if (length < 1e-3) continue;
+    const road: SampledRoad = { name: definition.name, width: definition.width, closed, points, cum, length };
+    let side: -1 | 1 = 1;
+    // EVERY road gets one, even a stub shorter than the phase: it takes its station at its own midpoint
+    // instead. Coverage is per road here, so a short residential street cannot be skipped by a phase that
+    // overshoots its end — which is precisely how the old global stride left whole suburbs without one.
+    for (let arc = Math.min(HYDRANT_STATION_PHASE, length / 2); arc <= length; arc += HYDRANT_STATION_SPACING) {
+      stations.push({ road, arc, side });
+      side = side === 1 ? -1 : 1;
+    }
+  }
+  return stations;
+}
+
+/** The verge point (and inward normal over the carriageway) a station resolves to, `delta` further along
+ *  its own kerb. Same shape as a roadsidePoint/streetlampPoint, so the furniture pass aims it identically.
+ *  undefined once the slide runs off the end of the road. */
+export function hydrantStationPoint(station: HydrantStation, delta = 0): RoadsidePoint | undefined {
+  const { road, side } = station;
+  const arc = station.arc + delta;
+  if (arc < 0 || arc > road.length) return undefined;
+  let segment = 0; let high = road.points.length - 2; // binary search the cumulative table
+  while (segment < high) {
+    const mid = (segment + high + 1) >> 1;
+    if (road.cum[mid]! <= arc) segment = mid; else high = mid - 1;
+  }
+  const start = road.points[segment]; const end = road.points[segment + 1];
+  if (!start || !end) return undefined;
+  const dx = end.x - start.x; const dz = end.z - start.z; const length = Math.hypot(dx, dz);
+  if (length < 1e-4) return undefined;
+  const t = (arc - road.cum[segment]!) / length;
+  const normalX = -dz / length; const normalZ = dx / length; // left-hand normal of the local road direction
+  const offset = road.width / 2 + ROADSIDE_OFFSET;
+  return {
+    x: start.x + dx * t + normalX * offset * side, z: start.z + dz * t + normalZ * offset * side,
+    inwardX: -normalX * side, inwardZ: -normalZ * side, width: road.width,
+  };
+}
+
+/**
+ * The kerb spots one station will accept, nearest first: its own, then alternating steps of
+ * HYDRANT_SLIDE_STEP up to half a pitch either way ALONG ITS OWN KERB.
+ *
+ * A station that lands in a crossing carriageway, under a bench or inside a clipped notch of pavement
+ * slides along the street it belongs to instead of being dropped — the same rescue clearOfRoad already
+ * gives a street-name post. Half a pitch is the widest slide that keeps stations in order, so a slid
+ * hydrant can never overtake its neighbour or hop to another road. Lazy: the ~85% of stations that are
+ * fine where they stand cost exactly one candidate.
+ */
+export function* hydrantStationCandidates(station: HydrantStation): Generator<RoadsidePoint> {
+  const own = hydrantStationPoint(station, 0);
+  if (own) yield own;
+  for (let step = HYDRANT_SLIDE_STEP; step <= HYDRANT_STATION_SPACING / 2; step += HYDRANT_SLIDE_STEP) {
+    for (const delta of [step, -step]) {
+      const point = hydrantStationPoint(station, delta);
+      if (point) yield point;
+    }
+  }
+}
+
 interface IndexedSegment { ax: number; az: number; bx: number; bz: number; half: number; surface: number; }
 
 /** Uniform grid over the sampled road segments: every distance/on-road query goes through this
@@ -767,8 +902,6 @@ function adoptBakedVehicleNav(): NavGraph | undefined {
 /** Cell size for the signalised-junction spatial index (see City.signalStops). Comfortably larger than any
  *  junction's influence radius (widest/2 + SIGNAL_STOP_APPROACH), so buckets stay small. */
 const SIGNAL_CELL = 48;
-/** Width of the walkable sidewalk band beyond a road edge — a point this far off the tar reads as pavement. */
-const SIDEWALK_BAND = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH;
 /** Sidewalk-point grid for ambient ped wander goals within ~500u of the ped — short, reachable A* solves.
  *  Crowd distribution is handled by the census bubble (cull-far/spawn-near), not by long wander hops. */
 const WANDER_CELL = 120;
@@ -824,6 +957,9 @@ export class City {
   /** Staggered streetlamp anchors, one every STREETLAMP_SPACING of road, alternating kerbs. Kept apart
    *  from the verge roadsidePoints so lamp pitch is set by arc length, not the coarser roadside stride. */
   streetlampPoints: RoadsidePoint[] = buildStreetlampPoints(ROAD_NETWORK);
+  /** Fire-hydrant stations on the same arc-length model — a coverage guarantee per street rather than a
+   *  modulus over a global point index. See buildHydrantStations for why that distinction is the whole fix. */
+  hydrantStations: HydrantStation[] = buildHydrantStations(ROAD_NETWORK);
   roadPaths: RoadPoint[][] = [];
   /** Sampled rail centrelines (world XZ) — the train system runs along these. */
   railPaths: RoadPoint[][] = [];
@@ -915,6 +1051,8 @@ export class City {
       this.detailStore,
       this.roadsidePoints,
       this.streetlampPoints,
+      this.hydrantStations,
+      (station) => hydrantStationCandidates(station),
       (x, z, radius) => this.collides(x, z, radius) || this.isReserved(x, z, radius)
         || distanceToRailwayCorridor(x, z) < radius + 0.6,
       (x, z, margin) => this.isOnRoad(x, z, margin),
@@ -925,8 +1063,12 @@ export class City {
       // paving exists there, while the paving ribbon stops at ROAD_BUILD_MARGIN. Every furniture pass
       // that steps outward off the verge line therefore stood on a slab that isn't drawn and hung a
       // full kerb height (0.37u = 50cm) above the grass under it. surfaceHeightAt answers honestly, so
-      // the streetscape is grounded on the same surface the player and the peds walk on.
-      (x, z) => this.surfaceHeightAt(x, z),
+      // the streetscape is grounded on the same surface the player and the peds walk on — and on the
+      // same surface each prop's OWN collider base is computed from (collidesAt/supportHeight below
+      // hand PropRegistry surfaceHeightAt), which the old wiring disagreed with by a whole kerb.
+      // `preferred` is forwarded for the one family whose corner is paved BY CONSTRUCTION and whose
+      // own tactile slab no band query can see — see UrbanInfrastructure.addSignalPole.
+      (x, z, preferred) => this.surfaceHeightAt(x, z, preferred),
     );
     yield { label: 'Merging the city blocks', fraction: 0.91 }; bootMark('city: merge');
     mergeStaticGeometry(this.group, MERGE_CHUNK_SIZE, this.chunkStore); // water is built after the merge: its meshes stay live for per-frame animation

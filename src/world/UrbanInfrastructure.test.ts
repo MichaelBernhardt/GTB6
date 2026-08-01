@@ -1,14 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { describe, expect, it } from 'vitest';
 import {
-  BENCH_SITE_STRIDE, BENCH_VERGE_DISTANCE, BIN_SITE_STRIDE, BIN_VERGE_DISTANCE, HYDRANT_FLANGE_RADIUS,
-  HYDRANT_KERB_DISTANCE, HYDRANT_SITE_STRIDE, isBenchSite, isBinSite, isHydrantSite,
+  BENCH_LEG_CENTER, BENCH_SEAT_TOP, BENCH_SITE_STRIDE, BENCH_SLAT_CENTER, BENCH_SLAT_HALF_HEIGHT,
+  BENCH_VERGE_DISTANCE, BIN_SITE_STRIDE, BIN_VERGE_DISTANCE, HYDRANT_FLANGE_RADIUS,
+  HYDRANT_KERB_DISTANCE, isBenchSite, isBinSite,
   isUtilityRoadsideCandidate, onRoadsideStride, SIGN_CHUNK_SIZE, SIGN_HYSTERESIS, SIGN_VISIBILITY_STEP,
   SIGN_VISIBLE_RANGE, UTILITY_SITE_STRIDE,
 } from './UrbanInfrastructure';
-import { ROADSIDE_OFFSET, SIDEWALK_CENTER, SIDEWALK_INNER_EDGE, SIDEWALK_WIDTH, type RoadsidePoint } from './City';
+import {
+  ROADSIDE_OFFSET, SIDEWALK_BAND, SIDEWALK_CENTER, SIDEWALK_INNER_EDGE, SIDEWALK_WIDTH, type RoadsidePoint,
+} from './City';
+import { ROAD_BUILD_MARGIN } from './mapData';
 
 const worldFile = (name: string): string => readFileSync(join(dirname(fileURLToPath(import.meta.url)), name), 'utf8');
 
@@ -85,15 +90,66 @@ describe('pavement furniture placement across the pavement', () => {
   it('grounds the streetscape on the surface City actually draws, and beds it in', () => {
     // sidewalkHeightAt is terrain + 0.37 whether or not paving exists at (x, z). Handing that to
     // UrbanInfrastructure floated every prop that stands off the paving — bins, benches, cabinets,
-    // shrubs and roadside trees, not just hydrants — by a full kerb height.
+    // shrubs and roadside trees, not just hydrants — by a full kerb height. Kept as a source assertion
+    // because vitest never constructs City and nothing else can catch this wiring silently regressing.
     const city = worldFile('City.ts');
     const construction = city.slice(city.indexOf('new UrbanInfrastructure('), city.indexOf('Merging the city blocks'));
-    expect(construction).toContain('this.surfaceHeightAt(x, z)');
+    expect(construction).toContain('this.surfaceHeightAt(x, z, preferred)');
     expect(construction).not.toContain('this.sidewalkHeightAt(x, z)');
     // And nothing is left exactly flush: 1cm proud reads as broken, 1cm buried reads as bolted down.
     const bed = Number(/const SURFACE_BED = ([\d.]+);/.exec(worldFile('UrbanInfrastructure.ts'))?.[1]);
     expect(bed).toBeGreaterThan(0);
     expect(bed).toBeLessThan(0.05);
+  });
+
+  it('keeps the walkable band and the drawn paving edge the SAME line', () => {
+    // This single identity is what makes the honest query correct at the paving edge: inside the band
+    // surfaceHeightAt returns the pavement plane and paving is drawn there; outside it, neither. Widening
+    // the ribbon without widening the band (or the reverse) reopens the hover the fix closes, silently.
+    expect(SIDEWALK_BAND).toBeCloseTo(SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH, 10);
+    expect(SIDEWALK_BAND).toBeCloseTo(ROAD_BUILD_MARGIN, 10);
+  });
+
+  it('keeps every family\'s GROUND-LEVEL footprint on one side of the paving edge', () => {
+    // A single height query per prop cannot serve a footprint that straddles the edge: half of it would
+    // stand on the pavement plane and half on grass 0.37 below. These are the half-extents of the geometry
+    // that actually touches the ground (not the collider radii, which overstate them 2-4x).
+    const families = [
+      { label: 'streetlamp collar', kerb: ROADSIDE_OFFSET, half: 0.28 },
+      { label: 'hydrant flange', kerb: HYDRANT_KERB_DISTANCE, half: HYDRANT_FLANGE_RADIUS },
+      { label: 'bench leg', kerb: BENCH_VERGE_DISTANCE, half: 0.25 },
+      { label: 'cabinet plinth', kerb: ROADSIDE_OFFSET + 1.35, half: 0.575 },
+    ];
+    for (const family of families) {
+      const inner = family.kerb - family.half; const outer = family.kerb + family.half;
+      const straddles = inner < SIDEWALK_BAND && outer > SIDEWALK_BAND;
+      expect(straddles, `${family.label} straddles the paving edge at ${SIDEWALK_BAND}`).toBe(false);
+    }
+    // The litter bin is the one exception, and it is 1cm of it: the drum's bottom rim spans 3.49..4.01
+    // against a 3.50 edge, so ~0.14u of rim tucks 1cm behind the pavement lip. Named here with the measured
+    // number rather than hidden in a tolerance — it is invisible, and the alternative is 37cm of daylight
+    // under the whole bin. Anything worse than 3cm means the bin has drifted and wants its own decision.
+    const binGraze = SIDEWALK_BAND - (BIN_VERGE_DISTANCE - 0.26);
+    expect(binGraze).toBeGreaterThan(0);
+    expect(binGraze).toBeLessThan(0.03);
+  });
+
+  it('stands a bench on its feet and lets a player stand on its seat', () => {
+    // The legs used to be pinned at 0.3 with a 0.55u leg, so a bench's feet stopped 0.025u above whatever
+    // it was grounded on. And RoundedBoxGeometry does not keep the height you ask for on a thin slab, so
+    // the seat top is measured off the real mesh rather than assumed to be 0.11/2 above the slat centre.
+    expect(BENCH_LEG_CENTER).toBeCloseTo(0.55 / 2, 10);
+    const slat = new RoundedBoxGeometry(2.25, 0.11, 0.16, 2, 0.035);
+    slat.computeBoundingBox();
+    expect(slat.boundingBox!.max.y).toBeCloseTo(BENCH_SLAT_HALF_HEIGHT, 4);
+    expect(BENCH_SLAT_HALF_HEIGHT).toBeLessThan(0.11 / 2); // the trap: asking for 0.11 gets 0.037
+    const bed = Number(/const SURFACE_BED = ([\d.]+);/.exec(worldFile('UrbanInfrastructure.ts'))?.[1]);
+    expect(BENCH_SEAT_TOP).toBeCloseTo(BENCH_SLAT_CENTER + slat.boundingBox!.max.y - bed, 6);
+    // A player must land ON the seat, not on the backrest band the collider height describes. Standing
+    // 0.46u above every bench in the city is what an honest grounding does without this.
+    expect(BENCH_SEAT_TOP).toBeLessThan(1.1);
+    const source = worldFile('UrbanInfrastructure.ts');
+    expect(source).toContain('standHeight: BENCH_SEAT_TOP');
   });
 });
 
@@ -101,7 +157,7 @@ describe('pavement furniture strides', () => {
   const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
 
   it('gives each prop its own stride, pairwise co-prime with the others', () => {
-    const strides = { bench: BENCH_SITE_STRIDE, bin: BIN_SITE_STRIDE, hydrant: HYDRANT_SITE_STRIDE, cabinet: UTILITY_SITE_STRIDE };
+    const strides = { bench: BENCH_SITE_STRIDE, bin: BIN_SITE_STRIDE, cabinet: UTILITY_SITE_STRIDE };
     const named = Object.entries(strides);
     expect(new Set(Object.values(strides)).size, 'two props sharing a stride share their sites').toBe(named.length);
     for (let a = 0; a < named.length; a++) {
@@ -112,34 +168,23 @@ describe('pavement furniture strides', () => {
     }
   });
 
-  it('keeps the three rhythms interleaved down a street, and gives the hydrant the tightest', () => {
+  it('keeps the two amenity rhythms interleaved down a street', () => {
     // The real city has ~22k roadside points; walk that many and count the sites each prop claims.
     const span = 25000;
     const indices = Array.from({ length: span }, (_, index) => index);
     const benches = indices.filter(isBenchSite);
     const bins = indices.filter(isBinSite);
-    const hydrants = indices.filter(isHydrantSite);
     expect(benches.length).toBeGreaterThan(1500);
     expect(bins.length).toBeGreaterThan(1200);
-    // A hydrant is municipal equipment, not an amenity: it must be the commonest thing on the pavement,
-    // or a player who wants one has to search the city for it (which is exactly what happened at 19).
-    expect(hydrants.length).toBeGreaterThan(benches.length);
-    expect(hydrants.length).toBeGreaterThan(bins.length);
-
     const shared = (a: number[], b: number[]): number => { const set = new Set(b); return a.filter((index) => set.has(index)).length; };
-    // Before the fix this was 100% of hydrants: same stride, same offset, same points. Coincidences no
-    // longer put one prop inside another (the hydrant is kerbside now) but a low rate keeps a street's
-    // furniture spread out rather than bunched.
-    expect(shared(hydrants, benches) / hydrants.length).toBeLessThan(0.1);
-    expect(shared(hydrants, bins) / hydrants.length).toBeLessThan(0.07);
     expect(shared(benches, bins) / benches.length).toBeLessThan(0.07);
     // Co-prime strides cannot avoid every coincidence — the residual is what the pass order handles.
-    expect(shared(hydrants, benches)).toBeGreaterThan(0);
+    expect(shared(benches, bins)).toBeGreaterThan(0);
   });
 
   it('reads strides identically on either side of the origin', () => {
-    for (const site of [isBenchSite, isBinSite, isHydrantSite]) {
-      const stride = site === isBenchSite ? BENCH_SITE_STRIDE : site === isBinSite ? BIN_SITE_STRIDE : HYDRANT_SITE_STRIDE;
+    for (const site of [isBenchSite, isBinSite]) {
+      const stride = site === isBenchSite ? BENCH_SITE_STRIDE : BIN_SITE_STRIDE;
       const offset = Array.from({ length: stride }, (_, index) => index).find(site)!;
       expect(site(offset - stride * 3)).toBe(true);
       expect(site(offset + 1)).toBe(false);
@@ -161,10 +206,22 @@ describe('pavement furniture strides', () => {
     expect(at('this.buildFireHydrants()')).toBeGreaterThan(at('this.buildStreetFurniture()'));
     expect(at('this.buildFireHydrants()')).toBeGreaterThan(at('this.buildLitterBins()'));
     expect(at('this.buildStreetFurniture()')).toBeGreaterThan(at('this.buildUtilityInfrastructure()'));
-    // And the hydrant pass must guard its OWN spot, not the roadside point it was offset from.
+    // And the hydrant pass must guard its OWN spot, not the station point it was offset from.
     const pass = source.slice(source.indexOf('private buildFireHydrants'), source.indexOf('private buildLitterBins'));
     expect(pass, 'the hydrant guard must test the hydrant position').toContain('this.isBlocked(x, z,');
     expect(pass).toContain('this.isRoad(x, z,');
+  });
+
+  it('separates two hydrants by a distance a player would call separate', () => {
+    // The 1.2u spacedFrom() this replaced was a coincident-point dedupe wearing a separation guard's
+    // clothes: 1.2u is barely wider than one hydrant, so the closest legal pair (measured at 1.2047u in
+    // the CBD) was a visible twin. Nothing had escaped the guard; the guard promised nothing.
+    const source = worldFile('UrbanInfrastructure.ts');
+    const separation = Number(/const HYDRANT_MIN_SEPARATION = ([\d.]+);/.exec(source)?.[1]);
+    expect(separation).toBeGreaterThan(4 * (HYDRANT_KERB_DISTANCE + HYDRANT_FLANGE_RADIUS));
+    const pass = source.slice(source.indexOf('private buildFireHydrants'), source.indexOf('private buildLitterBins'));
+    expect(pass, 'a linear scan over ~4,900 placements is 12M comparisons').not.toContain('spacedFrom(');
+    expect(pass).toContain('farEnoughFromOtherHydrants(x, z)');
   });
 });
 
