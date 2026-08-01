@@ -49,7 +49,8 @@ import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescrip
 import { PLAYER } from '../../config';
 import { FIND_CAP, type InteriorDoor, type InteriorsSave } from '../interiors.state';
 import {
-  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, INTERIOR_LAMP_INTENSITY, markerFade, toLocal, toWorld,
+  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, INTERIOR_LAMP_INTENSITY, MARKER_LOCKED, MARKER_OPEN,
+  markerFade, toLocal, toWorld,
   type BuiltDoorways, type BuiltFloor,
 } from './build';
 import {
@@ -76,23 +77,26 @@ const BASEMENT_DROP = 30;
 const ABANDON_DISTANCE = 90;
 /** How far down the street a doorway is built. Far enough to be a landmark you walk toward. */
 const STREAM_RANGE = 190;
-const STREAM_SLACK = 45;
-const STREAM_CAP = 22;
+/** Rebuild the marker set after this much movement. Tighter than the old 45 for a reason the owner
+ *  found on foot: with the nearest-STREAM_CAP slice, a door dropped as #23 at 60 u could be walked
+ *  to within 16 u and still show no circle, because nothing had re-streamed yet. The slack must be
+ *  small enough that a door can never get inside the marker fade (26 u) while stale. */
+const STREAM_SLACK = 28;
+/** More markers than the old 22: dense suburbs hold 26+ doors inside STREAM_RANGE, and every door
+ *  past the cap was a house with no circle — "many residential buildings don't allow entry". ~6
+ *  meshes per marker keeps 32 of them trivial. */
+const STREAM_CAP = 32;
 /** Hold a floor this long after the player leaves its sightline, so pacing up and down a few steps
  *  cannot thrash generation. */
 const RELEASE_DWELL = 0.8;
 /** A prop shorter than this is stepped over, not walked around. The solver's grid uses the same sill. */
 const STEP_OVER = 0.55;
-/** Game-seconds a door you JUST came out of stays open to re-entry without a lock check — the roof
- *  hatch and the street door (so stepping out to check the street never costs a second dial).
- *
- *  ON A ROOF THE WINDOW CANNOT RUN OUT. A countdown alone shipped the exact trap the one-way lock
- *  model forbids: walk out of the hatch (free, as every exit is), photograph the skyline for a
- *  minute, and the only way down asked for a pick you may not carry. So update() RE-ARMS the window
- *  for as long as the player is still standing on the roof of the graced building — they never
- *  picked that door shut behind them, so it plausibly stays unlatched — and the countdown only
- *  starts once they actually leave the roof. The id also survives the save (InteriorsSave.graceId),
- *  so a reload made out on the roof cannot re-latch the way down either. */
+/** Game-seconds a STREET door you just came out of stays open to re-entry without a lock check, so
+ *  stepping out to check the street never costs a second dial. The id survives the save
+ *  (InteriorsSave.graceId), so a reload on the doorstep keeps the same courtesy. The roof-side
+ *  half of this machinery — a re-arming window that kept the hatch answerable however long you
+ *  stood up there — is GONE, because the hatch no longer asks: people lock the street door, not
+ *  the roof, so every hatch opens from the roof side, always (see interiors:roofdoor). */
 const EXIT_GRACE = 60;
 /** Drifting this far from where the dial was started cancels it — golf's walk-off-the-ball rule. */
 const PICK_CANCEL_RANGE = 3.0;
@@ -152,18 +156,24 @@ interface Visit {
   shaftBase?: number;
   /** Seconds the second floor has been out of sight; it goes when this passes RELEASE_DWELL. */
   idleFor: number;
-  fixture?: { ped: NonNullable<ReturnType<FeatureGameApi['spawnFixture']>>; y: number };
+  /** The fixture NPC on the current floor, if it has one. Its groundOverride is this floor's y —
+   *  set at placement, cleared at removal — so its whole grounding model lives on the storey. */
+  fixture?: { ped: NonNullable<ReturnType<FeatureGameApi['spawnFixture']>> };
   /** Previous local position, for the axis-separated clamp. */
   last: { x: number; z: number };
+  /** The last world y the clamp pinned the player to — the storey plane, or the flight height mid
+   *  climb. This is what indoorFloorY() reports, so Player.update grounds on the stair as well as
+   *  the floor. */
+  lastY?: number;
   /** Peak floors VISIBLE at once this visit — reported by the QA driver, not guessed at. */
   peakResident: number;
 }
 
-/** The dial in progress at a locked door: a sweep runs up and falls back until E lands in the bite.
- *  See the "picking dial" block in lock.ts for the tuning and the reasoning. */
+/** The dial in progress at a locked STREET door: a sweep runs up and falls back until E lands in
+ *  the bite. Only the street door ever runs it now — the roof hatch is always open from the roof
+ *  side. See the "picking dial" block in lock.ts for the tuning and the reasoning. */
 interface Picking {
   door: InteriorDoor;
-  via: 'street' | 'roof';
   /** Where the player stood when the dial started; drifting off it cancels (golf's steppedBack). */
   x: number; z: number;
   sweep: number;
@@ -188,12 +198,19 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /** Monotonic in-game seconds (summed dt — NEVER the wall clock; see the determinism rule). Only
    *  used for the hatch grace window, which is gameplay time, not world generation. */
   let clock = 0;
-  /** After leaving a building — by the street door OR the roof hatch — its doors stay open to you
-   *  for EXIT_GRACE game-seconds (re-armed for as long as you stand on its roof — see EXIT_GRACE),
-   *  so leaving never costs a fresh pick to undo. Rehydrated from the save so a reload made out on
-   *  a roof keeps the way down unlatched. */
+  /** After leaving a building, its STREET door stays open to you for EXIT_GRACE game-seconds, so
+   *  leaving never costs a fresh pick to undo. Rehydrated from the save so a reload on the
+   *  doorstep keeps the courtesy. (The roof hatch needs no grace: it is always open from above.) */
   let exitGrace: { id: string; until: number } | undefined =
     saved?.graceId ? { id: saved.graceId, until: EXIT_GRACE } : undefined;
+  /** A visit the SAVE says the player was inside — consumed by update() once the door can be
+   *  resolved (the save put the player's world position on that building's doorstep, so it is in
+   *  range by construction). The whole entry path re-runs — install(), the indoors edge, the lot —
+   *  so a restored visit is a real visit, not a teleport that skipped the machinery. Dropped after
+   *  a few seconds if the door cannot be found (a changed map): the player simply stays on the
+   *  doorstep, which is the honest degradation. */
+  let pendingRestore: NonNullable<InteriorsSave['visit']> | undefined = saved?.visit;
+  let restorePatience = 6;
 
   // ---- the fade. The feature API has no screenFade(), so the feature owns one element and takes it
   // away again in dispose(). #fade is z-index 90; this sits just under it and over the HUD.
@@ -216,14 +233,71 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let doorways: BuiltDoorways | undefined;
   let builtAt: { x: number; z: number } | undefined;
 
+  /** Cache of raycast-derived marker heights, keyed per doorstep. The drawn ground is static, so
+   *  each door pays one ray in its lifetime instead of one per 28 u re-stream; fallback answers
+   *  (chunk not built yet, so no drawn surface to hit) are deliberately NOT cached, so the next
+   *  re-stream refines them once the geometry lands. */
+  const markerHeights = new Map<string, { y: number; nx: number; ny: number; nz: number }>();
+  /** True while any streamed marker stands on a FALLBACK height (its chunk had no drawn surface
+   *  yet when the ray was cast). update() re-streams every ~1.5 s until every marker has a real
+   *  surface under it — without this, a disc placed before its paving landed stayed subtly
+   *  subsurface until the player happened to walk 28 u. */
+  let markersProvisional = false;
+  let provisionalRetry = 0;
+  const markerRay = new THREE.Raycaster();
+  const RAY_DOWN = new THREE.Vector3(0, -1, 0);
+  /** True when a raycast hit belongs to marker furniture or an interior floor — surfaces a street
+   *  disc must never sit on. */
+  const notGround = (object: THREE.Object3D): boolean => {
+    for (let node: THREE.Object3D | null = object; node; node = node.parent) {
+      if (node.name === 'InteriorDoors' || node.name.startsWith('Floor:')) return true;
+    }
+    return false;
+  };
+  /**
+   * The marker's resting height: the RENDERED surface under the doorstep — the paving the player
+   * actually sees — probed by a single downward ray, with a small proudness so seams and slopes
+   * cannot swallow the disc, and extra lift on steep hits so the rim stays clear. The collider
+   * stand height (then terrain) is the fallback while the chunk is still baking. This is the
+   * third and final derivation: terrain height buried discs inside foundation colliders, collider
+   * height left them under the foundation's drawn paving (the visual rides up to ~0.25 above the
+   * collider, unknowably), and only the drawn surface itself is always where the eye says it is.
+   */
+  const markerSurface = (px: number, pz: number): { y: number; nx: number; ny: number; nz: number } => {
+    const key = `${Math.round(px * 4)},${Math.round(pz * 4)}`;
+    const cached = markerHeights.get(key);
+    if (cached !== undefined) return cached;
+    const terrain = api.surfaceHeightAt(px, pz);
+    const stand = api.standHeightAt?.(px, pz) ?? terrain;
+    const reference = Math.max(stand, terrain);
+    markerRay.set(new THREE.Vector3(px, reference + 6, pz), RAY_DOWN);
+    for (const hit of markerRay.intersectObjects(api.scene.children, true)) {
+      if (notGround(hit.object)) continue;
+      // Only surfaces NEAR the standing reference count as ground: a parked car's roof, a tree
+      // canopy or an awning over the step is a transient — and a cached transient would pin the
+      // disc to a car that has since driven off.
+      if (hit.point.y > reference + 1.2 || hit.point.y < terrain - 4) continue;
+      const normal = hit.face && Math.abs(hit.face.normal.y) > 0.05
+        ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
+        : undefined;
+      if (normal && normal.y < 0) normal.negate();
+      const found = { y: hit.point.y + 0.04, nx: normal?.x ?? 0, ny: normal?.y ?? 1, nz: normal?.z ?? 0 };
+      markerHeights.set(key, found);
+      return found;
+    }
+    markersProvisional = true;
+    return { y: reference + 0.04, nx: 0, ny: 1, nz: 0 }; // nothing drawn yet: best-effort, uncached, refined next stream
+  };
+
   const streamDoorways = (x: number, z: number): void => {
     const near = doorsNear(x, z, STREAM_RANGE)
       .sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))
       .slice(0, STREAM_CAP);
     const wanted = near.map((door) => door.id).join('|');
-    if (doorways && wanted === doorways.ids.join('|')) { builtAt = { x, z }; return; }
+    if (doorways && wanted === doorways.ids.join('|') && !markersProvisional) { builtAt = { x, z }; return; }
     doorways?.dispose();
-    doorways = buildDoorways(near, (px, pz) => api.surfaceHeightAt(px, pz));
+    markersProvisional = false; // markerSurface re-raises it if any door still lacks drawn ground
+    doorways = buildDoorways(near, markerSurface);
     api.scene.add(doorways.group);
     builtAt = { x, z };
   };
@@ -296,7 +370,11 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   const holdNeighbour = (current: Visit, local: { x: number; z: number }, dt: number): void => {
     const core = current.core;
     if (!core.stair) return; // a single-storey building has no neighbour to hold
-    const onSpine = Math.abs(local.x - core.corridorX) < CORRIDOR / 2 + 1.6;
+    // The sightline: the spine, the shaft itself, and the open band AROUND the shaft — the stair
+    // can stand far off the spine now, and the walk across the band toward it must find the
+    // neighbouring storey already built, not watch it pop in.
+    const onSpine = Math.abs(local.x - core.corridorX) < CORRIDOR / 2 + 1.6
+      || withinRect(core.stair, local.x, local.z, 3.2);
     const inShaft = withinRect(core.stair, local.x, local.z, 0.6);
     // On the TOP floor the flight in the well leads DOWN, so the neighbour worth pre-warming is the
     // storey below — the old code asked for storeys and got nothing, so the well showed bare void.
@@ -420,14 +498,15 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   };
 
   const placeFixture = (current: Visit, plan: FloorPlan): void => {
-    if (current.fixture) { api.removeFixture(current.fixture.ped); current.fixture = undefined; }
+    if (current.fixture) { current.fixture.ped.groundOverride = undefined; api.removeFixture(current.fixture.ped); current.fixture = undefined; }
     if (!plan.fixture) return;
     const spot = toWorld(current, current.heading, plan.fixture.x, plan.fixture.z);
     const ped = api.spawnFixture(spot.x, spot.z, plan.fixture.name);
-    // spawnFixture grounds the ped on the terrain, which for an interior is a hundred metres below
-    // the floor it should be standing on. The API has no way to place one at a height, so its y is
-    // pinned here every frame instead. Noted as a gap rather than papered over.
-    if (ped) { ped.group.position.y = floorY(current, current.floor); current.fixture = { ped, y: floorY(current, current.floor) }; }
+    // The fixture's ground IS this storey's floor — groundOverride replaces the old per-frame y
+    // pin, so the ped's whole grounding model (walking, cowering, the down pose, the ragdoll
+    // floor) agrees with the room it stands in. Without it, a shot shopkeeper died toward the
+    // pavement thirty units overhead.
+    if (ped) { ped.groundOverride = floorY(current, current.floor); ped.group.position.y = ped.groundOverride; current.fixture = { ped }; }
   };
 
   const enter = (door: InteriorDoor, instant = false): string => {
@@ -445,7 +524,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (!visit) return;
     const current = visit;
     visit = undefined;
-    if (current.fixture) api.removeFixture(current.fixture.ped);
+    if (current.fixture) { current.fixture.ped.groundOverride = undefined; api.removeFixture(current.fixture.ped); }
     for (const resident of current.resident.values()) resident.built.dispose();
     current.resident.clear();
     // The pool goes with the visit, under the exit fade. The census outside is the same one we left,
@@ -505,7 +584,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   /**
    * Where the hatch puts you out: the stair's own spot mapped back onto the REAL roof. The interior
-   * plate is scaled relative to the footprint (58.6% of interiors exceed their massing on an axis),
+   * plate is scaled relative to the footprint (20.3% of interiors still exceed their massing on an axis),
    * so the stair position goes through the shared Tardis transform (tardis.ts — the one place
    * inside is related to outside) and is then clamped a metre inside the top tier — NEVER mapped
    * one-to-one, or half the city's hatches would open onto thin air beside the building. Altitude
@@ -560,10 +639,10 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   };
 
   /**
-   * THE lock question, asked identically by the street door and the roof hatch — both are entries
-   * from OUTSIDE, so both pass 'outside' to doorLocked (which is where "inside is never locked"
-   * lives; exit paths never ask at all). On top of the classification: `opensesame` opens
-   * everything, and a door you just came out of stays open for the grace window.
+   * THE lock question — asked by the STREET door only now. The roof hatch never asks: it opens
+   * from the roof side always ("people lock the street door, not the roof"), and exit paths never
+   * ask at all. On top of the classification: `opensesame` opens everything, and a door you just
+   * came out of stays open for the grace window.
    */
   const entryLocked = (door: InteriorDoor, hour: number): boolean => {
     if (api.doorsUnlocked?.()) return false;
@@ -575,9 +654,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   // ---- the picking dial (see lock.ts for the tuning constants and the design note) ---------------
 
-  const startPicking = (door: InteriorDoor, via: 'street' | 'roof', at: THREE.Vector3): void => {
+  const startPicking = (door: InteriorDoor, at: THREE.Vector3): void => {
     picking = {
-      door, via, x: at.x, z: at.z, sweep: 0, dir: 1, misses: 0,
+      door, x: at.x, z: at.z, sweep: 0, dir: 1, misses: 0,
       finish: buildCore(door.facts).finish,
     };
   };
@@ -607,10 +686,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     if (!dialBites(dial)) { dial.misses += 1; dial.sweep = 0; dial.dir = 1; return; }
     picking = undefined;
     picks += 1;
-    api.analytics('picked', { detail: dial.via, value: dial.misses });
+    api.analytics('picked', { detail: 'street', value: dial.misses });
     api.persist();
-    if (dial.via === 'roof') enterFromRoof(dial.door, instant);
-    else enter(dial.door, instant);
+    enter(dial.door, instant);
   };
 
   /** The offer while the dial is running: the SAME rung the door offered keeps offering, so the
@@ -655,13 +733,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
    * rung directly below the door is `E  Enter vehicle`: standing at a locked door beside your own
    * car, E rattled the door instead of opening the car. That is the protest-rung failure class
    * (PR #120) reintroduced, which is why the explanation lives on a chip that claims no key at all.
-   * Resolves the same subjects the two entry rungs do (street doorstep, then roof), so the chip
-   * lights exactly where the offer withdrew.
+   * Street doorsteps only: the roof hatch is never locked from the roof side, so a roof never has
+   * anything to explain.
    */
   const lockedHintDoor = (): InteriorDoor | undefined => {
     if (visit || swapping || picking || carriesPick()) return undefined;
     const position = api.playerPosition();
-    const door = doorNear(position.x, position.z) ?? roofUnderfoot(position);
+    const door = doorNear(position.x, position.z);
     if (!door) return undefined;
     if (api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) return undefined;
     return entryLocked(door, api.hour()) ? door : undefined;
@@ -735,6 +813,26 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // The spine wall between the flights — and on the top floor, the centre rail of the stair head
     // that stands on the same line. A stairless single-storey building has neither.
     if (core.stair) out.push({ x: core.stair.x, z: core.stair.z - core.stair.d * 0.19, w: 0.16, d: core.stair.d * 0.62 });
+    // THE SHAFT'S REAR IS SEALED. The stair may stand as an island now (mid, front, side classes —
+    // and even the back class leaves up to 1.5 u behind it), and the shaft rectangle snaps anyone
+    // inside it to flight height: walking into its open rear at ground level teleported you UP
+    // onto the mid landing, and stepping off the mid landing's rear edge dropped you half a storey.
+    // One thin cap closes both. build.ts draws the matching panel-and-rail on island shafts.
+    if (core.stair) out.push({ x: core.stair.x, z: rectMaxZ(core.stair) - 0.07, w: core.stair.w, d: 0.14 });
+    // AND SO ARE ITS SIDES — the owner's report, verbatim: "you just fall off the sides as you go
+    // up and around the flights if you're not super careful". Stepping across a side edge mid-climb
+    // resolved the storey from lastProgress and dropped the player half a flight; stepping IN from
+    // the side at ground level hoisted them onto it. Two thin caps along the side edges make the
+    // mouth (the front face) the only crossing, at every altitude — which also makes the stair
+    // head's rails on the top floor real instead of aspirational (side entry used to drop you into
+    // the well). No altitude test needed: there is no legitimate side crossing at ANY height —
+    // "under the stair" does not exist in this model (every point in the rect is flight), walking
+    // beside the shaft stays clear (the caps sit ON the edge, thin as a wall), and both landing
+    // ends cross the FRONT edge, which stays open. build.ts draws the sloped rails these enforce.
+    if (core.stair) {
+      out.push({ x: rectMinX(core.stair) + 0.07, z: core.stair.z, w: 0.14, d: core.stair.d });
+      out.push({ x: rectMaxX(core.stair) - 0.07, z: core.stair.z, w: 0.14, d: core.stair.d });
+    }
     // The half flight that leads nowhere is NOT in this list. The clamp is two-dimensional, and a
     // flat obstacle at the foot of the ground floor's dead down flight would sit directly under the
     // TOP of its up flight — walling off the last step of a climb the player is three metres above.
@@ -782,7 +880,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         placeFixture(current, here(current));
       }
       const world = toWorld(current, current.heading, x, z);
-      player.set(world.x, floorY(current, current.floor), world.z);
+      current.lastY = floorY(current, current.floor);
+      player.set(world.x, current.lastY, world.z);
     } else {
       if (current.shaftBase === undefined) {
         // Which flight this is: the +x half climbs FROM this storey, the −x half arrives ON it.
@@ -807,7 +906,8 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       }
       lastProgress = progress;
       const world = toWorld(current, current.heading, x, z);
-      player.set(world.x, floorY(current, current.shaftBase) + progress * STOREY_HEIGHT, world.z);
+      current.lastY = floorY(current, current.shaftBase) + progress * STOREY_HEIGHT;
+      player.set(world.x, current.lastY, world.z);
     }
     holdNeighbour(current, { x, z }, dt);
   };
@@ -875,21 +975,17 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       },
     },
     {
-      // The roof hatch, from outside: standing on a qualifying building's flat top. A hatch the
-      // player can answer offers; one they cannot answer offers NOTHING — the same no-refusal rule
-      // as the street door below (see lockedHintDoor; the passive LOCKED chip explains instead).
-      // The hatch a player walked out of stays in grace for as long as they are on the roof (see
-      // EXIT_GRACE), so the pickless-locked case here is only ever a roof reached some other way.
+      // The roof hatch, from outside: standing on a qualifying building's flat top, the way in is
+      // simply OPEN — always, for everyone, no pick, no grace. People lock the street door, not
+      // the roof: the lock model's whole question belongs to the pavement side of the building.
+      // (This is also what deleted the roof-B stranding edge: jump from a graced roof to its
+      // neighbour and the neighbour's hatch answers like any other.) The accepted trade is stated
+      // where the rule is: reaching a roof by parkour now yields free entry to that top floor.
       id: 'interiors:roofdoor', order: 52, context: 'foot',
       test: (ctx) => {
         if (visit || swapping) return undefined;
         const door = roofUnderfoot(ctx.position);
         if (!door) return undefined;
-        if (picking && picking.via === 'roof' && picking.door.id === door.id) return pickingOffer(picking);
-        if (entryLocked(door, ctx.hour)) {
-          if (!carriesPick()) return undefined;
-          return { prompt: `E  Pick the hatch lock · ${door.name}`, act: () => startPicking(door, 'roof', ctx.position) };
-        }
         return { prompt: `E  In through the roof hatch · ${door.name}`, act: () => { enterFromRoof(door); } };
       },
     },
@@ -924,14 +1020,14 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
         // into the interior of an invisible building. No offer until the chunk is really built.
         // (Hosts without the seam keep the old behaviour.)
         if (api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) return undefined;
-        if (picking && picking.via === 'street' && picking.door.id === door.id) return pickingOffer(picking);
+        if (picking && picking.door.id === door.id) return pickingOffer(picking);
         if (entryLocked(door, ctx.hour)) {
           // A locked door the player cannot answer offers NOTHING: this rung sits directly above
           // `E  Enter vehicle` in Game's on-foot ladder, and any offer — even an explainer — would
           // eat the press that should open the car at the kerb (the PR #120 failure class). The
           // passive LOCKED chip (lockedHintDoor) carries the explanation without claiming a key.
           if (!carriesPick()) return undefined;
-          return { prompt: `E  Pick the lock · ${door.name}`, act: () => startPicking(door, 'street', ctx.position) };
+          return { prompt: `E  Pick the lock · ${door.name}`, act: () => startPicking(door, ctx.position) };
         }
         return { prompt: `E  Go inside · ${door.name}`, act: () => { enter(door); } };
       },
@@ -946,38 +1042,69 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       const current = visit;
       if (!current && (!builtAt || Math.hypot(player.x - builtAt.x, player.z - builtAt.z) > STREAM_SLACK)) {
         streamDoorways(player.x, player.z);
+      } else if (!current && markersProvisional) {
+        // Some markers were placed before their paving streamed in: retry until every disc has a
+        // real drawn surface under it (each retry re-rays only the uncached doors).
+        provisionalRetry += dt;
+        if (provisionalRetry > 1.5) { provisionalRetry = 0; streamDoorways(player.x, player.z); }
       }
       phase += dt;
       clock += dt;
       tickPicking(dt);
-      // THE ROOF-STRANDING GUARD. The grace window is a countdown, and a countdown alone re-created
-      // the trap the one-way lock model forbids: out through the hatch is free, and sixty seconds
-      // later the way back down wanted a pick. While the player is still standing on the roof of
-      // the graced building the window re-arms, so the door they never picked shut stays unlatched
-      // until they actually leave the roof; back on the ground the countdown runs out normally and
-      // the grace is dropped. Cost: one surfaceHeightAt per frame, and the roofUnderfoot scan only
-      // in the second half of the window and only while the player stands well above the terrain.
-      if (!current && exitGrace) {
-        const elevated = player.y - api.surfaceHeightAt(player.x, player.z) >= 5;
-        if (elevated) {
-          if (exitGrace.until - clock < EXIT_GRACE / 2 && roofUnderfoot(player)?.id === exitGrace.id) {
-            exitGrace.until = clock + EXIT_GRACE;
+      // A save written indoors walks back in here, through the REAL entry path.
+      if (pendingRestore && !current && !swapping) {
+        const wanted = pendingRestore;
+        const door = doorsNear(player.x, player.z, 60).find((candidate) => candidate.id === wanted.id);
+        if (door) {
+          pendingRestore = undefined;
+          install(door);
+          const revived = visit;
+          if (revived && wanted.floor > 0 && wanted.floor < revived.core.storeys) {
+            for (const key of [...revived.resident.keys()]) drop(revived, key);
+            revived.floor = wanted.floor;
+            raise(revived, wanted.floor);
+            placeFixture(revived, here(revived));
           }
-        } else if (clock >= exitGrace.until) {
-          exitGrace = undefined;
+          if (revived) {
+            // The saved spot is floor-local and was stood on when written; determinism rebuilt the
+            // same plan, so it is still open floor. Clamped anyway — a save is outside the clamp.
+            const lx = Math.max(-revived.core.width / 2 + 0.5, Math.min(revived.core.width / 2 - 0.5, wanted.x));
+            const lz = Math.max(-revived.core.depth / 2 + 0.5, Math.min(revived.core.depth / 2 - 0.5, wanted.z));
+            revived.last = { x: lx, z: lz };
+            const spot = toWorld(revived, revived.heading, lx, lz);
+            player.set(spot.x, floorY(revived, revived.floor), spot.z);
+            assignLamps(revived);
+          }
+        } else {
+          restorePatience -= dt;
+          if (restorePatience <= 0) pendingRestore = undefined;
         }
       }
+      // The street-door grace is a plain countdown now. The roof half of this machinery — the
+      // re-arm-while-on-the-roof loop, and the elevation gate that kept it honest — existed to
+      // keep the hatch answerable, and the hatch answers unconditionally today: it went with the
+      // roof-side lock, not into an if.
+      if (!current && exitGrace && clock >= exitGrace.until) exitGrace = undefined;
       // THE MARKERS FADE UP AS YOU REACH THEM. A shop pad pulses at full strength from across the
       // street because there are six of them; there are thousands of front doors, so a door only
       // lights when you are nearly on its step and a street of houses reads as a street of houses.
       // See markerFade / the note over it in build.ts.
       const pulse = 0.24 + Math.sin(phase * 2.6) * 0.09;
       if (doorways) {
+        // The circle carries the lock state now: gold where walking up will offer (open, graced,
+        // or pickable-with-your-pick), grey where the ladder will stay silent. Same predicate as
+        // the rung — entryLocked plus the pick in the pocket — evaluated per lit marker per frame
+        // so nightfall, buying a pick, or a grace window re-tint the street without a rebuild.
+        const hour = api.hour();
+        const picked = carriesPick();
         for (const marker of doorways.markers) {
           const fade = markerFade(Math.hypot(marker.x - player.x, marker.z - player.z));
           const lit = fade > 0.001;
           marker.disc.visible = lit; marker.ring.visible = lit; marker.bay.visible = lit;
           if (!lit) continue;
+          const silent = entryLocked(marker.door, hour) && !picked;
+          marker.discMaterial.color.setHex(silent ? MARKER_LOCKED.disc : MARKER_OPEN.disc);
+          marker.ringMaterial.color.setHex(silent ? MARKER_LOCKED.ring : MARKER_OPEN.ring);
           marker.discMaterial.opacity = pulse * fade;
           marker.ringMaterial.opacity = 0.7 * fade;
           marker.disc.rotation.y += dt * 0.9;
@@ -989,7 +1116,24 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       if (Math.hypot(player.x - current.x, player.z - current.z) > ABANDON_DISTANCE) { close(false); showFade(false); return; }
       clamp(current, dt);
       cullPartitions(current);
-      if (current.fixture) current.fixture.ped.group.position.y = floorY(current, current.floor);
+      // The fixture grounds itself on the floor via groundOverride now; what the room still owes
+      // it is CONTAINMENT and an honest panic. A shot survivor's FLEE is ordinary ped movement
+      // aimed somewhere outside the building — it pinned against the plate clamp and ran on the
+      // spot, turning, forever (the owner's exact words). Indoors there is nowhere to run TO, so
+      // the honest response is the one the fear system already owns: COWER — duck where you
+      // stand, behind your own counter. It also retires the sprint-through-a-partition residual,
+      // because a cowering body goes nowhere. The plate clamp stays for ordinary wandering.
+      if (current.fixture && current.fixture.ped.state !== 'down') {
+        if (current.fixture.ped.state === 'flee') current.fixture.ped.state = 'cower';
+        const ped = current.fixture.ped.group.position;
+        const local = toLocal(current, current.heading, ped.x, ped.z);
+        const cx = Math.max(-current.core.width / 2 + 0.6, Math.min(current.core.width / 2 - 0.6, local.x));
+        const cz = Math.max(-current.core.depth / 2 + 0.6, Math.min(current.core.depth / 2 - 0.6, local.z));
+        if (cx !== local.x || cz !== local.z) {
+          const held = toWorld(current, current.heading, cx, cz);
+          ped.x = held.x; ped.z = held.z;
+        }
+      }
       // Load shedding reaches inside: the pool lamps sink with the grid, the pool ambient does not,
       // so the way out is always findable. assignLamps also tracks raise/drop from this frame.
       assignLamps(current);
@@ -1010,6 +1154,29 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
             fill: Math.round(Math.max(0, Math.min(1, picking.sweep)) * 100), warn: biting,
           }];
         }
+        // OPENSESAME IS VISIBLE AT THE DOOR. The cheat is session-only and console-only, and with
+        // it armed every door in the city walks open — which reads exactly like broken lock
+        // gating to anyone who forgot it was on (the owner: "I seemed to walk into some
+        // residential buildings"). While it is armed, standing at any door says so.
+        if (api.doorsUnlocked?.()) {
+          const position = api.playerPosition();
+          if (doorNear(position.x, position.z)) {
+            return [{ id: 'interiors:sesame', label: 'CHEAT', value: 'opensesame — every door is open' }];
+          }
+        }
+        // THE STREAMING CHIP: a door whose chunk has not finished baking offers nothing (the E
+        // press must not drop a player into an invisible building) — but a dense cell is seconds
+        // of geometry work, and to a player mid-window that silence read as "the game is broken":
+        // the owner pressed E at door after door and nothing happened OR explained itself. The
+        // chip carries the explanation the rung may not (press-theft rule), and vanishes the
+        // moment the cell lands and the offer takes over.
+        if (!swapping) {
+          const position = api.playerPosition();
+          const door = doorNear(position.x, position.z);
+          if (door && api.chunkBuiltAt && !api.chunkBuiltAt(door.facts.x, door.facts.z)) {
+            return [{ id: 'interiors:streaming', label: 'STREAMING', value: 'This block is still building — a moment' }];
+          }
+        }
         // The half of the locked-door story that may NOT live on the E ladder: a pickless player at
         // a locked door gets a chip, not an offer — a chip claims no key, so E stays with the car
         // at the kerb. It names the fix, not the door: the door has its own painted board.
@@ -1026,12 +1193,30 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     /** Under a roof, with the lamps above (dimmed by the grid, never out) and the exit mat behind. */
     indoors: () => Boolean(visit),
 
+    /** The picking dial owns the hands: the host prompt slot yields to the dial's own guidance and
+     *  cover entry waits, so Q cannot yank the camera in the middle of the bite. */
+    handsBusy: () => Boolean(picking),
+
+    /** The storey's floor height, for host systems that ground things while the player is inside.
+     *  The player's own y is NOT this mid-frame (Player.update grounds it against the terrain
+     *  before this feature's clamp re-pins it), which is exactly why the seam exists. */
+    indoorFloorY: () => (visit ? visit.lastY ?? floorY(visit, visit.floor) : undefined),
+
     interactions: () => rungs,
 
-    // graceId rides the save so a reload made out on a walked-onto roof cannot re-latch the way
-    // down (see EXIT_GRACE). Included whenever the grace is live; update() drops a stale one on the
-    // ground, so the field is absent from almost every save ever written.
-    serialize: () => ({ visited: [...visited].slice(-32), finds, picks, ...(exitGrace ? { graceId: exitGrace.id } : {}) }),
+    // graceId rides the save so a reload on the doorstep you just stepped out of keeps the street
+    // door's grace (see EXIT_GRACE); `visit` rides it so a save written INSIDE a building reloads
+    // inside it — building, storey and floor-local spot (the world position saved alongside is the
+    // DOORSTEP, via outdoorAnchor, so a loader that ignores this field lands at the front door).
+    serialize: () => ({
+      visited: [...visited].slice(-32), finds, picks,
+      ...(exitGrace ? { graceId: exitGrace.id } : {}),
+      ...(visit ? { visit: { id: visit.door.id, floor: visit.floor, x: Math.round(visit.last.x * 100) / 100, z: Math.round(visit.last.z * 100) / 100 } } : {}),
+    }),
+
+    /** The doorstep of the building the player is inside — what the save writes as their world
+     *  position, so nothing that misses the feature slice ever spawns them underground. */
+    outdoorAnchor: () => (visit ? { x: visit.door.x, z: visit.door.z } : undefined),
 
     restore: (next) => {
       const incoming = next as InteriorsSave | undefined;
@@ -1042,6 +1227,9 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       picking = undefined;
       exitGrace = incoming?.graceId ? { id: incoming.graceId, until: clock + EXIT_GRACE } : undefined;
       close(false);
+      // A checkpoint reload carries its indoor visit the same way a boot does.
+      pendingRestore = incoming?.visit;
+      restorePatience = 6;
     },
 
     menu: (actionId) => {
@@ -1304,12 +1492,17 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     // Which half is "up" is the building's own seeded stairDir, exactly as drawn.
     const lane = shaft.w / 4;
     const up = direction > 0 ? current.core.stairDir : -current.core.stairDir;
-    // Onto the spine first — the corridor is the one route every room opens onto, so this is the
-    // walk a player makes, not a shortcut through a wall.
-    const spine: [number, number][] = [[current.core.corridorX, current.last.z], [current.core.corridorX, rectMinZ(shaft) - 1.6]];
+    // Onto the spine first — the corridor is the one route every room opens onto — then across the
+    // open band to stand square in front of the up flight's own lane before stepping in: the shaft
+    // may be far off the spine now, and a diagonal approach could clip the down-half's front,
+    // which on the ground floor is the step the clamp refuses (no basement).
+    const spine: [number, number][] = [
+      [current.core.corridorX, current.last.z], [current.core.corridorX, rectMinZ(shaft) - 1.6],
+      [shaft.x + up * lane, rectMinZ(shaft) - 1.2],
+    ];
     const path: [number, number][] = [
-      [shaft.x + up * lane, rectMinZ(shaft) + 0.3], [shaft.x + up * lane, rectMaxZ(shaft) - 0.3],
-      [shaft.x - up * lane, rectMaxZ(shaft) - 0.3], [shaft.x - up * lane, rectMinZ(shaft) + 0.3],
+      [shaft.x + up * lane, rectMinZ(shaft) + 0.3], [shaft.x + up * lane, rectMaxZ(shaft) - 0.7],
+      [shaft.x - up * lane, rectMaxZ(shaft) - 0.7], [shaft.x - up * lane, rectMinZ(shaft) + 0.3],
     ];
     let at = { x: current.last.x, z: current.last.z };
     for (const [tx, tz] of [...spine, ...path, [current.core.corridorX, rectMinZ(shaft) - 1.6]] as [number, number][]) {

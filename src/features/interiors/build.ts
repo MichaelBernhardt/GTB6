@@ -181,6 +181,11 @@ export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
       mesh.position.set(x, y, z); shaft.add(mesh); return mesh;
     };
     const shaftKit = { box: shaftBox, solid, keep, group: shaft, mat };
+    // An ISLAND shaft — any stair the position class stood clear of the back wall — shows its rear
+    // to walkable floor, so the rear is sealed: solid up to the mid landing, a balustrade above.
+    // The clamp refuses the crossing either way (see obstacles() in interiors.ts); this draws the
+    // refusal so it reads as a stairwell's back, not an invisible wall.
+    const island = rectMaxZ(core.stair) < plan.depth / 2 - 0.9;
     if (ends.top) {
       // THE TOP OF THE STAIRWELL. The old code drew a full switchback rising into the ceiling with a
       // grey shutter across it — the "blocked off stairs" the owner reported on every top floor.
@@ -191,7 +196,13 @@ export function buildFloor(plan: FloorPlan, ends: FloorEnds): BuiltFloor {
       // ladder to a roof hatch instead of a rail, and E under it takes you out onto the real roof.
       buildStairHead(core.stair, core.stairDir, height, ends.hatch, shaftKit);
     } else {
-      buildStair(core.stair, core.stairDir, height, shaftKit);
+      // Which side edges are OPEN floor (rail wanted) rather than plate wall or lift shaft.
+      const liftOnLow = core.lift !== undefined && Math.abs(rectMaxX(core.lift) - rectMinX(core.stair)) < 0.5;
+      const liftOnHigh = core.lift !== undefined && Math.abs(rectMinX(core.lift) - rectMaxX(core.stair)) < 0.5;
+      buildStair(core.stair, core.stairDir, height, island, {
+        low: rectMinX(core.stair) + plan.width / 2 > 0.35 && !liftOnLow,
+        high: plan.width / 2 - rectMaxX(core.stair) > 0.35 && !liftOnHigh,
+      }, ends.ground, shaftKit);
     }
     if (ends.ground) {
       // THE FOOT OF THE STAIRWELL. Downstairs from the ground floor there is nothing, and the old
@@ -301,10 +312,38 @@ interface Kit {
  *
  * See interiors.ts stairProgress() for the matching altitude function: this draws it, that walks it.
  */
-function buildStair(shaft: Rect, dir: 1 | -1, height: number, kit: Kit): void {
-  const { box, solid } = kit;
+function buildStair(
+  shaft: Rect, dir: 1 | -1, height: number, sealedRear: boolean,
+  openSides: { low: boolean; high: boolean }, ground: boolean, kit: Kit,
+): void {
+  const { box, solid, keep, group } = kit;
   const tread = solid(0x77726a, 0.9);
   const nose = solid(0x3b4143, 0.7);
+  if (!ground) {
+    // THE WAY DOWN READS AS A WAY DOWN. The descent to the storey below happens in the −dir half
+    // of the shaft — an opening in this floor's plate — but the shell drew its floor face straight
+    // across it: "just empty floor" (the owner) that you discovered by sinking into it. The
+    // ascending well through the ceiling already reads as a dark rectangle; the floor's well now
+    // gets the same treatment the top floor's stair head always had — the dark mouth, with a
+    // nosing strip across the edge you step down over. The ground floor is the one storey with no
+    // descent; its dead quarter keeps the under-stair cupboard instead.
+    const halfW = shaft.w / 2;
+    const wellX = shaft.x - dir * halfW / 2;
+    const well = new THREE.Mesh(keep(new THREE.BoxGeometry(halfW - 0.1, 0.03, shaft.d - 0.1)), MOUTH_MATERIAL);
+    well.position.set(wellX, 0.015, shaft.z);
+    group.add(well);
+    box(halfW - 0.1, 0.05, 0.09, nose, wellX, 0.03, rectMinZ(shaft) + 0.06);
+  }
+  if (sealedRear) {
+    // The back of an island stairwell: panelled to the mid landing, railed above it — what the
+    // back of a free-standing switchback actually looks like from the room behind it.
+    const landingY = STOREY_HEIGHT * 0.5;
+    box(shaft.w, landingY + 0.06, 0.14, solid(0x8d877c, 0.9), shaft.x, (landingY + 0.06) / 2, rectMaxZ(shaft) - 0.07);
+    box(shaft.w, 0.07, 0.08, solid(0x4a5254, 0.5), shaft.x, landingY + 1.02, rectMaxZ(shaft) - 0.07);
+    for (const t of [-0.33, 0, 0.33]) {
+      box(0.07, 1.0, 0.07, solid(0x4a5254, 0.5), shaft.x + t * shaft.w, landingY + 0.5, rectMaxZ(shaft) - 0.07);
+    }
+  }
   const steps = 9;
   const halfW = shaft.w / 2;
   for (let half = 0; half < 2; half++) {
@@ -321,9 +360,29 @@ function buildStair(shaft: Rect, dir: 1 | -1, height: number, kit: Kit): void {
   // The spine wall between the two flights: it is what stops you stepping sideways off a half
   // landing, and it is the thing that makes the shaft read as a stairwell rather than a ramp.
   box(0.12, height, shaft.d * 0.62, solid(0x8d877c, 0.9), shaft.x, height / 2, shaft.z - shaft.d * 0.19);
-  // A handrail down the outside of each flight.
-  for (const sign of [-1, 1] as const) {
-    box(0.07, 0.07, shaft.d, solid(0x4a5254, 0.5), shaft.x + sign * (halfW - 0.08), STOREY_HEIGHT * (sign === dir ? 0.25 : 0.75) + 1.0, shaft.z);
+  // RAILS DOWN THE OPEN SIDES — sloped with their own flight, posted, and REAL: the clamp carries a
+  // matching collider along both side edges (see obstacles() in interiors.ts), because the owner's
+  // report was walking up a switchback and drifting off the side of it. The old version drew one
+  // floating horizontal rail per side and enforced nothing. A side standing against the plate wall
+  // or the lift shaft draws no rail (there is a wall there); the collider holds regardless.
+  const steel = solid(0x4a5254, 0.5);
+  const rise = STOREY_HEIGHT / 2;
+  const slope = Math.atan2(rise, shaft.d);
+  for (const side of [-1, 1] as const) {
+    if (!(side === -1 ? openSides.low : openSides.high)) continue;
+    const railX = shaft.x + side * (halfW - 0.06);
+    // This side's flight: the `dir` half rises front→back, the other arrives from above.
+    const upThisSide = side === dir;
+    const flightY = (z: number): number => {
+      const t = (z - (shaft.z - shaft.d / 2)) / shaft.d;
+      return upThisSide ? t * rise : STOREY_HEIGHT - t * rise;
+    };
+    const rail = box(0.07, 0.07, Math.hypot(shaft.d, rise), steel,
+      railX, (upThisSide ? rise * 0.5 : STOREY_HEIGHT - rise * 0.5) + 1.0, shaft.z);
+    rail.rotation.x = upThisSide ? -slope : slope;
+    for (const z of [shaft.z - shaft.d / 2 + 0.4, shaft.z, shaft.z + shaft.d / 2 - 0.4]) {
+      box(0.07, 1.0, 0.07, steel, railX, flightY(z) + 0.5, z);
+    }
   }
 }
 
@@ -431,6 +490,9 @@ export const EXIT_MAT_IN = 1.7;
 export interface DoorMarker {
   /** The doorstep, for the distance test. */
   readonly x: number; readonly z: number;
+  /** The door this marker stands for, so the per-frame pass can tint the circle by the SAME lock
+   *  predicate the rung answers — a circle must never promise an E the ladder will not offer. */
+  readonly door: InteriorDoor;
   readonly disc: THREE.Mesh;
   readonly ring: THREE.Mesh;
   /** Frame, sign and glow — everything mounted on the wall itself. */
@@ -438,6 +500,14 @@ export interface DoorMarker {
   readonly discMaterial: THREE.MeshBasicMaterial;
   readonly ringMaterial: THREE.MeshBasicMaterial;
 }
+
+/** Marker palette: gold = walking up will offer (enter, or the pick dial); silver = the ladder
+ *  will stay silent (locked and no pick carried) — the LOCKED chip carries the words, the circle
+ *  carries the colour, and both read the same predicate as the rung. Silver, not grey: the first
+ *  locked tint vanished against concrete paving, which recreated the invisible-circle defect the
+ *  tint was meant to fix. */
+export const MARKER_OPEN = { disc: 0xe8b64c, ring: 0xf5c451 } as const;
+export const MARKER_LOCKED = { disc: 0xc3ccd4, ring: 0xdde4ea } as const;
 
 export interface BuiltDoorways {
   readonly group: THREE.Group;
@@ -465,6 +535,10 @@ export interface BuiltDoorways {
 const FADE_FAR = 26;
 const FADE_NEAR = 11;
 
+const UP = new THREE.Vector3(0, 1, 0);
+/** The torus lies in the XY plane; this turns it floor-flat before the slope lean is applied. */
+const RING_FLAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+
 /** The disc's own opacity at full strength — ShopSystem pulses 0.42..0.60; an ordinary front door
  *  sits well under that, because there are three thousand of them and six of those. */
 const DISC_OPACITY = 0.3;
@@ -485,7 +559,7 @@ export function markerFade(distance: number): number {
  */
 export function buildDoorways(
   doors: readonly InteriorDoor[],
-  surfaceHeightAt: (x: number, z: number) => number,
+  surfaceAt: (x: number, z: number) => { y: number; nx: number; ny: number; nz: number },
 ): BuiltDoorways {
   const group = new THREE.Group();
   group.name = 'InteriorDoors';
@@ -505,7 +579,11 @@ export function buildDoorways(
 
   for (const door of doors) {
     const bay = new THREE.Group();
-    bay.position.set(door.faceX, surfaceHeightAt(door.faceX, door.faceZ), door.faceZ);
+    // The frame stands at the DOORSTEP's rendered surface, not the terrain under the wall plane:
+    // on a foundation-levelled site the model's leaf sits on the plinth, and probing height AT the
+    // face would find the building's own roof. The step is where the player stands to use the
+    // door, so its surface is the honest base for the joinery too.
+    bay.position.set(door.faceX, surfaceAt(door.x, door.z).y, door.faceZ);
     bay.rotation.y = door.heading; // local +z faces the street
     const add = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): void => {
       const mesh = new THREE.Mesh(unitBox, material);
@@ -530,14 +608,21 @@ export function buildDoorways(
     // you are standing in to read it. A house does not have a signboard.
     // The circle on the ground, and nothing standing on it. Its own material per door so the fade is
     // per door and not per street — twenty-two MeshBasic materials is nothing next to one beam.
-    const stepY = surfaceHeightAt(door.x, door.z);
+    // The step comes from the caller's probe of the RENDERED surface (see markerSurface in
+    // interiors.ts): its height plus its NORMAL, so on a slope the disc TILTS with the paving
+    // instead of digging a rim in or floating a rim off. Depth testing stays ON — a doorstep
+    // circle marks a spot you can see, never an x-ray through the building. (depthWrite stays
+    // off: it is a transparent overlay and must not punch holes in what draws behind it.)
+    const step = surfaceAt(door.x, door.z);
+    const lean = new THREE.Quaternion().setFromUnitVectors(UP, new THREE.Vector3(step.nx, step.ny, step.nz).normalize());
     const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: DISC_OPACITY, depthWrite: false }));
     const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.75, depthWrite: false }));
     const disc = new THREE.Mesh(discGeometry, discMaterial);
-    disc.position.set(door.x, stepY + 0.06, door.z);
+    disc.position.set(door.x, step.y, door.z);
+    disc.quaternion.copy(lean);
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-    ring.rotation.x = Math.PI / 2; ring.position.copy(disc.position); ring.position.y += 0.015;
-    markers.push({ x: door.x, z: door.z, disc, ring, bay, discMaterial, ringMaterial });
+    ring.quaternion.copy(lean).multiply(RING_FLAT); ring.position.copy(disc.position); ring.position.y += 0.015;
+    markers.push({ x: door.x, z: door.z, door, disc, ring, bay, discMaterial, ringMaterial });
     group.add(bay, disc, ring);
   }
 
@@ -735,6 +820,23 @@ function buildProp(prop: Prop, kit: Kit): void {
       const posts = Math.max(2, Math.round(prop.d / 1.4));
       for (let i = 0; i < posts; i++) {
         box(0.07, prop.h, 0.07, solid(0x39423f, 0.5), prop.x, base + prop.h / 2, prop.z - prop.d / 2 + i * prop.d / Math.max(1, posts - 1));
+      }
+      break;
+    }
+    case 'postboxes': {
+      // The flats-lobby postbox wall: a backing panel with a grid of pigeonholes, half of them
+      // hanging open — the residential answer to the commercial lobby's service counter.
+      box(prop.w * 0.5, prop.h, prop.d, body, prop.x, base + prop.h / 2 + 0.5, prop.z);
+      const cell = solid(0x6f6a60, 0.6);
+      const openLeaf = solid(0x4a463e, 0.6);
+      const cols = Math.max(2, Math.floor(prop.d / 0.5));
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < cols; col++) {
+          const open = (row * 7 + col * 3) % 5 === 0; // deterministic scatter of sprung-open leaves
+          const along = -prop.d / 2 + 0.28 + col * (prop.d - 0.56) / Math.max(1, cols - 1);
+          box(0.06, 0.34, 0.4, open ? openLeaf : cell,
+            prop.x + (prop.x > 0 ? -1 : 1) * (prop.w * 0.25 + 0.04), base + 0.85 + row * 0.44, prop.z + along);
+        }
       }
       break;
     }
