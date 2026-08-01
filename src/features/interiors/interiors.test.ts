@@ -832,6 +832,23 @@ describe('the circle, the chip and the rung agree', () => {
     system.dispose();
   }, 120000);
 
+  it('names the cheat at the doorstep while opensesame is armed', () => {
+    // Locks census, current build: every residential door (suburban/estate/rural/dense-res,
+    // parcel and scattered) answers LOCKED pickless at every hour, and none is roof-enterable —
+    // so "I walked into a residential building" pickless means the session cheat is on, and the
+    // game must say so rather than let the lock line take the blame.
+    const test = harness();
+    test.api.doorsUnlocked = () => true;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    system.update!(0.02);
+    expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:sesame'),
+      'an armed opensesame must be named at the door').toBe(true);
+    system.dispose();
+  }, 120000);
+
   it('explains a still-baking chunk with the STREAMING chip instead of dead air', () => {
     const test = harness();
     test.api.chunkBuiltAt = () => false;   // the whole city mid-bake, as after a teleport

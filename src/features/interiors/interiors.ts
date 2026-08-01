@@ -1104,6 +1104,16 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
             fill: Math.round(Math.max(0, Math.min(1, picking.sweep)) * 100), warn: biting,
           }];
         }
+        // OPENSESAME IS VISIBLE AT THE DOOR. The cheat is session-only and console-only, and with
+        // it armed every door in the city walks open — which reads exactly like broken lock
+        // gating to anyone who forgot it was on (the owner: "I seemed to walk into some
+        // residential buildings"). While it is armed, standing at any door says so.
+        if (api.doorsUnlocked?.()) {
+          const position = api.playerPosition();
+          if (doorNear(position.x, position.z)) {
+            return [{ id: 'interiors:sesame', label: 'CHEAT', value: 'opensesame — every door is open' }];
+          }
+        }
         // THE STREAMING CHIP: a door whose chunk has not finished baking offers nothing (the E
         // press must not drop a player into an invisible building) — but a dense cell is seconds
         // of geometry work, and to a player mid-window that silence read as "the game is broken":
