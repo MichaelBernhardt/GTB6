@@ -61,9 +61,10 @@ export function decayFear(current: number, dt: number): number {
 }
 
 /**
- * SOLIDARITY — the picket line, and the answer to "everyone gets scared of me and runs away".
+ * PEOPLE WHOSE STANDING STILL IS THE ACTIVITY — and the answer to "everyone gets scared of me and
+ * runs away". Two kinds of person qualify, for the same reason and through this one cap.
  *
- * WHY THEY RAN. Nothing registered the player as a threat; the ordinary fear machine did its job and
+ * THE PICKET. Nothing registered the player as a threat; the ordinary fear machine did its job and
  * the job was wrong for this one place. A protest crowd is ten people standing shoulder to shoulder in
  * the road, so walking into it BUMPS someone; a second bump inside BUMP_WINDOW reads as `assault`
  * (42 ≥ FLEE_THRESHOLD) and that one person bolts; `spreadPanic` then hands every neighbour up to
@@ -71,17 +72,27 @@ export function decayFear(current: number, dt: number): number {
  * the fault is not any single number — it is that nobody had ever said these particular people came
  * here on purpose.
  *
- * So they do not get an immunity, they get a NERVE. Fear still accumulates on a picket (the value
- * moves, the threat is remembered, the moment solidarity breaks it is already there to act on) but it
- * is held below the flee threshold, because standing in the road while frightened is the entire
- * activity. That covers the bumping, the raised gun, the panicking bystander and the bang two streets
- * away with one rule instead of four exemptions — and it leaves `takeDamage`/`knockdown`/`mug`, which
- * set fear directly rather than through this path, free to break it. Attacking someone is what ends it.
+ * THE FIXTURE (`Pedestrian.scripted`) — the dealer under the orange column, the worker under the
+ * purple one, the forecourt attendant, the golf pro, the yard guard. A feature puts a marker over a
+ * person and tells the player to walk to it, which makes leaving the marker a BROKEN PROMISE rather
+ * than a reaction: the column stays lit over an empty slab and the `E  Talk to …` rung, resolved from
+ * the ped's live position, goes with them. Removing the sight-of-a-gun fear was necessary but not
+ * sufficient — a pistol fired anywhere inside `gunshot`'s 48-unit radius still cleared every corner
+ * within earshot, so one shot across the road un-staffed a corner the player was walking to. Their
+ * job is to be found where the marker says.
+ *
+ * So neither gets an immunity, they get a NERVE. Fear still accumulates (the value moves, the threat
+ * is remembered, the moment the hold breaks it is already there to act on) but it is held below the
+ * flee threshold. That covers the bumping, the panicking bystander and the bang two streets away with
+ * one rule instead of four exemptions — and it leaves `takeDamage`/`knockdown`/`mug`, which set fear
+ * DIRECTLY rather than through this path, free to break it. So the line is exactly the owner's:
+ * ambient violence is noise you stand through, and being personally shot, punched, floored or robbed
+ * is not. Attacking someone is what ends it.
  */
-export const SOLIDARITY_FEAR_CAP = FLEE_THRESHOLD - 1;
+export const HOLD_GROUND_CAP = FLEE_THRESHOLD - 1;
 
-export function solidarityFear(current: number, amount: number): number {
-  return Math.min(SOLIDARITY_FEAR_CAP, accumulateFear(current, amount));
+export function holdGroundFear(current: number, amount: number): number {
+  return Math.min(HOLD_GROUND_CAP, accumulateFear(current, amount));
 }
 
 /**

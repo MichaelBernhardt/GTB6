@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { PedestrianVisualLod } from '../config';
 import { KNOCKDOWN_DAMAGE, knockdownOutcome, STUMBLE_DURATION } from '../systems/BumpSystem';
-import { accumulateFear, CALM_THRESHOLD, decayFear, DRAWN_ON_ME_FEAR, FEAR_EVENTS, fearResponse, FEAR_MAX, solidarityFear } from '../systems/FearSystem';
+import { accumulateFear, CALM_THRESHOLD, decayFear, DRAWN_ON_ME_FEAR, FEAR_EVENTS, fearResponse, FEAR_MAX, holdGroundFear } from '../systems/FearSystem';
 import { advanceSwing, beginSwing, MELEE_COOLDOWN_JITTER, MELEE_COOLDOWN_MIN, MELEE_ENGAGE_RANGE, MELEE_ENGAGE_RELEASE, swingExtension, type MeleeSwing } from '../systems/MeleeSystem';
 import { GUN_ENGAGE_RANGE, GUN_ENGAGE_RELEASE, gunDeterrence, isArmedCitizen } from '../systems/SidearmSystem';
 import { ProgressWatchdog } from '../systems/NavGraph';
@@ -28,7 +28,12 @@ export class Pedestrian {
   carGuard = false;
   /** A placed fixture owned by a feature (src/features/): a dealer on his corner, a protester, a
    *  forecourt attendant. Excluded from the ambient census, from despawn recycling and from taxi
-   *  hailing — but otherwise an ordinary ped: damageable, frightenable, muggable.
+   *  hailing — but otherwise an ordinary ped: damageable, muggable, killable.
+   *  NOT freely frightenable, and that is the one deliberate exception: a fixture stands under a
+   *  marker that told the player to walk to it, so ambient fear is capped below the flee threshold
+   *  (HOLD_GROUND_CAP) and only a personal attack — takeDamage/knockdown/mug, which set fear
+   *  directly — moves them off their spot. A vendor who bolts at a gunshot across the road deletes
+   *  the interaction their own column advertises.
    *  Do NOT reach for `contact` instead. It makes the ped invulnerable AND Game.updateContactPresence
    *  hides any contact ped whose name isn't a live mission giver — the #1 "my NPC doesn't appear" trap. */
   scripted = false;
@@ -39,7 +44,7 @@ export class Pedestrian {
    * Set by the feature that owns the crowd (src/features/protest) for as long as its barricade
    * stands, cleared by that feature when it comes down, and cleared here the moment anybody actually
    * hurts them. While it is set, `applyFear` caps fear below the flee threshold — see
-   * SOLIDARITY_FEAR_CAP — and the aggressive-personality mug trigger below is suppressed: one in nine
+   * HOLD_GROUND_CAP — and the aggressive-personality mug trigger below is suppressed: one in nine
    * ambient bodies squares up to anyone who stands within 4.5 units, which at a protest means the
    * crowd you just joined starts a fight with you.
    */
@@ -327,12 +332,14 @@ export class Pedestrian {
 
   applyFear(amount: number, origin: THREE.Vector3): void {
     if (amount <= 0 || this.state === 'down' || this.contact || this.hostile || this.police) return;
-    // A picket holds. Fear still lands (the value moves and the threat is remembered, so the instant
-    // solidarity breaks there is already something to act on) but it never reaches the flee threshold:
-    // these people came here to stand in the road. See SOLIDARITY_FEAR_CAP for why the fix is a cap on
-    // this one path rather than an exemption per fear source. Attacking them is what ends it —
-    // takeDamage/knockdown/mug set fear directly and clear the flag on the way past.
-    if (this.solidarity) { this.fear = solidarityFear(this.fear, amount); this.threat.copy(origin); return; }
+    // A picket holds, and so does a fixture under its own marker. Fear still lands (the value moves
+    // and the threat is remembered, so the instant the hold breaks there is already something to act
+    // on) but it never reaches the flee threshold: these people came here to stand where they are.
+    // See HOLD_GROUND_CAP for why the fix is a cap on this one path rather than an exemption per fear
+    // source. Attacking them is what ends it — takeDamage/knockdown/mug set fear directly and go
+    // straight past this line, so a fixture personally shot, punched, floored or robbed panics like
+    // anybody else. Only violence that was not aimed at them is what they now stand through.
+    if (this.solidarity || this.scripted) { this.fear = holdGroundFear(this.fear, amount); this.threat.copy(origin); return; }
     this.fear = accumulateFear(this.fear, amount); this.threat.copy(origin);
     // gunDeterrence: an unarmed good samaritan's 'fight' collapses to flight while the player
     // visibly holds a firearm — fists only pick fights with fists. Armed citizens still fight.

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import type { City } from '../world/City';
-import { FEAR_EVENTS, FLEE_THRESHOLD } from '../systems/FearSystem';
+import { FEAR_EVENTS, FEAR_MAX, FLEE_THRESHOLD } from '../systems/FearSystem';
 import { Pedestrian } from './Pedestrian';
 
 /**
@@ -11,17 +11,20 @@ import { Pedestrian } from './Pedestrian';
  *    and you can't talk to them. They shouldn't scare away at all unless actually shot at or
  *    punched. Seeing a gun or whatever spooks them now is not enough."
  *
- * The deep orange (#f0842a) and the purple (#c07bff) are the street feature's two corner fixtures —
- * the dealer and the worker (src/features/street/street.ts DEALER_COLOR/WORKER_COLOR), each standing
- * inside a beacon of her own colour with an `E  Talk to <name>` rung at TALK_RANGE. That is why the
- * owner met the bug in exactly those two colours: they are the only pedestrians in the game he has a
- * REASON to walk up to, and `nearestFixture` measures from the ped's live position, so a fixture
- * driven off her kerb by fear takes the prompt with her while the beacon stays lit and empty.
+ * The "deep orange and purple" are LIGHT COLUMNS, not clothing: the street feature's two corner
+ * beacons (src/features/street/street.ts DEALER_COLOR #f0842a / WORKER_COLOR #c07bff — a lit pad, a
+ * ring and a 26-unit beam) standing over the dealer and the worker, each with an `E  Talk to <name>`
+ * rung at TALK_RANGE. That is why the owner met the bug in exactly those two colours: a column is an
+ * instruction to walk over, so those are the only pedestrians in the game he has a REASON to
+ * approach — and `nearestFixture` measures from the ped's LIVE position, so a fixture driven off her
+ * kerb takes the prompt with her and leaves the column lit over an empty slab.
  *
- * The cause was general, not fixture-specific: a passive brandish broadcast fired at every ped who
- * could see a raised gun, so it emptied the whole pavement — the fixtures were merely the ones whose
- * absence the player could feel. Both are pinned below: the ordinary citizen and the standing
- * fixture, approached to arm's length by a player with a gun out.
+ * TWO holes had to close, and the second only became visible once the first did:
+ *   1. sight of a raised gun frightened everyone who could see it — general, and it emptied the
+ *      whole pavement; the fixtures were merely the ones whose absence the player could feel.
+ *   2. a fixture still bolted at ANY gunshot inside 48 units, so one round across the road
+ *      un-staffed a corner the player was walking to. Fixtures now hold their ground through
+ *      violence that was not aimed at them, and break only for a personal attack.
  *
  * FearSystem.test.ts pins the same rule in the shape of the event table; this pins the behaviour a
  * player actually sees.
@@ -113,6 +116,48 @@ describe('a drawn gun frightens nobody who is not already in the fight', () => {
       expect(ped.hailing).toBe(true); // still beckoning, not fleeing
       expect(ped.group.position.distanceTo(kerb)).toBeLessThan(TALK_RANGE); // still inside her own prompt
     }
+  });
+
+  it('holds a fixture on her slab through gunfire that was not aimed at her', () => {
+    // Removing the sight-fear was necessary but not sufficient. `gunshot` carries 48 units, so a
+    // single round fired across the road still un-staffed every corner within earshot — the column
+    // stays lit, the vendor is gone, and the player walks to a promise nobody is keeping. A fixture
+    // now stands through ambient violence (HOLD_GROUND_CAP) and only moves for a personal attack.
+    for (const index of ORDINARY) {
+      const ped = fixture(index);
+      const kerb = ped.group.position.clone();
+      for (let i = 0; i < 12; i++) ped.applyFear(FEAR_EVENTS.gunshot.base, new THREE.Vector3(2, 0, 0));
+      ped.applyFear(FEAR_EVENTS.kill.base, new THREE.Vector3(3, 0, 0)); // someone else is killed nearby
+      expect(ped.fear).toBeLessThan(FLEE_THRESHOLD); // rattled, and still standing
+      expect(ped.state).toBe('idle');
+      expect(ped.hailing).toBe(true);
+      expect(ped.group.position.distanceTo(kerb)).toBeLessThan(0.01);
+    }
+  });
+
+  it('scatters the IDENTICAL pedestrian who is not a fixture, so the street still reacts', () => {
+    const bystander = citizen(ORDINARY[0]); // same index, same personality, no `scripted`
+    for (let i = 0; i < 12; i++) bystander.applyFear(FEAR_EVENTS.gunshot.base, new THREE.Vector3(2, 0, 0));
+    expect(bystander.state).toBe('flee');
+  });
+
+  it('still breaks a fixture the player personally attacks — shot, punched, floored or robbed', () => {
+    // The hold is not armour. takeDamage/knockdown/mug write fear directly and never touch the cap,
+    // which is exactly the owner's line: ambient violence is noise, being attacked is not.
+    const shotAt = fixture(ORDINARY[0]);
+    shotAt.takeDamage(12, new THREE.Vector3(1, 0, 0));
+    expect(shotAt.fear).toBe(FEAR_MAX);
+    expect(shotAt.state).toBe('flee');
+
+    const floored = fixture(ORDINARY[0]);
+    floored.knockdown(new THREE.Vector3(1, 0, 0));
+    expect(floored.state).toBe('down');
+    expect(floored.fear).toBeGreaterThanOrEqual(FLEE_THRESHOLD);
+
+    const robbed = fixture(ORDINARY[1]);
+    robbed.mug(new THREE.Vector3(1, 0, 0));
+    expect(robbed.fear).toBe(FEAR_MAX);
+    expect(robbed.state).toBe('flee');
   });
 
   it('does not frighten a bystander standing beside a fight the player draws in', () => {

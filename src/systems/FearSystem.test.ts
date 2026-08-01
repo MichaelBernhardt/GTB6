@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accumulateFear, CALM_THRESHOLD, COWER_THRESHOLD, decayFear, DRAWN_ON_ME_FEAR, FEAR_EVENTS, FEAR_MAX, fearContribution, fearResponse, FLEE_THRESHOLD, SOLIDARITY_FEAR_CAP, solidarityFear } from './FearSystem';
+import { accumulateFear, CALM_THRESHOLD, COWER_THRESHOLD, decayFear, DRAWN_ON_ME_FEAR, FEAR_EVENTS, FEAR_MAX, fearContribution, fearResponse, FLEE_THRESHOLD, HOLD_GROUND_CAP, holdGroundFear } from './FearSystem';
 
 describe('FearSystem', () => {
   it('scales fear by proximity with zero effect outside the radius', () => {
@@ -116,16 +116,16 @@ describe('only violence frightens anybody', () => {
  */
 describe('a picket line holds', () => {
   it('never lets fear reach the flee threshold, however much of it lands', () => {
-    expect(solidarityFear(0, FEAR_EVENTS.kill.base)).toBeLessThan(FLEE_THRESHOLD);
-    expect(solidarityFear(SOLIDARITY_FEAR_CAP, FEAR_MAX)).toBe(SOLIDARITY_FEAR_CAP);
-    expect(fearResponse(solidarityFear(0, FEAR_EVENTS.assault.base), false, 0.5)).toBe('calm');
-    expect(fearResponse(solidarityFear(0, FEAR_EVENTS.kill.base), false, 0.05)).toBe('calm'); // not even a cower
+    expect(holdGroundFear(0, FEAR_EVENTS.kill.base)).toBeLessThan(FLEE_THRESHOLD);
+    expect(holdGroundFear(HOLD_GROUND_CAP, FEAR_MAX)).toBe(HOLD_GROUND_CAP);
+    expect(fearResponse(holdGroundFear(0, FEAR_EVENTS.assault.base), false, 0.5)).toBe('calm');
+    expect(fearResponse(holdGroundFear(0, FEAR_EVENTS.kill.base), false, 0.05)).toBe('calm'); // not even a cower
   });
 
   it('still ACCUMULATES, so the moment solidarity breaks there is already something to act on', () => {
     // This is why it is a cap and not a zero: a protester who has been shouted at all morning and
     // then sees a shooting does not start from calm.
-    const rattled = solidarityFear(0, FEAR_EVENTS.assault.base);
+    const rattled = holdGroundFear(0, FEAR_EVENTS.assault.base);
     expect(rattled).toBeGreaterThan(0);
     expect(accumulateFear(rattled, FEAR_EVENTS.kill.base)).toBeGreaterThan(COWER_THRESHOLD);
   });
@@ -134,6 +134,6 @@ describe('a picket line holds', () => {
     // Two bumps inside BUMP_WINDOW read as `assault`, and one assault is over the threshold on its
     // own. Standing in a crowd of ten makes that unavoidable.
     expect(FEAR_EVENTS.assault.base).toBeGreaterThan(FLEE_THRESHOLD);
-    expect(solidarityFear(0, FEAR_EVENTS.assault.base)).toBeLessThan(FLEE_THRESHOLD);
+    expect(holdGroundFear(0, FEAR_EVENTS.assault.base)).toBeLessThan(FLEE_THRESHOLD);
   });
 });
