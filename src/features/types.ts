@@ -213,6 +213,23 @@ export interface FeatureSystem {
    *  ask "is the player outdoors?" without knowing which features exist (Game.torchWouldHelp: the
    *  torch hint must not fire at someone standing in a lit room). Almost no feature needs this. */
   indoors?(): boolean;
+  /** World-space y of the interior floor the player currently stands on, while indoors() is true.
+   *  The host takes the first defined answer. Exists because the player's OWN y is unreliable
+   *  mid-frame — Player.update grounds against the terrain before the feature's clamp re-pins the
+   *  interior height — so host systems that ground things (gore decals land on "the floor here")
+   *  need the feature's answer, not the player's transient one. */
+  indoorFloorY?(): number | undefined;
+  /** A SAFE OUTDOOR world position for this feature's current indoor state — the doorstep of the
+   *  building the player is inside. The save writes THIS as the player's world position while
+   *  indoors, never the raw one (which sits ~30 u under the terrain): any loader that ignores the
+   *  feature slice — an older build, a failed feature load — then spawns the player at the front
+   *  door instead of underground. The feature's own save slice carries the way back in. */
+  outdoorAnchor?(): { x: number; z: number } | undefined;
+  /** True while this feature owns the player's HANDS in a modal interaction — the lock-picking
+   *  dial today. The host ORs it; Game yields the shared prompt slot to the feature's own
+   *  guidance and holds cover entry while it is true, so "Q Take cover" can never paper over
+   *  "E Turn it — NOW" mid-bite. */
+  handsBusy?(): boolean;
   /** Full-fidelity interaction rungs. These replace the eager `approach` entry once loaded. */
   interactions?(): readonly InteractionDescriptor[];
   /** The slice stored under `SavedGame.features[saveKey]`. Must be JSON-safe. */

@@ -347,7 +347,14 @@ export class Game {
       this.robotRace.bestTime = this.save.activityRecords.robotRunBest;
     }
     this.combat = new CombatSystem(this.scene, this.audio);
-    this.gore = new GoreSystem(this.scene, (x, z) => this.city.surfaceHeightAt(x, z));
+    // Blood grounds on the surface the fight is happening on, not always the terrain: a feature
+    // interior stands ~30 u below its own building, and terrain-grounded gore from an indoor kill
+    // sprayed decals onto the (hidden) pavement far overhead. The FEATURE answers the floor height
+    // — deliberately not the player's own y, which mid-frame is terrain-grounded by Player.update
+    // until the interior clamp re-pins it AFTER the gore has already run (found live: every indoor
+    // decal at terrain+0.06 while the player "stood" at the floor).
+    this.gore = new GoreSystem(this.scene, (x, z) =>
+      this.features.indoorFloorY() ?? this.city.surfaceHeightAt(x, z));
     this.pickups = new PickupSystem(this.scene);
     this.projectiles = new ProjectileSystem(this.scene);
     this.bullets = new BulletSystem(this.scene);
@@ -852,6 +859,9 @@ export class Game {
     const shadows = this.baseQuality() !== 'low';
     this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
+    // A quality change mid-visit must not silently re-arm the shadow pass the interior paused —
+    // updateFeatureIndoors only runs on the indoors EDGE, so the pause is re-asserted here.
+    this.renderer.shadowMap.autoUpdate = !this.featureIndoors;
     this.dayNight.setQuality(this.baseQuality());
     this.city.setWaterQuality(this.baseQuality()); // rebuilds water meshes; disposes the old tier's materials and mirror target
     this.applyWorldBudget();
@@ -1203,7 +1213,7 @@ export class Game {
 
   /**
    * The moment the player steps into or out of a feature interior (interiors is the only feature
-   * that answers indoors() today), two host-side things flip:
+   * that answers indoors() today), four host-side things flip:
    *
    * 1. THE CAMERA. Inside, the on-foot view starts at first person — the owner's ask, and the read
    *    that makes an interior legible: no boom, so no wall ever stands between the lens and the
@@ -1224,6 +1234,26 @@ export class Game {
     if (indoors === this.featureIndoors) return;
     this.featureIndoors = indoors;
     this.city.group.visible = !indoors;
+    // 3. THE OUTDOOR EFFECT LIGHT POOLS GO DARK. Three's forward renderer sizes every fragment's
+    // light loop by the census of VISIBLE lights, intensity notwithstanding — and indoors, every
+    // pixel on screen is a lit interior surface. The vehicle-fire and projectile pools (9 point
+    // lights) serve a world that is hidden while inside; dropping them cuts the per-fragment loop
+    // for the whole room. The census change costs a handful of one-off program variants at first
+    // entry — which entry already pays for the interior's own lamp pool — and the exit restores
+    // the boot census, whose programs are still warm.
+    this.vehicleFire.lights.setVisible(!indoors);
+    this.projectiles.lights.setVisible(!indoors);
+    // 4. THE SUN'S SHADOW PASS STOPS. Hiding city.group never covered the scene-root casters —
+    // pedestrians, traffic (a dozen meshes per car), trains, the safehouse, the crafted shops,
+    // mission set pieces — and the cascade kept re-rendering all of them into the shadow map every
+    // frame from underground: measured 1,387 casters, ~480 draw calls and 250 k triangles of the
+    // 648-call indoor frame at high, which is precisely the owner's "I think it's doing the full
+    // world render still". No sunlit surface is visible from an interior (they sit below the
+    // terrain; interior meshes neither cast nor receive), so the map simply stops UPDATING —
+    // autoUpdate, not castShadow, because flipping a light's caster flag changes every receiver's
+    // shader defines and would buy a recompile storm both ways. The stale map is sampled by
+    // nothing the player can see; the first outdoor frame refreshes it.
+    this.renderer.shadowMap.autoUpdate = !indoors;
     if (indoors) {
       this.indoorFootView = 0;
       if (this.settings.cameraViewFoot !== 0) this.ui.notify('Camera: First person', 'V cycles the view. Your usual view returns outside.');
@@ -1343,6 +1373,10 @@ export class Game {
   }
 
   private updateOnFoot(dt: number): void {
+    // The interior floor is the player's ground for the WHOLE frame — set before Player.update so
+    // no later system ever sees a terrain-grounded y while the player is indoors. See
+    // Player.groundOverride for the mid-frame oscillation this kills.
+    this.player.groundOverride = this.features.indoorFloorY();
     this.player.update(dt, this.input, this.cameraController.yaw, this.city, this.updateCoverState(dt));
     const fall = this.player.consumeFallDamage(); // hard landings billed through the usual damage path
     if (fall > 0) { this.damagePlayer(fall); this.shake = Math.min(0.7, this.shake + 0.25); this.audio.collision(10 + fall * 0.3); }
@@ -1579,6 +1613,9 @@ export class Game {
   private updateCoverState(dt: number): CoverPose | undefined {
     const position = this.player.group.position;
     if (this.footView() === 0 || this.player.tumbling || this.player.knockedDown) { this.cover = undefined; this.coverAvailable = false; return undefined; } // FP Q is a no-op; a bump tumble or knockdown knocks you out of cover
+    // A modal interaction (the picking dial) owns the hands: cover entry waits so Q cannot yank the
+    // camera mid-bite, and starting a dial from cover stands the player up out of it.
+    if (this.features.handsBusy()) { this.cover = undefined; this.coverAvailable = false; return undefined; }
     if (!this.cover) {
       const spot = nearestGroundedCoverSpot(position.x, position.z, this.player.onGround, this.city.colliders, COVER_ENTER_RANGE, position.y); // only faces that shield the player's elevation
       this.coverAvailable = Boolean(spot);
@@ -3109,6 +3146,10 @@ export class Game {
         }
       }
       else if (this.trains.riding) prompt = this.trains.driving ? `${Math.round(this.trains.rideSpeedKph)} km/h  ·  W/S  Drive  ·  V  Camera  ·  E  Release controls` : this.trains.atCab ? 'E  Take the controls' : 'E  Step off the train';
+      // A feature that OWNS THE HANDS owns the prompt slot: mid-pick-dial, "Q Take cover" (or any
+      // other rung of this ladder) papering over "E Turn it — NOW" is a stolen bite — the owner's
+      // report, and the rule fixes the slot, not the one pair. Modal guidance first, always.
+      else if (this.features.handsBusy() && featureOffer) prompt = featureOffer.prompt;
       else if (this.cover) prompt = this.cover.corner !== 0 ? 'CTRL  Peek and fire  ·  Q  Leave cover' : 'A/D  Slide to a corner  ·  Q  Leave cover';
       else if (this.missions.objective?.kind === 'collect' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 8) prompt = `E  Take the ${(this.missions.objective.target?.label ?? 'item').toLowerCase()}`;
       else if (this.missions.state === 'failed' && nearbyTarget && nearbyTarget.position.distanceTo(focus) < 10) prompt = 'E  Restart mission';
@@ -3347,7 +3388,14 @@ export class Game {
   private trackMissionStart(missionId: string): void { this.missionTelemetryStartedAt = performance.now(); analytics.record('mission_start', { missionId }); }
   private missionTelemetryDuration(): number { return this.missionTelemetryStartedAt === undefined ? 0 : Math.max(0, (performance.now() - this.missionTelemetryStartedAt) / 1000); }
   private persist(): void {
-    const at = this.activeVehicle?.group.position ?? this.player.group.position; // live location (the vehicle is the player while driving)
+    // While the player is inside a feature interior their raw position is ~30 u under the terrain —
+    // a loader that restored it verbatim surfaced them on the street ("saving inside respawns you
+    // outside", the owner's report), and a loader without the feature would spawn them underground.
+    // So the SAVED world position while indoors is the building's DOORSTEP (outdoorAnchor); the
+    // interiors save slice carries the building/floor/spot and walks the player back inside on boot.
+    const anchor = this.features.outdoorAnchor();
+    const live = this.activeVehicle?.group.position ?? this.player.group.position; // the vehicle is the player while driving
+    const at = anchor ? new THREE.Vector3(anchor.x, this.city.surfaceHeightAt(anchor.x, anchor.z), anchor.z) : live;
     const heading = this.activeVehicle?.heading ?? this.player.heading;
     // One key per line, deliberately: this used to be a single ~700-character physical line, which
     // made every feature that wanted a save key a merge conflict on the identical line.

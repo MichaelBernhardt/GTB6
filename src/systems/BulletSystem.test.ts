@@ -162,6 +162,54 @@ describe('BulletSystem', () => {
     expect(corpse.jolts).toHaveLength(1); // nine pellets, one kick
   });
 
+  it('kills underground: an interior round is not eaten by the terrain above the room', () => {
+    // The interiors feature stands its rooms ~30u UNDER the terrain (same x/z as the building), so
+    // a round fired down a corridor there is below terrainHeightAt from the muzzle onward — and
+    // the wall sampler used to read that as "hit the ground" at its first sample, sparking on the
+    // muzzle every trigger pull: the owner's "people inside buildings are shootable but seem
+    // immortal". A bullet that STARTS under the terrain is inside a feature interior; the ground
+    // far above it is not a wall it can meet.
+    const buried = { collidesAt: () => false, terrainHeightAt: () => 20 } as unknown as City;
+    const system = new BulletSystem(new THREE.Scene());
+    const floorY = -75;
+    const shopkeeper = makePed(new THREE.Vector3(0, floorY, 6));
+    const from = new THREE.Vector3(0, floorY, 0);
+    const gun = new THREE.Vector3(0, floorY + 1.5, 0);
+    system.spawnShot(from, gun, [shopkeeper.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)).sub(gun).normalize()], 1, WEAPON_BY_ID.pistol);
+    const { resolution } = flyUntilResolved(system, population([shopkeeper]), buried);
+    expect(resolution?.result.victim, 'the round died in imaginary dirt').toBe(shopkeeper);
+    expect(shopkeeper.received.length).toBeGreaterThan(0);
+  });
+
+  it('stops an indoor round fired upward at the earth — it never reaches the street above', () => {
+    // The other direction of the boundary: a subterranean round ignores the terrain BELOW it (that
+    // is the fix that made interiors mortal), but fired upward it must die in the ground over the
+    // room's ceiling, not sail through the pavement into a pedestrian on the surface.
+    const buried = { collidesAt: () => false, terrainHeightAt: () => 20 } as unknown as City;
+    const system = new BulletSystem(new THREE.Scene());
+    const streetPed = makePed(new THREE.Vector3(0, 20, 12));  // on the pavement overhead
+    const gun = new THREE.Vector3(0, -74, 0);
+    system.spawnShot(new THREE.Vector3(0, -75, 0), gun,
+      [streetPed.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)).sub(gun).normalize()], 1, WEAPON_BY_ID.pistol);
+    const { resolution } = flyUntilResolved(system, population([streetPed]), buried);
+    expect(resolution?.result.victim, 'a round crossed the terrain from below and hit the street').toBeUndefined();
+    expect(streetPed.health).toBe(100);
+  });
+
+  it('still buries an outdoor round fired into the dirt', () => {
+    // The other side of the same line: a round that starts ABOVE the terrain keeps dying where it
+    // meets it. Fired steeply downward, it must stop in the ground within a couple of frames, not
+    // fly on to max range under the world.
+    const ground = { collidesAt: () => false, terrainHeightAt: () => 0 } as unknown as City;
+    const system = new BulletSystem(new THREE.Scene());
+    const bystander = makePed(new THREE.Vector3(0, 0, 60));
+    system.spawnShot(shooter, muzzle, [new THREE.Vector3(0, -1, 3).normalize()], 1, WEAPON_BY_ID.pistol);
+    const { resolution, elapsed } = flyUntilResolved(system, population([bystander]), ground);
+    expect(resolution?.result.victim).toBeUndefined();
+    expect(bystander.health).toBe(100);
+    expect(elapsed, 'the round should die in the dirt a few metres out, not at max range').toBeLessThan(0.2);
+  });
+
   it('respects drive-by exclusion so your own bakkie never eats your rounds', () => {
     const system = new BulletSystem(new THREE.Scene());
     const own = makeVehicle(new THREE.Vector3(0, 0, 2));

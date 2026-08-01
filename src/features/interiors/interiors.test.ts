@@ -448,7 +448,7 @@ describe('the marker on the step', () => {
     resetDoorCache();
     const doors = doorsNear(0, 0, 260).slice(0, 8);
     expect(doors.length).toBeGreaterThan(3);
-    const built = buildDoorways(doors, flat);
+    const built = buildDoorways(doors, () => ({ y: 0, nx: 0, ny: 1, nz: 0 }));
     expect(built.markers).toHaveLength(doors.length);
     let cylinders = 0; let tallest = 0;
     built.group.traverse((object) => {
@@ -635,6 +635,25 @@ describe('locked doors', () => {
     system.dispose();
   }, 120000);
 
+  it('carries the street-door grace through the save, so a reload on the doorstep keeps it', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('pick', {}).startsWith('ok')).toBe(true);
+    expect(system.qa!('leave', {})).toBe('ok');
+    // The save written on the doorstep carries the graced door through the sanitizer...
+    const slice = sanitizeInteriorsState(system.serialize!());
+    expect(slice.graceId, 'the graced street door must survive into the save').toBe(door.id);
+    system.dispose();
+    // ...and a PICKLESS fresh session restored on the same doorstep still walks straight in.
+    const revived = createFeature({ ...test.api, inventoryCount: () => 0 }, slice);
+    expect(offer(revived, test.player)?.prompt, 'reload re-locked the door just stepped out of')
+      .toBe(`E  Go inside · ${door.name}`);
+    revived.dispose();
+  }, 120000);
+
   it('opensesame opens everything without a pick', () => {
     const test = harness();
     test.api.doorsUnlocked = () => true;
@@ -642,6 +661,21 @@ describe('locked doors', () => {
     const door = lockedDoorNear(0, 0)!;
     test.player.set(door.x, 0, door.z);
     expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    system.dispose();
+  }, 120000);
+
+  it('owns the hands while the dial runs, so cover can neither mask the prompt nor yank the bite', () => {
+    const test = harness();
+    test.api.inventoryCount = () => 1;
+    const system = createFeature(test.api, undefined);
+    expect(system.handsBusy?.(), 'idle hands').toBe(false);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    offer(system, test.player)!.act();   // the dial starts
+    expect(system.handsBusy?.(), 'the dial owns the hands').toBe(true);
+    test.player.set(door.x + 8, 0, door.z); // walk off: dial cancels
+    system.update!(1 / 60);
+    expect(system.handsBusy?.(), 'hands free after the dial ends').toBe(false);
     system.dispose();
   }, 120000);
 
@@ -663,19 +697,283 @@ describe('locked doors', () => {
 });
 
 /**
- * THE ROOF IS NEVER A TRAP. The owner's rule, verbatim: "you don't need to lockpick to get out.
- * You can always exit a building, either front door or onto the roof. Getting back in is when you
- * need to lock pick." A hatch that graced re-entry for only sixty seconds shipped the trap anyway:
- * walk out onto a works roof in hours (free, as every exit is), let night fall — or simply linger —
- * and the only way down asked for a pick. These tests pin the invariant that killed it: a pickless
- * player on a roof they walked onto ALWAYS has the way back in, however long they stand out there,
- * and across a save reload.
+ * THE MACHINE CLIMBS EVERY CLASS. The stair can stand at the back, mid-plate, against a wall or
+ * beside the door now, and the QA driver's climb is the same walk a player makes — spine, across
+ * the band, into the up flight, around the switchback, out — through the same clamp. One 'run' per
+ * class per source (parcel and scatter where present) is the difference between "the histogram
+ * moved" and "you can actually walk these buildings".
  */
-describe('the roof is never a trap', () => {
+describe('every stair class is climbable', () => {
   beforeEach(() => { resetDoorCache(); });
 
-  /** A roof-access building that is open in hours and locked at night: the works dock that sprang
-   *  the trap. Searched outward so a sparse origin still answers. */
+  it('walks the full loop in a back, mid, side and front stair building', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const seen = new Map<string, { x: number; z: number }>();
+    for (const door of doorsNear(0, 0, 2600)) {
+      const core = buildCore(door.facts);
+      if (!core.stair || core.stairClass === undefined) continue;
+      if (doorLocked(door.facts, 'outside', 13)) continue; // visit mechanics, not locks
+      if (!seen.has(core.stairClass)) seen.set(core.stairClass, { x: door.x, z: door.z });
+      if (seen.size === 4) break;
+    }
+    expect([...seen.keys()].sort(), 'could not find all four classes near the origin')
+      .toEqual(['back', 'front', 'mid', 'side']);
+    for (const [stairClass, spot] of seen) {
+      test.player.set(spot.x, 0, spot.z);
+      const result = system.qa!('run', {});
+      expect(result, `class ${stairClass} at ${spot.x.toFixed(0)},${spot.z.toFixed(0)}: ${result}`).toBe('ok');
+    }
+    system.dispose();
+  }, 300000);
+});
+
+/**
+ * A SAVE WRITTEN INDOORS RELOADS INDOORS. The owner: "when saving with the player inside, they
+ * respawn in the outside world." The save now carries the visit (building, storey, floor-local
+ * spot) while the WORLD position it stores is the doorstep — so a loader without the feature lands
+ * the player at the front door instead of underground, and the feature walks them back inside
+ * through the real entry path on the first update.
+ */
+describe('saving indoors', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  it('reloads inside the same building, on the same storey, on the identical floor plan', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const entry = tallDoor({ x: 0, z: 0 })!;
+    expect(entry.core.storeys).toBeGreaterThan(2);
+    const { door } = entry;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    expect(system.qa!('floor', { n: 2 }).startsWith('ok')).toBe(true);
+    const before = system.qa!('where', {});
+    // The save, through the real sanitizer.
+    const slice = sanitizeInteriorsState(system.serialize!());
+    expect(slice.visit, 'a save written indoors must carry the visit').toBeDefined();
+    expect(slice.visit!.id).toBe(door.id);
+    expect(slice.visit!.floor).toBe(2);
+    // The world position the save should carry is the DOORSTEP, not the buried player.
+    const anchor = (system as { outdoorAnchor?(): { x: number; z: number } | undefined }).outdoorAnchor?.();
+    expect(anchor, 'no outdoor anchor while indoors').toBeDefined();
+    expect(Math.hypot(anchor!.x - door.x, anchor!.z - door.z)).toBeLessThan(0.01);
+    system.dispose();
+
+    // A fresh session boots with the slice, the player standing where the save put them: the step.
+    const revived = createFeature(test.api, slice);
+    test.player.set(door.x, 0, door.z);
+    revived.update!(0.02);
+    const status = revived.qa!('status', {});
+    expect(status, 'the reload must land INSIDE').toMatch(/^inside\|/);
+    expect(status).toContain(door.id);
+    expect(status).toContain('floor=2');
+    expect(test.player.y, 'restored under the terrain, on the storey').toBeLessThan(-20);
+    // The rebuilt floor is the floor they left — same rooms, same walkable tile count.
+    expect(revived.qa!('where', {})).toBe(before);
+    revived.dispose();
+  }, 120000);
+
+  it('drops the anchor and the visit the moment the player steps back outside', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    const door = openDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+    expect(sanitizeInteriorsState(system.serialize!()).visit).toBeDefined();
+    expect(system.qa!('leave', {})).toBe('ok');
+    expect(sanitizeInteriorsState(system.serialize!()).visit, 'an outdoor save must not carry a visit').toBeUndefined();
+    expect((system as { outdoorAnchor?(): unknown }).outdoorAnchor?.()).toBeUndefined();
+    system.dispose();
+  }, 120000);
+
+  it('sanitizes a hostile visit slice instead of trusting it', () => {
+    const garbage = sanitizeInteriorsState({ visited: [], finds: 0, picks: 0, visit: { id: 'x'.repeat(80), floor: 1e9, x: Number.NaN, z: 5 } });
+    expect(garbage.visit).toBeUndefined();
+    const fine = sanitizeInteriorsState({ visited: [], finds: 0, picks: 0, visit: { id: '12:34', floor: 3.7, x: -2.25, z: 61 } });
+    expect(fine.visit).toEqual({ id: '12:34', floor: 3, x: -2.25, z: 61 });
+  }, 120000);
+});
+
+/**
+ * THE CIRCLE NEVER LIES. The owner pressed E at circle after circle and "nothing happens" — some
+ * of it was the chunk-bake window with no explanation, some of it was locked doors whose gold
+ * circle promised an interaction the ladder deliberately withholds from a pickless player. Now the
+ * circle, the chip and the rung all read the same predicates: a grey circle means the ladder will
+ * stay silent (locked, no pick), gold means walking up offers (enter or the dial), and a door in a
+ * still-baking chunk explains itself with the STREAMING chip instead of dead air.
+ */
+describe('the circle, the chip and the rung agree', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  /** The disc mesh nearest a doorstep, fished out of the built doorway group. */
+  function discFor(scene: THREE.Scene, door: { x: number; z: number }): THREE.Mesh | undefined {
+    let found: THREE.Mesh | undefined;
+    scene.getObjectByName('InteriorDoors')?.traverse((object) => {
+      if (found || !(object instanceof THREE.Mesh)) return;
+      if (object.geometry.type !== 'CylinderGeometry') return;
+      if (Math.hypot(object.position.x - door.x, object.position.z - door.z) < 1.5) found = object;
+    });
+    return found;
+  }
+
+  it('tints locked-silent doors grey, pickable and open doors gold — same predicate as the rung', () => {
+    const test = harness();
+    let picks = 0;
+    test.api.inventoryCount = () => picks;
+    const system = createFeature(test.api, undefined);
+    const locked = lockedDoorNear(0, 0)!;
+    test.player.set(locked.x, 0, locked.z);
+    system.update!(0.02); system.update!(0.02);
+    // Pickless at a locked door: grey circle, no offer, LOCKED chip — three signals, one truth.
+    const grey = discFor(test.scene, locked)!;
+    expect(grey, 'no disc built for the locked door').toBeDefined();
+    expect((grey.material as THREE.MeshBasicMaterial).color.getHex(), 'a silent door must not glow gold').toBe(0xc3ccd4);
+    expect(offer(system, test.player)).toBeUndefined();
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:locked')).toBe(true);
+    // Buy a pick: the same circle turns gold, because the ladder now offers the dial.
+    picks = 1;
+    system.update!(0.02);
+    expect((grey.material as THREE.MeshBasicMaterial).color.getHex(), 'a pickable door earns the gold back').toBe(0xe8b64c);
+    expect(offer(system, test.player)?.prompt).toContain('Pick the lock');
+    // An open door was always gold, and always offers.
+    picks = 0;
+    const open = openDoorNear(0, 0)!;
+    test.player.set(open.x, 0, open.z);
+    system.update!(0.02); system.update!(0.02);
+    const gold = discFor(test.scene, open)!;
+    expect(gold, 'no disc built for the open door').toBeDefined();
+    expect((gold.material as THREE.MeshBasicMaterial).color.getHex()).toBe(0xe8b64c);
+    expect(offer(system, test.player)?.prompt).toContain('Go inside');
+    system.dispose();
+  }, 120000);
+
+  it('names the cheat at the doorstep while opensesame is armed', () => {
+    // Locks census, current build: every residential door (suburban/estate/rural/dense-res,
+    // parcel and scattered) answers LOCKED pickless at every hour, and none is roof-enterable —
+    // so "I walked into a residential building" pickless means the session cheat is on, and the
+    // game must say so rather than let the lock line take the blame.
+    const test = harness();
+    test.api.doorsUnlocked = () => true;
+    const system = createFeature(test.api, undefined);
+    const door = lockedDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    system.update!(0.02);
+    expect(offer(system, test.player)?.prompt).toBe(`E  Go inside · ${door.name}`);
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:sesame'),
+      'an armed opensesame must be named at the door').toBe(true);
+    system.dispose();
+  }, 120000);
+
+  it('explains a still-baking chunk with the STREAMING chip instead of dead air', () => {
+    const test = harness();
+    test.api.chunkBuiltAt = () => false;   // the whole city mid-bake, as after a teleport
+    const system = createFeature(test.api, undefined);
+    const door = openDoorNear(0, 0)!;
+    test.player.set(door.x, 0, door.z);
+    system.update!(0.02);
+    // The rung must stay silent (E may not enter an unbuilt building) — but never unexplained.
+    expect(offer(system, test.player)).toBeUndefined();
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:streaming'),
+      'silence with no explanation is the bug the owner reported').toBe(true);
+    // The chunk lands: chip yields to the offer.
+    test.api.chunkBuiltAt = () => true;
+    system.update!(0.02);
+    expect(offer(system, test.player)?.prompt).toContain('Go inside');
+    expect(system.hud!()?.some((chip) => chip.id === 'interiors:streaming') ?? false).toBe(false);
+    system.dispose();
+  }, 120000);
+});
+
+/**
+ * THE RAILS ARE REAL. The owner's follow-up, verbatim: "it's a little tricky to climb the stairs
+ * because you just fall off the sides as you go up and around the flights if you're not super
+ * careful." The side edges of the shaft are sealed by the clamp now (and railed by build.ts), so
+ * this walks the exact failure: up the switchback PRESSING OUTWARD the whole way — every stride
+ * aimed two metres past the open edge — and asserts the player stays on the flight, arrives on
+ * floor 1, and can still walk the ground floor past the stair afterwards.
+ */
+describe('the stair rails hold', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  it('climbs the switchback hugging the outside of the turn without falling off', () => {
+    const test = harness();
+    const system = createFeature(test.api, undefined);
+    // A mid-class island in the open, so falling off the side would be a real half-storey drop
+    // AND the ground floor genuinely walks past the shaft (both halves of the fix in one room).
+    const entry = doorsNear(0, 0, 2600)
+      .map((door) => ({ door, core: buildCore(door.facts) }))
+      .filter(({ door, core }) => core.stairClass === 'mid' && !doorLocked(door.facts, 'outside', 13))
+      .sort((a, b) => Math.hypot(a.door.x, a.door.z) - Math.hypot(b.door.x, b.door.z))[0];
+    expect(entry, 'no open mid-class building near the origin').toBeDefined();
+    const { door, core } = entry!;
+    const s = core.stair!;
+    const lane = s.w / 4;
+    const up = core.stairDir;
+    const minZ = s.z - s.d / 2, maxZ = s.z + s.d / 2;
+    const outside = s.x + up * (s.w / 2 + 2);       // two metres past the open edge of the up flight
+    test.player.set(door.x, 0, door.z);
+    expect(system.qa!('enter', {})).toBe('ok');
+
+    const walk = (x: number, z: number, max = 400): string => {
+      let last = '';
+      for (let i = 0; i < max; i++) {
+        last = system.qa!('walk', { x, z });
+        const [, lx, lz] = last.split('|');
+        if (Math.hypot(parseFloat(lx!) - x, parseFloat(lz!) - z) < 0.18) break;
+      }
+      return last;
+    };
+    // Onto the spine and square in front of the up lane, then IN.
+    walk(core.corridorX, minZ - 1.6);
+    walk(s.x + up * lane, minZ - 1.2);
+    walk(s.x + up * lane, minZ + 0.3);
+    // Up the flight aiming OUTWARD at every step — the owner's hug. The rail must hold the x while
+    // the z (and therefore the altitude) climbs.
+    const baseY = parseFloat(walk(outside, minZ + 0.3).split('|')[3]!.slice(2));
+    let highest = baseY;
+    for (const z of [minZ + s.d * 0.35, minZ + s.d * 0.7, maxZ - 0.7]) {
+      const state = walk(outside, z);
+      const [, lx, , y] = state.split('|');
+      expect(Math.abs(parseFloat(lx!) - s.x) < s.w / 2 - 0.3,
+        `pressed past the rail at z=${z.toFixed(1)}: ${state}`).toBe(true);
+      highest = Math.max(highest, parseFloat(y!.slice(2)));
+    }
+    expect(highest - baseY, 'the hug never gained height — not on the flight at all').toBeGreaterThan(1.2);
+    // Around the turn (still pressing outward on the OTHER side) and out one storey up.
+    walk(s.x - up * lane, maxZ - 0.7);
+    walk(s.x - up * (s.w / 2 + 2), minZ + 0.5, 500);
+    walk(s.x - up * lane, minZ + 0.3);
+    walk(s.x, minZ - 1.6);
+    const upStatus = system.qa!('status', {});
+    expect(upStatus, 'hugging the rails the whole way must still deliver floor 1').toContain('floor=1');
+    // Back down clean, then the other half of the promise: the ground floor still walks PAST the
+    // shaft — the side caps are the shaft's edge, not a fence around the room.
+    expect(system.qa!('floor', { n: 0 }).startsWith('ok')).toBe(true);
+    walk(core.corridorX, minZ - 1.6);
+    const behind = walk(core.corridorX, maxZ + 1.6, 600);
+    expect(behind.startsWith('ok'), `ground floor no longer passes the stair: ${behind}`).toBe(true);
+    const [, , lz] = behind.split('|');
+    expect(parseFloat(lz!), 'never reached the band behind the island').toBeGreaterThan(maxZ + 1.0);
+    system.dispose();
+  }, 300000);
+});
+
+/**
+ * EVERY HATCH OPENS FROM THE ROOF SIDE, ALWAYS. Round 2 kept the hatch behind the lock line plus a
+ * re-arming grace window, and shipped a residual trap anyway (#128): jump from your graced roof A
+ * to neighbouring roof B and B's hatch wanted a pick you might not carry. The owner's call closed
+ * it by deleting the roof-side lock outright — "people lock the street door, not the roof" — with
+ * the stated trade that reaching a roof by parkour now yields free entry to that top floor. These
+ * tests pin the new, simpler invariant: ANY hatch opens from ANY roof — no pick, no grace, no
+ * history, no hour. The street door's own lock, grace and persistence are untouched (see the
+ * locked-doors block above).
+ */
+describe('any hatch opens from any roof', () => {
+  beforeEach(() => { resetDoorCache(); });
+
+  /** A roof-access building that is open in hours and locked at night — the strictest subject: at
+   *  23:00 its STREET door refuses outsiders, so an opening hatch proves the roof side asks no
+   *  lock question at all. Searched outward so a sparse origin still answers. */
   function nightLockedRoofDoor() {
     for (const radius of [1500, 3000, 6000]) {
       const found = doorsNear(0, 0, radius)
@@ -689,34 +987,32 @@ describe('the roof is never a trap', () => {
     return undefined;
   }
 
-  it('keeps the hatch a pickless player walked out of unlatched, however long they linger', async () => {
+  it('opens the hatch on a roof reached cold — pickless, at night, never having been inside', () => {
     const test = harness();
-    let hour = 13;
+    const hour = 23;
     test.api.hour = () => hour;
-    const system = createFeature(test.api, undefined);
+    const system = createFeature(test.api, undefined);   // fresh session: no visits, no grace, no pick
     const roofy = nightLockedRoofDoor();
     expect(roofy, 'no night-locking roof-access building on the map').toBeDefined();
     const { door, core } = roofy!;
-    test.player.set(door.x, 0, door.z);
-    expect(system.qa!('enter', {})).toBe('ok');                       // in through the open works door, in hours
-    expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
-    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);       // out the hatch — free, no pick, no check
-    // Night falls and they photograph the skyline for three whole minutes: far past the 60 s
-    // window, and the building is now night-locked to outsiders on every side.
-    hour = 23;
-    for (let i = 0; i < 180; i++) system.update!(1);
     expect(doorLocked(door.facts, 'outside', hour), 'the building must night-lock or this test bites nothing').toBe(true);
+    // Stand on the roof the way a parkour arrival would: on the top tier, via the same resolver.
+    test.player.set(door.x, 0, door.z);
+    const stood = system.qa!('roofstand', {});
+    expect(stood.startsWith('ok'), stood).toBe(true);
+    expect(stood).toContain(door.id);
+    // The way in is simply open: no pick carried, street door locked, roof never graced.
     const back = offer(system, test.player, hour);
-    expect(back?.prompt, 'pickless player marooned on a night-locked roof').toContain('In through the roof hatch');
-    back!.act();
-    await new Promise((resolve) => setTimeout(resolve, 500));         // the real 260 ms entry fade
+    expect(back?.prompt, 'a hatch refused a player on its own roof').toContain('In through the roof hatch');
+    const entered = system.qa!('roofenter', {});
+    expect(entered.startsWith('ok'), entered).toBe(true);
     const status = system.qa!('status', {});
     expect(status).toMatch(/^inside\|/);
-    expect(status).toContain(`floor=${core.storeys - 1}`);            // back in at the top, exactly where the hatch leads
+    expect(status).toContain(`floor=${core.storeys - 1}`);  // in at the top, exactly where the hatch leads
     system.dispose();
   }, 300000);
 
-  it('keeps the walked-onto roof unlatched across a save reload', () => {
+  it('lingering on a roof you exited costs nothing: the way down never expires', () => {
     const test = harness();
     let hour = 13;
     test.api.hour = () => hour;
@@ -725,18 +1021,34 @@ describe('the roof is never a trap', () => {
     expect(roofy).toBeDefined();
     const { door, core } = roofy!;
     test.player.set(door.x, 0, door.z);
-    expect(system.qa!('enter', {})).toBe('ok');
+    expect(system.qa!('enter', {})).toBe('ok');                       // in through the open works door, in hours
     expect(system.qa!('floor', { n: core.storeys - 1 }).startsWith('ok')).toBe(true);
-    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);
+    expect(system.qa!('roof', {}).startsWith('ok')).toBe(true);       // out the hatch — free, as every exit is
+    // Night falls and they photograph the skyline for three whole minutes — far past any window
+    // the old grace machinery ever kept. There is no window now; there is no lock.
     hour = 23;
-    // The save written out on the roof carries the unlatched door through the sanitizer...
-    const slice = sanitizeInteriorsState(system.serialize!());
-    expect(slice.graceId, 'the unlatched door must survive into the save').toBe(door.id);
+    for (let i = 0; i < 180; i++) system.update!(1);
+    const back = offer(system, test.player, hour);
+    expect(back?.prompt, 'pickless player marooned on a night-locked roof').toContain('In through the roof hatch');
     system.dispose();
-    // ...and a fresh session restored on the same roof still has the way down, still re-arming.
-    const revived = createFeature(test.api, slice);
-    for (let i = 0; i < 180; i++) revived.update!(1);
-    expect(offer(revived, test.player, hour)?.prompt, 'reload on the roof re-latched the way down').toContain('In through the roof hatch');
+  }, 300000);
+
+  it('survives a reload cold: a fresh session on the same roof still gets in, no saved grace needed', () => {
+    const test = harness();
+    const hour = 23;
+    test.api.hour = () => hour;
+    const roofy = nightLockedRoofDoor();
+    expect(roofy).toBeDefined();
+    const { door } = roofy!;
+    test.player.set(door.x, 0, door.z);
+    const scout = createFeature(test.api, undefined);
+    expect(scout.qa!('roofstand', {}).startsWith('ok')).toBe(true);
+    scout.dispose();
+    // A save with NOTHING in it — the old test needed graceId to survive the sanitizer for the
+    // roof to stay answerable; the invariant no longer depends on any state at all.
+    const revived = createFeature(test.api, sanitizeInteriorsState(undefined));
+    for (let i = 0; i < 60; i++) revived.update!(1);
+    expect(offer(revived, test.player, hour)?.prompt, 'a reload re-latched the way down').toContain('In through the roof hatch');
     revived.dispose();
   }, 300000);
 });

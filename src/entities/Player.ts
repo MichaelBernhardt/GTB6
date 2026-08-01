@@ -34,6 +34,15 @@ export class Player {
   maxHealth = PLAYER.maxHealth;
   velocityY = 0;
   onGround = true;
+  /** A feature-owned standing surface (the interior floor), set by Game each frame from
+   *  features.indoorFloorY(). THE OSCILLATION THIS KILLS: without it, this update grounded the
+   *  indoor player against the TERRAIN thirty units overhead, and the interiors clamp re-pinned
+   *  the floor only later in the frame — so every system running between the two (hostile melee's
+   *  height gate, the bump pass, combat's fire origin) read a player standing on the pavement.
+   *  Surface punches landed indoors, hip-fired rounds spawned on the street and killed
+   *  pedestrians up there ("a distant scream from above"), and the same class of bug had already
+   *  bitten gore twice. With the override, the player's y never leaves the storey. */
+  groundOverride?: number;
   ghost = false;
   private ghostRise = 0;
   inVehicle = false;
@@ -89,7 +98,7 @@ export class Player {
     if (this.tumbleTimer > 0) { this.applyTumble(dt); this.setVisualState({ tumbleProgress: this.tumbleProgress, tumbleDirection: this.tumbleDir, onGround: true }); return; }
     const aimHeld = input.aiming && this.weapon !== 'fists';
     const aiming = aimHeld || (input.firing && this.weapon !== 'fists');
-    if (cover) { this.updateCover(dt, cover, aiming, input.firing, city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y)); return; }
+    if (cover) { this.updateCover(dt, cover, aiming, input.firing, this.groundOverride ?? city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y)); return; }
     const side = inputAxis(input, 'KeyA', 'KeyD');
     const forward = inputAxis(input, 'KeyS', 'KeyW');
     const move = new THREE.Vector3(side, 0, -forward); const moveAmount = Math.min(1, move.length()); const moving = moveAmount > 0.01; const sprinting = moving && input.down('ShiftLeft');
@@ -108,7 +117,7 @@ export class Player {
     this.group.rotation.x *= Math.exp(-dt * 12); this.group.rotation.z *= Math.exp(-dt * 12);
     this.applyPunch(dt);
     const jump = input.consume('Space') && this.onGround ? jumpVelocity(this.cheats.bigJump) : undefined;
-    const support = city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y);
+    const support = this.groundOverride ?? city.supportHeight(this.group.position.x, this.group.position.z, this.group.position.y);
     const motion = { y: this.group.position.y, velocityY: this.velocityY, onGround: this.onGround, fallOriginY: this.fallOriginY };
     const landing = stepVertical(motion, dt, support, jump);
     this.group.position.y = motion.y; this.velocityY = motion.velocityY; this.onGround = motion.onGround; this.fallOriginY = motion.fallOriginY;

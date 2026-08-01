@@ -336,6 +336,12 @@ export class PopulationSystem {
     const events: PlayerBump[] = [];
     for (const ped of this.pedestrians) {
       if (ped.contact || ped.state === 'down') continue;
+      // Bodies collide in three dimensions: a pedestrian on the pavement directly ABOVE a player
+      // inside a feature interior has horizontal distance ~0 at |dy| ~30, and the horizontal-only
+      // test shoved (and grunted at) the buried player through the ground — read from below as
+      // being punched by someone on the surface. The reach matches melee's own height gate, so
+      // stairs and kerbs still bump.
+      if (Math.abs(ped.group.position.y - position.y) > MELEE_HEIGHT_REACH) continue;
       // Scalar broad phase: the old clone().sub() allocated one Vector3 for every pedestrian on every
       // on-foot frame, even though almost every body is outside bump range.
       const dx = ped.group.position.x - position.x; const dz = ped.group.position.z - position.z;
