@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allBuildings, buildingStats, CELL_BUILDING_CAP, CELL_SIZE, footprintOverlapXZ, footprintRailwayClearance, footprintRoadClearance, generateCell, OCCUPANCY_FACTOR, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, zonePackingGap, type GeneratedBuilding } from './CityGen';
+import { allBuildings, buildingStats, CBD_STOREY, CELL_BUILDING_CAP, CELL_SIZE, footprintOverlapXZ, footprintRailwayClearance, footprintRoadClearance, generateCell, OCCUPANCY_FACTOR, RAILWAY_BUILDING_CLEARANCE, RAILWAY_STATION_CLEARANCE, zonePackingGap, type GeneratedBuilding } from './CityGen';
 import { ARCHITECTURE_VARIANTS } from './BuildingArchitecture';
 import { AERODROME_POLYGONS, DIRT_POLYGONS, FARM_POLYGONS, GREEN_POLYGONS, MAP_STATS, MAP_WORLD_SIZE, METRES_PER_UNIT, RAILWAY_STATION_SITES, WATER_POLYGONS, nearestRoadSpot, pointInAnyPolygon } from './mapData';
 import { MANICURED_FOOTPRINTS } from './data/manicured';
@@ -68,15 +68,40 @@ describe('citywide parcel layout', () => {
     expect(aligned / total).toBeGreaterThan(0.75);
   });
 
-  it('sizes buildings by zone (highrise towers dwarf houses; estates and industry present)', () => {
+  /**
+   * THE CBD IS A LOW STREET WALL WITH TOWER CORES IN IT — not a wall of towers.
+   *
+   * This used to assert that the AVERAGE downtown parcel dwarfs the average house, which the old
+   * `40 + s²·72` satisfied by making every single CBD stand at least eleven storeys: "the CBD
+   * became New York" (the playtest). The average was the wrong statistic. What actually has to
+   * hold is that the FABRIC is the two-to-five storey shopfront street Joburg is made of, while
+   * the TAIL still puts real towers over it — so the median and the tail are asserted separately,
+   * and the tower share is held rare from both sides so neither this pass nor a future one can
+   * quietly re-skyscraper downtown.
+   */
+  it('sizes buildings by zone (a low CBD street wall under a rare, tall tower tail)', () => {
     const byZone = new Map<string, number[]>();
     for (const b of all) { const list = byZone.get(b.zone) ?? []; list.push(b.height); byZone.set(b.zone, list); }
     const avg = (z: string) => { const l = byZone.get(z) ?? []; return l.reduce((a, b) => a + b, 0) / Math.max(1, l.length); };
+    const quantile = (z: string, q: number) => {
+      const l = [...(byZone.get(z) ?? [])].sort((a, b) => a - b);
+      return l[Math.min(l.length - 1, Math.floor(q * l.length))] ?? 0;
+    };
     expect(byZone.get('commercial-highrise')?.length ?? 0).toBeGreaterThan(0);
     expect(byZone.get('estate')?.length ?? 0).toBeGreaterThan(0);
     expect(byZone.get('industrial')?.length ?? 0).toBeGreaterThan(0);
     expect(byZone.get('residential')?.length ?? 0).toBeGreaterThan(0);
-    expect(avg('commercial-highrise')).toBeGreaterThan(avg('residential') * 2);
+    // The fabric: the median downtown stand is a shopfront building of five storeys or fewer.
+    expect(quantile('commercial-highrise', 0.5)).toBeLessThanOrEqual(5 * CBD_STOREY);
+    // The tail: the top of downtown still dwarfs the top of the suburbs, several times over.
+    expect(quantile('commercial-highrise', 0.999)).toBeGreaterThan(quantile('residential', 0.999) * 3);
+    // Towers stay RARE — under a tenth of downtown — but never vanish.
+    const towers = (byZone.get('commercial-highrise') ?? []).filter((h) => h >= 9 * CBD_STOREY).length;
+    const cbd = byZone.get('commercial-highrise')!.length;
+    expect(towers / cbd).toBeGreaterThan(0.015);
+    expect(towers / cbd).toBeLessThan(0.1);
+    // Downtown is still the tall zone on average, just not by the old 2x skyline margin.
+    expect(avg('commercial-highrise')).toBeGreaterThan(avg('residential'));
   });
 
   it('never exceeds the per-cell building cap (bounds draw calls + generation cost)', () => {

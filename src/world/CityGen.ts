@@ -25,6 +25,9 @@ import {
   FARM_POLYGONS,
   GREEN_POLYGONS,
   WATER_POLYGONS,
+  CBD_NAME,
+  districtCenter,
+  landmark,
   nearestDistrict,
   pointInAnyPolygon,
   REAL_FOOTPRINTS,
@@ -239,11 +242,92 @@ function buildingStyle(zone: Exclude<Zone, 'none'>, density: number, x: number, 
   return seeded(blockX, blockZ, 61) < denseChance ? 'dense-residential' : 'suburban';
 }
 
-/** Building height for a placed parcel — highrise cores get a full skyline range, suburbs stay low.
- *  (Height does NOT use the OSM count-density: that peaks in low-rise suburbs, not the tower cores.) */
-function buildingHeight(zone: Exclude<Zone, 'none'>, _density: number, s: number, style: BuildingStyle): number {
+/** One facade storey, the unit the CBD street wall is actually talked about in. */
+export const CBD_STOREY = 3.5;
+/** The Joburg street wall: 2 storeys at the bottom of the fabric band… */
+const CBD_FABRIC_MIN = 2 * CBD_STOREY;
+/** …5 storeys at the top of its LOW part, which is where most of the fabric sits… */
+const CBD_FABRIC_LOW_MAX = 5 * CBD_STOREY;
+/** …and 8 storeys for the 1960s block that turns up every fifth stand or so. */
+const CBD_FABRIC_MAX = 8 * CBD_STOREY;
+/** Share of the non-tower fabric that stays in the 2–5 storey band. */
+const CBD_FABRIC_LOW_SHARE = 0.8;
+/** A CBD tower starts here (≈9 storeys) and runs to CBD_TOWER_MIN + CBD_TOWER_SPAN (≈32). */
+const CBD_TOWER_MIN = 31.5;
+const CBD_TOWER_SPAN = 80.5;
+/** Chance an ORDINARY downtown stand (outside every tower core) carries a tower: the lone
+ *  Marshalltown office block standing over a block of two-storey shops, which does happen. */
+const CBD_TOWER_FABRIC_CHANCE = 0.018;
+
+/** A tower core: towers get common toward its centre and vanish at its edge. */
+interface TowerCore { x: number; z: number; radius: number; peak: number }
+/**
+ * WHERE JOBURG ACTUALLY STACKS HEIGHT. The city is not Manhattan and its CBD is not a wall of
+ * towers: the high-rise stands in a few tight cores — Marshalltown/the Carlton block, the Hillbrow
+ * ridge with Ponte and the tower on it, the Braamfontein spine — and every other downtown street
+ * is a two-to-five storey shopfront street wall. Cores are named against the map's OWN district
+ * table and landmark pins (source → destination: a name the committed map does not carry simply
+ * contributes no core), and the landmark pins are in the list because the tower they name has to
+ * be a tower — buildingIdentity.landmarkAnchors picks Ponte from parcels ≥ 12 storeys.
+ */
+const TOWER_CORE_DISTRICTS: ReadonlyArray<{ name: string; radius: number; peak: number }> = [
+  { name: CBD_NAME, radius: 380, peak: 0.66 },
+  { name: 'Hillbrow', radius: 260, peak: 0.54 },
+  { name: 'Braamfontein', radius: 230, peak: 0.42 },
+];
+const TOWER_CORE_LANDMARKS: ReadonlyArray<{ name: string; radius: number; peak: number }> = [
+  { name: 'Ponte Tower', radius: 260, peak: 0.9 },
+  { name: 'Hillbrow tower', radius: 260, peak: 0.9 },
+];
+
+let towerCores: TowerCore[] | undefined;
+function cbdTowerCores(): TowerCore[] {
+  if (towerCores) return towerCores;
+  towerCores = [];
+  for (const entry of TOWER_CORE_DISTRICTS) {
+    const centre = districtCenter(entry.name);
+    if (centre) towerCores.push({ x: centre.x, z: centre.z, radius: entry.radius, peak: entry.peak });
+  }
+  for (const entry of TOWER_CORE_LANDMARKS) {
+    const pin = landmark(entry.name);
+    if (pin) towerCores.push({ x: pin.x, z: pin.z, radius: entry.radius, peak: entry.peak });
+  }
+  return towerCores;
+}
+
+/**
+ * Tower likelihood at a point: 0 out in the ordinary street wall, rising linearly to a core's own
+ * peak at its centre. Exported so tools/qa/frontage-meter.ts can report the skyline by core.
+ */
+export function cbdTowerWeight(x: number, z: number): number {
+  let best = 0;
+  for (const core of cbdTowerCores()) {
+    const distance = Math.hypot(x - core.x, z - core.z);
+    if (distance >= core.radius) continue;
+    const weight = core.peak * (1 - distance / core.radius);
+    if (weight > best) best = weight;
+  }
+  return best;
+}
+
+/** Building height for a placed parcel — the CBD is a low street wall with tower cores in it,
+ *  suburbs stay low. (Height does NOT use the OSM count-density: that peaks in low-rise suburbs.) */
+function buildingHeight(
+  zone: Exclude<Zone, 'none'>, _density: number, s: number, style: BuildingStyle, x: number, z: number,
+): number {
   switch (zone) {
-    case 'commercial-highrise': return 40 + s * s * 72; // s² skews toward a few very tall towers
+    case 'commercial-highrise': {
+      // The whole downtown used to be 40 + s²·72 — EVERY stand at least eleven storeys, which is
+      // how a Joburg CBD came out reading as New York. One seed now decides both questions: the
+      // bottom slice of it is the tower (rare in the fabric, common in a core), and the rest is
+      // remapped across the street wall so the fabric keeps its full spread.
+      const towerChance = CBD_TOWER_FABRIC_CHANCE + cbdTowerWeight(x, z);
+      if (s < towerChance) return CBD_TOWER_MIN + (s / towerChance) ** 2 * CBD_TOWER_SPAN;
+      const t = (s - towerChance) / (1 - towerChance);
+      return t < CBD_FABRIC_LOW_SHARE
+        ? lerp(CBD_FABRIC_MIN, CBD_FABRIC_LOW_MAX, t / CBD_FABRIC_LOW_SHARE)
+        : lerp(CBD_FABRIC_LOW_MAX, CBD_FABRIC_MAX, (t - CBD_FABRIC_LOW_SHARE) / (1 - CBD_FABRIC_LOW_SHARE));
+    }
     case 'commercial-strip': return 10 + s * 16;
     case 'industrial': return 8 + s * 9;
     case 'estate': return 7 + s * 5.5;
@@ -389,7 +473,15 @@ function fitFootprint(
     // that refuses the seeded width still deserves a narrow corner stand rather than bare kerb —
     // the diagnostic showed "no footprint fits" was the single biggest source of empty suburban
     // kerb (28% of all residential frontage samples) once the lots themselves were right-sized.
-    for (const widthScale of [1, 0.72, 0.5]) {
+    //
+    // The ladder used to stop at 0.5, which on the CBD's own grid was not narrow enough to matter:
+    // the block faces around the default spawn are 28–40 u of kerb between junction mouths, the
+    // seeded lots are 35–60 u wide, and half of that block's slots still died here at 0.5 (a
+    // 22 u mass on a 28 u face). That is the "basically empty lot" the player spawns beside. Two
+    // more rungs take the ladder down to MIN_STREETWALL_DEPTH, and the narrow shopfront stand
+    // wedged between two bigger ones is not a compromise — it is what a Joburg CBD block face is
+    // actually made of.
+    for (const widthScale of [1, 0.72, 0.5, 0.34, 0.22]) {
       const width = Math.max(width0 * widthScale, MIN_STREETWALL_DEPTH);
       let depth = depth0;
       while (depth >= MIN_STREETWALL_DEPTH) {
@@ -439,7 +531,7 @@ function commitBuilding(
   occ.add(x, z, radius, rect, packingGap);
   out.push({
     x, z, heading, width, depth,
-    height: stableWorldFloat(buildingHeight(zone, density, seeded(seedX, seedZ, 30 + salt), style)),
+    height: stableWorldFloat(buildingHeight(zone, density, seeded(seedX, seedZ, 30 + salt), style, x, z)),
     style, zone,
     variant: Math.floor(seeded(seedX, seedZ, 40 + salt) * 997),
   });
@@ -466,11 +558,19 @@ const REAL_FOOTPRINT_STYLE: Record<string, BuildingStyle> = {
  *  has to clear the carriageway itself, which CityGen.test asserts citywide at 1 unit. */
 const REAL_FOOTPRINT_ROAD_CLEARANCE = 1.2;
 
+/** How many ranks deep the rear infill may go. The CBD builds its blocks out solid — a Joburg
+ *  city block is buildings to the party wall on all four sides with a light well in the middle,
+ *  not a doughnut around a lawn — and three ranks is what it takes to cross the deepest of them.
+ *  Everywhere else keeps the single back-yard mass it always had (the granny flat, the works
+ *  annexe): a suburban stand has a garden behind the house and should keep it. */
+const INFILL_RANKS: Partial<Record<Exclude<Zone, 'none'>, number>> = { 'commercial-highrise': 2 };
+
 const INFILL_ACCEPT: Partial<Record<Exclude<Zone, 'none'>, number>> = {
-  // CBD infill stays modest ON PURPOSE: the per-cell cap is the binding budget in the CBD, and a
-  // rear-infill mass spends a cap slot that buys no street frontage — the thing this pass exists
-  // to fill. Street-wall commits come first; infill takes what's left.
-  'commercial-highrise': 0.35,
+  // CBD infill was held at 0.35 while the per-cell cap was the binding budget and a rear mass
+  // bought no street frontage. It is raised for the block-interior pass: the interiors are the
+  // last unbuilt ground downtown, the cap now has headroom at 256, and each rank re-rolls, so
+  // 0.62 still leaves nearly two thirds of stands with only one mass behind the street building.
+  'commercial-highrise': 0.42,
   'commercial-strip': 0.45,
   // Suburbs-density pass: more than half of eligible stands carry a back-yard cottage/flatlet —
   // the granny-flat/backroom pattern that makes real Joburg stands read full from the street.
@@ -500,7 +600,10 @@ function layoutRealFootprints(occ: Occupancy, out: GeneratedBuilding[]): void {
   }
 }
 
-function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, walk: WalkPoint[], occ: Occupancy, out: GeneratedBuilding[]): void {
+function layoutRoadSide(
+  road: GeneratedRoad, roadIndex: number, side: 1 | -1, walk: WalkPoint[],
+  occ: Occupancy, out: GeneratedBuilding[], rear: GeneratedBuilding[],
+): void {
   const half = road.width / 2;
   let acc = seeded(roadIndex, side, 7) * 20; // phase offset so lots don't align across parallel roads
   let target = 12 * LAYOUT_SCALE;
@@ -568,20 +671,34 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
     if (!fit) { if (packed) target = 6 * LAYOUT_SCALE; continue; }
     const style = buildingStyle(zone, district.density, frontX, frontZ);
     if (!commitBuilding(fit, heading, zone, district.density, style, frontX, frontZ, 0, occ, out)) { if (packed) target = 6 * LAYOUT_SCALE; continue; }
+    // Advance by what was actually BUILT, not by what was asked for. The seeded lot pitch is right
+    // only when the mass got its seeded width; when fitFootprint had to narrow it — which is most
+    // of what happens on the CBD's short block faces — striding the full pitch anyway leaves the
+    // difference as bare ground beside the stand. That difference is the empty lot the player
+    // spawns next to. Packed zones only: the strip, the works, the estates and the farms are meant
+    // to keep their authored spacing.
+    if (packed) target = Math.min(target, (fit.width + gap) * pitchScale);
 
-    // Eligible urban lots can carry a second, smaller mass behind the street building. It stays
-    // deterministic and must still be in the same zone and pass every normal clearance/blocker rule.
+    // THE BLOCK INTERIOR. Eligible urban lots carry further masses behind the street building,
+    // each stepping one rank deeper into the block. A frontage-driven generator can only build
+    // what a kerb can see, so any block deeper than a lot and a half keeps a hole in the middle
+    // however well the kerb itself packs — and the default CBD spawn stands at the mouth of one:
+    // a 60 × 100 u interior of bare veld with no road on any side of it, which is the "basically
+    // empty green lot" of the playtest. Ranks stop at the first one that will not fit, so a thin
+    // block still gets exactly the one rear mass it always did.
     const infillAccept = INFILL_ACCEPT[zone] ?? 0;
-    if (infillAccept > 0 && seeded(frontX, frontZ, 70) < infillAccept) {
-      const infillDepth = depth0 * (0.65 + seeded(frontX, frontZ, 71) * 0.18);
-      const infillWidth = width0 * (0.7 + seeded(frontX, frontZ, 72) * 0.18);
-      const infillGap = (2.5 + seeded(frontX, frontZ, 73) * 3) * LAYOUT_SCALE;
-      const infillFaceX = faceX + nX * (fit.depth + infillGap);
-      const infillFaceZ = faceZ + nZ * (fit.depth + infillGap);
-      const infill = fitFootprint(infillFaceX, infillFaceZ, nX, nZ, infillWidth, infillDepth, heading, packed);
-      if (infill && classifyZone(infill.x, infill.z, road.width) === zone) {
-        commitBuilding(infill, heading, zone, district.density, style, frontX, frontZ, 100, occ, out);
-      }
+    let rankFaceX = faceX; let rankFaceZ = faceZ; let rankDepth = fit.depth;
+    for (let rank = 0; rank < (INFILL_RANKS[zone] ?? 1); rank++) {
+      if (!(infillAccept > 0) || seeded(frontX, frontZ, 70 + rank * 4) >= infillAccept) break;
+      const infillDepth = depth0 * (0.65 + seeded(frontX, frontZ, 71 + rank * 4) * 0.18);
+      const infillWidth = width0 * (0.7 + seeded(frontX, frontZ, 72 + rank * 4) * 0.18);
+      const infillGap = (2.5 + seeded(frontX, frontZ, 73 + rank * 4) * 3) * LAYOUT_SCALE;
+      rankFaceX += nX * (rankDepth + infillGap);
+      rankFaceZ += nZ * (rankDepth + infillGap);
+      const infill = fitFootprint(rankFaceX, rankFaceZ, nX, nZ, infillWidth, infillDepth, heading, packed);
+      if (!infill || classifyZone(infill.x, infill.z, road.width) !== zone) break;
+      if (!commitBuilding(infill, heading, zone, district.density, style, frontX, frontZ, 100 + rank * 9, occ, rear)) break;
+      rankDepth = infill.depth;
     }
   }
 }
@@ -592,6 +709,7 @@ function layoutRoadSide(road: GeneratedRoad, roadIndex: number, side: 1 | -1, wa
 export function* parcelStages(): Generator<number> {
   if (parcelCells) return;
   const out: GeneratedBuilding[] = [];
+  const rear: GeneratedBuilding[] = [];
   const occ = new Occupancy();
   layoutRealFootprints(occ, out);
   const stride = Math.max(60, Math.ceil(GENERATED_ROADS.length / 24));
@@ -601,20 +719,61 @@ export function* parcelStages(): Generator<number> {
     if (road.width < 6) continue;
     const walk = walkRoad(road);
     if (walk.length < 2) continue;
-    layoutRoadSide(road, ri, 1, walk, occ, out);
-    layoutRoadSide(road, ri, -1, walk, occ, out);
+    layoutRoadSide(road, ri, 1, walk, occ, out, rear);
+    layoutRoadSide(road, ri, -1, walk, occ, out, rear);
   }
   const cells = new Map<string, GeneratedBuilding[]>();
   const canonical: GeneratedBuilding[] = [];
-  for (const building of out) {
+  const candidates = new Map<string, GeneratedBuilding[]>();
+  const streetCount = new Set(out);
+  // Street-frontage parcels first, rear infill after: the cap's tie-break, so a cell that has to
+  // drop something loses a back yard before it loses a building on a kerb.
+  for (const building of [...out, ...rear]) {
     const key = `${Math.floor(building.x / CELL_SIZE)},${Math.floor(building.z / CELL_SIZE)}`;
-    const bucket = cells.get(key);
-    if (bucket) {
-      if (bucket.length < CELL_BUILDING_CAP) { bucket.push(building); canonical.push(building); }
-    } else { cells.set(key, [building]); canonical.push(building); }
+    const bucket = candidates.get(key);
+    if (bucket) bucket.push(building); else candidates.set(key, [building]);
+  }
+  for (const [key, list] of candidates) {
+    cells.set(key, admitToCell(list, streetCount));
+    canonical.push(...cells.get(key)!);
   }
   allParcels = canonical;
   parcelCells = cells;
+}
+
+/**
+ * WHICH BUILDINGS A FULL CHUNK KEEPS — and the reason the player used to spawn beside a bare lot.
+ *
+ * The cap used to be applied in WALK order: take the first CELL_BUILDING_CAP the road loop reaches
+ * and silently drop the rest. Walk order is road order, which is spatially arbitrary, so a capped
+ * cell did not thin out evenly — it kept every building on the roads that happened to come first
+ * and erased whole city blocks belonging to the roads that came last. Cell (2,1), the CBD chunk the
+ * default spawn looks into, was committing buildings right across the block north-east of the
+ * spawn (a 38 × 47 u mass among them) and dropping every one of them at this line: a 60 × 100 u
+ * rectangle of bare veld in the middle of downtown, with a road on every side of it.
+ *
+ * So the SAME budget is now spread evenly instead. Each candidate is ranked within its own
+ * CAP_SUBCELL tile — first building in the tile is rank 0, second rank 1, and so on — and the cell
+ * admits by rank. A full cell therefore loses its Nth building everywhere at once instead of its
+ * last thousand in one corner, which is the difference between a slightly thinner CBD and a hole.
+ * Rank ties break toward the street wall and then to walk order, so the result is deterministic and
+ * the streaming contract holds; cells under the cap are untouched (the common case returns early).
+ */
+const CAP_SUBCELL = CELL_SIZE / 8;
+
+function admitToCell(candidates: GeneratedBuilding[], street: ReadonlySet<GeneratedBuilding>): GeneratedBuilding[] {
+  if (candidates.length <= CELL_BUILDING_CAP) return candidates;
+  const tileCount = new Map<string, number>();
+  const ranked = candidates.map((building, index) => {
+    const tile = `${Math.floor(building.x / CAP_SUBCELL)},${Math.floor(building.z / CAP_SUBCELL)}`;
+    const rank = tileCount.get(tile) ?? 0;
+    tileCount.set(tile, rank + 1);
+    // A rear mass costs one rank: the first back yard in an empty tile is worth the same as the
+    // SECOND building on a kerb, never more. Spatial evenness first, the street wall second.
+    return { building, rank: rank + (street.has(building) ? 0 : 1), index };
+  });
+  ranked.sort((a, b) => a.rank - b.rank || a.index - b.index);
+  return ranked.slice(0, CELL_BUILDING_CAP).sort((a, b) => a.index - b.index).map((entry) => entry.building);
 }
 
 /** Force the (memoized) citywide parcel layout to build now — call during load, not first frame. */

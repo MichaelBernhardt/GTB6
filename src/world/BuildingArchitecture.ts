@@ -192,6 +192,22 @@ function sized(x: number, z: number, width: number, kind: EntranceKind, mass: re
   return { x, z, width, height, kind };
 }
 
+/**
+ * Below this height a downtown parcel is STREET WALL, not a tower: it takes the low-rise massing
+ * family (buildDowntownStreetBlock), a parapet scaled to its own storeys, and no rooftop mast,
+ * plant room or deco cap. 20 u is a hair under six storeys — the top of the fabric band CityGen
+ * hands the CBD (buildingHeight: 2–5 storeys mostly, 5–8 for the odd 1960s block).
+ */
+export const DOWNTOWN_LOWRISE_MAX = 20;
+/**
+ * A shop bay needs about five units of front wall to hold glass, a roller shutter, its hood and a
+ * trade board. The gate used to be 14 u — authored when every downtown stand was eleven storeys —
+ * and it would have stripped the shopfronts off four fifths of the new street wall, which is the
+ * one part of the CBD pass the owner liked. A two-storey building with a shop under it is THE
+ * Joburg high-street form; only genuinely single-storey masses keep a plain base.
+ */
+const SHOP_BAY_MIN_HEIGHT = 6.4;
+
 /** One street-level shop bay on a downtown front: centre x, clear width, and the wall plane it
  *  mounts on — building-local, like every other architecture coordinate. */
 export interface ShopBay { x: number; width: number; z: number; }
@@ -222,8 +238,8 @@ const SHOP_BAY_ACCENTS = ['#f0ae43', '#72d8d2', '#ef6556', '#74e392'] as const;
  * reports IS what gets drawn.
  *
  * Deterministic hold-outs keep variety: the elliptical tower (massing 4 — its facade is not a
- * plane), low masses (h <= 14 keep the plain base), and one variant in five (banks, government
- * blocks, blank podiums — a CBD where literally every building is a spaza row reads as wallpaper).
+ * plane), masses too short to carry a bay (SHOP_BAY_MIN_HEIGHT), and one variant in five (banks,
+ * government blocks, blank podiums — a CBD where every building is a spaza row reads as wallpaper).
  * A bay never covers the planned entrance: the way in stays open, parity-tested, and
  * unshuttered — a front door rolled shut at night would lock the interiors feature out.
  */
@@ -231,7 +247,7 @@ export function planShopBays(
   tiers: readonly MassingTier[], width: number, height: number, massing: number, variant: number,
   entrance?: EntranceTag,
 ): ShopBay[] {
-  if (massing === 4 || height <= 14 || variant % 5 === 2) return [];
+  if (massing === 4 || height < SHOP_BAY_MIN_HEIGHT || variant % 5 === 2) return [];
   const mass = tiers.filter((tier) => tier.kind !== 'wall');
   const bays: ShopBay[] = [];
   for (const span of frontFacadeSpansAt(mass, SHOP_BAY_Y, -width / 2, width / 2)) {
@@ -634,8 +650,58 @@ export class BuildingArchitecture {
     const mesh = new THREE.Mesh(geometry, boxMaterials(spec.facade, spec.roof)); mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; this.place(mesh);
   }
 
+  /**
+   * THE JOBURG HIGH STREET — the two-to-five storey shopfront block that is most of the real CBD.
+   *
+   * The eleven downtown massings below are all TOWER grammars: a podium, a setback, a shaft, a
+   * crown. Handed a ten-unit height they turn into wedding cakes the size of a bus shelter, which
+   * is what a low street wall looked like the first time CityGen stopped making every downtown
+   * stand eleven storeys. So the street wall gets its own small family instead: a flat-topped box
+   * to a parapet, four forms deep, party walls left and right (the massing fills its stand, and
+   * neighbours abut by STREETWALL_MAX_OVERLAP), and everything above the shopfront left plain for
+   * the facade atlas and the tag layer. The shared downtown passes still run over it — plinth,
+   * shop bays with their roller doors, mullions, cornice, parapet — so this reads as the same city,
+   * just at the height the city actually is.
+   */
+  private buildDowntownStreetBlock(spec: BuildingSpec, massing: number): number {
+    const { x, z, width: w, depth: d, height: h } = spec;
+    if (massing % 4 === 1) {
+      // Shopfront under a recessed upper wall: the ground floor takes the whole stand and the
+      // storeys above step back off the pavement — the awninged Joburg street with a shadow line.
+      const groundH = Math.min(4.7, h * 0.46);
+      this.addBox(spec, w, groundH, d, x, groundH / 2 + 0.2, z);
+      this.addBox(spec, w, h - groundH, d * 0.88, x, groundH + (h - groundH) / 2 + 0.2, z - d * 0.06);
+      this.addSetbackBand(x, z, w * 1.02, d * 1.02, groundH + 0.2);
+      return h + 0.2;
+    }
+    if (massing % 4 === 2) {
+      // Two stands built ten years apart under one street wall: the taller half a storey up on the
+      // shorter, the shorter also shallower so the step is a real shoulder and not a coplanar seam
+      // (the massing-9 lesson — abutting boxes, never a shared flank plane).
+      const split = w * 0.46;
+      this.addBox(spec, split, h, d, x - (w - split) / 2, h / 2 + 0.2, z);
+      const shortH = Math.max(3.4, h - 3.5);
+      this.addBox(spec, w - split, shortH, d * 0.82, x + split / 2, shortH / 2 + 0.2, z - d * 0.09);
+      return h + 0.2;
+    }
+    if (massing % 4 === 3) {
+      // Flat block with a raised name bay over the entrance — the parapet sign board every second
+      // CBD shop row wears, and the cheapest break there is in a run of flat rooflines.
+      this.addBox(spec, w, h, d, x, h / 2 + 0.2, z);
+      const bayW = Math.min(w * 0.44, 9);
+      const board = new THREE.Mesh(new THREE.BoxGeometry(bayW, 1.5, 0.4), this.stone);
+      board.position.set(x, h + 0.95, z + d / 2 - 0.16);
+      board.castShadow = true; board.name = 'streetblock-name-bay'; this.place(board);
+      return h + 0.2;
+    }
+    // The plain one: one box to the parapet, wall to wall. Most of a Joburg block face is this.
+    this.addBox(spec, w, h, d, x, h / 2 + 0.2, z);
+    return h + 0.2;
+  }
+
   private buildDowntown(spec: BuildingSpec, massing: number): number {
     const { x, z, width: w, depth: d, height: h } = spec;
+    if (h < DOWNTOWN_LOWRISE_MAX) return this.buildDowntownStreetBlock(spec, massing);
     if (massing === 0) {
       const podiumH = Math.min(9, h * 0.18); const middleH = h * 0.55; const upperH = h - podiumH - middleH;
       this.addBox(spec, w, podiumH, d, x, podiumH / 2 + 0.2, z, true);
@@ -1222,10 +1288,15 @@ export class BuildingArchitecture {
     if (!main) return;
     const cap = variant % 3 === 0 ? this.darkMetal : this.stone;
     const thickness = 0.38;
+    // A parapet is read against the storeys under it: the 1.25–2.15 u upstand that gives a thirty-
+    // storey shaft its lip is a third of a two-storey shop's facade. The street wall gets its own
+    // scale, which is also what a real Joburg shop row wears — a low coping over the roofline.
+    const lowRise = spec.height < DOWNTOWN_LOWRISE_MAX;
     for (let index = 0; index < roofs.length; index++) {
       // The main roof carries the tall parapet; a secondary roof (a twin slab, a lower wing, a lift
       // core) gets a shorter one, so a stepped massing reads as steps and not as a repeated stencil.
-      this.addParapet(roofs[index]!, index === 0 ? 1.25 + (variant % 3) * 0.45 : 0.85, thickness, cap);
+      const mainHeight = lowRise ? 0.5 + (variant % 3) * 0.22 : 1.25 + (variant % 3) * 0.45;
+      this.addParapet(roofs[index]!, index === 0 ? mainHeight : mainHeight * 0.68, thickness, cap);
       // The deck, sunk inside the parapet, in the building's OWN roof tone. It is here because
       // downtown roofs were reading as white icing — the setback band several massings wear AT their
       // roof line is pale stone and covers most of the deck — and re-laying that area in roof grey
@@ -1262,7 +1333,11 @@ export class BuildingArchitecture {
     cornice.castShadow = true; cornice.name = 'downtown-cornice'; this.place(cornice);
     // Two massings already own their roof: 10 has the plant room and braced tanks it was authored
     // with, and 2's gantry straddles the roof centre, so it takes only the corner-seated crowns.
-    const kind = massing === 10 ? -1 : massing === 2 ? variant % 2 : variant % 4;
+    // The street wall takes only ONE of the four — the water tanks on their stand, on a third of
+    // them. A lift overrun, a deco cap or a nine-unit radio mast belongs to a shaft; on a three-
+    // storey shop row each of them is taller than the building it is standing on.
+    const kind = lowRise ? (variant % 3 === 0 ? 1 : -1)
+      : massing === 10 ? -1 : massing === 2 ? variant % 2 : variant % 4;
     if (kind >= 0 && main.maxX - main.minX > 6.5 && main.maxZ - main.minZ > 6.5) this.addRoofCrown(spec, main, kind, cap);
   }
 
