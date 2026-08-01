@@ -94,6 +94,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .hud-objective small, .hud-objective span { color: var(--yellow); font: 900 9px Inter, sans-serif; letter-spacing: 1.2px; text-transform: uppercase; }
 .hud-objective strong { display: block; font-size: clamp(16px, 1.4vw, 21px); line-height: 1.14; }
 .hud-objective-track { height: 3px; margin-top: 9px; background: #4f5a57; }.hud-objective-track i { display: block; height: 100%; background: var(--yellow); transition: width .25s; }
+.hud-target-pointer { position: absolute; transform: translate(-50%, -50%); font: 900 22px Inter, sans-serif; text-shadow: 0 0 6px rgba(17, 24, 23, .9), 0 2px 4px rgba(17, 24, 23, .8); pointer-events: none; animation: hud-pointer-bob 1.2s ease-in-out infinite; }
+@keyframes hud-pointer-bob { 0%, 100% { margin-top: 0 } 50% { margin-top: 6px } }
+.hud-mainstory { display: block; margin-top: 7px; padding-top: 6px; border-top: 1px solid rgba(111, 196, 216, .3); color: #6fc4d8 !important; font: 900 9px Inter, sans-serif; letter-spacing: 1.2px; text-transform: uppercase; }
 
 .hud-vehicle { position: absolute; right: 28px; bottom: 28px; width: 174px; padding: 10px 12px; text-align: right; background: rgba(17, 24, 23, .88); border-bottom: 5px solid var(--yellow); box-shadow: var(--shadow); transform: rotate(.35deg); }
 .hud-vehicle > small { display: block; color: var(--yellow); font: 900 10px Inter, sans-serif; letter-spacing: 1.1px; text-transform: uppercase; }

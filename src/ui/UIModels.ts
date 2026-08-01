@@ -56,6 +56,14 @@ export interface HudState {
   scope?: { zoom: string };
   vehicle?: VehicleTelemetry;
   objective?: ObjectiveView;
+  /** Persistent campaign-spine footer under the objective card: the main story must be findable
+   *  from ANY state (owner: "I can't find the main quests"), not only in a post-completion toast. */
+  mainStory?: string;
+  /** Screen-space pointer at the current marker target's projected position (clamped to the frame
+   *  edge with a direction arrow when off-screen/behind). The world beam cannot survive this
+   *  camera's pitch at range — photographed: at 500m the horizon sits INSIDE the masthead band —
+   *  so the pointer is what guarantees "an obvious pointer, visible always". */
+  targetPointer?: { xPct: number; yPct: number; color: string; clamp?: 'left' | 'right' };
   dialogue?: DialogueView; // face-to-face exchange card: E advances, walking away abandons
   missionPassed?: MissionPassedView; // GTA-style completion celebration with itemized rewards
   fps: number;

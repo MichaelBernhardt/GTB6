@@ -77,7 +77,7 @@ import type { BaseQuality, CheatSettings, GameMode, GameSettings, GameSnapshot, 
 import { weaponWheelResponds } from './ui/mapRender';
 import type { MapViewFrame } from './ui/MapView';
 import { type MapMarker, type MapPoint, MINIMAP_ZOOM_NAMES, stepMinimapZoom } from './ui/MinimapView';
-import { vehicleHealthPercent, type ObjectiveView } from './ui/UIModels';
+import { vehicleHealthPercent, type HudState, type ObjectiveView } from './ui/UIModels';
 import { TouchControls } from './ui/TouchControls';
 import { shouldEnableTouch, touchQuality } from './ui/TouchModels';
 import { UIManager } from './ui/UIManager';
@@ -112,9 +112,19 @@ const SIDE_QUEST_COLOR_HEX = 0xb06fd8;
  *  from streets away (the old 11u x 12%-opacity beam was invisible). Shared by the objective/
  *  breadcrumb marker and the side-quest giver beacons so the two always read as the same language. */
 function beaconMeshes(color: number): THREE.Object3D[] {
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 8, 28), new THREE.MeshBasicMaterial({ color })); ring.rotation.x = Math.PI / 2;
-  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.9, 130, 12, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false })); core.position.y = 65;
-  const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.8, 130, 18, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false })); beam.position.y = 65;
+  // fog: false on every part — a beacon is GUIDANCE, not scenery. With scene fog on (and it is
+  // dense on Low), a fogged beam vanished exactly when it mattered most: across town, at night,
+  // in a blackout (owner: "I can't find the main quests" — the shot proved the beam wasn't there).
+  // 300u tall: the column must clear the CBD skyline, because from street level the only part of
+  // a cross-town beacon a player can ever see is the slice above the rooftops (the 130u beam
+  // vanished behind three blocks of mid-rise — photographed, not guessed).
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.16, 8, 28), new THREE.MeshBasicMaterial({ color, fog: false })); ring.rotation.x = Math.PI / 2;
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 4, 300, 12, 1, true), new THREE.MeshBasicMaterial({ color, fog: false, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false })); core.position.y = 150;
+  // Wide on purpose: at 500m the visible slice of a beacon is a few dozen pixels between the
+  // rooftop line and the HUD masthead — a pencil-thin column disappears into either. A ~30u
+  // column still reads there; photographed at 0.16 the wide skirt washed out on daylight
+  // low-poly faces, so it carries real alpha now and the bright core does the close-up work.
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(9, 16, 300, 18, 1, true), new THREE.MeshBasicMaterial({ color, fog: false, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false })); beam.position.y = 150;
   return [ring, core, beam];
 }
 
@@ -3310,6 +3320,11 @@ export class Game {
         ? `Lose the JMPD, then take the ${hotVehicle.spec.name} to Bra Vusi’s lock-up`
         : `Deliver the ${hotVehicle.spec.name} to Bra Vusi · offer R${chopShopOffer(hotVehicle.spec.kind, hotVehicle.health, hotVehicle.maxHealth).toLocaleString()}`,
     } : undefined;
+    // The campaign spine is FINDABLE FROM ANY STATE (owner: "I can't find the main quests"): the
+    // idle card names the next mainline mission outright, and whenever any other card is up — an
+    // active side job, a race, a waypoint — a pale-blue MAIN STORY footer still names it.
+    const nextMainline = this.online ? undefined : this.nextMainlineMission();
+    const spineCrumb = Boolean(nextMainline) && this.markerTarget?.breadcrumb === true && this.markerTarget.label === nextMainline?.start.label;
     const freeRoamObjective: ObjectiveView | undefined = !this.online && !this.missions.active && this.markerTarget
       ? this.markerTarget.label === PERSONAL_WAYPOINT_LABEL
         ? {
@@ -3321,9 +3336,14 @@ export class Game {
             missionName: 'ROBOT RUN',
             text: `Pull into the purple beacon with a roadworthy vehicle${this.robotRace?.bestTime === undefined ? '' : ` · PB ${formatRunTime(this.robotRace.bestTime)}`}`,
           }
+        : spineCrumb && nextMainline
+        ? {
+            missionName: this.missions.completed.size === 0 ? 'MAIN STORY — FIRST MOVE' : 'MAIN STORY',
+            text: `Next: ${nextMainline.name} with ${nextMainline.contact} — follow the pale-blue beacon and press E to talk`,
+          }
         : {
-            missionName: this.missions.completed.size === 0 ? 'FIRST MOVE' : 'NEXT JOB',
-            text: `Meet ${this.markerTarget.label} — follow the turquoise GPS line and press E to talk`,
+            missionName: this.markerTarget.breadcrumb ? 'SIDE JOB' : 'NEXT JOB',
+            text: `Meet ${this.markerTarget.label} — follow the ${this.markerTarget.breadcrumb ? 'purple beacon' : 'turquoise GPS line'} and press E to talk`,
           }
       : undefined;
     const objective: ObjectiveView | undefined = raceObjective ?? (this.online ? this.online.objective ? {
@@ -3336,6 +3356,26 @@ export class Game {
     } : hotVehicleObjective ?? freeRoamObjective);
     if (objective && this.markerTarget) {
       objective.distanceMetres = Math.hypot(this.markerTarget.position.x - focus.x, this.markerTarget.position.z - focus.z) * METRES_PER_UNIT;
+    }
+    // The pale-blue footer rides under whatever card is up, UNLESS that card already IS the main
+    // story (the idle spine card, or the spine mission being played) — no duplicate line, no gap.
+    const mainStory = nextMainline && objective && !(objective === freeRoamObjective && spineCrumb) && this.missions.active?.id !== nextMainline.id
+      ? `MAIN STORY — NEXT: ${nextMainline.name} with ${nextMainline.contact}` : undefined;
+    // Screen-space target pointer: the projected marker position, clamped into the frame. The
+    // world beam is real but this camera's pitch parks the horizon inside the masthead at range
+    // (photographed), so the pointer is the guarantee that the current goal is ALWAYS on screen.
+    let targetPointer: HudState['targetPointer'];
+    if (!this.online && this.mode === 'playing' && this.markerTarget
+      && Math.hypot(this.markerTarget.position.x - focus.x, this.markerTarget.position.z - focus.z) > 30) {
+      const projected = this.markerTarget.position.clone(); projected.y += 6; projected.project(this.camera);
+      const behind = projected.z > 1;
+      let xPct = behind ? (projected.x < 0 ? 100 : 0) : (projected.x + 1) * 50;
+      let yPct = behind ? 45 : (1 - projected.y) * 50;
+      let clamp: 'left' | 'right' | undefined;
+      if (xPct <= 4) { xPct = 4; clamp = 'left'; }
+      else if (xPct >= 96) { xPct = 96; clamp = 'right'; }
+      yPct = Math.min(80, Math.max(17, yPct));
+      targetPointer = { xPct, yPct, color: this.markerTarget.color ?? '#f5c542', ...(clamp ? { clamp } : {}) };
     }
     const onlineVehicle = this.online?.vehicleStates.find((entry) => entry.id === this.online?.localState?.vehicleId);
     const onlineVehicleMaxHealth = onlineVehicle
@@ -3363,7 +3403,7 @@ export class Game {
     const hudFeatures = flowHud ? [...(featureHud ?? []), flowHud] : featureHud;
     const promptMode = this.activePlane ? 'flight' : this.activeVehicle || this.trains.driving ? 'vehicle' : 'foot';
     const hudPrompt = this.input.gamepadActive ? gamepadPrompt(prompt, promptMode) : prompt;
-    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable || this.cheats.teflon || this.openSesame), cheatedEver: !this.online && this.everCheated, inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
+    this.ui.update({ health: this.player.health, armour: this.online ? 0 : this.inventory.armour, stims: this.online ? 0 : this.inventory.stims, parachutes: this.online ? 0 : this.inventory.parachutes, torch: !this.online && this.torch.on, money: this.online ? 0 : this.economy.balance, weaponName: spec.name, melee: spec.melee, ammo: onlineState?.ammo ?? ammoState.ammo, reserve: onlineState?.reserve ?? ammoState.reserve, reloading: onlineState?.reloading ?? this.combat.reloading > 0, wanted: this.online ? 0 : this.wanted.level, unseen: !this.online && this.concealed && this.wanted.isWanted, district, street: this.streetName, clock: this.dayNight.clockText, reputation: !this.online ? reputationTier(this.livingCity.district(district).communityStanding) : undefined, prompt: hudPrompt, dialogue: !this.online && this.dialogue.line ? { speaker: this.dialogue.line.speaker, text: this.dialogue.line.text, more: this.dialogue.hasMore, offer: Boolean(this.story.pendingOffer) } : undefined, missionPassed: !this.online ? this.missionPassedView : undefined, crosshair, scope: scoped ? { zoom: scopeZoomLabel(this.scopeLevel) } : undefined, vehicle, objective, mainStory, targetPointer, fps: this.fps, loopTotalPct: this.profiler.total(), loopSample: this.profiler.sample(), navCalls: this.navHudCalls, navMs: this.navHudMs, position: this.player.group.position, settings: this.settings, cheatsOn: !this.online && (this.cheats.fastRun || this.cheats.bigJump || this.cheats.invulnerable || this.cheats.teflon || this.openSesame), cheatedEver: !this.online && this.everCheated, inebriation: this.online ? 0 : this.player.inebriation, features: hudFeatures });
     this.touch?.update({
       active: this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen && !this.weaponWheelOpen,
       prompt,

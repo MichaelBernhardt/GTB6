@@ -47,7 +47,7 @@ def run(port):
         # ---- 2. Side-quest pacing at Portia ---------------------------------------------
         side = json.loads(page.evaluate("""() => {
           const g = window.__game;
-          g.missions.completed.add('last-coach-home'); // Portia's mainline now exhausted
+          g.missions.completed.add('last-coach-home'); // (a side itself now) out of the way so padstal-run is the one cooling
           for (let i = 0; i < 60; i++) g.update(1/30); // stamp lands + contact cadence runs
           const offerCold = g.contactAction() ?? null; // player still stands at Portia
           const beaconCold = g.sideBeacons.get('padstal-run')?.visible ?? false;

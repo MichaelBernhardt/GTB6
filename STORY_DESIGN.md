@@ -50,7 +50,11 @@ Existing 4 missions are the on-ramp. `hot-property` (Vusi's copper) is the threa
 cartel pulls.
 
 **ACT 1 — "Hustle"** (grind; the city teaches you its systems)
-1. **Last Coach Home** (Portia; *trains*) — her nephew abandoned her rent bag on the
+1. **Last Coach Home** (Portia; *trains*) — DEMOTED TO A SIDE PIECE (owner, round 4:
+   he read the mandatory train ride as a side quest twice — the crime story runs
+   Couch Run → Hot Copper; the rent-bag trip is flavour and now gets the full side
+   treatment: purple beam, post-mainline cooldown, never on the spine). Original brief:
+   her nephew abandoned her rent bag on the
    Sandton line. Board at any station, ride to Sandton Station, grab the bag off the
    platform, bring it back. Conditions: `onTrain` + `stationName`.
 2. **Copper Wire Blues** (Vusi; *tail*) — follow the cable buyer's bakkie across town

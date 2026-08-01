@@ -43,6 +43,8 @@ export class HudView {
   private objectiveText: HTMLElement;
   private objectiveMeta: HTMLElement;
   private objectiveFill: HTMLElement;
+  private mainStory: HTMLElement;
+  private targetPointer: HTMLElement;
   private objectiveTrack: HTMLElement;
   private prompt: HTMLElement;
   private passed: HTMLElement;
@@ -90,9 +92,10 @@ export class HudView {
       </section>
       <section class="hud-objective" data-hud="objective" aria-label="Current objective">
         <div><small data-hud="objective-name"></small><span data-hud="objective-meta"></span></div>
-        <strong data-hud="objective-text"></strong><div class="hud-objective-track" data-hud="objective-track" role="progressbar" aria-label="Objective progress" aria-valuemin="0" aria-valuemax="100"><i data-hud="objective-fill"></i></div>
+        <strong data-hud="objective-text"></strong><div class="hud-objective-track" data-hud="objective-track" role="progressbar" aria-label="Objective progress" aria-valuemin="0" aria-valuemax="100"><i data-hud="objective-fill"></i></div><small class="hud-mainstory" data-hud="mainstory" hidden></small>
       </section>
       <section class="hud-vehicle" data-hud="vehicle" aria-label="Vehicle telemetry"><small data-hud="vehicle-name"></small><div><b data-hud="vehicle-speed"></b><span>KM/H</span></div><em data-hud="vehicle-health"></em><i class="hud-radio" data-hud="radio" role="status"></i><i class="hud-taxi" data-hud="taxi" role="status"></i></section>
+      <div class="hud-target-pointer" data-hud="target-pointer" hidden aria-hidden="true"></div>
       <section class="hud-passed" data-hud="passed" role="status" aria-live="polite" hidden><small>MISSION PASSED</small><strong data-hud="passed-name"></strong><ul data-hud="passed-items"></ul></section>
       <section class="hud-dialogue" data-hud="dialogue" role="status" aria-live="polite" hidden><small data-hud="dialogue-speaker"></small><p data-hud="dialogue-text"></p><em data-hud="dialogue-more"></em></section>
       <div class="hud-prompt" data-hud="prompt" role="status"></div>
@@ -110,7 +113,7 @@ export class HudView {
     this.featureStrip = required(root, '[data-hud="features"]');
     this.weaponName = required(root, '[data-hud="weapon-name"]'); this.ammo = required(root, '[data-hud="ammo"]'); this.reserve = required(root, '[data-hud="reserve"]'); this.reload = required(root, '[data-hud="reload"]');
     this.wantedContainer = required(root, '[data-hud="wanted"]'); this.wanted = Array.from(root.querySelectorAll<HTMLElement>('.hud-wanted i')); this.unseen = required(root, '[data-hud="unseen"]');
-    this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]');
+    this.objective = required(root, '[data-hud="objective"]'); this.objectiveName = required(root, '[data-hud="objective-name"]'); this.objectiveText = required(root, '[data-hud="objective-text"]'); this.objectiveMeta = required(root, '[data-hud="objective-meta"]'); this.objectiveFill = required(root, '[data-hud="objective-fill"]'); this.objectiveTrack = required(root, '[data-hud="objective-track"]'); this.mainStory = required(root, '[data-hud="mainstory"]'); this.targetPointer = required(root, '[data-hud="target-pointer"]');
     this.prompt = required(root, '[data-hud="prompt"]');
     this.passed = required(root, '[data-hud="passed"]'); this.passedName = required(root, '[data-hud="passed-name"]'); this.passedItems = required(root, '[data-hud="passed-items"]');
     this.dialogue = required(root, '[data-hud="dialogue"]'); this.dialogueSpeaker = required(root, '[data-hud="dialogue-speaker"]'); this.dialogueText = required(root, '[data-hud="dialogue-text"]'); this.dialogueMore = required(root, '[data-hud="dialogue-more"]'); this.vehicle = required(root, '[data-hud="vehicle"]'); this.vehicleName = required(root, '[data-hud="vehicle-name"]'); this.vehicleSpeed = required(root, '[data-hud="vehicle-speed"]'); this.vehicleHealth = required(root, '[data-hud="vehicle-health"]'); this.radio = required(root, '[data-hud="radio"]'); this.taxi = required(root, '[data-hud="taxi"]');
@@ -150,7 +153,17 @@ export class HudView {
       if (state.objective.required && state.objective.progress !== undefined) bits.push(`${state.objective.progress}/${state.objective.required}`);
       if (state.objective.remainingSeconds !== undefined) bits.push(`${Math.max(0, Math.ceil(state.objective.remainingSeconds))} SEC`);
       if (state.objective.distanceMetres !== undefined) bits.push(formatObjectiveDistance(state.objective.distanceMetres));
+      setHidden(this.mainStory, !state.mainStory);
+      setText(this.mainStory, state.mainStory ?? ''); // cleared when hidden: stale spine text must never linger in the DOM
       setText(this.objectiveMeta, bits.join(' · ')); const progress = objectiveProgress(state.objective); setWidth(this.objectiveFill, `${progress ?? 0}%`); setHidden(this.objectiveTrack, progress === undefined); setAttribute(this.objectiveTrack, 'aria-valuenow', String(progress ?? 0));
+    }
+    setHidden(this.targetPointer, !state.targetPointer);
+    if (state.targetPointer) {
+      const pointer = state.targetPointer;
+      this.targetPointer.style.left = `${pointer.xPct}%`;
+      this.targetPointer.style.top = `${pointer.yPct}%`;
+      this.targetPointer.style.color = pointer.color;
+      setText(this.targetPointer, pointer.clamp === 'left' ? '\u25c0' : pointer.clamp === 'right' ? '\u25b6' : '\u25bc');
     }
     setHidden(this.passed, !state.missionPassed);
     if (state.missionPassed) {

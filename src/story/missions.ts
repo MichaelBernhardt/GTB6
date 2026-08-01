@@ -66,7 +66,10 @@ export const MISSIONS: MissionDefinition[] = [
 
   // ---- Act 1: "Hustle" ------------------------------------------------------------
   {
-    id: 'last-coach-home', name: 'Last Coach Home', contact: 'Auntie Portia', reward: 1100, act: 'hustle',
+    // Round 4 owner reversal: a SIDE quest. He called the mandatory train ride a side quest twice —
+    // the crime story he follows runs Couch Run -> Hot Copper; the rent-bag train trip is flavour,
+    // so it gets the full side treatment (purple beam, post-mainline cooldown, never on the spine).
+    id: 'last-coach-home', name: 'Last Coach Home', contact: 'Auntie Portia', reward: 1100, act: 'side',
     prerequisites: { missions: ['delivery-run'] },
     intro: 'My nephew fell asleep on the train and left my rent bag on the platform at Park Station, the silly child. Walk over to Doornfontein, catch a train IN to Park like a commuter, and fetch it before someone honest finds it, boet.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
@@ -265,7 +268,7 @@ export const MISSIONS: MissionDefinition[] = [
   // ---- Side pieces ----------------------------------------------------------------------
   {
     id: 'padstal-run', name: 'Ouma se Padstal Run', contact: 'Auntie Portia', reward: 4000, act: 'side',
-    prerequisites: { missions: ['last-coach-home'] },
+    prerequisites: { missions: ['delivery-run'] }, // re-hung off Portia's real mainline: the spine must never route through a side (last-coach-home is one now)
     intro: 'The aunties\' savings club ordered pastries and dried meat from Grandma\'s farm stall, far out west past Paarlshoop — the Rooibos Route, almost at the dam. It\'s a proper drive, boet — take something with a working radio.',
     start: spot(PORTIA_START, 'Auntie Portia'), objectives: [
       { kind: 'reach', radius: 10, timeLimit: 1500, text: 'Drive the order list out west to Ouma se Padstal on the Rooibos Route', target: spot(PADSTAL_SPOT, 'Ouma se Padstal') },
