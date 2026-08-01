@@ -118,6 +118,22 @@ export function sanitizeSafehouses(raw: unknown): SafehouseId[] {
   return [...new Set<SafehouseId>([STARTER_SAFEHOUSE, ...valid])];
 }
 
+/**
+ * Completed mission ids: unique kebab-case tokens; junk types and duplicates drop.
+ *
+ * THE MOVED-WAYPOINT CONTRACT (round 4 moved half the campaign's anchors): the save persists WHICH
+ * missions are done (ids) and WHERE the player is — never the active mission, objective index, or
+ * any waypoint coordinate. Every target is recomputed from placements at boot, so a mid-campaign
+ * save written before an anchor moved simply re-aims on load; there is nothing to reset or migrate.
+ * Ids from older campaigns that no longer exist stay in the set DELIBERATELY: prerequisites only
+ * ever ask `has(id)`, so an orphan is inert — and dropping it would erase real progress if that
+ * mission ever returns. (SaveManager.test.ts pins the schema so runtime state can't creep in.)
+ */
+export function sanitizeCompletedMissions(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((id): id is string => typeof id === 'string' && /^[a-z0-9-]{1,64}$/.test(id)))];
+}
+
 /** Story flags: plain lowercase tokens (`act1`, `choice:two-fires:sindi`); junk and duplicates drop. */
 export function sanitizeStoryFlags(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -147,7 +163,7 @@ function deserialize(value: string | null): SavedGame {
     const spawn = sanitizeSpawn(parsed.spawn);
     return {
       ...structuredClone(DEFAULT_SAVE), ...parsed, version: 3,
-      completedMissions: Array.isArray(parsed.completedMissions) ? parsed.completedMissions : [],
+      completedMissions: sanitizeCompletedMissions(parsed.completedMissions),
       storyFlags: sanitizeStoryFlags(parsed.storyFlags), // v1/v2 saves carry none — the arc starts fresh
       diaryPages: sanitizeDiaryPages(parsed.diaryPages),
       spawn,

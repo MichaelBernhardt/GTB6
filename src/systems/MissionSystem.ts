@@ -187,6 +187,26 @@ export class MissionSystem {
     return this.progress >= (this.objective.required ?? 1) ? this.advance() : { advanced: true };
   }
 
+  /** Whether a `choice` objective still lies between the current objective and the end of the
+   *  active mission. `mission complete` refuses these: auto-picking would silently write the
+   *  `choice:<mission>:<id>` story flags that gate the rest of the campaign — the player must
+   *  make those calls for real. */
+  get pendingChoice(): boolean {
+    return this.active !== undefined && this.state === 'active'
+      && this.active.objectives.slice(this.objectiveIndex).some((objective) => objective.kind === 'choice');
+  }
+
+  /** Console/testing (`mission complete`): resolve every remaining objective of the ACTIVE mission
+   *  at once and return the SAME completion update natural play produces — the caller routes it
+   *  through the ordinary completion path (rewards, setFlags, outro, diary page, persist). Never
+   *  `completed.add()` behind the system's back; never past a pending choice (see pendingChoice);
+   *  and completing is not granting — the next mission still has to be offered and accepted. */
+  completeActive(): MissionUpdate {
+    if (!this.active || this.state !== 'active' || this.pendingChoice) return {};
+    this.objectiveIndex = this.active.objectives.length - 1; this.progress = 0; this.remainingTime = 0;
+    return this.advance();
+  }
+
   choose(id: string): MissionUpdate {
     const objective = this.objective;
     if (!this.active || this.state !== 'active' || objective?.kind !== 'choice') return {};

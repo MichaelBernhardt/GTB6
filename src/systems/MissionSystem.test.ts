@@ -167,4 +167,68 @@ describe('missionUnlocked', () => {
     expect(missionUnlocked(gated, new Set(['a', 'b']), new Set(['act1']))).toBe(true);
     expect(missionUnlocked(def([]), new Set(), new Set())).toBe(true); // no prerequisites
   });
+
+  it('ignores orphaned ids in a restored completed set (a save from an older campaign never wedges)', () => {
+    // Prerequisites only ever ask has(id) — extra ids from missions that no longer exist are inert.
+    const gated = def([], { prerequisites: { missions: ['a'], flags: [] } });
+    expect(missionUnlocked(gated, new Set(['a', 'ghost-of-the-reverted-arc']), new Set())).toBe(true);
+  });
+});
+
+describe('completeActive — the `mission complete` console cheat', () => {
+  it('completes the active mission with the same update natural play produces', () => {
+    const system = new MissionSystem();
+    expect(system.start('delivery-run')).toBe(true);
+    const update = system.completeActive();
+    expect(update.completed?.id).toBe('delivery-run');
+    expect(update.completed?.reward).toBe(900); // the caller pays from this, exactly like natural completion
+    expect(system.completed.has('delivery-run')).toBe(true);
+    expect(system.state).toBe('complete');
+    expect(system.active).toBeUndefined();
+    expect(system.completed.size).toBe(1); // completing is not granting: nothing else moved
+  });
+
+  it('completes cleanly from mid-mission state (half-driven checkpoints, live timer)', () => {
+    const system = sim([def([
+      { kind: 'checkpoints', text: 'stops', required: 3 },
+      { kind: 'reach', text: 'bring it home', target: at(), timeLimit: 30 },
+    ])]);
+    system.start('sim');
+    system.registerCheckpoint(); // 1 of 3 — then the tester bails out
+    expect(system.completeActive().completed?.id).toBe('sim');
+    expect(system.remainingTime).toBe(0); // no stale countdown left ticking
+  });
+
+  it('refuses while a choice objective remains, then works once the choice is made for real', () => {
+    const system = new MissionSystem();
+    expect(system.start('arms-deal')).toBe(true);
+    expect(system.pendingChoice).toBe(true);
+    expect(system.completeActive()).toEqual({});
+    expect(system.state).toBe('active'); // untouched — still waiting on the real decision
+    expect(system.choose('protect').completed?.id).toBe('arms-deal');
+  });
+
+  it('refuses a choice buried BEYOND the current objective too', () => {
+    const system = sim([def([
+      { kind: 'reach', text: 'go', target: at() },
+      { kind: 'choice', text: 'pick a side', choices: [{ id: 'a', label: 'A', detail: '', reward: 0 }] },
+    ])]);
+    system.start('sim');
+    expect(system.pendingChoice).toBe(true); // the choice is objective 1, not 0
+    expect(system.completeActive()).toEqual({});
+    system.update(0.016, snapshot, true); // reach done → the choice is current
+    expect(system.choose('a').completed?.id).toBe('sim');
+  });
+
+  it('does nothing without an active mission, and never rescues a failed one', () => {
+    const system = new MissionSystem();
+    expect(system.completeActive()).toEqual({}); // nothing active
+    const timed = sim([def([{ kind: 'reach', text: 'go', target: at(), timeLimit: 10 }])]);
+    timed.start('sim');
+    timed.update(11, snapshot, false);
+    expect(timed.state).toBe('failed');
+    expect(timed.completeActive()).toEqual({}); // restart first — completing is not un-failing
+    expect(timed.state).toBe('failed');
+    expect(timed.completed.has('sim')).toBe(false);
+  });
 });

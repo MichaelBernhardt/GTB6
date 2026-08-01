@@ -7,6 +7,7 @@ export type ConsoleCommand =
   | { kind: 'noop' }
   | { kind: 'mission-list' }
   | { kind: 'mission-start'; index: number }
+  | { kind: 'mission-complete' }
   | { kind: 'help' }
   | { kind: 'fps' }
   | { kind: 'perfchart' }
@@ -123,6 +124,10 @@ export interface ConsoleHost {
   feature(args: string[]): string[];
   missionList(): string[];
   missionStart(index: number): string;
+  /** `mission complete` — finish the ACTIVE mission through the normal completion path (rewards,
+   *  flags, outro, diary). Completing is not granting: the next mission still has to be offered
+   *  and accepted in the world. A cheat by default, deliberately NOT in CHEAT_EXEMPT. */
+  missionComplete(): string;
 }
 
 const KINDS = Object.keys(VEHICLE_SPECS) as VehicleKind[];
@@ -167,6 +172,7 @@ export const HELP_LINES = [
   'fps — toggle the performance display (shows X/Y/Z position)',
   'perfchart — toggle the scrolling game-loop timing graph (stacked % of the 60fps budget per phase)',
   'mission [n] — list the missions, or jump-start mission n at its contact (replays even completed ones)',
+  'mission complete — finish the active mission (rewards paid; the next job must still be earned)',
   `spawn <kind> — drop a vehicle ahead, on the nearest kerb or on the ground when no road is close: ${KINDS.join(', ')}, bakkie`,
   'cheats — bakkie · pedalpedal · vroomvroom · ritchierich · unwanted · shedding · nomoresirens · teflon · opensesame',
 ];
@@ -276,8 +282,9 @@ export function parseCommand(input: string): ConsoleCommand {
   }
   if (head === 'mission') {
     if (rest.length === 0) return { kind: 'mission-list' };
+    if (rest.length === 1 && rest[0] === 'complete') return { kind: 'mission-complete' };
     const index = rest.length === 1 ? parseCount(rest[0]!) : undefined;
-    if (index === undefined || index < 1) return { kind: 'error', message: 'Usage: mission — list them · mission <n> — jump-start mission n (testing).' };
+    if (index === undefined || index < 1) return { kind: 'error', message: 'Usage: mission — list them · mission <n> — jump-start mission n · mission complete — finish the active one (testing).' };
     return { kind: 'mission-start', index };
   }
   return { kind: 'error', message: `Eish, unknown command: ${input.trim()}. Type "help" for the list.` };
@@ -326,5 +333,6 @@ export function runConsoleCommand(input: string, host: ConsoleHost): string[] {
     case 'feature': return host.feature(command.args);
     case 'mission-list': return host.missionList();
     case 'mission-start': return [host.missionStart(command.index)];
+    case 'mission-complete': return [host.missionComplete()];
   }
 }

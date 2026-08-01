@@ -120,6 +120,15 @@ describe('console parser', () => {
   it('does not treat cheat words with arguments as cheats', () => {
     expect(parseCommand('bakkie now').kind).toBe('error');
   });
+
+  it('parses mission list, jump-start and complete', () => {
+    expect(parseCommand('mission')).toEqual({ kind: 'mission-list' });
+    expect(parseCommand('mission 7')).toEqual({ kind: 'mission-start', index: 7 });
+    expect(parseCommand('Mission Complete')).toEqual({ kind: 'mission-complete' }); // tokenizer lowercases
+    for (const bad of ['mission complete now', 'mission done', 'mission 0', 'mission -1', 'mission two']) {
+      expect(parseCommand(bad).kind, bad).toBe('error');
+    }
+  });
 });
 
 describe('parseCoordinate', () => {
@@ -159,6 +168,7 @@ describe('runConsoleCommand', () => {
     setTime: (hour) => `time:${hour}`,
     missionList: () => ['mission:list'],
     missionStart: (index) => `mission:${index}`,
+    missionComplete: () => 'mission:complete',
     setTimerate: (rate) => `timerate:${rate}`,
     toggleFps: () => 'fps',
     togglePerfChart: () => 'perfchart',
@@ -233,6 +243,7 @@ describe('runConsoleCommand', () => {
     expect(runConsoleCommand('tp list', host)).toEqual(['place one', 'place two']);
     expect(runConsoleCommand('mission', host)).toEqual(['mission:list']);
     expect(runConsoleCommand('mission 3', host)).toEqual(['mission:3']);
+    expect(runConsoleCommand('mission complete', host)).toEqual(['mission:complete']);
     expect(runConsoleCommand('mission zero', host)[0]).toMatch(/Usage: mission/);
     expect(runConsoleCommand('mission 0', host)[0]).toMatch(/Usage: mission/);
     expect(runConsoleCommand('skyfall', host)).toEqual(['skyfall:here']);
@@ -285,6 +296,9 @@ describe('the cheat classification (default is CHEAT; exemptions are deliberate)
     'tp-name': true, 'skyfall': true, 'give-weapon': true, 'give-ammo': true, 'give-armour': true,
     'give-item': true, 'give-feature': true, 'opensesame': true, 'drunk': true,
     'mission-start': true, 'feature': true, // 'feature' WITH args; the bare list is special-cased below
+    // mission-complete skips the playing — a cheat by the owner's default rule, even when used for
+    // testing; that the tester's save gets flagged is intended.
+    'mission-complete': true,
   };
 
   it('classifies every command kind, most of them as cheats', () => {
@@ -300,6 +314,7 @@ describe('the cheat classification (default is CHEAT; exemptions are deliberate)
       'give-ammo': 'give ammo', 'give-armour': 'give armour', 'give-item': 'give lockpick',
       'give-feature': 'give tyres', 'opensesame': 'opensesame', 'drunk': 'drunk',
       'mission-start': 'mission 1', 'feature': 'feature interiors leave',
+      'mission-complete': 'mission complete',
     };
     for (const [kind, ruled] of Object.entries(RULINGS)) {
       const command = parseCommand(inputs[kind as ConsoleCommand['kind']]);
@@ -337,10 +352,11 @@ describe('the cheat chokepoint in runConsoleCommand', () => {
     runConsoleCommand('give tyres 2', host);
     runConsoleCommand('mapnpcs', host);
     runConsoleCommand('tp 10 10', host);
-    expect(marks).toHaveLength(5);
+    runConsoleCommand('mission complete', host);
+    expect(marks).toHaveLength(6);
     // a malformed command runs nothing and marks nothing
     runConsoleCommand('give tyres zero', host);
-    expect(marks).toHaveLength(5);
+    expect(marks).toHaveLength(6);
   });
 });
 

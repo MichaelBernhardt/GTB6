@@ -720,6 +720,20 @@ export class Game {
       this.teleportPlayer(mission.start.position.x, mission.start.position.z, mission.contact);
       return `Mission ${index} "${mission.name}" armed — you're with ${mission.contact}. Objective: ${this.missions.objective?.text ?? ''}`;
     },
+    // `mission complete` (a cheat, like mission <n>): the ACTIVE mission completes through the SAME
+    // path as natural play — processMissionUpdate pays, raises flags, plays the outro, grants the
+    // diary page and persists. Completing is not granting: the next mission is never armed here,
+    // so the organic offer flow (breadcrumb → walk up → E → dialogue) still has to happen.
+    missionComplete: () => {
+      const active = this.missions.active;
+      if (!active) return 'Eish, no active mission to complete. Type "mission" for the list.';
+      if (this.missions.state === 'failed') return `"${active.name}" is failed — press E to restart it first, then complete it.`;
+      if (this.missions.pendingChoice) return `"${active.name}" still has a choice to make — that call you make for real, then try again.`;
+      const update = this.missions.completeActive();
+      if (!update.completed) return 'Eish, that mission would not complete.';
+      this.processMissionUpdate(update);
+      return `Mission "${update.completed.name}" complete — rewards paid. The next job still has to be offered: follow the breadcrumb and press E.`;
+    },
   };
 
   /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeActivityRecords, sanitizeCheats, sanitizeEverCheated, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
+import { DEFAULT_CHEATS, DEFAULT_INVENTORY, DEFAULT_SAVE, DEFAULT_TIME_OF_DAY, STARTER_SAFEHOUSE, SaveManager, defaultWeapons, sanitizeActivityRecords, sanitizeCheats, sanitizeCompletedMissions, sanitizeEverCheated, sanitizeGarage, sanitizeInventory, sanitizeDiaryPages, sanitizeSafehouses, sanitizeStoryFlags, sanitizeTimeOfDay, sanitizeWeapons, type StorageLike } from './SaveManager';
 import { ARMOUR_MAX, LOCKPICK_MAX, PARACHUTE_MAX, STIM_MAX } from './GameRules';
 import type { CheatSettings, GameSettings, Inventory, SavedVehicle, SavedWeapons } from '../types';
 import { MAP_WORLD_SIZE } from '../world/mapData';
@@ -364,5 +364,44 @@ describe('the sticky ever-cheated flag', () => {
 
   it('starts every new game clean', () => {
     expect(DEFAULT_SAVE.everCheated).toBe(false);
+  });
+});
+
+describe('moved waypoints cannot wedge a mid-campaign save (round 4 moved half the anchors)', () => {
+  // The contract (see sanitizeCompletedMissions): the save persists WHICH missions are done and
+  // WHERE the player is — never the active mission, objective index, or a waypoint coordinate.
+  // Targets are recomputed from placements at boot, so an old save re-aims on load by construction.
+  it('pins the save schema: no mission-runtime or waypoint state may creep in', () => {
+    expect(Object.keys(DEFAULT_SAVE).sort()).toEqual([
+      'activityRecords', 'cheats', 'completedMissions', 'diaryPages', 'everCheated', 'features',
+      'garage', 'heading', 'inventory', 'livingCity', 'money', 'position', 'safehouses', 'settings',
+      'spawn', 'storyFlags', 'timeOfDay', 'version', 'weapons',
+    ]); // adding activeMission/objectiveIndex/waypoint here means re-answering how moved anchors load
+  });
+
+  it('keeps orphaned mission ids and drops junk from completedMissions', () => {
+    expect(sanitizeCompletedMissions(['delivery-run', 'ghost-of-the-reverted-arc', 'delivery-run', 42, null, 'NOT VALID', {}]))
+      .toEqual(['delivery-run', 'ghost-of-the-reverted-arc']); // orphans stay inert-but-remembered; junk drops
+    expect(sanitizeCompletedMissions('delivery-run')).toEqual([]);
+    expect(sanitizeCompletedMissions(undefined)).toEqual([]);
+  });
+
+  it('loads a mid-campaign save written against the old map: progress intact, positions re-anchored', () => {
+    const storage = new MemoryStorage(); const manager = new SaveManager(storage);
+    const half = MAP_WORLD_SIZE / 2;
+    storage.setItem('groot-theft-bakkie-save-v1', JSON.stringify({
+      ...DEFAULT_SAVE,
+      completedMissions: ['delivery-run', 'hot-property', 'dockside-signal'],
+      storyFlags: ['act1', 'choice:arms-deal:protect'],
+      diaryPages: [1, 2],
+      spawn: [half + 200, 2, 0], // a pre-crop coordinate, now out of bounds
+      position: [-(half + 90), 2, half + 400], // saved mid-drive toward an anchor that has since moved
+    }));
+    const loaded = manager.load();
+    expect(loaded.completedMissions).toEqual(['delivery-run', 'hot-property', 'dockside-signal']);
+    expect(loaded.storyFlags).toEqual(['act1', 'choice:arms-deal:protect']);
+    expect(loaded.diaryPages).toEqual([1, 2]);
+    expect(loaded.spawn).toEqual(DEFAULT_SAVE.spawn); // out-of-world spawn → the starter anchor
+    expect(loaded.position).toEqual(loaded.spawn); // out-of-world resume point follows the spawn
   });
 });
