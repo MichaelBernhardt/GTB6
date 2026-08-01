@@ -222,6 +222,21 @@ export class Vehicle {
 
   setFirstPerson(firstPerson: boolean): void { this.firstPerson = firstPerson; for (const part of this.cabinParts) part.visible = !firstPerson; } // hide cabin glass/roof so the driver view is unobstructed
 
+  /**
+   * A rock on the suspension that is PURELY PRESENTATIONAL: pitch and roll in radians and a lift in
+   * metres, applied to the drawn body alone.
+   *
+   * `group` is the physics body — its position is the collider, the nav target, the camera focus and
+   * what every other system means by "where that car is" — so a cutscene must never touch it. This
+   * moves the model hanging under it instead, which means collision, traffic, police and ragdoll all
+   * go on seeing a parked car while the springs do the acting. `(0, 0, 0)` puts the body back, and
+   * calling it on a vehicle whose model has not mounted yet is a no-op.
+   */
+  setBodySway(pitch: number, roll: number, lift = 0): void {
+    const root = this.detailRoot; if (!root) return;
+    root.rotation.x = pitch; root.rotation.z = roll; root.position.y = lift;
+  }
+
   /** Kept for the public driving API; the uniform minibus fleet has no roof-mounted duty light. */
   setTaxiLight(available: boolean): void { void available; /* taxi duty remains visible in the HUD */ }
 

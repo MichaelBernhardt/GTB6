@@ -138,6 +138,7 @@ ever loads or not, and the eager list gets it for free.
 | Save state | return it from `serialize()`; it arrives back as the `state` argument |
 | Money | `api.balance()`, `api.earn(n)`, `api.spend(n)` (returns false when short) |
 | An NPC standing a spot | `api.spawnFixture(x, z, name)` |
+| A cutscene: bars, a fixed lens, neutral controls | `api.cinema({ eye, focus, hint })` each tick; `api.cinema(undefined)` ends it |
 | A debug command | `feature <id> …` in the console → your `command(args)` |
 | A machine playthrough | `window.__qa.feature('<id>', action)` → your `qa(action, args)` |
 | Analytics | `api.analytics('round_banked', { value: 3 })` — your id is bound in for you |
@@ -234,6 +235,16 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
   in-flight guard and the same never-auto-retry rule. It is deliberately **not on
   `FeatureApproach`**: one feature needs it, the host duck-types it, and `registry.ts` casts. Fold it
   into the type when a second feature wants it.
+- **A cutscene is `api.cinema`, and it is not a pause.** The street's short time is the game's first
+  one and the seam was built for the second: pass a shot every tick and the bars slide in, the camera
+  cranes to that pose and the control branch goes neutral, while the world underneath keeps running —
+  traffic, the clock, the radio. That last one is deliberate. `showMenu` would have been the lazy
+  answer and it is the wrong one: a paused world runs **no sim step**, so your feature's `update()`
+  stops, and a scene driven from a paused screen simply freezes on frame one. Three rules the street
+  learned: read the RETURN (it is the skip edge — a scene with no way out gets reported as a hang),
+  lower the bars *before* you open any card, and treat the seam as optional (`api.cinema?.`) so a host
+  without it goes straight to whatever the scene was presentation for. The scene must never be where
+  the payoff lives, or skipping it becomes a punishment.
 - **The camera boom is 9.5 units and you cannot shorten it.** `Game.updateCamera` special-cases the
   plane, the train and a skydive; a feature cannot add a case, and `CameraController` only shortens
   the boom against `City.colliders`, which a feature cannot register. So anything that encloses the
@@ -262,6 +273,7 @@ Boot cost of a lazy feature is the ~280 B loader stub. That is the whole point.
 | The eager map + minimap blips | `src/features/mapIcons.ts`, merged by `UIManager.drawMap`/`updateMap` |
 | The proximity ring (`approach.near`, or `approach.preload`) | `FeatureHost.preloadNearby` |
 | The ordered interaction ladder | `src/features/interactions.ts` |
+| Cutscenes: bars, lens, neutral controls | `FeatureGameApi.cinema` → `Game.updateCinemaBars`/`applyCinemaShot`, `UIManager.setLetterbox` |
 | The save sanitizer | `src/features/save.ts` |
 | The contract | `src/features/types.ts` |
 | Game's four interaction branches | `Game.updateOnFoot`, `Game.updateDriving`, `Game.renderHUD` (×2) |
