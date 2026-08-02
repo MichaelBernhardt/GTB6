@@ -49,8 +49,8 @@ import type { FeatureGameApi, FeatureHudEntry, FeatureSystem, InteractionDescrip
 import { PLAYER } from '../../config';
 import { FIND_CAP, type InteriorDoor, type InteriorsSave } from '../interiors.state';
 import {
-  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, INTERIOR_LAMP_INTENSITY, MARKER_LOCKED, MARKER_OPEN,
-  markerFade, toLocal, toWorld,
+  BOOM, buildDoorways, buildFloor, EXIT_MAT_IN, FADE_FAR, INTERIOR_LAMP_INTENSITY, MARKER_LOCKED, MARKER_OPEN,
+  markerFade, seatMarker, toLocal, toWorld,
   type BuiltDoorways, type BuiltFloor,
 } from './build';
 import {
@@ -86,6 +86,29 @@ const STREAM_SLACK = 28;
  *  past the cap was a house with no circle — "many residential buildings don't allow entry". ~6
  *  meshes per marker keeps 32 of them trivial. */
 const STREAM_CAP = 32;
+/**
+ * HOW FAR A DOORSTEP CAN BE AND STILL BE WORTH PROBING, and how many probes one simulation step may
+ * pay for. This pair is the fix for the owner's travel stutter, so it is worth stating plainly.
+ *
+ * A marker's resting height comes from a downward ray through the whole scene graph, and the scene
+ * graph's heaviest object by far is the merged per-cell city geometry: one Mesh per material for a
+ * whole 976 u cell, 667k triangles in the CBD, with no acceleration structure. three.js answers a
+ * point query against that by testing every triangle — 33 ms a ray, measured
+ * (tools/qa/travel-stutter.ts). Streaming built the nearest 32 markers out to STREAM_RANGE and
+ * probed every door it had not seen before, every time the player got STREAM_SLACK from where it
+ * last built. At a 13 u·s⁻¹ sprint that is a re-stream every 2.15 s, ~4 fresh doors each time, and
+ * ~130 ms of raycasting landing on ONE frame — a hitch you can feel, on repeat, for as long as you
+ * travel in a straight line, and nothing at all standing still or pacing about.
+ *
+ * The waste is that a marker is fully transparent past FADE_FAR: the streamer was buying a
+ * centimetre-exact height for discs nobody can see. So a doorstep further than FADE_FAR plus one
+ * re-stream's slack is seated on the collider stand height instead, and refine() pays the real ray
+ * when it comes into view — at most PROBE_BUDGET a step, so the cost can never bunch again. The
+ * probes are the same probes, on the same doorsteps, cached for the session exactly as before;
+ * only WHEN they are paid for has changed.
+ */
+const PROBE_RANGE = FADE_FAR + STREAM_SLACK;
+const PROBE_BUDGET = 1;
 /** Hold a floor this long after the player leaves its sightline, so pacing up and down a few steps
  *  cannot thrash generation. */
 const RELEASE_DWELL = 0.8;
@@ -235,15 +258,17 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
 
   /** Cache of raycast-derived marker heights, keyed per doorstep. The drawn ground is static, so
    *  each door pays one ray in its lifetime instead of one per 28 u re-stream; fallback answers
-   *  (chunk not built yet, so no drawn surface to hit) are deliberately NOT cached, so the next
-   *  re-stream refines them once the geometry lands. */
+   *  (chunk not built yet, so no drawn surface to hit) are deliberately NOT cached, so a later
+   *  refinement gets the real surface once the geometry lands. */
   const markerHeights = new Map<string, { y: number; nx: number; ny: number; nz: number }>();
-  /** True while any streamed marker stands on a FALLBACK height (its chunk had no drawn surface
-   *  yet when the ray was cast). update() re-streams every ~1.5 s until every marker has a real
-   *  surface under it — without this, a disc placed before its paving landed stayed subtly
-   *  subsurface until the player happened to walk 28 u. */
+  const markerKey = (px: number, pz: number): string => `${Math.round(px * 4)},${Math.round(pz * 4)}`;
+  /** True while any streamed marker stands on a FALLBACK height — its chunk had no drawn surface
+   *  yet, or the probe budget below deferred it. refine() re-probes those markers in place, under
+   *  the same budget, until none are left. */
   let markersProvisional = false;
-  let provisionalRetry = 0;
+  /** Ground probes left this simulation step, and the point PROBE_RANGE is measured from. */
+  let probeBudget = 0;
+  let probeFocusX = 0; let probeFocusZ = 0;
   const markerRay = new THREE.Raycaster();
   /**
    * A PLACEMENT PROBE MUST NEVER BE ABLE TO THROW. This ray walks the whole scene graph looking for
@@ -268,19 +293,32 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   /**
    * The marker's resting height: the RENDERED surface under the doorstep — the paving the player
    * actually sees — probed by a single downward ray, with a small proudness so seams and slopes
-   * cannot swallow the disc, and extra lift on steep hits so the rim stays clear. The collider
-   * stand height (then terrain) is the fallback while the chunk is still baking. This is the
+   * cannot swallow the disc, and extra lift on steep hits so the rim stays clear. This is the
    * third and final derivation: terrain height buried discs inside foundation colliders, collider
    * height left them under the foundation's drawn paving (the visual rides up to ~0.25 above the
    * collider, unknowably), and only the drawn surface itself is always where the eye says it is.
+   *
+   * The collider stand height (then terrain) remains the fallback in the three cases where the ray
+   * is not worth casting yet: the chunk has not baked, so there is nothing to hit; the step is
+   * beyond PROBE_RANGE, where the marker is transparent and the difference cannot be seen; or this
+   * step's PROBE_BUDGET is spent. All three are provisional, uncached, and refined by refineMarkers.
    */
   const markerSurface = (px: number, pz: number): { y: number; nx: number; ny: number; nz: number } => {
-    const key = `${Math.round(px * 4)},${Math.round(pz * 4)}`;
+    const key = markerKey(px, pz);
     const cached = markerHeights.get(key);
     if (cached !== undefined) return cached;
     const terrain = api.surfaceHeightAt(px, pz);
     const stand = api.standHeightAt?.(px, pz) ?? terrain;
     const reference = Math.max(stand, terrain);
+    const provisional = { y: reference + 0.04, nx: 0, ny: 1, nz: 0 };
+    // OUT OF SIGHT, OR OUT OF BUDGET: take the collider stand height and refine later. A marker is
+    // fully transparent past FADE_FAR, so the difference between this and the ray's answer is
+    // literally unobservable on a disc 190 u down the street — and it is not worth 33 ms.
+    if (probeBudget <= 0 || Math.hypot(px - probeFocusX, pz - probeFocusZ) > PROBE_RANGE) { markersProvisional = true; return provisional; }
+    // Nothing is drawn to hit until the chunk has baked. Probing anyway spends the whole budget on a
+    // ray that cannot answer, every frame, for as long as the player stands there.
+    if (api.chunkBuiltAt && !api.chunkBuiltAt(px, pz)) { markersProvisional = true; return provisional; }
+    probeBudget -= 1;
     markerRay.set(new THREE.Vector3(px, reference + 6, pz), RAY_DOWN);
     for (const hit of markerRay.intersectObjects(api.scene.children, true)) {
       if (!(hit.object as THREE.Mesh).isMesh) continue; // sprites, points, lines: never pavement
@@ -298,20 +336,39 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
       return found;
     }
     markersProvisional = true;
-    return { y: reference + 0.04, nx: 0, ny: 1, nz: 0 }; // nothing drawn yet: best-effort, uncached, refined next stream
+    return provisional; // the chunk is built but nothing lies under the step: best-effort, uncached
   };
 
   const streamDoorways = (x: number, z: number): void => {
+    probeFocusX = x; probeFocusZ = z;
     const near = doorsNear(x, z, STREAM_RANGE)
       .sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))
       .slice(0, STREAM_CAP);
     const wanted = near.map((door) => door.id).join('|');
-    if (doorways && wanted === doorways.ids.join('|') && !markersProvisional) { builtAt = { x, z }; return; }
+    if (doorways && wanted === doorways.ids.join('|')) { builtAt = { x, z }; return; }
     doorways?.dispose();
-    markersProvisional = false; // markerSurface re-raises it if any door still lacks drawn ground
+    markersProvisional = false; // markerSurface re-raises it for any door it deferred
     doorways = buildDoorways(near, markerSurface);
     api.scene.add(doorways.group);
     builtAt = { x, z };
+  };
+
+  /** Re-probe the markers that were placed on a provisional height and are now close enough to see,
+   *  seating each one in place. This is the drain for the budget above: no doorsNear, no teardown,
+   *  no rebuild — a marker moves, and the ones already seated are never touched again. */
+  const refineMarkers = (x: number, z: number): void => {
+    if (!doorways) { markersProvisional = false; return; }
+    probeFocusX = x; probeFocusZ = z;
+    let pending = false;
+    for (const marker of doorways.markers) {
+      const key = markerKey(marker.x, marker.z);
+      if (markerHeights.has(key)) continue;
+      if (Math.hypot(marker.x - x, marker.z - z) > PROBE_RANGE) { pending = true; continue; }
+      if (probeBudget <= 0) { pending = true; break; }
+      const step = markerSurface(marker.x, marker.z);
+      if (markerHeights.has(key)) seatMarker(marker, step); else pending = true;
+    }
+    markersProvisional = pending;
   };
 
   // ---- floors, on demand -------------------------------------------------------------------------
@@ -1052,13 +1109,13 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     update: (dt) => {
       const player = api.playerPosition();
       const current = visit;
+      probeBudget = PROBE_BUDGET; // one ground ray a step, spent by whichever of the two branches asks
       if (!current && (!builtAt || Math.hypot(player.x - builtAt.x, player.z - builtAt.z) > STREAM_SLACK)) {
         streamDoorways(player.x, player.z);
       } else if (!current && markersProvisional) {
-        // Some markers were placed before their paving streamed in: retry until every disc has a
-        // real drawn surface under it (each retry re-rays only the uncached doors).
-        provisionalRetry += dt;
-        if (provisionalRetry > 1.5) { provisionalRetry = 0; streamDoorways(player.x, player.z); }
+        // Markers placed before their paving streamed in, or deferred by the probe budget: seat them
+        // in place as they come into view. One ray a step, so this can never bunch into a hitch.
+        refineMarkers(player.x, player.z);
       }
       phase += dt;
       clock += dt;
