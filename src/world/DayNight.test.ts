@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { advanceBlackout, advanceHour, applyBlackout, BLACKOUT_FADE_SECONDS, createSkySample, DAY_CYCLE_SECONDS, DAWN_END, DAWN_START, DUSK_END, DUSK_START, formatClock, nightFactor, sampleSky, selectNearest, SKY_KEYFRAMES, sunDirection, wrapHour } from './DayNight';
+import { advanceBlackout, advanceHour, applyBlackout, BLACKOUT_FADE_SECONDS, createSkySample, DAY_CYCLE_SECONDS, DAWN_END, DAWN_START, DUSK_END, DUSK_START, formatClock, headlightWorldY, nightFactor, sampleSky, selectNearest, SKY_KEYFRAMES, streetlightWorldY, sunDirection, wrapHour } from './DayNight';
 
 describe('day/night clock', () => {
   it('advances in game hours and wraps at midnight', () => {
@@ -111,6 +111,13 @@ describe('sun path', () => {
 });
 
 describe('light pool assignment', () => {
+  it('keeps practical and headlight pools above elevated CBD surfaces', () => {
+    expect(streetlightWorldY(8.63)).toBeCloseTo(14.33);
+    expect(headlightWorldY(8.63).lamp).toBeCloseTo(9.48);
+    expect(headlightWorldY(8.63).target).toBeCloseTo(8.68);
+    expect(streetlightWorldY(0)).toBeCloseTo(5.7); // flat districts retain their authored fixture height
+  });
+
   it('selects the N nearest points ordered by ascending distance', () => {
     const xz = Float32Array.from([0, 0, 10, 0, 3, 4, 100, 100, -1, -1]);
     const indices: number[] = []; const distances: number[] = [];

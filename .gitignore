@@ -19,3 +19,4 @@ __pycache__/
 !art/vehicles/work/*-source.blend
 *.fbx
 .claude/worktrees/
+gauntlet/evidence/

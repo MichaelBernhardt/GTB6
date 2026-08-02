@@ -18,15 +18,15 @@ export const DUSK_START = 17.7; export const DUSK_END = 19.5;
 export const STREETLIGHT_POOL: Record<BaseQuality, number> = { low: 4, medium: 8, high: 12 };
 export const HEADLIGHT_POOL: Record<BaseQuality, number> = { low: 2, medium: 4, high: 6 };
 
-const STREETLIGHT_RADIUS = 18; const STREETLIGHT_INTENSITY = 30; const STREETLIGHT_COLOR = 0xffb45e;
-const HEADLIGHT_RANGE = 36; const HEADLIGHT_INTENSITY = 48; const HEADLIGHT_COLOR = 0xfff3cf;
+const STREETLIGHT_RADIUS = 22; const STREETLIGHT_INTENSITY = 48; const STREETLIGHT_COLOR = 0xffb45e;
+const HEADLIGHT_RANGE = 36; const HEADLIGHT_INTENSITY = 60; const HEADLIGHT_COLOR = 0xfff3cf;
 const LAMP_HEIGHT = 5.7; // just below the fixture built in UrbanInfrastructure (bulb at y=6.02)
 const DISC_DISTANCE = 1750; // sun/moon disc distance from the focus (camera far is 2600)
-const FACADE_NIGHT_EMISSIVE = 1.25;
+const FACADE_NIGHT_EMISSIVE = 0.82;
 
 export interface SkyKeyframe { hour: number; sky: number; fog: number; sun: number; sunIntensity: number; hemiSky: number; hemiGround: number; hemiIntensity: number; ambient: number; ambientIntensity: number; }
 
-const NIGHT: Omit<SkyKeyframe, 'hour'> = { sky: 0x0b1322, fog: 0x0d1726, sun: 0x93a9d6, sunIntensity: 0.4, hemiSky: 0x1e2d4a, hemiGround: 0x11171c, hemiIntensity: 0.55, ambient: 0x31436a, ambientIntensity: 0.2 };
+const NIGHT: Omit<SkyKeyframe, 'hour'> = { sky: 0x0b1322, fog: 0x0d1726, sun: 0x93a9d6, sunIntensity: 0.4, hemiSky: 0x243858, hemiGround: 0x151c22, hemiIntensity: 0.66, ambient: 0x3a4f78, ambientIntensity: 0.23 };
 
 /** Sorted by hour; the first frame must sit at hour 0 and the last wraps back to it across midnight. */
 export const SKY_KEYFRAMES: SkyKeyframe[] = [
@@ -110,6 +110,12 @@ export function sampleSky(hour: number, out: SkySample): SkySample {
 export function sunDirection(hour: number, out: THREE.Vector3): THREE.Vector3 {
   const angle = ((hour - 6) / 24) * Math.PI * 2;
   return out.set(Math.cos(angle) * 0.92, Math.sin(angle) * 0.88 + 0.03, 0.42).normalize();
+}
+
+/** Dynamic-light Y helpers are exported so elevated districts cannot regress to sea-level pools. */
+export function streetlightWorldY(surfaceY: number): number { return surfaceY + LAMP_HEIGHT; }
+export function headlightWorldY(vehicleY: number): { lamp: number; target: number } {
+  return { lamp: vehicleY + 0.85, target: vehicleY + 0.05 };
 }
 
 /** Writes the indices of the `count` nearest xz pairs to (fx, fz) into outIndices, ascending by distance.
@@ -223,7 +229,8 @@ export class DayNightSystem {
       this.streetFocusX = focus.x; this.streetFocusZ = focus.z; this.streetRefresh = 0; this.streetActive = true;
       for (let slot = 0; slot < this.streetFound; slot++) {
         const lamp = this.lampIndices[slot]!;
-        pool[slot]!.position.set(this.lampXZ[lamp * 2]!, LAMP_HEIGHT, this.lampXZ[lamp * 2 + 1]!);
+        const x = this.lampXZ[lamp * 2]!; const z = this.lampXZ[lamp * 2 + 1]!;
+        pool[slot]!.position.set(x, streetlightWorldY(this.city.surfaceHeightAt(x, z)), z);
       }
     }
     for (let slot = 0; slot < pool.length; slot++) {
@@ -260,8 +267,9 @@ export class DayNightSystem {
     const position = vehicle.group.position;
     const forwardX = Math.sin(vehicle.heading); const forwardZ = Math.cos(vehicle.heading);
     const nose = vehicle.spec.size[2] / 2 + 0.2;
-    light.position.set(position.x + forwardX * nose, 0.85, position.z + forwardZ * nose);
-    light.target.position.set(position.x + forwardX * (nose + 14), 0.05, position.z + forwardZ * (nose + 14));
+    const y = headlightWorldY(position.y);
+    light.position.set(position.x + forwardX * nose, y.lamp, position.z + forwardZ * nose);
+    light.target.position.set(position.x + forwardX * (nose + 14), y.target, position.z + forwardZ * (nose + 14));
     light.intensity = night * HEADLIGHT_INTENSITY;
   }
 }

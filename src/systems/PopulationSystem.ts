@@ -23,7 +23,8 @@ import { MISSIONS } from './MissionSystem';
 import { ProgressWatchdog, roadClosures, roadHazards, RoutePlanner, type NavPoint } from './NavGraph';
 import { AVOID_RANGE, bumperAhead, carYields, corridorBlocked, DODGE_AHEAD, DODGE_SIDE, DODGE_THROTTLE, DODGE_TIME, firstHonkDelay, hazardBand, HAZARD_PATIENCE, HAZARD_REHONK, HAZARD_SCAN, HAZARD_STOP_MARGIN, HAZARD_SWERVE_AHEAD, HAZARD_SWERVE_THROTTLE, HIT_COOLDOWN, HIT_SPEED_KEEP, HOLD_SPEED, holdRelease, overlapPush, pullAroundPatience, pullAroundSide, rehonkDelay, threadHazards, vehicleHitDamage, type HazardBand } from './TrafficAvoidance';
 import type { City, RoadPoint } from '../world/City';
-import { HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
+import { CBD_HERO_CORRIDOR, HOSTILE_SPOTS, PARKED_VEHICLES, SPAWN_POINT } from '../world/placements';
+import { selectCbdHeroPedestrianSites } from '../world/cbdHeroCorridor';
 import { powerOn } from '../world/powerGrid';
 import { stablePositionRandom } from '../world/StableRandom';
 import {
@@ -829,9 +830,13 @@ export class PopulationSystem {
     // Opening crowd walks the resumed district; the lifecycle census takes over from there.
     const nearby = this.city.sidewalkPoints.filter((point) => (point.x - this.playerPos.x) ** 2 + (point.z - this.playerPos.z) ** 2 < 320 * 320);
     const pool = nearby.length >= 40 ? nearby : this.city.sidewalkPoints;
+    const heroSites = selectCbdHeroPedestrianSites(CBD_HERO_CORRIDOR, pool, this.playerPos);
     for (let i = 0; i < 28; i++) {
-      const point = pool[(i * 17 + 4) % pool.length]; if (!point) continue;
-      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant(point.x, point.z)); ped.pickDestination(this.localChoice(point.x, point.z)); this.pedestrians.push(ped);
+      const point = heroSites[i] ?? pool[(i * 17 + 4) % pool.length]; if (!point) continue;
+      const ped = new Pedestrian(this.scene, this.clearSpawn(point.x, point.z), i, false, false, this.nextAmbientNpcVariant(point.x, point.z));
+      if (i < heroSites.length) { ped.state = 'idle'; ped.idleTime = 999999; }
+      else ped.pickDestination(this.localChoice(point.x, point.z));
+      this.pedestrians.push(ped);
     }
     const seenContacts = new Set<string>(); // one body per contact, at their first-listed mission's spot
     MISSIONS.forEach((mission, index) => {

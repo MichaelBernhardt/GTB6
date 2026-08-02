@@ -43,7 +43,8 @@ import { beachBands, farWaterOutline, isSandZ, OCEAN_Y, shoreColourAt, WATER_HOR
 import { buildAirport } from './Airport';
 import { BEACHFRONT } from './beachfront';
 import { buildPleasurePier } from './models/pier';
-import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
+import { CBD_HERO_CORRIDOR, HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
+import { CBD_HERO_FACADE_ROLES, cbdHeroFacadeRole, cbdHeroRoadXAt, type CbdHeroFacadeRole } from './cbdHeroCorridor';
 import { boardText, parcelBuildingName, scatterBuildingName } from './buildingIdentity';
 import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type GeneratedBuilding } from './CityGen';
 import { fenceSegmentCollider, planParcelFence, type FencePlan } from './ParcelFences';
@@ -956,6 +957,14 @@ export class City {
   private foundationMaterial = new THREE.MeshStandardMaterial({ color: 0xb4b3aa, map: this.concrete, roughness: 0.92 });
   private neighbourhoodFoundationMaterials = new Map<string, { wall: THREE.MeshStandardMaterial; accent: THREE.MeshStandardMaterial }>();
   private foundationJointMaterial = new THREE.MeshStandardMaterial({ color: 0x343a39, map: this.concrete, roughness: 0.94 });
+  // Shared hero-corridor accents. Buildings still merge by material inside their streamed cell, so
+  // eight different rhythms cost six material buckets rather than one draw call per ornament.
+  private heroBrick = new THREE.MeshStandardMaterial({ color: 0x8e4a35, map: this.concrete, roughness: 0.9 });
+  private heroCream = new THREE.MeshStandardMaterial({ color: 0xd6c39b, map: this.concrete, roughness: 0.84 });
+  private heroDark = new THREE.MeshStandardMaterial({ color: 0x263336, metalness: 0.58, roughness: 0.42 });
+  private heroGlass = new THREE.MeshStandardMaterial({ color: 0x397380, emissive: 0x173d48, emissiveIntensity: 0.04, metalness: 0.22, roughness: 0.2 });
+  private heroGreen = new THREE.MeshStandardMaterial({ color: 0x476f55, roughness: 0.75, metalness: 0.12 });
+  private heroGold = new THREE.MeshStandardMaterial({ color: 0xc08a31, metalness: 0.55, roughness: 0.42 });
   private sidewalk = createSidewalkTexture();
   // Default veld ground: the same dry turf as wild parks. Ground uses 0..1 plane UVs, so repeat = WORLD_SIZE/6
   // gives the same ~6u tile as the world-space park lawns. Macro-detiled in the shader, no wind on the open ground.
@@ -1250,6 +1259,7 @@ export class City {
   setFacadeGlow(intensity: number): void {
     this.facadeGlow = intensity;
     for (const material of this.buildingMaterial.values()) material.emissiveIntensity = intensity;
+    this.heroGlass.emissiveIntensity = 0.04 + intensity * 0.62;
   }
 
   streetlightLampsXZ(): Float32Array { return this.infrastructure.lampsXZ; }
@@ -2812,7 +2822,9 @@ export class City {
     }
     const baseY = hMax;
     const plinthDrop = baseY - hMin + 1.8; // from the building base down past the lowest corner, buried
-    const facadeIndex = neighbourhoodFacadeIndex(district, style, sourceVariant);
+    const heroRole = cbdHeroFacadeRole(CBD_HERO_CORRIDOR.spawn, spec.x, spec.z);
+    const heroAtlas = heroRole ? [1, 2, 5, 3, 0, 4, 1, 5][CBD_HERO_FACADE_ROLES.indexOf(heroRole)] : undefined;
+    const facadeIndex = heroAtlas ?? neighbourhoodFacadeIndex(district, style, sourceVariant);
     const palette = BUILDING_PALETTES[style];
     const color = palette[facadeIndex % palette.length] ?? 0x9aa4a8;
     const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);
@@ -2855,6 +2867,7 @@ export class City {
       ? planShopBays(profile.tiers, w, h, variant % ARCHITECTURE_VARIANTS.downtown, variant, profile.entrance) : [];
     const shopfronted = shopBays.length > 0;
     if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName, shopfronted);
+    if (heroRole && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addCbdHeroFacade(spec, profile, heroRole);
     this.addGrimeDecals(spec, style, profile, shopBays, districtGrimeScale(district));
     this.addRoofEquipment(0, 0, w, d, h, profile.tiers, profile.gables, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.tiers, profile.gables, variant);
@@ -3243,6 +3256,118 @@ export class City {
       quad.position.set(decal.x, decal.y, decal.z);
       quad.receiveShadow = true; quad.name = 'street-grime-decal';
       this.target.add(quad);
+    }
+  }
+
+  /**
+   * Dress whichever local Z face actually looks onto Risk-It Street. This matters on the west kerb:
+   * generated parcels face their source road, so the default camera used to see an undressed service
+   * wall even though the opposite facade had a shopfront. All pieces use the six shared materials above
+   * and are merged into the streamed cell with the building.
+   */
+  private addCbdHeroFacade(spec: GeneratedBuilding, profile: BuildingProfile, role: CbdHeroFacadeRole): void {
+    const tiers = profile.tiers.filter((tier) => tier.kind !== 'wall');
+    const roadX = cbdHeroRoadXAt(CBD_HERO_CORRIDOR.spawn, spec.z);
+    const localRoadZ = (roadX - spec.x) * Math.sin(spec.heading);
+    const side = localRoadZ >= 0 ? 1 : -1;
+    const candidates = tiers.filter((tier) => tier.y1 - tier.y0 >= 6 && tier.maxX - tier.minX >= 4);
+    const host = candidates.sort((a, b) =>
+      (b.y1 - b.y0) * (b.maxX - b.minX) - (a.y1 - a.y0) * (a.maxX - a.minX))[0];
+    if (!host) return;
+    const faceZ = side > 0 ? host.maxZ : host.minZ;
+    const cx = (host.minX + host.maxX) / 2; const width = host.maxX - host.minX;
+    const low = Math.max(host.y0 + 0.55, 4.5); const top = Math.min(host.y1 - 0.45, low + 29);
+    const span = top - low; if (span < 3.5) return;
+    const surface = (
+      w: number, h: number, depth: number, x: number, y: number,
+      material: THREE.Material, z = faceZ,
+    ): THREE.Mesh => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.max(0.08, w), Math.max(0.08, h), Math.max(0.05, depth)), material);
+      mesh.position.set(x, y, z + side * (depth / 2 + 0.045)); mesh.castShadow = depth > 0.12; mesh.receiveShadow = true;
+      this.target.add(mesh); return mesh;
+    };
+
+    // Warm, human-scaled base on the true corridor face: four differently sized panes and a deep
+    // canopy break the old blank service slabs without inventing text or unique materials.
+    const baseHost = tiers.filter((tier) => tier.y0 <= 0.8 && tier.y1 >= 3.6)
+      .sort((a, b) => (b.maxX - b.minX) - (a.maxX - a.minX))[0];
+    if (baseHost) {
+      const baseFace = side > 0 ? baseHost.maxZ : baseHost.minZ;
+      const baseW = Math.min(baseHost.maxX - baseHost.minX - 1.2, 14);
+      const paneW = baseW / 4 - 0.22; const left = (baseHost.minX + baseHost.maxX) / 2 - baseW / 2;
+      for (let pane = 0; pane < 4; pane++) {
+        const paneX = left + paneW / 2 + pane * (paneW + 0.22);
+        surface(paneW * (pane === 1 ? 0.84 : 1), 2.35, 0.1, paneX, 1.65, this.heroGlass, baseFace);
+      }
+      surface(baseW + 0.7, 0.24, 1.35, (baseHost.minX + baseHost.maxX) / 2, 3.25, role === 'heritage-arcade' || role === 'heritage-veranda' ? this.heroGold : this.heroDark, baseFace);
+    }
+
+    const innerW = width * 0.86; const midY = (low + top) / 2;
+    const columnXs = (count: number, inset = 0.08): number[] => Array.from({ length: count }, (_, index) =>
+      cx - width * (0.5 - inset) + index * width * (1 - inset * 2) / Math.max(1, count - 1));
+
+    switch (role) {
+      case 'heritage-arcade': {
+        surface(innerW, span, 0.14, cx, midY, this.heroBrick);
+        for (const x of columnXs(6, 0.1)) surface(0.48, span + 0.5, 0.36, x, midY, this.heroCream);
+        for (const y of [low + 0.2, low + span * 0.52, top - 0.15]) surface(width * 0.94, 0.34, 0.5, cx, y, this.heroCream);
+        break;
+      }
+      case 'art-deco': {
+        surface(innerW, span, 0.13, cx, midY, this.heroCream);
+        surface(width * 0.13, span + 1.1, 0.45, cx, midY + 0.3, this.heroDark);
+        for (const [index, x] of columnXs(5, 0.14).entries()) surface(index === 2 ? 0.5 : 0.3, span * (index === 2 ? 1 : 0.86), 0.58, x, midY + (index === 2 ? 0 : 0.5), this.heroGold);
+        surface(width * 0.72, 0.45, 0.65, cx, top, this.heroGold);
+        surface(width * 0.48, 0.38, 0.72, cx, top + 0.48, this.heroCream);
+        break;
+      }
+      case 'curtain-wall': {
+        surface(innerW, span, 0.18, cx, midY, this.heroGlass);
+        for (const x of columnXs(7, 0.09)) surface(0.12, span, 0.28, x, midY, this.heroDark);
+        for (let y = low + 2.7; y < top; y += 3.15) surface(innerW, 0.16, 0.32, cx, y, this.heroDark);
+        break;
+      }
+      case 'brutalist-shades': {
+        surface(width * 0.24, span, 0.38, cx - width * 0.25, midY, this.heroBrick);
+        for (let floor = 0; floor < Math.min(7, Math.floor(span / 3.1)); floor++) {
+          const y = low + 1.45 + floor * 3.1;
+          surface(width * (floor % 2 ? 0.68 : 0.82), 0.24, 1.08, cx + (floor % 2 ? width * 0.07 : 0), y, this.heroCream);
+        }
+        surface(0.5, span, 0.78, cx + width * 0.38, midY, this.heroDark);
+        break;
+      }
+      case 'balcony-stack': {
+        surface(innerW, span, 0.12, cx, midY, this.heroCream);
+        const floors = Math.min(6, Math.floor(span / 3.4));
+        for (let floor = 0; floor < floors; floor++) {
+          const y = low + 1.1 + floor * 3.4; const balconyW = width * (floor % 2 ? 0.64 : 0.78);
+          surface(balconyW, 0.2, 1.45, cx + (floor % 2 ? width * 0.08 : -width * 0.04), y, this.heroDark);
+          surface(balconyW, 0.78, 0.09, cx + (floor % 2 ? width * 0.08 : -width * 0.04), y + 0.48, this.heroGlass, faceZ + side * 1.45);
+        }
+        break;
+      }
+      case 'green-screen': {
+        surface(innerW, span, 0.12, cx, midY, this.heroCream);
+        for (const [index, x] of columnXs(7, 0.1).entries()) surface(index % 2 ? 0.22 : 0.38, span * (index % 2 ? 0.82 : 1), 0.72, x, midY, this.heroGreen);
+        for (const y of [low + span * 0.32, low + span * 0.68]) surface(width * 0.78, 0.32, 0.86, cx, y, this.heroGold);
+        break;
+      }
+      case 'heritage-veranda': {
+        surface(innerW, span, 0.14, cx, midY, this.heroBrick);
+        for (const x of columnXs(4, 0.12)) surface(0.42, span, 0.42, x, midY, this.heroCream);
+        for (const y of [low + 2.2, low + 5.9, low + 9.6].filter((value) => value < top - 0.5)) {
+          surface(width * 0.78, 0.2, 1.15, cx, y, this.heroDark);
+          for (const x of columnXs(8, 0.13)) surface(0.09, 0.72, 0.09, x, y + 0.45, this.heroDark, faceZ + side * 1.17);
+        }
+        surface(width * 0.95, 0.5, 0.62, cx, top, this.heroCream);
+        break;
+      }
+      case 'gold-fins': {
+        surface(innerW, span, 0.16, cx, midY, this.heroGlass);
+        for (const [index, x] of columnXs(8, 0.08).entries()) surface(index % 3 === 0 ? 0.28 : 0.13, span * (index % 2 ? 0.88 : 1), index % 2 ? 0.46 : 0.78, x, midY, this.heroGold);
+        surface(width * 0.92, 0.52, 0.72, cx, top, this.heroDark);
+        break;
+      }
     }
   }
 

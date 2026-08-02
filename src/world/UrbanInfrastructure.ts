@@ -5,6 +5,7 @@ import { addInstancedChunks, ChunkStore, ChunkVisibility, type InstanceItem, typ
 import type { HydrantStation, RoadPoint, RoadsidePoint, SurfaceKind } from './City';
 import { SIGNAL_JUNCTIONS, STREET_SIGN_JUNCTIONS } from './mapData';
 import { ETOLL_SPOTS, ROADSIDE_SIGNS, SPAWN_SIGN_JUNCTIONS, TRANSIT_STOPS } from './placements';
+import { CBD_HERO_CORRIDOR } from './placements';
 import { createSignMesh } from './ProceduralMaterials';
 import { onPowerChange } from './powerGrid';
 import { buildTreeInstance, type TreeInstancePart, type TreeSpecies } from './FoliageAssets';
@@ -15,6 +16,8 @@ import {
   type StreetLifeKind,
   type StreetLifeProfile,
 } from './data/streetLife';
+
+type XZLike = { x: number; z: number };
 
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
@@ -261,6 +264,7 @@ export class UrbanInfrastructure {
   private bulbMaterial?: THREE.MeshBasicMaterial;
   private powered = true;
   private treeSites: RoadPoint[] = [];
+  private heroJacarandaSites: RoadPoint[] = [];
   private treeAssetsInstalled = false;
   private signStore: ChunkStore;
   private signCulling: ChunkVisibility;
@@ -295,6 +299,7 @@ export class UrbanInfrastructure {
     onPowerChange((on) => { this.powered = on; this.lensPowerDirty = true; });
     this.buildVegetation();
     this.buildStreetlights();
+    this.buildCbdHeroStreetLife();
     this.buildUtilityInfrastructure();
     this.buildTrafficSignals();
     this.buildStreetSigns();
@@ -396,7 +401,7 @@ export class UrbanInfrastructure {
    *  Everything else can construct immediately, leaving the normal retry UI alive if asset loading fails. */
   installTreeAssets(): void {
     if (this.treeAssetsInstalled) return;
-    const jacarandas = this.treeSites.filter((_, index) => index % 2 === 0);
+    const jacarandas = [...this.treeSites.filter((_, index) => index % 2 === 0), ...this.heroJacarandaSites];
     const broadleaf = this.treeSites.filter((_, index) => index % 2 !== 0);
     this.buildBroadleafTrees(broadleaf);
     this.buildJacarandas(jacarandas);
@@ -413,6 +418,8 @@ export class UrbanInfrastructure {
       .map((point) => ({ x: point.x - point.inwardX * 2.1, z: point.z - point.inwardZ * 2.1 }))
       .filter((point) => !this.isBlocked(point.x, point.z, 2.8) && !this.isRoad(point.x, point.z, 2.4));
     this.treeSites = sites;
+    this.heroJacarandaSites = CBD_HERO_CORRIDOR.jacarandaSites
+      .filter((site) => !this.isRoad(site.x, site.z, 1.8) && !this.isBlocked(site.x, site.z, 2.1));
 
     const shrubSites = sites.filter((_, index) => index % 3 === 0);
     const shrubGeometry = new THREE.SphereGeometry(1, 16, 10);
@@ -540,6 +547,103 @@ export class UrbanInfrastructure {
         },
       });
     });
+  }
+
+  /**
+   * A compact Jozi street-life kit for the default-spawn corridor: umbrella traders, produce/crates,
+   * a braai, planted kerbs and a mine-headgear sculpture. Seven shared instanced batches cover the
+   * whole layer; the three practical globes also join the normal nearest-light pool at night.
+   */
+  private buildCbdHeroStreetLife(): void {
+    const sites = CBD_HERO_CORRIDOR.activitySites.filter((site) => !this.isRoad(site.x, site.z, 1.1));
+    const dark = new THREE.MeshStandardMaterial({ color: 0x283234, metalness: 0.72, roughness: 0.38 });
+    const wood = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82, vertexColors: true });
+    const fabric = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, vertexColors: true, side: THREE.DoubleSide });
+    const produce = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88, vertexColors: true });
+    const concrete = new THREE.MeshStandardMaterial({ color: 0xb48f68, roughness: 0.92 });
+    const poleGeometry = new THREE.CylinderGeometry(0.06, 0.1, 1, 10);
+    const canopyGeometry = new THREE.ConeGeometry(1, 0.34, 12, 1, true);
+    const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const sphereGeometry = new THREE.SphereGeometry(1, 10, 7);
+    const globeGeometry = new THREE.SphereGeometry(0.18, 12, 8);
+    const wheelGeometry = new THREE.TorusGeometry(0.7, 0.09, 8, 20);
+    const poleItems: InstanceItem[] = []; const canopyItems: InstanceItem[] = [];
+    const woodItems: InstanceItem[] = []; const produceItems: InstanceItem[] = [];
+    const steelItems: InstanceItem[] = []; const planterItems: InstanceItem[] = [];
+    const globeItems: InstanceItem[] = []; const wheelItems: InstanceItem[] = [];
+    const up = new THREE.Vector3(0, 1, 0); const zAxis = new THREE.Vector3(0, 0, 1);
+    const item = (
+      root: XZLike, x: number, y: number, z: number,
+      sx: number, sy: number, sz: number, quaternion = new THREE.Quaternion(), color?: number,
+    ): InstanceItem => ({
+      x: root.x, z: root.z,
+      matrix: new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), quaternion, new THREE.Vector3(sx, sy, sz)),
+      ...(color === undefined ? {} : { color: new THREE.Color(color) }),
+    });
+    const canopyColors = [0xf2b632, 0x2d8c82, 0xe45745];
+    const crateColors = [0x8e5d32, 0xb7793c, 0x6f472c];
+    const fruitColors = [0xf2c230, 0xd54c34, 0x4f8c3f, 0xe9862d];
+    const practicalAnchors: XZLike[] = [];
+
+    sites.forEach((site, siteIndex) => {
+      const yaw = new THREE.Quaternion().setFromAxisAngle(up, siteIndex % 2 ? 0.18 : -0.12);
+      canopyItems.push(item(site, site.x, 3.05, site.z, 2.25, 1, 2.25, yaw, canopyColors[siteIndex]!));
+      poleItems.push(item(site, site.x, 1.5, site.z, 1, 3, 1));
+      woodItems.push(item(site, site.x, 1.02, site.z + 0.35, 2.7, 0.18, 1.25, yaw, crateColors[siteIndex]!));
+      for (let crate = 0; crate < 4; crate++) {
+        const ox = (crate % 2 - 0.5) * 1.45; const oz = Math.floor(crate / 2) * 0.72 - 0.78;
+        woodItems.push(item(site, site.x + ox, 0.34, site.z + oz, 1.05, 0.68, 0.62, yaw, crateColors[(siteIndex + crate) % crateColors.length]!));
+      }
+      for (let fruit = 0; fruit < 12; fruit++) {
+        const ox = (fruit % 4 - 1.5) * 0.42; const oz = (Math.floor(fruit / 4) - 1) * 0.37;
+        produceItems.push(item(site, site.x + ox, 1.25, site.z + 0.35 + oz, 0.16, 0.14, 0.16, undefined, fruitColors[(fruit + siteIndex) % fruitColors.length]!));
+      }
+      // Low planters and leaves keep the paved edge from reading as one pale, textureless sheet.
+      for (const side of [-1, 1]) {
+        const px = site.x + side * 2.1; const pz = site.z + 1.35;
+        planterItems.push(item(site, px, 0.28, pz, 0.72, 0.56, 0.72));
+        produceItems.push(item(site, px, 0.83, pz, 0.55, 0.72, 0.55, undefined, side < 0 ? 0x417447 : 0x5d873f));
+      }
+      if (site.kind === 'braai') {
+        steelItems.push(item(site, site.x + 2.15, 0.82, site.z - 0.65, 1.05, 0.22, 0.72));
+        for (const side of [-1, 1]) poleItems.push(item(site, site.x + 2.15 + side * 0.38, 0.38, site.z - 0.65, 1.2, 0.76, 1.2));
+      }
+      const lampX = site.x + (site.x < CBD_HERO_CORRIDOR.spawn.x ? 2.9 : -2.9);
+      const lampZ = site.z - 1.7;
+      practicalAnchors.push({ x: lampX, z: lampZ });
+      poleItems.push(item(site, lampX, 2.15, lampZ, 1.35, 4.3, 1.35));
+      globeItems.push(item(site, lampX, 4.42, lampZ, 1, 1, 1));
+      this.props.register('shelter', site.x, site.z, 2.25, 3.3, { standHeight: 1.15 });
+      this.props.register('post', lampX, lampZ, 0.18, 4.5);
+    });
+
+    // Gold-mining headgear as public art: an unmistakable non-text cue, kept outside the walk line.
+    const art = CBD_HERO_CORRIDOR.mineHeadgear;
+    for (const side of [-1, 1]) for (const depth of [-1, 1]) {
+      const rotation = new THREE.Quaternion().setFromAxisAngle(zAxis, side * -0.34);
+      steelItems.push(item(art, art.x + side * 1.05, 2.65, art.z + depth * 0.72, 0.24, 5.6, 0.24, rotation));
+    }
+    steelItems.push(item(art, art.x, 4.9, art.z, 4.8, 0.25, 0.25));
+    wheelItems.push(item(art, art.x, 4.15, art.z - 0.84, 1, 1, 1));
+    planterItems.push(item(art, art.x, 0.24, art.z, 4.8, 0.48, 2.6));
+    this.props.register('monument', art.x, art.z, 2.5, 5.2, { standHeight: 0.48 });
+
+    addInstancedChunks(this.detail, poleGeometry, dark, this.groundItems(poleItems), { cast: true });
+    addInstancedChunks(this.detail, canopyGeometry, fabric, this.groundItems(canopyItems), { cast: true, receive: true });
+    addInstancedChunks(this.detail, boxGeometry, wood, this.groundItems(woodItems), { cast: true, receive: true });
+    addInstancedChunks(this.detail, sphereGeometry, produce, this.groundItems(produceItems), { cast: true });
+    addInstancedChunks(this.detail, boxGeometry, dark, this.groundItems(steelItems), { cast: true, receive: true });
+    addInstancedChunks(this.detail, boxGeometry, concrete, this.groundItems(planterItems), { cast: true, receive: true });
+    if (this.bulbMaterial) addInstancedChunks(this.detail, globeGeometry, this.bulbMaterial, this.groundItems(globeItems));
+    addInstancedChunks(this.detail, wheelGeometry, dark, this.groundItems(wheelItems), { cast: true });
+
+    const expanded = new Float32Array(this.lampsXZ.length + practicalAnchors.length * 2);
+    expanded.set(this.lampsXZ);
+    practicalAnchors.forEach((anchor, index) => {
+      expanded[this.lampsXZ.length + index * 2] = anchor.x;
+      expanded[this.lampsXZ.length + index * 2 + 1] = anchor.z;
+    });
+    this.lampsXZ = expanded;
   }
 
   /** The unglamorous layer that makes a city feel built and serviced: electricity cabinets at regular
