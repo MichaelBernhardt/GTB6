@@ -226,7 +226,7 @@ function insideJunction(x: number, z: number): boolean {
  * samples this one function, so relief propagates for free.
  */
 export const TERRAIN_REGIONAL_SCALE = 0; // subtract the broad plateau/coast trend out entirely (land meets ocean at 0)
-export const TERRAIN_LOCAL_SCALE = 2.0; // fine residual: metres → units (exaggerate the flat land into hills)
+export const TERRAIN_LOCAL_SCALE = 1.0; // fine residual: metres → units (1:1 — the exaggeration to 2.0 read as too steep)
 /** Cap on the local residual (metres) BEFORE exaggeration, so the blur's overshoot at the steep synthetic
  *  escarpment kink can't blow up into a spike; gentle CBD undulation is well under this. */
 export const TERRAIN_LOCAL_CAP = 18;

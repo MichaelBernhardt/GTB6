@@ -73,6 +73,8 @@ export class FeatureHost {
   private preloadTimer = 0;
   /** Edge tracker for FeatureSystem.suspend(): fired once when PvP starts, cleared when it ends. */
   private suspendedNow = false;
+  /** Feature ids whose update() threw: dropped for the session so one body cannot stop the frame. */
+  private readonly broken = new Set<string>();
 
   constructor(private readonly context: FeatureHostContext, private readonly registry: readonly FeatureDescriptor[] = FEATURES) {}
 
@@ -144,7 +146,22 @@ export class FeatureHost {
       ctx ??= this.eagerFrame();
       feature.eager.tick(dt, ctx);
     }
-    for (const system of this.systems.values()) system.update?.(dt);
+    // A FEATURE MAY NOT BRICK THE GAME. These bodies are lazily-loaded optional content and they run
+    // BEFORE the renderer in the frame, so an exception in one used to take the render call with it:
+    // the world froze while the DOM console and menu kept answering, which reads as "the game stopped
+    // rendering" and hides the cause. (It happened: the interiors doorstep probe raycast the whole
+    // scene, met a multiplayer nameplate Sprite, and threw every frame from the moment a remote
+    // player joined.) A throwing feature is now quarantined instead — its update is dropped, the
+    // error is logged once by id, and everything else, above all the frame, carries on.
+    for (const [id, system] of this.systems) {
+      if (this.broken.has(id)) continue;
+      try {
+        system.update?.(dt);
+      } catch (error) {
+        this.broken.add(id);
+        console.error(`[features] ${id} threw in update and has been suspended for this session`, error);
+      }
+    }
   }
 
   /**

@@ -245,6 +245,17 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
   let markersProvisional = false;
   let provisionalRetry = 0;
   const markerRay = new THREE.Raycaster();
+  /**
+   * A PLACEMENT PROBE MUST NEVER BE ABLE TO THROW. This ray walks the whole scene graph looking for
+   * drawn ground, and a scene graph contains things that are not ground and do not raycast like
+   * geometry: THREE.Sprite dereferences `raycaster.camera.matrixWorld` unconditionally, so an
+   * unset camera is not a warning, it is a TypeError — thrown from inside intersectObjects, every
+   * frame, before the renderer runs. That froze the world while the DOM menu kept answering.
+   * Two independent guards, because either alone would have been enough and neither is expensive:
+   * the camera is set so sprite raycasting is defined at all, and only MESH hits are considered,
+   * so nothing that is not real geometry can be mistaken for the pavement.
+   */
+  markerRay.camera = new THREE.PerspectiveCamera();
   const RAY_DOWN = new THREE.Vector3(0, -1, 0);
   /** True when a raycast hit belongs to marker furniture or an interior floor — surfaces a street
    *  disc must never sit on. */
@@ -272,6 +283,7 @@ export function createFeature(api: FeatureGameApi, state: unknown): FeatureSyste
     const reference = Math.max(stand, terrain);
     markerRay.set(new THREE.Vector3(px, reference + 6, pz), RAY_DOWN);
     for (const hit of markerRay.intersectObjects(api.scene.children, true)) {
+      if (!(hit.object as THREE.Mesh).isMesh) continue; // sprites, points, lines: never pavement
       if (notGround(hit.object)) continue;
       // Only surfaces NEAR the standing reference count as ground: a parked car's roof, a tree
       // canopy or an awning over the step is a transient — and a cached transient would pin the
