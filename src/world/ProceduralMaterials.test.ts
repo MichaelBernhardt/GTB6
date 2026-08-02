@@ -1,5 +1,6 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { facadeWindowGrammar, facadeWorldTile, SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex } from './ProceduralMaterials';
+import { applyUrbanGroundShader, facadeWindowGrammar, facadeWorldTile, GRIME_ATLAS_CELLS, GRIME_TAG_CELLS_BY_CLASS, GRIME_TAG_CLASSES, grimeTagClass, SIGN_NIGHT_EMISSIVE, SIGN_RETRO_BOOST, gennySignEmissiveIntensity, signAtlasLayout, signDiffuseScale, signEmissiveIntensity, signSlotIndex, type GrimeTagClass } from './ProceduralMaterials';
 import { STREET_SIGN_JUNCTIONS } from './mapData';
 
 describe('facade physical grammars', () => {
@@ -16,6 +17,47 @@ describe('facade physical grammars', () => {
     expect(facadeWindowGrammar(7)).toBe('curtained');
     expect(facadeWindowGrammar(10)).toBe('clerestory');
     expect(facadeWindowGrammar(-1)).toBe('clerestory');
+  });
+});
+
+/**
+ * The colour classification is MEASURED data about a binary asset, not taste, and the planner
+ * weights the whole city off it (planGrimeDecals picks a class first and a cell second). Nothing at
+ * runtime can catch it drifting out of step with the sheet — a wrong entry just quietly paints the
+ * CBD the wrong colour — so the table's own invariants are pinned here. If the generated sheet is
+ * ever re-rendered, re-measure the p98 chroma per cell and update BOTH the table and its comment.
+ */
+describe('grime tag colour classification (the measured mono/colour/piece split of the atlas)', () => {
+  it('classifies every tag cell, and only the tag cells', () => {
+    const tagCells = GRIME_ATLAS_CELLS.filter((cell) => cell.kind === 'tag');
+    expect(GRIME_TAG_CLASSES).toHaveLength(tagCells.length);
+    for (let cell = 0; cell < GRIME_ATLAS_CELLS.length; cell++) {
+      const expected = GRIME_ATLAS_CELLS[cell]!.kind === 'tag';
+      expect(grimeTagClass(cell) !== undefined, `cell ${cell}`).toBe(expected);
+    }
+    expect(grimeTagClass(99)).toBeUndefined();
+  });
+
+  it('holds the shipped sheet\'s measured 4 mono / 2 colour / 2 piece split', () => {
+    // Measured off public/textures/graffiti-tags-gpt.png: cells 0/1/4/6 are p98 chroma <= 43
+    // (white, black, white-black bubble, dark-olive bubble); 3/7 carry a teal at chroma 151/164;
+    // 2/5 carry the largest saturated masses (chroma 228 red, 176 teal) and earn the piece tier.
+    expect(GRIME_TAG_CELLS_BY_CLASS.mono).toEqual([0, 1, 4, 6]);
+    expect(GRIME_TAG_CELLS_BY_CLASS.colour).toEqual([3, 7]);
+    expect(GRIME_TAG_CELLS_BY_CLASS.piece).toEqual([2, 5]);
+  });
+
+  it('keeps at least two cells in every class, so no class repeats one image citywide', () => {
+    const classes: GrimeTagClass[] = ['mono', 'colour', 'piece'];
+    const seen = new Set<number>();
+    for (const cls of classes) {
+      expect(GRIME_TAG_CELLS_BY_CLASS[cls].length, cls).toBeGreaterThanOrEqual(2);
+      for (const cell of GRIME_TAG_CELLS_BY_CLASS[cls]) {
+        expect(seen.has(cell), `cell ${cell} in two classes`).toBe(false);
+        seen.add(cell);
+      }
+    }
+    expect(seen.size).toBe(GRIME_TAG_CLASSES.length); // the pools partition the tag band exactly
   });
 });
 
@@ -78,5 +120,45 @@ describe('signSlotIndex — an allocated slot is never overwritten', () => {
     expect(signSlotIndex(capacity, capacity)).toBe(capacity - 1);
     expect(signSlotIndex(capacity + 9999, capacity)).toBe(capacity - 1);
     expect(signSlotIndex(capacity + 9999, capacity)).not.toBe(0);
+  });
+});
+
+/**
+ * The urban-ground pass is shader-only and stacks on whatever the ground material already wears
+ * (the lawn macro pass, then the altitude rock/snow band). Chained onBeforeCompile hooks are easy
+ * to get wrong in exactly two ways — dropping the prior hook, and sharing a program cache key with
+ * an unrelated variant — so both are pinned here rather than left to a screenshot.
+ */
+describe('applyUrbanGroundShader — downtown is dust, not lawn', () => {
+  const material = (): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial();
+  const compile = (mat: THREE.MeshStandardMaterial): { vertexShader: string; fragmentShader: string } => {
+    const shader = {
+      vertexShader: 'void main() {\n#include <common>\n#include <begin_vertex>\n}',
+      fragmentShader: 'void main() {\n#include <common>\n#include <color_fragment>\n}',
+      uniforms: {},
+    };
+    mat.onBeforeCompile!(shader as never, undefined as never);
+    return shader;
+  };
+
+  it('runs a prior hook and then tints, so it composes with the lawn/snow passes', () => {
+    const mat = material();
+    let priorRan = false;
+    mat.onBeforeCompile = () => { priorRan = true; };
+    applyUrbanGroundShader(mat, [{ x: 100, z: -200, radius: 500 }]);
+    const shader = compile(mat);
+    expect(priorRan).toBe(true);
+    expect(shader.vertexShader).toContain('vUrbWorld');
+    expect(shader.fragmentShader).toContain('urbTone');
+    // The anchor survives, so a later pass (applySnowShader) can still find it.
+    expect(shader.fragmentShader).toContain('#include <color_fragment>');
+  });
+
+  it('keys its program per site list, and does nothing at all without sites', () => {
+    const one = material(); applyUrbanGroundShader(one, [{ x: 0, z: 0, radius: 500 }]);
+    const two = material(); applyUrbanGroundShader(two, [{ x: 900, z: 0, radius: 500 }]);
+    expect(one.customProgramCacheKey!()).not.toBe(two.customProgramCacheKey!());
+    const none = material(); applyUrbanGroundShader(none, []);
+    expect(none.onBeforeCompile).toBe(THREE.MeshStandardMaterial.prototype.onBeforeCompile);
   });
 });

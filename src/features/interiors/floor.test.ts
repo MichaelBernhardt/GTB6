@@ -398,7 +398,11 @@ describe('the floorplan solver', () => {
    */
   it('anchors the corridor on the model-tagged door, proportionally mapped and clamped', () => {
     let offCentre = 0;
-    for (const facts of sample(300)) {
+    // 300 -> 900: the clamp only leaves slack on cores wider than ~14.5 u, and the CBD-height pass
+    // (a low street wall packed with narrow shopfront stands) moved the citywide width mix down
+    // far enough that a 300-parcel stride found only two of them. The assertion is unchanged; the
+    // sample is simply large enough again to contain the case it is about.
+    for (const facts of sample(900)) {
       const core = buildCore(facts);
       if (core.layout === 'small') continue; // the one-room layout clamps the door by its own rule
       const slack = Math.max(0, core.width / 2 - 3.3 / 2 - 5.6);

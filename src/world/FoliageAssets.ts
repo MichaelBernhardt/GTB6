@@ -20,6 +20,45 @@ export interface TreeInstancePart {
   geometry: THREE.BufferGeometry;
   material: THREE.Material | THREE.Material[];
   matrix: THREE.Matrix4;
+  /** True for foliage parts: instanced callers pass the per-tree canopy tint for these (and only these). */
+  canopy: boolean;
+}
+
+/** The authored foliage materials, by Blender name. Everything else on a tree is wood and stays untinted. */
+const CANOPY_MATERIALS = new Set([
+  'LeafGreen', 'LeafDark', 'LeafDusty', 'LeafOlive', 'PineNeedles',
+  'JacarandaBloom', 'JacarandaDeep', 'CoralBloom', 'PalmFrond', 'PalmDry',
+]);
+
+const isCanopyMaterial = (material: THREE.Material | THREE.Material[]): material is THREE.Material =>
+  !Array.isArray(material) && CANOPY_MATERIALS.has(material.name);
+
+/** Bakes a vertical light gradient into a canopy part's vertex colours (dark underside, lit crown) —
+ *  free depth at zero extra triangles. Runs once per library part; clones inherit and multiply it. */
+function bakeCanopyShading(geometry: THREE.BufferGeometry): void {
+  if (geometry.getAttribute('color')) return;
+  const position = geometry.getAttribute('position');
+  let minY = Infinity; let maxY = -Infinity;
+  for (let index = 0; index < position.count; index++) { const y = position.getY(index); if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  const span = Math.max(maxY - minY, 1e-6);
+  const colors = new Float32Array(position.count * 3);
+  for (let index = 0; index < position.count; index++) {
+    const shade = 0.72 + 0.28 * ((position.getY(index) - minY) / span);
+    colors[index * 3] = colors[index * 3 + 1] = colors[index * 3 + 2] = shade;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
+/** Deterministic per-tree canopy tint: a subtle warm/cool + lightness spread around the authored leaf
+ *  colour, so an avenue of one species stops reading as copy-paste. Multiplies the baked shading. */
+export function canopyTint(seed: number): THREE.Color {
+  const warm = hash(seed, 73) - 0.5;
+  const light = 0.84 + hash(seed, 74) * 0.2;
+  return new THREE.Color(
+    Math.max(0, light * (1 + 0.26 * warm)),
+    Math.max(0, light * (1 + 0.05 * warm)),
+    Math.max(0, light * (1 - 0.2 * warm)),
+  );
 }
 
 /** Lightweight authored-tree placement data. Unlike buildTreeAsset(), this deliberately retains the
@@ -31,6 +70,8 @@ export interface TreeInstance {
   trunkHeight: number;
   /** True when this trunk is thick enough to be a wall (see SOLID_TRUNK_MIN_DIAMETER). */
   trunkSolid: boolean;
+  /** Deterministic canopy tint for this tree: pass as the instance colour of every canopy part. */
+  tint: THREE.Color;
   parts: readonly TreeInstancePart[];
 }
 
@@ -54,6 +95,22 @@ export const SOLID_TRUNK_MIN_DIAMETER = 0.5;
  *  scattered tree paths cannot disagree about which trees are solid. */
 export const trunkIsSolid = (colliderW: number, colliderD: number): boolean =>
   Math.max(colliderW, colliderD) >= SOLID_TRUNK_MIN_DIAMETER;
+
+/**
+ * THE FATTEST WALL A TREE CAN BE, in world units of radius.
+ *
+ * The widest authored trunk in the library is the landmark-tree v1 at 1.70 m across
+ * (art/foliage/recipe.json), and per-tree scale jitter only ever shrinks a tree — resolveTree's
+ * scale is 0.84 + size·0.16, so it tops out at exactly 1.0. That makes 0.85 the true worst case for
+ * every instance of every species, not an average.
+ *
+ * Placement rules that must not seal a route need this bound BEFORE the GLB has loaded (the scatter
+ * layout is computed in node during the bake, with no library resident at all), so it is stated here
+ * beside the library facts rather than measured off a built tree. FoliageCollision.test pins it
+ * against the real asset at full scale, so re-authoring a fatter trunk fails the gate instead of
+ * quietly narrowing the clearance ModelScatter keeps around a pavement.
+ */
+export const FATTEST_TRUNK_RADIUS = 0.85;
 
 export class TreeLibraryError extends Error {
   constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'TreeLibraryError'; }
@@ -113,10 +170,20 @@ export function installTreeLibrary(gltf: GLTF): void {
     const instanceParts: TreeInstancePart[] = [];
     source.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
+      const canopy = isCanopyMaterial(object.material);
+      if (canopy) {
+        // Shared library material + shared geometry: bake the shading once, switch the material to
+        // vertex colours once. Instanced trees multiply their tint in via instanceColor; cloned trees
+        // (parks, scatter) multiply theirs into the cloned attribute (see buildTreeAsset).
+        bakeCanopyShading(object.geometry as THREE.BufferGeometry);
+        (object.material as THREE.MeshStandardMaterial).vertexColors = true;
+        (object.material as THREE.MeshStandardMaterial).needsUpdate = true;
+      }
       instanceParts.push({
         geometry: object.geometry,
         material: object.material,
         matrix: inverseRoot.clone().multiply(object.matrixWorld),
+        canopy,
       });
     });
     installed.set(name, { source, size, trunkCollider: trunkCollider as [number, number, number], instanceParts });
@@ -154,6 +221,7 @@ export function buildTreeInstance(species: TreeSpecies, seed: number, options: B
     trunkRadius: Math.max(colliderW, colliderD) * scale / 2,
     trunkHeight: colliderH * scale,
     trunkSolid: trunkIsSolid(colliderW, colliderD),
+    tint: canopyTint(seed),
     parts: record.instanceParts,
   };
 }
@@ -165,10 +233,19 @@ export function buildTreeAsset(species: TreeSpecies, seed: number, options: Buil
   group.name = `${key(species, variant)}__instance`;
   group.userData.assetSource = 'blender'; group.userData.treeSpecies = species; group.userData.treeVariant = variant;
   group.scale.multiplyScalar(scale);
+  const tint = canopyTint(seed);
   group.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
     // City streaming disposes each unmerged source geometry after baking; never dispose the library template.
     object.geometry = object.geometry.clone();
+    if (isCanopyMaterial(object.material)) {
+      // The clone inherits the baked shading; multiply this tree's tint in so merged park and
+      // scattered trees vary exactly like their instanced roadside siblings.
+      const color = object.geometry.getAttribute('color');
+      for (let index = 0; index < color.count; index++) {
+        color.setXYZ(index, color.getX(index) * tint.r, color.getY(index) * tint.g, color.getZ(index) * tint.b);
+      }
+    }
     object.castShadow = true; object.receiveShadow = true;
   });
   const [colliderW, colliderD, colliderH] = record.trunkCollider;

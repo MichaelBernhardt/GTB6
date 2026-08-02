@@ -9,11 +9,12 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   boardText, CAFE_NAMES, COMPLEX_NAMES, HOUSE_NAMES, identityBoardTexts, KERK_NAMES, MALL_NAMES,
-  MASJID_NAMES, parcelBuildingName, SAAL_NAMES, scatterBuildingName, SKOOL_NAMES, SPAZA_NAMES,
+  landmarkParcelName, MASJID_NAMES, parcelBuildingName, SAAL_NAMES, scatterBuildingName, SKOOL_NAMES, SPAZA_NAMES,
   VILLA_NAMES, WORKS_NAMES,
 } from './buildingIdentity';
 import { signAtlasLayout } from './ProceduralMaterials';
 import { GENERATED_ROADS } from './mapData';
+import { allBuildings } from './CityGen';
 
 describe('building identity', () => {
   // The first name lookup pays for the module's lazy init — the street register is derived from
@@ -57,7 +58,11 @@ describe('building identity', () => {
   it('gives the landmark parcel its landmark name on BOTH sides, not just the prompt', () => {
     // The audit's one surviving disagreement: Ponte Tower's prompt was overridden prompt-side only,
     // so its painted board said RIDGE COURT. The override lives in the identity module now.
-    expect(parcelBuildingName(2994, 612, 'downtown', 'lobby')).toBe('Ponte Tower');
+    // The chosen parcel is derived (tallest tagged neighbour of the anchor), so find it the same
+    // way both consumers do rather than pinning yesterday's coordinates — the density pass moves it.
+    const ponte = allBuildings().find((b) => landmarkParcelName(b.x, b.z) === 'Ponte Tower');
+    expect(ponte, 'no parcel carries the Ponte Tower landmark name').toBeDefined();
+    expect(parcelBuildingName(ponte!.x, ponte!.z, 'downtown', 'lobby')).toBe('Ponte Tower');
     // And an ordinary neighbour still draws from its pool, not the landmark table.
     expect(parcelBuildingName(10, 10, 'downtown', 'lobby')).not.toBe('Ponte Tower');
   });

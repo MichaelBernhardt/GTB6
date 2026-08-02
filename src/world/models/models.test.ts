@@ -146,9 +146,11 @@ const TRUNK_COLLIDERS = FOLIAGE.filter((name) => name !== 'veld-grass');
 /** Trees whose colliders must stay trunk-slim so the player walks under the canopy, not into it. */
 const SLIM_TRUNKS = ['jacaranda', 'shade-tree', 'gum', 'pine', 'acacia', 'palm', 'landmark-tree'];
 /** Instancing budget: worst-case triangles per build (foliage scatters in the thousands). */
+// Tree budgets mirror tools/foliage/validate.mjs: raised for the de-Minecraft canopy pass
+// (20-face icosahedron blobs -> jittered 80-face icospheres; landmark crowns 320-face).
 const TRI_BUDGET: Record<string, number> = {
-  'jacaranda': 300, 'shade-tree': 340, 'gum': 300, 'pine': 240, 'acacia': 300, 'palm': 260,
-  'aloe': 420, 'agave': 240, 'bougainvillea': 200, 'veld-grass': 130, 'hedge-unit': 200, 'landmark-tree': 500,
+  'jacaranda': 600, 'shade-tree': 700, 'gum': 460, 'pine': 540, 'acacia': 540, 'palm': 300,
+  'aloe': 420, 'agave': 240, 'bougainvillea': 200, 'veld-grass': 130, 'hedge-unit': 200, 'landmark-tree': 2400,
 };
 
 function triangleCount(group: THREE.Group): number {

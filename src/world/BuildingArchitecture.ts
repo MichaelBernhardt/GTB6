@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import {
+  applyFacadeWeathering, createSignMesh, GRIME_ATLAS_CELLS, GRIME_TAG_CELLS_BY_CLASS, type GrimeTagClass,
+  rollerShutterMaterial, SHUTTER_ATTRIBUTE,
+} from './ProceduralMaterials';
+import { stablePositionRandom } from './StableRandom';
 
 export type BuildingStyle =
   | 'downtown'
@@ -190,6 +195,306 @@ function sized(x: number, z: number, width: number, kind: EntranceKind, mass: re
   return { x, z, width, height, kind };
 }
 
+/**
+ * Below this height a downtown parcel is STREET WALL, not a tower: it takes the low-rise massing
+ * family (buildDowntownStreetBlock), a parapet scaled to its own storeys, and no rooftop mast,
+ * plant room or deco cap. 20 u is a hair under six storeys — the top of the fabric band CityGen
+ * hands the CBD (buildingHeight: 2–5 storeys mostly, 5–8 for the odd 1960s block).
+ */
+export const DOWNTOWN_LOWRISE_MAX = 20;
+/**
+ * A shop bay needs about five units of front wall to hold glass, a roller shutter, its hood and a
+ * trade board. The gate used to be 14 u — authored when every downtown stand was eleven storeys —
+ * and it would have stripped the shopfronts off four fifths of the new street wall, which is the
+ * one part of the CBD pass the owner liked. A two-storey building with a shop under it is THE
+ * Joburg high-street form; only genuinely single-storey masses keep a plain base.
+ */
+const SHOP_BAY_MIN_HEIGHT = 6.4;
+
+/** One street-level shop bay on a downtown front: centre x, clear width, and the wall plane it
+ *  mounts on — building-local, like every other architecture coordinate. */
+export interface ShopBay { x: number; width: number; z: number; }
+
+/** Height the shop-bay layout probes the front wall at (inside every ground-floor tier). */
+const SHOP_BAY_Y = 1.6;
+/** Structural gap between neighbouring bays — the pier stands in it. */
+const SHOP_BAY_MARGIN = 0.9;
+/** Vertical extent of a CLOSED roller shutter (the authored state; the shader rolls it up by day). */
+const SHOP_SHUTTER_BOTTOM = 0.25;
+const SHOP_SHUTTER_TOP = 2.9;
+/** Painted trade boards over the bays. A small fixed pool on purpose: every distinct
+ *  text|accent pair costs a sign-atlas slot (1024 citywide), so bay boards spend at most
+ *  SHOP_BAY_SIGNS × SHOP_BAY_ACCENTS = 64 of them however many thousand bays the CBD carries. */
+const SHOP_BAY_SIGNS = [
+  'HAIR SALON', 'CELL REPAIRS', 'TAKE AWAYS', 'CASH & CARRY', 'PAWN SHOP', 'FISH & CHIPS',
+  'INTERNET CAFE', 'BARBER', 'SPARES & PARTS', 'DRY CLEAN', 'SHOE DOKTA', 'AIRTIME - DATA',
+  'FUNERAL COVER', 'GOLD BUYERS', 'SALON & NAILS', 'KOTA CORNER',
+] as const;
+/** Same accent strings the City storefront boards use, so no new text|accent atlas keys per colour. */
+const SHOP_BAY_ACCENTS = ['#f0ae43', '#72d8d2', '#ef6556', '#74e392'] as const;
+
+/**
+ * THE SHOPS AT THE BOTTOM OF THE TOWERS. Joburg CBD street level is shop bay after shop bay —
+ * hair salons, cell-repair counters, takeaways — with a roller shutter over every one of them at
+ * night. This lays those bays out: a pure function of the massing, shared verbatim by the draw
+ * pass (addShopfront) and the QA census (tools/qa/frontage-meter.ts), so the count the meter
+ * reports IS what gets drawn.
+ *
+ * Deterministic hold-outs keep variety: the elliptical tower (massing 4 — its facade is not a
+ * plane), masses too short to carry a bay (SHOP_BAY_MIN_HEIGHT), and one variant in five (banks,
+ * government blocks, blank podiums — a CBD where every building is a spaza row reads as wallpaper).
+ * A bay never covers the planned entrance: the way in stays open, parity-tested, and
+ * unshuttered — a front door rolled shut at night would lock the interiors feature out.
+ */
+export function planShopBays(
+  tiers: readonly MassingTier[], width: number, height: number, massing: number, variant: number,
+  entrance?: EntranceTag,
+): ShopBay[] {
+  if (massing === 4 || height < SHOP_BAY_MIN_HEIGHT || variant % 5 === 2) return [];
+  const mass = tiers.filter((tier) => tier.kind !== 'wall');
+  const bays: ShopBay[] = [];
+  for (const span of frontFacadeSpansAt(mass, SHOP_BAY_Y, -width / 2, width / 2)) {
+    const spanW = span.maxX - span.minX;
+    if (spanW < 5) continue;
+    const count = Math.max(1, Math.min(6, Math.floor(spanW / 5)));
+    const pitch = spanW / count;
+    for (let bay = 0; bay < count; bay++) {
+      const x = span.minX + (bay + 0.5) * pitch;
+      const bayW = pitch - SHOP_BAY_MARGIN;
+      if (bayW < 2.2) continue;
+      if (entrance && Math.abs(x - entrance.x) < (bayW + entrance.width) / 2 + 0.4) continue;
+      bays.push({ x, width: bayW, z: span.z });
+    }
+  }
+  return bays;
+}
+
+/** Street-glazing bay layout City.addStreetLevelDetail draws on non-shopfronted commercial and
+ *  walk-up fronts — extracted and exported so the grime planner keeps spray tags off the display
+ *  windows with the SAME arithmetic the drawer uses (shared function, no drift). Positions are
+ *  building-local; the centre bay is skipped (that zone belongs to the entrance). */
+export function glazingBayLayout(width: number): { positions: number[]; windowWidth: number } {
+  const bays = Math.max(2, Math.min(5, Math.floor(width / 5)));
+  const windowWidth = Math.min(3.2, width / bays * 0.62);
+  const positions: number[] = [];
+  for (let bay = 0; bay < bays; bay++) {
+    const px = -width * 0.39 + bay * (width * 0.78 / Math.max(1, bays - 1));
+    if (Math.abs(px) < Math.min(3, width * 0.18)) continue;
+    positions.push(px);
+  }
+  return { positions, windowWidth };
+}
+
+/** One street decal: a quad hung 0.035u proud of a real front wall, sampling one atlas cell.
+ *  Building-local coordinates, like every other architecture fact. */
+export interface GrimeDecal { x: number; y: number; z: number; width: number; height: number; cell: number; flip: boolean; }
+
+/** Fraction of each family's buildings that carry street grime/graffiti. Suburbs, estates and the
+ *  rural belt stay clean — the dirt belongs to the CBD, the strips, the walk-ups and the works.
+ *
+ *  Raised across the board after the first playtest of the dirt pass: "Maybe some more graffiti
+ *  density. I only saw one." At 0.6 of downtown carrying an average 0.36 TAGS each, a player could
+ *  walk four blocks of the CBD past nothing but clean wall. A tagged wall is the norm in the inner
+ *  city and a clean one is the exception, so the fractions read that way now; the hold-out share
+ *  that is left keeps a bank or a repainted frontage on most block faces.
+ *
+ *  This is only HALF the rate. Each figure is scaled per district by the caller's `grimeScale`
+ *  (districtGrimeScale, in data/neighbourhoods — see planGrimeDecals): x1.10 in the inner city and
+ *  the townships, x1.00 through the ordinary middle, x0.34 on the ridge. Never read a number here
+ *  as the realised share; `npx tsx tools/qa/grime-census.ts` prints the realised one per wealth
+ *  band, which is the only figure worth tuning against. */
+export const GRIME_DECAL_CHANCE: Partial<Record<BuildingStyle, number>> = {
+  downtown: 0.93, 'mixed-use': 0.82, 'dense-residential': 0.7, industrial: 0.8,
+};
+
+/** Above this parcel height a building can also wear an UPPER wash streak (soot bleeding down the
+ *  shaft from a scupper) — the "subtle overlay wear higher up" layer. */
+const GRIME_UPPER_MIN_HEIGHT = 22;
+
+/** The four soft-wash cells, resolved once — the tag cells are chosen by class, not by scan. */
+const GRIME_PATCH_CELLS: readonly number[] = GRIME_ATLAS_CELLS
+  .flatMap((cell, index) => (cell.kind === 'grime' ? [index] : []));
+
+/**
+ * THE MIX ON THE WALL, and why it is weighted rather than uniform. Half the atlas tag cells are
+ * monochrome (GRIME_TAG_CLASSES holds the measured chroma), so a uniform draw painted the city
+ * 50% white-or-black, 50% colour, all at the same size, in whatever gap the planner found first —
+ * which is how a whole CBD session produced "the one I saw was all white".
+ *
+ * Real inner-city walls are not an even draw. Quick mono handstyles are the bulk of what is on a
+ * street-level pier because they take ten seconds; a two-colour throw-up takes a couple of minutes
+ * and wants a bit of blank wall; a piece takes an evening and only ever goes where there is a big
+ * empty plane and nobody watching. So the weights differ BY BAND, and each triple is
+ * [mono, colour, piece] summing to 1:
+ *   - street level is where the quick work is, so it is overwhelmingly handstyles;
+ *   - the first fascia slot (above the shop, off the hood — the only clear plane on a shopfronted
+ *     CBD front) is the statement slot: it takes the widest span on the parcel at piece scale;
+ *   - the remaining fascia slots fill in around it with quick work again, so a front reads as one
+ *     piece amongst many tags rather than a gallery wall.
+ * Weighted against the measured 40/60 street/fascia split of placed CBD tags, this lands on the
+ * authored 60 / 30 / 10 spread. Re-measure with `npx tsx tools/qa/grime-census.ts` after any change
+ * to the band counts — the two are coupled and only the census can tell you the realised mix.
+ */
+type GrimeTagMix = readonly [mono: number, colour: number, piece: number];
+const GRIME_STREET_MIX: GrimeTagMix = [0.78, 0.20, 0.02];
+const GRIME_FASCIA_STATEMENT_MIX: GrimeTagMix = [0.16, 0.56, 0.28];
+const GRIME_FASCIA_FILL_MIX: GrimeTagMix = [0.68, 0.28, 0.04];
+
+/** Quad-size multiplier per class. A throw-up is bigger than a handstyle and a piece is bigger
+ *  again — this is what makes 10% of the quads carry a third of the visible paint. The band still
+ *  caps the result, so a piece that cannot fit its band is simply not drawn there (the attempt
+ *  re-rolls into a smaller class), which keeps big colour off narrow piers by construction. */
+const GRIME_CLASS_SCALE: Readonly<Record<GrimeTagClass, number>> = { mono: 1, colour: 1.3, piece: 1.85 };
+
+const grimeTagClassAt = (mix: GrimeTagMix, roll: number): GrimeTagClass =>
+  (roll < mix[0] ? 'mono' : roll < mix[0] + mix[1] ? 'colour' : 'piece');
+
+/**
+ * WHERE THE DIRT GOES. A pure plan, shared verbatim by the draw pass (City.addGrimeDecals) and the
+ * QA census (tools/qa/grime-census.ts), exactly like planShopBays: what the census counts IS what
+ * gets drawn.
+ *
+ * Per-building entropy comes from stablePositionRandom on the parcel's WORLD coordinates (the local
+ * variant repeats every few streets and would repeat the same tag with it). Placement rules:
+ *   - only on real front spans (frontFacadeSpansAt), verified across the quad's full height, so a
+ *     setback or arcade never gets a floating tag;
+ *   - never over the planned entrance, a shop bay, a display window (glazingBayLayout — same
+ *     arithmetic the drawer uses) or the industrial roller door;
+ *   - tags sit in the spray-reach band; grime patches hug the base; tall buildings may add one
+ *     upper wash streak. Everything else near the wall stands PROUD of the 0.035 decal plane
+ *     (piers 0.09+, windows 0.07, signs 0.08), so overlaps resolve as paint behind architecture;
+ *   - WHICH tag goes where is weighted, not uniform: see the mix constants above. Quick mono
+ *     handstyles carry street level, colour and pieces are drawn bigger and take the widest blank
+ *     span of the fascia band. All of it is one atlas and one material, so the mix is free.
+ *
+ * `grimeScale` is the DISTRICT's wealth term (districtGrimeScale, in data/neighbourhoods): paint is
+ * a money fact before it is a style fact, and the table above can say a walk-up is dirtier than a
+ * villa but not that the same walk-up is wall-to-wall tags in Hillbrow and repainted twice a year
+ * in Killarney. It arrives as a PARAMETER rather than a lookup for two reasons, and both are load
+ * bearing. Purity: the drawer (City.addGrimeDecals) and the census (tools/qa/grime-census.ts) must
+ * be able to call this and get the identical plan, which is the shared-definition contract this
+ * whole module is built on. And layering: this file is lifted into its own `world-geometry` bundle
+ * chunk, which is only legal while it is a LEAF — importing the district tables here closes a
+ * vehicle-models -> world-geometry -> simulation cycle that neither tsc nor vitest can see, and
+ * only `npm run build` reports. The callers already hold the district; they resolve the term.
+ *
+ * It defaults to 1 — the pre-wealth behaviour — so a caller with no district (fixtures, single
+ * building QA rebuilds) still gets the authored per-style rate rather than a silent clean wall.
+ */
+export function planGrimeDecals(
+  tiers: readonly MassingTier[], style: BuildingStyle, width: number, height: number,
+  worldX: number, worldZ: number, entrance?: EntranceTag, bays: readonly ShopBay[] = [],
+  grimeScale = 1,
+): GrimeDecal[] {
+  const chance = GRIME_DECAL_CHANCE[style];
+  if (chance === undefined || height < 4 || width < 6) return [];
+  const roll = (salt: number) => stablePositionRandom(worldX, worldZ, salt);
+  // Clamped, not renormalised: an inner-city downtown front wants "every wall", and 0.93 x 1.10 is
+  // the planner's way of saying so. The hold-out share it eats is a couple of parcels per block.
+  if (roll(701) >= Math.min(1, chance * grimeScale)) return [];
+  const mass = tiers.filter((tier) => tier.kind !== 'wall');
+  const out: GrimeDecal[] = [];
+  // Keep-out ranges are x-bands with a HEIGHT: a ground-floor window must not push a wash streak
+  // off the shaft eight metres above it. `tagsOnly` marks display glazing — those boxes stand
+  // proud of the decal plane and cleanly clip whatever sits behind them, so a soft grime wash may
+  // run in behind them, but a spray TAG half-hidden behind a window is a wasted tag.
+  const blocked: Array<{ x: number; half: number; y0: number; y1: number; tagsOnly?: boolean }> = [];
+  if (entrance) blocked.push({ x: entrance.x, half: entrance.width / 2 + 0.4, y0: 0, y1: entrance.height + 0.6 });
+  for (const bay of bays) blocked.push({ x: bay.x, half: (bay.width + SHOP_BAY_MARGIN) / 2, y0: 0, y1: 4.2 });
+  if (bays.length === 0 && style !== 'industrial') {
+    const glazing = glazingBayLayout(width);
+    for (const px of glazing.positions) blocked.push({ x: px, half: glazing.windowWidth / 2 + 0.2, y0: 0, y1: 2.9, tagsOnly: true });
+  }
+  if (style === 'mixed-use') {
+    // The strip family also draws its own shop glass (addMixedUseDetail) — same arithmetic here.
+    const shopBays = Math.max(2, Math.min(5, Math.floor(width / 5)));
+    const shopW = Math.min(3.2, width / shopBays * 0.72);
+    for (let bay = 0; bay < shopBays; bay++) {
+      blocked.push({ x: -width * 0.36 + bay * (width * 0.72 / Math.max(1, shopBays - 1)), half: shopW / 2 + 0.2, y0: 0, y1: 2.6, tagsOnly: true });
+    }
+  }
+  if (style === 'industrial') {
+    // The works family hangs its big roller door on the widest span (addIndustrialDetail); block
+    // that region rather than recompute the exact door, with margin for the sign over it.
+    const shutterH = Math.min(5, height * 0.48);
+    const span = widestFrontFacadeSpanAt(mass, shutterH / 2 + 0.2, -width / 2, width / 2, 3.2);
+    if (span) blocked.push({ x: (span.minX + span.maxX) / 2, half: Math.min(width * 0.21, (span.maxX - span.minX) / 2) + 0.4, y0: 0, y1: shutterH + 2.4 });
+  }
+  const clearOf = (kind: 'tag' | 'grime', x: number, halfW: number, y: number, halfH: number): boolean =>
+    blocked.every((b) => (b.tagsOnly && kind === 'grime')
+      || Math.abs(x - b.x) >= b.half + halfW || y - halfH >= b.y1 || y + halfH <= b.y0);
+  let salt = 710;
+  const tryPlace = (
+    kind: 'tag' | 'grime', widthMin: number, widthMax: number, bandLow: number, bandHigh: number,
+    mix: GrimeTagMix = GRIME_STREET_MIX,
+  ): void => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const base = salt; salt += 8;
+      // Class first, cell second: the mix decides WHAT kind of paint this is, and only then which of
+      // that class's cells carries it. Rolling the cell directly is the uniform draw we came from.
+      const cls = kind === 'tag' ? grimeTagClassAt(mix, roll(base)) : 'mono';
+      const pool = kind === 'tag' ? GRIME_TAG_CELLS_BY_CLASS[cls] : GRIME_PATCH_CELLS;
+      const cellIndex = pool[Math.floor(roll(base + 6) * pool.length)]!;
+      const aspect = GRIME_ATLAS_CELLS[cellIndex]!.aspect;
+      const scale = kind === 'tag' ? GRIME_CLASS_SCALE[cls] : 1;
+      const scaledMin = widthMin * scale;
+      // A square throw-up must still fit its band: clamp the width to what the band can carry. A
+      // piece that cannot make its scale in this band fails the attempt and re-rolls — which is the
+      // mechanism that keeps the big colour on the fascia and off a 1.1 u street-level pier.
+      const widthCap = kind === 'tag' ? Math.min(widthMax * scale, (bandHigh - bandLow) * aspect) : widthMax;
+      if (widthCap < scaledMin) continue;
+      const w = scaledMin + roll(base + 1) * (widthCap - scaledMin);
+      const h = kind === 'tag' ? w / aspect : Math.min(bandHigh - bandLow, 1.5 + roll(base + 2) * 1.3);
+      if (bandLow + h > bandHigh + 1e-6) continue;
+      const y = bandLow + h / 2 + roll(base + 3) * Math.max(0, bandHigh - bandLow - h);
+      const spans = frontFacadeSpansAt(mass, y, -width / 2, width / 2).filter((span) => span.maxX - span.minX >= w + 1.6);
+      if (spans.length === 0) continue;
+      // Colour is a statement and a statement wants a blank wall, so anything but a quick handstyle
+      // takes the WIDEST qualifying span on the parcel rather than a random one. Quick tags keep the
+      // random pick — they cluster wherever there is a gap, which is exactly where they really go.
+      const span = cls === 'mono'
+        ? spans[Math.floor(roll(base + 4) * spans.length)]!
+        : spans.reduce((best, candidate) => (candidate.maxX - candidate.minX > best.maxX - best.minX ? candidate : best));
+      const x = span.minX + 0.8 + w / 2 + roll(base + 5) * (span.maxX - span.minX - 1.6 - w);
+      if (!clearOf(kind, x, w / 2, y, h / 2)) continue;
+      // The quad must ride ONE wall plane over its full height — a step mid-quad means floating paint.
+      const zTop = frontFacadeZAt(mass, x, y + h / 2 - 0.05, w / 2);
+      const zBottom = frontFacadeZAt(mass, x, y - h / 2 + 0.05, w / 2);
+      if (zTop === undefined || zBottom === undefined || Math.abs(zTop - span.z) > 1e-3 || Math.abs(zBottom - span.z) > 1e-3) continue;
+      // Flip gets its own salt: sharing base+5 with the x offset meant every mirrored tag sat in the
+      // right-hand half of its span, a systematic that shows up once there are ten tags on a face.
+      out.push({ x, y, z: span.z + 0.035, width: w, height: h, cell: cellIndex, flip: roll(base + 7) > 0.5 });
+      blocked.push({ x, half: w / 2 + 0.3, y0: y - h / 2 - 0.3, y1: y + h / 2 + 0.3 }); // decals never overlap each other either
+      return;
+    }
+  };
+  const baseBand = style === 'downtown' ? 1.0 : 0.6; // the CBD plinth tops out at 0.9
+  // Street level, spray-can reach. The width floor came down from 1.7 because on a shopfronted
+  // front the only wall left is the pier between two bays, and nothing 1.7 wide has ever fitted
+  // one: a narrow tag on a pier is exactly what is actually painted there.
+  const tags = 3 + Math.floor(roll(702) * 4);
+  for (let i = 0; i < tags; i++) tryPlace('tag', 1.1, 3.3, baseBand, 3.35, GRIME_STREET_MIX);
+  const patches = 1 + Math.floor(roll(703) * 3);
+  for (let i = 0; i < patches; i++) tryPlace('grime', 2.4, 4.8, Math.max(0.5, baseBand - 0.4), 3.1);
+  // THE FASCIA BAND, and the reason a whole CBD session showed one tag. A shopfronted downtown
+  // front is blocked solid from the pavement to 4.2 by its own bays (glass, shutter, hood, board),
+  // so on the 68% of downtown buildings that carry bays — the ones lining every street the player
+  // walks — the street-level band above had NO wall left to paint. The writers' own answer is the
+  // fascia over the shop, reached off the hood, and that band is free on every front.
+  // It is also the only plane on the parcel big enough to carry a piece, so the FIRST fascia slot
+  // is drawn from the statement mix onto the widest span while that span is still whole; the rest
+  // fill in around it. Order matters: a fill tag placed first fragments the wall a piece needs.
+  const fasciaTop = Math.min(height - 0.6, 8.6);
+  if (fasciaTop > 6.2) {
+    const fascia = 1 + Math.floor(roll(705) * 3);
+    for (let i = 0; i < fascia; i++) {
+      tryPlace('tag', 1.2, 3.1, 4.6, fasciaTop, i === 0 ? GRIME_FASCIA_STATEMENT_MIX : GRIME_FASCIA_FILL_MIX);
+    }
+  }
+  if (height > GRIME_UPPER_MIN_HEIGHT && roll(704) < 0.6) tryPlace('grime', 2.6, 4.6, 6, Math.min(11, height - 3));
+  return out;
+}
+
 /** A gable (or thatch) roof in building-local coordinates: ridge along local z at lx=0, apex `rise`
  *  above the eaves plane `y`, optionally yawed by `ry` (only quarter turns are used). */
 export interface GableSpec { x: number; z: number; width: number; depth: number; y: number; rise: number; ry: number; }
@@ -375,7 +680,11 @@ export class BuildingArchitecture {
    *  geometry is allocated. See plan(). */
   private drawing = true;
 
-  constructor(private parent: THREE.Group) {}
+  constructor(private parent: THREE.Group) {
+    // The pale trim (plinths, piers, headers, parapets) rides the same world-space dirt as the
+    // facades behind it — a clean white pier on a weathered wall reads as a repair, citywide.
+    applyFacadeWeathering(this.stone);
+  }
 
   /** Retarget where subsequent build() output is added — the on-demand chunk builder points this at
    *  a fresh per-building group so the whole building can be rotated to face its street as a unit. */
@@ -448,8 +757,58 @@ export class BuildingArchitecture {
     const mesh = new THREE.Mesh(geometry, boxMaterials(spec.facade, spec.roof)); mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; this.place(mesh);
   }
 
+  /**
+   * THE JOBURG HIGH STREET — the two-to-five storey shopfront block that is most of the real CBD.
+   *
+   * The eleven downtown massings below are all TOWER grammars: a podium, a setback, a shaft, a
+   * crown. Handed a ten-unit height they turn into wedding cakes the size of a bus shelter, which
+   * is what a low street wall looked like the first time CityGen stopped making every downtown
+   * stand eleven storeys. So the street wall gets its own small family instead: a flat-topped box
+   * to a parapet, four forms deep, party walls left and right (the massing fills its stand, and
+   * neighbours abut by STREETWALL_MAX_OVERLAP), and everything above the shopfront left plain for
+   * the facade atlas and the tag layer. The shared downtown passes still run over it — plinth,
+   * shop bays with their roller doors, mullions, cornice, parapet — so this reads as the same city,
+   * just at the height the city actually is.
+   */
+  private buildDowntownStreetBlock(spec: BuildingSpec, massing: number): number {
+    const { x, z, width: w, depth: d, height: h } = spec;
+    if (massing % 4 === 1) {
+      // Shopfront under a recessed upper wall: the ground floor takes the whole stand and the
+      // storeys above step back off the pavement — the awninged Joburg street with a shadow line.
+      const groundH = Math.min(4.7, h * 0.46);
+      this.addBox(spec, w, groundH, d, x, groundH / 2 + 0.2, z);
+      this.addBox(spec, w, h - groundH, d * 0.88, x, groundH + (h - groundH) / 2 + 0.2, z - d * 0.06);
+      this.addSetbackBand(x, z, w * 1.02, d * 1.02, groundH + 0.2);
+      return h + 0.2;
+    }
+    if (massing % 4 === 2) {
+      // Two stands built ten years apart under one street wall: the taller half a storey up on the
+      // shorter, the shorter also shallower so the step is a real shoulder and not a coplanar seam
+      // (the massing-9 lesson — abutting boxes, never a shared flank plane).
+      const split = w * 0.46;
+      this.addBox(spec, split, h, d, x - (w - split) / 2, h / 2 + 0.2, z);
+      const shortH = Math.max(3.4, h - 3.5);
+      this.addBox(spec, w - split, shortH, d * 0.82, x + split / 2, shortH / 2 + 0.2, z - d * 0.09);
+      return h + 0.2;
+    }
+    if (massing % 4 === 3) {
+      // Flat block with a raised name bay over the entrance — the parapet sign board every second
+      // CBD shop row wears, and the cheapest break there is in a run of flat rooflines.
+      this.addBox(spec, w, h, d, x, h / 2 + 0.2, z);
+      const bayW = Math.min(w * 0.44, 9);
+      const board = new THREE.Mesh(new THREE.BoxGeometry(bayW, 1.5, 0.4), this.stone);
+      board.position.set(x, h + 0.95, z + d / 2 - 0.16);
+      board.castShadow = true; board.name = 'streetblock-name-bay'; this.place(board);
+      return h + 0.2;
+    }
+    // The plain one: one box to the parapet, wall to wall. Most of a Joburg block face is this.
+    this.addBox(spec, w, h, d, x, h / 2 + 0.2, z);
+    return h + 0.2;
+  }
+
   private buildDowntown(spec: BuildingSpec, massing: number): number {
     const { x, z, width: w, depth: d, height: h } = spec;
+    if (h < DOWNTOWN_LOWRISE_MAX) return this.buildDowntownStreetBlock(spec, massing);
     if (massing === 0) {
       const podiumH = Math.min(9, h * 0.18); const middleH = h * 0.55; const upperH = h - podiumH - middleH;
       this.addBox(spec, w, podiumH, d, x, podiumH / 2 + 0.2, z, true);
@@ -1036,10 +1395,15 @@ export class BuildingArchitecture {
     if (!main) return;
     const cap = variant % 3 === 0 ? this.darkMetal : this.stone;
     const thickness = 0.38;
+    // A parapet is read against the storeys under it: the 1.25–2.15 u upstand that gives a thirty-
+    // storey shaft its lip is a third of a two-storey shop's facade. The street wall gets its own
+    // scale, which is also what a real Joburg shop row wears — a low coping over the roofline.
+    const lowRise = spec.height < DOWNTOWN_LOWRISE_MAX;
     for (let index = 0; index < roofs.length; index++) {
       // The main roof carries the tall parapet; a secondary roof (a twin slab, a lower wing, a lift
       // core) gets a shorter one, so a stepped massing reads as steps and not as a repeated stencil.
-      this.addParapet(roofs[index]!, index === 0 ? 1.25 + (variant % 3) * 0.45 : 0.85, thickness, cap);
+      const mainHeight = lowRise ? 0.5 + (variant % 3) * 0.22 : 1.25 + (variant % 3) * 0.45;
+      this.addParapet(roofs[index]!, index === 0 ? mainHeight : mainHeight * 0.68, thickness, cap);
       // The deck, sunk inside the parapet, in the building's OWN roof tone. It is here because
       // downtown roofs were reading as white icing — the setback band several massings wear AT their
       // roof line is pale stone and covers most of the deck — and re-laying that area in roof grey
@@ -1076,7 +1440,11 @@ export class BuildingArchitecture {
     cornice.castShadow = true; cornice.name = 'downtown-cornice'; this.place(cornice);
     // Two massings already own their roof: 10 has the plant room and braced tanks it was authored
     // with, and 2's gantry straddles the roof centre, so it takes only the corner-seated crowns.
-    const kind = massing === 10 ? -1 : massing === 2 ? variant % 2 : variant % 4;
+    // The street wall takes only ONE of the four — the water tanks on their stand, on a third of
+    // them. A lift overrun, a deco cap or a nine-unit radio mast belongs to a shaft; on a three-
+    // storey shop row each of them is taller than the building it is standing on.
+    const kind = lowRise ? (variant % 3 === 0 ? 1 : -1)
+      : massing === 10 ? -1 : massing === 2 ? variant % 2 : variant % 4;
     if (kind >= 0 && main.maxX - main.minX > 6.5 && main.maxZ - main.minZ > 6.5) this.addRoofCrown(spec, main, kind, cap);
   }
 
@@ -1223,6 +1591,10 @@ export class BuildingArchitecture {
       plinth.position.set((span.minX + span.maxX) / 2, 0.55, span.z + 0.11);
       plinth.receiveShadow = true; plinth.name = 'downtown-plinth'; this.place(plinth);
     }
+    // The shop-bay run — the same plan the QA meter censuses. Buildings that carry bays get their
+    // piers ON the bay boundaries (addShopfront); hold-outs keep the old evenly-spread piers.
+    const entrance = planEntrance(w, 'downtown', this.tiers);
+    const bays = planShopBays(this.tiers, w, h, massing, variant, entrance);
     if (h > 14) {
       for (const span of frontFacadeSpansAt(this.tiers, 5.15, left, right)) {
         const width = span.maxX - span.minX;
@@ -1230,6 +1602,7 @@ export class BuildingArchitecture {
         const header = new THREE.Mesh(new THREE.BoxGeometry(width, 0.5, 0.5), this.stone);
         header.position.set((span.minX + span.maxX) / 2, 5.15, span.z + 0.15);
         header.castShadow = true; header.name = 'downtown-header'; this.place(header);
+        if (bays.length > 0) continue;
         // Piers between plinth and header. The glazing pass hangs flat panes on this wall; a vertical
         // every few metres in front of them is what turns a painted-on shopfront into a built one.
         const piers = Math.max(2, Math.min(6, Math.round(width / 6)));
@@ -1241,6 +1614,7 @@ export class BuildingArchitecture {
         }
       }
     }
+    if (bays.length > 0) this.addShopfront(spec, bays);
     if (variant % 2 !== 0) {
       let shaft: MassingTier | undefined;
       for (const tier of this.tiers) if (tier.kind !== 'wall' && (!shaft || tier.y1 > shaft.y1)) shaft = tier;
@@ -1252,19 +1626,72 @@ export class BuildingArchitecture {
         }
       }
     }
-    if (variant % 3 === 1) {
-      const bay = widestFrontFacadeSpanAt(this.tiers, 1.6, left, right, 4.4);
-      if (bay) {
-        const shutterW = Math.min(4.6, (bay.maxX - bay.minX) * 0.36);
-        const wanted = bay.minX + (bay.maxX - bay.minX) * (variant % 2 ? 0.24 : 0.76);
-        const px = THREE.MathUtils.clamp(wanted, bay.minX + shutterW / 2 + 0.25, bay.maxX - shutterW / 2 - 0.25);
-        const shutter = new THREE.Mesh(new THREE.BoxGeometry(shutterW, 2.5, 0.14), this.darkMetal);
-        shutter.position.set(px, 1.75, bay.z + 0.2); shutter.name = 'downtown-shutter'; this.place(shutter);
-        for (const ry of [1, 1.75, 2.5]) {
-          const rib = new THREE.Mesh(new THREE.BoxGeometry(shutterW - 0.14, 0.1, 0.1), this.darkMetal);
-          rib.position.set(px, ry, bay.z + 0.28); this.place(rib);
+    // The old permanently-down decorative shutter (variant % 3 === 1) retired into addShopfront:
+    // every bay now carries a REAL roller door that rides the day/night cycle.
+  }
+
+  /**
+   * Draw the shop-bay run planShopBays laid out: display glass, a night ROLLER SHUTTER and its
+   * hood per bay, piers on the bay boundaries, and painted boards over alternate bays.
+   *
+   * The shutters are the one new material in the city (rollerShutterMaterial — shared, so a whole
+   * chunk's worth merges to +1 draw call); everything else reuses materials every downtown cell
+   * already buckets (glass, stone, darkMetal, the sign atlas). Each shutter vertex carries
+   * SHUTTER_ATTRIBUTE = its distance below the shutter's own top edge — yaw/translation-invariant,
+   * so it survives the GeometryBaker world bake — and the material's vertex shader collapses the
+   * door toward its top edge by day (see ProceduralMaterials). Authored CLOSED; castShadow stays
+   * off because the depth pass cannot see the drop uniform, and a hard shadow of a door that has
+   * rolled up would lie.
+   *
+   * Offsets from the wall plane are deliberately distinct from every neighbour: glass 0.16,
+   * pier 0.09 (front 0.24), shutter 0.30 (back 0.255), plinth 0.11 (front 0.28), hood 0.2 —
+   * nothing coplanar with anything; coplanar infill is how the last z-fighting epidemic started.
+   */
+  private addShopfront(spec: BuildingSpec, bays: readonly ShopBay[]): void {
+    if (!this.drawing) return;
+    const { variant } = spec;
+    const shutterH = SHOP_SHUTTER_TOP - SHOP_SHUTTER_BOTTOM;
+    const shutter = rollerShutterMaterial();
+    // City's per-building storefront board hangs at (x − w·0.2, 3.82) with width min(6.4, w·0.34)
+    // (addStreetLevelDetail); bay boards duck out of its x-footprint so boards never overlap.
+    const bigSignX = spec.x - spec.width * 0.2;
+    const bigSignW = Math.min(6.4, spec.width * 0.34);
+    const piers = new Map<number, { x: number; z: number }>();
+    for (const [index, bay] of bays.entries()) {
+      const pitch = bay.width + SHOP_BAY_MARGIN;
+      for (const edge of [bay.x - pitch / 2, bay.x + pitch / 2]) {
+        piers.set(Math.round(edge * 8), { x: edge, z: bay.z });
+      }
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(bay.width, 2.4, 0.06), this.glass);
+      glass.position.set(bay.x, 2.1, bay.z + 0.16); glass.name = 'downtown-shop-glass'; this.place(glass);
+      const geometry = new THREE.BoxGeometry(bay.width + 0.2, shutterH, 0.09);
+      const position = geometry.getAttribute('position');
+      const up = new Float32Array(position.count);
+      for (let vertex = 0; vertex < position.count; vertex++) up[vertex] = shutterH / 2 - position.getY(vertex);
+      geometry.setAttribute(SHUTTER_ATTRIBUTE, new THREE.BufferAttribute(up, 1));
+      const door = new THREE.Mesh(geometry, shutter);
+      door.position.set(bay.x, (SHOP_SHUTTER_TOP + SHOP_SHUTTER_BOTTOM) / 2, bay.z + 0.3);
+      door.castShadow = false; door.name = 'downtown-shop-shutter'; this.place(door);
+      const hood = new THREE.Mesh(new THREE.BoxGeometry(bay.width + 0.34, 0.3, 0.3), this.darkMetal);
+      hood.position.set(bay.x, SHOP_SHUTTER_TOP + 0.16, bay.z + 0.2);
+      hood.castShadow = true; hood.name = 'downtown-shop-hood'; this.place(hood);
+      if ((index + variant) % 2 === 0) {
+        const signW = Math.min(bay.width * 0.92, 4.6);
+        if (Math.abs(bay.x - bigSignX) > (signW + bigSignW) / 2 + 0.4) {
+          const label = SHOP_BAY_SIGNS[(variant + index * 5) % SHOP_BAY_SIGNS.length]!;
+          const accent = SHOP_BAY_ACCENTS[(variant + index) % SHOP_BAY_ACCENTS.length]!;
+          this.decor(() => {
+            const board = createSignMesh(new THREE.PlaneGeometry(signW, 0.72), label, accent);
+            board.position.set(bay.x, 3.62, bay.z + 0.2); board.name = 'downtown-shop-sign';
+            return board;
+          });
         }
       }
+    }
+    for (const pier of piers.values()) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4, 0.3), this.stone);
+      post.position.set(pier.x, 2.9, pier.z + 0.09);
+      post.castShadow = true; post.name = 'downtown-shopfront-pier'; this.place(post);
     }
   }
 

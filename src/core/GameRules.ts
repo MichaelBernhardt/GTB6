@@ -101,6 +101,26 @@ export function stepVertical(motion: VerticalMotion, dt: number, support: number
   return { landed: false, drop: 0 };
 }
 
+/**
+ * Fence-top hazards (the suburban razor/spike fences — src/world/ParcelFences.ts). Contact means
+ * the player's FEET are at the fence TOP: within reach below it (grabbing over) or just above it
+ * (standing/landing on the spikes). Walking past the fence at ground level is free — the panels
+ * are plain steel; the wire and the spike tips live on top, so only crossing costs blood.
+ * Damage lands through Game.damagePlayer behind a cooldown (the vehicle-contact pattern — a
+ * player standing on a razor coil keeps bleeding by the tick, never by the frame).
+ */
+export type FenceHazardKind = 'spike' | 'razor';
+export const FENCE_HAZARD_DAMAGE: Record<FenceHazardKind, number> = { spike: 4, razor: 15 };
+export const FENCE_HAZARD_COOLDOWN = 1.5;
+/** How far below/above a fence top the feet count as touching it. Below spans the clamp's stepUp
+ *  window (feet pass no closer than top - stepUp - jump margin while crossing); above covers
+ *  standing on the top. */
+export const FENCE_HAZARD_REACH_BELOW = 0.85;
+export const FENCE_HAZARD_REACH_ABOVE = 0.6;
+export function fenceHazardTouch(colliderTop: number, feetY: number): boolean {
+  return feetY > colliderTop - FENCE_HAZARD_REACH_BELOW && feetY < colliderTop + FENCE_HAZARD_REACH_ABOVE;
+}
+
 /** Bicycles have no throttle: W turns the cranks at a cruise, Shift (the sprint key) stands on the pedals. */
 export const BICYCLE_CRUISE_FACTOR = 0.6;
 export function bicycleCap(maxSpeed: number, pedalHard: boolean): number {

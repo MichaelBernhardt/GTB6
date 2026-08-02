@@ -5,7 +5,7 @@ import type { City } from './City';
 import type { EnvironmentHandle } from './Environment';
 import type { SkyMood } from './AtmosphericSky';
 import { powerOn } from './powerGrid';
-import { setSignGlow } from './ProceduralMaterials';
+import { setShutterDrop, setSignGlow } from './ProceduralMaterials';
 
 /** One full 24h cycle in 10 real minutes. */
 export const DAY_CYCLE_SECONDS = 600;
@@ -206,6 +206,7 @@ export class DayNightSystem {
     this.city.setStreetlightGlow(night); // the bulb material checks the grid itself so panels also read dark by day
     this.city.setFacadeGlow(gridNight * FACADE_NIGHT_EMISSIVE); // covers facade materials streamed in after boot, too
     setSignGlow(night, this.blackout); // painted boards ride the same ramp: night glow on a healthy grid, torch-lit paint in a blackout
+    setShutterDrop(night); // the CBD's shop roller doors: down through dusk, up through dawn (one uniform, all chunks)
     this.updateStreetlightPool(focus, gridNight, dt);
     this.updateHeadlightPool(focus, night, traffic, police, playerVehicle); // cars run on batteries — Eskom can't touch these
   }

@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { PLAYER, WORLD_SIZE } from '../config';
 import { bootMark } from '../core/BootTimeline';
+import { fenceHazardTouch } from '../core/GameRules';
 import type { BaseQuality, District } from '../types';
-import { BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, massingTopAt, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier } from './BuildingArchitecture';
+import { ARCHITECTURE_VARIANTS, BuildingArchitecture, foundationTiers, frontFacadeSpansAt, frontFacadeZAt, gableSurfaceAt, glazingBayLayout, massingTopAt, planGrimeDecals, planShopBays, roofSurfaceAt, scaleBoxFacadeUvs, widestFrontFacadeSpanAt, type BuildingProfile, type BuildingStyle, type EntranceTag, type GableSpec, type MassingTier, type ShopBay } from './BuildingArchitecture';
 import {
   BEACH_POLYGONS,
   COASTLINE,
@@ -14,23 +15,21 @@ import {
   regionalMetresAt,
   ridgeMetresAt,
   HAS_ELEVATION,
-  GENERATED_ROADS,
   GENERATED_RAILWAYS,
   GENERATED_PATHS,
   GENERATED_TRACKS,
   GREEN_POLYGONS,
   DIRT_POLYGONS,
+  DISTRICT_CENTERS,
   FARM_POLYGONS,
   JUNCTION_SURFACES,
   junctionPaves,
   junctionReach,
-  METRES_PER_UNIT,
   OCEAN_POLYGON,
   pointInPolygon,
   RAILWAY_CORRIDOR_HALF_WIDTH,
   RAILWAY_LEVEL_CROSSINGS,
   RAILWAY_STATION_SITES,
-  ROAD_BUILD_MARGIN,
   STATION_PLATFORM_OFFSET,
   STATION_PLATFORM_WIDTH,
   platformSideFits,
@@ -38,6 +37,7 @@ import {
   WATER_POLYGONS,
   type MapPolygon,
 } from './mapData';
+import { HIGHRISE_DISTRICTS } from './data/zoning';
 import { damSignedDistance } from './damField';
 import { beachBands, farWaterOutline, isSandZ, OCEAN_Y, shoreColourAt, WATER_HORIZON_BLEND, WATER_HORIZON_CLEARANCE } from './coast';
 import { buildAirport } from './Airport';
@@ -46,21 +46,31 @@ import { buildPleasurePier } from './models/pier';
 import { HILLBROW_TOWER_SPOT, PONTE_SPOT, RESERVED_PADS, WATER_TOWER_SPOT } from './placements';
 import { boardText, parcelBuildingName, scatterBuildingName } from './buildingIdentity';
 import { CELL_SIZE, parcelStages, RAILWAY_STATION_CLEARANCE, generateCell, type GeneratedBuilding } from './CityGen';
+import { fenceSegmentCollider, planParcelFence, type FencePlan } from './ParcelFences';
 import { scatterCell, scatterStages, type ScatteredModel } from './ModelScatter';
 import { buildModel, MODEL_INDEX } from './models/catalog';
+import { buildTreeInstance, type TreeInstancePart } from './FoliageAssets';
 import type { BuiltModel } from './models/kit';
 import { RESOLVED_MANICURED_SITES, type ResolvedManicuredSite } from './data/manicured';
 import { addInstancedChunks, BUILDING_VISIBLE_RANGE, cellDistance, cellsWithinRange, ChunkStore, ChunkVisibility, CHUNK_HYSTERESIS, DETAIL_HYSTERESIS, DETAIL_VISIBLE_RANGE, type InstanceItem } from './ChunkVisibility';
-import { applyGrassShader, applySnowShader, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS } from './ProceduralMaterials';
+import { applyFacadeWeathering, applyGrassShader, applySnowShader, applyUrbanGroundShader, CHAINLINK_TILE_WIDTH, chainlinkFenceMaterial, createFacadeGlowTexture, createFacadeTexture, createFootpathAlphaTexture, createGeneratedSurfaceTexture, createGrassTexture, createSidewalkTexture, createSignMesh, createSurfaceTexture, createTrackSurfaceTexture, facadeWorldTile, FACADE_VARIANTS, fencePostMaterial, GRIME_ATLAS_CELLS, grimeDecalMaterial, PALISADE_TILE_WIDTH, palisadeFenceMaterial, RAZOR_COIL_TILE_WIDTH, razorCoilMaterial } from './ProceduralMaterials';
 import { POTHOLE_SEGMENTS, potholeRimAt, potholeVertexRadius, RIM_MIN_SPAN, type PotholeHazard } from './PotholeShape';
 import { GeometryBaker, mergeStaticGeometry } from './StaticGeometry';
-import { bridgeIslands, buildNavGraph, type NavGraph, type NavPath, type NavPoint } from '../systems/NavGraph';
+import { bridgeIslands, buildNavGraph, type NavGraph, type NavPoint } from '../systems/NavGraph';
+// The road-path primitives are a LEAF module (src/world/roadPaths.ts), not a City concern, precisely
+// so that ModelScatter — which City imports, and which therefore may never import City — can measure
+// the same pedestrian walk polylines the ped nav graph is built from. Re-exported below under their
+// original names so every existing importer of City keeps working unchanged.
+import {
+  buildCityNavPaths, LAYOUT_SCALE, offsetRoadPath, ROAD_NETWORK, ROAD_SAMPLE_SPACING, sampleRoadPath,
+  SIDEWALK_CENTER, SIDEWALK_INNER_EDGE, SIDEWALK_WIDTH, type RoadDefinition, type RoadPoint,
+} from './roadPaths';
 import { PropRegistry } from '../systems/PropSystem';
 import { CITY_JUNCTIONS, type JunctionDefinition, signalHoldsDriver, signalSlowFactor, SIGNAL_STOP_APPROACH, UrbanInfrastructure } from './UrbanInfrastructure';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createWater, waterTier, type WaterHandle, type WaterSite } from './Water';
 import { registerPowered } from './powerGrid';
-import { neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from './data/neighbourhoods';
+import { districtGrimeScale, neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from './data/neighbourhoods';
 import { foundationIdentityForDistrict, type FoundationIdentity } from './data/foundations';
 
 /** XZ AABB with a real vertical span: `height` above `y0`. `y0` is world-space; when omitted the collider is
@@ -71,7 +81,10 @@ import { foundationIdentityForDistrict, type FoundationIdentity } from './data/f
  *  phase tests against that so a building rotated to a diagonal street stops you at its wall, never at the
  *  corner of an oversized AABB. Axis-aligned (or quarter-snapped) colliders leave `heading` undefined so the
  *  fast AABB path stays exact. */
-export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; y0?: number; heading?: number; hw?: number; hd?: number; }
+export interface Collider { minX: number; maxX: number; minZ: number; maxZ: number; height: number; y0?: number; heading?: number; hw?: number; hd?: number;
+  /** Touching this collider's TOP hurts (razor-wire / spiked fence runs — see ParcelFences and
+   *  Game's fence-hazard tick). Plain walls and buildings leave it unset. */
+  hazard?: 'spike' | 'razor'; }
 export const colliderBase = (box: Collider): number => box.y0 ?? terrainHeightAt((box.minX + box.maxX) / 2, (box.minZ + box.maxZ) / 2);
 export const colliderTop = (box: Collider): number => colliderBase(box) + box.height;
 
@@ -143,11 +156,13 @@ export function trunkProp(built: BuiltModel, x: number, z: number): TrunkProp | 
   };
 }
 
-export interface RoadPoint { x: number; z: number; }
 export interface RoadsidePoint extends RoadPoint { inwardX: number; inwardZ: number; width: number; }
 export interface RoadPose { position: THREE.Vector3; heading: number; }
-export interface RoadDefinition { name: string; width: number; closed?: boolean; points: RoadPoint[]; }
 export type SurfaceKind = 'auto' | 'terrain' | 'road' | 'sidewalk';
+
+/** Re-exported from ./roadPaths so City stays the single import site everything already uses. */
+export { buildCityNavPaths, offsetRoadPath, ROAD_NETWORK, ROAD_SAMPLE_SPACING, sampleRoadPath, SIDEWALK_CENTER, SIDEWALK_INNER_EDGE, SIDEWALK_WIDTH };
+export type { RoadDefinition, RoadPoint };
 
 export const STOREFRONT_SIGNS = ['KOTA & CHIPS', 'HAIR BY BONGI', 'MZANSI FONES', 'BRAAI 2 GO', 'EISH EXPRESS', 'LOAD SHED CAFE'] as const;
 export const INDUSTRIAL_SIGNS = ['PANELBEATERS', 'GENERATOR GUYS', 'TYRES & SONS', 'WELDING NOW-NOW'] as const;
@@ -173,15 +188,10 @@ export const SIDEWALK_RISE = 0.22;
  *  instead of a flat sheet coplanar with the land (the original z-fighting the relief pass set out to kill). */
 export const WATER_BASIN_DEPTH = 2.6;
 export const STOP_LINE_DEPTH = 0.6; // thickness (along travel) of an intersection stop bar — bold, reads as the feature
-/** Pavement begins just behind the kerb and ends exactly at the walkable-band query boundary. */
-export const SIDEWALK_INNER_EDGE = 0.38;
-/** Derived from ROAD_BUILD_MARGIN, not declared beside it, so the pavement the renderer LAYS and the
- *  road footprint every clearance rule MEASURES can never disagree. Widening the pavement now widens
- *  the footprint that rail, station platforms and roadside placement are all held clear of. */
-export const SIDEWALK_WIDTH = ROAD_BUILD_MARGIN - SIDEWALK_INNER_EDGE;
-export const SIDEWALK_CENTER = SIDEWALK_INNER_EDGE + SIDEWALK_WIDTH / 2;
 /** Width of the walkable sidewalk band beyond a road edge — a point this far off the tar reads as pavement.
- *  It is load-bearing that this is the SAME number the paving ribbon is drawn out to (both are
+ *  SIDEWALK_INNER_EDGE/WIDTH/CENTER now live in roadPaths.ts (imported and re-exported above) so
+ *  ModelScatter can read real walk lines without a City cycle; the BAND stays declared here beside its
+ *  consumers. It is load-bearing that this is the SAME number the paving ribbon is drawn out to (both are
  *  ROAD_BUILD_MARGIN by derivation): surfaceHeightAt returns the pavement plane exactly where the pavement
  *  is laid and bare terrain exactly where it stops, so nothing grounded through it is left hovering over
  *  the paving edge or bedded into it. Widening one without the other reopens the hover. City.test.ts pins it. */
@@ -417,8 +427,6 @@ export function inWater(x: number, z: number): boolean {
 /** District ownership comes from the generated map's place nodes (nearest centre). */
 export const districtAt = generatedDistrictAt;
 
-/** The driveable road network — straight from the generated OSM map. */
-export const ROAD_NETWORK: RoadDefinition[] = GENERATED_ROADS.map((road) => ({ name: road.name, width: road.width, points: road.points }));
 /** Off-road dirt tracks: rendered as narrow unpaved strips, not part of the nav graph. */
 export const TRACK_NETWORK: RoadDefinition[] = GENERATED_TRACKS.map((track) => ({ name: track.name, width: track.width, points: track.points }));
 /** Footpaths and trails: rendered as worn desire lines. Outside the road index and every nav graph —
@@ -504,15 +512,6 @@ const seeded = (x: number, z: number, salt = 0): number => {
   return value - Math.floor(value);
 };
 
-/**
- * Unit-denominated layout spacings were authored against the 2.94 m/unit (6000u) map. They must
- * track the map footprint so real-world density stays constant at any TARGET_SIZE: without this,
- * a scale-up would sample more nav nodes / sidewalk points per road (squaring the nav-graph build
- * cost) and space roadside buildings closer in real terms. LAYOUT_SCALE is 1.0 at the old scale
- * and 3.0 at the 18000u parity scale, so ROAD_SAMPLE_SPACING/NAV joins hold the same *real* pitch.
- */
-const LAYOUT_SCALE = 2.94 / METRES_PER_UNIT;
-export const ROAD_SAMPLE_SPACING = Math.round(12 * LAYOUT_SCALE);
 /** Sub-step (world units) the road/track SURFACE mesh is re-tessellated to, independent of the coarser nav
  *  sampling — small enough (vs the ~70u ground-mesh cells) that the tar hugs the relief and the faceted
  *  ground can't crease up through it between samples. Only the visual strip densifies; nav is untouched. */
@@ -543,27 +542,6 @@ export const WARM_BUILD_FRAME_BUDGET_MS = 8;
  *  keeps required-world loading making progress without spinning or monopolising the main thread. */
 export const WARM_BUILD_YIELD_FALLBACK_MS = 50;
 
-export function sampleRoadPath(points: RoadPoint[], closed: boolean, spacing: number): RoadPoint[] {
-  const source = closed ? [...points, points[0]].filter((point): point is RoadPoint => Boolean(point)) : points;
-  const output: RoadPoint[] = [];
-  for (let segment = 0; segment < source.length - 1; segment++) {
-    const start = source[segment]; const end = source[segment + 1]; if (!start || !end) continue;
-    const distance = Math.hypot(end.x - start.x, end.z - start.z); const steps = Math.max(1, Math.ceil(distance / spacing));
-    for (let step = 0; step < steps; step++) { const t = step / steps; output.push({ x: THREE.MathUtils.lerp(start.x, end.x, t), z: THREE.MathUtils.lerp(start.z, end.z, t) }); }
-  }
-  if (!closed && source.at(-1)) output.push({ ...source.at(-1)! });
-  return output;
-}
-
-export function offsetRoadPath(points: RoadPoint[], offset: number, closed: boolean): RoadPoint[] {
-  return points.map((point, index) => {
-    const previous = points[index === 0 ? (closed ? points.length - 1 : 0) : index - 1] ?? point;
-    const next = points[index === points.length - 1 ? (closed ? 0 : points.length - 1) : index + 1] ?? point;
-    const dx = next.x - previous.x; const dz = next.z - previous.z; const length = Math.hypot(dx, dz) || 1;
-    return { x: point.x - dz / length * offset, z: point.z + dx / length * offset };
-  });
-}
-
 /**
  * Clear portions of a path segment, with binary-refined transitions.  Long street runs remain one
  * quad; only the neighbourhood of a crossing is sampled.  Keeping this pure makes the clipping rule
@@ -590,20 +568,6 @@ export function clearPathIntervals(length: number, blockedAt: (distance: number)
   }
   if (!blocked && openStart !== undefined && length - openStart > 0.08) intervals.push([openStart, length]);
   return intervals;
-}
-
-/** Pure builder for the nav-graph source polylines: one lane pair and one sidewalk pair per road,
- *  sampled exactly like the rendered geometry so waypoints sit on the drawn lanes and sidewalks. */
-export function buildCityNavPaths(network: RoadDefinition[] = ROAD_NETWORK): { lanes: NavPath[]; walks: NavPath[] } {
-  const lanes: NavPath[] = []; const walks: NavPath[] = [];
-  for (const definition of network) {
-    const closed = definition.closed ?? false;
-    const sampled = sampleRoadPath(definition.points, closed, ROAD_SAMPLE_SPACING);
-    lanes.push({ points: offsetRoadPath(sampled, -definition.width * 0.23, closed), closed });
-    lanes.push({ points: offsetRoadPath(sampled, definition.width * 0.23, closed).reverse(), closed });
-    for (const side of [-1, 1]) walks.push({ points: offsetRoadPath(sampled, side * (definition.width / 2 + SIDEWALK_CENTER), closed).filter((_, index) => index % 2 === 0), closed });
-  }
-  return { lanes, walks };
 }
 
 /** Pure builder for the staggered streetlamp anchors: walk each road's centreline by arc length and drop
@@ -919,6 +883,8 @@ const BUILDING_PALETTES: Record<BuildingStyle, number[]> = {
 
 const GENERIC_AREA_NAMES = new Set(['park', 'grass', 'forest', 'wood', 'scrub', 'golf_course', 'nature_reserve', 'green', 'water', 'brownfield', 'mine_dump']);
 const PARK_TREE_SPECIES = ['shade-tree', 'jacaranda', 'shade-tree', 'gum', 'pine'] as const;
+/** Perimeter-avenue mix: planes and jacarandas dominate, the odd gum breaks the rhythm. */
+const RING_TREE_SPECIES = ['shade-tree', 'jacaranda', 'pine', 'jacaranda', 'shade-tree', 'gum'] as const;
 
 /** One step of the staged city build: the label for the loading bar and the build fraction 0..1. */
 export interface CityBuildStage { label: string; fraction: number }
@@ -933,6 +899,11 @@ export class City {
    *  furniture…): sub-pixel long before its 1200u range, so it culls far earlier than the world. */
   private detailStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
   private detailCulling = new ChunkVisibility(this.detailStore, DETAIL_VISIBLE_RANGE, DETAIL_HYSTERESIS);
+  /** Coarse grid (3x3 world cells) for the park perimeter avenues: a park's instanced tree batches
+   *  span a handful of coarse cells instead of one InstancedMesh set per 976u cell, keeping the
+   *  ring's draw-call cost near the roadside-tree baseline while still distance-culling whole parks. */
+  private treeStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE * 3);
+  private treeCulling = new ChunkVisibility(this.treeStore);
   /** On-demand building tier: buildings are GENERATED per cell as the player approaches (frame-budgeted)
    *  and their geometry disposed beyond the far radius — regenerable identically from CityGen's seeds. */
   private buildingStore = new ChunkStore(this.group, MERGE_CHUNK_SIZE);
@@ -944,7 +915,7 @@ export class City {
   private buildQueue: Array<[number, number]> = [];
   private queuedCells = new Set<string>();
   /** The cell currently being baked, a few buildings at a time, across frames (spreads the cost). */
-  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; index: number; models: ScatteredModel[]; modelIndex: number; baker: GeometryBaker; colliders: Collider[]; trunks: TrunkProp[]; group: THREE.Group };
+  private pending?: { key: string; cellX: number; cellZ: number; specs: GeneratedBuilding[]; neighbours: GeneratedBuilding[]; index: number; models: ScatteredModel[]; modelIndex: number; baker: GeometryBaker; colliders: Collider[]; trunks: TrunkProp[]; group: THREE.Group };
   /** Where the building meshes for the current build go (a per-building local group, rotated to face
    *  its street, then merged into the cell). Defaults to the root group for up-front geometry. */
   private target: THREE.Group = this.group;
@@ -1016,6 +987,8 @@ export class City {
   private architecture: BuildingArchitecture;
   private infrastructure!: UrbanInfrastructure; // assigned in buildStages (constructor drains it, or the staged boot walks it)
   private parkTreeSites: Array<{ x: number; z: number; seed: number }> = [];
+  /** Perimeter-avenue sites around manicured greens (see plantParkRing); built instanced, never merged. */
+  private parkRingSites: Array<{ x: number; z: number; seed: number }> = [];
   private treeAssetsInstalled = false;
 
   /** `staged: true` skips the build here so an async caller can walk buildStages() itself,
@@ -1084,8 +1057,38 @@ export class City {
     for (const site of this.parkTreeSites) this.addParkTree(site.x, site.z, site.seed, parks);
     mergeStaticGeometry(parks, MERGE_CHUNK_SIZE, this.chunkStore);
     parks.removeFromParent();
+    this.buildParkRingTrees();
     this.infrastructure.installTreeAssets();
     this.treeAssetsInstalled = true;
+  }
+
+  /** The park perimeter avenues, instanced per chunk cell exactly like the roadside trees (one
+   *  InstancedMesh per species-variant part per cell): thousands of ring trees stay a handful of
+   *  draw calls per park and cost per-instance matrices instead of merged resident geometry. Trunks
+   *  register the same solid 'tree' prop as every other authored tree — one collision rule. */
+  private buildParkRingTrees(): void {
+    interface Batch { part: TreeInstancePart; items: InstanceItem[] }
+    const batches = new Map<string, Batch>();
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const site of this.parkRingSites) {
+      const species = RING_TREE_SPECIES[Math.abs(Math.trunc(site.seed)) % RING_TREE_SPECIES.length]!;
+      const tree = buildTreeInstance(species, site.seed);
+      if (tree.trunkSolid) this.props.register('tree', site.x, site.z, tree.trunkRadius, tree.trunkHeight);
+      const placement = new THREE.Matrix4().compose(
+        new THREE.Vector3(site.x, terrainHeightAt(site.x, site.z), site.z),
+        new THREE.Quaternion().setFromAxisAngle(up, site.seed * 2.399963229728653),
+        new THREE.Vector3(tree.scale, tree.scale, tree.scale),
+      );
+      tree.parts.forEach((part, partIndex) => {
+        const key = `${species}:${tree.variant}:${partIndex}`;
+        const batch = batches.get(key) ?? { part, items: [] };
+        batch.items.push({ x: site.x, z: site.z, matrix: placement.clone().multiply(part.matrix), color: part.canopy ? tree.tint : undefined });
+        batches.set(key, batch);
+      });
+    }
+    for (const { part, items } of batches.values()) {
+      addInstancedChunks(this.treeStore, part.geometry, part.material, items, { cast: true, receive: true });
+    }
   }
 
   update(dt: number): void {
@@ -1157,6 +1160,7 @@ export class City {
   setStreamRanges(world: number, detail: number, buildings = BUILDING_VISIBLE_RANGE): void {
     this.chunkCulling.setRange(world);
     this.detailCulling.setRange(detail);
+    this.treeCulling.setRange(world);
     this.buildingVisibleRange = buildings;
     // A live tier change must not finish the old wider queue after its budget has been pulled inward.
     this.buildQueue = this.buildQueue.filter(([cx, cz]) => cellDistance(this.visibilityFocusX, this.visibilityFocusZ, cx, cz, MERGE_CHUNK_SIZE) <= buildings);
@@ -1173,6 +1177,7 @@ export class City {
     this.visibilityFocusX = focus.x; this.visibilityFocusZ = focus.z;
     this.chunkCulling.update(focus.x, focus.z);
     this.detailCulling.update(focus.x, focus.z);
+    this.treeCulling.update(focus.x, focus.z);
     this.infrastructure.updateVisibility(focus.x, focus.z);
     if (streamModels) this.updateBuildingChunks(focus.x, focus.z);
   }
@@ -1373,6 +1378,26 @@ export class City {
     return Math.max(this.surfaceHeightAt(x, z), best, propTop ?? -Infinity);
   }
 
+  /** The worst hazard-tagged fence collider the player's feet are touching the TOP of — crossing
+   *  or standing on razor wire / spike tips (see GameRules.fenceHazardTouch for the band; Game
+   *  applies the damage behind a cooldown). Walking along a fence at ground level touches only
+   *  the plain panel and reports nothing. Same single-cell grid query as every other move test. */
+  fenceHazardAt(x: number, z: number, radius: number, feetY: number): 'spike' | 'razor' | undefined {
+    this.indexNewColliders();
+    const bucket = this.colliderCells.get(`${Math.floor(x / this.colliderCellSize)},${Math.floor(z / this.colliderCellSize)}`);
+    if (!bucket) return undefined;
+    let worst: 'spike' | 'razor' | undefined;
+    for (const index of bucket) {
+      const box = this.colliders[index]!;
+      if (!box.hazard || worst === box.hazard || (worst === 'razor')) continue;
+      if (!fenceHazardTouch(colliderTop(box), feetY)) continue;
+      if (!colliderOverlapsXZ(box, x, z, radius)) continue;
+      worst = box.hazard === 'razor' ? 'razor' : 'spike';
+      if (worst === 'razor') return worst;
+    }
+    return worst;
+  }
+
   terrainHeightAt(x: number, z: number): number { return terrainHeightAt(x, z); }
 
   roadHeightAt(x: number, z: number): number { return terrainHeightAt(x, z) + ROAD_SURFACE_OFFSET; }
@@ -1472,6 +1497,10 @@ export class City {
     geometry.computeVertexNormals(); // real normals so slopes catch the light instead of reading flat
     setTerrainGrid(grid, n, step); // from here, terrainHeightAt returns this exact drawn surface
     const groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: this.groundGrass, roughness: 0.96 });
+    // Downtown is dust, not lawn — the ground between a CBD pavement and a CBD wall. Applied BEFORE
+    // the altitude pass so rock and snow still win on the northern range (the CBD is nowhere near it,
+    // but the ordering is the honest one: geology over land use).
+    applyUrbanGroundShader(groundMat, DISTRICT_CENTERS.filter((district) => HIGHRISE_DISTRICTS.has(district.name)));
     applySnowShader(groundMat, { snowY: SNOW_Y, rockY: SNOW_Y * 0.55 }); // veld → rock → snow up the northern range
     const ground = new THREE.Mesh(geometry, groundMat);
     ground.receiveShadow = true;
@@ -2526,6 +2555,7 @@ export class City {
     for (const polygon of GREEN_POLYGONS) {
       this.addGroundCover(polygon, parkMaterial, GROUND_COVER_LIFT); // drapes onto the relief
       this.plantParkTrees(polygon);
+      if (polygon.manicured) this.plantParkRing(polygon); // parks are surrounded by trees; wild veld is not
       if (!GENERIC_AREA_NAMES.has(polygon.name.toLowerCase()) && polygon.area > 4000) this.addParkSign(polygon);
     }
     for (const polygon of DIRT_POLYGONS) this.addGroundCover(polygon, dirtMaterial, 0.04); // mine dumps: Joburg's pale gold heaps, now draped on the terrain
@@ -2544,6 +2574,49 @@ export class City {
       if (terrainHeightAt(x, z) > SNOW_Y * 0.55) continue; // no leafy park trees above the range's rock line
       this.parkTreeSites.push({ x, z, seed: attempt + Math.round(polygon.cx) });
       planted++;
+    }
+  }
+
+  /** Walks a manicured green's boundary and books a tree at a steady pitch just inside it, so parks
+   *  read as tree-lined the way Joburg's actually are. Same rejects as the interior scatter (no tar,
+   *  no ballast, no reserved ground, no water, nothing above the rock line); pitch widens with
+   *  perimeter so a golf course gets an avenue, not a hedgerow. Sites are deterministic (seeded off
+   *  the polygon and station index) and are built as per-chunk instanced batches, not merged clones —
+   *  a few thousand ring trees cost matrices, not resident megabytes (see buildParkRingTrees). */
+  private plantParkRing(polygon: MapPolygon): void {
+    const points = polygon.points;
+    let perimeter = 0;
+    for (let index = 0; index < points.length; index++) {
+      const a = points[index]!; const b = points[(index + 1) % points.length]!;
+      perimeter += Math.hypot(b.x - a.x, b.z - a.z);
+    }
+    if (perimeter < 60) return; // a pocket lawn has no room for an avenue
+    const pitch = THREE.MathUtils.clamp(perimeter / 130, 8, 18);
+    let untilNext = pitch * 0.5; let station = 0;
+    for (let index = 0; index < points.length; index++) {
+      const a = points[index]!; const b = points[(index + 1) % points.length]!;
+      const length = Math.hypot(b.x - a.x, b.z - a.z);
+      if (length < 1e-3) continue;
+      const dirX = (b.x - a.x) / length; const dirZ = (b.z - a.z) / length;
+      let along = untilNext;
+      while (along < length) {
+        station++;
+        const jitterAlong = (seeded(polygon.cx + station, polygon.cz, 33) - 0.5) * pitch * 0.35;
+        const inset = 2.6 + seeded(polygon.cx, polygon.cz + station, 34) * 2.4;
+        const baseX = a.x + dirX * THREE.MathUtils.clamp(along + jitterAlong, 0, length);
+        const baseZ = a.z + dirZ * THREE.MathUtils.clamp(along + jitterAlong, 0, length);
+        along += pitch;
+        // The boundary winding is not guaranteed, so try both normals and keep the inward one.
+        for (const side of [1, -1]) {
+          const x = baseX - dirZ * inset * side; const z = baseZ + dirX * inset * side;
+          if (!pointInPolygon(polygon, x, z)) continue;
+          if (this.inWater(x, z) || this.isOnRoad(x, z, 2.4) || this.isReserved(x, z, 2)) break;
+          if (distanceToRailwayCorridor(x, z) < 0.7 || terrainHeightAt(x, z) > SNOW_Y * 0.55) break;
+          this.parkRingSites.push({ x, z, seed: station * 7 + Math.round(polygon.cx + polygon.cz) });
+          break;
+        }
+      }
+      untilNext = along - length;
     }
   }
 
@@ -2641,13 +2714,19 @@ export class City {
         const [cx, cz] = this.buildQueue.shift()!; const key = `${cx},${cz}`;
         this.queuedCells.delete(key);
         if (this.buildingCells.has(key)) continue;
-        this.pending = { key, cellX: cx, cellZ: cz, specs: generateCell(cx, cz), index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], trunks: [], group: this.buildingStore.groupForKey(key) };
+        const specs = generateCell(cx, cz);
+        // Fence planning drops any run that would cross a neighbouring footprint; the 3x3 cell
+        // neighbourhood covers stands whose neighbour sits across a cell boundary. Deterministic:
+        // generateCell is a pure lookup, and the list only ever VETOES segments.
+        const neighbours = [...specs];
+        for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) { if (dx !== 0 || dz !== 0) neighbours.push(...generateCell(cx + dx, cz + dz)); }
+        this.pending = { key, cellX: cx, cellZ: cz, specs, neighbours, index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], trunks: [], group: this.buildingStore.groupForKey(key) };
       }
       const pending = this.pending;
       // One item per budget slice — procedural buildings first, then the scattered structures/foliage;
       // both feed the same per-cell baker so the whole cell still collapses to a handful of draw calls.
       if (pending.index < pending.specs.length) {
-        const { group, colliders } = this.buildOneBuilding(pending.specs[pending.index++]!);
+        const { group, colliders } = this.buildOneBuilding(pending.specs[pending.index++]!, pending.neighbours);
         pending.baker.addObject(group);
         group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); // baker cloned the geometry
         pending.colliders.push(...colliders);
@@ -2694,8 +2773,10 @@ export class City {
   }
 
   /** Build one building at the origin inside its own group, then rotate it to face its street and
-   *  place it. Returns the group (unmerged) and its world-space collision tiers. */
-  private buildOneBuilding(spec: GeneratedBuilding): { group: THREE.Group; colliders: Collider[] } {
+   *  place it. Returns the group (unmerged) and its world-space collision tiers. `neighbours` (the
+   *  cell's 3x3 parcel neighbourhood) lets the per-parcel fence planner veto runs that would cross
+   *  another footprint; omitted (QA single-building rebuilds), the fence simply skips no runs. */
+  private buildOneBuilding(spec: GeneratedBuilding, neighbours: readonly GeneratedBuilding[] = []): { group: THREE.Group; colliders: Collider[] } {
     const group = new THREE.Group();
     const previousTarget = this.target; this.target = group; this.architecture.retarget(group);
     const { width: w, depth: d, height: h, style, variant: sourceVariant } = spec;
@@ -2723,7 +2804,7 @@ export class City {
     const materialKey = `${style}-${facadeIndex}`; let facade = this.buildingMaterial.get(materialKey);
     // emissiveIntensity starts at the CURRENT window-glow level, not 0: this material may be born at
     // midnight, halfway across the map from wherever the cycle last walked the list (see setFacadeGlow).
-    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: this.facadeGlow, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); this.buildingMaterial.set(materialKey, facade); }
+    if (!facade) { facade = new THREE.MeshStandardMaterial({ color, map: this.facades[facadeIndex], emissive: 0xffffff, emissiveMap: this.facadeGlows[facadeIndex], emissiveIntensity: this.facadeGlow, roughness: 0.72, metalness: style === 'downtown' || style === 'mixed-use' ? 0.12 : 0.02 }); applyFacadeWeathering(facade); this.buildingMaterial.set(materialKey, facade); }
     const profile = this.architecture.build({ x: 0, z: 0, width: w, depth: d, height: h, style, variant, facade, roof: this.roofMaterial, facadeTile: facadeWorldTile(facadeIndex) });
     const foundations = foundationTiers(profile.tiers, -plinthDrop);
     const foundationIdentity = foundationIdentityForDistrict(district);
@@ -2753,7 +2834,14 @@ export class City {
     // never opens, so it keeps the old generic-business vocabulary.
     const boardName = profile.entrance ? boardText(parcelBuildingName(spec.x, spec.z, style, profile.entrance.kind)) : undefined;
     if (style === 'industrial') this.addIndustrialDetail(0, 0, w, d, h, variant, profile.tiers, profile.gables, boardName);
-    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName);
+    // A downtown building whose street base is a real shop-bay run (glass + shutters, drawn by the
+    // architecture pass) skips the generic glazing strip — two stacked panes of different sizes on
+    // one wall read as a bug, not a shop. Same planShopBays the architecture draws from.
+    const shopBays = style === 'downtown'
+      ? planShopBays(profile.tiers, w, h, variant % ARCHITECTURE_VARIANTS.downtown, variant, profile.entrance) : [];
+    const shopfronted = shopBays.length > 0;
+    if (detailed && (style === 'downtown' || style === 'mixed-use' || style === 'dense-residential')) this.addStreetLevelDetail(0, w, style, variant, profile.tiers, boardName, shopfronted);
+    this.addGrimeDecals(spec, style, profile, shopBays, districtGrimeScale(district));
     this.addRoofEquipment(0, 0, w, d, h, profile.tiers, profile.gables, style, variant);
     if (style === 'downtown' && h > 48 && variant % 4 === 0) this.addRoofSign(0, 0, w, d, profile.tiers, profile.gables, variant);
     group.position.set(spec.x, baseY, spec.z); group.rotation.y = spec.heading;
@@ -2763,8 +2851,83 @@ export class City {
     if (hMax - hMin > PLAYER.stepUp) {
       colliders.push(...foundations.map((foundation) => this.tierToWorldCollider(foundation, spec.x, spec.z, spec.heading, baseY)));
     }
+    // The suburban norm: a per-parcel fence ring (wall / spiked palisade / razor wire) with a gate
+    // cut at the planned front door. The stoep house (suburban massing 6) carries its own yard
+    // wall in the architecture and is exempt inside the planner.
+    if (spec.zone === 'residential') {
+      const fence = planParcelFence(spec, { massing: profile.massing, entranceX: profile.entrance?.x, neighbours });
+      if (fence) colliders.push(...this.buildParcelFence(group, fence, baseY, foundationMaterials.wall));
+    }
     this.target = previousTarget; this.architecture.retarget(this.group);
     return { group, colliders };
+  }
+
+  /**
+   * Draw one parcel's fence from its plan and return the matching colliders — mesh and collider
+   * come from the SAME segment list, so no fence collider can stand anywhere its panel is not.
+   * Meshes are built in the building's local frame (the group is rotated to the street as a unit)
+   * but grounded per segment on the world terrain, so runs step down slopes like the airport
+   * fence. Materials are shared citywide: garden walls reuse the district's foundation concrete,
+   * posts match the architecture's dark metal, and the three panel materials bucket once per
+   * chunk — the whole layer costs at most ~3 extra draw calls per chunk.
+   */
+  private buildParcelFence(group: THREE.Group, fence: FencePlan, baseY: number, wallMaterial: THREE.MeshStandardMaterial): Collider[] {
+    const colliders: Collider[] = [];
+    const skirt = 0.9; // buried below grade so downhill segment joints show no daylight
+    for (const segment of fence.segments) {
+      const ground = terrainHeightAt(segment.x, segment.z);
+      colliders.push(fenceSegmentCollider(segment, fence, ground));
+      const sideways = segment.along === 'z';
+      if (fence.kind === 'wall') {
+        const wallH = fence.height + skirt;
+        const mesh = new THREE.Mesh(
+          scaleBoxFacadeUvs(new THREE.BoxGeometry(segment.length, wallH, 0.26), segment.length, wallH, 0.26, FOUNDATION_UV_TILE),
+          wallMaterial);
+        mesh.position.set(segment.lx, ground - baseY + fence.height - wallH / 2, segment.lz);
+        if (sideways) mesh.rotation.y = Math.PI / 2;
+        mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh);
+        continue;
+      }
+      const bodyTop = fence.kind === 'palisade' ? fence.height : 1.85; // razor: mesh body, coil covers the rest
+      const bodyH = bodyTop + 0.25; // embedded so slope steps show steel, not daylight
+      const tile = fence.kind === 'palisade' ? PALISADE_TILE_WIDTH : CHAINLINK_TILE_WIDTH;
+      const panel = new THREE.Mesh(
+        this.fencePanelGeometry(segment.length, bodyH, tile, fence.kind === 'palisade' ? 1 : bodyH / CHAINLINK_TILE_WIDTH),
+        fence.kind === 'palisade' ? palisadeFenceMaterial() : chainlinkFenceMaterial());
+      panel.position.set(segment.lx, ground - baseY + bodyTop - bodyH / 2, segment.lz);
+      if (sideways) panel.rotation.y = Math.PI / 2;
+      panel.receiveShadow = true; group.add(panel);
+      if (fence.kind === 'razor') {
+        const coil = new THREE.Mesh(this.fencePanelGeometry(segment.length, 0.6, RAZOR_COIL_TILE_WIDTH), razorCoilMaterial());
+        coil.position.set(segment.lx, ground - baseY + 2.02, segment.lz);
+        if (sideways) coil.rotation.y = Math.PI / 2;
+        group.add(coil);
+      }
+    }
+    for (const post of fence.posts) {
+      const ground = terrainHeightAt(post.x, post.z);
+      if (fence.kind === 'wall') {
+        const pillarH = fence.height + 0.35 + 0.7;
+        const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.42, pillarH, 0.42), wallMaterial);
+        pillar.position.set(post.lx, ground - baseY + fence.height + 0.35 - pillarH / 2, post.lz);
+        pillar.castShadow = true; pillar.receiveShadow = true; group.add(pillar);
+      } else {
+        const postH = fence.height + 0.15 + 0.5;
+        const steel = new THREE.Mesh(new THREE.BoxGeometry(0.12, postH, 0.12), fencePostMaterial());
+        steel.position.set(post.lx, ground - baseY + fence.height + 0.15 - postH / 2, post.lz);
+        steel.castShadow = true; group.add(steel);
+      }
+    }
+    return colliders;
+  }
+
+  /** A fence panel plane with its UVs scaled to the shared texture's world tile, so pale pitch and
+   *  mesh weave stay constant whatever length the segment came out. */
+  private fencePanelGeometry(length: number, height: number, tileWidth: number, vRepeat = 1): THREE.PlaneGeometry {
+    const geometry = new THREE.PlaneGeometry(length, height);
+    const uv = geometry.getAttribute('uv');
+    for (let index = 0; index < uv.count; index++) uv.setXY(index, uv.getX(index) * (length / tileWidth), uv.getY(index) * vRepeat);
+    return geometry;
   }
 
   private foundationMaterialsFor(identity: FoundationIdentity): { wall: THREE.MeshStandardMaterial; accent: THREE.MeshStandardMaterial } {
@@ -3045,18 +3208,43 @@ export class City {
     if (variant % 4 === 0) this.addRoofSign(x, z, w, d, tiers, gables, variant);
   }
 
-  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[], boardName?: string): void {
+  /** Street grime and graffiti quads on the deterministic subset planGrimeDecals selects — one
+   *  shared atlas material, so a chunk's whole decal layer merges to a single extra mesh. Placement
+   *  is the pure plan's job; this pass only cuts the quads and points their UVs at the atlas.
+   *  `grimeScale` is the district's wealth term, resolved by the caller from the district it has
+   *  already looked up — the planner stays pure so the census plans the identical wall. */
+  private addGrimeDecals(spec: GeneratedBuilding, style: BuildingStyle, profile: BuildingProfile, bays: readonly ShopBay[], grimeScale: number): void {
+    const decals = planGrimeDecals(profile.tiers, style, spec.width, spec.height, spec.x, spec.z, profile.entrance, bays, grimeScale);
+    if (decals.length === 0) return;
+    const material = grimeDecalMaterial();
+    for (const decal of decals) {
+      const geometry = new THREE.PlaneGeometry(decal.width, decal.height);
+      const cell = GRIME_ATLAS_CELLS[decal.cell]!;
+      const uv = geometry.getAttribute('uv');
+      const u0 = decal.flip ? cell.u1 : cell.u0; const u1 = decal.flip ? cell.u0 : cell.u1;
+      for (let index = 0; index < uv.count; index++) {
+        uv.setXY(index, THREE.MathUtils.lerp(u0, u1, uv.getX(index)), THREE.MathUtils.lerp(cell.v0, cell.v1, uv.getY(index)));
+      }
+      const quad = new THREE.Mesh(geometry, material);
+      quad.position.set(decal.x, decal.y, decal.z);
+      quad.receiveShadow = true; quad.name = 'street-grime-decal';
+      this.target.add(quad);
+    }
+  }
+
+  private addStreetLevelDetail(x: number, w: number, style: BuildingStyle, variant: number, tiers: readonly MassingTier[], boardName?: string, shopfronted = false): void {
     const frame = new THREE.MeshStandardMaterial({ color: 0x273235, metalness: 0.55, roughness: 0.38 });
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x315f68, roughness: 0.12, metalness: 0.18, clearcoat: 0.7 });
-    const bays = Math.max(2, Math.min(5, Math.floor(w / 5)));
-    for (let bay = 0; bay < bays; bay++) {
-      const px = x - w * 0.39 + bay * (w * 0.78 / Math.max(1, bays - 1));
-      if (Math.abs(px - x) < Math.min(3, w * 0.18)) continue;
-      const commercial = style === 'downtown' || style === 'mixed-use';
-      const windowW = Math.min(3.2, w / bays * 0.62); const windowY = commercial ? 1.55 : 1.65;
-      const facadeZ = frontFacadeZAt(tiers, px, windowY, windowW / 2); if (facadeZ === undefined) continue;
-      const window = new THREE.Mesh(new THREE.BoxGeometry(windowW, commercial ? 2.35 : 1.65, 0.09), glass); window.position.set(px, windowY, facadeZ + 0.025); this.target.add(window);
-      const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, w / bays * 0.68), 0.1, 0.18), frame); sill.position.set(px, 0.4, facadeZ + 0.06); this.target.add(sill);
+    if (!shopfronted) { // a shop-bay run already owns this wall's street glazing (see buildOneBuilding)
+      const glazing = glazingBayLayout(w); // shared with planGrimeDecals: tags avoid these exact bays
+      for (const bayX of glazing.positions) {
+        const px = x + bayX;
+        const commercial = style === 'downtown' || style === 'mixed-use';
+        const windowW = glazing.windowWidth; const windowY = commercial ? 1.55 : 1.65;
+        const facadeZ = frontFacadeZAt(tiers, px, windowY, windowW / 2); if (facadeZ === undefined) continue;
+        const window = new THREE.Mesh(new THREE.BoxGeometry(windowW, commercial ? 2.35 : 1.65, 0.09), glass); window.position.set(px, windowY, facadeZ + 0.025); this.target.add(window);
+        const sill = new THREE.Mesh(new THREE.BoxGeometry(Math.min(3.5, windowW * 1.1), 0.1, 0.18), frame); sill.position.set(px, 0.4, facadeZ + 0.06); this.target.add(sill);
+      }
     }
     if (style === 'downtown' || style === 'mixed-use' || variant % 3 === 0) {
       const colors = [0xc8503f, 0x2f7774, 0xd4a438, 0x586f91];

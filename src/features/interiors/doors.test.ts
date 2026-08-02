@@ -35,11 +35,13 @@ describe('doors', () => {
   beforeEach(() => { resetDoorCache(); });
 
   it('puts the doorstep in front of the plane the model tagged, on the building it belongs to', () => {
-    let checked = 0; let tucked = 0;
+    let checked = 0; let tucked = 0; let suburbanChecked = 0; let suburbanTucked = 0;
     for (const building of allBuildings().filter((_, index) => index % 31 === 0)) {
       const door = doorFor(building);
       if (!door) continue;
       checked++;
+      const streetWall = building.style === 'downtown';
+      if (!streetWall) suburbanChecked++;
       const tag = planOf(building).entrance!;
       // The frame sits on the tagged plane, transformed by the building's own placement.
       const c = Math.cos(building.heading); const s = Math.sin(building.heading);
@@ -50,7 +52,7 @@ describe('doors', () => {
       const standOff = Math.hypot(door.x - door.faceX, door.z - door.faceZ);
       expect(standOff, door.name).toBeLessThanOrEqual(2.9 + 1e-6);
       expect(standOff, door.name).toBeGreaterThan(0.3);
-      if (standOff < 2.6) tucked++;
+      if (standOff < 2.6) { tucked++; if (!streetWall) suburbanTucked++; }
       // The step belongs to THIS building: never further from its centre than its own half-diagonal
       // plus that stride.
       const reach = Math.hypot(building.width, building.depth) / 2 + 3.0;
@@ -59,8 +61,14 @@ describe('doors', () => {
       expect(door.openWidth).toBe(tag.width);
     }
     expect(checked, 'no doors were checked at all').toBeGreaterThan(30);
-    // Almost every doorstep makes the full stand-off; only a pavement too narrow for it tucks in.
-    expect(tucked / checked, `${tucked}/${checked} doorsteps had to tuck against their wall`).toBeLessThan(0.05);
+    // Outside the CBD street wall, almost every doorstep makes the full stand-off; only a pavement
+    // too narrow for it tucks in. Downtown is EXPECTED to tuck: the city-density pass stands its
+    // buildings at yard 0.6 — the Joburg street wall, where a lobby door genuinely opens onto the
+    // pavement — so the tuck ladder (STAND_OFFS) doing its designed job there is not the
+    // floating-doorstep bug this ratio was written to catch. The wall-plane, ownership and
+    // step-exists assertions above still hold for every door, downtown included.
+    expect(suburbanTucked / suburbanChecked, `${suburbanTucked}/${suburbanChecked} non-street-wall doorsteps had to tuck against their wall`).toBeLessThan(0.05);
+    expect(tucked / checked, `${tucked}/${checked} doorsteps tucked citywide — even the CBD street wall should leave most of the city standing clear`).toBeLessThan(0.45);
   }, 120000);
 
   /**
@@ -168,18 +176,37 @@ describe('doors', () => {
 describe('doors on scattered models', () => {
   beforeEach(() => { resetDoorCache(); });
 
-  /** The exact spot the owner reported: "-3011.8,484.1 has a common building type with no entrance."
-   *  It is a scattered office-block, six metres off, and the parcel pass has nothing within 38 u. */
-  it('offers a prompt at the coordinate the owner reported as shut', () => {
-    const door = doorNear(-3011.8, 484.1);
-    expect(door, 'no prompt at -3011.8,484.1').toBeDefined();
-    expect(door!.id.startsWith('s'), 'the door there should be a scattered model, not a parcel').toBe(true);
-    expect(doorNear(door!.x, door!.z)?.id).toBe(door!.id);
+  /**
+   * The exact spot the owner reported: "-3011.8,484.1 has a common building type with no entrance."
+   *
+   * RE-AIMED AT THE RULE, deliberately. The scattered office-block that stood on this coordinate was
+   * displaced by the row-builder pass — parcels claim ground before scatter, and the inner-city and
+   * dense-residential zones now claim it continuously, so the nearest building here is a 37 x 47 u
+   * mixed-use parcel 25 u away and the spot itself is open pavement. Pinning "a prompt fires at
+   * exactly this coordinate" was pinning WHICH pass happened to own that ground, which is not what
+   * the report was about. The report was about walking up to a building and finding no way in, so
+   * that is what is asserted now: nothing enterable-looking stands here shut, and there is still an
+   * openable building within a short walk.
+   */
+  it('leaves nothing shut at the coordinate the owner reported as shut', () => {
+    const shut = allScatteredModels().filter((model) => MODEL_INDEX.get(model.name)?.interior
+      && Math.hypot(model.x + 3011.8, model.z - 484.1) < 14 && !scatterDoorFor(model));
+    expect(shut.map((model) => `${model.name}@${model.x.toFixed(1)},${model.z.toFixed(1)}`)).toEqual([]);
+    const nearest = nearestDoor(-3011.8, 484.1);
+    expect(nearest, 'no openable building anywhere near -3011.8,484.1').toBeDefined();
+    expect(Math.hypot(nearest!.x + 3011.8, nearest!.z - 484.1)).toBeLessThan(40);
   }, 300000);
 
   it('opens essentially every scattered model a person would live or work in', () => {
     const enterable = allScatteredModels().filter((model) => MODEL_INDEX.get(model.name)?.interior);
-    expect(enterable.length).toBeGreaterThan(3000);
+    // Floor recalibrated once per density pass, for one reason each time: procedural parcels claim
+    // frontage BEFORE scatter, so every parcel added moves an enterable building from the scatter
+    // column to the parcel column while the combined universe grows. CBD pass 3,712 → ~5,450
+    // parcels, suburbs pass → ~8,370, row builder → 10,284; scattered enterables ~2,550 → ~1,740 →
+    // ~1,206, combined ~8,000 → ~10,100 → ~11,500. The 0.99 open ratio below is the real guard —
+    // it says every enterable-LOOKING building opens, which is the owner's actual complaint — and
+    // this floor only proves scatter still contributes a substantial share of them.
+    expect(enterable.length).toBeGreaterThan(1150);
     const open = enterable.filter((model) => scatterDoorFor(model)).length;
     expect(open / enterable.length, `only ${open} of ${enterable.length} scattered buildings open`).toBeGreaterThan(0.99);
   }, 900000);
