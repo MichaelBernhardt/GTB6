@@ -128,6 +128,10 @@ npm run vehicle:validate  # Validate all five committed four-wheel vehicle asset
 npm run vehicle:build     # Rebuild vehicle Blend/GLB sources and inspection sheets
 ```
 
+For long-form autonomous quality work, [the Groot Theft Bakkie Gauntlet Loop](gauntlet/README.md)
+provides a repo-specific builder/critic prompt, concrete comparison bars, and a live evidence
+workbench.
+
 `npm run map:build` uses the map-generation pipeline under `tools/mapgen/`. The generated map data is checked in, so ordinary development does not need to call Overpass or regenerate Johannesburg before breakfast.
 
 `npm run character:build` requires Blender 4.2+, MPFB 2.0.16, the locked CC0 MakeHuman system asset pack, and Quaternius Universal Animation Library Standard. On macOS, put `UAL1_Standard.glb` at `~/Library/Application Support/GTATHREEJS/character/UAL1_Standard.glb`, or set `QUATERNIUS_ANIMATIONS=/path/to/UAL1_Standard.glb`. The command recreates the ignored editable Blend and FBX before installing and validating the web GLB.

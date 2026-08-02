@@ -25,6 +25,7 @@ import {
   type SignalJunctionDef,
 } from './mapData';
 import { BEACHFRONT_PADS } from './beachfront';
+import { createCbdHeroCorridorPlan } from './cbdHeroCorridor';
 import { toNewWorld } from './coordTransform';
 
 export interface PlacedSite {
@@ -253,6 +254,8 @@ const spawnPoint = (() => {
 })();
 export const PLAYER_SPAWN: [number, number, number] = [spawnPoint.x, 1, spawnPoint.z];
 export const SPAWN_POINT: MapPt = spawnPoint;
+/** Deterministic 165m visual/workload plan for the default-spawn Risk-It Street corridor. */
+export const CBD_HERO_CORRIDOR = createCbdHeroCorridorPlan(spawnPoint);
 
 // ---- JMPD lock-up (bust release point) ---------------------------------------
 
@@ -560,6 +563,9 @@ export const PARKED_VEHICLES: ParkedVehicleSpot[] = [
   parkedEntry('motorbike', kerbVehicleSpot('Anderson Street', { x: CBD_CENTER.x - 45 * P, z: CBD_CENTER.z + 25 * P }, 2)),
   parkedEntry('courier', kerbVehicleSpot('Commissioner Street', { x: COURIER_DEPOT.x, z: COURIER_DEPOT.z }, 2), 0x84f01c),
   (() => { const near = toward(hillbrow, 0.62); const spot = bestKerbSpot({ near, clearance: 2, ownRadius: 3.4, minEdge: 0.1, minRoadWidth: 7 }); return { kind: 'superbike', x: spot.x, z: spot.z, heading: Math.atan2(spot.dirX, spot.dirZ) }; })(), // northern-suburbs showroom superbike, ~1.5km (Stage Fright)
+  // The default-spawn hero view needs a recognisable kerbside queue on first frame, before roaming
+  // traffic happens to wander into shot. These four stay inside the bounded corridor plan above.
+  ...CBD_HERO_CORRIDOR.parkedVehicles,
 ];
 
 // ---- e-toll gantries (on the M1) -----------------------------------------------------

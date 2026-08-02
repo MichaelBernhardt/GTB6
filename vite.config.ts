@@ -70,7 +70,7 @@ function manualChunk(id: string): string | undefined {
   // back-edge was enough to make world-data and simulation mutually uninitialisable.
   // railAlignment belongs here too: mapData imports it to deconflict the rail against the built road
   // footprint, and it is a true leaf (pure arithmetic, no imports at all), so it cannot close a cycle.
-  if (/\/src\/world\/(?:mapData|railAlignment|beachfront|placements|coordTransform|data\/manicured|data\/zoning)\.ts$/.test(path)) return 'world-data';
+  if (/\/src\/world\/(?:mapData|railAlignment|beachfront|placements|cbdHeroCorridor|coordTransform|data\/manicured|data\/zoning)\.ts$/.test(path)) return 'world-data';
   // Feature plumbing that MUST be eager: the registry, the host, the interaction ladder, the save
   // sanitizer, and any top-level `<id>.state.ts`. Matches ONE path segment under src/features/ only —
   // feature bodies live in src/features/<id>/ and must match NO rule so they stay lazy async chunks.

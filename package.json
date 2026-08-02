@@ -17,6 +17,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "gauntlet:browser": "node tools/qa/gauntlet-browser.mjs",
     "character:build": "node tools/character/build.mjs",
     "character:validate": "node tools/character/validate.mjs",
     "foliage:build": "node tools/foliage/build.mjs",
