@@ -532,7 +532,7 @@ export interface BuiltDoorways {
  * you see houses; walk up to one and its door lights up. The gold pillar stays where it belongs, on
  * the street economy's genuine objectives.
  */
-const FADE_FAR = 26;
+export const FADE_FAR = 26;
 const FADE_NEAR = 11;
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -548,6 +548,21 @@ export function markerFade(distance: number): number {
   if (distance <= FADE_NEAR) return 1;
   if (distance >= FADE_FAR) return 0;
   return (FADE_FAR - distance) / (FADE_FAR - FADE_NEAR);
+}
+
+/**
+ * Sit one marker's frame, disc and ring on a probed surface — height AND tilt. The build below and
+ * the later refinement in interiors.ts both go through here, so a marker whose real surface arrives
+ * a few frames after it was streamed lands byte-identically to one probed up front. Only the bay's
+ * HEIGHT moves: the frame stands on the wall plane, the circle on the step.
+ */
+export function seatMarker(marker: DoorMarker, step: { y: number; nx: number; ny: number; nz: number }): void {
+  const lean = new THREE.Quaternion().setFromUnitVectors(UP, new THREE.Vector3(step.nx, step.ny, step.nz).normalize());
+  marker.bay.position.y = step.y;
+  marker.disc.position.set(marker.x, step.y, marker.z);
+  marker.disc.quaternion.copy(lean);
+  marker.ring.quaternion.copy(lean).multiply(RING_FLAT);
+  marker.ring.position.copy(marker.disc.position); marker.ring.position.y += 0.015;
 }
 
 /**
@@ -583,7 +598,12 @@ export function buildDoorways(
     // on a foundation-levelled site the model's leaf sits on the plinth, and probing height AT the
     // face would find the building's own roof. The step is where the player stands to use the
     // door, so its surface is the honest base for the joinery too.
-    bay.position.set(door.faceX, surfaceAt(door.x, door.z).y, door.faceZ);
+    //
+    // ONE probe per door, shared by the frame and the disc below. The caller's probe is budgeted
+    // (see markerSurface), so asking twice could hand the frame the real surface and the disc the
+    // provisional one — a frame and its own doorstep circle at different heights.
+    const step = surfaceAt(door.x, door.z);
+    bay.position.set(door.faceX, step.y, door.faceZ);
     bay.rotation.y = door.heading; // local +z faces the street
     const add = (w: number, h: number, d: number, material: THREE.Material, x: number, y: number, z: number): void => {
       const mesh = new THREE.Mesh(unitBox, material);
@@ -613,16 +633,13 @@ export function buildDoorways(
     // instead of digging a rim in or floating a rim off. Depth testing stays ON — a doorstep
     // circle marks a spot you can see, never an x-ray through the building. (depthWrite stays
     // off: it is a transparent overlay and must not punch holes in what draws behind it.)
-    const step = surfaceAt(door.x, door.z);
-    const lean = new THREE.Quaternion().setFromUnitVectors(UP, new THREE.Vector3(step.nx, step.ny, step.nz).normalize());
     const discMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xe8b64c, transparent: true, opacity: DISC_OPACITY, depthWrite: false }));
     const ringMaterial = mat(new THREE.MeshBasicMaterial({ color: 0xf5c451, transparent: true, opacity: 0.75, depthWrite: false }));
     const disc = new THREE.Mesh(discGeometry, discMaterial);
-    disc.position.set(door.x, step.y, door.z);
-    disc.quaternion.copy(lean);
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-    ring.quaternion.copy(lean).multiply(RING_FLAT); ring.position.copy(disc.position); ring.position.y += 0.015;
-    markers.push({ x: door.x, z: door.z, door, disc, ring, bay, discMaterial, ringMaterial });
+    const marker: DoorMarker = { x: door.x, z: door.z, door, disc, ring, bay, discMaterial, ringMaterial };
+    seatMarker(marker, step);
+    markers.push(marker);
     group.add(bay, disc, ring);
   }
 

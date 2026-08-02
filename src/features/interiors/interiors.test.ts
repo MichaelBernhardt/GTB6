@@ -12,7 +12,7 @@ import { createFeature } from './interiors';
 import { buildCore, hasRoofAccess, hatchFoot } from './core';
 import { doorsNear, nearestDoor, resetDoorCache } from './doors';
 import { doorLocked } from './lock';
-import { buildDoorways, buildFloor, markerFade } from './build';
+import { buildDoorways, buildFloor, markerFade, seatMarker } from './build';
 import { solveFloor } from './floor';
 import { FeatureHost, type FeatureHostContext } from '../host';
 import { sanitizeInteriorsState } from '../interiors.state';
@@ -469,6 +469,37 @@ describe('the marker on the step', () => {
       expect(marker.discMaterial.opacity).toBeLessThanOrEqual(0.31);
     }
     built.dispose();
+  }, 120000);
+
+  /**
+   * The travel-stutter fix defers a doorstep's ground probe until the marker is close enough to be
+   * seen, then seats it in place. That is only safe if a marker seated LATE is indistinguishable
+   * from one built on the real surface up front — otherwise deferring the probe would be a visible
+   * pop rather than an invisible saving. One code path (seatMarker) now does both, and this is the
+   * proof: build on the provisional height, seat on the real one, and land byte-identically.
+   */
+  it('seats a deferred marker exactly where an up-front probe would have put it', () => {
+    resetDoorCache();
+    const doors = doorsNear(0, 0, 260).slice(0, 4);
+    expect(doors.length).toBeGreaterThan(1);
+    const real = { y: 7.25, nx: 0.18, ny: 0.97, nz: -0.14 };
+    const provisional = { y: 6.4, nx: 0, ny: 1, nz: 0 };
+
+    const upFront = buildDoorways(doors, () => real);
+    const deferred = buildDoorways(doors, () => provisional);
+    // Provisional first, so the two really do start apart — then seat, and they must converge.
+    expect(deferred.markers[0]!.disc.position.y).not.toBeCloseTo(upFront.markers[0]!.disc.position.y, 3);
+    for (const marker of deferred.markers) seatMarker(marker, real);
+
+    for (const [index, marker] of deferred.markers.entries()) {
+      const reference = upFront.markers[index]!;
+      expect(marker.bay.position.y).toBeCloseTo(reference.bay.position.y, 6);
+      expect(marker.disc.position.toArray()).toEqual(reference.disc.position.toArray());
+      expect(marker.ring.position.toArray()).toEqual(reference.ring.position.toArray());
+      expect(marker.disc.quaternion.angleTo(reference.disc.quaternion)).toBeLessThan(1e-6); // float32 quaternion storage, not a difference an eye or a pixel can hold
+      expect(marker.ring.quaternion.angleTo(reference.ring.quaternion)).toBeLessThan(1e-6);
+    }
+    upFront.dispose(); deferred.dispose();
   }, 120000);
 });
 

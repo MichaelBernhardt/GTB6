@@ -2720,7 +2720,12 @@ export class City {
         // generateCell is a pure lookup, and the list only ever VETOES segments.
         const neighbours = [...specs];
         for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) { if (dx !== 0 || dz !== 0) neighbours.push(...generateCell(cx + dx, cz + dz)); }
-        this.pending = { key, cellX: cx, cellZ: cz, specs, neighbours, index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], trunks: [], group: this.buildingStore.groupForKey(key) };
+        const group = this.buildingStore.groupForKey(key);
+        // Hidden until every material bucket has merged. The merge is now spent a bucket at a time
+        // against the budget below, and a cell that revealed itself bucket by bucket would show
+        // walls without their roofs for the half-second that takes.
+        group.visible = false;
+        this.pending = { key, cellX: cx, cellZ: cz, specs, neighbours, index: 0, models: scatterCell(cx, cz), modelIndex: 0, baker: new GeometryBaker(), colliders: [], trunks: [], group };
       }
       const pending = this.pending;
       // One item per budget slice — procedural buildings first, then the scattered structures/foliage;
@@ -2737,8 +2742,14 @@ export class City {
         pending.colliders.push(...colliders);
         if (trunk) pending.trunks.push(trunk);
       }
-      if (pending.index >= pending.specs.length && pending.modelIndex >= pending.models.length) { // cell complete: one cheap merge, register colliders once
-        pending.baker.finalize(pending.group);
+      if (pending.index >= pending.specs.length && pending.modelIndex >= pending.models.length) { // every item baked: merge the buckets, then register colliders once
+        // ONE material bucket per budget slice. The merge is the biggest single step in the
+        // streamer and it is superlinear in cell content — 78 ms for a packed CBD cell, against a
+        // 2 ms drip — so running it whole, here, past the budget test above, made the frame a cell
+        // FINISHED the one frame guaranteed to hitch. `continue` returns to that test, so a slice
+        // that has run out of time resumes on the next frame instead of merging the rest anyway.
+        if (!pending.baker.finalizeStep(pending.group)) continue;
+        pending.group.visible = true;
         // Colliders AND trunk props are registered behind the same once-per-cell gate: this cell's
         // geometry is disposed and rebuilt every time the player leaves and returns, and a trunk
         // registered per rebuild would grow the prop grid without bound.
@@ -2753,9 +2764,12 @@ export class City {
     }
   }
 
-  /** Drop a half-baked pending cell (its group holds no merged meshes yet) so it can regenerate later. */
+  /** Drop a half-baked pending cell so it can regenerate later. Since the merge is spent a bucket
+   *  at a time, a cell aborted mid-finalize DOES hold merged meshes — free them, or walking out of
+   *  range of a cell part-way through its merge leaks a few megabytes of buffers every time. */
   private abortPending(): void {
     if (!this.pending) return;
+    this.pending.group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
     this.buildingStore.parent.remove(this.pending.group);
     this.buildingStore.groups.delete(this.pending.key);
     this.pending = undefined;

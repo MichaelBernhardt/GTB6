@@ -69,6 +69,20 @@ export function splitGeometryByCell(geometry: THREE.BufferGeometry, cellSize: nu
  */
 interface BakeBucket { material: THREE.Material; geometries: THREE.BufferGeometry[]; cast: boolean; receive: boolean; }
 
+/**
+ * Vertices one finalizeStep() will merge before it stops and hands the frame back.
+ *
+ * Merging is linear in the vertices copied, and one material's share of a packed CBD cell is not
+ * evenly sized: measured at 41 buckets for 667k triangles, ONE of them (the shared downtown facade)
+ * was half the cell's merge on its own — 19.8 ms of a 38.9 ms total. A per-bucket grain therefore
+ * still leaves one slice nobody budgeted for, so a big bucket is merged a slice at a time and emits
+ * one mesh per slice. At ~120k vertices a slice runs a few ms, and the only cost is a handful of
+ * extra draw calls on the two or three buckets in the city big enough to split.
+ */
+const MERGE_SLICE_VERTICES = 120_000;
+
+const vertexCount = (geometry: THREE.BufferGeometry): number => geometry.getAttribute('position')?.count ?? 0;
+
 export class GeometryBaker {
   private buckets = new Map<string, BakeBucket>();
 
@@ -93,16 +107,45 @@ export class GeometryBaker {
     });
   }
 
-  /** Merge every bucket into one mesh per material and add it under `target`; resets the baker. */
-  finalize(target: THREE.Object3D): void {
-    for (const bucket of this.buckets.values()) {
-      const merged = bucket.geometries.length === 1 ? bucket.geometries[0]! : mergeGeometries(bucket.geometries, false);
-      if (!merged) continue;
+  /**
+   * Merge ONE material bucket into `target` and report whether the cell is now complete.
+   *
+   * The whole-cell merge is the single largest step in the building streamer — 78 ms for a packed
+   * CBD cell, and superlinear in cell content (tools/qa/travel-stutter.ts fits ~items^2.4), because
+   * a dense cell has both more parcels AND heavier geometry on each. It used to run as one
+   * indivisible call at the end of City.updateBuildingChunks' budget loop, i.e. OUTSIDE the budget
+   * test, so the frame a cell finished streaming was the frame that hitched. One bucket at a time
+   * lets the caller spend it against the same per-frame budget as the geometry that fed it.
+   *
+   * Returns true when no buckets remain. Callers that must not show a half-merged cell keep its
+   * group hidden until then — see City.updateBuildingChunks.
+   */
+  finalizeStep(target: THREE.Object3D): boolean {
+    const next = this.buckets.keys().next();
+    if (next.done) return true;
+    const key = next.value;
+    const bucket = this.buckets.get(key)!;
+    // Take whole geometries until the slice is full — always at least one, so a single geometry
+    // larger than the slice still makes progress instead of looping forever.
+    let vertices = 0; let take = 0;
+    while (take < bucket.geometries.length && (take === 0 || vertices < MERGE_SLICE_VERTICES)) {
+      vertices += vertexCount(bucket.geometries[take]!); take++;
+    }
+    const slice = take === bucket.geometries.length ? bucket.geometries : bucket.geometries.splice(0, take);
+    if (slice === bucket.geometries) this.buckets.delete(key);
+    const merged = slice.length === 1 ? slice[0]! : mergeGeometries(slice, false);
+    if (merged) {
       const mesh = new THREE.Mesh(merged, bucket.material);
       mesh.castShadow = bucket.cast; mesh.receiveShadow = bucket.receive; mesh.matrixAutoUpdate = false;
       target.add(mesh);
     }
-    this.buckets.clear();
+    return this.buckets.size === 0;
+  }
+
+  /** Merge every bucket into one mesh per material and add it under `target`; resets the baker.
+   *  The unbudgeted whole-cell form — for callers with no frame to protect (QA, tools). */
+  finalize(target: THREE.Object3D): void {
+    while (!this.finalizeStep(target));
   }
 }
 
