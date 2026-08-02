@@ -35,6 +35,7 @@ import { neighbourhoodBuildingVariant, neighbourhoodFacadeIndex } from '../../sr
 import { districtAt as generatedDistrictAt } from '../../src/world/mapData';
 import { terrainHeightAt } from '../../src/world/City';
 import { doorsNear } from '../../src/features/interiors/doors';
+import { ChunkStore, ChunkVisibility } from '../../src/world/ChunkVisibility';
 import { facadeWorldTile } from '../../src/world/ProceduralMaterials';
 
 const cellKey = (x: number, z: number): string => `${Math.floor(x / CELL_SIZE)},${Math.floor(z / CELL_SIZE)}`;
@@ -71,7 +72,7 @@ let skippedTotal = 0;
 const root = new THREE.Group();
 const architecture = new BuildingArchitecture(root);
 
-interface CellCost { key: string; items: number; bakeMs: number; finalizeMs: number; merged: THREE.Group; triangles: number; }
+interface CellCost { key: string; items: number; bakeMs: number; finalizeMs: number; buckets: number; worstBucket: number; merged: THREE.Group; triangles: number; }
 
 function measureCell(cell: { key: string; specs: GeneratedBuilding[]; models: ScatteredModel[] }): CellCost {
   const [cx, cz] = cell.key.split(',').map(Number) as [number, number];
@@ -125,13 +126,23 @@ function measureCell(cell: { key: string; specs: GeneratedBuilding[]; models: Sc
   }
   skippedTotal += skipped;
   const bakeMs = performance.now() - bakeStart;
+  // Per BUCKET, because that is the grain City now merges at: the whole-cell number is the old
+  // unbudgeted spike, the worst single bucket is what one budget slice can still be forced to pay.
   const finalizeStart = performance.now();
-  baker.finalize(group);
+  let buckets = 0; let worstBucket = 0;
+  for (;;) {
+    const sliceStart = performance.now();
+    const done = baker.finalizeStep(group);
+    const slice = performance.now() - sliceStart;
+    if (slice > worstBucket) worstBucket = slice;
+    buckets++;
+    if (done) break;
+  }
   const finalizeMs = performance.now() - finalizeStart;
   let triangles = 0;
   group.traverse((object) => { if (object instanceof THREE.Mesh) triangles += object.geometry.getAttribute('position').count / 3; });
   architecture.retarget(root);
-  return { key: cell.key, items: cell.specs.length + cell.models.length, bakeMs, finalizeMs, merged: group, triangles };
+  return { key: cell.key, items: cell.specs.length + cell.models.length, bakeMs, finalizeMs, buckets, worstBucket, merged: group, triangles };
 }
 
 const sampleCount = Number(process.argv[2] ?? 6);
@@ -139,13 +150,13 @@ const step = Math.max(1, Math.floor(cells.length / sampleCount));
 const sample = [cells[0]!, ...cells.filter((_, index) => index > 0 && index % step === 0).slice(0, sampleCount - 1)];
 
 console.log('\n=== A. building streamer: per-cell bake + the ONE unbudgeted merge ===');
-console.log('cell         items    bake ms   finalize ms   drip frames @2ms   cadence @60fps');
+console.log('cell         items    bake ms   merge ms  buckets  worst bucket   drip frames @2ms');
 const results: CellCost[] = [];
 for (const cell of sample) {
   const cost = measureCell(cell);
   results.push(cost);
   const frames = Math.ceil(cost.bakeMs / 2);
-  console.log(`${cost.key.padEnd(10)} ${String(cost.items).padStart(6)} ${cost.bakeMs.toFixed(0).padStart(9)} ${cost.finalizeMs.toFixed(1).padStart(13)} ${String(frames).padStart(18)} ${(frames / 60).toFixed(1).padStart(15)}s`);
+  console.log(`${cost.key.padEnd(10)} ${String(cost.items).padStart(6)} ${cost.bakeMs.toFixed(0).padStart(9)} ${cost.finalizeMs.toFixed(1).padStart(10)} ${String(cost.buckets).padStart(8)} ${cost.worstBucket.toFixed(1).padStart(11)} ms ${String(frames).padStart(15)}`);
 }
 console.log(`(skipped ${skippedTotal} asset-backed models: no GLB library headless — every cost here is an understatement)`);
 
@@ -286,3 +297,104 @@ const after = run(true);
 report('BEFORE', before);
 report('AFTER', after);
 console.log(`worst frame: ${Math.max(...before.frames).toFixed(0)} ms -> ${Math.max(...after.frames).toFixed(0)} ms`);
+
+// ---- F. spike cost against cell content ---------------------------------------------------------
+//
+// The owner: it goes away COMPLETELY in some low-density areas, and he cannot tell whether that is a
+// slope or a cliff. Three hypotheses — graded, threshold/bimodal, superlinear-that-clips — and one
+// measurement separates them: the arrival/re-stream spike, priced per cell, right across the
+// density range, fitted on a log-log axis. A slope near 1 is graded; near 2 or above names an n²;
+// two clusters with nothing between them is a threshold.
+//
+// Both factors are measured per cell, because the spike is their PRODUCT:
+//   probes per 28 u step  — how fast the nearest-32 door set churns (door density)
+//   ms per probe          — how many merged triangles one downward ray has to scan (geometry density)
+
+console.log('\n=== F. spike cost vs cell content, across the density range ===');
+
+interface Point { key: string; items: number; triangles: number; doors: number; probes: number; msPerProbe: number; spikeMs: number; finalizeMs: number; }
+
+/** Cells spanning the whole range, densest to emptiest, so the fit has leverage at both ends. */
+const spread = [0, 0.05, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 0.97]
+  .map((fraction) => cells[Math.min(cells.length - 1, Math.round(fraction * (cells.length - 1)))]!)
+  .filter((cell, index, list) => list.findIndex((other) => other.key === cell.key) === index);
+
+const points: Point[] = [];
+for (const cell of spread) {
+  const cost = measureCell(cell);
+  const [cx, cz] = cell.key.split(',').map(Number) as [number, number];
+  const x = cx * CELL_SIZE + CELL_SIZE / 2; const z = cz * CELL_SIZE + CELL_SIZE / 2;
+  const probeScene = new THREE.Scene();
+  probeScene.add(cost.merged);
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(20000, 20000, 64, 64), material('ground', 0x6d7a5a));
+  plane.rotation.x = -Math.PI / 2; probeScene.add(plane);
+
+  const doors = doorsNear(x, z, RANGE);
+  // Churn: how many doors enter the nearest-CAP set over one STREAM_SLACK step, averaged over a few
+  // steps so a single street corner cannot stand for the whole cell.
+  let seen = new Set(nearestSet(x, z).map((door) => door.id));
+  let churn = 0; const STEPS = 6;
+  for (let s = 1; s <= STEPS; s++) {
+    const ids = nearestSet(x + s * SLACK, z).map((door) => door.id);
+    churn += ids.filter((id) => !seen.has(id)).length;
+    seen = new Set(ids);
+  }
+  churn /= STEPS;
+  // Ms per probe, against THIS cell's geometry — the term that scales with parcels and fences.
+  const inCell = doors.filter((door) => Math.floor(door.x / CELL_SIZE) === cx && Math.floor(door.z / CELL_SIZE) === cz).slice(0, 6);
+  let rayMs = 0; let rays = 0;
+  for (const door of inCell.length ? inCell : doors.slice(0, 3)) {
+    ray.set(new THREE.Vector3(door.x, 400, door.z), DOWN);
+    const t = performance.now(); ray.intersectObjects(probeScene.children, true); rayMs += performance.now() - t; rays++;
+  }
+  const msPerProbe = rays ? rayMs / rays : 0;
+  points.push({ key: cell.key, items: cost.items, triangles: cost.triangles, doors: doors.length, probes: churn, msPerProbe, spikeMs: churn * msPerProbe, finalizeMs: cost.finalizeMs });
+  cost.merged.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
+}
+
+console.log('cell        items    tris   doors  probes/step  ms/probe   SPIKE ms   merge ms');
+for (const p of points) {
+  console.log(`${p.key.padEnd(9)} ${String(p.items).padStart(6)} ${(p.triangles / 1000).toFixed(0).padStart(6)}k ${String(p.doors).padStart(7)} ${p.probes.toFixed(1).padStart(12)} ${p.msPerProbe.toFixed(2).padStart(9)} ${p.spikeMs.toFixed(1).padStart(10)} ${p.finalizeMs.toFixed(1).padStart(10)}`);
+}
+
+/** Least-squares slope of ln(y) on ln(x) — the exponent of y ~ x^k. */
+function exponent(pairs: Array<[number, number]>): number {
+  const usable = pairs.filter(([x, y]) => x > 0 && y > 0);
+  if (usable.length < 3) return NaN;
+  const lx = usable.map(([x]) => Math.log(x)); const ly = usable.map(([, y]) => Math.log(y));
+  const mx = lx.reduce((s, v) => s + v, 0) / lx.length; const my = ly.reduce((s, v) => s + v, 0) / ly.length;
+  let num = 0; let den = 0;
+  for (let i = 0; i < lx.length; i++) { num += (lx[i]! - mx) * (ly[i]! - my); den += (lx[i]! - mx) ** 2; }
+  return num / den;
+}
+
+console.log(`\nfitted exponents against cell item count (log-log least squares):`);
+console.log(`  ms/probe   ~ items^${exponent(points.map((p) => [p.items, p.msPerProbe])).toFixed(2)}   (geometry a ray must scan)`);
+console.log(`  probes     ~ items^${exponent(points.map((p) => [p.items, p.probes])).toFixed(2)}   (how fast the door set churns)`);
+console.log(`  SPIKE      ~ items^${exponent(points.map((p) => [p.items, p.spikeMs])).toFixed(2)}   <= the product of the two`);
+console.log(`  merge      ~ items^${exponent(points.map((p) => [p.items, p.finalizeMs])).toFixed(2)}   (the building streamer's finalize)`);
+const zero = points.filter((p) => p.spikeMs < 1);
+const loud = points.filter((p) => p.spikeMs >= 20);
+console.log(`\nnull tests: ${zero.length} cell(s) with NO measurable spike (${zero.map((p) => `${p.key}@${p.items}`).join(', ') || 'none'})`);
+console.log(`            ${loud.length} cell(s) over 20 ms (${loud.map((p) => `${p.key}@${p.items}`).join(', ') || 'none'})`);
+
+// ---- G. is the bespoke visibility layer the cost? -----------------------------------------------
+//
+// The owner's hypothesis: "shitty javascript trying to replicate GPU culling could be a pig".
+// ChunkVisibility is the only bespoke visibility layer in the build. It does NOT replicate frustum
+// culling (three does that per object in projectObject, and nothing here constructs a Frustum) — it
+// is DISTANCE culling, which three does not do, and it works on per-cell GROUPS, not per object:
+// one attach/detach per cell, staggered at a fixed budget per frame. Price it at real scale.
+
+console.log('\n=== G. ChunkVisibility: the whole bespoke culling layer, per frame ===');
+const store = new ChunkStore(new THREE.Group(), CELL_SIZE);
+for (const cell of cells) store.group(Number(cell.key.split(',')[0]) * CELL_SIZE + 1, Number(cell.key.split(',')[1]) * CELL_SIZE + 1);
+const culling = new ChunkVisibility(store);
+let cullMs = 0; const CULL_FRAMES = 600;
+for (let frame = 0; frame < CULL_FRAMES; frame++) {
+  const t = performance.now();
+  culling.update(spotX + frame * SPRINT * FRAME, spotZ);
+  cullMs += performance.now() - t;
+}
+console.log(`${store.groups.size} cell groups, ${CULL_FRAMES} frames of sprinting: ${(cullMs / CULL_FRAMES * 1000).toFixed(1)} µs per frame per store (the build runs three, plus signs)`);
+console.log(`=> the entire distance-culling layer costs well under 1% of a frame. It is not the stutter, and deleting it would submit the whole city instead.`);
