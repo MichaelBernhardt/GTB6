@@ -422,15 +422,24 @@ export class PopulationSystem {
   }
 
   private taxiThrottle(vehicle: Vehicle, dt: number, player: THREE.Vector3, blocked: boolean): number {
-    const state = this.taxiState.get(vehicle) ?? { stopTimer: 6 + Math.random() * 9, dwell: 0, hootTimer: 2 + Math.random() * 3 };
+    // Deterministic per-taxi jitter, salted apart so a rank does not stop and hoot in unison. These
+    // timers gate a taxi's DWELL, which is simulation: a dwelling taxi is not asking the planner for
+    // a route, so wall-clock randomness here changed how much of the shared per-frame planner budget
+    // reached the pedestrians — the same coupling that made the sidewalk-replan test flake.
+    const at = vehicle.group.position;
+    const state = this.taxiState.get(vehicle) ?? {
+      stopTimer: 6 + stablePositionRandom(at.x, at.z, 0x7a11) * 9,
+      dwell: 0,
+      hootTimer: 2 + stablePositionRandom(at.x, at.z, 0x7a12) * 3,
+    };
     state.stopTimer -= dt; state.hootTimer -= dt; state.dwell = Math.max(0, state.dwell - dt);
     if (state.stopTimer <= 0) {
       const passengerNearby = this.pedestrians.some((ped) => ped.state === 'walk' && ped.group.position.distanceToSquared(vehicle.group.position) < 784);
       state.dwell = passengerNearby ? 2.6 : 1.2;
-      state.stopTimer = 7 + Math.random() * 10;
+      state.stopTimer = 7 + stablePositionRandom(vehicle.group.position.x, vehicle.group.position.z, 0x7a13) * 10;
     }
     if (state.hootTimer <= 0 && this.hootCooldown === 0 && vehicle.group.position.distanceToSquared(player) < 9025) {
-      this.audio.taxiHoot(); state.hootTimer = 3 + Math.random() * 5; this.hootCooldown = 0.6;
+      this.audio.taxiHoot(); state.hootTimer = 3 + stablePositionRandom(vehicle.group.position.x, vehicle.group.position.z, 0x7a14) * 5; this.hootCooldown = 0.6;
     }
     this.taxiState.set(vehicle, state);
     if (state.dwell > 0) return 0;
@@ -847,7 +856,20 @@ export class PopulationSystem {
    *  stall-reverse is in progress (callers skip normal driving that frame). */
   private followDrivePlan(vehicle: Vehicle, dt: number): boolean {
     const plan = this.trafficPlans.get(vehicle);
-    if (!plan) { if (vehicle.routeCooldown <= 0 && !this.assignVehicleRoute(vehicle, false)) vehicle.routeCooldown = 0.8 + Math.random() * 1.2; return true; } // no plan yet: request one, but back off after an empty result instead of re-solving every frame
+    // No plan yet: request one, but back off after an empty result instead of re-solving every frame.
+    // The back-off is spread per driver so a stalled queue does not ask in unison — DETERMINISTICALLY,
+    // because this length decides how many route requests hit the planner's shared per-frame budget,
+    // and every pedestrian replan competes for the same budget. With Math.random here the simulation
+    // was not reproducible from one run to the next: AiIntentions' "replans a fresh sidewalk route"
+    // test blocked three production deploys in an hour because its ped sometimes never won a slot
+    // inside the 900-frame window. The file's own hazard-clock comment already states the rule.
+    if (!plan) {
+      if (vehicle.routeCooldown <= 0 && !this.assignVehicleRoute(vehicle, false)) {
+        const position = vehicle.group.position;
+        vehicle.routeCooldown = 0.8 + stablePositionRandom(position.x, position.z, 0x5c0d) * 1.2;
+      }
+      return true;
+    }
     // A road shut AFTER this route was solved (protest barricade, crash scene). One integer compare in
     // the common case; only a driver whose remaining waypoints actually enter the circle pays for a
     // reroute, and requestCollisionReplan's cooldown + the planner's frame budget keep it to a trickle.
