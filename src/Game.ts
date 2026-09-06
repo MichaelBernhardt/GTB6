@@ -20,6 +20,11 @@ import { featureMapIcons } from './features/mapIcons';
 import type { FeatureCinemaShot, FeatureGameApi } from './features/types';
 import { maxCatchupSteps, simSteps } from './core/Timestep';
 import { FrameProfiler } from './core/FrameProfiler';
+import { requestGamePointerLock } from './core/PointerLock';
+import { GraphicsRecovery } from './render/GraphicsRecovery';
+import { installPooledLightGuards } from './render/PooledLightShader';
+import { renderSize } from './render/RenderSizing';
+import { GraphicsRecoveryView } from './ui/GraphicsRecoveryView';
 import { adjustedShopPrice, ammoPrice, detailerPrice, HOTDOG_PRICE, hotdogHeal, reserveFull, resolveArmourPurchase, resolveLockpickPurchase, resolvePurchase, weaponPrice } from './core/ShopRules';
 import { applyDrink, decayInebriation, DRINK_BY_ID, DRINKS, drunkHealthDelta, inebriationFraction, INEBRIATION_MAX, resolveDrinkPurchase, type DrinkId } from './core/DrinkRules';
 import type { Pedestrian } from './entities/Pedestrian';
@@ -96,9 +101,6 @@ import { NeighbourhoodArrivalTracker } from './world/data/neighbourhoods';
 import type { PostProcessingQuality, PostProcessingStack } from './render/PostProcessing';
 
 const MOUSE_STEER_GAIN = 0.005; // px of horizontal LMB-drag per unit of steer: ~200px winds the virtual wheel to full lock — tuned light, for small trim adjustments rather than hard cornering
-const ULTRA_MIN_SCALE = 2; // Ultra renders at ≥2× the CSS resolution and downsamples — real supersampling AA. The floor bites hardest on LOW-dpi screens (a 1× monitor jumps to 2×, where aliasing shows most); HiDPI already renders dense, so it just stays at native.
-const ULTRA_MAX_SCALE = 3; // …but cap the buffer so a 4×-dpi panel doesn't blow up VRAM/fill
-const POTATO_RENDER_SCALE = 0.5; // potato renders at HALF the CSS resolution and the canvas upscales 2× — the single biggest lever on a weak GPU (owner-endorsed; on a DPR-3 phone this is 1/6 of native device pixels)
 const POTATO_DENSITY_SCALE = 0.5; // potato halves the ambient ped/car census targets
 const formatRunTime = (seconds: number): string => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 const PERSONAL_WAYPOINT_LABEL = 'Personal waypoint';
@@ -114,6 +116,12 @@ export class Game {
   private renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   private postProcessing?: PostProcessingStack;
   private postProcessingGeneration = 0;
+  private environmentMap?: THREE.WebGLRenderTarget;
+  private graphicsRecovery!: GraphicsRecovery;
+  private graphicsRecoveryView!: GraphicsRecoveryView;
+  private recoveryInputFailed = false;
+  private maxRenderDimension = 4096;
+  private resizeQueued = false;
   private environment!: EnvironmentHandle;
   private clock = new THREE.Clock();
   private input!: InputManager;
@@ -456,53 +464,93 @@ export class Game {
   }
 
   private setupRenderer(): void {
+    installPooledLightGuards();
     // Dev keeps shader diagnostics. In production the default (true) makes three block on
     // getProgramParameter/getProgramInfoLog at every program's first draw — a synchronous driver
     // round-trip that concentrated the old explosion recompile storm into one multi-second frame.
     this.renderer.debug.checkShaderErrors = import.meta.env.DEV;
-    this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
+    const gl = this.renderer.getContext();
+    this.maxRenderDimension = Math.min(this.renderer.capabilities.maxTextureSize, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number);
+    this.resize();
     this.renderer.shadowMap.enabled = this.baseQuality() !== 'low'; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace; this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.22;
     this.renderer.shadowMap.autoUpdate = true;
-    // GPU context loss (OOM, driver reset — the classic silent mobile death): surface it through
-    // the boot error traps in main.ts instead of leaving a frozen bar or a black canvas.
-    this.renderer.domElement.addEventListener('webglcontextlost', (event) => {
-      event.preventDefault();
-      window.dispatchEvent(new ErrorEvent('error', { message: 'Graphics context lost — the device ran out of GPU memory or the driver reset. Reload to continue.' }));
+    this.graphicsRecoveryView = new GraphicsRecoveryView(() => this.graphicsRecovery.resume());
+    this.graphicsRecovery = new GraphicsRecovery(this.renderer.domElement, {
+      pause: () => { this.input?.reset(); this.audio.stopRadio(); document.exitPointerLock?.(); },
+      rebuild: async () => {
+        this.setupEnvironmentMap();
+        this.city?.setWaterQuality(this.baseQuality(), true);
+        this.environment.sun.shadow.map?.dispose(); this.environment.sun.shadow.map = null;
+        this.renderer.shadowMap.needsUpdate = true;
+        this.resize();
+        await this.setupComposer();
+        if (!this.renderer.getContext().isContextLost()) await this.renderer.compileAsync(this.scene, this.camera);
+      },
+      resume: () => {
+        this.clock.getDelta(); this.input?.reset();
+        if (this.mode === 'playing' && this.activeVehicle && !this.activeVehicle.spec.twoWheeler) this.audio.startRadio();
+        if (this.mode === 'playing' && !this.ui.mapOpen && !this.ui.consoleOpen) requestGamePointerLock(this.renderer.domElement);
+      },
+      changed: (state, error) => {
+        if (state === 'lost') {
+          ++this.postProcessingGeneration;
+          this.postProcessing?.dispose(); this.postProcessing = undefined;
+          analytics.captureError(new Error('WebGL context lost'), { source: 'runtime', severity: 'recoverable', asset: 'graphics-context' });
+        } else if (state === 'failed') {
+          console.error('[render] The game has stopped.', error);
+          analytics.captureError(error, { source: 'runtime', severity: 'fatal' });
+        }
+        this.graphicsRecoveryView.show(state);
+      },
     });
-    this.container.append(this.renderer.domElement); window.addEventListener('resize', () => this.resize());
+    this.container.append(this.renderer.domElement); window.addEventListener('resize', this.queueResize);
+    document.addEventListener('visibilitychange', () => { this.clock.getDelta(); this.input?.reset(); });
   }
 
   private setupScene(): void {
     this.environment = buildEnvironment(this.scene, this.baseQuality());
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture; pmrem.dispose();
+    this.setupEnvironmentMap();
     this.scene.environmentIntensity = 0.32;
-    this.setupComposer();
+    void this.setupComposer();
   }
 
-  private setupComposer(): void {
+  private setupEnvironmentMap(): void {
+    const room = new RoomEnvironment(); const pmrem = new THREE.PMREMGenerator(this.renderer);
+    try {
+      const previous = this.environmentMap;
+      this.environmentMap = pmrem.fromScene(room, 0.04);
+      this.scene.environment = this.environmentMap.texture;
+      previous?.dispose();
+    } finally {
+      pmrem.dispose(); room.dispose();
+      room.traverse((object) => { if (object instanceof THREE.InstancedMesh) object.dispose(); });
+    }
+  }
+
+  private async setupComposer(): Promise<void> {
     const generation = ++this.postProcessingGeneration;
     this.postProcessing?.dispose(); this.postProcessing = undefined;
-    if (this.baseQuality() === 'low') return; // low and potato: plain renderer.render, no post stack
+    if (this.baseQuality() === 'low' || this.renderer.getContext().isContextLost()) return;
     const quality = this.settings.quality as PostProcessingQuality;
-    void import('./render/PostProcessing')
-      .then(({ createPostProcessing }) => createPostProcessing(this.renderer, this.scene, this.camera, quality))
-      .then((stack) => {
-        if (generation !== this.postProcessingGeneration) { stack.dispose(); return; }
-        this.postProcessing = stack;
-      })
-      .catch((error: unknown) => {
-        // Post effects are optional: retain the plain renderer and surface a recoverable diagnostic.
-        console.warn('[render] post-processing unavailable; using the base renderer.', error);
-        analytics.captureError(error, { source: 'runtime', severity: 'recoverable', asset: 'post-processing' });
-      });
+    try {
+      const { createPostProcessing } = await import('./render/PostProcessing');
+      if (generation !== this.postProcessingGeneration || this.renderer.getContext().isContextLost()) return;
+      const stack = await createPostProcessing(this.renderer, this.scene, this.camera, quality);
+      if (generation !== this.postProcessingGeneration || this.renderer.getContext().isContextLost()) { stack.dispose(); return; }
+      this.postProcessing = stack;
+    } catch (error: unknown) {
+      if (generation !== this.postProcessingGeneration) return;
+      // Post effects are optional: retain the plain renderer and surface a recoverable diagnostic.
+      console.warn('[render] post-processing unavailable; using the base renderer.', error);
+      analytics.captureError(error, { source: 'runtime', severity: 'recoverable', asset: 'post-processing' });
+    }
   }
 
   private bindUI(): void {
     this.ui.onStart = (fresh) => this.startGame(fresh);
     this.ui.onOnline = (name) => this.startOnline(name);
-    this.ui.onResume = () => { this.mode = 'playing'; analytics.setMode(this.online ? 'multiplayer' : 'singleplayer'); this.input.reset(); this.ui.hideMenu(); if (this.activeVehicle && !this.activeVehicle.spec.twoWheeler) this.audio.startRadio(); void this.renderer.domElement.requestPointerLock().catch(() => undefined); };
+    this.ui.onResume = () => { this.mode = 'playing'; analytics.setMode(this.online ? 'multiplayer' : 'singleplayer'); this.input.reset(); this.ui.hideMenu(); if (this.activeVehicle && !this.activeVehicle.spec.twoWheeler) this.audio.startRadio(); requestGamePointerLock(this.renderer.domElement); };
     this.ui.onRestart = () => { this.respawn(); this.mode = 'playing'; analytics.setMode(this.online ? 'multiplayer' : 'singleplayer'); this.ui.hideMenu(); };
     this.ui.onResetSave = () => { this.save = this.saveManager.reset(); location.reload(); };
     this.ui.onSettings = (settings) => {
@@ -538,7 +586,7 @@ export class Game {
       this.ui.onResume?.();
     };
     this.ui.onMissionChoice = (id) => {
-      const update = this.missions.choose(id); this.mode = 'playing'; analytics.setMode('singleplayer'); this.ui.hideMenu(); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+      const update = this.missions.choose(id); this.mode = 'playing'; analytics.setMode('singleplayer'); this.ui.hideMenu(); requestGamePointerLock(this.renderer.domElement);
       this.processMissionUpdate(update);
     };
     this.ui.onFeatureMenuAction = (featureId, actionId) => this.features.menuAction(featureId, actionId); // one callback for every feature menu there will ever be
@@ -561,7 +609,7 @@ export class Game {
   private closeMap(): void {
     if (!this.ui.mapOpen) return;
     this.ui.closeMap(); this.input.suspend(false);
-    if (this.mode === 'playing') void this.renderer.domElement.requestPointerLock().catch(() => undefined); // may hit the browser's relock cooldown: the standing click-to-relock fallback covers that
+    if (this.mode === 'playing') requestGamePointerLock(this.renderer.domElement); // may hit the browser's relock cooldown: the standing click-to-relock fallback covers that
   }
 
   private setCustomWaypoint(x: number, z: number): void {
@@ -873,7 +921,7 @@ export class Game {
 
   private applyQuality(): void {
     const shadows = this.baseQuality() !== 'low';
-    this.renderer.setPixelRatio(this.renderPixelRatio()); this.renderer.setSize(innerWidth, innerHeight);
+    this.resize();
     this.renderer.shadowMap.enabled = shadows; this.environment.sun.castShadow = shadows;
     // A quality change mid-visit must not silently re-arm the shadow pass the interior paused —
     // updateFeatureIndoors only runs on the indoors EDGE, so the pause is re-asserted here.
@@ -881,7 +929,7 @@ export class Game {
     this.dayNight.setQuality(this.baseQuality());
     this.city.setWaterQuality(this.baseQuality()); // rebuilds water meshes; disposes the old tier's materials and mirror target
     this.applyWorldBudget();
-    this.setupComposer();
+    void this.setupComposer();
   }
 
   /** Visual tier the world subsystems (city, lights, water, environment) render at. `ultra` is a render-only
@@ -891,22 +939,9 @@ export class Game {
     return this.settings.quality === 'ultra' ? 'high' : this.settings.quality === 'potato' ? 'low' : this.settings.quality;
   }
 
-  /** Render resolution multiplier. Base tiers only CAP the ratio (min with devicePixelRatio → never above
-   *  native, so they're a HiDPI perf throttle, NOT antialiasing). Ultra instead FORCES the ratio up to at
-   *  least ULTRA_MIN_SCALE — genuine supersampling that downsamples geometry, textures and specular alike.
-   *  Because it's a floor (max, not min), the boost lands hardest on low-dpi screens where aliasing is most
-   *  visible: a 1× monitor renders at 2× (2× SSAA); a 2× Retina panel is already dense, so it stays at native.
-   *  Potato goes the other way entirely: a fixed sub-native buffer the canvas CSS-upscales. */
-  private renderPixelRatio(): number {
-    if (this.settings.quality === 'potato') return POTATO_RENDER_SCALE;
-    if (this.settings.quality === 'ultra') return Math.min(ULTRA_MAX_SCALE, Math.max(devicePixelRatio || 1, ULTRA_MIN_SCALE));
-    const cap: Record<BaseQuality, number> = { low: 1, medium: 1.25, high: 1.5 };
-    return Math.min(devicePixelRatio || 1, cap[this.settings.quality]);
-  }
-
   /** The potato tier's world budget, applied at boot and on quality change (idempotent, cheap):
    *  pulled-in streaming rings, smog-thick fog so their edge hides in haze, half-density crowds.
-   *  The sub-native render scale is renderPixelRatio()'s job. */
+   *  The drawing-buffer budget is applied by resize(). */
   private applyWorldBudget(): void {
     const potato = this.settings.quality === 'potato';
     this.city.setStreamRanges(
@@ -929,7 +964,7 @@ export class Game {
     this.online?.close(); this.online = undefined; this.multiplayerOverlay.hide();
     if (fresh) { this.endTaxiShift(); this.endCourierShift(); this.removeGarageVehicle(); this.saveManager.clearCheckpoint(); this.save = structuredClone(DEFAULT_SAVE); this.everCheated = false; this.openSesame = false; this.saveManager.save(this.save); this.saveExists = true; this.economy.balance = this.save.money; this.livingCity = new LivingCitySystem(this.save.livingCity); this.missions.completed.clear(); this.story.restore([], []); this.airborne = undefined; this.releasePlane(); this.player.setCanopy(false); this.inventory = { ...this.save.inventory }; this.stolenVehicles = new WeakSet(); this.player.group.position.set(...this.save.spawn); this.player.group.position.y = this.city.surfaceHeightAt(this.player.group.position.x, this.player.group.position.z); this.player.setHeading(this.save.heading); this.combat.restore(this.save.weapons); this.player.setWeapon(this.combat.current); Object.assign(this.cheats, this.save.cheats); this.applyTeflon(); this.dayNight.hour = this.save.timeOfDay; if (this.robotRace) this.robotRace.bestTime = this.save.activityRecords.robotRunBest; this.features.reset(this.save.features); }
     this.joziFlow.reset(this.save.activityRecords.joziFlowBest);
-    this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+    this.player.setDead(false); this.mode = 'playing'; analytics.setMode('singleplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume(); this.audio.setVolume(this.settings.masterVolume); requestGamePointerLock(this.renderer.domElement);
     this.ui.notify('Welcome to Joburg', 'Follow turquoise GPS to story contacts. M opens the map; gold Quantum and lime Sixty-Sekonds blips are repeatable side work.');
   }
 
@@ -947,12 +982,31 @@ export class Game {
     this.player.setDead(false); this.onlineWasDead = false; this.online = new OnlineSession(this.scene, this.multiplayerOverlay, name, (x, z) => this.city.surfaceHeightAt(x, z));
     this.markerTarget = undefined;
     this.mode = 'playing'; analytics.setMode('multiplayer'); this.input.reset(); this.ui.hideMenu(); void this.audio.resume();
-    void this.renderer.domElement.requestPointerLock().catch(() => undefined);
+    requestGamePointerLock(this.renderer.domElement);
     this.ui.notify('Global world', 'Open PvP is active. Press Enter to chat.');
   }
 
   private animate = (): void => {
     requestAnimationFrame(this.animate);
+    if (document.hidden) return;
+    if (this.graphicsRecovery.suspended) {
+      if (this.input && !this.recoveryInputFailed) {
+        try {
+          this.input.pollGamepad(Math.min(this.clock.getDelta(), 0.05), 'menu');
+          this.graphicsRecoveryView.update(this.input);
+        } catch (error) {
+          // If input caused the original failure, retrying it every frame would make recovery
+          // fail too. The independent DOM buttons still work with keyboard, mouse and touch.
+          this.recoveryInputFailed = true; this.graphicsRecovery.fail(error);
+        } finally { this.input.endFrame(); }
+      }
+      return;
+    }
+    try { this.frame(); }
+    catch (error) { this.graphicsRecovery.fail(error); }
+  };
+
+  private frame(): void {
     this.profiler.enabled = this.settings.showFps || this.settings.showPerfChart; this.profiler.frameStart(); // off = zero overhead
     const raw = this.clock.getDelta(); this.fps = THREE.MathUtils.lerp(this.fps, 1 / Math.max(raw, 0.001), 0.06);
     const gamepadMode: GamepadMode = this.mode !== 'playing' || this.ui.mapOpen || this.ui.consoleOpen
@@ -1024,7 +1078,7 @@ export class Game {
     if (measure) { this.loggedDrawCalls = true; console.info(`[render] calls=${this.renderer.info.render.calls} tris=${this.renderer.info.render.triangles}`); this.renderer.info.autoReset = true; }
     this.profiler.frameEnd();
     this.input.endFrame();
-  };
+  }
 
   private update(dt: number): void {
     this.profiler.mark('player');
@@ -3506,7 +3560,25 @@ export class Game {
     };
     this.saveManager.save(this.save);
   }
-  private resize(): void { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); this.postProcessing?.composer.setSize(innerWidth, innerHeight); }
+  private queueResize = (): void => {
+    if (this.resizeQueued) return;
+    this.resizeQueued = true;
+    requestAnimationFrame(() => { this.resizeQueued = false; this.resize(); });
+  };
+
+  private resize(): void {
+    if (this.renderer.getContext().isContextLost()) return;
+    const size = renderSize(this.settings.quality, innerWidth, innerHeight, devicePixelRatio, this.maxRenderDimension);
+    const aspect = size.width / size.height;
+    if (this.camera.aspect !== aspect) { this.camera.aspect = aspect; this.camera.updateProjectionMatrix(); }
+    const current = this.renderer.getSize(new THREE.Vector2());
+    if (current.width === size.width && current.height === size.height && this.renderer.getPixelRatio() === size.pixelRatio) return;
+    // One drawing-buffer change per resize. setPixelRatio() followed by setSize() resizes twice,
+    // and writing unchanged canvas dimensions still clears/reallocates the browser's backbuffer.
+    this.renderer.setDrawingBufferSize(size.width, size.height, size.pixelRatio);
+    this.renderer.domElement.style.width = `${size.width}px`; this.renderer.domElement.style.height = `${size.height}px`;
+    this.postProcessing?.composer.setSize(this.renderer.domElement.width, this.renderer.domElement.height);
+  }
 
   /** What the FeatureHost needs beyond the feature-facing api: the online suspension verdict and the
    *  two analytics routes. Features are SUSPENDED while `this.online` — no ticks, no prompts, no

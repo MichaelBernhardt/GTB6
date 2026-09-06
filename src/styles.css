@@ -369,3 +369,18 @@ body.is-touch .menu-card button, body.is-touch .menu-card .danger-link { min-hei
 /* swapped utils mirror right but sit BELOW the ammo panel (hud-status stays top-right in both
  * modes); left-edge stays clear for the mirrored aim/jump/weapon column */
 .tc.is-swapped .tc-utils { left: auto; right: calc(10px + env(safe-area-inset-right, 0px)); top: calc(190px + env(safe-area-inset-top, 0px)); }
+
+.graphics-recovery {
+  position: fixed; inset: 0; z-index: 1900; display: grid; place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+  background: rgba(10, 18, 17, .94); color: #f2edda; overflow: auto;
+}
+.graphics-recovery-card { width: min(520px, 100%); padding: clamp(20px, 4vw, 32px); background: #17211f; border-top: 6px solid #f7c843; box-shadow: 12px 12px 0 rgba(0, 0, 0, .28); }
+.graphics-recovery-kicker { margin: 0 0 12px; color: #f7c843; font-size: 11px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; }
+.graphics-recovery h1 { margin: 0 0 12px; font-size: clamp(24px, 4vw, 32px); line-height: 1.1; text-transform: uppercase; }
+#graphics-recovery-message { margin: 0 0 24px; color: #c8c4ad; font-size: 15px; line-height: 1.5; }
+.graphics-recovery-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.graphics-recovery button { min-height: 46px; padding: 12px 20px; border: 1px solid #8a948f; background: transparent; color: #f2edda; font: inherit; font-weight: 800; cursor: pointer; }
+.graphics-recovery [data-graphics-continue] { border-color: #f7c843; background: #f7c843; color: #111817; }
+.graphics-recovery button:focus-visible { outline: 3px solid #6cdaca; outline-offset: 4px; }
+.graphics-recovery [hidden] { display: none; }

@@ -204,7 +204,7 @@ class Cdp {
   }
 }
 
-async function evaluate(cdp, expression) {
+export async function evaluate(cdp, expression) {
   const response = await cdp.send('Runtime.evaluate', {
     expression,
     awaitPromise: true,
@@ -218,7 +218,7 @@ async function evaluate(cdp, expression) {
   return response.result?.value;
 }
 
-async function waitForGame(cdp, timeoutMs) {
+export async function waitForGame(cdp, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let last = {};
   while (Date.now() < deadline) {
@@ -237,7 +237,7 @@ async function waitForGame(cdp, timeoutMs) {
   throw new Error(`Game was not ready after ${Math.round(timeoutMs / 1000)}s: ${JSON.stringify(last)}`);
 }
 
-async function waitFrames(cdp, count) {
+export async function waitFrames(cdp, count) {
   return evaluate(cdp, `(async () => {
     const count = ${JSON.stringify(Math.max(0, Math.round(count)))};
     const stamps = [];
@@ -892,7 +892,8 @@ async function verify(options) {
   if (!result.eligibleToRegenerateBaseline) process.exitCode = 1;
 }
 
-async function runBrowser(options) {
+/** Shared fresh-profile browser lifecycle for captures, profiles and graphics fault tests. */
+export async function runBrowser(options, inspect) {
   const port = await freePort();
   const profileDirectory = await mkdtemp(path.join(tmpdir(), 'gtb-gauntlet-chrome-'));
   const chrome = process.env.CHROME_PATH ?? DEFAULT_CHROME;
@@ -929,7 +930,8 @@ async function runBrowser(options) {
       browserCdp.ready,
     ]);
     const browserState = await collectBrowserState(browserCdp);
-    if (options.command === 'capture') await capture(cdp, browserState, chromeArguments, options);
+    if (inspect) await inspect(cdp, browserState, chromeArguments);
+    else if (options.command === 'capture') await capture(cdp, browserState, chromeArguments, options);
     else await profile(cdp, browserState, chromeArguments, options);
   } catch (error) {
     console.error(error instanceof Error ? error.stack : String(error));
@@ -942,7 +944,7 @@ async function runBrowser(options) {
     await Promise.race([new Promise((resolve) => child.once('exit', resolve)), delay(2000)]);
     child.stderr.destroy();
     child.unref();
-    await rm(profileDirectory, { recursive: true, force: true });
+    await rm(profileDirectory, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
   }
 }
 

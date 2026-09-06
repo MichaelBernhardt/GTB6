@@ -1,4 +1,5 @@
 import { activeGamepadFrame, mapStandardGamepad, type GamepadMode } from './GamepadInput';
+import { requestGamePointerLock } from './PointerLock';
 
 export const typingInField = (target: EventTarget | null): boolean =>
   target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
@@ -35,7 +36,7 @@ export class InputManager {
       if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Tab', 'PageUp', 'PageDown', 'AltLeft'].includes(event.code)) event.preventDefault();
     });
     window.addEventListener('keyup', (event) => this.held.delete(event.code));
-    window.addEventListener('blur', () => { this.held.clear(); this.pointerFiring = false; });
+    window.addEventListener('blur', () => this.reset());
     window.addEventListener('mousemove', (event) => {
       if (!this.suspended && document.pointerLockElement === this.element) {
         if (this.ignoreNextMove) { this.ignoreNextMove = false; return; } // drop the post-relock spike, not the whole frame
@@ -54,7 +55,7 @@ export class InputManager {
     window.addEventListener('mouseup', (event) => { if (this.ignoreMouse) return; if (event.button === 0) this.pointerFiring = false; if (event.button === 2) this.rmbHeld = false; });
     window.addEventListener('contextmenu', (event) => { if (document.pointerLockElement === this.element) event.preventDefault(); });
     window.addEventListener('wheel', (event) => { if (!this.suspended && document.pointerLockElement === this.element) this.wheel += Math.sign(event.deltaY); }, { passive: true });
-    this.element.addEventListener('click', () => { if (!document.pointerLockElement) void this.element.requestPointerLock().catch(() => undefined); });
+    this.element.addEventListener('click', () => { if (!document.pointerLockElement) requestGamePointerLock(this.element); });
   }
 
   // --- Touch synthesis (TouchControls) -------------------------------------------------------

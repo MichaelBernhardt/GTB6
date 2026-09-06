@@ -352,6 +352,11 @@ export class RiggedPedestrianVisual {
     unregisterRagdoll(this); this.ragdollDriver.release();
     this.disposed = true; this.status = 'disposed'; this.mixer?.stopAllAction();
     if (this.model && this.mixer) this.mixer.uncacheRoot(this.model);
+    // SkeletonUtils clones each skeleton, including the bone texture allocated on first render.
+    // Geometry/materials belong to the shared template; the despawned instance owns only its rigs.
+    const skeletons = new Set<THREE.Skeleton>();
+    this.model?.traverse((object) => { if (object instanceof THREE.SkinnedMesh) skeletons.add(object.skeleton); });
+    for (const skeleton of skeletons) skeleton.dispose();
     this.group.clear(); this.parent.remove(this.group); this.group.visible = false;
     this.actions.clear(); this.mixedRotations.clear(); this.model = undefined; this.mixer = undefined; this.bones = undefined; this.current = undefined; this.currentName = undefined;
   }

@@ -557,9 +557,11 @@ export class UrbanInfrastructure {
   private buildCbdHeroStreetLife(): void {
     const sites = CBD_HERO_CORRIDOR.activitySites.filter((site) => !this.isRoad(site.x, site.z, 1.1));
     const dark = new THREE.MeshStandardMaterial({ color: 0x283234, metalness: 0.72, roughness: 0.38 });
-    const wood = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82, vertexColors: true });
-    const fabric = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, vertexColors: true, side: THREE.DoubleSide });
-    const produce = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88, vertexColors: true });
+    // Colours come from instanceColor. These shared primitive geometries have no vertex colour
+    // attribute: enabling vertexColors multiplies their authored tints by an unbound black input.
+    const wood = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 });
+    const fabric = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, side: THREE.DoubleSide });
+    const produce = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 });
     const concrete = new THREE.MeshStandardMaterial({ color: 0xb48f68, roughness: 0.92 });
     const poleGeometry = new THREE.CylinderGeometry(0.06, 0.1, 1, 10);
     const canopyGeometry = new THREE.ConeGeometry(1, 0.34, 12, 1, true);

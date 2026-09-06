@@ -25,33 +25,45 @@ export async function createPostProcessing(
   camera: Camera,
   quality: PostProcessingQuality,
 ): Promise<PostProcessingStack> {
-  const ultra = quality === 'ultra';
+  // Resolve optional code before owning GPU targets. A failed lazy import used to leave an
+  // unreachable composer behind on every retry/quality change.
+  const aoModule = usesGtao(quality) ? await import('three/addons/postprocessing/GTAOPass.js') : undefined;
+  const size = renderer.getDrawingBufferSize(new Vector2());
   const composer = new EffectComposer(renderer);
-  // Two samples preserve edge stability while halving the multisample bandwidth/memory of the old 4x
-  // full-screen half-float targets. Ultra stacks 4x MSAA on top of its 2x supersample.
-  const samples = ultra ? 4 : 2;
-  composer.renderTarget1.samples = samples; composer.renderTarget2.samples = samples;
-  composer.setSize(innerWidth, innerHeight);
-  composer.addPass(new RenderPass(scene, camera));
-
   let gtao: GTAOPass | undefined;
-  if (usesGtao(quality)) {
-    const module = await import('three/addons/postprocessing/GTAOPass.js');
-    gtao = new module.GTAOPass(scene, camera, innerWidth, innerHeight);
-    gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 2, thickness: 1 }); gtao.blendIntensity = 0.9;
-    composer.addPass(gtao);
-  }
-  composer.addPass(new UnrealBloomPass(new Vector2(innerWidth, innerHeight), 0.32, 0.45, 0.85));
-  composer.addPass(new OutputPass());
-
-  return {
-    composer,
-    gtao,
-    dispose: () => {
-      // EffectComposer owns its render targets but not every pass target. Dispose both layers so
-      // repeated settings changes cannot strand GTAO/bloom framebuffers in GPU memory.
-      for (const pass of composer.passes) pass.dispose();
-      composer.dispose();
-    },
+  let bloom: UnrealBloomPass | undefined;
+  let disposed = false;
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    // EffectComposer owns its render targets but not every pass target. Three r178 also omits
+    // GTAO's main/blend materials and bloom's high-pass filter from their dispose methods.
+    for (const pass of composer.passes) pass.dispose();
+    gtao?.gtaoMaterial.dispose(); gtao?.blendMaterial.dispose();
+    bloom?.materialHighPassFilter.dispose();
+    composer.dispose();
   };
+  try {
+    // Ultra already supersamples. Two MSAA samples retain edge stability without the redundant
+    // four-sample HDR/depth buffers that made its largest windows particularly prone to GPU OOM.
+    const samples = Math.min(2, renderer.capabilities.maxSamples);
+    composer.renderTarget1.samples = samples; composer.renderTarget2.samples = samples;
+    // Keep post targets in physical pixels. Resizes then need one setSize call, avoiding the
+    // old setPixelRatio + setSize pair that rebuilt all pass targets twice on a DPR change.
+    composer.setPixelRatio(1);
+    composer.setSize(size.width, size.height);
+    composer.addPass(new RenderPass(scene, camera));
+    if (aoModule) {
+      gtao = new aoModule.GTAOPass(scene, camera, size.width, size.height);
+      composer.addPass(gtao);
+      gtao.updateGtaoMaterial({ radius: 0.9, distanceExponent: 2, thickness: 1 }); gtao.blendIntensity = 0.9;
+    }
+    bloom = new UnrealBloomPass(size, 0.32, 0.45, 0.85);
+    composer.addPass(bloom);
+    composer.addPass(new OutputPass());
+    return { composer, gtao, dispose };
+  } catch (error) {
+    dispose(); // a later pass failing must not strand the earlier passes and HDR buffers
+    throw error;
+  }
 }

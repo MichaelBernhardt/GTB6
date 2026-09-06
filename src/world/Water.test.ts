@@ -1,6 +1,61 @@
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
-import { DETAIL_WAVES, FOUNTAIN_RIPPLE, OCEAN_GRAZE_POWER, OCEAN_HAZE_DENSITY, OCEAN_SKY_MIX, oceanHazeGlsl, OCEAN_WAVES, POND_RIPPLE, REFLECTOR_FAR_INTERVAL, REFLECTOR_RANGE, WATER_KEYFRAMES, createWaterNormalTexture, rectDistanceSq, reflectorShouldRender, rippleEnvelope, ripplePhase, rippleSlope, rippleSlopeGlsl, sampleWaterColor, tileableNoise, waterNoiseHeight, waterTier, waveHeight, waveHeightGlsl, waveSlope, waveSlopeGlsl } from './Water';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+import { describe, expect, it, vi } from 'vitest';
+import { DETAIL_WAVES, FOUNTAIN_RIPPLE, OCEAN_GRAZE_POWER, OCEAN_HAZE_DENSITY, OCEAN_SKY_MIX, oceanHazeGlsl, OCEAN_WAVES, POND_RIPPLE, REFLECTOR_FAR_INTERVAL, REFLECTOR_RANGE, WATER_KEYFRAMES, createWater, createWaterNormalTexture, rectDistanceSq, reflectorShouldRender, rippleEnvelope, ripplePhase, rippleSlope, rippleSlopeGlsl, sampleWaterColor, tileableNoise, waterNoiseHeight, waterTier, waveHeight, waveHeightGlsl, waveSlope, waveSlopeGlsl } from './Water';
+
+const twoLakes = () => createWater([
+  { kind: 'ocean', x: 0, y: 0, z: 0, width: 20, depth: 20 },
+  { kind: 'ocean', x: 50, y: 2, z: 0, width: 20, depth: 20 },
+], 'planar');
+
+describe('multiple lake reflection ownership', () => {
+  it('updates the day/night tint, sun and haze on every lake', () => {
+    const water = twoLakes();
+    const sun = new THREE.Vector3(0.2, 0.8, 0.1); const light = new THREE.Color(0xabcdef);
+    water.setMood(0, sun, light); water.setHaze(0.002, 0.6, 6);
+    for (const object of water.group.children as Reflector[]) {
+      const uniforms = (object.material as THREE.ShaderMaterial).uniforms;
+      expect(uniforms.uColor!.value).toEqual(sampleWaterColor(0, new THREE.Color()));
+      expect(uniforms.uSunDir!.value).toEqual(sun); expect(uniforms.uSunColor!.value).toEqual(light);
+      expect(uniforms.uOceanHaze!.value).toBe(0.002);
+      expect(uniforms.uOceanSky!.value).toBe(0.6); expect(uniforms.uOceanGraze!.value).toBe(6);
+    }
+    water.dispose();
+  });
+
+  it('releases every lake target/material and the shared normal map once', () => {
+    const water = twoLakes(); const released: ReturnType<typeof vi.fn>[] = [];
+    const lakes = water.group.children as Reflector[];
+    const resources = lakes.flatMap((lake) => [lake.getRenderTarget(), lake.material as THREE.ShaderMaterial, lake.geometry]);
+    resources.push((lakes[0]!.material as THREE.ShaderMaterial).uniforms.uDetail!.value);
+    for (const resource of resources) {
+      const listener = vi.fn(); resource.addEventListener('dispose', listener); released.push(listener);
+    }
+    water.dispose(); water.dispose();
+    for (const listener of released) expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it('refreshes separate lakes once per frame without nested reflection rendering', () => {
+    const water = twoLakes(); const scene = new THREE.Scene(); scene.add(water.group);
+    const camera = new THREE.PerspectiveCamera(); camera.position.set(0, 10, 20); camera.lookAt(0, 0, 0);
+    scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+    const lakes = water.group.children as Reflector[];
+    const draw = (lake: Reflector): void => lake.onBeforeRender(renderer, scene, camera, lake.geometry, lake.material as THREE.ShaderMaterial, null as never);
+    const render = vi.fn(() => { for (const lake of lakes) draw(lake); });
+    const renderer = {
+      getRenderTarget: () => null, setRenderTarget: vi.fn(), render, autoClear: true,
+      xr: { enabled: false }, shadowMap: { autoUpdate: true }, state: { buffers: { depth: { setMask: vi.fn() } } },
+    } as unknown as THREE.WebGLRenderer;
+    for (const lake of lakes) draw(lake);
+    expect(render).toHaveBeenCalledTimes(2);
+    for (const lake of lakes) draw(lake);
+    expect(render).toHaveBeenCalledTimes(2);
+    water.update(1 / 60);
+    for (const lake of lakes) draw(lake);
+    expect(render).toHaveBeenCalledTimes(4);
+    water.dispose();
+  });
+});
 
 describe('water tier selection', () => {
   it('maps quality presets onto distinct tiers', () => {

@@ -1217,9 +1217,11 @@ export class City {
 
   /** (Re)builds every water surface for the given quality tier; safe to call live from the pause menu.
    *  The old handle disposes its geometries, materials, and the planar mirror's render target. */
-  setWaterQuality(quality: BaseQuality): void {
+  setWaterQuality(quality: BaseQuality, force = false): void {
+    const tier = waterTier(quality);
+    if (!force && this.waterHandle?.tier === tier) return;
     this.waterHandle?.dispose();
-    this.waterHandle = createWater(this.waterSites, waterTier(quality));
+    this.waterHandle = createWater(this.waterSites, tier);
     this.group.add(this.waterHandle.group);
     if (this.waterMood) this.waterHandle.setMood(this.waterMood.hour, this.waterMood.sun, this.waterMood.color);
   }
