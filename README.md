@@ -115,6 +115,7 @@ Progress is saved periodically and after important events. Money, completed jobs
 ```bash
 npm run lint       # ESLint
 npm test           # Vitest gameplay and world tests
+npm run test:graphics # Chrome/WebGL fault checks against a running Vite dev server
 npm run build      # TypeScript project build + production Vite bundle
 npm run test:watch # Vitest in watch mode
 npm run map:build  # Regenerate the checked-in map data
@@ -131,6 +132,9 @@ npm run vehicle:build     # Rebuild vehicle Blend/GLB sources and inspection she
 For long-form autonomous quality work, [the Groot Theft Bakkie Gauntlet Loop](gauntlet/README.md)
 provides a repo-specific builder/critic prompt, concrete comparison bars, and a live evidence
 workbench.
+
+The [graphics validation guide](docs/graphics-validation.md) covers desktop and touch checks,
+forced GPU resets, render-buffer budgets, and performance comparisons.
 
 `npm run map:build` uses the map-generation pipeline under `tools/mapgen/`. The generated map data is checked in, so ordinary development does not need to call Overpass or regenerate Johannesburg before breakfast.
 
@@ -209,6 +213,11 @@ Do not also enable Heroku dashboard auto-deploy for `main`; that creates duplica
 ## Performance notes
 
 The world uses instanced vegetation and street furniture, shared geometry and materials, distance-based building streaming, pooled traffic and effects, spatial indexes, bounded fixed-timestep catch-up, and throttled AI routing. Graphics quality and an FPS display are available in the pause menu.
+
+Rendering respects a pixel budget as well as the device's GPU limits, including on Retina and large
+fullscreen displays. Ultra adds supersampling and ambient occlusion within a 4K pixel budget.
+Hidden tabs stop drawing. If the browser resets the GPU, the game pauses, rebuilds its graphics,
+and offers Continue once the view is ready; an unrecoverable error offers reload from the last save.
 
 If Jozi starts moving like the M1 at 17:00, lower the graphics quality first.
 

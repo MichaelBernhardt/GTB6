@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NPC_CHARACTER_IDS } from './NpcCatalog';
 import { RAGDOLL_TIMEOUT, type RagdollEnvironment } from './PedRagdoll';
 import {
@@ -400,5 +400,28 @@ describe('cached rigged pedestrian instances', () => {
     const pending = visual.load(); visual.dispose(); expect(parent.children).not.toContain(visual.group);
     resolve(await loadNpc('rosebank-athlete')); await pending;
     expect(visual.status).toBe('disposed'); expect(visual.group.children).toHaveLength(0); expect(parent.children).not.toContain(visual.group);
+  });
+
+  it('releases bone textures on despawn while another NPC clone keeps its shared render assets', async () => {
+    const first = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc() });
+    const second = new RiggedPedestrianVisual(new THREE.Group(), 'braamfontein-creative', { load: () => loadNpc() });
+    await Promise.all([first.load(), second.load()]);
+    const firstSkeletons = new Set<THREE.Skeleton>(); const secondSkeletons = new Set<THREE.Skeleton>();
+    first.group.traverse((object) => { if (object instanceof THREE.SkinnedMesh) firstSkeletons.add(object.skeleton); });
+    second.group.traverse((object) => { if (object instanceof THREE.SkinnedMesh) secondSkeletons.add(object.skeleton); });
+    const released = [...firstSkeletons].map((skeleton) => {
+      skeleton.computeBoneTexture(); const listener = vi.fn(); skeleton.boneTexture!.addEventListener('dispose', listener); return listener;
+    });
+    for (const skeleton of secondSkeletons) skeleton.computeBoneTexture();
+    const shared = second.group.getObjectByProperty('isSkinnedMesh', true) as THREE.SkinnedMesh;
+    const sharedReleased = vi.fn();
+    shared.geometry.addEventListener('dispose', sharedReleased);
+    (shared.material as THREE.Material).addEventListener('dispose', sharedReleased);
+    first.dispose(); first.dispose();
+    for (const listener of released) expect(listener).toHaveBeenCalledOnce();
+    expect(sharedReleased).not.toHaveBeenCalled();
+    for (const skeleton of secondSkeletons) expect(skeleton.boneTexture).not.toBeNull();
+    second.update(1 / 60); expect(second.ready).toBe(true);
+    second.dispose();
   });
 });

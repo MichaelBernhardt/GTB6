@@ -43,16 +43,28 @@ export function buildEnvironment(scene: THREE.Scene, quality: 'low' | 'medium' |
 
   const sunDisc = new THREE.Mesh(new THREE.SphereGeometry(14, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffdf9d, fog: false })); sunDisc.position.set(330, 370, -520); sunDisc.name = 'Sun'; scene.add(sunDisc);
 
-  const texel = (SHADOW_SPAN * 2) / 2048; const snapped = new THREE.Vector3();
+  const focusPoint = new THREE.Vector3(); const snapped = new THREE.Vector3();
+  const basis = new THREE.Matrix4(); const origin = new THREE.Vector3();
+  const right = new THREE.Vector3(); const up = new THREE.Vector3();
   const updateShadowFocus = (focus: THREE.Vector3): void => {
-    snapped.set(Math.round(focus.x / texel) * texel, 0, Math.round(focus.z / texel) * texel);
+    focusPoint.copy(focus);
+    // Snap in the shadow camera's plane. Snapping world X/Z still slides geometry between shadow
+    // texels when the sun is oblique, and pinning Y=0 leaves roofs/elevated districts out of range.
+    basis.lookAt(sunOffset, origin, sun.shadow.camera.up);
+    right.setFromMatrixColumn(basis, 0); up.setFromMatrixColumn(basis, 1);
+    const texelX = (sun.shadow.camera.right - sun.shadow.camera.left) / sun.shadow.camera.zoom / sun.shadow.mapSize.x;
+    const texelY = (sun.shadow.camera.top - sun.shadow.camera.bottom) / sun.shadow.camera.zoom / sun.shadow.mapSize.y;
+    const x = focus.dot(right); const y = focus.dot(up);
+    snapped.copy(focus)
+      .addScaledVector(right, Math.round(x / texelX) * texelX - x)
+      .addScaledVector(up, Math.round(y / texelY) * texelY - y);
     sun.position.copy(snapped).add(sunOffset);
     sun.target.position.copy(snapped);
     sky.mesh.position.copy(focus); // the dome follows the player so its horizon can never be reached
   };
   const setSunDirection = (direction: THREE.Vector3): void => {
     sunOffset.copy(direction).normalize().multiplyScalar(SUN_DISTANCE);
-    sun.position.copy(snapped).add(sunOffset); // keep the shadow frustum on the last focus until the next updateShadowFocus
+    updateShadowFocus(focusPoint);
   };
   updateShadowFocus(new THREE.Vector3());
   return { sun, hemisphere, ambient, sunDisc, sky, skyTraffic, updateShadowFocus, setSunDirection };

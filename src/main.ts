@@ -38,7 +38,7 @@ function showBootError(title: string, message: string): void {
 
 // Traps stay armed for the whole boot (city build through asset load) and disarm on the game's
 // boot-ready signal — a stuck bar can no longer hide a dead boot. Game.boot() rejections arrive
-// as unhandledrejection; a lost WebGL context re-dispatches as an ErrorEvent from Game.
+// as unhandledrejection. Game's graphics recovery screen owns context loss during boot and play.
 const onBootError = (event: ErrorEvent): void => showBootError('The city failed to start', event.message || 'Unknown startup error.');
 const onBootRejection = (event: PromiseRejectionEvent): void =>
   showBootError('The city failed to start', event.reason instanceof Error ? event.reason.message : String(event.reason));

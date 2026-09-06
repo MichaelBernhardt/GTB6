@@ -344,8 +344,8 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
   const moodMaterials: THREE.MeshPhysicalMaterial[] = [];
   const textures: THREE.Texture[] = [];
   const scrollTextures: THREE.Texture[] = [];
-  let reflector: Reflector | undefined; let reflectorUniforms: Record<string, THREE.IUniform> | undefined;
-  let frame = 0; let lastReflection = -1;
+  const reflectors: Reflector[] = [];
+  let frame = 0; let reflecting = false; let disposed = false;
   const detail = tier === 'flat' ? undefined : createWaterNormalTexture();
   if (detail) textures.push(detail);
   const cameraPosition = new THREE.Vector3();
@@ -458,7 +458,7 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
         #include <fog_fragment>
         ${oceanHazeGlsl('eyeDir.y')}
       }`;
-    reflector = new Reflector(oceanGeometryXY(site, OCEAN_SEGMENTS), {
+    const reflector = new Reflector(oceanGeometryXY(site, OCEAN_SEGMENTS), {
       textureWidth: REFLECTOR_TEXTURE_SIZE, textureHeight: REFLECTOR_TEXTURE_SIZE, clipBias: 0.015, multisample: 0,
       shader: {
         name: 'HarbourWater',
@@ -475,14 +475,18 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
     const material = reflector.material as THREE.ShaderMaterial;
     material.uniforms.uTime = timeUniform; material.uniforms.uDetail!.value = detail;
     material.transparent = true; material.fog = true; material.side = THREE.DoubleSide; // seen from underwater too
-    reflectorUniforms = material.uniforms;
+    reflectors.push(reflector);
     reflector.rotation.x = -Math.PI / 2; reflector.position.set(site.x, site.y, site.z); reflector.userData.dynamic = true;
     const render = reflector.onBeforeRender;
+    let lastReflection = -1;
     reflector.onBeforeRender = (renderer, scene, camera, geometry, mat, renderGroup): void => {
+      if (reflecting) return; // lakes do not recursively render one another's mirror views
       cameraPosition.setFromMatrixPosition(camera.matrixWorld);
       if (!reflectorShouldRender(rectDistanceSq(cameraPosition.x, cameraPosition.z, site.x, site.z, site.width, site.depth), frame, lastReflection)) return;
       lastReflection = frame;
-      render.call(reflector, renderer, scene, camera, geometry, mat, renderGroup);
+      reflecting = true;
+      try { render.call(reflector, renderer, scene, camera, geometry, mat, renderGroup); }
+      finally { reflecting = false; }
     };
     group.add(reflector);
   };
@@ -517,24 +521,28 @@ export function createWater(sites: readonly WaterSite[], tier: WaterTier): Water
     },
     setHaze(density: number, skyMix = skyUniform.value, graze = grazeUniform.value): void {
       hazeUniform.value = density; skyUniform.value = skyMix; grazeUniform.value = graze;
-      if (reflectorUniforms?.uOceanHaze) reflectorUniforms.uOceanHaze.value = density;
-      if (reflectorUniforms?.uOceanSky) reflectorUniforms.uOceanSky.value = skyMix;
-      if (reflectorUniforms?.uOceanGraze) reflectorUniforms.uOceanGraze.value = graze;
+      for (const reflector of reflectors) {
+        const uniforms = (reflector.material as THREE.ShaderMaterial).uniforms;
+        uniforms.uOceanHaze!.value = density; uniforms.uOceanSky!.value = skyMix; uniforms.uOceanGraze!.value = graze;
+      }
     },
     setMood(hour: number, sunDirection: THREE.Vector3, sunColor: THREE.Color): void {
       sampleWaterColor(hour, COLOR_TMP);
       for (const material of moodMaterials) material.color.copy(COLOR_TMP);
-      if (reflectorUniforms) {
-        (reflectorUniforms.uColor!.value as THREE.Color).copy(COLOR_TMP);
-        (reflectorUniforms.uSunColor!.value as THREE.Color).copy(sunColor);
-        (reflectorUniforms.uSunDir!.value as THREE.Vector3).copy(sunDirection);
+      for (const reflector of reflectors) {
+        const uniforms = (reflector.material as THREE.ShaderMaterial).uniforms;
+        (uniforms.uColor!.value as THREE.Color).copy(COLOR_TMP);
+        (uniforms.uSunColor!.value as THREE.Color).copy(sunColor);
+        (uniforms.uSunDir!.value as THREE.Vector3).copy(sunDirection);
       }
     },
     dispose(): void {
+      if (disposed) return;
+      disposed = true;
       group.removeFromParent();
       group.traverse((object) => { if (object instanceof THREE.Mesh) object.geometry.dispose(); });
       for (const material of moodMaterials) material.dispose();
-      reflector?.dispose(); // frees the mirror render target and its ShaderMaterial
+      for (const reflector of reflectors) reflector.dispose(); // every lake owns a mirror target and shader
       for (const texture of textures) texture.dispose();
     },
   };
